@@ -56,6 +56,10 @@ class CloudPreparationProcessTest {
             val failed = object : PreparationCalls by calls { override suspend fun environment() = failing }
             assertFalse(EnvironmentPreparation(failed, commands, workspace.toString(), sleep = {}).run())
             assertEquals(RunnerPreparationFailureView("setup_start", 0, 3), calls.failures.last())
+            // Without any secret the log is still bounded.
+            val chatty = RunnerEnvironmentView(recipe.copy(setup = CloudSetupView(start = listOf("head -c 6000000 /dev/zero | tr '\\0' x"))), prepared.git, emptyMap(), emptyList(), prepared.github)
+            assertTrue(EnvironmentPreparation(object : PreparationCalls by calls { override suspend fun environment() = chatty }, commands, workspace.toString(), sleep = {}).run())
+            assertTrue(Path(EnvironmentPreparation.logFile(workspace.toString(), 1)).fileSize() <= 4L * 1024 * 1024)
         } finally { root.toFile().deleteRecursively() }
     }
 }

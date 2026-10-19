@@ -46,6 +46,8 @@ data class CloudEnvironmentView(
     val requiredVariables: List<String> = emptyList(),
     val requireGitHub: Boolean = false,
     val gitEmailDomain: String? = null,
+    /** Hosts repositories may be cloned from. */
+    val repositoryHosts: List<String> = listOf("github.com"),
 )
 /** What a session request may change in its profile's recipe; null keeps the profile's value. */
 @Serializable

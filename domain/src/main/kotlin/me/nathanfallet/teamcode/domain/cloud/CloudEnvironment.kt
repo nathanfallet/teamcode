@@ -38,6 +38,8 @@ data class CloudEnvironmentSpec(
     val requireGitHub: Boolean = false,
     /** Email domain of the Git identity for owners without a linked GitHub account. */
     val gitEmailDomain: String? = null,
+    /** Hosts repositories may be cloned from; keeps session requests from pointing the pod at internal endpoints. */
+    val repositoryHosts: List<String> = listOf("github.com"),
 )
 
 /** What a session request may change in its profile's recipe. Null keeps the profile's value. */
@@ -110,11 +112,27 @@ object CloudEnvironmentRules {
     /** Directories the runner owns on the workspace. */
     private val reserved = setOf(".teamcode", ".home")
 
-    fun merge(profile: CloudEnvironmentSpec, override: CloudEnvironmentOverride?): CloudEnvironmentSpec = if (override == null) profile else
-        profile.copy(repositories = override.repositories ?: profile.repositories, workingDirectory = override.workingDirectory ?: profile.workingDirectory)
+    /**
+     * Applies a session's overrides. Replacing the repositories while keeping a profile working directory that is
+     * no longer inside any of them is refused here, rather than failing in the pod after a full clone.
+     */
+    fun merge(profile: CloudEnvironmentSpec, override: CloudEnvironmentOverride?): CloudEnvironmentSpec {
+        if (override == null) return profile
+        val repositories = override.repositories ?: profile.repositories
+        val inherited = profile.workingDirectory?.trimEnd('/')
+        if (override.repositories != null && override.workingDirectory == null && inherited != null &&
+            repositories.none { inherited == it.path.trimEnd('/') || inherited.startsWith(it.path.trimEnd('/') + "/") })
+            invalid("The profile's working directory $inherited is not inside the requested repositories; set workingDirectory too.")
+        return profile.copy(repositories = repositories, workingDirectory = override.workingDirectory ?: profile.workingDirectory)
+    }
 
     fun validate(spec: CloudEnvironmentSpec) {
+        if (spec.repositoryHosts.size > 16 || spec.repositoryHosts.any { !domain.matches(it) }) invalid("Name at most 16 repository hosts as DNS names.")
         validateRepositories(spec.repositories)
+        for (repository in spec.repositories) {
+            val host = repository.url.removePrefix("https://").substringBefore('/').substringBefore(':')
+            if (host !in spec.repositoryHosts) invalid("Repository host $host is not allowed by the profile (${spec.repositoryHosts.joinToString(", ")}).")
+        }
         spec.workingDirectory?.let(::validatePath)
         for (commands in listOf(spec.setup.create, spec.setup.start))
             if (commands.size > MAX_COMMANDS || commands.any { it.isBlank() || it.length > MAX_COMMAND_LENGTH || '\u0000' in it })

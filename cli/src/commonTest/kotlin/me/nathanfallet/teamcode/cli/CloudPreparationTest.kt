@@ -96,6 +96,34 @@ class CloudPreparationTest {
         assertEquals("working_directory", missing.failures.single().step)
     }
 
+    @Test fun ownerVariablesNeverSteerTheRunnersOwnCommands() = runTest {
+        val hostile = RunnerEnvironmentView(recipe, RunnerGitIdentityView("o", "o@example.test"),
+            mapOf("HOME" to "/tmp/x", "PATH" to "/tmp/bin", "LD_PRELOAD" to "/tmp/x.so", "GIT_CONFIG_COUNT" to "1", "GIT_CONFIG_KEY_0" to "core.sshCommand", "BAD=NAME" to "x", "NPM_TOKEN" to "kept-value"),
+            emptyList(), RunnerGitHubView("not_linked"))
+        val shell = Shell(mutableSetOf("/workspace/api"))
+        assertTrue(EnvironmentPreparation(Calls { hostile }, shell, sleep = {}).run())
+        val environment = shell.calls.first().environment
+        assertEquals("kept-value", environment["NPM_TOKEN"])
+        for (name in listOf("HOME", "PATH", "LD_PRELOAD", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "BAD=NAME")) assertFalse(name in environment, name)
+    }
+
+    @Test fun aRunnerErrorIsReportedInsteadOfWaitingForTheTimeout() = runTest {
+        val calls = Calls { environment() }
+        assertFalse(EnvironmentPreparation(calls, { _, _, _, _ -> throw okio.IOException("No space left on device") }, sleep = {}).run())
+        assertEquals(listOf(RunnerPreparationFailureView("runner")), calls.failures)
+    }
+
+    @Test fun progressOutagesDoNotStopThePreparation() = runTest {
+        var reports = 0
+        val calls = object : PreparationCalls {
+            override suspend fun environment(): RunnerEnvironmentView = this@CloudPreparationTest.environment()
+            override suspend fun progress(phase: String, failure: RunnerPreparationFailureView?): RunnerInstructionView {
+                reports++; throw TeamCodeException(if (reports == 1) 401 else 408, "transient")
+            }
+        }
+        assertTrue(EnvironmentPreparation(calls, Shell(mutableSetOf("/workspace/api")), sleep = {}).run())
+    }
+
     @Test fun aRefusedEnvironmentStopsAndOutagesAreRetried() = runTest {
         val refused = Calls { throw TeamCodeException(409, "failed", "preparation_failed") }
         assertFalse(EnvironmentPreparation(refused, Shell(), sleep = {}).run())

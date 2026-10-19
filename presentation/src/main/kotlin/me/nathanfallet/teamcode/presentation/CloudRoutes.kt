@@ -24,9 +24,9 @@ internal fun CloudSession.view() = CloudSessionView(
     environment = environment.view(),
 )
 internal fun CloudEnvironmentSpec.view() = CloudEnvironmentView(repositories.map { CloudRepositoryView(it.url, it.path, it.ref, it.branch) }, workingDirectory,
-    CloudSetupView(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain)
+    CloudSetupView(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 private fun CloudRepositoryView.domain() = CloudRepository(url, path, ref, branch)
-private fun CloudEnvironmentView.domain() = CloudEnvironmentSpec(repositories.map { it.domain() }, workingDirectory, CloudSetup(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain)
+private fun CloudEnvironmentView.domain() = CloudEnvironmentSpec(repositories.map { it.domain() }, workingDirectory, CloudSetup(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 private fun CloudExecution.view() = CloudExecutionView(epoch, podName, state.wire, createdAt, registeredAt, lastHeartbeatAt, nodeName, imageDigest, endedAt, exitReason, checkpoint)
 private fun CloudCluster.view() = CloudClusterView(id, name, apiUrl, allowedNamespaces, maxRunningPods, defaultStorageClass, version, orphanedVolumes, lastGarbageCollectionAt, createdAt, updatedAt)
 private fun CloudProfileSpec.view() = CloudProfileSpecView(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResourcesView(resources.cpuMillis, resources.memoryMebibytes),

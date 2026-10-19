@@ -61,14 +61,24 @@ internal class EnvironmentPreparation(
             report(failed.failure)
             false
         } catch (_: Stopped) { false }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) {
+            // The runner itself could not proceed (workspace unwritable, full volume): fail now rather than at the timeout.
+            log("Preparation stopped on a runner error.")
+            report(RunnerPreparationFailureView("runner"))
+            false
+        }
     }
 
     private suspend fun prepare(prepared: RunnerEnvironmentView) {
         val spec = prepared.environment
         val token = prepared.github.token?.takeIf { prepared.github.status == "linked" }
         val secrets = (prepared.variables.values + listOfNotNull(token)).filter { it.length >= MIN_MASKED }.toSet()
+        val ignored = prepared.variables.keys.filter { !variableName.matches(it) || RESERVED_VARIABLES.any(it::startsWith) }
+        if (ignored.isNotEmpty()) log("Ignored variables that would change how preparation runs: ${ignored.sorted().joinToString(", ")}.")
         val environment = buildMap<String, String?> {
-            putAll(prepared.variables)
+            // Owner values first, without names that steer the shell, the loader, Git or the runner; ours always win.
+            putAll(prepared.variables - ignored.toSet())
             // Children never learn where the runner's own token is, and Git never prompts.
             put("TEAMCODE_CLOUD_TOKEN_FILE", null)
             put("GIT_TERMINAL_PROMPT", "0")
@@ -132,7 +142,7 @@ internal class EnvironmentPreparation(
         reported = phase
         try { calls.progress(phase) }
         catch (error: CancellationException) { throw error }
-        catch (error: TeamCodeException) { if (error.refusal) throw Stopped() }
+        catch (error: TeamCodeException) { if (error.code in STOP_CODES) throw Stopped() }
         catch (_: Exception) { log("Could not report preparation progress; continuing.") }
     }
 
@@ -154,8 +164,11 @@ internal class EnvironmentPreparation(
         }
     }
 
-    /** Fencing, an ended preparation or a rejected request; a concurrent write (`session_busy`) is retried instead. */
-    private val TeamCodeException.refusal get() = statusCode in 400..499 && !(statusCode == 409 && code == "session_busy") && statusCode != 429
+    /**
+     * Fencing, an ended preparation or a rejected request. Timeouts, rate limits, concurrent writes and a `401`
+     * during token rotation are retried; a real `401` also stops the heartbeats, which end the runner.
+     */
+    private val TeamCodeException.refusal get() = code in STOP_CODES || statusCode in setOf(400, 403, 404, 413, 422)
 
     companion object {
         const val WORKSPACE = "/workspace"
@@ -163,6 +176,10 @@ internal class EnvironmentPreparation(
         const val STATE_DIR = ".teamcode"
         const val TOKEN_VARIABLE = "TEAMCODE_GITHUB_TOKEN"
         private const val MIN_MASKED = 4
+        private val STOP_CODES = setOf("execution_fenced", "not_preparing", "preparation_failed")
+        private val variableName = Regex("[A-Za-z_][A-Za-z0-9_]{0,127}")
+        /** Prefixes and names the runner's own commands depend on; an owner variable never overrides them. */
+        private val RESERVED_VARIABLES = listOf("PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "LD_", "DYLD_", "GIT_", "GH_", "TEAMCODE_", "XDG_CONFIG_HOME", "SSH_")
         /** Answers `get` with the token from its own environment; `store` and `erase` do nothing. */
         const val CREDENTIAL_HELPER = "!f() { test \"\$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"\$$TOKEN_VARIABLE\"; }; f"
         private const val MOVE_INTO_PLACE = "mkdir -p \"\$(dirname \"\$2\")\" && { [ ! -e \"\$2\" ] || rmdir \"\$2\"; } && mv \"\$1\" \"\$2\""
@@ -178,21 +195,26 @@ internal class ShellCommandRunner(private val logFile: String, private val files
     override suspend fun run(arguments: List<String>, directory: String, environment: Map<String, String?>, secrets: Set<String>): Int {
         val log = logFile.toPath()
         log.parent?.let(files::createDirectories)
+        val before = files.metadataOrNull(log)?.size ?: 0
         val code = try {
             runInteractiveProcess("/bin/sh", listOf("-c", WRAPPER, "sh", directory, logFile) + arguments, environment, quiet = true)
         } catch (error: CancellationException) { throw error } catch (_: Exception) { 127 }
-        mask(secrets)
+        tidy(secrets, before)
         return code
     }
 
-    private fun mask(secrets: Set<String>) {
-        if (secrets.isEmpty()) return
+    /** Masks known secrets in what the command wrote and keeps the log bounded, replacing the file atomically. */
+    private fun tidy(secrets: Set<String>, before: Long) {
         val path = logFile.toPath()
         val size = files.metadataOrNull(path)?.size ?: return
-        // Keep the log bounded: a long dependency install keeps only its last part.
-        var text = files.read(path) { if (size > MAX_LOG_BYTES) skip(size - MAX_LOG_BYTES); readUtf8() }
+        if (size == before && size <= MAX_LOG_BYTES) return // Nothing written: nothing to mask or trim.
+        if (secrets.isEmpty() && size <= MAX_LOG_BYTES) return
+        val text = files.read(path) { if (size > MAX_LOG_BYTES) skip(size - MAX_LOG_BYTES); readUtf8() }
         val masked = secrets.fold(text) { current, secret -> current.replace(secret, "[REDACTED]") }
-        if (masked != text || size > MAX_LOG_BYTES) { text = masked; files.write(path) { writeUtf8(text) } }
+        if (masked == text && size <= MAX_LOG_BYTES) return
+        val temporary = "$logFile.tmp".toPath()
+        files.write(temporary) { writeUtf8(masked) }
+        files.atomicMove(temporary, path)
     }
 
     private companion object {

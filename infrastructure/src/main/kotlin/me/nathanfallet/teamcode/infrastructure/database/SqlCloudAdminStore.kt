@@ -120,6 +120,7 @@ private data class StoredEnvironment(
     val repositories: List<StoredRepository> = emptyList(), val workingDirectory: String? = null,
     val setupCreate: List<String> = emptyList(), val setupStart: List<String> = emptyList(),
     val requiredVariables: List<String> = emptyList(), val requireGitHub: Boolean = false, val gitEmailDomain: String? = null,
+    val repositoryHosts: List<String> = listOf("github.com"),
 )
 @Serializable
 private data class StoredProfileSpec(
@@ -129,9 +130,9 @@ private data class StoredProfileSpec(
     val environment: StoredEnvironment = StoredEnvironment(),
 )
 private fun CloudEnvironmentSpec.stored() = StoredEnvironment(repositories.map { StoredRepository(it.url, it.path, it.ref, it.branch) }, workingDirectory,
-    setup.create, setup.start, requiredVariables, requireGitHub, gitEmailDomain)
+    setup.create, setup.start, requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 private fun StoredEnvironment.domain() = CloudEnvironmentSpec(repositories.map { CloudRepository(it.url, it.path, it.ref, it.branch) }, workingDirectory,
-    CloudSetup(setupCreate, setupStart), requiredVariables, requireGitHub, gitEmailDomain)
+    CloudSetup(setupCreate, setupStart), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 /** Null for an empty recipe, so sessions without preparation keep a null column. */
 internal fun encodeEnvironment(spec: CloudEnvironmentSpec): String? = if (spec == CloudEnvironmentSpec()) null else Json.encodeToString(spec.stored())
 internal fun decodeEnvironment(value: String?): CloudEnvironmentSpec = value?.let { Json.decodeFromString<StoredEnvironment>(it).domain() } ?: CloudEnvironmentSpec()

@@ -259,6 +259,9 @@ The recipe is part of the immutable profile version (`spec.environment`). At cre
 | `requiredVariables` | Variable names the owner must be assigned; preparation fails without them |
 | `requireGitHub` | Preparation fails when the owner has no usable GitHub access |
 | `gitEmailDomain` | Email domain of the Git identity for owners without a linked GitHub account |
+| `repositoryHosts` | Hosts repositories may be cloned from, `["github.com"]` by default; session repositories are checked against the profile's list, so a request cannot point the pod at metadata or cluster-internal endpoints |
+
+A session that replaces the repositories while the profile's working directory is not inside any of them must set `workingDirectory` too (`400 invalid_environment`), rather than failing in the pod after a full clone.
 
 ### What the runner does
 
@@ -271,15 +274,18 @@ After registering, the runner prepares while it keeps heartbeating (`ready: fals
 5. **Setup** (`running_setup`): each `create` command whose marker `/workspace/.teamcode/setup/create-<n>-<hash>.done` is missing (the hash is the command's, so an edited command runs again on a new session), then every `start` command.
 6. The next heartbeat reports `ready: true`, and only then does the session become `ready`.
 
-Command output goes to `/workspace/.teamcode/logs/prepare-e<epoch>.log` on the session's own workspace, with known variable values and the token replaced by `[REDACTED]` after each command, and the last 4 MiB kept. It never reaches the server, the pod log or the transcript.
+Command output goes to `/workspace/.teamcode/logs/prepare-e<epoch>.log` on the session's own workspace and never reaches the server, the pod log or the transcript. After each command the runner replaces known variable values and the token by `[REDACTED]` and keeps the last 4 MiB, rewriting the file atomically. Masking is best effort: a command that prints a credential (`env`, `set -x`) writes it to the log until the command ends, or for good if the pod dies first, and transformed values (base64, URL-encoded) are not recognized. Setup commands must not print credentials.
+
+A runner error (unwritable or full workspace) is reported as step `runner` right away instead of waiting for the preparation timeout, and a runner that stops heartbeating while it prepares a resume is lost after 90 seconds, as during a first preparation.
 
 ### Credentials in child processes only
 
-Variable values and the GitHub token live in the runner's memory and in the environment of the preparation's child processes. They are never written to the pod spec, a Kubernetes Secret, a remote URL, a Git config file, the workspace or the server's database:
+Variable values and the GitHub token live in the runner's memory and in the environment of the preparation's child processes. The runner never writes them to the pod spec, a Kubernetes Secret, a remote URL, a Git config file, the workspace or the server's database (see the log caveat above):
 
 - `git` gets the token from a credential helper defined through `GIT_CONFIG_COUNT` for `https://github.com` only (helpers from the image are reset first), which prints `x-access-token` and the token from its own environment; other hosts never see it.
 - `gh` reads `GH_TOKEN`.
 - `GIT_TERMINAL_PROMPT=0`, and children do not inherit the runner's token file path.
+- Owner variables never steer the runner's own commands: names that are not shell identifiers, and `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `XDG_CONFIG_HOME` and the `LD_`, `DYLD_`, `GIT_`, `GH_`, `SSH_`, `TEAMCODE_` prefixes, are dropped (by name, in the pod log). The variants work refuses most of them at definition already.
 
 The child processes run with the pod UID, like the planned agent: see the token exposure note in [the runner and the pod](#the-runner-and-the-pod).
 

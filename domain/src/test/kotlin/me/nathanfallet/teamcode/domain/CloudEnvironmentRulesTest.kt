@@ -30,6 +30,9 @@ class CloudEnvironmentRulesTest {
         refused(spec.copy(requiredVariables = listOf("lower")))
         refused(spec.copy(requiredVariables = listOf("A", "A")))
         refused(spec.copy(gitEmailDomain = "not a domain"))
+        for (host in listOf("169.254.169.254", "kubernetes.default.svc", "localhost"))
+            refused(spec.copy(repositories = listOf(repository.copy(url = "https://$host/latest/x"))))
+        CloudEnvironmentRules.validate(spec.copy(repositoryHosts = listOf("git.example.com"), repositories = listOf(repository.copy(url = "https://git.example.com/team/api"))))
         assertEquals("invalid_environment", assertFailsWith<TeamFailure> {
             CloudEnvironmentRules.validate(CloudEnvironmentOverride(listOf(repository.copy(url = "http://x/y"))))
         }.code)
@@ -42,6 +45,9 @@ class CloudEnvironmentRulesTest {
         assertEquals(spec.setup, merged.setup); assertEquals(spec.requiredVariables, merged.requiredVariables)
         assertEquals(spec, CloudEnvironmentRules.merge(spec, null))
         assertEquals(spec, CloudEnvironmentRules.merge(spec, CloudEnvironmentOverride()))
+        assertEquals("invalid_environment", assertFailsWith<TeamFailure> { CloudEnvironmentRules.merge(spec, CloudEnvironmentOverride(listOf(other))) }.code,
+            "Replacing the repositories must not keep a working directory outside them")
+        assertEquals("api/src", CloudEnvironmentRules.merge(spec.copy(workingDirectory = "api/src"), CloudEnvironmentOverride(listOf(repository.copy(ref = "dev")))).workingDirectory)
     }
 
     @Test fun gitIdentityFollowsTheOwner() {

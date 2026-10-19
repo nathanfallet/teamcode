@@ -82,6 +82,9 @@ class RunnerChannelUseCase(
         val spec = session.environment
         val resolved = variables.resolve(teamId, owner.id)
         val missing = spec.requiredVariables.filter { it !in resolved.values }
+        // An assigned value that could not be read now is a retryable outage, not a missing assignment.
+        val unreadable = missing.filter { it in resolved.unavailable }
+        if (unreadable.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables of the owner are unavailable right now: ${unreadable.joinToString(", ")}.", retryable = true)
         if (missing.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables are not assigned to the owner: ${missing.joinToString(", ")}.")
         val access = github.userAccess(teamId, owner.id)
         if (spec.requireGitHub && access !is GitHubAccess.Linked)
@@ -108,9 +111,7 @@ class RunnerChannelUseCase(
                 }
                 if ((failure.index != null && failure.index !in 0 until count) || (failure.exitCode != null && failure.exitCode !in 0..255))
                     throw TeamFailure("invalid_failure", 400, "Unknown preparation step index or exit code.")
-                CloudTransition(current.copy(phase = CloudEnvironmentRules.PREPARATION_FAILED, updatedAt = now,
-                    failure = CloudProblem(CloudEnvironmentRules.PREPARATION_FAILED, CloudEnvironmentRules.message(failure, spec, epoch), failure.step in RETRYABLE_STEPS)),
-                    CloudWrite(reconcileAt = now))
+                failed(current, CloudEnvironmentRules.message(failure, spec, epoch), failure.step in RETRYABLE_STEPS, now)
             } else if (current.phase == phase) null
             else CloudTransition(current.copy(phase = phase, updatedAt = now), CloudWrite())
         } ?: throw fenced()
@@ -126,14 +127,14 @@ class RunnerChannelUseCase(
     }
 
     private suspend fun fail(teamId: String, sessionId: String, epoch: Int, message: String, retryable: Boolean = false): Nothing {
-        transition(teamId, sessionId) { current ->
-            preparing(current, epoch)
-            val now = store.now()
-            CloudTransition(current.copy(phase = CloudEnvironmentRules.PREPARATION_FAILED, updatedAt = now,
-                failure = CloudProblem(CloudEnvironmentRules.PREPARATION_FAILED, message, retryable)), CloudWrite(reconcileAt = now))
-        }
+        transition(teamId, sessionId) { current -> failed(preparing(current, epoch), message, retryable, store.now()) }
         throw TeamFailure(CloudEnvironmentRules.PREPARATION_FAILED, 409, "The environment cannot be prepared.")
     }
+
+    /** Records a failed preparation; the reconciler then stops the pod and fails the session or blocks the resume. */
+    private fun failed(current: CloudSession, message: String, retryable: Boolean, now: Long) = CloudTransition(
+        current.copy(phase = CloudEnvironmentRules.PREPARATION_FAILED, updatedAt = now, failure = CloudProblem(CloudEnvironmentRules.PREPARATION_FAILED, message, retryable)),
+        CloudWrite(reconcileAt = now))
 
     private suspend fun live(session: CloudSession, epoch: Int): CloudExecution {
         if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()

@@ -427,8 +427,23 @@ class CloudSessionPersistenceTest {
         assertNull(blocked.failure, "The session itself has not failed")
         assertNotNull(cluster(ra).claims["teamcode/${blocked.workspace.claimName}"], "A blocked resume keeps the workspace")
         assertTrue(cluster(ra).podNames().none { it.startsWith("tc-${prepared.id}-") }, "Its pod is stopped")
+        // A runner that goes silent while preparing a resume is lost after 90 seconds, not at the 30-minute timeout.
+        ra.sessions.resume(colleague, null, prepared.id)
+        registered(prepared.id, 3)
+        ra.database.query { CloudExecutions.update({ (CloudExecutions.sessionId eq prepared.id) and (CloudExecutions.epoch eq 3) }) { it[lastHeartbeatAt] = 1 } }
+        pass(ra)
+        val silent = ra.store.find(team, prepared.id)!!
+        assertEquals(PAUSED, silent.state); assertEquals("execution_lost", silent.resumeBlocked?.code)
+        // Unreadable required values are a retryable outage, not a missing assignment.
+        val outage = RunnerChannelUseCase(ra.store, variables = { _, _ -> CloudVariables(emptyMap(), listOf("NPM_TOKEN")) })
+        val unreadable = create("outage")
+        registered(unreadable.id, 1)
+        failure(CloudEnvironmentRules.PREPARATION_FAILED) { outage.environment(team, unreadable.id, 1) }
+        val problem = ra.store.find(team, unreadable.id)!!.failure!!
+        assertTrue(problem.retryable && problem.message.contains("unavailable right now"))
+        ra.sessions.delete(colleague, null, unreadable.id)
         ra.sessions.delete(colleague, null, prepared.id)
-        drain(ra) { ra.store.find(team, prepared.id)!!.workspace.deletion == DeletionState.PROVEN }
+        drain(ra) { listOf(prepared, unreadable).all { ra.store.find(team, it.id)!!.workspace.deletion == DeletionState.PROVEN } }
     }
 
     private fun cluster(r: Replica) = r.cluster
