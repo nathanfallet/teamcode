@@ -20,6 +20,9 @@ fun Principal.requireSkillReader(memberId: String) {
 
 /** Validates a CI or administrator upload and stores it as an immutable version. */
 class PublishSkillVersionUseCase(private val store: SkillStore) {
+    /** Lets transports refuse an unauthorized caller before reading a multi-megabyte upload. */
+    fun authorize(actor: Principal) = actor.requireSkillPublisher()
+
     suspend operator fun invoke(actor: Principal, name: String, version: String, files: List<SkillFile>): SkillPublication {
         actor.requireSkillPublisher()
         SkillArtifacts.validateName(name)
@@ -81,8 +84,39 @@ class ReportSkillInstallationsUseCase(private val store: SkillStore) {
     }
 }
 
+/**
+ * Administrator catalog operations: authorization and input validation happen here, before persistence. Rules that
+ * depend on current shared state (retired skill, pinned version, limits) are enforced by the store inside its
+ * team-locked transaction, so two replicas cannot both pass them.
+ */
+class ManageSkillCatalogUseCase(private val store: SkillStore) {
+    suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return store.catalog(actor) }
+    suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> = admin(actor, name) { store.versions(actor, name) }
+    suspend fun pin(actor: Principal, name: String, version: String): Skill = admin(actor, name, version) { store.pin(actor, name, version) }
+    suspend fun unpin(actor: Principal, name: String): Skill = admin(actor, name) { store.unpin(actor, name) }
+    suspend fun retire(actor: Principal, name: String): Skill = admin(actor, name) { store.retire(actor, name) }
+    suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }
+    suspend fun retireVersion(actor: Principal, name: String, version: String): SkillVersion = admin(actor, name, version) { store.retireVersion(actor, name, version) }
+    suspend fun assignments(actor: Principal, name: String): List<SkillAssignment> = admin(actor, name) { store.assignments(actor, name) }
+    /** Sets a member's yes/no decision; null clears it. */
+    suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?): SkillAssignment? =
+        admin(actor, name) { store.assign(actor, name, memberId, decision) }
+    /** Device installation status: the member themself (interactive) or an administrator. */
+    suspend fun installations(actor: Principal, memberId: String): List<SkillInstallation> {
+        if (actor.member.id != memberId) actor.requireAdmin() else { actor.requireInteractive(); actor.requireReady() }
+        return store.installations(actor, memberId)
+    }
+    private inline fun <T> admin(actor: Principal, name: String, version: String? = null, block: () -> T): T {
+        actor.requireAdmin()
+        SkillArtifacts.validateName(name)
+        version?.let(SkillArtifacts::validateVersion)
+        return block()
+    }
+}
+
 /** Composition bundle for the transport layer. */
 class SkillCatalog(val store: SkillStore) {
+    val manage = ManageSkillCatalogUseCase(store)
     val publish = PublishSkillVersionUseCase(store)
     val effective = ResolveEffectiveSkillsUseCase(store)
     val download = DownloadSkillUseCase(store, effective)

@@ -9,7 +9,7 @@ A skill is instructions and files loaded by an agent. It is not executed by the 
 | Concept | Rule |
 | --- | --- |
 | Skill | Team-scoped, named `[a-z0-9]+(-[a-z0-9]+)*`, at most 64 characters. Created by its first publication. |
-| Version | Immutable label of 1–64 characters `[0-9A-Za-z][0-9A-Za-z.+_-]*`. Its files and digest never change. Labels carry no ordering: "update" and "rollback" are both explicit pins. |
+| Version | Immutable, case-sensitive label of 1–64 characters `[0-9A-Za-z][0-9A-Za-z.+_-]*` (binary collation, so `v1` and `V1` are distinct). Its files and digest never change. A retired version cannot be republished. Labels carry no ordering: "update" and "rollback" are both explicit pins. |
 | Artifact | 1–200 files, at most 5 MiB of content in total, with `SKILL.md` at the root. Stored in MySQL (`MEDIUMBLOB` per file). |
 | Pinned version | The single approved version an administrator chose. Publication never pins. A skill without a pin delivers nothing. |
 | Access decision | Per member: **yes** (`allow`), **no** (`deny`) or not assigned. Only *yes* delivers. There are no variants. |
@@ -68,11 +68,61 @@ Content-Type: application/json
 - `201 Created`: a new immutable version, with its digest.
 - `200 OK` with `created: false`: the same version was already published with the same digest. CI retries are safe and append no audit event.
 - `409 skill_version_conflict`: the version exists with different content. Publish a new version.
+- `409 skill_version_retired`: the version exists but was retired; publish a new version.
 - `409 skill_retired`: the skill was removed from the catalog; restore it first.
 - `400` for invalid names, versions, paths, modes or base64; `413` above the size bound (the request body itself is bounded at 8 MiB).
 - `403 credential_scope` for a key without `skills:publish`, `403 forbidden` for a member or a non-administrator key.
 
 Limits: 500 skills per team, 200 versions per skill.
+
+### Example: publishing from a GitHub repository
+
+Publication is API-only by design. TeamCode has no GitHub connection (no App, no OAuth, no server-side pull). A repository that holds skills publishes them itself from its own workflow, with a `skills:publish` key stored as a repository secret. This GitHub Actions workflow publishes `skills/review` when a `review-v*` tag is pushed:
+
+```yaml
+name: Publish review skill
+on:
+  push:
+    tags: ['review-v*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the publication request
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/skill.json"
+          import base64, json, os, pathlib
+          root = pathlib.Path("skills/review")
+          files = []
+          for path in sorted(root.rglob("*")):
+              if path.is_symlink():
+                  raise SystemExit(f"Symbolic links cannot be published: {path}")
+              if path.is_file():
+                  files.append({
+                      "path": path.relative_to(root).as_posix(),
+                      "mode": "executable" if os.access(path, os.X_OK) else "file",
+                      "contentBase64": base64.b64encode(path.read_bytes()).decode(),
+                  })
+          print(json.dumps({"version": os.environ["VERSION"].removeprefix("review-v"), "files": files}))
+          PY
+      - name: Publish to TeamCode
+        env:
+          TEAMCODE_URL: https://teamcode.example.org
+          TEAMCODE_SKILLS_KEY: ${{ secrets.TEAMCODE_SKILLS_KEY }}
+        run: |
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer $TEAMCODE_SKILLS_KEY" \
+            -H "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/skill.json" \
+            "$TEAMCODE_URL/api/v1/skills/review/versions"
+```
+
+A re-run of the same tag succeeds without creating anything (`200`, `created: false`). Changed content under an existing label fails the job (`409`). The published version is only delivered after an administrator pins it. Rotate the key like any other service key; it expires after at most 90 days.
 
 ## Administration
 
@@ -111,17 +161,17 @@ Members opening **Skills** are redirected to their own delivered skills.
 
 The manifest lists `name`, `version`, `digest`, `sizeBytes` and `fileCount` for each effective skill. The artifact returns each file's `path`, `mode`, `size`, `sha256` and `contentBase64`, plus the digest. Only the currently effective pinned version is served: any other version, or a skill whose decision was removed, returns 404. Authorization is evaluated on every request against shared MySQL state, so a change on one replica applies to the next request on any replica.
 
-Installation reports upsert the status of up to 500 named catalog skills for the device bound to the login session (`409 device_required` otherwise; service keys have no device). Unknown names are refused. Reports are kept when access is removed, as history; a removed device deletes its reports. They are not audited, because they describe workstation state rather than an administrative change.
+Installation reports upsert the status of up to 500 named catalog skills for the device bound to the login session (`409 device_required` otherwise; service keys have no device). Unknown names are refused, and a reported version must be published for that skill (with a matching digest when one is given), so a status never names unknown content. Reports are kept when access is removed, as history; a removed device deletes its reports. They are not audited, because they describe workstation state rather than an administrative change.
 
 ## Audit
 
-Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the affected member ID). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
+Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the assignment ID, a stable row of `skill_assignments` naming both the skill and the member; clearing a decision keeps the row). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
 
 ## Persistence and upgrade
 
 Five additive tables: `skills`, `skill_versions`, `skill_files`, `skill_assignments`, `skill_installations`, created by one Flyway migration generated from the Exposed definitions and reviewed (the generator emitted one file per table, each repeating the `skills` DDL; they were merged into a single file). Existing data is untouched. Every replica must run this version before the catalog is used, because older replicas do not serve the new routes.
 
-Administrative writes lock the team row briefly; a version's content insert holds only its skill row lock, so a 5 MiB upload does not delay team-wide admission. Concurrent publications of the same version on two replicas converge on one record (tested). No content is cached in memory between requests.
+Authorization and input validation live in `ManageSkillCatalogUseCase` and the publication/delivery use cases; rules that depend on shared state (retired skill, pinned version, limits) are enforced by the store inside its transaction. Administrative writes lock the team row briefly; a version's content insert holds only its skill row lock, so a 5 MiB upload does not delay team-wide admission. Concurrent publications of the same version on two replicas converge on one record (tested). Publication commits the catalog entry before the version: if the version step then fails (revoked key, conflict, database error), the skill remains with no version. It delivers nothing, counts toward the 500-skill limit, and can be retired; a retry reuses it. No content is cached in memory between requests.
 
 ## What is planned
 
@@ -130,7 +180,3 @@ Administrative writes lock the team row briefly; a version's content insert hold
 - **Group decisions**, using the precedence above.
 - **Cloud sessions** resolving the effective member's skills on creation, resume and transfer.
 - **Pruning** of old, retired versions; versions are currently kept forever (bounded at 200 per skill).
-
-### Open question: GitHub synchronization
-
-The roadmap leaves open whether the catalog is populated by GitHub synchronization, CI publication through the API, or both. This slice implements **CI publication only**: it needs no GitHub credentials on the server and keeps the approved artifact independent from repository history. GitHub synchronization remains **planned**; if it is added, it should produce the same immutable versions through the same publication use case, so pinning, rollback and delivery are unchanged.

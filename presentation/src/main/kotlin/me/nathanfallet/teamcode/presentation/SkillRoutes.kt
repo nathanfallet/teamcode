@@ -50,10 +50,10 @@ private fun PublishSkillVersionRequest.files(): List<SkillFile> {
         SkillFile(upload.path, fileMode(upload.mode), content)
     }
 }
-private val ApplicationCall.skillName get() = parameters["name"]!!.also(SkillArtifacts::validateName)
+private val ApplicationCall.skillName get() = parameters["name"]!!
 
 internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: String) {
-    val store = skills.store
+    val store = skills.manage
     // Catalog administration and CI publication.
     get("/api/v1/skills") { call.respond(store.catalog(call.principal).map { it.view() }) }
     get("/api/v1/skills/{name}/versions") {
@@ -62,6 +62,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
     }
     post("/api/v1/skills/{name}/versions") {
         val name = call.skillName
+        skills.publish.authorize(call.principal) // Before buffering up to 8 MiB.
         val input = call.boundedJson<PublishSkillVersionRequest>(MAX_PUBLISH_BODY_BYTES)
         val result = skills.publish(call.principal, name, input.version, input.files())
         call.respond(if (result.created) HttpStatusCode.Created else HttpStatusCode.OK,
@@ -70,7 +71,6 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
     put("/api/v1/skills/{name}/pin") {
         val name = call.skillName
         val input = call.boundedJson<PinSkillRequest>(4_096)
-        SkillArtifacts.validateVersion(input.version)
         call.respond(store.pin(call.principal, name, input.version).view())
     }
     delete("/api/v1/skills/{name}/pin") { call.respond(store.unpin(call.principal, call.skillName).view()) }
@@ -78,8 +78,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
     post("/api/v1/skills/{name}/restore") { call.respond(store.restore(call.principal, call.skillName).view()) }
     delete("/api/v1/skills/{name}/versions/{version}") {
         val name = call.skillName
-        val version = call.parameters["version"]!!.also(SkillArtifacts::validateVersion)
-        val retired = store.retireVersion(call.principal, name, version)
+        val retired = store.retireVersion(call.principal, name, call.parameters["version"]!!)
         call.respond(retired.view(null))
     }
     get("/api/v1/skills/{name}/assignments") { call.respond(store.assignments(call.principal, call.skillName).map { it.view() }) }
@@ -100,8 +99,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
     }
     get("/api/v1/skill-delivery/{name}/{version}") {
         val name = call.skillName
-        val version = call.parameters["version"]!!.also(SkillArtifacts::validateVersion)
-        call.respond(skills.download(call.principal, name, version).view())
+        call.respond(skills.download(call.principal, name, call.parameters["version"]!!).view())
     }
     put("/api/v1/skill-delivery/installations") {
         val input = call.boundedJson<ReportSkillInstallationsRequest>(MAX_REPORT_BODY_BYTES)
@@ -119,7 +117,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
 private fun date(value: Long) = Instant.ofEpochMilli(value).toString()
 
 private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin: String) {
-    val store = skills.store
+    val store = skills.manage
     get("/dashboard/skills") {
         val actor = call.principal
         if (actor.member.role != Role.ADMIN) return@get call.respondRedirect("/dashboard/members/${actor.member.id}/skills")
@@ -154,8 +152,7 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
     }
     post("/dashboard/skills/{name}/pin") {
         val input = call.form(origin)
-        val version = input["version"].orEmpty().also(SkillArtifacts::validateVersion)
-        call.respondRedirect("/dashboard/skills/${store.pin(call.principal, call.skillName, version).name}")
+        call.respondRedirect("/dashboard/skills/${store.pin(call.principal, call.skillName, input["version"].orEmpty()).name}")
     }
     post("/dashboard/skills/{name}/unpin") { call.form(origin); call.respondRedirect("/dashboard/skills/${store.unpin(call.principal, call.skillName).name}") }
     post("/dashboard/skills/{name}/retire") { call.form(origin); call.respondRedirect("/dashboard/skills/${store.retire(call.principal, call.skillName).name}") }
@@ -163,7 +160,7 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
     post("/dashboard/skills/{name}/versions/{version}/retire") {
         call.form(origin)
         val name = call.skillName
-        store.retireVersion(call.principal, name, call.parameters["version"]!!.also(SkillArtifacts::validateVersion))
+        store.retireVersion(call.principal, name, call.parameters["version"]!!)
         call.respondRedirect("/dashboard/skills/$name")
     }
     post("/dashboard/skills/{name}/assignments/{memberId}") {

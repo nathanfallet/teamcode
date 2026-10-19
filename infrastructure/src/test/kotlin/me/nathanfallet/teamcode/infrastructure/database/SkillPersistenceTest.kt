@@ -82,6 +82,9 @@ class SkillPersistenceTest {
                 failure("credential_scope") { catalogA.report(member.copy(serviceScopes = setOf(ServiceScope.SKILLS_READ)), emptyList()) }
                 failure("device_required") { catalogA.report(admin, listOf(SkillInstallationReport("review", "1.0.0", v1.version.digest, SkillInstallationStatus.INSTALLED))) }
                 failure("not_found") { catalogA.report(member, listOf(SkillInstallationReport("unknown", null, null, SkillInstallationStatus.CONFLICT))) }
+                failure("invalid_skill_installation") { catalogA.report(member, listOf(SkillInstallationReport("review", "9.9.9", null, SkillInstallationStatus.INSTALLED))) }
+                failure("invalid_skill_installation") { catalogA.report(member, listOf(SkillInstallationReport("review", "1.0.0", v2.version.digest, SkillInstallationStatus.INSTALLED))) }
+                failure("invalid_skill_installation") { catalogA.report(member, listOf(SkillInstallationReport("review", null, v1.version.digest, SkillInstallationStatus.INSTALLED))) }
                 catalogA.report(member, listOf(SkillInstallationReport("review", "1.0.0", v1.version.digest, SkillInstallationStatus.INSTALLED)))
                 catalogB.report(member, listOf(SkillInstallationReport("review", "1.0.0", v1.version.digest, SkillInstallationStatus.CONFLICT)))
                 val status = catalogA.store.installations(admin, member.member.id).single()
@@ -99,6 +102,7 @@ class SkillPersistenceTest {
                 failure("skill_version_pinned") { catalogA.store.retireVersion(admin, "review", "1.0.0") }
                 assertTrue(catalogA.store.retireVersion(admin, "review", "2.0.0").retired)
                 failure("skill_version_retired") { catalogB.store.pin(admin, "review", "2.0.0") }
+                failure("skill_version_retired") { catalogA.publish(publisher, "review", "2.0.0", files("two")) }
                 catalogB.store.unpin(admin, "review")
                 assertEquals(emptyList(), catalogA.effective(member))
                 catalogB.store.pin(admin, "review", "1.0.0")
@@ -124,6 +128,10 @@ class SkillPersistenceTest {
                     "skill.access.denied", "skill.access.cleared", "skill.version.retired", "skill.unpinned", "skill.retired", "skill.restored")))
                 assertEquals(2, actions.count { it.first == "skill.version.published" }, "Idempotent and refused publications append nothing")
                 assertTrue(actions.all { (_, subject) -> subject.length == 36 })
+                // Access events name the assignment, which resolves to both the skill and the member, even once cleared.
+                val accessSubjects = actions.filter { it.first.startsWith("skill.access.") }.map { it.second }.toSet()
+                val resolved = a.query { SkillAssignments.select(SkillAssignments.id, SkillAssignments.skillId, SkillAssignments.memberId).where { SkillAssignments.id inList accessSubjects }.map { it[SkillAssignments.skillId] to it[SkillAssignments.memberId] }.toSet() }
+                assertEquals(setOf(v1.skill.id to member.member.id, v1.skill.id to other.id), resolved)
             } }
         }
     }
@@ -144,6 +152,12 @@ class SkillPersistenceTest {
                 assertEquals(1, results.count { it.created })
                 assertEquals(1, results.map { it.version.id }.toSet().size)
                 assertEquals(1L, a.query { SkillVersions.selectAll().count() })
+                // Version labels are case-sensitive, matching the domain pattern.
+                val catalog = SkillCatalog(SqlSkillStore(a))
+                assertTrue(catalog.publish(admin, "race", "v2", files("lower")).created)
+                assertTrue(catalog.publish(admin, "race", "V2", files("upper")).created)
+                catalog.store.pin(admin, "race", "V2")
+                assertEquals("V2", catalog.store.versions(admin, "race").first.pinnedVersion)
             } }
         }
     }

@@ -33,7 +33,8 @@ object Skills : Table("skills") {
 object SkillVersions : Table("skill_versions") {
     val id = varchar("id", 36)
     val skillId = reference("skill_id", Skills.id)
-    val version = varchar("version", 64)
+    /** Labels are case-sensitive in the domain; the default collation would merge `v1` and `V1`. */
+    val version = varchar("version", 64, collate = "utf8mb4_bin")
     val digest = varchar("digest", 71)
     val sizeBytes = long("size_bytes")
     val fileCount = integer("file_count")
@@ -54,11 +55,15 @@ object SkillFiles : Table("skill_files") {
     override val primaryKey = PrimaryKey(versionId, path)
 }
 
-/** Explicit per-member yes/no decisions. A missing row means not assigned. */
+/**
+ * Explicit per-member yes/no decisions; a missing row or a null decision means not assigned. A row is kept when its
+ * decision is cleared so its stable ID, used as the audit subject, keeps resolving to the skill and member.
+ */
 object SkillAssignments : Table("skill_assignments") {
+    val id = varchar("id", 36).uniqueIndex("skill_assignment_id")
     val skillId = reference("skill_id", Skills.id)
     val memberId = reference("member_id", Members.id, onDelete = ReferenceOption.CASCADE).index("skill_assignment_member")
-    val decision = varchar("decision", 8)
+    val decision = varchar("decision", 8).nullable()
     val updatedBy = varchar("updated_by", 36)
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(skillId, memberId)

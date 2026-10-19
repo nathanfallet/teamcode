@@ -97,6 +97,8 @@ class SkillRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-inference", publishBody("1", files)).status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-read", publishBody("1", files)).status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", "member", publishBody("1", files)).status)
+        // Authorization precedes reading the body: a member's malformed upload is refused, not parsed.
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", "member", "{not json").status)
         val created = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("1", files))
         assertEquals(HttpStatusCode.Created, created.status)
         val published = Serialization.json.decodeFromString<PublishSkillVersionResponse>(created.bodyAsText())

@@ -63,6 +63,8 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             if (existing != null) {
                 if (existing[SkillVersions.digest] != artifact.digest)
                     throw TeamFailure("skill_version_conflict", 409, "Version $version is already published with different content. Publish a new version.")
+                if (existing[SkillVersions.retiredAt] != null)
+                    throw TeamFailure("skill_version_retired", 409, "Version $version is retired and cannot be pinned. Publish a new version.")
                 return@query SkillPublication(skill(row), version(existing), created = false)
             }
             if (SkillVersions.select(SkillVersions.id).where { SkillVersions.skillId eq skillId }.count() >= SkillStore.VERSION_LIMIT)
@@ -136,8 +138,8 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         return database.query {
             requireCurrent(this, actor)
             val skill = skillRow(actor.teamId, name)[Skills.id]
-            SkillAssignments.selectAll().where { SkillAssignments.skillId eq skill }.orderBy(SkillAssignments.memberId to SortOrder.ASC)
-                .limit(1_000).map(::assignment)
+            SkillAssignments.selectAll().where { (SkillAssignments.skillId eq skill) and SkillAssignments.decision.isNotNull() }
+                .orderBy(SkillAssignments.memberId to SortOrder.ASC).limit(1_000).map { assignment(it)!! }
         }
     }
 
@@ -149,21 +151,20 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             if (Members.select(Members.id).where { (Members.id eq memberId) and (Members.teamId eq actor.teamId) }.forUpdate().singleOrNull() == null)
                 throw TeamFailure("not_found", 404, "Member not found.")
             val where = (SkillAssignments.skillId eq skill) and (SkillAssignments.memberId eq memberId)
-            val current = SkillAssignments.selectAll().where { where }.singleOrNull()?.let(::assignment)
+            val row = SkillAssignments.selectAll().where { where }.singleOrNull()
+            val current = row?.let(::assignment)
             if (current?.decision == decision) return@query current
-            if (decision == null) {
-                SkillAssignments.deleteWhere { where }
-                audit(actor.teamId, actor.member.id, "skill.access.cleared", memberId)
-                return@query null
-            }
             val now = nowMillis()
-            if (current == null) SkillAssignments.insert {
-                it[skillId] = skill; it[SkillAssignments.memberId] = memberId; it[SkillAssignments.decision] = decision.wire
-                it[updatedBy] = actor.member.id; it[updatedAt] = now
+            val id = row?.get(SkillAssignments.id) ?: UUID.randomUUID().toString()
+            if (row == null) SkillAssignments.insert {
+                it[SkillAssignments.id] = id; it[skillId] = skill; it[SkillAssignments.memberId] = memberId
+                it[SkillAssignments.decision] = decision?.wire; it[updatedBy] = actor.member.id; it[updatedAt] = now
             } else SkillAssignments.update({ where }) {
-                it[SkillAssignments.decision] = decision.wire; it[updatedBy] = actor.member.id; it[updatedAt] = now
+                it[SkillAssignments.decision] = decision?.wire; it[updatedBy] = actor.member.id; it[updatedAt] = now
             }
-            audit(actor.teamId, actor.member.id, if (decision == SkillDecision.ALLOW) "skill.access.allowed" else "skill.access.denied", memberId)
+            val action = when (decision) { SkillDecision.ALLOW -> "skill.access.allowed"; SkillDecision.DENY -> "skill.access.denied"; null -> "skill.access.cleared" }
+            // The assignment ID resolves to both the skill and the member in skill_assignments.
+            audit(actor.teamId, actor.member.id, action, id)
             SkillAssignments.selectAll().where { where }.single().let(::assignment)
         }
     }
@@ -203,10 +204,22 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             .associate { it[Skills.name] to it[Skills.id] }
         val missing = reports.firstOrNull { it.name !in ids }
         if (missing != null) throw TeamFailure("not_found", 404, "Skill ${missing.name} is not in the catalog.")
+        // A reported version must be a published one, and a digest must match it, so status never names unknown content.
+        val labels = reports.mapNotNull { it.version }.toSet()
+        val digests = if (labels.isEmpty()) emptyMap() else SkillVersions.select(SkillVersions.skillId, SkillVersions.version, SkillVersions.digest)
+            .where { (SkillVersions.skillId inList ids.values) and (SkillVersions.version inList labels) }
+            .associate { (it[SkillVersions.skillId] to it[SkillVersions.version]) to it[SkillVersions.digest] }
+        for (report in reports) {
+            if (report.version == null && report.digest != null) throw TeamFailure("invalid_skill_installation", 400, "A digest must name its version.")
+            val published = report.version?.let { digests[ids.getValue(report.name) to it] }
+            if (report.version != null && (published == null || (report.digest != null && report.digest != published)))
+                throw TeamFailure("invalid_skill_installation", 400, "Skill ${report.name} has no published version matching this report.")
+        }
         val now = nowMillis()
-        for (report in reports) SkillInstallations.upsert {
-            it[deviceId] = device; it[skillId] = ids.getValue(report.name); it[version] = report.version
-            it[digest] = report.digest; it[status] = report.status.wire; it[reportedAt] = now
+        SkillInstallations.batchUpsert(reports) { report ->
+            this[SkillInstallations.deviceId] = device; this[SkillInstallations.skillId] = ids.getValue(report.name)
+            this[SkillInstallations.version] = report.version; this[SkillInstallations.digest] = report.digest
+            this[SkillInstallations.status] = report.status.wire; this[SkillInstallations.reportedAt] = now
         }
     }
 
@@ -252,8 +265,9 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         row[SkillVersions.id], row[SkillVersions.skillId], row[SkillVersions.version], row[SkillVersions.digest], row[SkillVersions.sizeBytes],
         row[SkillVersions.fileCount], row[SkillVersions.publishedBy], row[SkillVersions.publishedAt], row[SkillVersions.retiredAt] != null,
     )
-    private fun assignment(row: ResultRow) =
-        SkillAssignment(row[SkillAssignments.skillId], row[SkillAssignments.memberId], decision(row[SkillAssignments.decision]), row[SkillAssignments.updatedAt])
+    private fun assignment(row: ResultRow) = row[SkillAssignments.decision]?.let {
+        SkillAssignment(row[SkillAssignments.skillId], row[SkillAssignments.memberId], decision(it), row[SkillAssignments.updatedAt])
+    }
     private fun decision(value: String) = SkillDecision.entries.single { it.wire == value }
     private fun mode(value: String) = SkillFileMode.entries.single { it.wire == value }
 }
