@@ -12,7 +12,8 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Attachment leases and `teamcode cloud attach` | Implemented (`cloud.attach.v1`) |
 | Access policy for members and groups (create, attach, message, transcript) | Implemented (`cloud.access.v1`); groups need a group directory, see [access](#access) |
 | Transcript retention setting (`transcriptRetentionDays`, 30 days by default) | Implemented |
-| Idle pause, `initialMessage` on create, caller-wide SSE feed, webhooks | Planned |
+| Idle pause with attachment leases, `initialMessage` on create (`cloud.sessions.initial-message.v1`) | Implemented, see [idle pause](cloud-sessions.md#idle-pause) and [create](cloud-sessions.md#create-request-and-view) |
+| Caller-wide SSE feed, webhooks | Planned |
 | Transfer: leases removed, unconsumed messages cancelled or kept, `transfer` event | Implemented, see [transfer](cloud-sessions.md#transfer) |
 
 The capabilities are advertised with `cloud.sessions.v1`, when cloud sessions are enabled.
@@ -87,7 +88,7 @@ Acknowledgement levels: `queued`, `delivered` (handed to the runner), `consumed`
 
 ## Attach
 
-`POST /cloud/sessions/{id}/attachments` takes a 60-second lease (`201`), renewed with `POST .../attachments/{attachment}/renew` (`409 attachment_expired` once lost) and released with `DELETE .../attachments/{attachment}`. Attaching needs the `attach` and `transcript` permissions; the lease lists what the member may do (`transcript`, `message`). An ended session cannot be attached (`409`). A change of owner removes every lease of the session; the former owner's `teamcode cloud attach` then stops with "Access to this session was revoked."
+`POST /cloud/sessions/{id}/attachments` takes a 60-second lease (`201`), renewed with `POST .../attachments/{attachment}/renew` (`409 attachment_expired` once lost) and released with `DELETE .../attachments/{attachment}`. Attaching needs the `attach` and `transcript` permissions; the lease lists what the member may do (`transcript`, `message`). An ended session cannot be attached (`409`). A change of owner removes every lease of the session; the former owner's `teamcode cloud attach` then stops with "Access to this session was revoked." A live lease keeps the session from the [idle pause](cloud-sessions.md#idle-pause), and the end of a lease (detach or expiry) counts as its last activity; ended leases are kept a day for that, then purged.
 
 `teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]` holds a lease (renewed every 20 s, taken again if it expired), prints the last events and then the stream, and sends each input line as a message with its own idempotency key. `/interrupt` stops the current turn; `/detach` or the end of input detaches, and the session keeps running. A network failure reconnects from the last printed event, so nothing is printed twice or skipped.
 
@@ -121,7 +122,7 @@ Migrations `V20261019210000*`: `cloud_settings.transcript_retention_days`, `clou
 ## Known limits
 
 - The agent runs with the pod UID like the runner, so it can read the projected token file; a separate UID or a token that the runner drops after reading is a follow-up.
-- Idle pause, the attachment lease in idle detection, `initialMessage`, the caller-wide feed and webhooks are not implemented.
+- The caller-wide feed and webhooks are not implemented.
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.

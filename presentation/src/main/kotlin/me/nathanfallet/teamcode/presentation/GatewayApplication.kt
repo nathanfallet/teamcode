@@ -115,7 +115,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && devices != null) listOf("team.devices") else emptyList()) +
                     (if (team != null && serviceKeys != null) listOf("team.service-keys.v1") else emptyList()) +
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
-                    (if (team != null && cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1") else emptyList()) +
+                    (if (team != null && cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else emptyList())))

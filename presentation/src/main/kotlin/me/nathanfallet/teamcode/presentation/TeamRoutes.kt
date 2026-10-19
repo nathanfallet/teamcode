@@ -15,9 +15,9 @@ internal val ApplicationCall.principal get() = attributes[PRINCIPAL]
 internal fun Member.view() = MemberView(id, username, role.name, disabled, passwordChangeRequired)
 internal fun NewMember.view() = CreatedMemberResponse(member.view(), temporaryPassword)
 internal fun role(value: String): Role = Role.entries.find { it.name == value } ?: throw TeamFailure("invalid_role", 400, "Unknown role.")
-internal suspend inline fun <reified T> ApplicationCall.jsonBody(): T {
+internal suspend inline fun <reified T> ApplicationCall.jsonBody(limit: Int = 32_768): T {
     if (request.contentType().withoutParameters() != ContentType.Application.Json) throw TeamFailure("invalid_body", 400, "A JSON body is required.")
-    return try { Serialization.json.decodeFromString<T>(receiveChannel().readBounded(32_768).decodeToString()) }
+    return try { Serialization.json.decodeFromString<T>(receiveChannel().readBounded(limit).decodeToString()) }
     catch (_: IllegalArgumentException) { throw TeamFailure("invalid_body", 400, "Invalid request body.") }
 }
 internal fun Route.teamRoutes(team: TeamService) {

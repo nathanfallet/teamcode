@@ -234,6 +234,8 @@ data class CloudSessionDraft(
     val agentEffort: String?,
     val labels: Map<String, String>,
     val idleTimeoutMinutes: Int?,
+    /** The first message for the agent, queued with the session and delivered once it is ready. */
+    val initialMessage: String? = null,
 )
 
 /** Idempotency of a mutating request: scope is team + initiator + route + key, compared on a body digest. */

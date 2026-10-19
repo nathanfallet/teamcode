@@ -14,7 +14,7 @@ import org.jetbrains.exposed.v1.jdbc.*
  * Transcript, inputs, attachments and the access policy in MySQL. Writes that number events or count pending
  * inputs lock the session row first, so concurrent replicas and retried runner batches agree.
  */
-class SqlCloudConversationStore(private val database: Database) : CloudConversationStore {
+class SqlCloudConversationStore(private val database: Database) : CloudConversationStore, CloudActivitySource {
     override suspend fun now(): Long = database.query { nowMillis() }
 
     override suspend fun appendRunnerEvents(sessionId: String, epoch: Int, events: List<RunnerEvent>): RunnerEventsAck = database.query {
@@ -199,8 +199,19 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }
 
     override suspend fun detach(sessionId: String, id: String, memberId: String) = database.query {
-        CloudSessionAttachments.deleteWhere { (CloudSessionAttachments.id eq id) and (CloudSessionAttachments.sessionId eq sessionId) and (CloudSessionAttachments.memberId eq memberId) }
+        val now = nowMillis()
+        CloudSessionAttachments.update({ (CloudSessionAttachments.id eq id) and (CloudSessionAttachments.sessionId eq sessionId) and
+            (CloudSessionAttachments.memberId eq memberId) and (CloudSessionAttachments.leaseUntil greater now) }) { it[leaseUntil] = now }
         Unit
+    }
+
+    override suspend fun lastActivity(sessionId: String, now: Long): Long? = database.query {
+        val waiting = !CloudSessionInputs.select(CloudSessionInputs.id).where {
+            (CloudSessionInputs.sessionId eq sessionId) and (CloudSessionInputs.status inList listOf(CloudInputStatus.QUEUED.wire, CloudInputStatus.DELIVERED.wire))
+        }.limit(1).empty()
+        if (waiting) return@query now
+        val latest = CloudSessionAttachments.leaseUntil.max()
+        CloudSessionAttachments.select(latest).where { CloudSessionAttachments.sessionId eq sessionId }.singleOrNull()?.get(latest)?.coerceAtMost(now)
     }
 
     override suspend fun attachments(sessionId: String, now: Long): List<CloudAttachment> = database.query {
@@ -241,6 +252,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             after = teams.lastOrNull() ?: break
             if (teams.size < 100) break
         }
+        // Ended leases are kept a day, the longest idle timeout, so idle detection still sees a recent detach.
         CloudSessionAttachments.deleteWhere(limit = limit) { CloudSessionAttachments.leaseUntil less (now - DAY_MILLIS) }
         deleted
     }

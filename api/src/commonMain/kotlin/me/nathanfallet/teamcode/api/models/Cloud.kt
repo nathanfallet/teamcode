@@ -73,6 +73,8 @@ data class CreateCloudSessionRequest(
     val agent: CloudAgentRequest? = null,
     val labels: Map<String, String> = emptyMap(),
     val idleTimeoutMinutes: Int? = null,
+    /** The first message for the agent (`cloud.sessions.initial-message.v1`), delivered once the session is ready. */
+    val initialMessage: String? = null,
 )
 @Serializable
 data class PauseCloudSessionRequest(val force: Boolean = false)

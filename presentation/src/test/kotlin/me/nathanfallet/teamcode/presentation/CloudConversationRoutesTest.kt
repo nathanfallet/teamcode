@@ -150,8 +150,9 @@ class CloudConversationRoutesTest {
         val store = Sessions(listOf(admin, colleague, other))
         val conversations = Conversations()
         val access = CloudAccessService(conversations, store)
-        val sessions = CloudSessionService(store, access = access)
-        val conversation = CloudConversation(CloudConversationService(conversations, store, access, sleep = { delay(20) }), access,
+        val service = CloudConversationService(conversations, store, access, sleep = { delay(20) })
+        val sessions = CloudSessionService(store, access = access, initialMessages = service)
+        val conversation = CloudConversation(service, access,
             RunnerConversationUseCase(store, conversations, sleep = { delay(20) }))
         val server = embeddedServer(io.ktor.server.cio.CIO, port = 0, host = "127.0.0.1") {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
@@ -174,7 +175,21 @@ class CloudConversationRoutesTest {
             store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
 
             val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
-            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1").all { it in features })
+            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1").all { it in features })
+
+            // An initial message of the full 32,000 characters fits the creation body and is queued (replay: CloudIdlePersistenceTest).
+            val longest = "é".repeat(CloudConversationRules.MAX_MESSAGE_CHARS)
+            suspend fun create(text: String, key: String) = client.post("/api/v1/cloud/sessions") {
+                bearerAuth("colleague"); contentType(ContentType.Application.Json); header(CloudHeaders.IDEMPOTENCY_KEY, key)
+                setBody(Serialization.json.encodeToString(CreateCloudSessionRequest("Initial", "profile-id", initialMessage = text)))
+            }
+            val withMessage = create(longest, "initial-1")
+            assertEquals(HttpStatusCode.Accepted, withMessage.status, withMessage.bodyAsText())
+            val initialId = Serialization.json.decodeFromString<CloudSessionView>(withMessage.bodyAsText()).id
+            assertEquals(listOf(longest), conversations.inputs.values.filter { it.sessionId == initialId }.map { it.text })
+            assertEquals(HttpStatusCode.BadRequest, create(longest + "x", "initial-2").status, "Longer than a message")
+            assertFalse(store.sessions.values.any { it.name == "Initial" && it.id != initialId }, "A refused message creates no session")
+            conversations.inputs.values.removeIf { it.sessionId == initialId }
 
             suspend fun send(token: String, body: String, key: String? = null, onBehalf: String? = null) = client.post("/api/v1/cloud/sessions/s1/messages") {
                 bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)

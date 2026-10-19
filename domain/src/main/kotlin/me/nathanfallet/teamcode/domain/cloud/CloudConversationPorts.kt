@@ -51,6 +51,7 @@ interface CloudConversationStore {
     suspend fun attach(attachment: CloudAttachment, expectedOwnerId: String): CloudAttachment
     /** Extends a live lease owned by [memberId]; null when it expired, was released or belongs to someone else. */
     suspend fun renew(sessionId: String, id: String, memberId: String, leaseUntil: Long): CloudAttachment?
+    /** Ends the lease now; the row stays (until the transcript purge, a day later) so idle detection knows when the member left. */
     suspend fun detach(sessionId: String, id: String, memberId: String)
     suspend fun attachments(sessionId: String, now: Long): List<CloudAttachment>
 

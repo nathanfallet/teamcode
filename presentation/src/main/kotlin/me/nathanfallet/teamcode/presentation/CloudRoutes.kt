@@ -86,9 +86,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         post("/sessions") {
             val key = call.idempotencyKey(required = true)!!
             val onBehalfOf = call.onBehalfOf()
-            val input = call.jsonBody<CreateCloudSessionRequest>()
+            // Room for an initial message of 32,000 characters.
+            val input = call.jsonBody<CreateCloudSessionRequest>(256 * 1024)
             val canonical = Serialization.json.encodeToString(input.copy(labels = input.labels.toSortedMap())) + "\n" + (onBehalfOf ?: call.principal.member.id)
-            val draft = CloudSessionDraft(input.name, input.profileId, input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes)
+            val draft = CloudSessionDraft(input.name, input.profileId, input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes, input.initialMessage)
             when (val outcome = sessions.create(call.principal, onBehalfOf, draft, IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical)))) {
                 is CloudCreateOutcome.Created -> call.respond(HttpStatusCode.Accepted, outcome.session.view())
                 is CloudCreateOutcome.Replayed -> {

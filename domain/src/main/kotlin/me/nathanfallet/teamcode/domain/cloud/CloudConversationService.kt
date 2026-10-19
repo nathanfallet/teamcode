@@ -18,7 +18,14 @@ class CloudConversationService(
     private val access: CloudAccessService,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-) {
+) : CloudInitialMessages {
+    override suspend fun queue(principal: Principal, session: CloudSession, text: String) {
+        if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("initial\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) }
+        val input = newInput(principal, session, CloudInputKind.MESSAGE, text, InputRequest(text, false, INITIAL_MESSAGE_KEY, digest, null))
+        store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+    }
+
     suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
         CloudConversationRules.validatePage(limit, after, before)
         val session = open(principal, id, CloudPermission.TRANSCRIPT)
@@ -189,6 +196,8 @@ class CloudConversationService(
 
     companion object {
         const val POLL_MILLIS = 1_000L
+        /** The client key of the message given at creation; unique per session and author. */
+        const val INITIAL_MESSAGE_KEY = "initial-message"
         const val KEEPALIVE_MILLIS = 15_000L
         const val RECHECK_MILLIS = 15_000L
         private fun missing() = TeamFailure("not_found", 404, "Cloud session not found.")

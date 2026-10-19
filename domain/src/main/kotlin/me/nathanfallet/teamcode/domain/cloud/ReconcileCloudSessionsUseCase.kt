@@ -19,6 +19,8 @@ class ReconcileCloudSessionsUseCase(
     private val onError: (sessionId: String, error: Exception) -> Unit = { _, _ -> },
     /** Ownership transfers; null where the server does not offer them (a session then never holds one). */
     private val transfers: CompleteCloudTransferUseCase? = null,
+    /** Attachment leases and waiting inputs for idle detection; null disables the idle pause. */
+    private val activity: CloudActivitySource? = null,
 ) {
     /**
      * Reconciles up to [limit] due sessions; returns how many were claimed. All leases are taken together, so
@@ -170,7 +172,22 @@ class ReconcileCloudSessionsUseCase(
             return lost(s, owner, now, execution, if (pod == null) "pod_missing" else "heartbeat_lost")
         if (s.state == PREPARING && now - execution.createdAt > PREPARE_TIMEOUT_MILLIS)
             return fail(s, owner, now, CloudProblem("prepare_timeout", "The session did not become ready within 30 minutes.", true))
+        idle(s, owner, now)?.let { return it }
         return now + MONITOR_MILLIS
+    }
+
+    /**
+     * Pauses a `ready` session with no activity for its idle timeout: no turn, no message waiting for the agent and
+     * no attachment lease (a member watching the session keeps it running). It is an ordinary pause, so the session
+     * checkpoints and keeps its workspace; a message wakes it again. Inactivity never deletes anything.
+     */
+    private suspend fun idle(s: CloudSession, owner: String, now: Long): Long? {
+        if (activity == null || !CloudIdleRules.candidate(s)) return null
+        val timeout = CloudIdleRules.timeoutMillis(s)
+        if (now - s.lastActivityAt < timeout) return null
+        if (now - CloudIdleRules.idleSince(s, activity.lastActivity(s.id, now)) < timeout) return null
+        commit(s, owner, s.copy(desiredState = DesiredState.PAUSED, pauseRequestedAt = now, pauseForce = false, updatedAt = now), "cloud.session.idle_paused")
+        return now
     }
 
     private suspend fun drain(s: CloudSession, owner: String, now: Long): Long? {
