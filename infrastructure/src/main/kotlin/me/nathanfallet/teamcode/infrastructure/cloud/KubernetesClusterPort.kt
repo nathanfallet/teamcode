@@ -14,6 +14,7 @@ import java.security.cert.CertificateFactory
 import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.ReconcileCloudSessionsUseCase.Companion.CLUSTER_LABEL
@@ -41,7 +42,10 @@ data class KubernetesPodOptions(
     val runAsUser: Long = 1000,
 ) {
     init {
-        require(serverUrl.startsWith("https://") || serverUrl.startsWith("http://")) { "The runner server URL must be http(s)." }
+        // The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server.
+        require(Regex("https://[^/?#@\\s]+/?").matches(serverUrl) && !Regex("https://(localhost|127\\.[0-9.]+|\\[::1])(:[0-9]+)?/?").matches(serverUrl)) {
+            "Set TEAMCODE_CLOUD_SERVER_URL (or TEAMCODE_PUBLIC_URL) to the HTTPS origin session pods reach."
+        }
         require(workspaceAccessMode in setOf("ReadWriteOncePod", "ReadWriteOnce")) { "Use ReadWriteOncePod or ReadWriteOnce." }
     }
 }
@@ -61,6 +65,9 @@ class KubernetesClusterPort(
 ) : ClusterPort, AutoCloseable {
     private class Client(val fingerprint: String, val connection: ClusterConnection, val http: HttpClient, val loadedAt: Long)
     private val clients = ConcurrentHashMap<String, Client>()
+    /** Clients replaced after a rotation stay open until [close]: requests in flight may still use them. */
+    private val retired = java.util.concurrent.ConcurrentLinkedQueue<HttpClient>()
+    private val creation = kotlinx.coroutines.sync.Mutex()
     private val shared by lazy { engine?.let { HttpClient(it) { expectSuccess = false } } }
 
     override suspend fun storageClass(clusterId: String, name: String?): StorageClassObservation? {
@@ -97,7 +104,8 @@ class KubernetesClusterPort(
         get(clusterId, "/api/v1/persistentvolumes/${segment(name)}")?.let(::volume)
 
     override suspend fun orphanedVolumes(clusterId: String): List<VolumeObservation> =
-        list(clusterId, "/api/v1/persistentvolumes", null).map(::volume).filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
+        // PersistentVolumes are cluster-wide and carry no TeamCode label: read them all, with a larger page budget.
+        list(clusterId, "/api/v1/persistentvolumes", null, maxPages = 200).map(::volume).filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
 
     override suspend fun createPod(clusterId: String, request: PodRequest) {
         create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request))
@@ -234,14 +242,15 @@ class KubernetesClusterPort(
         if (!response.status.isSuccess() && response.status != HttpStatusCode.NotFound) throw ClusterApiException(response.status.value)
     }
     /** Every page of a list, at most [MAX_PAGES] pages of [PAGE_SIZE]. */
-    private suspend fun list(clusterId: String, path: String, labelSelector: String?): List<JsonObject> {
+    private suspend fun list(clusterId: String, path: String, labelSelector: String?, maxPages: Int = MAX_PAGES): List<JsonObject> {
         val items = mutableListOf<JsonObject>()
         var next: String? = null
-        repeat(MAX_PAGES) {
+        repeat(maxPages) {
             val query = Parameters.build {
                 append("limit", PAGE_SIZE.toString()); labelSelector?.let { append("labelSelector", it) }; next?.let { append("continue", it) }
             }.formUrlEncode()
-            val page = get(clusterId, "$path?$query") ?: return items
+            // A missing namespace lists nothing; a page vanishing mid-list must not pass for a complete list.
+            val page = get(clusterId, "$path?$query") ?: if (next == null) return items else throw ClusterApiException(404)
             page["items"]?.jsonArray?.forEach { items += it.jsonObject }
             next = page.obj("metadata")?.str("continue")?.takeIf { it.isNotEmpty() } ?: return items
         }
@@ -266,6 +275,10 @@ class KubernetesClusterPort(
     private suspend fun client(clusterId: String): Client {
         // The connection is decrypted from the database at most every 30 s per cluster, so a rotated token applies quickly.
         clients[clusterId]?.takeIf { System.currentTimeMillis() - it.loadedAt < CONNECTION_REFRESH_MILLIS }?.let { return it }
+        return creation.withLock { clients[clusterId]?.takeIf { System.currentTimeMillis() - it.loadedAt < CONNECTION_REFRESH_MILLIS } ?: load(clusterId) }
+    }
+
+    private suspend fun load(clusterId: String): Client {
         val connection = connections(clusterId) ?: throw ClusterApiException(404)
         val fingerprint = MessageDigest.getInstance("SHA-256").digest((connection.apiUrl + "\u0000" + connection.caCertificate + "\u0000" + connection.token).encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
@@ -279,11 +292,15 @@ class KubernetesClusterPort(
             engine { https { trustManager = trustManager(connection.caCertificate) } }
         }
         val created = Client(fingerprint, connection, http, System.currentTimeMillis())
-        clients.put(clusterId, created)?.let { previous -> if (previous.http !== shared) previous.http.close() }
+        clients.put(clusterId, created)?.let { previous -> if (previous.http !== shared) retired += previous.http }
         return created
     }
 
-    override fun close() { clients.values.forEach { if (it.http !== shared) it.http.close() }; clients.clear(); shared?.close() }
+    override fun close() {
+        clients.values.forEach { if (it.http !== shared) it.http.close() }; clients.clear()
+        generateSequence { retired.poll() }.forEach { it.close() }
+        shared?.close()
+    }
 
     companion object {
         const val SESSION_CONTAINER = "session"

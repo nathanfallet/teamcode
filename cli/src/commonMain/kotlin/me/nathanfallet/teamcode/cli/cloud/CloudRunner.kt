@@ -25,8 +25,8 @@ internal interface RunnerCalls {
  * It starts no agent yet (the agent, its loopback proxy and transcript come with later releases), so there is
  * nothing to drain and the checkpoint is immediately complete.
  *
- * A `409` means this execution is fenced: stop and exit without checkpointing. A `401` means the pod's token is
- * not accepted. Network failures are retried; the server marks the execution lost after 90 s without heartbeats.
+ * `409 execution_fenced` means this execution is fenced: stop and exit without checkpointing; any other `409` is
+ * retried. A `401` means the pod's token is not accepted. Network failures are retried; the server marks the execution lost after 90 s without heartbeats.
  */
 internal class RunnerLoop(
     private val calls: RunnerCalls,
@@ -34,37 +34,58 @@ internal class RunnerLoop(
     private val log: (String) -> Unit = {},
     private val maxIterations: Int = Int.MAX_VALUE,
 ) {
+    private sealed interface Outcome {
+        data class Done(val instruction: RunnerInstructionView) : Outcome
+        /** `409 execution_fenced`: stop without a checkpoint. */
+        data object Fenced : Outcome
+        /** Another `409` (a pause cancelled before the checkpoint landed, a concurrent write): try again later. */
+        data object Conflict : Outcome
+    }
+
     /** Returns the process exit code. */
     suspend fun run(): Int {
-        var instruction = retrying { calls.register() } ?: return EXIT_FENCED_OR_DONE
-        log("Registered for epoch ${instruction.epoch}.")
+        var registered: RunnerInstructionView? = null
+        while (registered == null) {
+            when (val outcome = attempt { calls.register() }) {
+                is Outcome.Done -> registered = outcome.instruction
+                Outcome.Fenced -> return EXIT_FENCED_OR_DONE
+                Outcome.Conflict -> sleep(HEARTBEAT_MILLIS)
+            }
+        }
+        log("Registered for epoch ${registered.epoch}.")
         var checkpointed = false
         var iterations = 0
         while (iterations++ < maxIterations) {
-            instruction = retrying { calls.heartbeat(ready = true) } ?: return EXIT_FENCED_OR_DONE
-            when (instruction.desiredState) {
+            val instruction = when (val outcome = attempt { calls.heartbeat(ready = true) }) {
+                is Outcome.Done -> outcome.instruction
+                Outcome.Fenced -> return EXIT_FENCED_OR_DONE
+                Outcome.Conflict -> null
+            }
+            when (instruction?.desiredState) {
                 "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
-                "paused" -> if (!checkpointed) {
-                    retrying { calls.checkpoint(completed = true) } ?: return EXIT_FENCED_OR_DONE
-                    checkpointed = true
-                    log("Checkpoint complete; waiting for the pod to stop.")
+                "paused" -> if (!checkpointed) when (attempt { calls.checkpoint(completed = true) }) {
+                    is Outcome.Done -> { checkpointed = true; log("Checkpoint complete; waiting for the pod to stop.") }
+                    Outcome.Fenced -> return EXIT_FENCED_OR_DONE
+                    Outcome.Conflict -> Unit // The pause may have been cancelled; the next heartbeat tells.
                 }
+                "running" -> checkpointed = false
             }
             sleep(HEARTBEAT_MILLIS)
         }
         return EXIT_FENCED_OR_DONE
     }
 
-    /** Null when fenced; throws [RunnerRefused] for an authentication failure. */
-    private suspend fun retrying(call: suspend () -> RunnerInstructionView): RunnerInstructionView? {
+    /** Retries network failures and server errors with backoff; throws [RunnerRefused] for an authentication failure. */
+    private suspend fun attempt(call: suspend () -> RunnerInstructionView): Outcome {
         var wait = 1_000L
         while (true) {
-            try { return call() }
+            try { return Outcome.Done(call()) }
             catch (error: CancellationException) { throw error }
             catch (error: TeamCodeException) {
-                when (error.statusCode) {
-                    409 -> { log("This execution is fenced; exiting without a checkpoint."); return null }
-                    401, 403, 404 -> throw RunnerRefused(error.statusCode)
+                when {
+                    error.code == "execution_fenced" -> { log("This execution is fenced; exiting without a checkpoint."); return Outcome.Fenced }
+                    error.statusCode in setOf(401, 403, 404) -> throw RunnerRefused(error.statusCode)
+                    error.statusCode == 409 -> { log("The server reported ${error.code ?: "a conflict"}; continuing."); return Outcome.Conflict }
                     else -> log("The server returned HTTP ${error.statusCode}; retrying.")
                 }
             } catch (_: Exception) { log("The server is unreachable; retrying.") }

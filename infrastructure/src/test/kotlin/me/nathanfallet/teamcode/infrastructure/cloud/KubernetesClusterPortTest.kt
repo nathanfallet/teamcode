@@ -105,6 +105,21 @@ class KubernetesClusterPortTest {
         assertFalse(error.message!!.contains(token), "The API body is never surfaced")
     }
 
+    @Test fun partialListsAndRunnerOriginsAreRefused(): Unit = runBlocking {
+        for (origin in listOf("http://teamcode.example.test", "https://localhost:8080", "https://127.0.0.1", "https://user@teamcode.example.test"))
+            assertFailsWith<IllegalArgumentException>(origin) { KubernetesPodOptions(origin, "runner:1") }
+        KubernetesPodOptions("https://teamcode.example.test:8443/", "runner:1")
+        var page = 0
+        val port = port { request ->
+            page++
+            if (page == 1) json("""{"metadata":{"continue":"next"},"items":[{"metadata":{"name":"tc-1-e1"},"status":{"phase":"Running"}}]}""")
+            else json("{}", HttpStatusCode.NotFound)
+        }
+        assertEquals(404, assertFailsWith<ClusterApiException> { port.managed("c1", "teamcode") }.status, "A page vanishing mid-list is not a complete list")
+        val missing = port { json("{}", HttpStatusCode.NotFound) }
+        assertEquals(ManagedObjects(emptyList(), emptyList()), missing.managed("c1", "gone"), "A missing namespace lists nothing")
+    }
+
     @Test fun refusedTokenReviews(): Unit = runBlocking {
         val responses = ArrayDeque(listOf(
             """{"status":{"authenticated":false}}""",

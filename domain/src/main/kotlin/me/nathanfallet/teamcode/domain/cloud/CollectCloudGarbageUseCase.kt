@@ -23,7 +23,8 @@ class CollectCloudGarbageUseCase(private val store: CloudSessionStore, private v
             for (claim in objects.claims) if (claim !in live.claims) { cluster.deleteClaim(cloudCluster.id, namespace, claim); claims++ }
         }
         // A Delete-policy volume whose claim is gone is being removed by its provisioner; a Retain or failed one is not.
-        val orphaned = volumes.count { it.claimName !in live.claims && (it.reclaimPolicy != "Delete" || it.phase == "Failed") }
+        // Only volumes whose claim lived in one of this cluster record's namespaces count as its orphans.
+        val orphaned = volumes.count { it.claimNamespace in namespaces && it.claimName !in live.claims && (it.reclaimPolicy != "Delete" || it.phase == "Failed") }
         store.recordGarbageCollection(cloudCluster.id, orphaned)
         return GarbageReport(pods, claims, orphaned)
     }

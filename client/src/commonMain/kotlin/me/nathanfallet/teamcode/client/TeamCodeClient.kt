@@ -164,9 +164,21 @@ class TeamCodeClient(
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }
     /** Runner channel; construct the client with the pod's projected token as its credential. */
-    suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = request("/api/v1/cloud/runner/register", HttpMethod.Post, input)
-    suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = request("/api/v1/cloud/runner/heartbeat", HttpMethod.Post, input)
-    suspend fun runnerCheckpoint(input: RunnerCheckpointRequest): RunnerInstructionView = request("/api/v1/cloud/runner/checkpoint", HttpMethod.Post, input)
+    suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
+    suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = runnerRequest("heartbeat", input)
+    suspend fun runnerCheckpoint(input: RunnerCheckpointRequest): RunnerInstructionView = runnerRequest("checkpoint", input)
+    /** Failures carry the server's error code (for example `execution_fenced`), never its message. */
+    private suspend inline fun <reified B> runnerRequest(path: String, body: B): RunnerInstructionView {
+        val response = http.request("$origin/api/v1/cloud/runner/$path") {
+            method = HttpMethod.Post; contentType(ContentType.Application.Json); setBody(body); authenticate(); timeout { requestTimeoutMillis = 30_000 }
+        }
+        if (!response.status.isSuccess()) {
+            val code = try { response.body<ApiError>().error.type.takeIf { Regex("[a-z_]{1,64}").matches(it) } }
+                catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+            throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code)
+        }
+        return response.body()
+    }
     private suspend fun cloudAction(path: String, id: String, onBehalfOf: String?, body: PauseCloudSessionRequest?, method: HttpMethod = HttpMethod.Post): HttpResponse {
         identifier(id); onBehalfOf?.let(::identifier)
         val response = http.request("$origin$path") {
@@ -284,4 +296,4 @@ class TeamCodeClient(
     }
 }
 
-class TeamCodeException(val statusCode: Int, message: String) : Exception(message)
+class TeamCodeException(val statusCode: Int, message: String, val code: String? = null) : Exception(message)

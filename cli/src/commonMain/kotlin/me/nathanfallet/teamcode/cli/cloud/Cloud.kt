@@ -39,6 +39,12 @@ private fun CloudSessionView.details() = buildString {
     expiresAt?.let { appendLine("Expires:      ${Instant.fromEpochMilliseconds(it)}") }
 }.trimEnd()
 
+private fun parseLabels(labels: List<String>) = labels.associate { label ->
+    val key = label.substringBefore('=', "")
+    require(key.isNotEmpty()) { "Use --label key=value." }
+    key to label.substringAfter('=')
+}
+
 private class CloudCreate : SuspendingCliktCommand(name = "create") {
     override fun help(context: Context) = "Create a cloud session from a profile. Retrying with the same --idempotency-key never creates a second session."
     private val name by option("--name").required()
@@ -52,11 +58,7 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
     private val idempotencyKey by option("--idempotency-key", help = "Defaults to a random key.")
     private val json by option("--json").flag()
     override suspend fun run() {
-        val parsed = labels.associate { label ->
-            val key = label.substringBefore('=', "")
-            require(key.isNotEmpty() && '=' in label) { "Use --label key=value." }
-            key to label.substringAfter('=')
-        }
+        val parsed = parseLabels(labels)
         val agent = if (model != null || effort != null) CloudAgentRequest(model, effort) else null
         val session = sdk(loadConfig()).use {
             it.createCloudSession(CreateCloudSessionRequest(name, profile, image, agent, parsed, idle), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
@@ -74,7 +76,7 @@ private class CloudList : SuspendingCliktCommand(name = "list") {
     private val json by option("--json").flag()
     override suspend fun run() {
         require(!(all && member != null)) { "Use --all or --member, not both." }
-        val parsed = labels.associate { it.substringBefore('=') to it.substringAfter('=', "") }
+        val parsed = parseLabels(labels)
         sdk(loadConfig()).use { client ->
             var before: String? = null
             val sessions = mutableListOf<CloudSessionView>()

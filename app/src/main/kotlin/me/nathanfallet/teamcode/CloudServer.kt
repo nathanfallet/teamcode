@@ -42,6 +42,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             while (isActive) {
                 val claimed = try { reconciler(replica) }
+                    catch (error: TimeoutCancellationException) { System.err.println("TeamCode cloud reconciler pass timed out."); 0 }
                     catch (error: CancellationException) { throw error }
                     catch (error: Exception) { System.err.println("TeamCode cloud reconciler is temporarily unavailable (${describe(error)})."); 0 }
                 if (claimed == 0) delay(1_000)
@@ -52,7 +53,10 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
                 try {
                     work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain() }
                     work.runDue("cloud-gc", intervalMillis = 10 * 60_000, timeoutMillis = 240_000) { collectGarbage() }
-                } catch (error: CancellationException) { throw error }
+                }
+                // runDue's deadline is a cancellation of the block only; the loop must survive it.
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode cloud maintenance deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
                 catch (error: Exception) { System.err.println("TeamCode cloud maintenance is temporarily unavailable (${describe(error)}).") }
                 delay(15_000)
             }

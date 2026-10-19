@@ -23,7 +23,9 @@ class AuthenticateRunnerUseCase(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private data class Cached(val identity: TokenIdentity?, val until: Long)
-    private val cache = LinkedHashMap<String, Cached>()
+    // Accepted and refused reviews are kept apart, so a flood of bad tokens can never evict a runner's review.
+    private val accepted = LinkedHashMap<String, Cached>()
+    private val refused = LinkedHashMap<String, Cached>()
     private val lock = Mutex()
 
     suspend operator fun invoke(token: String?, teamId: String, sessionId: String, epoch: Int): RunnerIdentity {
@@ -41,12 +43,13 @@ class AuthenticateRunnerUseCase(
     private suspend fun review(clusterId: String, token: String): TokenIdentity? {
         val key = clusterId + ":" + MessageDigest.getInstance("SHA-256").digest(token.encodeToByteArray()).joinToString("") { "%02x".format(it) }
         val now = clock()
-        lock.withLock { cache[key]?.takeIf { it.until > now }?.let { return it.identity } }
+        lock.withLock { (accepted[key] ?: refused[key])?.takeIf { it.until > now }?.let { return it.identity } }
         val identity = cluster.reviewToken(clusterId, token, AUDIENCE)
         lock.withLock {
+            // Refusals are cached briefly too, so a repeated bad token is not a cluster call every time.
+            val cache = if (identity == null) refused else accepted
             cache.entries.removeIf { it.value.until <= now }
             if (cache.size >= MAX_CACHED) cache.remove(cache.keys.first())
-            // Refusals are cached briefly too, so a bad token cannot turn every request into a cluster call.
             cache[key] = Cached(identity, now + if (identity == null) REFUSAL_CACHE_MILLIS else CACHE_MILLIS)
         }
         return identity
