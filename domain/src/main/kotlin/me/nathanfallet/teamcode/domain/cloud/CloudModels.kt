@@ -101,6 +101,8 @@ data class CloudSession(
     val workspace: CloudWorkspace,
     val createdAt: Long,
     val updatedAt: Long,
+    /** The accepted transfer this session is moving toward; set from acceptance until the owner changed or the transfer ended. */
+    val transferId: String? = null,
 )
 
 data class CloudExecution(
@@ -118,6 +120,12 @@ data class CloudExecution(
     val exitReason: String? = null,
     /** `completed` or `failed`, reported by the runner's checkpoint call. */
     val checkpoint: String? = null,
+    /**
+     * The session owner this execution ran for, fixed when it started. Work of the execution (inference, pod time)
+     * is attributed to this member, so history stays with the former owner after a transfer. Null for executions
+     * recorded before transfers existed: they predate any change of owner.
+     */
+    val ownerId: String? = null,
 )
 
 data class CloudResources(val cpuMillis: Int, val memoryMebibytes: Int)
@@ -189,7 +197,24 @@ data class CloudSettings(
     val maxRetainedSessionsPerMember: Int = 20,
     /** Days transcript events and finished messages are kept, counted from each event; null keeps them indefinitely. Independent of pods and workspaces. */
     val transcriptRetentionDays: Int? = 30,
+    /** Whether an owner who is not an administrator may offer a session to another member. Administrators always transfer directly. */
+    val memberTransfers: MemberTransfers = MemberTransfers.OFFER,
+    /** Days a recipient has to accept an offer. */
+    val transferOfferDays: Int = 7,
+    /** What happens to messages still queued or delivered but unconsumed when the owner changes. */
+    val transferPendingInputs: TransferPendingInputs = TransferPendingInputs.CANCEL,
 )
+enum class MemberTransfers(val wire: String) {
+    DISABLED("disabled"), OFFER("offer");
+    companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
+enum class TransferPendingInputs(val wire: String) {
+    /** Cancelled with reason `transferred`: the former owner's instructions never run under the new owner. */
+    CANCEL("cancel"),
+    /** Kept queued and delivered to the next execution, under the new owner. */
+    KEEP("keep");
+    companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
 
 data class CloudSessionQuery(
     /** null: the caller's own sessions; "*": every team session (administrators only); otherwise a member id. */

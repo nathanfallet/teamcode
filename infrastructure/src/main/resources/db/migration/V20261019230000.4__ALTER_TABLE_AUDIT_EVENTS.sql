@@ -1,0 +1,1 @@
+ALTER TABLE audit_events ADD related_member_id VARCHAR(36) NULL;

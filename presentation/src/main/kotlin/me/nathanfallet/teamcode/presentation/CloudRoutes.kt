@@ -11,7 +11,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
 
-private fun CloudProblem.view() = CloudProblemView(code, message, retryable)
+internal fun CloudProblem.view() = CloudProblemView(code, message, retryable)
 internal fun CloudSession.view() = CloudSessionView(
     id = id, name = name, ownerId = ownerId, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
     state = state.wire, phase = phase, desiredState = desiredState.wire, generation = generation, currentEpoch = currentEpoch,
@@ -20,25 +20,28 @@ internal fun CloudSession.view() = CloudSessionView(
     activity = CloudActivityView(lastActivityAt, idleTimeoutMinutes), resume = CloudResumeView(resumeWorkspace.wire, resumeConversation.wire),
     failure = failure?.view(), resumeBlocked = resumeBlocked?.view(),
     workspaceDeletion = CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
-    createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason,
+    createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
 )
-private fun CloudExecution.view() = CloudExecutionView(epoch, podName, state.wire, createdAt, registeredAt, lastHeartbeatAt, nodeName, imageDigest, endedAt, exitReason, checkpoint)
+private fun CloudExecution.view() = CloudExecutionView(epoch, podName, state.wire, createdAt, registeredAt, lastHeartbeatAt, nodeName, imageDigest, endedAt, exitReason, checkpoint, ownerId)
 private fun CloudCluster.view() = CloudClusterView(id, name, apiUrl, allowedNamespaces, maxRunningPods, defaultStorageClass, version, orphanedVolumes, lastGarbageCollectionAt, createdAt, updatedAt)
 private fun CloudProfileSpec.view() = CloudProfileSpecView(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResourcesView(resources.cpuMillis, resources.memoryMebibytes),
     workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes)
 private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResources(resources.cpuMillis, resources.memoryMebibytes),
     workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes)
 private fun CloudProfile.view() = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt)
-private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays)
-private fun CloudSettingsView.domain() = CloudSettings(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays)
+private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
+    memberTransfers.wire, transferOfferDays, transferPendingInputs.wire)
+private fun CloudSettingsView.domain() = CloudSettings(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
+    MemberTransfers.parse(memberTransfers) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use memberTransfers offer or disabled."), transferOfferDays,
+    TransferPendingInputs.parse(transferPendingInputs) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use transferPendingInputs cancel or keep."))
 
 /** `TeamCode-On-Behalf-Of`: at most one value; the domain decides whether the caller may use it. */
-private fun ApplicationCall.onBehalfOf(): String? {
+internal fun ApplicationCall.onBehalfOf(): String? {
     val values = request.headers.getAll(CloudHeaders.ON_BEHALF_OF) ?: return null
     return values.singleOrNull()?.takeIf { Regex("[a-zA-Z0-9-]{1,36}").matches(it) }
         ?: throw TeamFailure("invalid_on_behalf", 400, "Send one member identifier in ${CloudHeaders.ON_BEHALF_OF}.")
 }
-private fun ApplicationCall.idempotencyKey(required: Boolean): String? {
+internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
     val values = request.headers.getAll(CloudHeaders.IDEMPOTENCY_KEY)
     if (values == null) {
         if (required) throw TeamFailure("idempotency_key_required", 400, "Send an ${CloudHeaders.IDEMPOTENCY_KEY} header (1–128 characters from A-Z a-z 0-9 . _ : -).")
@@ -47,7 +50,7 @@ private fun ApplicationCall.idempotencyKey(required: Boolean): String? {
     return values.singleOrNull()?.takeIf { CloudHeaders.idempotencyKey.matches(it) }
         ?: throw TeamFailure("invalid_idempotency_key", 400, "Use one ${CloudHeaders.IDEMPOTENCY_KEY} of 1–128 characters from A-Z a-z 0-9 . _ : -.")
 }
-private fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+internal fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 private fun ApplicationCall.id() = parameters["id"]!!.also { if (!Regex("[a-zA-Z0-9-]{1,36}").matches(it)) throw TeamFailure("not_found", 404, "Not found.") }
 
 internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String) {
@@ -117,15 +120,21 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
     get("/dashboard/cloud") {
         val actor = call.principal
         val settings = admin.settings(actor)
-        call.respondText(page("Cloud session settings", """<p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><button>Save settings</button></form>"""), ContentType.Text.Html)
+        call.respondText(page("Cloud session settings", """<p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
     }
     post("/dashboard/cloud") {
         val input = call.form(origin.trimEnd('/'))
         fun number(name: String) = input[name]?.toIntOrNull() ?: -1
+        // A form from before the transfer settings existed keeps the stored transfer policy.
+        val current = admin.settings(call.principal)
         admin.saveSettings(call.principal, CloudSettings(input["pausedRetentionDays"]?.takeIf { it.isNotBlank() }?.let { it.toIntOrNull() ?: -1 },
             number("failedWorkspaceRetentionDays"), number("maxRunning"), number("maxRetained"),
-            input["transcriptRetentionDays"]?.takeIf { it.isNotBlank() }?.let { it.toIntOrNull() ?: -1 }))
+            input["transcriptRetentionDays"]?.takeIf { it.isNotBlank() }?.let { it.toIntOrNull() ?: -1 },
+            input["memberTransfers"]?.let { MemberTransfers.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Choose whether members may offer sessions.") } ?: current.memberTransfers,
+            input["transferOfferDays"]?.let { it.toIntOrNull() ?: -1 } ?: current.transferOfferDays,
+            input["transferPendingInputs"]?.let { TransferPendingInputs.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Choose what happens to unconsumed messages.") } ?: current.transferPendingInputs))
         call.respondRedirect("/dashboard/cloud")
     }
 }
+private fun option(value: String, label: String, selected: String) = """<option value="$value"${if (value == selected) " selected" else ""}>$label</option>"""
 private fun SaveCloudClusterRequest.domain() = CloudClusterInput(name, apiUrl, caCertificate, serviceAccountToken, allowedNamespaces, maxRunningPods, defaultStorageClass)

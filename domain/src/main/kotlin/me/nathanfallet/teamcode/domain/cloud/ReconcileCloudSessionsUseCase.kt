@@ -17,6 +17,8 @@ class ReconcileCloudSessionsUseCase(
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(store),
     /** Called for every failed step, so the server can log and count it; the session is retried either way. */
     private val onError: (sessionId: String, error: Exception) -> Unit = { _, _ -> },
+    /** Ownership transfers; null where the server does not offer them (a session then never holds one). */
+    private val transfers: CompleteCloudTransferUseCase? = null,
 ) {
     /**
      * Reconciles up to [limit] due sessions; returns how many were claimed. All leases are taken together, so
@@ -50,19 +52,21 @@ class ReconcileCloudSessionsUseCase(
         val now = store.now()
         val s = session
         return when {
+            s.transferId != null && transfers != null && (s.state.terminal || s.desiredState == DesiredState.TERMINATED) -> transfers.abandon(s, owner, now)
             s.state == TERMINATED -> cleanup(s, owner, now)
             s.desiredState == DesiredState.TERMINATED -> terminate(s, owner, now)
             s.state == FAILED && s.workspace.deletion != DeletionState.NONE -> cleanup(s, owner, now)
             s.state == FAILED -> if (s.expiresAt != null && s.expiresAt <= now) {
                 commit(s, owner, s.copy(workspace = s.workspace.copy(deletion = DeletionState.PENDING), phase = "cleanup_pending", updatedAt = now)); now
             } else s.expiresAt
-            s.state == PAUSED -> paused(s, owner, now)
+            s.state == PAUSED -> if (s.transferId != null && transfers != null) transfers.begin(s, owner, now) else paused(s, owner, now)
+            s.state == TRANSFERRING -> transfers?.step(s, owner, now) ?: (now + MONITOR_MILLIS)
             s.state == CREATING || s.state == RESUMING -> if (s.desiredState == DesiredState.PAUSED && s.state == RESUMING) abandonResume(s, owner, now) else start(s, owner, now)
             s.state == PREPARING || s.state == READY || s.state == ACTIVE -> if (s.desiredState == DesiredState.PAUSED && s.state != PREPARING) {
                 commit(s, owner, s.copy(state = PAUSING, phase = "draining", pauseRequestedAt = s.pauseRequestedAt ?: now, updatedAt = now), "cloud.session.pausing"); now
             } else monitor(s, owner, now)
             s.state == PAUSING -> drain(s, owner, now)
-            else -> now + MONITOR_MILLIS // TRANSFERRING is not produced by this release.
+            else -> now + MONITOR_MILLIS
         }
     }
 
@@ -117,7 +121,7 @@ class ReconcileCloudSessionsUseCase(
             val pod = CloudSessionService.podName(current.id, epoch)
             val limit = store.settings(current.teamId).maxRunningSessionsPerMember
             val outcome = transition.start(current, current.copy(currentEpoch = epoch, phase = "scheduling", waitingSince = null, updatedAt = now),
-                CloudExecution(current.id, epoch, pod, ExecutionState.PENDING, now), owner, limit)
+                CloudExecution(current.id, epoch, pod, ExecutionState.PENDING, now, ownerId = current.ownerId), owner, limit)
             if (outcome == StartOutcome.WaitingCapacity) {
                 if (current.phase != "waiting_capacity" || current.waitingSince == null)
                     commit(current, owner, current.copy(phase = "waiting_capacity", waitingSince = current.waitingSince ?: now, updatedAt = now))

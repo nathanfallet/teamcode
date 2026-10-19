@@ -16,6 +16,7 @@ class TransitionCloudSessionUseCase(private val store: CloudSessionStore) {
         require(next.id == expected.id && next.teamId == expected.teamId && next.generation == expected.generation) { "A transition must derive from the row it replaces." }
         CloudStateMachine.require(expected.state, next.state)
         require(next.currentEpoch == expected.currentEpoch) { "The epoch advances only through start()." }
+        require(next.ownerId == expected.ownerId) { "The owner changes only through a completed transfer." }
         return store.compareAndSet(expected, next, transition.write)
     }
 
@@ -24,6 +25,7 @@ class TransitionCloudSessionUseCase(private val store: CloudSessionStore) {
         require(next.id == expected.id && next.generation == expected.generation && next.state == expected.state) { "A start keeps the session state." }
         require(expected.state == CloudSessionState.CREATING || expected.state == CloudSessionState.RESUMING) { "Only a creating or resuming session starts an execution." }
         require(next.currentEpoch == expected.currentEpoch + 1 && execution.epoch == next.currentEpoch && execution.sessionId == expected.id) { "The epoch advances by one with its execution." }
+        require(next.ownerId == expected.ownerId && execution.ownerId == expected.ownerId) { "An execution runs for the session's current owner." }
         return store.startExecution(expected, next, execution, leaseOwner, memberRunningLimit)
     }
 

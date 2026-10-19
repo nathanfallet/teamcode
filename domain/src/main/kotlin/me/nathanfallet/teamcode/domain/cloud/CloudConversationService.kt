@@ -123,7 +123,8 @@ class CloudConversationService(
         for ((teamId, sessionId) in store.pendingWakes(limit)) {
             val session = sessions.find(teamId, sessionId)
             if (session == null || session.state.terminal || session.desiredState == DesiredState.TERMINATED) { store.clearWake(sessionId); continue }
-            if (session.state == PAUSING) continue
+            // The completed transfer clears wake requests: a former owner's message never resumes the recipient's session.
+            if (session.state == PAUSING || session.state == TRANSFERRING || session.transferId != null) continue
             if (wake(teamId, session.id, null)) woken++
             store.clearWake(sessionId)
         }
@@ -138,6 +139,8 @@ class CloudConversationService(
         val session = sessions.find(teamId, sessionId) ?: return false
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return false
         if (session.desiredState == DesiredState.RUNNING && session.resumeBlocked == null) return false
+        // A session moving to another owner stays paused; the message waits for the transfer's own policy.
+        if (session.transferId != null || session.state == TRANSFERRING) return false
         val owner = sessions.member(teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired) return false
         val profile = sessions.profile(teamId, session.profileId)
@@ -145,6 +148,7 @@ class CloudConversationService(
         var woke = false
         transition(teamId, sessionId) { current ->
             if (current.state.terminal || current.state == PAUSING || current.desiredState == DesiredState.TERMINATED) return@transition null
+            if (current.transferId != null || current.state == TRANSFERRING) return@transition null
             if (current.desiredState == DesiredState.RUNNING && current.resumeBlocked == null) return@transition null
             val now = sessions.now()
             woke = true

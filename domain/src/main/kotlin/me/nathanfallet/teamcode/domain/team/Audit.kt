@@ -5,6 +5,8 @@ data class AuditEvent(
     val id: Long, val actorId: String, val action: String, val subjectId: String, val occurredAt: Long,
     /** Set for delegated cloud actions: the member the action applied to and the initiating credential id. */
     val effectiveMemberId: String? = null, val credentialId: String? = null,
+    /** Cloud transfers: the other member concerned, the former owner when a session changed owner. */
+    val relatedMemberId: String? = null,
 )
 data class AuditPage(val events: List<AuditEvent>, val nextBeforeId: Long?)
 

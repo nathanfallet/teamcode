@@ -115,6 +115,8 @@ class CloudSessionService(
             val now = store.now()
             when {
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                // An accepted transfer pauses the session; only the transfer itself resumes it, for the recipient.
+                current.state == CloudSessionState.TRANSFERRING || current.transferId != null -> throw TeamFailure("session_transferring", 409, "The session is being transferred to another member.")
                 current.desiredState == DesiredState.RUNNING && current.resumeBlocked == null -> null
                 else -> CloudTransition(
                     current.copy(desiredState = DesiredState.RUNNING, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, updatedAt = now),

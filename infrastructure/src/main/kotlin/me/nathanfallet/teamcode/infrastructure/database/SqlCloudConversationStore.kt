@@ -243,7 +243,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }
 
     /** Final status for an input, with its transcript event: the consumed message itself, or an `input` notice. */
-    private fun JdbcTransaction.finish(teamId: String, input: CloudInput, status: CloudInputStatus, reason: String?, now: Long): CloudInput {
+    internal fun JdbcTransaction.finish(teamId: String, input: CloudInput, status: CloudInputStatus, reason: String?, now: Long): CloudInput {
         val data = if (status == CloudInputStatus.CONSUMED && input.kind == CloudInputKind.MESSAGE) buildJsonObject {
             put("inputId", input.id); put("authorId", input.authorId); put("text", CloudConversationRules.bound(input.text.orEmpty()))
         } else buildJsonObject {
@@ -261,6 +261,20 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         }
         return input.copy(status = status, finishedAt = now, reason = reason, eventSeq = seq, consumedAt = if (status == CloudInputStatus.CONSUMED) now else input.consumedAt)
     }
+
+    /** A server-written event (epoch 0); the caller holds the session row lock. Returns its sequence number. */
+    internal fun serverEvent(sessionId: String, teamId: String, type: CloudEventType, data: String, now: Long): Long {
+        val cursor = cursorOf(sessionId)
+        val seq = (cursor?.get(CloudSessionTranscripts.lastSeq) ?: 0L) + 1
+        insertEvent(sessionId, teamId, seq, 0, null, type, now, data)
+        saveCursor(sessionId, cursor != null, seq, cursor?.get(CloudSessionTranscripts.runnerEpoch) ?: 0, cursor?.get(CloudSessionTranscripts.runnerSeq) ?: 0L)
+        return seq
+    }
+
+    /** Queued and delivered inputs of a session, oldest first; the caller holds the session row lock. */
+    internal fun pendingInputs(sessionId: String): List<CloudInput> = CloudSessionInputs.selectAll().where {
+        (CloudSessionInputs.sessionId eq sessionId) and (CloudSessionInputs.status inList listOf(CloudInputStatus.QUEUED.wire, CloudInputStatus.DELIVERED.wire))
+    }.orderBy(CloudSessionInputs.createdAt to SortOrder.ASC).limit(CloudConversationRules.MAX_PENDING_INPUTS).map(::readInput)
 
     /** The caller holds the session row lock, so sequences are dense; [saveCursor] records the new last sequence. */
     private fun insertEvent(sessionId: String, teamId: String, seq: Long, epoch: Int, runnerSeq: Long?, type: CloudEventType, at: Long, data: String) {

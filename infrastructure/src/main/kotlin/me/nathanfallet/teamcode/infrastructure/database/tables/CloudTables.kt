@@ -56,6 +56,11 @@ object CloudSettingsTable : Table("cloud_settings") {
     val maxRetainedSessionsPerMember = integer("max_retained_sessions_per_member")
     /** Null keeps transcripts indefinitely. Existing rows get the 30-day default. */
     val transcriptRetentionDays = integer("transcript_retention_days").nullable().default(30)
+    /** `offer` or `disabled`: whether owners who are not administrators may offer their sessions. */
+    val memberTransfers = varchar("member_transfers", 16).default("offer")
+    val transferOfferDays = integer("transfer_offer_days").default(7)
+    /** `cancel` or `keep`: unconsumed messages when a session changes owner. */
+    val transferPendingInputs = varchar("transfer_pending_inputs", 16).default("cancel")
     override val primaryKey = PrimaryKey(teamId)
 }
 object CloudSessions : Table("cloud_sessions") {
@@ -115,6 +120,8 @@ object CloudSessions : Table("cloud_sessions") {
     val reconcileRequested = bool("reconcile_requested").default(false)
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
+    /** The accepted transfer the session is moving toward, until its owner changed. */
+    val transferId = varchar("transfer_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)
@@ -145,6 +152,8 @@ object CloudExecutions : Table("cloud_executions") {
     val endedAt = long("ended_at").nullable()
     val exitReason = varchar("exit_reason", 64).nullable()
     val checkpoint = varchar("checkpoint", 16).nullable()
+    /** The owner the execution ran for; null for executions recorded before transfers existed. */
+    val ownerId = varchar("owner_id", 36).nullable()
     override val primaryKey = PrimaryKey(sessionId, epoch)
 }
 /** The stored outcome of a mutating request, replayed for 24 hours. */
@@ -159,4 +168,47 @@ object CloudIdempotency : Table("cloud_idempotency") {
     val expiresAt = long("expires_at")
     override val primaryKey = PrimaryKey(teamId, initiatorId, route, key)
     init { index("cloud_idempotency_expiry", false, expiresAt) }
+}
+
+/**
+ * Ownership transfers. Rows are kept after completion: with the executions' owners they record which member each
+ * part of a session's history belongs to. The idempotency key is kept 24 hours, then cleared.
+ */
+object CloudTransfers : Table("cloud_transfers") {
+    val id = varchar("id", 36)
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_transfers_team")
+    val sessionId = reference("session_id", CloudSessions.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_transfers_session")
+    val fromMemberId = varchar("from_member_id", 36)
+    val toMemberId = varchar("to_member_id", 36)
+    val initiatorId = varchar("initiator_id", 36)
+    val credentialId = varchar("credential_id", 36)
+    val effectiveMemberId = varchar("effective_member_id", 36)
+    val state = varchar("state", 16)
+    val resume = bool("resume")
+    val force = bool("force_pause")
+    val pendingInputs = varchar("pending_inputs", 16)
+    val version = integer("version")
+    val createdAt = long("created_at")
+    val updatedAt = long("updated_at")
+    val expiresAt = long("expires_at").nullable()
+    val deciderId = varchar("decider_id", 36).nullable()
+    val deciderCredentialId = varchar("decider_credential_id", 36).nullable()
+    val deciderEffectiveMemberId = varchar("decider_effective_member_id", 36).nullable()
+    val decidedAt = long("decided_at").nullable()
+    val completedAt = long("completed_at").nullable()
+    val atEpoch = integer("at_epoch").nullable()
+    val eventSeq = long("event_seq").nullable()
+    val failureCode = varchar("failure_code", 64).nullable()
+    val failureMessage = varchar("failure_message", 512).nullable()
+    val idempotencyKey = varchar("idempotency_key", 128, "ascii_bin").nullable()
+    val requestDigest = char("request_digest", 64).nullable()
+    override val primaryKey = PrimaryKey(id)
+    init {
+        uniqueIndex("cloud_transfer_idempotency", teamId, initiatorId, idempotencyKey)
+        index("cloud_transfer_session", false, sessionId, state)
+        index("cloud_transfer_from", false, teamId, fromMemberId, createdAt)
+        index("cloud_transfer_to", false, teamId, toMemberId, createdAt)
+        index("cloud_transfer_team", false, teamId, createdAt)
+        index("cloud_transfer_expiry", false, state, expiresAt)
+    }
 }

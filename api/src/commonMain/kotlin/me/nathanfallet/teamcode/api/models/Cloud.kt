@@ -57,6 +57,8 @@ data class CloudSessionView(
     /** When a paused session's workspace will be deleted, or when a failed session's workspace is deleted. */
     val expiresAt: Long? = null,
     val terminatedReason: String? = null,
+    /** The accepted transfer the session is moving toward (`cloud.transfer.v1`); null otherwise. */
+    val transferId: String? = null,
 )
 @Serializable
 data class CloudSessionPageView(val sessions: List<CloudSessionView>, val nextBefore: String? = null)
@@ -88,6 +90,8 @@ data class CloudExecutionView(
     val endedAt: Long? = null,
     val exitReason: String? = null,
     val checkpoint: String? = null,
+    /** The member this execution ran (and was charged) for; absent for executions recorded before transfers existed. */
+    val ownerId: String? = null,
 )
 
 @Serializable
@@ -153,6 +157,12 @@ data class CloudSettingsView(
     val maxRetainedSessionsPerMember: Int = 20,
     /** Days transcript events and finished messages are kept; null keeps them indefinitely. */
     val transcriptRetentionDays: Int? = 30,
+    /** `offer` (owners may offer their sessions; the recipient accepts) or `disabled` (administrators only). */
+    val memberTransfers: String = "offer",
+    /** Days a recipient has to accept an offer (1 to 30). */
+    val transferOfferDays: Int = 7,
+    /** `cancel` or `keep`: unconsumed messages when a session changes owner. */
+    val transferPendingInputs: String = "cancel",
 )
 
 object CloudHeaders {

@@ -14,7 +14,7 @@ internal fun JdbcTransaction.nowMillis(): Long {
 internal fun JdbcTransaction.lockTeam(team: String) {
     check(Teams.select(Teams.id).where { Teams.id eq team }.forUpdate().singleOrNull() != null)
 }
-internal fun JdbcTransaction.audit(team: String, actor: String, action: String, subject: String, effectiveMember: String? = null, credential: String? = null) {
+internal fun JdbcTransaction.audit(team: String, actor: String, action: String, subject: String, effectiveMember: String? = null, credential: String? = null, related: String? = null) {
     val now = nowMillis()
     AuditEvents.insert {
         it[teamId] = team
@@ -25,5 +25,6 @@ internal fun JdbcTransaction.audit(team: String, actor: String, action: String, 
         // Only cloud actions name these columns, so other writes stay compatible with the previous schema.
         if (effectiveMember != null) it[effectiveMemberId] = effectiveMember
         if (credential != null) it[credentialId] = credential
+        if (related != null) it[relatedMemberId] = related
     }
 }

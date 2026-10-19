@@ -269,6 +269,40 @@ class TeamCodeClient(
     }
     suspend fun cloudAccessPolicy(): CloudAccessPolicyView = coded(HttpMethod.Get, "/api/v1/cloud/access", null as Unit?)
     suspend fun saveCloudAccessPolicy(policy: CloudAccessPolicyView): CloudAccessPolicyView = coded(HttpMethod.Put, "/api/v1/cloud/access", policy)
+
+    // Ownership transfers (`cloud.transfer.v1`).
+    /** Retrying with the same [idempotencyKey] replays the first transfer instead of creating another. */
+    suspend fun transferCloudSession(id: String, input: CreateCloudTransferRequest, idempotencyKey: String = Uuid.random().toString(), onBehalfOf: String? = null): CloudTransferView {
+        identifier(id); identifier(input.toMemberId); onBehalfOf?.let(::identifier)
+        require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/cloud/sessions/$id/transfer", input) {
+            header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey)
+            onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+        }
+    }
+    /** [direction] is `incoming`, `outgoing` or null for both; [team] lists every team transfer (administrators). */
+    suspend fun cloudTransfers(direction: String? = null, team: Boolean = false, states: List<String> = emptyList(), session: String? = null, before: String? = null, limit: Int = 50): CloudTransferPageView {
+        session?.let(::identifier); before?.let(::identifier)
+        return coded(HttpMethod.Get, "/api/v1/cloud/transfers", null as Unit?) {
+            url {
+                direction?.let { parameters.append("direction", it) }
+                if (team) parameters.append("scope", "team")
+                states.forEach { parameters.append("state", it) }
+                session?.let { parameters.append("session", it) }
+                before?.let { parameters.append("before", it) }
+                parameters.append("limit", limit.toString())
+            }
+        }
+    }
+    suspend fun cloudTransfer(id: String): CloudTransferView { identifier(id); return coded(HttpMethod.Get, "/api/v1/cloud/transfers/$id", null as Unit?) }
+    suspend fun acceptCloudTransfer(id: String, resume: Boolean = false, onBehalfOf: String? = null): CloudTransferView =
+        transferDecision(id, "accept", AcceptCloudTransferRequest(resume), onBehalfOf)
+    suspend fun declineCloudTransfer(id: String, onBehalfOf: String? = null): CloudTransferView = transferDecision<Unit>(id, "decline", null, onBehalfOf)
+    suspend fun cancelCloudTransfer(id: String, onBehalfOf: String? = null): CloudTransferView = transferDecision<Unit>(id, "cancel", null, onBehalfOf)
+    private suspend inline fun <reified B> transferDecision(id: String, action: String, body: B?, onBehalfOf: String?): CloudTransferView {
+        identifier(id); onBehalfOf?.let(::identifier)
+        return coded(HttpMethod.Post, "/api/v1/cloud/transfers/$id/$action", body) { onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) } }
+    }
     /** Agent side of the runner channel; construct the client with the pod's projected token. */
     suspend fun runnerAgent(input: RunnerAgentRequest): RunnerAgentView = coded(HttpMethod.Post, "/api/v1/cloud/runner/agent", input)
     suspend fun runnerEvents(input: RunnerEventsRequest): RunnerEventsAckView = coded(HttpMethod.Post, "/api/v1/cloud/runner/events", input)

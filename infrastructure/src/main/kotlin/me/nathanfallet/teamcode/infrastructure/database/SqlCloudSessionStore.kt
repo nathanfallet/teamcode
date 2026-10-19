@@ -64,7 +64,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[profileId] = created.profileId; it[profileVersion] = created.profileVersion; it[clusterId] = created.clusterId; it[namespace] = created.namespace
             it[claimName] = created.workspace.claimName; it[storageClass] = created.workspace.storageClass; it[workspaceSize] = created.workspace.sizeGibibytes
             it[createdAt] = now
-            writeMutable(it, created)
+            writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
         }
         for ((key, value) in created.labels) CloudSessionLabels.insert { it[sessionId] = created.id; it[CloudSessionLabels.key] = key; it[CloudSessionLabels.value] = value }
@@ -107,8 +107,8 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     override suspend fun compareAndSet(expected: CloudSession, next: CloudSession, write: CloudWrite): CloudSession? = database.query {
         write.actor?.let { requireCurrent(this, it.principal) }
         val now = nowMillis()
-        val updated = CloudSessions.update({ guard(expected, write.leaseOwner, now) }) {
-            writeMutable(it, next.copy(generation = expected.generation + 1))
+        val updated = CloudSessions.update({ sessionGuard(expected, write.leaseOwner, now) }) {
+            writeSessionMutable(it, next.copy(generation = expected.generation + 1))
             if (write.reconcileAt != null) {
                 it[reconcileAfter] = write.reconcileAt
                 if (write.leaseOwner == null) it[reconcileRequested] = true
@@ -144,7 +144,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
                 (CloudSessions.desiredState eq DesiredState.RUNNING.wire) and (CloudSessions.state inList listOf(CloudSessionState.CREATING.wire, CloudSessionState.RESUMING.wire))
         }.orderBy(CloudSessions.waitingSince to SortOrder.ASC).limit(50).map { it[CloudSessions.ownerId] }.distinct()
         if (ahead.any { owner -> owner == expected.ownerId || running(owner) < memberRunningLimit }) return@query StartOutcome.WaitingCapacity
-        val updated = CloudSessions.update({ guard(expected, leaseOwner, now) }) { writeMutable(it, next.copy(generation = expected.generation + 1)) }
+        val updated = CloudSessions.update({ sessionGuard(expected, leaseOwner, now) }) { writeSessionMutable(it, next.copy(generation = expected.generation + 1)) }
         if (updated != 1) return@query StartOutcome.Conflict
         CloudExecutions.insert {
             it[sessionId] = execution.sessionId; it[epoch] = execution.epoch; it[createdAt] = now
@@ -222,36 +222,6 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         Unit
     }
 
-    private fun guard(expected: CloudSession, leaseOwner: String?, now: Long): Op<Boolean> {
-        var op: Op<Boolean> = (CloudSessions.id eq expected.id) and (CloudSessions.teamId eq expected.teamId) and (CloudSessions.generation eq expected.generation)
-        if (leaseOwner != null) op = op and (CloudSessions.reconcileOwner eq leaseOwner) and (CloudSessions.reconcileUntil greater now)
-        return op
-    }
-
-    private fun writeMutable(it: UpdateBuilder<*>, s: CloudSession) {
-        it[CloudSessions.imageReference] = s.imageReference; it[CloudSessions.imageDigest] = s.imageDigest
-        it[CloudSessions.agentKind] = s.agentKind; it[CloudSessions.agentVersion] = s.agentVersion; it[CloudSessions.agentModel] = s.agentModel; it[CloudSessions.agentEffort] = s.agentEffort
-        it[CloudSessions.state] = s.state.wire; it[CloudSessions.phase] = s.phase?.take(64); it[CloudSessions.desiredState] = s.desiredState.wire
-        it[CloudSessions.generation] = s.generation; it[CloudSessions.currentEpoch] = s.currentEpoch
-        it[CloudSessions.idleTimeoutMinutes] = s.idleTimeoutMinutes; it[CloudSessions.lastActivityAt] = s.lastActivityAt
-        it[CloudSessions.resumeWorkspace] = s.resumeWorkspace.wire; it[CloudSessions.resumeConversation] = s.resumeConversation.wire
-        it[CloudSessions.failureCode] = s.failure?.code; it[CloudSessions.failureMessage] = s.failure?.message?.take(512); it[CloudSessions.failureRetryable] = s.failure?.retryable ?: false
-        it[CloudSessions.blockedCode] = s.resumeBlocked?.code; it[CloudSessions.blockedMessage] = s.resumeBlocked?.message?.take(512); it[CloudSessions.blockedRetryable] = s.resumeBlocked?.retryable ?: false
-        it[CloudSessions.pauseRequestedAt] = s.pauseRequestedAt; it[CloudSessions.pauseForce] = s.pauseForce; it[CloudSessions.pausedAt] = s.pausedAt
-        it[CloudSessions.expiresAt] = s.expiresAt; it[CloudSessions.terminatedReason] = s.terminatedReason; it[CloudSessions.waitingSince] = s.waitingSince
-        val w = s.workspace
-        it[CloudSessions.volumeName] = w.volumeName; it[CloudSessions.volumeHandle] = w.volumeHandle?.take(512); it[CloudSessions.deletionState] = w.deletion.wire
-        it[CloudSessions.claimDeletedAt] = w.claimDeletedAt; it[CloudSessions.volumeDeletedAt] = w.volumeDeletedAt
-        it[CloudSessions.deletionCode] = w.deletionProblem?.code; it[CloudSessions.deletionMessage] = w.deletionProblem?.message?.take(512)
-        it[CloudSessions.updatedAt] = s.updatedAt
-    }
-    private fun writeExecution(it: UpdateBuilder<*>, e: CloudExecution) {
-        it[CloudExecutions.podName] = e.podName; it[CloudExecutions.state] = e.state.wire
-        it[CloudExecutions.registeredAt] = e.registeredAt; it[CloudExecutions.lastHeartbeatAt] = e.lastHeartbeatAt; it[CloudExecutions.runnerReady] = e.runnerReady
-        it[CloudExecutions.nodeName] = e.nodeName?.take(253); it[CloudExecutions.imageDigest] = e.imageDigest?.take(100)
-        it[CloudExecutions.endedAt] = e.endedAt; it[CloudExecutions.exitReason] = e.exitReason?.take(64); it[CloudExecutions.checkpoint] = e.checkpoint
-    }
-
     companion object { const val IDEMPOTENCY_MILLIS = 24 * 3_600_000L }
 }
 
@@ -279,10 +249,41 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     workspace = CloudWorkspace(row[CloudSessions.claimName], row[CloudSessions.storageClass], row[CloudSessions.workspaceSize], row[CloudSessions.volumeName], row[CloudSessions.volumeHandle],
         DeletionState.parse(row[CloudSessions.deletionState]), row[CloudSessions.claimDeletedAt], row[CloudSessions.volumeDeletedAt],
         problem(row[CloudSessions.deletionCode], row[CloudSessions.deletionMessage], false)),
-    createdAt = row[CloudSessions.createdAt], updatedAt = row[CloudSessions.updatedAt],
+    createdAt = row[CloudSessions.createdAt], updatedAt = row[CloudSessions.updatedAt], transferId = row[CloudSessions.transferId],
 )
 internal fun readExecution(row: ResultRow) = CloudExecution(
     row[CloudExecutions.sessionId], row[CloudExecutions.epoch], row[CloudExecutions.podName], ExecutionState.parse(row[CloudExecutions.state]), row[CloudExecutions.createdAt],
     row[CloudExecutions.registeredAt], row[CloudExecutions.lastHeartbeatAt], row[CloudExecutions.runnerReady], row[CloudExecutions.nodeName], row[CloudExecutions.imageDigest],
-    row[CloudExecutions.endedAt], row[CloudExecutions.exitReason], row[CloudExecutions.checkpoint],
+    row[CloudExecutions.endedAt], row[CloudExecutions.exitReason], row[CloudExecutions.checkpoint], row[CloudExecutions.ownerId],
 )
+
+internal fun sessionGuard(expected: CloudSession, leaseOwner: String?, now: Long): Op<Boolean> {
+    var op: Op<Boolean> = (CloudSessions.id eq expected.id) and (CloudSessions.teamId eq expected.teamId) and (CloudSessions.generation eq expected.generation)
+    if (leaseOwner != null) op = op and (CloudSessions.reconcileOwner eq leaseOwner) and (CloudSessions.reconcileUntil greater now)
+    return op
+}
+
+internal fun writeSessionMutable(it: UpdateBuilder<*>, s: CloudSession) {
+    it[CloudSessions.imageReference] = s.imageReference; it[CloudSessions.imageDigest] = s.imageDigest
+    it[CloudSessions.agentKind] = s.agentKind; it[CloudSessions.agentVersion] = s.agentVersion; it[CloudSessions.agentModel] = s.agentModel; it[CloudSessions.agentEffort] = s.agentEffort
+    it[CloudSessions.state] = s.state.wire; it[CloudSessions.phase] = s.phase?.take(64); it[CloudSessions.desiredState] = s.desiredState.wire
+    it[CloudSessions.generation] = s.generation; it[CloudSessions.currentEpoch] = s.currentEpoch
+    it[CloudSessions.idleTimeoutMinutes] = s.idleTimeoutMinutes; it[CloudSessions.lastActivityAt] = s.lastActivityAt
+    it[CloudSessions.resumeWorkspace] = s.resumeWorkspace.wire; it[CloudSessions.resumeConversation] = s.resumeConversation.wire
+    it[CloudSessions.failureCode] = s.failure?.code; it[CloudSessions.failureMessage] = s.failure?.message?.take(512); it[CloudSessions.failureRetryable] = s.failure?.retryable ?: false
+    it[CloudSessions.blockedCode] = s.resumeBlocked?.code; it[CloudSessions.blockedMessage] = s.resumeBlocked?.message?.take(512); it[CloudSessions.blockedRetryable] = s.resumeBlocked?.retryable ?: false
+    it[CloudSessions.pauseRequestedAt] = s.pauseRequestedAt; it[CloudSessions.pauseForce] = s.pauseForce; it[CloudSessions.pausedAt] = s.pausedAt
+    it[CloudSessions.expiresAt] = s.expiresAt; it[CloudSessions.terminatedReason] = s.terminatedReason; it[CloudSessions.waitingSince] = s.waitingSince
+    val w = s.workspace
+    it[CloudSessions.volumeName] = w.volumeName; it[CloudSessions.volumeHandle] = w.volumeHandle?.take(512); it[CloudSessions.deletionState] = w.deletion.wire
+    it[CloudSessions.claimDeletedAt] = w.claimDeletedAt; it[CloudSessions.volumeDeletedAt] = w.volumeDeletedAt
+    it[CloudSessions.deletionCode] = w.deletionProblem?.code; it[CloudSessions.deletionMessage] = w.deletionProblem?.message?.take(512)
+    it[CloudSessions.updatedAt] = s.updatedAt; it[CloudSessions.transferId] = s.transferId
+}
+internal fun writeExecution(it: UpdateBuilder<*>, e: CloudExecution) {
+    it[CloudExecutions.podName] = e.podName; it[CloudExecutions.state] = e.state.wire
+    it[CloudExecutions.registeredAt] = e.registeredAt; it[CloudExecutions.lastHeartbeatAt] = e.lastHeartbeatAt; it[CloudExecutions.runnerReady] = e.runnerReady
+    it[CloudExecutions.nodeName] = e.nodeName?.take(253); it[CloudExecutions.imageDigest] = e.imageDigest?.take(100)
+    it[CloudExecutions.endedAt] = e.endedAt; it[CloudExecutions.exitReason] = e.exitReason?.take(64); it[CloudExecutions.checkpoint] = e.checkpoint
+    it[CloudExecutions.ownerId] = e.ownerId
+}

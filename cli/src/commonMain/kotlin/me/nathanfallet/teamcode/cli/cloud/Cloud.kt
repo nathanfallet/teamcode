@@ -17,7 +17,7 @@ import me.nathanfallet.teamcode.cli.sdk
 /** `teamcode cloud`: sessions that run on the team's Kubernetes cluster. */
 class Cloud : SuspendingNoOpCliktCommand(name = "cloud") {
     override fun help(context: Context) = "Create and manage cloud sessions on your team's cluster. Requires an interactive login."
-    init { subcommands(CloudCreate(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAttach(), CloudRunner()) }
+    init { subcommands(CloudCreate(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner()) }
 }
 
 private fun CloudSessionView.line() = listOf(id, state + (phase?.let { " ($it)" } ?: ""), name, "epoch $currentEpoch", "updated ${Instant.fromEpochMilliseconds(updatedAt)}").joinToString("\t")
@@ -37,6 +37,7 @@ private fun CloudSessionView.details() = buildString {
     labels.entries.sortedBy { it.key }.forEach { (key, value) -> appendLine("Label:        $key=$value") }
     pausedAt?.let { appendLine("Paused:       ${Instant.fromEpochMilliseconds(it)}") }
     expiresAt?.let { appendLine("Expires:      ${Instant.fromEpochMilliseconds(it)}") }
+    transferId?.let { appendLine("Transfer:     $it (accepted; the owner changes once paused)") }
 }.trimEnd()
 
 private fun parseLabels(labels: List<String>) = labels.associate { label ->
@@ -101,7 +102,7 @@ private class CloudShow : SuspendingCliktCommand(name = "show") {
             val session = client.cloudSession(id)
             if (json) echo(Serialization.json.encodeToString(session)) else echo(session.details())
             if (executions) for (execution in client.cloudExecutions(id))
-                echo("e${execution.epoch}\t${execution.state}\t${execution.podName}\t${execution.nodeName ?: "-"}\t${execution.exitReason ?: "-"}\t${execution.checkpoint ?: "-"}")
+                echo("e${execution.epoch}\t${execution.state}\t${execution.podName}\t${execution.nodeName ?: "-"}\t${execution.exitReason ?: "-"}\t${execution.checkpoint ?: "-"}\t${execution.ownerId ?: "-"}")
         }
     }
 }

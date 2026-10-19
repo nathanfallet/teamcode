@@ -10,6 +10,9 @@ import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlCloudTransferStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlMemberAllowance
+import me.nathanfallet.teamcode.infrastructure.database.SqlModelPolicyStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import me.nathanfallet.teamcode.presentation.CloudConversation
@@ -30,16 +33,23 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     ))
     private val work = SqlScheduledWork(database)
     private val replica = UUID.randomUUID().toString()
-    private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, onError = { session, error ->
-        // Class and HTTP status only: messages from the cluster or the driver may echo request content.
-        System.err.println("TeamCode cloud reconciliation failed for session $session (${describe(error)}); retrying.")
-    })
-    private val garbage = CollectCloudGarbageUseCase(store, cluster)
 
     private val conversationStore = SqlCloudConversationStore(database)
     // Groups do not exist in TeamCode yet; a group directory plugs in here when they land.
     private val access = CloudAccessService(conversationStore, store, CloudGroupDirectory.NONE)
     val sessions = CloudSessionService(store, access = access)
+
+    // Transfers recheck the recipient with the same rules as creation, plus model policy and quota. Environment
+    // variables, MCP servers and skills reach cloud sessions in other branches; their assignment checks join this list.
+    private val transferStore = SqlCloudTransferStore(database)
+    private val recipients = CloudRecipientPolicy(store, access, listOf(ModelPolicyRecipientCheck(SqlModelPolicyStore(database)), QuotaRecipientCheck(SqlMemberAllowance(database))))
+    val transfers = CloudTransferService(store, transferStore, sessions, recipients)
+
+    private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, onError = { session, error ->
+        // Class and HTTP status only: messages from the cluster or the driver may echo request content.
+        System.err.println("TeamCode cloud reconciliation failed for session $session (${describe(error)}); retrying.")
+    }, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients))
+    private val garbage = CollectCloudGarbageUseCase(store, cluster)
     val admin = CloudAdministrationService(adminStore, cluster)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster))
 
@@ -77,7 +87,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             while (isActive) {
                 try {
-                    work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain() }
+                    work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain(); transferStore.maintain(); transfers.expireOffers() }
                     work.runDue("cloud-gc", intervalMillis = 10 * 60_000, timeoutMillis = 240_000) { collectGarbage() }
                 }
                 // runDue's deadline is a cancellation of the block only; the loop must survive it.

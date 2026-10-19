@@ -5,11 +5,13 @@ enum class CloudEventType(val wire: String) {
     USER_MESSAGE("message.user"), AGENT_MESSAGE("message.agent"), TOOL_CALL("tool.call"), TOOL_RESULT("tool.result"),
     TURN("turn"), STATUS("status"), ERROR("error"),
     /** Written by the server when an input is consumed, cancelled or rejected. */
-    INPUT("input");
+    INPUT("input"),
+    /** Written by the server when the session changed owner: `{transferId, fromMemberId, toMemberId, atEpoch}`. */
+    TRANSFER("transfer");
     companion object {
         fun parse(value: String) = entries.singleOrNull { it.wire == value }
-        /** Types a runner may upload; `input` events are the server's own. */
-        val fromRunner = entries.toSet() - INPUT
+        /** Types a runner may upload; `input` and `transfer` events are the server's own. */
+        val fromRunner = entries.toSet() - INPUT - TRANSFER
     }
 }
 

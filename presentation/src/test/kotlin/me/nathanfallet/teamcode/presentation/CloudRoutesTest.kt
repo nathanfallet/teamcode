@@ -133,6 +133,101 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?limit=51") { bearerAuth("admin") }.status)
     }
 
+    /** Transfers in memory: the version compare-and-set and the session write of the real store, without SQL. */
+    private class Transfers(val store: Store) : CloudTransferStore {
+        val rows = linkedMapOf<String, CloudTransfer>()
+        override suspend fun find(teamId: String, id: String) = rows[id]
+        override suspend fun byKey(teamId: String, initiatorId: String, key: String) = rows.values.find { it.initiatedBy.initiatorId == initiatorId && it.idempotencyKey == key }
+        override suspend fun list(teamId: String, memberId: String, query: CloudTransferQuery) =
+            CloudTransferPage(rows.values.filter { query.team || it.fromMemberId == memberId || it.toMemberId == memberId }
+                .filter { query.direction != CloudTransferDirection.OUTGOING || it.fromMemberId == memberId }
+                .filter { query.direction != CloudTransferDirection.INCOMING || it.toMemberId == memberId }.reversed(), null)
+        override suspend fun open(transfer: CloudTransfer, actor: CloudActor, auditAction: String, session: SessionChange?): CloudTransferOutcome {
+            byKey(transfer.teamId, transfer.initiatedBy.initiatorId, transfer.idempotencyKey!!)?.let { return CloudTransferOutcome.Replayed(it) }
+            if (rows.values.any { it.sessionId == transfer.sessionId && it.state.open }) throw TeamFailure("transfer_pending", 409, "pending")
+            session?.let { store.compareAndSet(it.expected, it.next, CloudWrite()) ?: throw TeamFailure("session_busy", 409, "busy") }
+            rows[transfer.id] = transfer
+            return CloudTransferOutcome.Created(transfer)
+        }
+        override suspend fun update(expected: CloudTransfer, next: CloudTransfer, actor: CloudActor?, auditAction: String?, session: SessionChange?): CloudTransfer? {
+            if (rows[expected.id]?.version != expected.version) return null
+            session?.let { store.compareAndSet(it.expected, it.next, CloudWrite()) ?: return null }
+            return next.also { rows[it.id] = it }
+        }
+        override suspend fun complete(expected: CloudSession, next: CloudSession, transfer: CloudTransfer, leaseOwner: String, retainedLimit: Int) = TransferCompletion.Conflict
+        override suspend fun expireOffers(limit: Int) = 0
+        override suspend fun maintain() = Unit
+    }
+
+    @Test fun transfersAreOffersForMembersAndImmediateForAdministrators() = testApplication {
+        val store = Store()
+        val settings = Admin()
+        val sessions = CloudSessionService(store)
+        val transfers = CloudTransferService(store, Transfers(store), sessions, CloudRecipientPolicy(store))
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(settings, FakeCluster),
+                cloudTransfers = transfers, publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.transfer.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText()).features)
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions[created.id] = created.copy(state = CloudSessionState.READY)
+        suspend fun transfer(token: String, key: String?, body: String = """{"toMemberId":"admin-id"}""", onBehalf: String? = null) = client.post("/api/v1/cloud/sessions/${created.id}/transfer") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
+            key?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) }; onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+        }
+        assertEquals(HttpStatusCode.Forbidden, transfer("service-admin", "t1").status, "Service keys never transfer sessions")
+        assertEquals(HttpStatusCode.BadRequest, transfer("colleague", null).status, "An Idempotency-Key is required")
+        assertEquals(HttpStatusCode.Forbidden, transfer("colleague", "t1", onBehalf = "admin-id").status)
+        val offered = transfer("colleague", "t1")
+        assertEquals(HttpStatusCode.Accepted, offered.status)
+        val offer = Serialization.json.decodeFromString<CloudTransferView>(offered.bodyAsText())
+        assertEquals(listOf("offered", "colleague-id", "admin-id"), listOf(offer.state, offer.fromMemberId, offer.toMemberId))
+        assertEquals(CloudAttributionView("colleague-id", "colleague-session", "colleague-id"), offer.initiatedBy)
+        val replay = transfer("colleague", "t1", """{ "toMemberId" : "admin-id" }""")
+        assertEquals("true", replay.headers[CloudHeaders.IDEMPOTENCY_REPLAYED]); assertEquals(offer.id, Serialization.json.decodeFromString<CloudTransferView>(replay.bodyAsText()).id)
+        assertEquals(HttpStatusCode.UnprocessableEntity, transfer("colleague", "t1", """{"toMemberId":"admin-id","resume":true}""").status, "Same key, another request")
+        assertNull(store.sessions.getValue(created.id).transferId, "An offer does not touch the session")
+
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/transfers?scope=team") { bearerAuth("colleague") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/transfers?direction=sideways") { bearerAuth("colleague") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/transfers?state=pending") { bearerAuth("colleague") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/transfers/${offer.id}/accept") { bearerAuth("colleague") }.status, "The owner cannot accept their own offer")
+        val owner = TeamCodeClient("http://localhost", { "colleague" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        val recipient = TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            assertEquals(listOf(offer.id), owner.cloudTransfers(direction = "outgoing").transfers.map { it.id })
+            assertEquals(emptyList(), owner.cloudTransfers(direction = "incoming").transfers)
+            assertEquals(listOf(offer.id), recipient.cloudTransfers(team = true, states = listOf("offered")).transfers.map { it.id })
+            val accepted = recipient.acceptCloudTransfer(offer.id, resume = true)
+            assertEquals("accepted" to true, accepted.state to accepted.resume)
+            assertEquals(CloudAttributionView("admin-id", "admin-session", "admin-id"), accepted.decidedBy)
+            val session = owner.cloudSession(created.id)
+            assertEquals(offer.id to "paused", session.transferId to session.desiredState, "Acceptance pauses the session toward the transfer")
+            assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { owner.resumeCloudSession(created.id) }.statusCode, "No resume while a transfer is accepted")
+            assertEquals("transfer_forbidden", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { owner.cancelCloudTransfer(offer.id) }.code)
+            assertEquals("cancelled", recipient.cancelCloudTransfer(offer.id).state, "An administrator stops it before the owner change")
+            assertNull(owner.cloudSession(created.id).transferId)
+            // An administrator transfers at once, with the delegated member recorded.
+            val direct = recipient.transferCloudSession(created.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "t2", onBehalfOf = "colleague-id")
+            assertEquals("accepted", direct.state); assertEquals("colleague-id", direct.initiatedBy.effectiveMemberId)
+            assertEquals(true, store.sessions.getValue(created.id).pauseForce)
+            assertEquals(direct.id, recipient.cloudTransfer(direct.id).id)
+        } finally { owner.close(); recipient.close() }
+
+        // Settings: the transfer policy is part of the persistent cloud settings and the dashboard form.
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"memberTransfers":"always"}""") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"transferOfferDays":31}""") }.status)
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json)
+            setBody("""{"memberTransfers":"disabled","transferOfferDays":3,"transferPendingInputs":"keep"}""") }.status)
+        assertEquals(CloudSettings(memberTransfers = MemberTransfers.DISABLED, transferOfferDays = 3, transferPendingInputs = TransferPendingInputs.KEEP), settings.settings)
+        assertTrue(client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText().contains("Members may offer their own sessions"))
+        assertEquals(HttpStatusCode.Found, client.post("/dashboard/cloud") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=admin-session&pausedRetentionDays=30&failedWorkspaceRetentionDays=7&maxRunning=2&maxRetained=20&transcriptRetentionDays=30&memberTransfers=offer&transferOfferDays=5&transferPendingInputs=cancel")
+        }.status)
+        assertEquals(Triple(MemberTransfers.OFFER, 5, TransferPendingInputs.CANCEL), settings.settings.let { Triple(it.memberTransfers, it.transferOfferDays, it.transferPendingInputs) })
+    }
+
     @Test fun retentionSettingsArePersistentAdministratorSettings() = testApplication {
         val settings = Admin()
         application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(Store()), cloudAdmin = CloudAdministrationService(settings, FakeCluster), publicOrigin = "http://localhost") }

@@ -15,7 +15,7 @@ class SqlAuditService(private val database: Database) : AuditService {
             val rows = AuditEvents.selectAll().where {
                 (AuditEvents.teamId eq actor.teamId) and (beforeId?.let { AuditEvents.id less it } ?: Op.TRUE)
             }.orderBy(AuditEvents.id to SortOrder.DESC).limit(AuditService.PAGE_SIZE + 1).map {
-                AuditEvent(it[AuditEvents.id], it[AuditEvents.actorId], it[AuditEvents.action], it[AuditEvents.subjectId], it[AuditEvents.occurredAt], it[AuditEvents.effectiveMemberId], it[AuditEvents.credentialId])
+                AuditEvent(it[AuditEvents.id], it[AuditEvents.actorId], it[AuditEvents.action], it[AuditEvents.subjectId], it[AuditEvents.occurredAt], it[AuditEvents.effectiveMemberId], it[AuditEvents.credentialId], it[AuditEvents.relatedMemberId])
             }
             val events = rows.take(AuditService.PAGE_SIZE)
             AuditPage(events, if (rows.size > AuditService.PAGE_SIZE) events.last().id else null)

@@ -12,7 +12,8 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Attachment leases and `teamcode cloud attach` | Implemented (`cloud.attach.v1`) |
 | Access policy for members and groups (create, attach, message, transcript) | Implemented (`cloud.access.v1`); groups need a group directory, see [access](#access) |
 | Transcript retention setting (`transcriptRetentionDays`, 30 days by default) | Implemented |
-| Idle pause, `initialMessage` on create, caller-wide SSE feed, webhooks, transfer | Planned |
+| Idle pause, `initialMessage` on create, caller-wide SSE feed, webhooks | Planned |
+| Transfer: leases removed, unconsumed messages cancelled or kept, `transfer` event | Implemented, see [transfer](cloud-sessions.md#transfer) |
 
 The capabilities are advertised with `cloud.sessions.v1`, when cloud sessions are enabled.
 
@@ -56,6 +57,7 @@ Events, in `cloud_session_events`:
 | `status` | `{agent, conversation?, conversationId?, model?, exitCode?}` |
 | `error` | `{code, message}` |
 | `input` | `{inputId, kind, status, reason}`, server-written when an input is cancelled or rejected |
+| `transfer` | `{transferId, fromMemberId, toMemberId, atEpoch}`, server-written when the session changed owner |
 
 Clients must tolerate unknown types and unknown fields. `seq` starts at 1 and increases by one per session; `epoch` is the producing execution (0 for server events).
 
@@ -74,7 +76,7 @@ Clients must tolerate unknown types and unknown fields. `seq` starts at 1 and in
 
 `POST /cloud/sessions/{id}/messages` with `{text, wake, clientMessageId, expectedLastEventSeq}` (text 1 to 32,000 characters, body at most 256 KB) returns `202` with the input view. `Idempotency-Key` or `clientMessageId` (one, not both, `400` otherwise) makes a retry return the first acknowledgement with `Idempotency-Replayed: true`; the same key with another text is `422 idempotency_conflict`. `expectedLastEventSeq` refuses the message with `409 stale_view` when newer events exist.
 
-Acknowledgement levels: `queued`, `delivered` (handed to the runner), `consumed` (written to the agent; `eventSeq` points to its `message.user` event), and the final `cancelled` or `rejected` with a `reason`. A delivery not acknowledged within 60 s, or whose execution ended, is offered again, up to 3 attempts (`rejected`, `delivery_failed`). Inputs of a terminated session are `cancelled`. At most 100 inputs may be pending per session (`429 too_many_pending_inputs`).
+Acknowledgement levels: `queued`, `delivered` (handed to the runner), `consumed` (written to the agent; `eventSeq` points to its `message.user` event), and the final `cancelled` or `rejected` with a `reason`. A delivery not acknowledged within 60 s, or whose execution ended, is offered again, up to 3 attempts (`rejected`, `delivery_failed`). Inputs of a terminated session are `cancelled`; at a change of owner, unconsumed inputs are `cancelled` with reason `transferred` or kept, per the team's `transferPendingInputs`. At most 100 inputs may be pending per session (`429 too_many_pending_inputs`).
 
 **Wake.** A message to a paused session resumes it (`woke: true`) unless `wake: false`; it waits in the queue for the next resume. A message received while the session is pausing is queued and wakes the session as soon as the pause completes. The wake rechecks the owner and the profile assignment and is audited (`cloud.session.woken`).
 
@@ -84,7 +86,7 @@ Acknowledgement levels: `queued`, `delivered` (handed to the runner), `consumed`
 
 ## Attach
 
-`POST /cloud/sessions/{id}/attachments` takes a 60-second lease (`201`), renewed with `POST .../attachments/{attachment}/renew` (`409 attachment_expired` once lost) and released with `DELETE .../attachments/{attachment}`. Attaching needs the `attach` and `transcript` permissions; the lease lists what the member may do (`transcript`, `message`). An ended session cannot be attached (`409`).
+`POST /cloud/sessions/{id}/attachments` takes a 60-second lease (`201`), renewed with `POST .../attachments/{attachment}/renew` (`409 attachment_expired` once lost) and released with `DELETE .../attachments/{attachment}`. Attaching needs the `attach` and `transcript` permissions; the lease lists what the member may do (`transcript`, `message`). An ended session cannot be attached (`409`). A change of owner removes every lease of the session; the former owner's `teamcode cloud attach` then stops with "Access to this session was revoked."
 
 `teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]` holds a lease (renewed every 20 s, taken again if it expired), prints the last events and then the stream, and sends each input line as a message with its own idempotency key. `/interrupt` stops the current turn; `/detach` or the end of input detaches, and the session keeps running. A network failure reconnects from the last printed event, so nothing is printed twice or skipped.
 
@@ -119,7 +121,7 @@ Migrations `V20261019210000*`: `cloud_settings.transcript_retention_days`, `clou
 
 - The agent runs with the pod UID like the runner, so it can read the projected token file; a separate UID or a token that the runner drops after reading is a follow-up.
 - No `tcex_` inference credential is issued to the pod yet, so the agent cannot authenticate to the TeamCode gateway in a real cluster until that lands.
-- Idle pause, the attachment lease in idle detection, `initialMessage`, the caller-wide feed, webhooks and transfer are not implemented.
+- Idle pause, the attachment lease in idle detection, `initialMessage`, the caller-wide feed and webhooks are not implemented.
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.

@@ -21,7 +21,8 @@ This page is the contract and the record of what is implemented. It follows the 
 | Runner skeleton `teamcode cloud runner` (register, heartbeat, checkpoint; no agent) | Implemented (PR 2) |
 | CLI `teamcode cloud create/list/show/pause/resume/delete` | Implemented (PR 2) |
 | Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
-| Environment preparation, GitHub, transcript, messages, attach, transfer, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
+| Ownership transfer: offers and administrator transfers, recipient rechecks, owner change at a paused boundary, revocation, settings (`cloud.transfer.v1`) | Implemented, see [transfer](#transfer) |
+| Environment preparation, GitHub, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
 The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
 
@@ -34,8 +35,9 @@ The server mounts the cloud routes and advertises `cloud.sessions.v1` only when 
 | Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
 | Execution | `cloud_executions` | Session | One pod lifetime, unique on `(session_id, epoch)`: pod name, node, image digest, registration, heartbeats, exit reason, checkpoint result |
 | Idempotency record | `cloud_idempotency` | Team + initiating member | The session created by a keyed request, kept 24 hours |
+| Transfer | `cloud_transfers` | Session; former owner and recipient | From, to, initiator and decider, state, resume and pending-input policy, the last epoch of the former owner and the transcript event of the change. Kept after completion |
 
-Planned tables: `cloud_session_events` (transcript), `cloud_session_inputs` (messages and interrupts), `cloud_transfers`, GitHub grants.
+Planned tables: GitHub grants. Each execution row also records the owner it ran for (`owner_id`), which is how history stays attributed after a transfer.
 
 Credentials are never stored in these tables, except the cluster's service-account token, encrypted with the server's credential key and bound to the cluster id. No API returns it.
 
@@ -54,7 +56,7 @@ Groups do not exist in TeamCode yet, so profiles are assigned to members. Admini
 | `pausing` | Draining and checkpointing | `draining`, `checkpointing`, `stopping_pod` |
 | `paused` | No pod; workspace retained | - |
 | `resuming` | A new execution is starting on the same workspace | `waiting_capacity`, `scheduling`, `starting_runner`, `restoring` |
-| `transferring` | Changing owner at a paused boundary (planned) | - |
+| `transferring` | Changing owner at a paused boundary: no pod, recipient rechecked, then one transaction changes the owner | `transferring`, `stopping_pod` |
 | `terminated` | Deleted or expired; no pod; workspace being deleted or deleted | `cleanup_pending`, `deleting_volume`, `cleaned` |
 | `failed` | Unusable; the workspace never held work or is lost | - |
 
@@ -68,12 +70,15 @@ Other fields: `desiredState` (`running`, `paused`, `terminated`), `failure` and 
 | `creating` | `preparing` | The runner registered for the current epoch |
 | `creating`, `preparing` | `failed` | Missing or retaining storage class, namespace no longer allowed on the cluster, image or start failure, 15-minute start timeout, 30-minute preparation timeout, or execution lost during the first execution. The workspace is deleted right away. |
 | `preparing`, `resuming` | `ready` | The runner reported ready on a heartbeat. The agent is never reported ready earlier. |
-| `ready`, `active` | `pausing` | Desired state `paused` (explicit pause; idle timeout and transfer are planned), or the runner's checkpoint arriving before the reconciler's own move |
+| `ready`, `active` | `pausing` | Desired state `paused` (explicit pause, or an accepted [transfer](#transfer); idle timeout is planned), or the runner's checkpoint arriving before the reconciler's own move |
 | `pausing` | `paused` | Checkpoint completed (`consistent`), or failed, missed heartbeats or 15-minute pausing deadline (`crash_consistent`) |
 | `ready`, `active`, `pausing` | `paused` | Execution lost: no heartbeat for 90 s, the pod disappeared or stopped, or the execution row is missing (`execution_missing`, after deleting any pod of the session). `crash_consistent`, and the desired state becomes `paused`, so a lost execution never restarts by itself. |
 | `paused` | `resuming` | Desired state `running` (explicit resume, or a [message](cloud-conversations.md#messages-and-interrupts) with `wake`) |
 | `resuming` | `paused` | Image unavailable, start failure or timeout, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
 | `resuming` | `failed` | The workspace claim is lost |
+| `paused` | `transferring` | An accepted transfer (`transferId` set) once the session is paused |
+| `transferring` | `paused` | Owner changed without `resume`, or the transfer failed or was dropped (the session keeps its former owner) |
+| `transferring` | `resuming` | Owner changed with `resume`: the next execution starts for the recipient |
 | any | `terminated` | `DELETE`, or retention expiry while paused. A `failed` session keeps its deletion progress (a workspace already proven deleted stays proven). |
 
 The table lives in `CloudStateMachine`; every write is checked against it.
@@ -111,7 +116,7 @@ For creation, the effective member becomes the owner; the retained-session cap a
 
 ### Attribution and audit
 
-Sessions record `createdBy {initiatorId, credentialId, effectiveMemberId}`; `credentialId` is the id of the login session or key, never its token. The audit journal gained two nullable columns, `effective_member_id` and `credential_id`, exposed as optional fields of `GET /api/v1/audit` events. Journaled actions: `cloud.session.created`, `.paused`, `.resumed`, `.deleted` (by the caller), and `.pausing`, `.paused_checkpoint`, `.ready`, `.ready_resumed`, `.execution_lost`, `.resume_blocked`, `.failed`, `.expired`, `.terminated`, `.workspace_deleted` (by `system`, with the owner as effective member); `cloud.cluster.saved`, `cloud.profile.saved` and `cloud.settings.updated`.
+Sessions record `createdBy {initiatorId, credentialId, effectiveMemberId}`; `credentialId` is the id of the login session or key, never its token. The audit journal gained two nullable columns, `effective_member_id` and `credential_id`, exposed as optional fields of `GET /api/v1/audit` events. Journaled actions: `cloud.session.created`, `.paused`, `.resumed`, `.deleted` (by the caller), and `.pausing`, `.paused_checkpoint`, `.ready`, `.ready_resumed`, `.execution_lost`, `.resume_blocked`, `.failed`, `.expired`, `.terminated`, `.workspace_deleted`, `.transferring` (by `system`, with the owner as effective member); `cloud.cluster.saved`, `cloud.profile.saved` and `cloud.settings.updated`. Transfers add a third nullable column, `related_member_id` (`relatedMemberId` in the API): `cloud.transfer.offered`, `.requested`, `.accepted`, `.declined`, `.cancelled` (by the caller, subject the transfer), `.expired`, `.failed` (by `system`, with the recipient as effective member and the former owner as related member), and `cloud.session.transferred` (subject the session, actor the transfer's initiator, effective member the recipient, related member the former owner).
 
 ### Idempotency
 
@@ -123,7 +128,7 @@ Sessions record `createdBy {initiatorId, credentialId, effectiveMemberId}`; `cre
 
 The replay returns the **current** view of the created session rather than a byte copy of the first response. Records expire after 24 hours (bounded purge).
 
-Pause, resume and delete are naturally idempotent through the desired state. Messages take `Idempotency-Key` or its `clientMessageId` alias ([messages](cloud-conversations.md#messages-and-interrupts)); transfers will too.
+Pause, resume and delete are naturally idempotent through the desired state. Messages take `Idempotency-Key` or its `clientMessageId` alias ([messages](cloud-conversations.md#messages-and-interrupts)). `POST /cloud/sessions/{id}/transfer` requires `Idempotency-Key`, with the same scope and digest rules as creation (the digest covers the session, the body and the effective member); accept, decline and cancel are idempotent through the transfer's state.
 
 ### Routes
 
@@ -143,7 +148,9 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `.../messages`, `.../interrupt`, `.../attachments`, `/cloud/access`, `/cloud/runner/agent`, `.../events`, `.../inputs` | Transcript, messages, interrupt, attach lease, access policy, agent channel: see [transcript, messages and attach](cloud-conversations.md) | Access policy | Implemented |
 | `/cloud/events/stream` | Caller-wide SSE feed | | Planned |
-| `/cloud/sessions/{id}/transfer`, `/cloud/transfers...` | Ownership transfer | | Planned |
+| `POST /cloud/sessions/{id}/transfer` | `{toMemberId, resume?, force?}` with `Idempotency-Key`; `202`. An administrator's transfer is `accepted` at once, an owner's is `offered` | Owner (when `memberTransfers` is `offer`), administrator | Implemented |
+| `GET /cloud/transfers` | `direction=incoming\|outgoing\|all`, `scope=team` (administrators), `state` (repeatable), `session`, `before`, `limit` ≤ 50 | Both members, administrator | Implemented |
+| `GET /cloud/transfers/{id}`; `POST .../accept` (`{resume?}`), `.../decline`, `.../cancel` | Read and decide | Recipient (accept, decline), former owner (cancel an offer), administrator (all) | Implemented |
 
 A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
 
@@ -191,10 +198,13 @@ Administrators edit them through `PUT /api/v1/cloud/settings` or **Dashboard →
 | `maxRunningSessionsPerMember` | 2 | Running cap per member. |
 | `maxRetainedSessionsPerMember` | 20 | Retained cap per member. |
 | `transcriptRetentionDays` | 30 | Days transcript events are kept (1 to 3,650). `null` keeps them indefinitely. |
+| `memberTransfers` | `offer` | `offer`: an owner may offer their own session and the recipient accepts; `disabled`: only administrators transfer. |
+| `transferOfferDays` | 7 | Days a recipient has to accept an offer (1 to 30). |
+| `transferPendingInputs` | `cancel` | Messages not yet consumed when the owner changes: `cancel` (reason `transferred`) or `keep` (delivered to the recipient's next execution). |
 
 `expiresAt` is computed when the session pauses, from the setting in force at that moment; changing the setting applies to sessions paused afterwards, so shortening it never deletes existing work by surprise. Resuming clears it. At expiry the session is terminated with reason `expired` and its workspace deleted as below. The 7-day and 1-day expiry notices need the transcript and feed, and are planned.
 
-The transfer policy will be a setting too, with these defaults: pause first, undelivered messages cancelled, former owner without access. It ships with the transfer PR; nothing in this release reads it.
+The pause before a change of owner and the end of the former owner's access are not settings: they are what makes a transfer safe (see [transfer](#transfer)). The pending-input policy is copied onto the transfer when it is accepted, so a later change of the setting does not alter a transfer in progress.
 
 ## Workspace and proven deletion
 
@@ -215,6 +225,72 @@ Each session has one PersistentVolumeClaim, `tc-ws-<session>`, created before it
 5. `POST /resume` rechecks the owner and assignment, then sets `desiredState = running`. The reconciler moves the session to `resuming`, waits for capacity, starts epoch n+1 on the same workspace with the pinned digest, and the runner's ready heartbeat makes it `ready`.
 
 Inactivity only pauses; it never deletes. Idle detection (turns, pending inputs, preparation), the idle warning and `maxTurnMinutes` are planned.
+
+## Transfer
+
+A session can change owner and keep its identity, workspace, transcript and executions. Capability `cloud.transfer.v1`.
+
+### Who may transfer
+
+- **Administrators** transfer any team session to any eligible member at once: the transfer is created `accepted`. With `TeamCode-On-Behalf-Of`, the delegated member is recorded as the transfer's effective member; the call is still authorized with the administrator's rights, as everywhere else. An administrator's transfer cancels a pending offer for the same session (`superseded`).
+- **An owner who is not an administrator** can only offer their own session (`offered`), and only while `memberTransfers` is `offer`. The recipient, or an administrator, accepts or declines it within `transferOfferDays`; the owner can withdraw it until it is accepted. Nobody can take a session they do not own: a member asking to transfer someone else's session gets `404`, and only the recipient or an administrator can accept.
+- A session has at most one open transfer (`409 transfer_pending`). A session being created or prepared cannot be transferred (`409 session_preparing`): its preparation runs with the owner's credentials and recipe. An ended session cannot either (`409 session_not_running`).
+- `POST /transfer` requires `Idempotency-Key`; a retry replays the transfer even after the session changed (`Idempotency-Replayed: true`).
+
+Transfer states: `offered` → `accepted` → `completed`, or `declined`, `cancelled` (by a member, `superseded`, or because the session ended), `expired` (offers past their validity; a maintenance worker and every read of an offer apply it), `failed` (the recipient was no longer eligible at the boundary).
+
+### Recipient checks
+
+The recipient is checked when the transfer is requested, when it is accepted, and again by the reconciler right before the owner changes, on fresh data. A refusal at request or acceptance is `422 recipient_ineligible`, naming every problem code; a refusal at the boundary fails the transfer with that code and returns the session to `paused` for its former owner.
+
+| Check | Code |
+| --- | --- |
+| A team member, enabled, password setup completed | `recipient_not_found`, `recipient_unavailable` |
+| Assigned to the session's profile (administrators use every profile) | `profile_unassigned` |
+| `create` under the [access policy](cloud-conversations.md#access), as for a creation on their behalf | `cloud_permission_denied` |
+| The session's recorded agent model and effort against the team's model policy, exactly as inference will check them | `model_not_allowed`, `effort_not_allowed` |
+| An inference allowance at all (a pool weight or daily allowance of zero refuses). Today's consumption is not checked: a transfer neither resets nor borrows allowances | `recipient_no_quota` |
+| The retained-session cap, in the owner-change transaction under the recipient's member row lock | `cloud_session_limit` |
+
+The checks are a list of `CloudRecipientCheck` ports. Environment variables, MCP servers and skills are delivered to cloud sessions by other branches (environment preparation, the MCP gateway and the skill catalog); their assignment checks (for example the profile's `requiredVariables` for the recipient) join this list when they are merged, without changing the transfer flow.
+
+### The boundary: pause first, then change owner
+
+**Decision.** The owner changes only at a paused boundary, never in a running pod. Accepting a transfer sets the desired state to `paused` (keeping `transferId` on the session); a running session drains and checkpoints exactly like an explicit pause (the running turn finishes, or is interrupted 60 s before the deadline; `force` pauses at once and leaves a crash-consistent workspace), the reconciler deletes the pod and confirms it is gone, and only a `paused` session moves to `transferring`. There, the reconciler deletes any pod of the session still listed by the cluster, ends any execution still open, rechecks the recipient, and commits the change in one transaction. The next execution is a new epoch, started for the recipient, by `resume` on the transfer (or the acceptance) or later by the recipient.
+
+**Why.** Everything that acts for the owner inside a pod is bound to that pod or was resolved for the owner when it started: the agent process and its memory, the Git and GitHub credentials and the variable values the runner fetched for the owner, MCP credentials, and the pod's projected token. None of it can be proven revoked while the process lives, and the agent may have copied a credential into a child process. Ending the execution is the only revocation that holds, and the epoch fence already guarantees that nothing of an ended epoch can call the server again. The other options were set aside:
+
+- *Live hand-off in the running pod* (rotate credentials, keep the process): the former owner's credentials stay in the process and its children, and the work in progress would be billed partly to one member and partly to the other within one turn.
+- *Cancel the turn and transfer at once*: loses the running turn's work for no gain over `force`, which administrators can already ask for.
+- *Refuse transfers of running sessions*: pushes the pause onto every caller (an orchestrator would have to pause, poll and transfer), with a race between the pause and someone resuming it.
+
+The cost is the drain (bounded by the pause deadline) and one pod restart. The workspace, the transcript and, for agents that support it, the conversation (resumed by id) are kept, so the recipient continues the same session.
+
+While a transfer is accepted and not finished, an explicit resume is refused (`409 session_transferring`), a message never wakes the session, and a new transfer is refused. Deleting the session cancels the transfer.
+
+### What changes at the boundary
+
+In the owner-change transaction:
+
+- `ownerId` becomes the recipient; the transfer becomes `completed` with `atEpoch` (the last epoch run for the former owner) and `eventSeq`.
+- Every attachment lease of the session is removed. The former owner's `attach` stops at its next renewal, and their transcript stream ends with `event: denied` at its next access check.
+- Messages not yet consumed follow the transfer's `pendingInputs`: `cancel` marks them `cancelled` with reason `transferred` (each with its `input` transcript event), `keep` queues them for the recipient's next execution. Wake requests are cleared either way, so a former owner's message never resumes the recipient's session.
+- A server-written `transfer` event `{transferId, fromMemberId, toMemberId, atEpoch}` is appended to the transcript.
+- `cloud.session.transferred` is journaled with the initiator, the recipient and the former owner.
+- Without `resume`, the session stays `paused` and its expiry restarts from the recipient's full paused retention. With `resume`, it moves to `resuming` and starts for the recipient.
+
+After it, the former owner has no owner rights on the session (it is a `404` for them), unless the team's access policy grants them access to other members' sessions. The recipient sees the whole history.
+
+### Former-owner credentials
+
+- **Pod and execution.** No pod of the session exists after the boundary, and every execution of the former owner ended; their projected tokens are fenced by epoch. The planned `tcex_` inference credential is bound to the execution, so it dies with it.
+- **Git, GitHub and variables.** The environment branch resolves the Git identity, the GitHub user token and the variable values for the session's current owner on every runner `environment` call, which only the registered runner of the current epoch can make. After a transfer, that is the recipient's first execution. Nothing of the former owner's is stored with the session or in the pod spec. The runner's credential helper and `GH_TOKEN` live in memory and in child-process environments of the ended pod only.
+- **Attachments.** Removed in the transaction.
+- **Workspace content.** The workspace is transferred as it is: that is the point of a transfer. Files the former owner (or their agent) wrote there, including the agent's conversation state under `$HOME`, belong to the session. Credentials never reach the workspace through TeamCode, but a secret that a member typed into a file goes with the session.
+
+### Attribution and billing
+
+Each execution records the owner it ran for (`ownerId` in `GET /cloud/sessions/{id}/executions`). Work of an execution (inference through its execution credential, pod time) is attributed to that member, so the former owner's executions stay theirs and the recipient's start at `atEpoch + 1`. Transcript events carry their epoch, and `message.user` events their author, so history remains attributable after the change. Usage already recorded in the ledger is never moved, and allowances are neither reset nor transferred.
 
 ## The runner and the pod
 
@@ -250,7 +326,6 @@ See [transcript, messages and attach](cloud-conversations.md#the-agent-in-the-po
 
 - **Environment preparation.** Repositories and refs cloned into `/workspace/<path>` on the first execution and only fetched on resume (never reset or re-cloned over work); `create` and `start` setup steps with completion markers; the owner's Git identity rewritten on every execution; variant values from the environment/MCP variants work, injected into processes only.
 - **GitHub.** GitHub App user-to-server tokens per member (8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern); installation tokens only for dedicated service members; personal access tokens refused. Members link GitHub in the dashboard or with `teamcode github link`. Tokens reach Git and `gh` through a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
-- **Transfer.** Administrator transfer is immediate; an owner's request is an offer the recipient accepts within 7 days. Transfer happens at a checkpoint, revokes execution and attachment credentials, rechecks the recipient, and charges future work to the recipient while historical usage stays with the original member. The policy follows the settings above.
 - **Keys.** `cloud:read`/`cloud:write` personal scopes and `admin:cloud` administrator keys with `TeamCode-On-Behalf-Of`, with the V2 API keys. This enables the driving integration: an external orchestrator creating one session per task on behalf of a member, relaying messages from mobile through its own backend, without administrator keys ever reaching a device.
 
 ## CLI
@@ -262,10 +337,15 @@ teamcode cloud show SESSION [--executions] [--json]
 teamcode cloud pause SESSION [--force] [--member ID]
 teamcode cloud resume SESSION [--member ID]
 teamcode cloud delete SESSION --yes [--member ID]
+teamcode cloud transfer SESSION --to MEMBER_ID [--resume] [--force] [--member ID] [--idempotency-key KEY] [--json]
+teamcode cloud transfers list [--incoming|--outgoing|--all] [--state STATE]... [--session ID] [--json]
+teamcode cloud transfers show TRANSFER [--json]
+teamcode cloud transfers accept TRANSFER [--resume] [--member ID]
+teamcode cloud transfers decline|cancel TRANSFER [--member ID]
 teamcode cloud runner            # hidden; pod entrypoint only
 ```
 
-`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
+`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `logs`, `send`, `attach` and `interrupt` are described in [transcript, messages and attach](cloud-conversations.md#cli); the administration commands and `teamcode github ...` come with their features.
 
 ## Pull request sequence
 
@@ -276,7 +356,7 @@ teamcode cloud runner            # hidden; pod entrypoint only
 | 3 | Environment preparation and GitHub | `cloud.environment.v1` |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
 | 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
-| 6 | Transfer and its settings | `cloud.transfer.v1` |
+| 6 | Transfer and its settings (implemented) | `cloud.transfer.v1` |
 | Cross-cutting | V2 keys (`cloud:*`, `admin:cloud`), MCP gateway and skills in the runner | - |
 
 ## Evidence
@@ -287,6 +367,9 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudRoutesTest` (runner): only the current pod's projected token is accepted; member credentials, another namespace and unbound tokens get `401`, another epoch `409`; reviews are cached.
 - `KubernetesClusterPortTest` (Ktor mock engine): claim, volume, storage-class and pod parsing; idempotent create and delete; the pod manifest (bare, non-root, no API token, projected token, resources, pull secrets); `TokenReview` parsing and refusals; label-selected paging; error bodies never surfaced.
 - `CloudRunnerTest`: the runner skeleton registers with backoff, checkpoints once when paused, exits when fenced or deleted, and stops on `401`.
+- `CloudTransferPersistenceTest` (real MySQL 8.4, two pools): migration drift; offers refused for another member's session, for oneself, on behalf by a member, for an unassigned recipient or one without allowance, and when the team disabled them; one offer from concurrent identical requests on both replicas, replay and conflict; visibility and decision rights; decline, withdrawal, expiry on read and by the worker; concurrent acceptances on both replicas; the drain, checkpoint and pod deletion before `transferring`; no wake and no resume meanwhile; the owner change with attachment leases removed, unconsumed messages cancelled, the `transfer` event, the journal entry with initiator and both members, the former owner locked out, and the next epoch run for the recipient while epoch 1 stays the former owner's; an administrator transfer on behalf of a member superseding an offer, with `keep`; the recipient unassigned before the boundary failing the transfer (session kept by its owner); the retained cap at the boundary; deletion cancelling an accepted transfer; no transfer while creating.
+- `CloudRoutesTest` (transfers): `cloud.transfer.v1`, service keys refused, `Idempotency-Key` required with replay and conflict, on-behalf refused for members, offers through the typed client, query validation, acceptance pausing the session, cancellation rights, an administrator's direct transfer on behalf of a member, the transfer settings in the API and the dashboard form.
+- `CloudTransferRulesTest`: only `paused` moves to `transferring`; the owner never changes through an ordinary compare-and-set; acceptance toward a pause; refused states; model, effort and quota checks; settings bounds.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 
-Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.
+Migration note: this branch's migration is numbered after its base (`V20261019153908`). The transfer migrations (`V20261019230000*`: transfer settings, `cloud_sessions.transfer_id`, `cloud_executions.owner_id`, `cloud_transfers`, `audit_events.related_member_id`) are generated from the Exposed tables and numbered after the transcript and GitHub branches' `V20261019210000*`. V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.
