@@ -57,12 +57,18 @@ private class JvmUnixListener(private val server: ServerSocketChannel, private v
     }
 }
 
+/**
+ * The JVM cannot narrow the umask, so the socket is chmod-ed right after bind: there is a short window at the process's
+ * default mode. Pods run the native binary (which binds under a narrowed umask); the JVM serves tests and development.
+ */
 actual fun listenUnix(path: String): UnixListener {
     val file = Path.of(path)
     Files.deleteIfExists(file)
     val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
     server.bind(UnixDomainSocketAddress.of(file))
-    try { Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw----")) } catch (_: UnsupportedOperationException) {}
+    try { Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-rw----")) }
+    catch (_: UnsupportedOperationException) {} // No POSIX modes (Windows): nothing to narrow.
+    catch (error: Exception) { server.close(); Files.deleteIfExists(file); throw error }
     return JvmUnixListener(server, file)
 }
 
