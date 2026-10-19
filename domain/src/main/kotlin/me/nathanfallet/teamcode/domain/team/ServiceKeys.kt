@@ -1,8 +1,8 @@
 package me.nathanfallet.teamcode.domain.team
 
 /** Narrow permissions for unattended agents; null scopes on a principal mean an interactive login. */
-enum class ServiceScope(val wire: String) { INFERENCE("inference"), USAGE_READ("usage:read"), GUIDANCE("guidance") }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, INTERACTIVE }
+enum class ServiceScope(val wire: String) { INFERENCE("inference"), USAGE_READ("usage:read"), GUIDANCE("guidance"), MCP("mcp") }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, MCP, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -19,6 +19,7 @@ class AuthorizeCredentialUseCase {
             CredentialAction.INFERENCE -> actor.requireScope(ServiceScope.INFERENCE)
             CredentialAction.USAGE_READ -> actor.requireScope(ServiceScope.USAGE_READ)
             CredentialAction.GUIDANCE -> actor.requireScope(ServiceScope.GUIDANCE)
+            CredentialAction.MCP -> actor.requireScope(ServiceScope.MCP)
             CredentialAction.INTERACTIVE -> actor.requireInteractive()
         }
     }
