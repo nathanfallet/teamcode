@@ -64,6 +64,7 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
         val parsed = parseLabels(labels)
         val agent = if (model != null || effort != null) CloudAgentRequest(model, effort) else null
         val initial = message?.let { if (it == "-") generateSequence(::readlnOrNull).joinToString("\n") else it }
+        if (initial != null && initial.isBlank()) throw CliktError("The --message text is empty.")
         val session = sdk(loadConfig()).use {
             // An older server ignores unknown fields: never let it drop the message silently.
             if (initial != null && INITIAL_MESSAGE_CAPABILITY !in it.capabilities().features)

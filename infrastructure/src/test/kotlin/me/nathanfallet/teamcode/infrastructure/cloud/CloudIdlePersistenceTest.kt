@@ -83,6 +83,10 @@ class CloudIdlePersistenceTest {
                 assertEquals(DesiredState.RUNNING, ra.store.find(teamId, created.id)!!.desiredState, "Idle time counts from the detach")
                 a.query { CloudSessionAttachments.update({ CloudSessionAttachments.sessionId eq created.id }) { it[leaseUntil] = nowMillis() - 6 * 60_000L } }
 
+                // An input stuck on a broken runner counts once, from when it was queued, not forever.
+                val stuck = (ra.conversation.send(member, created.id, InputRequest("Never acknowledged", true, null, null, null)) as InputOutcome.Accepted).input
+                a.query { CloudSessionInputs.update({ CloudSessionInputs.id eq stuck.id }) { it[createdAt] = nowMillis() - 6 * 60_000L } }
+
                 // Idle: an ordinary pause, journaled, then a message wakes the session again.
                 pass(rb)
                 val paused = ra.store.find(teamId, created.id)!!

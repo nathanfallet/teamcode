@@ -22,8 +22,10 @@ class CloudConversationService(
     override suspend fun queue(principal: Principal, session: CloudSession, text: String) {
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return
         val digest = java.security.MessageDigest.getInstance("SHA-256").digest("initial\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) }
-        val input = newInput(principal, session, CloudInputKind.MESSAGE, text, InputRequest(text, false, INITIAL_MESSAGE_KEY, digest, null))
-        store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+        // It wakes like any message: a creation replayed after the session paused still gets its message delivered.
+        val input = newInput(principal, session, CloudInputKind.MESSAGE, text, InputRequest(text, true, INITIAL_MESSAGE_KEY, digest, null))
+        val outcome = store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+        if (outcome is InputOutcome.Accepted && session.state != PAUSING) wake(principal.teamId, session.id, principal)
     }
 
     suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {

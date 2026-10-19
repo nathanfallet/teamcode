@@ -206,12 +206,14 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }
 
     override suspend fun lastActivity(sessionId: String, now: Long): Long? = database.query {
-        val waiting = !CloudSessionInputs.select(CloudSessionInputs.id).where {
+        // At most MAX_PENDING_INPUTS rows, on the (session_id, status, created_at) index.
+        val queued = CloudSessionInputs.createdAt.max(); val delivered = CloudSessionInputs.deliveredAt.max()
+        val inputs = CloudSessionInputs.select(queued, delivered).where {
             (CloudSessionInputs.sessionId eq sessionId) and (CloudSessionInputs.status inList listOf(CloudInputStatus.QUEUED.wire, CloudInputStatus.DELIVERED.wire))
-        }.limit(1).empty()
-        if (waiting) return@query now
-        val latest = CloudSessionAttachments.leaseUntil.max()
-        CloudSessionAttachments.select(latest).where { CloudSessionAttachments.sessionId eq sessionId }.singleOrNull()?.get(latest)?.coerceAtMost(now)
+        }.singleOrNull()
+        val lease = CloudSessionAttachments.leaseUntil.max()
+        val leaseEnd = CloudSessionAttachments.select(lease).where { CloudSessionAttachments.sessionId eq sessionId }.singleOrNull()?.get(lease)
+        listOfNotNull(inputs?.get(queued), inputs?.get(delivered), leaseEnd).maxOrNull()?.coerceAtMost(now)
     }
 
     override suspend fun attachments(sessionId: String, now: Long): List<CloudAttachment> = database.query {
@@ -252,8 +254,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             after = teams.lastOrNull() ?: break
             if (teams.size < 100) break
         }
-        // Ended leases are kept a day, the longest idle timeout, so idle detection still sees a recent detach.
-        CloudSessionAttachments.deleteWhere(limit = limit) { CloudSessionAttachments.leaseUntil less (now - DAY_MILLIS) }
+        // Ended leases are kept as long as the longest idle timeout, so idle detection still sees a recent detach.
+        CloudSessionAttachments.deleteWhere(limit = limit) { CloudSessionAttachments.leaseUntil less (now - maxOf(DAY_MILLIS, CloudIdleRules.MAX_TIMEOUT_MINUTES * 60_000L)) }
         deleted
     }
 

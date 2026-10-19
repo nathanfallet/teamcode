@@ -6,9 +6,10 @@ package me.nathanfallet.teamcode.domain.cloud
  */
 interface CloudActivitySource {
     /**
-     * The latest activity time of [sessionId] outside the session row, capped at [now]: [now] while an attachment
-     * lease is live or an input waits for the agent, otherwise the end of the latest attachment lease; null when
-     * there is none.
+     * The latest activity time of [sessionId] outside the session row, capped at [now]: the end of the latest
+     * attachment lease ([now] while one is live), and the time an input still waiting for the agent was queued or
+     * last delivered. A waiting input therefore counts once, not forever, so an input stuck on a broken runner
+     * cannot keep a session from pausing. Null when there is none.
      */
     suspend fun lastActivity(sessionId: String, now: Long): Long?
 }
@@ -24,6 +25,9 @@ fun interface CloudInitialMessages {
 
 /** The idle-pause rule: a `ready` session that wants to run, with no activity for its idle timeout, is paused. */
 object CloudIdleRules {
+    /** The longest idle timeout a profile may set; ended attachment leases are kept at least this long. */
+    const val MAX_TIMEOUT_MINUTES = 1440
+
     fun idleSince(session: CloudSession, external: Long?): Long = maxOf(session.lastActivityAt, external ?: 0L)
     fun timeoutMillis(session: CloudSession): Long = session.idleTimeoutMinutes * 60_000L
     /** Only a prepared session with nothing running is a candidate; a turn, a preparation or a transfer is never idle. */

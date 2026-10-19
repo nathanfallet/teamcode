@@ -82,7 +82,7 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
                 spec.resources.cpuMillis !in 100..64_000 || spec.resources.memoryMebibytes !in 128..262_144 ||
                 spec.workspaceSizeGibibytes !in 1..2048 || spec.storageClass?.let { !dnsSubdomain.matches(it) } == true ||
                 spec.agentKind !in setOf("claude", "codex") || spec.agentVersion?.let { !Regex("[0-9A-Za-z.+-]{1,64}").matches(it) } == true ||
-                spec.minIdleTimeoutMinutes !in 5..1440 || spec.maxIdleTimeoutMinutes !in spec.minIdleTimeoutMinutes..1440 ||
+                spec.minIdleTimeoutMinutes !in 5..CloudIdleRules.MAX_TIMEOUT_MINUTES || spec.maxIdleTimeoutMinutes !in spec.minIdleTimeoutMinutes..CloudIdleRules.MAX_TIMEOUT_MINUTES ||
                 spec.idleTimeoutMinutes !in spec.minIdleTimeoutMinutes..spec.maxIdleTimeoutMinutes || assigned.size > 1000)
                 throw TeamFailure("invalid_profile", 400, "Check the profile namespace, image, resources (100–64000 mCPU, 128–262144 MiB), workspace size (1–2048 GiB), agent and idle bounds (5–1440 minutes).")
         }

@@ -15,6 +15,9 @@ class CloudSessionService(
     /** Queues `initialMessage`; null where the server has no conversations (creation then refuses one). */
     private val initialMessages: CloudInitialMessages? = null,
 ) {
+    /** Whether creation accepts `initialMessage`; the server advertises `cloud.sessions.initial-message.v1` from it. */
+    val acceptsInitialMessage: Boolean get() = initialMessages != null
+
     /** Resolves `TeamCode-On-Behalf-Of`. Only an interactive administrator may name another member. */
     suspend fun actor(principal: Principal, onBehalfOf: String?): CloudActor {
         principal.requireReady()
