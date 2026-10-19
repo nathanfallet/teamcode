@@ -41,14 +41,30 @@ The first open-source model provider is deferred to V2. V1 supports pooled Claud
 
 TeamCode will extend team administration to agent tools and reusable skills. This is planned V2 scope, not part of the current implementation or release acceptance.
 
-### MCP gateway and access control
+### MCP access through inference-request injection
 
-- Administrators register remote MCP servers in the dashboard and assign access to members or groups, with optional per-tool restrictions.
-- TeamCode exposes an authenticated MCP gateway. Tool discovery shows only authorized tools, and every tool invocation checks current server-side permissions. Hiding tools in a client configuration is not an authorization boundary.
-- Upstream MCP credentials remain encrypted on the server. Support shared team credentials and, where required by the upstream service, individual delegated authorization with explicit ownership and revocation.
-- `teamcode run claude` and `teamcode run codex` configure the agent's TeamCode MCP connection using scoped credentials, without requiring manual setup on each workstation or overwriting unrelated personal configuration.
-- Add bounded tool execution, concurrency/rate limits, metadata-only audit records and per-member usage visibility. Keep authorization and any required session state compatible with multiple stateless server replicas.
-- Acceptance: two members with different assignments see and can invoke only their authorized tools; direct unauthorized calls fail; revocation takes effect server-side; upstream credentials never reach the workstation.
+Decided by the owner on 2026-10-19: TeamCode does not expose an MCP gateway to workstations. The inference proxy itself attaches the team's MCP servers to the request it sends to the provider, and the provider's own MCP client calls them.
+
+- Administrators register remote MCP servers as MCP variants (see [environment/MCP variants](#environmentmcp-variants-and-per-user-assignments)) and assign them to members, with optional per-tool allowlists.
+- On every authenticated inference request, the proxy resolves the member's current effective MCP variants, decrypts their credentials and adds them to the provider-bound body only:
+  - Anthropic Messages API: one `mcp_servers` entry per server (`type: "url"`, `url`, `name`, `authorization_token`) and one matching `mcp_toolset` in `tools`, whose `default_config`/`configs` enable only the allowed tools. The proxy adds the MCP connector beta (`mcp-client-2025-11-20` at the time of writing) to `anthropic-beta`.
+  - OpenAI Responses API: one `{type: "mcp", server_label, server_url, headers, allowed_tools, require_approval: "never"}` entry per server in `tools`.
+- Authorization happens in the proxy at each request: removing an assignment, disabling a member or rotating a credential applies to the next request, with no workstation state to revoke. `teamcode run` installs and configures nothing for MCP, and personal MCP configuration is left untouched.
+- Credentials never reach the workstation: they exist only in the server and in the request to the provider. Responses and errors returned to the client, logs and audit records must not contain them.
+- Injected servers use a reserved name prefix. The proxy rejects a request whose client-declared tools or MCP servers use that prefix, so a client cannot shadow or replace a team server; other client-declared tools pass through unchanged. Because the injected tool list depends on the member, it changes the cached prompt prefix: keep the injected order deterministic.
+- Record metadata only: which servers and tools were attached to a request, and which MCP tool calls the provider reported in its response (server, tool, status), for per-member usage visibility. No tool input, output or credential is stored.
+- Keep resolution stateless and identical on every replica; it reads the same persisted variants and assignments as the rest of the proxy.
+
+Honest limits of this design:
+
+- The provider calls the MCP server, so the server must be reachable from the public Internet over HTTPS (Anthropic: Streamable HTTP or SSE). A server on a private network or a local stdio server cannot be used. Only MCP tools are supported, not prompts or resources.
+- The model, and therefore the provider, sees tool inputs and results, and the provider receives the decrypted credential with each request. Anthropic documents its MCP connector as not eligible for zero data retention.
+- Anthropic accepts a single bearer `authorization_token` per server; a variant that needs other headers can only be injected on OpenAI.
+- The feature depends on each provider's MCP support for the credentials TeamCode uses. On 2026-10-19, OpenAI documents hosted MCP/connectors as unsupported for ChatGPT plan usage ([Sign in with ChatGPT limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)), so Codex injection is blocked until that changes. Anthropic documents the connector for API-key access ([MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector)) and says nothing about subscription OAuth credentials; this must be proven before it is implemented.
+- Server-executed MCP calls come back as provider-specific blocks (`mcp_tool_use`/`mcp_tool_result` on Anthropic, `mcp_list_tools`/`mcp_call` items on OpenAI) that the agent must keep in its history and replay. Whether Claude Code and Codex accept and replay these blocks is unverified.
+- Injection works only on native routes. Experimental cross-provider translation does not translate server-executed MCP blocks and must not inject servers until it does.
+
+Acceptance: with a fake provider, two members with different assignments produce outgoing bodies that contain only their own servers and allowed tools, a member without an assignment gets none, and an assignment removal applies to the very next request; credentials never appear in what the workstation receives, in logs or in audit records; a client-declared reserved name is rejected. For each provider, an opt-in run with a real subscription account shows the provider executing an injected tool call and the unmodified agent (Claude Code, Codex) completing a multi-turn conversation that replays those blocks. Injection stays disabled for a provider until that run passes.
 
 ### Skill catalog and synchronization
 
@@ -56,10 +72,10 @@ TeamCode will extend team administration to agent tools and reusable skills. Thi
 - Populate the catalog through GitHub synchronization or publication through the API from a CI pipeline; decide whether to support one or both sources when designing V2. Define explicit published versions and authenticated publishing permissions, keeping a reproducible approved version for installation and rollback.
 - The native CLI synchronizes assigned skills into an isolated, agent-compatible local installation before `teamcode run`. Preserve personal skills and report naming conflicts explicitly.
 - Track installation/version status separately from permission to use protected resources. Skills are instructions and files loaded by the agent, not server-executed MCP tools.
-- Do not treat downloaded skill files as an access-control mechanism: users can copy instructions they have received. Enforce access to protected tools, credentials and data at the MCP gateway or backing service.
+- Do not treat downloaded skill files as an access-control mechanism: users can copy instructions they have received. Enforce access to protected tools, credentials and data through the proxy's MCP injection or the backing service.
 - Acceptance: clean setup and subsequent launches install the assigned pinned versions, updates/rollback are reproducible, removed assignments stop being provisioned, and personal configuration is preserved.
 
-The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these require explicit gateway and CLI capabilities.
+The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy attaches assigned MCP servers to provider requests; it does not install skills, which require an explicit CLI capability.
 
 
 ## V2: Kubernetes cloud agent sessions
@@ -103,9 +119,9 @@ The cloud-specific operations and automation surface above are V2. This does not
 Use one variant-assignment model for cloud environment variables and MCP servers/configuration. Administrators define named variants and assign the selected variant to each authorized user; a user without an assigned variant has neither the environment variable nor MCP access. Shared/global values are reusable variants, not an implicit grant to every user. Provide bulk assignment with explicit exclusions and per-user variant selection; define any later group/default precedence without changing the no-assignment rule.
 
 - **Environment variables:** variants contain the variable values required by an execution environment, using shared values or individual-user values. Support excluding selected users even when a shared variant is assigned in bulk. Keep secret values encrypted and out of transcripts/logs; expose only authorized values to that user's cloud execution. Define whether variants group variables or belong to individual variables before fixing the contract.
-- **MCP:** variants define a server's endpoint, configuration and credential binding, allowing shared team configuration or individual delegated credentials. Assignment controls both discovery and server-side tool invocation. Removing an assignment or disabling a user removes access; retaining an old local MCP configuration must not bypass the gateway.
+- **MCP:** variants define a server's endpoint, configuration and credential binding, allowing shared team configuration or individual delegated credentials. Assignment controls which servers and tools the inference proxy injects into that member's provider requests. Removing an assignment or disabling a user removes access from the next request; team MCP credentials never reach the workstation, so no local configuration can keep using them.
 - Show effective assignments in the dashboard and expose them through the authorized API. Persist variant versions and assignments for consistent behavior across replicas. On cloud creation, resume or ownership transfer, resolve the effective user's assignments again; do not retain the former owner's environment secrets or MCP credentials. Define explicit refresh/revocation behavior for running sessions rather than silently restarting active work.
-- Acceptance: two users receive different variants of the same variable/MCP, a third without an assignment receives none, and a user explicitly excluded from bulk assignment stays excluded. Verify assignment changes, current-user authorization, MCP direct-call denial, resume and ownership transfer without former-owner resource access.
+- Acceptance: two users receive different variants of the same variable/MCP, a third without an assignment receives none, and a user explicitly excluded from bulk assignment stays excluded. Verify assignment changes, current-user authorization, absence of unassigned MCP servers from provider requests, resume and ownership transfer without former-owner resource access.
 
 Skills remain a separate versioned catalog with access assignments, described above. A user without skill access receives no provisioned copy. On session creation/resume/transfer, resolve the new effective user's authorized pinned catalog artifacts. Already delivered skill files cannot be made secret again; enforce protected tool/data access independently.
 

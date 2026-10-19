@@ -23,7 +23,7 @@ flowchart LR
 | cli | Native commands, local proxy, browser login, OS credentials, agent integration and service registration | Kotlin/Native; JVM for fast tests |
 | domain | Models, use cases, repository/service ports, admission, fairness, capacity forecasts and model selection | Server JVM; no HTTP or database dependency |
 | infrastructure | Provider adapters, OAuth, database, encryption, HTTP transports and telemetry | Server JVM |
-| presentation | Typed management API, incoming inference protocols, dashboard and agent-facing MCP | Server JVM |
+| presentation | Typed management API, incoming inference protocols and dashboard | Server JVM |
 | app | Server composition root, Koin, configuration, lifecycle and OCI image | JVM 21, Ktor Netty |
 
 Infrastructure does not import public DTOs. Presentation maps domain objects to contracts and invokes use cases. CLI never imports server domain or repositories. Native platform code belongs behind `expect/actual` boundaries. The HTTP client accepts a caller-selected engine and credential supplier; the SDK never owns an operating system keychain.
