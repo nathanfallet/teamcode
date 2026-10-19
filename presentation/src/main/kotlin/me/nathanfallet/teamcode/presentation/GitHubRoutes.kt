@@ -15,7 +15,8 @@ private const val BROWSER_COOKIE = "teamcode_github_link"
 private fun GitHubApp?.view(callbackUrl: String) = GitHubAppView(this != null, this?.appId, this?.clientId, this?.slug, this?.name, this?.version, this?.updatedAt, callbackUrl)
 private fun GitHubLinkStatus.view() = GitHubLinkView(memberId, state?.wire ?: GitHubLinkStates.NOT_LINKED, appConfigured, link?.identity?.login, link?.identity?.userId,
     link?.linkedAt, link?.refreshedAt, link?.accessExpiresAt)
-private fun ApplicationCall.memberId() = parameters["memberId"]!!.also { if (!Regex("[a-zA-Z0-9-]{1,36}").matches(it)) throw TeamFailure("member_not_found", 404, "Member not found.") }
+private val identifier = Regex("[a-zA-Z0-9-]{1,36}")
+private fun ApplicationCall.memberId() = parameters["memberId"]!!.also { if (!identifier.matches(it)) throw TeamFailure("member_not_found", 404, "Member not found.") }
 
 /**
  * GitHub App configuration (administrators) and members' links. The routes never return a GitHub token: tokens reach
@@ -37,7 +38,7 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
             call.respond(HttpStatusCode.Created, GitHubDeviceLinkView(link.id, link.userCode, link.verificationUri, link.expiresAt, link.intervalSeconds))
         }
         post("/link/device/{id}") {
-            val id = call.parameters["id"]!!.takeIf { Regex("[a-zA-Z0-9-]{1,36}").matches(it) } ?: throw TeamFailure("github_link_not_found", 404, "Not found.")
+            val id = call.parameters["id"]!!.takeIf { identifier.matches(it) } ?: throw TeamFailure("github_link_not_found", 404, "Not found.")
             call.respond(when (val progress = github.pollDevice(call.principal, id)) {
                 is GitHubDeviceLinkProgress.Pending -> GitHubDeviceLinkPollView("pending", progress.intervalSeconds)
                 is GitHubDeviceLinkProgress.Linked -> GitHubDeviceLinkPollView("linked", link = progress.status.view())
@@ -86,9 +87,9 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
     // identify the attempt, its member and the browser that started it.
     get(GITHUB_CALLBACK_PATH) {
         val q = call.request.queryParameters
-        val nonce = call.request.cookies[BROWSER_COOKIE]
+        val status = github.completeWeb(q["state"], q["code"], q["error"], call.request.cookies[BROWSER_COOKIE], callback)
+        // Cleared only once the attempt matched: an unrelated request to this public route must not break a pending link.
         call.response.cookies.append(Cookie(BROWSER_COOKIE, "", path = GITHUB_CALLBACK_PATH, httpOnly = true, secure = origin.startsWith("https://"), maxAge = 0, extensions = mapOf("SameSite" to "Lax")))
-        val status = github.completeWeb(q["state"], q["code"], q["error"], nonce, callback)
         call.respondText(page("GitHub linked", """<p>Linked as <strong>${escape(status.link!!.identity.login)}</strong>. Your cloud sessions now use this account for Git and <code>gh</code>.</p><p><a href="/dashboard/github">Back to GitHub settings</a></p>"""), ContentType.Text.Html)
     }
     post("/dashboard/github/unlink") {

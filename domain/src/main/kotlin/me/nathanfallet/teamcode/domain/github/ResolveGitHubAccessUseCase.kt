@@ -32,7 +32,7 @@ class ResolveGitHubAccessUseCase(
         var waited = 0L
         while (true) {
             val now = apps.now()
-            when (val claim = links.claim(teamId, memberId, app.clientId, now + validForMillis, staleAfterMillis)) {
+            when (val claim = links.claim(teamId, memberId, app.clientId, now + validForMillis, now + STILL_USABLE_MILLIS, staleAfterMillis)) {
                 GitHubTokenClaim.NotLinked, GitHubTokenClaim.ReconnectRequired -> return GitHubAccess.NotLinked
                 is GitHubTokenClaim.Ready -> return linked(claim.link, claim.accessToken, claim.link.accessExpiresAt)
                 is GitHubTokenClaim.Refresh -> return refresh(teamId, memberId, app, claim, now)
@@ -52,9 +52,19 @@ class ResolveGitHubAccessUseCase(
             }
             catch (_: Exception) { null }
         return when (result) {
-            is GitHubRefresh.Refreshed ->
-                if (links.completeRefresh(teamId, memberId, claim, result.tokens)) linked(claim.link, result.tokens.accessToken, result.tokens.accessExpiresAt)
-                else GitHubAccess.Unavailable
+            is GitHubRefresh.Refreshed -> {
+                // GitHub already rotated the refresh token: losing these tokens would force the member to link again.
+                val saved = withContext(NonCancellable) { save(teamId, memberId, claim, result.tokens) }
+                when (saved) {
+                    // Saved, or not saved because of a passing database error: the new token is valid either way.
+                    true, null -> linked(claim.link, result.tokens.accessToken, result.tokens.accessExpiresAt)
+                    // Fenced by a relink, an unlink or a takeover: this token belongs to no stored link any more.
+                    false -> {
+                        GitHubLinkService.revokeToken(github, app, GitHubRevocable(app.clientId, result.tokens.accessToken))
+                        GitHubAccess.Unavailable
+                    }
+                }
+            }
             GitHubRefresh.Rejected -> {
                 links.abandonRefresh(teamId, memberId, claim, reconnect = true)
                 GitHubAccess.NotLinked
@@ -68,11 +78,22 @@ class ResolveGitHubAccessUseCase(
         }
     }
 
+    /** True when saved, false when fenced, null when the database kept failing. */
+    private suspend fun save(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, tokens: GitHubTokens): Boolean? {
+        repeat(SAVE_ATTEMPTS) { attempt ->
+            try { return links.completeRefresh(teamId, memberId, claim, tokens) }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { if (attempt < SAVE_ATTEMPTS - 1) delay(200L * (attempt + 1)) }
+        }
+        return null
+    }
+
     private fun linked(link: GitHubLink, token: String, expiresAt: Long?) =
         GitHubAccess.Linked(GitHubUserToken(token, expiresAt, link.identity.login, link.identity.userId))
 
     private companion object {
         const val WAIT_STEP_MILLIS = 100L
         const val STILL_USABLE_MILLIS = 5 * 60_000L
+        const val SAVE_ATTEMPTS = 3
     }
 }

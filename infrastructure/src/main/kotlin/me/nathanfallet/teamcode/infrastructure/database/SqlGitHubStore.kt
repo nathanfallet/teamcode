@@ -56,6 +56,8 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
 
     override suspend fun startAttempt(actor: Principal, attempt: GitHubLinkAttempt) = database.query {
         requireCurrent(this, actor)
+        // Serialized on the member row, so two concurrent starts leave exactly one attempt.
+        check(Members.select(Members.id).where { Members.id eq attempt.memberId }.forUpdate().singleOrNull() != null)
         val now = nowMillis()
         // One pending attempt per member; expired attempts of the team go with it, so the table stays small.
         GitHubLinkAttempts.deleteWhere { (GitHubLinkAttempts.memberId eq attempt.memberId) or ((GitHubLinkAttempts.teamId eq attempt.teamId) and (GitHubLinkAttempts.expiresAt lessEq now)) }
@@ -79,9 +81,10 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
 
     override suspend fun consumeAttempt(id: String): Boolean = database.query { GitHubLinkAttempts.deleteWhere { GitHubLinkAttempts.id eq id } == 1 }
 
-    override suspend fun deferPoll(id: String, intervalSeconds: Int, nextPollAt: Long) = database.query {
-        GitHubLinkAttempts.update({ GitHubLinkAttempts.id eq id }) { it[pollInterval] = intervalSeconds; it[GitHubLinkAttempts.nextPollAt] = nextPollAt }
-        Unit
+    override suspend fun deferPoll(id: String, expectedNextPollAt: Long?, intervalSeconds: Int, nextPollAt: Long): Boolean = database.query {
+        GitHubLinkAttempts.update({ (GitHubLinkAttempts.id eq id) and (if (expectedNextPollAt == null) Op.TRUE else GitHubLinkAttempts.nextPollAt eq expectedNextPollAt) }) {
+            it[pollInterval] = intervalSeconds; it[GitHubLinkAttempts.nextPollAt] = nextPollAt
+        } == 1
     }
 
     override suspend fun saveLink(teamId: String, memberId: String, actor: Principal?, identity: GitHubIdentity, clientId: String, tokens: GitHubTokens): GitHubLink = database.query {
@@ -112,26 +115,38 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
         GitHubLinks.selectAll().where { GitHubLinks.teamId eq teamId }.orderBy(GitHubLinks.githubLogin).limit(1000).map(::readLink)
     }
 
-    override suspend fun removeLink(teamId: String, memberId: String, actor: Principal): String? = database.query {
+    override suspend fun removeLink(teamId: String, memberId: String, actor: Principal): GitHubRevocable? = database.query {
         lockTeam(teamId); requireCurrent(this, actor)
         val row = GitHubLinks.selectAll().where { (GitHubLinks.memberId eq memberId) and (GitHubLinks.teamId eq teamId) }.forUpdate().singleOrNull() ?: return@query null
-        val token = try { decryptTokens(teamId, memberId, row[GitHubLinks.credential]).accessToken } catch (_: Exception) { null }
-        GitHubLinks.deleteWhere { GitHubLinks.memberId eq memberId }
         GitHubLinkAttempts.deleteWhere { GitHubLinkAttempts.memberId eq memberId }
-        audit(teamId, actor.member.id, "github.link.removed", memberId, memberId, actor.tokenId)
-        token
+        delete(row, actor)
     }
 
-    override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, staleAfterMillis: Long): GitHubTokenClaim = database.query {
+    override suspend fun removeLinksOfOtherApps(actor: Principal, clientId: String): List<GitHubRevocable> = database.query {
+        lockTeam(actor.teamId); requireCurrent(this, actor)
+        GitHubLinks.selectAll().where { (GitHubLinks.teamId eq actor.teamId) and (GitHubLinks.clientId neq clientId) }.forUpdate().toList().mapNotNull { delete(it, actor) }
+    }
+
+    /** Deletes one link row with its journal entry; returns its access token unless it no longer decrypts. */
+    private fun JdbcTransaction.delete(row: ResultRow, actor: Principal): GitHubRevocable? {
+        val teamId = row[GitHubLinks.teamId]; val memberId = row[GitHubLinks.memberId]
+        val token = try { decryptTokens(teamId, memberId, row[GitHubLinks.credential]).accessToken } catch (_: Exception) { null }
+        GitHubLinks.deleteWhere { GitHubLinks.memberId eq memberId }
+        audit(teamId, actor.member.id, "github.link.removed", memberId, memberId, actor.tokenId)
+        return token?.let { GitHubRevocable(row[GitHubLinks.clientId], it) }
+    }
+
+    override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, usableUntil: Long, staleAfterMillis: Long): GitHubTokenClaim = database.query {
         val row = GitHubLinks.selectAll().where { (GitHubLinks.memberId eq memberId) and (GitHubLinks.teamId eq teamId) }.forUpdate().singleOrNull()
             ?: return@query GitHubTokenClaim.NotLinked
         val link = readLink(row)
         if (link.state != GitHubLinkState.LINKED || link.clientId != clientId) return@query GitHubTokenClaim.ReconnectRequired
         val now = nowMillis()
         val pending = row[GitHubLinks.refreshPending]
-        if (pending && row[GitHubLinks.refreshStartedAt] + staleAfterMillis > now) return@query GitHubTokenClaim.Wait
         val tokens = decryptTokens(teamId, memberId, row[GitHubLinks.credential])
         val expiresAt = link.accessExpiresAt
+        if (pending && row[GitHubLinks.refreshStartedAt] + staleAfterMillis > now)
+            return@query if (expiresAt == null || expiresAt > usableUntil) GitHubTokenClaim.Ready(link, tokens.accessToken) else GitHubTokenClaim.Wait
         if (expiresAt == null || expiresAt > validUntil) {
             if (pending) GitHubLinks.update({ GitHubLinks.memberId eq memberId }) { it[refreshPending] = false }
             return@query GitHubTokenClaim.Ready(link, tokens.accessToken)

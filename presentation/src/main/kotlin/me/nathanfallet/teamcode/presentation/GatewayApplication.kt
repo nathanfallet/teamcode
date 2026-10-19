@@ -81,7 +81,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         }
     }
     routing {
-        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin) }
+        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
         if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin)
         if (directives != null) directiveRoutes(directives)

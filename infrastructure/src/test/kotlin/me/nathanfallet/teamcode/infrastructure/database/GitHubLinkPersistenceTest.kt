@@ -97,13 +97,19 @@ class GitHubLinkPersistenceTest {
                 assertEquals(0, github.refreshes.get())
 
                 // Near expiry, two replicas resolving at once spend the rotating refresh token exactly once.
-                a.query { GitHubLinks.update({ GitHubLinks.memberId eq member.member.id }) { it[accessExpiresAt] = System.currentTimeMillis() + 10 * 60_000 } }
+                a.query { GitHubLinks.update({ GitHubLinks.memberId eq member.member.id }) { it[accessExpiresAt] = System.currentTimeMillis() + 2 * 60_000 } }
                 github.refreshDelay = 600
                 val results = coroutineScope { listOf(ra, rb, ra, rb).map { r -> async(Dispatchers.IO) { r.access.userAccess(member.teamId, member.member.id) } }.awaitAll() }
                 assertEquals(1, github.refreshes.get(), "One refresh across replicas")
                 assertEquals(setOf("ghu_refreshed_1"), results.map { assertIs<GitHubAccess.Linked>(it).token.token }.toSet())
                 assertEquals(2, a.query { GitHubLinks.selectAll().single()[GitHubLinks.tokenVersion] })
                 github.refreshDelay = 0
+                // While a refresh is pending, a token still valid for a while is handed out instead of waited on.
+                a.query { GitHubLinks.update({ GitHubLinks.memberId eq member.member.id }) {
+                    it[accessExpiresAt] = System.currentTimeMillis() + 30 * 60_000; it[refreshPending] = true; it[refreshStartedAt] = System.currentTimeMillis()
+                } }
+                assertEquals("ghu_refreshed_1", assertIs<GitHubAccess.Linked>(ra.access.userAccess(member.teamId, member.member.id)).token.token)
+                assertEquals(1, github.refreshes.get())
 
                 // An owner that died mid-refresh is taken over after a minute, never before.
                 a.query { GitHubLinks.update({ GitHubLinks.memberId eq member.member.id }) {
@@ -116,7 +122,7 @@ class GitHubLinkPersistenceTest {
 
                 // A refresh owner that was overtaken by a new link cannot overwrite it.
                 a.query { GitHubLinks.update({ GitHubLinks.memberId eq member.member.id }) { it[accessExpiresAt] = System.currentTimeMillis() - 1 } }
-                val claim = assertIs<GitHubTokenClaim.Refresh>(ra.store.claim(member.teamId, member.member.id, "Iv23liSynthetic", System.currentTimeMillis(), 60_000))
+                val claim = assertIs<GitHubTokenClaim.Refresh>(ra.store.claim(member.teamId, member.member.id, "Iv23liSynthetic", System.currentTimeMillis(), System.currentTimeMillis(), 60_000))
                 ra.store.saveLink(member.teamId, member.member.id, member, GitHubIdentity(42, "octo"), "Iv23liSynthetic", GitHubTokens("ghu_relinked", null, null, null))
                 assertFalse(rb.store.completeRefresh(member.teamId, member.member.id, claim, GitHubTokens("ghu_stale", null, "ghr_stale", null)))
                 assertEquals("ghu_relinked", assertIs<GitHubAccess.Linked>(ra.access.userAccess(member.teamId, member.member.id)).token.token)

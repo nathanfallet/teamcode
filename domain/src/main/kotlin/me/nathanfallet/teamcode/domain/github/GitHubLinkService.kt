@@ -33,7 +33,12 @@ class GitHubLinkService(
             throw TeamFailure("invalid_github_app", 400, "Provide the client secret of the new App.")
         val privateKey = input.privateKey ?: current?.privateKey ?: throw TeamFailure("invalid_github_app", 400, "Provide the App's private key.")
         val metadata = remote { github.verifyApp(input.appId, input.clientId, privateKey) }
-        return apps.saveApp(actor, expectedVersion, input, metadata)
+        val saved = apps.saveApp(actor, expectedVersion, input, metadata)
+        if (current != null && current.clientId != input.clientId) {
+            // Links of the previous App can never be refreshed again; revoke their tokens while its credentials are known.
+            for (stale in links.removeLinksOfOtherApps(actor, input.clientId)) revoke(current, stale)
+        }
+        return saved
     }
 
     /** The caller's own link, or another member's for an administrator. */
@@ -75,14 +80,14 @@ class GitHubLinkService(
         if (attempt.expiresAt <= now) { links.consumeAttempt(id); return GitHubDeviceLinkProgress.Expired }
         if (now < attempt.nextPollAt) return GitHubDeviceLinkProgress.Pending(attempt.pollIntervalSeconds)
         val app = apps.credentials(actor.teamId) ?: notConfigured()
+        // The poll slot is taken before GitHub is asked, so a concurrent poll or a GitHub error never shortens the interval.
+        if (!links.deferPoll(id, attempt.nextPollAt, attempt.pollIntervalSeconds, now + attempt.pollIntervalSeconds * 1000L))
+            return GitHubDeviceLinkProgress.Pending(attempt.pollIntervalSeconds)
         return when (val poll = remote { github.pollDevice(app.clientId, attempt.secret) }) {
-            GitHubDevicePoll.Pending -> {
-                links.deferPoll(id, attempt.pollIntervalSeconds, now + attempt.pollIntervalSeconds * 1000L)
-                GitHubDeviceLinkProgress.Pending(attempt.pollIntervalSeconds)
-            }
+            GitHubDevicePoll.Pending -> GitHubDeviceLinkProgress.Pending(attempt.pollIntervalSeconds)
             is GitHubDevicePoll.SlowDown -> {
                 val interval = poll.intervalSeconds.coerceIn(attempt.pollIntervalSeconds, MAX_INTERVAL_SECONDS)
-                links.deferPoll(id, interval, now + interval * 1000L)
+                links.deferPoll(id, null, interval, now + interval * 1000L)
                 GitHubDeviceLinkProgress.Pending(interval)
             }
             GitHubDevicePoll.Expired -> { links.consumeAttempt(id); GitHubDeviceLinkProgress.Expired }
@@ -128,30 +133,26 @@ class GitHubLinkService(
     /** Removes the link and revokes its access token at GitHub (best effort). Unlinking twice is not an error. */
     suspend fun unlink(actor: Principal, memberId: String? = null) {
         val target = target(actor, memberId)
-        val token = links.removeLink(actor.teamId, target, actor) ?: return
-        revoke(actor.teamId, token)
+        val removed = links.removeLink(actor.teamId, target, actor) ?: return
+        apps.credentials(actor.teamId)?.let { revoke(it, removed) }
     }
 
     private suspend fun complete(app: GitHubAppCredentials, teamId: String, memberId: String, actor: Principal?, tokens: GitHubTokens): GitHubLinkStatus {
+        val issued = GitHubRevocable(app.clientId, tokens.accessToken)
         val identity = try { remote { github.user(tokens.accessToken) } }
-            catch (error: TeamFailure) { revoke(teamId, tokens.accessToken); throw error }
+            catch (error: TeamFailure) { revoke(app, issued); throw error }
         val link = try { links.saveLink(teamId, memberId, actor, identity, app.clientId, tokens) }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 // Never keep a live token nobody stores. Only this token is revoked: the member's grant, and any
                 // other token GitHub issued for it, stay untouched.
-                revoke(teamId, tokens.accessToken)
+                revoke(app, issued)
                 throw error
             }
         return GitHubLinkStatus(memberId, true, link, link.state)
     }
 
-    private suspend fun revoke(teamId: String, accessToken: String) {
-        val app = apps.credentials(teamId) ?: return
-        try { withTimeoutOrNull(10_000) { github.revoke(app, accessToken) } }
-        catch (error: CancellationException) { throw error }
-        catch (_: Exception) { /* Best effort: the stored tokens are already gone, and an access token expires within hours. */ }
-    }
+    private suspend fun revoke(app: GitHubAppCredentials, token: GitHubRevocable) = revokeToken(github, app, token)
 
     private suspend fun target(actor: Principal, memberId: String?): String {
         member(actor)
@@ -166,6 +167,16 @@ class GitHubLinkService(
     private fun token() = ByteArray(32).also(random::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
     companion object {
+        /**
+         * Best effort: the stored tokens are already gone and an access token expires within hours. Only the App that
+         * issued a token can revoke it; a token of a previous App is left to expire.
+         */
+        internal suspend fun revokeToken(github: GitHubPort, app: GitHubAppCredentials, token: GitHubRevocable) {
+            if (token.clientId != app.clientId) return
+            try { withTimeoutOrNull(10_000) { github.revoke(app, token.accessToken) } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { }
+        }
         const val MIN_INTERVAL_SECONDS = 5
         const val MAX_INTERVAL_SECONDS = 60
         const val WEB_ATTEMPT_MILLIS = 10 * 60_000L

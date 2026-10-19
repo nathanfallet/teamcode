@@ -146,7 +146,11 @@ interface GitHubLinkStore {
     suspend fun attempt(id: String): GitHubLinkAttempt?
     /** Removes the attempt; false when another request already consumed it. */
     suspend fun consumeAttempt(id: String): Boolean
-    suspend fun deferPoll(id: String, intervalSeconds: Int, nextPollAt: Long)
+    /**
+     * Moves the next allowed poll. With [expectedNextPollAt], only if it is still that value: two concurrent polls
+     * cannot both ask GitHub within one interval.
+     */
+    suspend fun deferPoll(id: String, expectedNextPollAt: Long?, intervalSeconds: Int, nextPollAt: Long): Boolean
 
     /**
      * Stores the member's link, replacing any previous one. Refuses a GitHub account already linked to another
@@ -156,18 +160,26 @@ interface GitHubLinkStore {
     suspend fun link(teamId: String, memberId: String): GitHubLink?
     suspend fun links(teamId: String): List<GitHubLink>
     /** Deletes the link and returns its last access token for a best-effort revocation at GitHub. */
-    suspend fun removeLink(teamId: String, memberId: String, actor: Principal): String?
+    suspend fun removeLink(teamId: String, memberId: String, actor: Principal): GitHubRevocable?
+    /** Deletes the links made with another App than [clientId] (after the team replaced its App). */
+    suspend fun removeLinksOfOtherApps(actor: Principal, clientId: String): List<GitHubRevocable>
 
     /**
      * The member's token when it stays valid past [validUntil]; otherwise the right to refresh it, committed before
      * GitHub is called so two replicas never spend the same rotating refresh token. An owner silent for
-     * [staleAfterMillis] is taken over. A link for another [clientId] than the configured App needs a new link.
+     * [staleAfterMillis] is taken over. While another caller refreshes, a token still valid past [usableUntil] is
+     * returned rather than waited on. A link for another [clientId] than the configured App needs a new link.
      */
-    suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, staleAfterMillis: Long): GitHubTokenClaim
+    suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, usableUntil: Long, staleAfterMillis: Long): GitHubTokenClaim
     /** Saves refreshed tokens if [claim] still owns the refresh. */
     suspend fun completeRefresh(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, tokens: GitHubTokens): Boolean
     /** Ends an owned refresh: [reconnect] marks the link `reconnect_required`; otherwise the old tokens are kept for a later attempt. */
     suspend fun abandonRefresh(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, reconnect: Boolean)
+}
+
+/** An access token to revoke, with the App that issued it: only that App's credentials can revoke it. */
+class GitHubRevocable(val clientId: String, val accessToken: String) {
+    override fun toString() = "GitHubRevocable(clientId=$clientId, [REDACTED])"
 }
 
 /** GitHub's OAuth and REST endpoints. Implementations never surface response bodies in errors. */

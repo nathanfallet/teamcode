@@ -59,7 +59,7 @@ class GitHubAppClient(
         if (status != 200 || body == null) throw GitHubApiException(status)
         val deviceCode = body.string("device_code"); val userCode = body.string("user_code"); val uri = body.string("verification_uri")
         val expiresIn = body.long("expires_in"); val interval = body.long("interval") ?: 5
-        if (deviceCode.isNullOrBlank() || deviceCode.length > 512 || userCode == null || !Regex("[A-Z0-9-]{4,32}").matches(userCode) ||
+        if (deviceCode.isNullOrBlank() || deviceCode.length > 512 || userCode == null || !userCodePattern.matches(userCode) ||
             uri == null || !uri.startsWith(endpoints.web + "/") || uri.length > 512 || expiresIn == null || expiresIn !in 1..3600 || interval !in 1..600)
             throw GitHubApiException(status)
         return GitHubDeviceAuthorization(deviceCode, userCode, uri, expiresIn.toInt(), interval.toInt())
@@ -111,7 +111,7 @@ class GitHubAppClient(
         val (status, body) = send(HttpMethod.Get, "${endpoints.api}/user") { bearerAuth(accessToken); restHeaders() }
         if (status != 200 || body == null) throw GitHubApiException(status)
         val id = body.long("id"); val login = body.string("login")
-        if (id == null || id <= 0 || login == null || !Regex("[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})").matches(login)) throw GitHubApiException(status)
+        if (id == null || id <= 0 || login == null || !loginPattern.matches(login)) throw GitHubApiException(status)
         return GitHubIdentity(id, login)
     }
 
@@ -171,6 +171,8 @@ class GitHubAppClient(
 
     companion object {
         private const val MAX_BODY_BYTES = 65_536
+        private val userCodePattern = Regex("[A-Z0-9-]{4,32}")
+        private val loginPattern = Regex("[A-Za-z0-9][A-Za-z0-9-]{0,38}")
         private fun JsonObject.string(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
         private fun JsonObject.long(name: String) = (this[name] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
 

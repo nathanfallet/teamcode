@@ -40,9 +40,11 @@ class GitHubLinkTest {
         }
         override suspend fun attempt(id: String) = attempts[id]
         override suspend fun consumeAttempt(id: String) = attempts.remove(id) != null
-        override suspend fun deferPoll(id: String, intervalSeconds: Int, nextPollAt: Long) {
-            val a = attempts.getValue(id)
+        override suspend fun deferPoll(id: String, expectedNextPollAt: Long?, intervalSeconds: Int, nextPollAt: Long): Boolean {
+            val a = attempts[id] ?: return false
+            if (expectedNextPollAt != null && a.nextPollAt != expectedNextPollAt) return false
             attempts[id] = GitHubLinkAttempt(a.id, a.teamId, a.memberId, a.kind, a.secret, a.browserHash, intervalSeconds, nextPollAt, a.expiresAt)
+            return true
         }
         override suspend fun saveLink(teamId: String, memberId: String, actor: Principal?, identity: GitHubIdentity, clientId: String, tokens: GitHubTokens): GitHubLink {
             if (links.values.any { it.first.identity.userId == identity.userId && it.first.memberId != memberId })
@@ -53,11 +55,16 @@ class GitHubLinkTest {
         }
         override suspend fun link(teamId: String, memberId: String) = links[memberId]?.first
         override suspend fun links(teamId: String) = links.values.map { it.first }
-        override suspend fun removeLink(teamId: String, memberId: String, actor: Principal) = links.remove(memberId)?.second?.accessToken
-        override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, staleAfterMillis: Long): GitHubTokenClaim {
+        override suspend fun removeLink(teamId: String, memberId: String, actor: Principal) = links.remove(memberId)?.let { GitHubRevocable(it.first.clientId, it.second.accessToken) }
+        override suspend fun removeLinksOfOtherApps(actor: Principal, clientId: String): List<GitHubRevocable> {
+            val stale = links.filterValues { it.first.clientId != clientId }
+            stale.keys.forEach(links::remove)
+            return stale.values.map { GitHubRevocable(it.first.clientId, it.second.accessToken) }
+        }
+        override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, usableUntil: Long, staleAfterMillis: Long): GitHubTokenClaim {
             val (link, tokens) = links[memberId] ?: return GitHubTokenClaim.NotLinked
             if (link.state != GitHubLinkState.LINKED || link.clientId != clientId) return GitHubTokenClaim.ReconnectRequired
-            pending?.let { if (it + staleAfterMillis > apps.clock) return GitHubTokenClaim.Wait }
+            pending?.let { if (it + staleAfterMillis > apps.clock) return if ((link.accessExpiresAt ?: Long.MAX_VALUE) > usableUntil) GitHubTokenClaim.Ready(link, tokens.accessToken) else GitHubTokenClaim.Wait }
             if ((link.accessExpiresAt ?: Long.MAX_VALUE) > validUntil) return GitHubTokenClaim.Ready(link, tokens.accessToken)
             pending = apps.clock
             return GitHubTokenClaim.Refresh(link, tokens.accessToken, tokens.refreshToken!!, 1, apps.clock)
@@ -78,13 +85,14 @@ class GitHubLinkTest {
         val calls = mutableListOf<String>()
         var verify: (Long, String, String) -> GitHubAppMetadata = { id, client, _ -> GitHubAppMetadata(id, client, "teamcode-test", "TeamCode test") }
         var poll: GitHubDevicePoll = GitHubDevicePoll.Pending
+        var pollFailure: Exception? = null
         var refresh: () -> GitHubRefresh = { GitHubRefresh.Refreshed(GitHubTokens("ghu_refreshed", 9_000_000_000, "ghr_next", null)) }
         var identity = GitHubIdentity(42, "octo")
         val revoked = mutableListOf<String>()
         var exchanged: Triple<String, String, String>? = null
         override suspend fun verifyApp(appId: Long, clientId: String, privateKey: String) = also { calls += "verify:$privateKey" }.verify(appId, clientId, privateKey)
         override suspend fun startDevice(clientId: String) = GitHubDeviceAuthorization("device-code-secret", "ABCD-1234", "https://github.com/login/device", 900, 5).also { calls += "device" }
-        override suspend fun pollDevice(clientId: String, deviceCode: String) = poll.also { calls += "poll:$deviceCode" }
+        override suspend fun pollDevice(clientId: String, deviceCode: String): GitHubDevicePoll { calls += "poll:$deviceCode"; pollFailure?.let { throw it }; return poll }
         override fun authorizationUrl(clientId: String, redirectUri: String, state: String, codeChallenge: String) = "https://github.com/login/oauth/authorize?state=$state&code_challenge=$codeChallenge"
         override suspend fun exchangeCode(credentials: GitHubAppCredentials, code: String, redirectUri: String, codeVerifier: String): GitHubTokens {
             exchanged = Triple(code, redirectUri, codeVerifier)
@@ -118,6 +126,12 @@ class GitHubLinkTest {
         assertEquals(listOf("verify:$key"), github.calls)
         assertEquals(input.clientSecret, apps.credentials!!.clientSecret)
         failure("invalid_github_app") { service.saveApp(admin, 2, GitHubAppInput(456, "Iv23liAnotherApp", null, null)) }
+        // Replacing the App removes the links it can no longer refresh and revokes them with the previous App.
+        val links = Links(apps)
+        val replacing = GitHubLinkService(apps, links, github)
+        links.saveLink("team", "member-id", member, GitHubIdentity(42, "octo"), input.clientId, GitHubTokens("ghu_old_app", null, null, null))
+        replacing.saveApp(admin, 2, GitHubAppInput(456, "Iv23liAnotherApp", "another-client-secret-0123456789", key))
+        assertTrue(links.links.isEmpty()); assertEquals(listOf("ghu_old_app"), github.revoked)
         assertFalse(input.toString().contains("synthetic-client-secret") || apps.credentials.toString().contains("synthetic-client-secret"))
     }
 
@@ -136,6 +150,11 @@ class GitHubLinkTest {
         assertEquals(1, github.calls.count { it == "poll:device-code-secret" })
         assertEquals(GitHubDeviceLinkProgress.Pending(5), service.pollDevice(member, device.id), "A fast client is held back")
         assertEquals(1, github.calls.count { it.startsWith("poll") })
+        apps.clock += 5_000; github.pollFailure = java.io.IOException("GitHub unreachable")
+        failure("github_unreachable") { service.pollDevice(member, device.id) }
+        assertEquals(GitHubDeviceLinkProgress.Pending(5), service.pollDevice(member, device.id))
+        github.pollFailure = null
+        assertEquals(2, github.calls.count { it.startsWith("poll") }, "A GitHub error still uses up the interval")
         apps.clock += 5_000; github.poll = GitHubDevicePoll.SlowDown(10)
         assertEquals(GitHubDeviceLinkProgress.Pending(10), service.pollDevice(member, device.id))
         apps.clock += 10_000; github.poll = GitHubDevicePoll.Authorized(GitHubTokens("ghu_device", 9_000_000_000, "ghr_device", null))
@@ -232,6 +251,9 @@ class GitHubLinkTest {
         // Another replica is refreshing: wait, then report unavailable rather than spend the same refresh token.
         links.pending = apps.clock
         assertEquals(GitHubAccess.Unavailable, access.userAccess("team", "member-id"))
+        links.links["member-id"] = links.links.getValue("member-id").let { it.first.copy(accessExpiresAt = apps.clock + 30 * 60_000) to it.second }
+        assertEquals("ghu_old", assertIs<GitHubAccess.Linked>(access.userAccess("team", "member-id")).token.token, "A token valid for a while is not waited on")
+        links.links["member-id"] = links.links.getValue("member-id").let { it.first.copy(accessExpiresAt = apps.clock + 60_000) to it.second }
         links.pending = null
 
         github.refresh = { GitHubRefresh.Rejected }

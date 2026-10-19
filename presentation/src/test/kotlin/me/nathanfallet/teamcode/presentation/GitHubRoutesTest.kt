@@ -40,13 +40,14 @@ class GitHubRoutesTest {
         override suspend fun startAttempt(actor: Principal, attempt: GitHubLinkAttempt) { attempts[attempt.id] = attempt }
         override suspend fun attempt(id: String) = attempts[id]
         override suspend fun consumeAttempt(id: String) = attempts.remove(id) != null
-        override suspend fun deferPoll(id: String, intervalSeconds: Int, nextPollAt: Long) = Unit
+        override suspend fun deferPoll(id: String, expectedNextPollAt: Long?, intervalSeconds: Int, nextPollAt: Long) = true
         override suspend fun saveLink(teamId: String, memberId: String, actor: Principal?, identity: GitHubIdentity, clientId: String, tokens: GitHubTokens) =
             GitHubLink(memberId, identity, clientId, GitHubLinkState.LINKED, tokens.accessExpiresAt, null, clock, clock).also { links[memberId] = it to tokens.accessToken }
         override suspend fun link(teamId: String, memberId: String) = links[memberId]?.first
         override suspend fun links(teamId: String) = links.values.map { it.first }
-        override suspend fun removeLink(teamId: String, memberId: String, actor: Principal) = links.remove(memberId)?.second
-        override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, staleAfterMillis: Long) = GitHubTokenClaim.NotLinked
+        override suspend fun removeLink(teamId: String, memberId: String, actor: Principal) = links.remove(memberId)?.let { GitHubRevocable(it.first.clientId, it.second) }
+        override suspend fun removeLinksOfOtherApps(actor: Principal, clientId: String) = emptyList<GitHubRevocable>()
+        override suspend fun claim(teamId: String, memberId: String, clientId: String, validUntil: Long, usableUntil: Long, staleAfterMillis: Long) = GitHubTokenClaim.NotLinked
         override suspend fun completeRefresh(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, tokens: GitHubTokens) = false
         override suspend fun abandonRefresh(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, reconnect: Boolean) = Unit
     }
@@ -143,6 +144,9 @@ class GitHubRoutesTest {
         // GitHub's redirect: no session cookie, only the browser cookie.
         val stranger = client.get("/dashboard/github/callback?state=$state&code=code-1")
         assertEquals(HttpStatusCode.Forbidden, stranger.status, "Another browser cannot complete someone's link")
+        val stray = client.get("/dashboard/github/callback?state=unrelated") { header(HttpHeaders.Cookie, "teamcode_github_link=$nonce") }
+        assertEquals(HttpStatusCode.NotFound, stray.status)
+        assertNull(stray.headers.getAll(HttpHeaders.SetCookie)?.find { it.startsWith("teamcode_github_link=") }, "A stray request keeps the pending link's cookie")
         val done = client.get("/dashboard/github/callback?state=$state&code=code-1") { header(HttpHeaders.Cookie, "teamcode_github_link=$nonce") }
         assertEquals(HttpStatusCode.OK, done.status)
         assertTrue(done.bodyAsText().contains("Linked as <strong>octo</strong>"))

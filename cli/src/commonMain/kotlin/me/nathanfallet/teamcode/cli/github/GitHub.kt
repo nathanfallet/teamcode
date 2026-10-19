@@ -44,7 +44,8 @@ private class GitHubLinkCommand : SuspendingCliktCommand(name = "link") {
             requireGitHub(client)
             val device = try { client.startGitHubDeviceLink() } catch (error: TeamCodeException) {
                 if (error.statusCode != 409) throw error
-                echo("The team's GitHub App is not configured or does not allow device flow. Link from ${config.serverUrl.trimEnd('/')}/dashboard/github instead.", err = true)
+                echo("GitHub linking could not start: the team's GitHub App is not configured, does not allow device flow, or is misconfigured. " +
+                    "Link from ${config.serverUrl.trimEnd('/')}/dashboard/github, or ask an administrator to check the App there.", err = true)
                 throw ProgramResult(1)
             }
             echo("Open ${device.verificationUri} and enter the code ${device.userCode}")
