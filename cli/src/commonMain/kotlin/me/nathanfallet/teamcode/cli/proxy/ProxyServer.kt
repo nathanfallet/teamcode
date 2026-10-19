@@ -7,7 +7,8 @@ import io.ktor.util.logging.Logger
 import me.nathanfallet.teamcode.client.TeamCodeClient
 
 /** Agent stdout belongs to the agent. Framework exceptions must not print credentials or response bodies. */
-internal fun proxyServer(client: TeamCodeClient, token: String, port: Int, serviceId: String? = null, serverUrl: String? = null, report: (String) -> Unit) = embeddedServer(
+internal fun proxyServer(client: TeamCodeClient, token: String, port: Int, serviceId: String? = null, serverUrl: String? = null,
+    upstreamReady: (suspend () -> Boolean)? = null, report: (String) -> Unit) = embeddedServer(
     CIO,
     environment = applicationEnvironment {
         log = object : Logger by KtorSimpleLogger("TeamCode proxy") {
@@ -27,4 +28,4 @@ internal fun proxyServer(client: TeamCodeClient, token: String, port: Int, servi
         reuseAddress = true // Rebind after a drained restart while old TCP connections leave TIME_WAIT.
         connectors.add(EngineConnectorBuilder().also { it.host = "127.0.0.1"; it.port = port })
     },
-) { localProxy(client, token, serviceId = serviceId, serverUrl = serverUrl) }
+) { localProxy(client, token, serviceId = serviceId, serverUrl = serverUrl, upstreamReady = upstreamReady) }

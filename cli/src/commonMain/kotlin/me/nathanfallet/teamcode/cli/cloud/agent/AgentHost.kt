@@ -58,8 +58,11 @@ internal class AgentHost(
     private val log: (String) -> Unit = {},
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
-    /** The runner's loopback inference proxy; null starts the agent without TeamCode inference (tests, old servers). */
-    private val inference: AgentInferenceEndpoint? = null,
+    /**
+     * The runner's loopback inference proxy, resolved when the agent starts; null (or a null result, for a server that
+     * issues no inference credentials) starts the agent with its own provider configuration.
+     */
+    private val inference: (suspend () -> AgentInferenceEndpoint?)? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
@@ -194,8 +197,8 @@ internal class AgentHost(
      * Points the agent at the runner's loopback proxy exactly as `teamcode run` does for a local session: the agent
      * receives only the proxy's random local token, and its own provider credentials are removed from its environment.
      */
-    private fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
-        val endpoint = inference ?: return base to AGENT_ENVIRONMENT
+    private suspend fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
+        val endpoint = inference?.invoke() ?: return base to AGENT_ENVIRONMENT
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token)
         return AgentCommand(base.command, plan.arguments) to AGENT_ENVIRONMENT + plan.environment
     }

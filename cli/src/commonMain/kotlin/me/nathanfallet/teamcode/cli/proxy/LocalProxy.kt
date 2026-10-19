@@ -12,7 +12,9 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.client.TeamCodeClient
 
 /** Fixed inference and local guidance routes. No CONNECT or arbitrary destination. */
-fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int = 2 * 1024 * 1024, serviceId: String? = null, serverUrl: String? = null) {
+fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int = 2 * 1024 * 1024, serviceId: String? = null, serverUrl: String? = null,
+    /** False while the upstream credential is unavailable: answer a retryable `503` rather than forward a request bound to be refused. */
+    upstreamReady: (suspend () -> Boolean)? = null) {
     require(localToken.length >= 32) { "A local proxy token of at least 32 characters is required." }
     routing {
         guidanceHook(client, localToken)
@@ -47,6 +49,11 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                         }
                         if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
                             call.respondText("A JSON body is required.", status = HttpStatusCode.UnsupportedMediaType)
+                            return@post
+                        }
+                        if (upstreamReady?.invoke() == false) {
+                            call.response.header(HttpHeaders.RetryAfter, "15")
+                            call.respondText("TeamCode inference is temporarily unavailable.", status = HttpStatusCode.ServiceUnavailable)
                             return@post
                         }
                         val buffer = ByteArray(8192)

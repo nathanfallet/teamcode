@@ -27,15 +27,17 @@ class SqlCloudInferenceCredentialStore(private val database: Database) : CloudIn
         if (execution[CloudExecutions.state] != ExecutionState.RUNNING.wire) return@query null
         // The member the execution runs for, fixed when it started; never the owner of a later epoch.
         val member = execution[CloudExecutions.ownerId] ?: session[CloudSessions.ownerId]
+        // Lock order: session, then member, then the member's tokens, as member updates lock the member before its tokens.
         val eligible = Members.select(Members.id).where {
             (Members.id eq member) and (Members.teamId eq teamId) and (Members.disabled eq false) and (Members.mustChangePassword eq false)
-        }.singleOrNull()
+        }.forUpdate().singleOrNull()
         if (eligible == null) return@query null
-        val now = nowMillis()
-        val older = CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId)
+        val existing = CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId, CloudInferenceCredentials.createdAt)
             .where { (CloudInferenceCredentials.sessionId eq sessionId) and (CloudInferenceCredentials.epoch eq epoch) }
-            .orderBy(CloudInferenceCredentials.createdAt to SortOrder.DESC, CloudInferenceCredentials.tokenId to SortOrder.DESC)
-            .map { it[CloudInferenceCredentials.tokenId] }.drop((keep - 1).coerceAtLeast(0))
+            .orderBy(CloudInferenceCredentials.createdAt to SortOrder.DESC).toList()
+        // Creation times are strictly increasing per execution, so "newest" never depends on a tie-break.
+        val now = maxOf(nowMillis(), (existing.firstOrNull()?.get(CloudInferenceCredentials.createdAt) ?: 0L) + 1)
+        val older = existing.drop((keep - 1).coerceAtLeast(0)).map { it[CloudInferenceCredentials.tokenId] }
         if (older.isNotEmpty()) Tokens.deleteWhere { Tokens.id inList older }
         val id = UUID.randomUUID().toString()
         val token = RunnerInferenceUseCase.TOKEN_PREFIX + Passwords.secret()
@@ -49,19 +51,23 @@ class SqlCloudInferenceCredentialStore(private val database: Database) : CloudIn
             it[tokenId] = id; it[CloudInferenceCredentials.sessionId] = sessionId; it[CloudInferenceCredentials.epoch] = epoch
             it[CloudInferenceCredentials.teamId] = teamId; it[createdAt] = now; it[CloudInferenceCredentials.expiresAt] = expiresAt
         }
-        IssuedInferenceCredential(token, expiresAt)
+        IssuedInferenceCredential(token, expiresAt, ttlMillis)
     }
 
     override suspend fun purge(limit: Int): Int = database.query {
         val now = nowMillis()
-        // Expired ones, and any whose execution is no longer the live current one (a safety net: the session store
-        // already revokes in the transaction that ends an execution).
-        val stale = (CloudInferenceCredentials innerJoin CloudSessions).join(CloudExecutions, JoinType.LEFT,
+        // Expired ones first, oldest first, on the expiry index.
+        val expired = CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId).where { CloudInferenceCredentials.expiresAt lessEq now }
+            .orderBy(CloudInferenceCredentials.expiresAt).limit(limit).map { it[CloudInferenceCredentials.tokenId] }
+        // A safety net: any whose execution is no longer the live current one. The session store already revokes in
+        // the transaction that ends an execution, so this finds nothing in normal operation. The table holds at most
+        // two rows per running execution, so the join stays small.
+        val orphaned = if (expired.size >= limit) emptyList() else (CloudInferenceCredentials innerJoin CloudSessions).join(CloudExecutions, JoinType.LEFT,
             additionalConstraint = { (CloudExecutions.sessionId eq CloudInferenceCredentials.sessionId) and (CloudExecutions.epoch eq CloudInferenceCredentials.epoch) })
             .select(CloudInferenceCredentials.tokenId).where {
-                (CloudInferenceCredentials.expiresAt lessEq now) or (CloudInferenceCredentials.epoch neq CloudSessions.currentEpoch) or
-                    CloudExecutions.state.isNull() or (CloudExecutions.state neq ExecutionState.RUNNING.wire)
-            }.limit(limit).map { it[CloudInferenceCredentials.tokenId] }
+                (CloudInferenceCredentials.epoch neq CloudSessions.currentEpoch) or CloudExecutions.state.isNull() or (CloudExecutions.state neq ExecutionState.RUNNING.wire)
+            }.orderBy(CloudInferenceCredentials.createdAt).limit(limit - expired.size).map { it[CloudInferenceCredentials.tokenId] }
+        val stale = expired + orphaned
         if (stale.isEmpty()) 0 else Tokens.deleteWhere { Tokens.id inList stale }
     }
 }
@@ -76,6 +82,20 @@ internal fun revokeInferenceCredentials(sessionId: String, epoch: Int? = null) {
         (CloudInferenceCredentials.sessionId eq sessionId) and (epoch?.let { CloudInferenceCredentials.epoch eq it } ?: Op.TRUE)
     }.map { it[CloudInferenceCredentials.tokenId] }
     if (ids.isNotEmpty()) Tokens.deleteWhere { Tokens.id inList ids }
+}
+/**
+ * The revocation rule of every session write, in its transaction: credentials exist only while the session is in a
+ * running state (issuance checks it under the session row lock), so leaving those states or heading for deletion
+ * revokes all of them, and an execution that ends revokes its own. Writes that stay outside the running states cost
+ * nothing.
+ */
+internal fun revokeInferenceCredentialsOnWrite(expected: CloudSession, next: CloudSession, endedEpoch: Int?) {
+    val wasRunning = expected.state in RunnerInferenceUseCase.INFERENCE_STATES && expected.desiredState != DesiredState.TERMINATED
+    val running = next.state in RunnerInferenceUseCase.INFERENCE_STATES && next.desiredState != DesiredState.TERMINATED
+    when {
+        wasRunning && !running -> revokeInferenceCredentials(expected.id)
+        endedEpoch != null -> revokeInferenceCredentials(expected.id, endedEpoch)
+    }
 }
 /** Revokes credentials of every epoch of [sessionId] older than [epoch]. */
 internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {

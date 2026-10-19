@@ -4,7 +4,7 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 /** A `tcex_` inference credential, returned once to the runner of the execution it belongs to. */
-class IssuedInferenceCredential(val token: String, val expiresAt: Long) {
+class IssuedInferenceCredential(val token: String, val expiresAt: Long, val lifetimeMillis: Long) {
     override fun toString() = "IssuedInferenceCredential(token=[REDACTED], expiresAt=$expiresAt)"
 }
 

@@ -45,7 +45,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
             val credential = inference.issue(pod.teamId, pod.sessionId, pod.epoch)
             call.response.header(HttpHeaders.CacheControl, "no-store")
-            call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt))
+            call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt, credential.lifetimeMillis))
         }
     }
 }

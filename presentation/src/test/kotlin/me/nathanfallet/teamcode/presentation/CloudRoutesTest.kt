@@ -308,7 +308,7 @@ class CloudRoutesTest {
         val credentials = object : CloudInferenceCredentialStore {
             override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int): IssuedInferenceCredential {
                 issued += Triple(sessionId, epoch, ttlMillis)
-                return IssuedInferenceCredential("tcex_synthetic-inference-credential-${issued.size}", 1_000 + ttlMillis)
+                return IssuedInferenceCredential("tcex_synthetic-inference-credential-${issued.size}", 1_000 + ttlMillis, ttlMillis)
             }
             override suspend fun purge(limit: Int) = 0
         }

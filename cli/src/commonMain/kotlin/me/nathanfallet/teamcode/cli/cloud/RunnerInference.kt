@@ -1,54 +1,81 @@
 package me.nathanfallet.teamcode.cli.cloud
 
+import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import me.nathanfallet.teamcode.api.models.RunnerInferenceCredentialView
 import me.nathanfallet.teamcode.client.TeamCodeException
 
 /**
  * The execution's `tcex_` inference credential, held in the runner's memory only. The runner's loopback proxy asks
- * for it on every forwarded request: it is fetched on first use and renewed every [RENEW_MILLIS], well inside its
- * one-hour lifetime, so the agent never holds it and a copy taken from the runner expires quickly.
+ * for it on every forwarded request: it is fetched on first use and renewed after a third of its lifetime, so the
+ * agent never holds it and a copy taken from the runner expires quickly. Deadlines are measured on the runner's
+ * clock from the lifetime the server returns, so clock skew between the pod and the server does not matter.
  *
- * A refusal (fenced execution, a server without `cloud.inference.v1`) leaves no credential: the request then reaches
- * the server unauthenticated and the agent sees an authentication error, while the runner loop handles fencing.
+ * Only one caller fetches at a time. While a renewal is in flight, other callers keep using the current credential
+ * as long as it is usable, instead of waiting on the network.
+ *
+ * A server without `cloud.inference.v1` answers `404`: [unsupported] then tells the runner to start the agent with
+ * its own provider configuration. A fenced execution (`409`) or a refused runner (`401`/`403`) drops the credential;
+ * the runner loop handles the fencing itself.
  */
 internal class RunnerInference(
     private val fetch: suspend () -> RunnerInferenceCredentialView,
     private val log: (String) -> Unit = {},
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
+    private class Held(val token: String, val renewAt: Long, val usableUntil: Long)
     private val lock = Mutex()
-    private var token: String? = null
-    private var fetchedAt = 0L
-    private var retryAt = 0L
+    @Volatile private var held: Held? = null
+    @Volatile private var retryAt = 0L
+    /** The server has no inference route for runners (`404`). */
+    @Volatile var unsupported = false; private set
 
-    suspend fun token(): String? = lock.withLock {
+    suspend fun token(): String? {
         val at = now()
-        if (token != null && at - fetchedAt < RENEW_MILLIS) return@withLock token
-        if (at < retryAt) return@withLock token?.takeIf { at - fetchedAt < USABLE_MILLIS }
+        held?.let { if (at < it.renewAt) return it.token }
+        val usable = held?.takeIf { at < it.usableUntil }?.token
+        // A renewal in flight elsewhere: keep serving the current credential rather than waiting for the network.
+        if (usable != null) { if (!lock.tryLock()) return usable } else lock.lock()
         try {
-            token = fetch().token
-            fetchedAt = at
+            val current = now()
+            held?.let { if (current < it.renewAt) return it.token }
+            if (current >= retryAt) renew(current)
+            return held?.takeIf { now() < it.usableUntil }?.token
+        } finally { lock.unlock() }
+    }
+
+    private suspend fun renew(at: Long) {
+        try {
+            val credential = fetch()
+            val lifetime = (credential.expiresInMillis ?: DEFAULT_LIFETIME_MILLIS).coerceIn(MIN_LIFETIME_MILLIS, MAX_LIFETIME_MILLIS)
+            held = Held(credential.token, at + lifetime / 3, at + lifetime - SAFETY_MILLIS.coerceAtMost(lifetime / 4))
+            unsupported = false
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
             retryAt = at + RETRY_MILLIS
-            log(if (error is TeamCodeException) "The inference credential was refused (HTTP ${error.statusCode}${error.code?.let { " $it" } ?: ""})."
-                else "The inference credential could not be renewed; retrying.")
-            if (error is TeamCodeException && error.statusCode in setOf(401, 403, 404, 409)) token = null
+            if (error is TeamCodeException) {
+                if (error.statusCode == 404) { if (!unsupported) log("This server does not issue inference credentials to cloud runners."); unsupported = true }
+                else log("The inference credential was refused (HTTP ${error.statusCode}${error.code?.let { " $it" } ?: ""}).")
+                if (error.statusCode in setOf(401, 403, 404, 409)) held = null
+            } else log("The inference credential could not be renewed; retrying.")
         }
-        token?.takeIf { at - fetchedAt < USABLE_MILLIS }
     }
 
-    /** Forgets the credential, for example once the execution is fenced. */
-    suspend fun clear() = lock.withLock { token = null }
+    /** Whether a credential is in hand or can be fetched now; the proxy answers `503` instead of forwarding without one. */
+    suspend fun available(): Boolean = token() != null
+
+    /** Forgets the credential, for example once the runner stops. */
+    fun clear() { held = null }
 
     companion object {
-        const val RENEW_MILLIS = 20 * 60_000L
-        /** A credential older than this is not offered any more, even if renewal keeps failing (it expires at 60). */
-        const val USABLE_MILLIS = 55 * 60_000L
+        /** Used when the server does not say (it always does from this release). */
+        const val DEFAULT_LIFETIME_MILLIS = 60 * 60_000L
+        const val MIN_LIFETIME_MILLIS = 60_000L
+        const val MAX_LIFETIME_MILLIS = 24 * 60 * 60_000L
+        /** A credential is not offered in its last minutes, even if renewal keeps failing. */
+        const val SAFETY_MILLIS = 5 * 60_000L
         const val RETRY_MILLIS = 15_000L
     }
 }

@@ -239,7 +239,7 @@ class CloudAgentTest {
         val started = mutableListOf<AgentCommand>()
         val local = "l".repeat(64)
         val host = AgentHost(channel, { command, environment, _ -> environments += environment; started += command; FakeProcess() },
-            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = AgentInferenceEndpoint(41234, local))
+            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = { AgentInferenceEndpoint(41234, local) })
         val job = launch { host.run() }
         channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Go", 1)))
         until { started.isNotEmpty() }
@@ -256,7 +256,7 @@ class CloudAgentTest {
         val codexChannel = object : AgentChannel by channel { override suspend fun agent() = RunnerAgentView("codex", "0.163", "gpt-5", null, "none") }
         val codexStarted = mutableListOf<Pair<AgentCommand, Map<String, String?>>>()
         val codexHost = AgentHost(codexChannel, { command, environment, _ -> codexStarted += command to environment; FakeProcess() },
-            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = AgentInferenceEndpoint(41234, local))
+            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = { AgentInferenceEndpoint(41234, local) })
         val codexJob = launch { codexHost.run() }
         channel.inputs.send(listOf(RunnerInputView("in-2", "message", "Go", 1)))
         until { codexStarted.isNotEmpty() }
@@ -271,28 +271,37 @@ class CloudAgentTest {
         var clock = 0L
         var fetches = 0
         var refuse: Exception? = null
+        val hour = 3_600_000L
         val inference = RunnerInference({
             refuse?.let { throw it }
             fetches++
-            RunnerInferenceCredentialView("tcex_credential-$fetches", 3_600_000)
+            RunnerInferenceCredentialView("tcex_credential-$fetches", 999_999_999, hour)
         }, now = { clock })
         assertEquals("tcex_credential-1", inference.token())
         clock += 60_000
         assertEquals("tcex_credential-1", inference.token(), "Reused until renewal is due")
-        clock += RunnerInference.RENEW_MILLIS
-        assertEquals("tcex_credential-2", inference.token(), "Renewed well before it expires")
+        assertEquals(1, fetches)
+        clock = hour / 3
+        assertEquals("tcex_credential-2", inference.token(), "Renewed after a third of its lifetime, from the lifetime the server returned")
         // A network failure keeps the current credential while it is still usable, and retries later.
-        clock += RunnerInference.RENEW_MILLIS
+        clock += hour / 3
         refuse = IllegalStateException("offline")
         assertEquals("tcex_credential-2", inference.token())
-        clock += RunnerInference.USABLE_MILLIS
-        assertNull(inference.token(), "Never offered past its usable life")
-        // A refusal by the server (fenced execution) drops it at once.
+        assertTrue(inference.available())
+        clock = hour / 3 + hour - RunnerInference.SAFETY_MILLIS
+        assertNull(inference.token(), "Never offered in its last minutes")
+        assertFalse(inference.available(), "The proxy answers 503 instead of forwarding without a credential")
+        // A refusal by the server (fenced execution) drops it at once; a missing route marks the server as unsupported.
         refuse = null
         clock += RunnerInference.RETRY_MILLIS
         assertEquals("tcex_credential-3", inference.token())
-        clock += RunnerInference.RENEW_MILLIS
+        clock += hour / 3
         refuse = TeamCodeException(409, "fenced", "execution_fenced")
         assertNull(inference.token())
+        assertFalse(inference.unsupported)
+        clock += RunnerInference.RETRY_MILLIS
+        refuse = TeamCodeException(404, "missing", "not_found")
+        assertNull(inference.token())
+        assertTrue(inference.unsupported)
     }
 }

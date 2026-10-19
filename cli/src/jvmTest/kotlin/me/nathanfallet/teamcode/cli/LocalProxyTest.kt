@@ -39,6 +39,25 @@ class LocalProxyTest {
         } finally { sdk.close() }
     }
 
+    @Test fun `a missing upstream credential is a retryable 503 that never reaches upstream`() = testApplication {
+        var calls = 0
+        var ready = false
+        val sdk = TeamCodeClient("https://self.hosted.example", { "tcex_server-token" }) { config -> HttpClient(MockEngine {
+            calls++; respond("event: done\ndata: {}\n\n", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { config(this) } }
+        application { localProxy(sdk, localToken, upstreamReady = { ready }) }
+        try {
+            suspend fun post() = client.post("/v1/messages") { header("x-api-key", localToken); contentType(ContentType.Application.Json); setBody(payload()) }
+            val refused = post()
+            assertEquals(HttpStatusCode.ServiceUnavailable, refused.status)
+            assertEquals("15", refused.headers[HttpHeaders.RetryAfter])
+            assertEquals(0, calls)
+            ready = true
+            assertEquals(HttpStatusCode.OK, post().status)
+            assertEquals(1, calls)
+        } finally { sdk.close() }
+    }
+
     @Test fun `unkeyed browser and oversized requests never reach upstream`() = testApplication {
         var calls = 0
         val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine {

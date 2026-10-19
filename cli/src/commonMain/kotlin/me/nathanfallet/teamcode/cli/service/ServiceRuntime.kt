@@ -77,7 +77,7 @@ internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
                 latest.accessToken
             }
         }) { configure -> HttpClient { configure(this) } }
-        val server = proxyServer(client, settings.localToken, settings.port, settings.id, origin, ::report)
+        val server = proxyServer(client, settings.localToken, settings.port, settings.id, origin, report = ::report)
         try {
             server.start(wait = false)
             // Ktor's Native startup registers its own signal handler. The service owns both

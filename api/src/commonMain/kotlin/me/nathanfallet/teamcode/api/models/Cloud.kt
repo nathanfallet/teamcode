@@ -190,6 +190,6 @@ data class RunnerInstructionView(val desiredState: String, val pauseDeadline: Lo
 data class RunnerInferenceRequest(val teamId: String, val sessionId: String, val epoch: Int)
 /** A `tcex_` inference credential for the execution's owner, kept in the runner's memory only. */
 @Serializable
-data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long) {
-    override fun toString() = "RunnerInferenceCredentialView(token=[REDACTED], expiresAt=$expiresAt)"
+data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long, val expiresInMillis: Long? = null) {
+    override fun toString() = "RunnerInferenceCredentialView(token=[REDACTED], expiresAt=$expiresAt, expiresInMillis=$expiresInMillis)"
 }

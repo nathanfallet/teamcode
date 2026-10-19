@@ -155,7 +155,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             val inference = RunnerInference({ client.runnerInference(RunnerInferenceRequest(team, session, epoch)) }, log = { echo(it, err = true) })
             val inferenceClient = TeamCodeClient(server, { inference.token() }) { configure -> HttpClient { configure(this) } }
             val localToken = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
-            val proxy = proxyServer(inferenceClient, localToken, 0) { echo(it, err = true) }
+            val proxy = proxyServer(inferenceClient, localToken, 0, upstreamReady = { inference.available() }) { echo(it, err = true) }
             try {
                 proxy.start(wait = false)
                 val port = proxy.engine.resolvedConnectors().single().port
@@ -163,13 +163,19 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
                 val agent = AgentHost(agentChannel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
                     FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
-                    BuildInfo.VERSION, log = { echo(it, err = true) }, inference = AgentInferenceEndpoint(port, localToken))
+                    BuildInfo.VERSION, log = { echo(it, err = true) }, inference = {
+                        // Fetched before the agent starts, so a server without the route is known and the agent keeps its own configuration.
+                        inference.available()
+                        if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
+                    })
                 try { RunnerLoop(calls, log = { echo(it, err = true) }, agent = agent).run() }
                 catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
             } finally {
-                inference.clear()
-                proxy.stop(500, 5_000)
-                inferenceClient.close()
+                withContext(NonCancellable) {
+                    inference.clear()
+                    proxy.stop(500, 5_000)
+                    inferenceClient.close()
+                }
             }
         }
         if (code != 0) SystemExit.exit(code)
