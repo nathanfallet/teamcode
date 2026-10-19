@@ -167,8 +167,11 @@ class TeamCodeClient(
     suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
     suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = runnerRequest("heartbeat", input)
     suspend fun runnerCheckpoint(input: RunnerCheckpointRequest): RunnerInstructionView = runnerRequest("checkpoint", input)
+    /** The preparation recipe with the owner's variable values and GitHub token; never log the result. */
+    suspend fun runnerEnvironment(input: RunnerEnvironmentRequest): RunnerEnvironmentView = runnerRequest("environment", input)
+    suspend fun runnerPreparation(input: RunnerPreparationRequest): RunnerInstructionView = runnerRequest("preparation", input)
     /** Failures carry the server's error code (for example `execution_fenced`), never its message. */
-    private suspend inline fun <reified B> runnerRequest(path: String, body: B): RunnerInstructionView {
+    private suspend inline fun <reified R, reified B> runnerRequest(path: String, body: B): R {
         val response = http.request("$origin/api/v1/cloud/runner/$path") {
             method = HttpMethod.Post; contentType(ContentType.Application.Json); setBody(body); authenticate(); timeout { requestTimeoutMillis = 30_000 }
         }

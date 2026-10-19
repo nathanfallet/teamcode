@@ -36,7 +36,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
 
     val sessions = CloudSessionService(store)
     val admin = CloudAdministrationService(adminStore, cluster)
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster))
+    // Variables come from the environment/MCP variants work and GitHub App user tokens from the GitHub linking work;
+    // both plug in here. Until they land, sessions get no variables and owners count as not linked to GitHub.
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = CloudVariableSource.NONE, github = GitHubAccessSource.NONE), AuthenticateRunnerUseCase(store, cluster))
 
     fun launch(scope: CoroutineScope) {
         scope.launch {

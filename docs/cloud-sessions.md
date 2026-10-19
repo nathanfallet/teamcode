@@ -21,7 +21,9 @@ This page is the contract and the record of what is implemented. It follows the 
 | Runner skeleton `teamcode cloud runner` (register, heartbeat, checkpoint; no agent) | Implemented (PR 2) |
 | CLI `teamcode cloud create/list/show/pause/resume/delete` | Implemented (PR 2) |
 | Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
-| Environment preparation, GitHub, transcript, messages, attach, transfer, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
+| Environment preparation: recipe on the profile version and the session, repositories, working directory, Git identity, setup commands, progress and failures in the lifecycle, `cloud.environment.v1` | Implemented (PR 3) |
+| Environment variables from environment variants, GitHub access through GitHub App user tokens | Interfaces and delivery implemented (PR 3); sources planned (variants work, GitHub linking PR) |
+| Transcript, messages, attach, transfer, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
 The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
 
@@ -30,8 +32,8 @@ The server mounts the cloud routes and advertises `cloud.sessions.v1` only when 
 | Resource | Table | Owner | Purpose |
 | --- | --- | --- | --- |
 | Cluster | `cloud_clusters` | Administrator | API URL, CA bundle, encrypted service-account credential, allowed namespaces, `maxRunningPods`, default storage class, garbage-collection report |
-| Profile | `cloud_profiles`, `cloud_profile_versions`, `cloud_profile_assignments` | Administrator; assigned to members (yes/no) | Versioned, immutable once published: cluster, namespace, image, `allowedImageOverrides`, `imagePullSecrets` names, resources, workspace size and storage class, agent kind/version, idle timeout and bounds |
-| Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
+| Profile | `cloud_profiles`, `cloud_profile_versions`, `cloud_profile_assignments` | Administrator; assigned to members (yes/no) | Versioned, immutable once published: cluster, namespace, image, `allowedImageOverrides`, `imagePullSecrets` names, resources, workspace size and storage class, agent kind/version, idle timeout and bounds, [environment recipe](#environment-preparation) |
+| Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, resolved environment recipe, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
 | Execution | `cloud_executions` | Session | One pod lifetime, unique on `(session_id, epoch)`: pod name, node, image digest, registration, heartbeats, exit reason, checkpoint result |
 | Idempotency record | `cloud_idempotency` | Team + initiating member | The session created by a keyed request, kept 24 hours |
 
@@ -66,13 +68,13 @@ Other fields: `desiredState` (`running`, `paused`, `terminated`), `failure` and 
 | --- | --- | --- |
 | (new) | `creating` | `POST /cloud/sessions` |
 | `creating` | `preparing` | The runner registered for the current epoch |
-| `creating`, `preparing` | `failed` | Missing or retaining storage class, namespace no longer allowed on the cluster, image or start failure, 15-minute start timeout, 30-minute preparation timeout, or execution lost during the first execution. The workspace is deleted right away. |
+| `creating`, `preparing` | `failed` | Missing or retaining storage class, namespace no longer allowed on the cluster, image or start failure, 15-minute start timeout, failed environment preparation (`preparation_failed`), 30-minute preparation timeout, or execution lost during the first execution. The workspace is deleted right away. |
 | `preparing`, `resuming` | `ready` | The runner reported ready on a heartbeat. The agent is never reported ready earlier. |
 | `ready`, `active` | `pausing` | Desired state `paused` (explicit pause; idle timeout and transfer are planned), or the runner's checkpoint arriving before the reconciler's own move |
 | `pausing` | `paused` | Checkpoint completed (`consistent`), or failed, missed heartbeats or 15-minute pausing deadline (`crash_consistent`) |
 | `ready`, `active`, `pausing` | `paused` | Execution lost: no heartbeat for 90 s, the pod disappeared or stopped, or the execution row is missing (`execution_missing`, after deleting any pod of the session). `crash_consistent`, and the desired state becomes `paused`, so a lost execution never restarts by itself. |
 | `paused` | `resuming` | Desired state `running` (explicit resume; wake by message is planned) |
-| `resuming` | `paused` | Image unavailable, start failure or timeout, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
+| `resuming` | `paused` | Image unavailable, start failure or timeout, failed environment preparation or 30-minute preparation timeout once the runner registered, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
 | `resuming` | `failed` | The workspace claim is lost |
 | any | `terminated` | `DELETE`, or retention expiry while paused. A `failed` session keeps its deletion progress (a workspace already proven deleted stays proven). |
 
@@ -141,6 +143,8 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | `POST /cloud/sessions/{id}/resume` | `202`; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
 | `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
+| `POST /cloud/runner/environment` | The recipe, the owner's Git identity, variable values and GitHub token for this execution (`Cache-Control: no-store`). Only the registered runner of the current epoch, while `preparing` or `resuming`; otherwise `409 not_preparing`. Missing required variables or GitHub access: `409 preparation_failed` | Pod token | Implemented |
+| `POST /cloud/runner/preparation` | `{phase}` progress, or `{phase, failure: {step, index, exitCode}}`; returns the instruction | Pod token | Implemented |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `/cloud/events/stream` | Transcript pages, per-session SSE, caller-wide SSE feed | | Planned |
 | `/cloud/sessions/{id}/messages`, `.../interrupt`, `.../attachments` | Messages, interrupt, CLI attach lease | | Planned |
 | `/cloud/sessions/{id}/transfer`, `/cloud/transfers...` | Ownership transfer | | Planned |
@@ -160,7 +164,11 @@ TeamCode-On-Behalf-Of: 6f1c...member-uuid
   "image": null,
   "agent": { "model": "opus", "effort": "high" },
   "labels": { "orchestrator.task": "1234" },
-  "idleTimeoutMinutes": 30
+  "idleTimeoutMinutes": 30,
+  "environment": {
+    "repositories": [{ "url": "https://github.com/example/api.git", "path": "api", "ref": "main", "branch": "task-1234" }],
+    "workingDirectory": "api"
+  }
 }
 ```
 
@@ -168,9 +176,10 @@ TeamCode-On-Behalf-Of: 6f1c...member-uuid
 - `labels`: at most 16 pairs, lowercase keys up to 63 characters, values up to 256, not secret, filterable.
 - `idleTimeoutMinutes` is clamped to the profile bounds (stored; automatic idle pause is planned with activity signals).
 - `agent.model` and `agent.effort` are recorded; they are checked against the member's model policy on every inference, as for local sessions.
-- `repositories` and `initialMessage` are planned (environment preparation and messages). The server ignores unknown fields, so do not send them before the matching capability is advertised.
+- `environment` (with `cloud.environment.v1`) replaces the profile's `repositories` and `workingDirectory` for this session; setup commands, required variables and the other recipe fields come from the profile only. Null fields keep the profile's values.
+- `initialMessage` is planned with messages. The server ignores unknown fields, so do not send them before the matching capability is advertised.
 
-The response is the session view: `id`, `name`, `ownerId`, `createdBy`, `state`, `phase`, `desiredState`, `generation`, `currentEpoch`, `profile {id, version}`, `image {reference, digest}`, `agent {kind, version, model, effort}`, `labels`, `activity {lastActivityAt, idleTimeoutMinutes}`, `resume`, `failure`, `resumeBlocked`, `workspaceDeletion`, `createdAt`, `updatedAt`, `pausedAt`, `expiresAt`, `terminatedReason`. The image digest is recorded from the first running container; every later execution uses `reference@digest`, so a moved tag does not change a resumed session.
+The response is the session view: `id`, `name`, `ownerId`, `createdBy`, `state`, `phase`, `desiredState`, `generation`, `currentEpoch`, `profile {id, version}`, `image {reference, digest}`, `agent {kind, version, model, effort}`, `labels`, `activity {lastActivityAt, idleTimeoutMinutes}`, `resume`, `failure`, `resumeBlocked`, `workspaceDeletion`, `createdAt`, `updatedAt`, `pausedAt`, `expiresAt`, `terminatedReason`, `environment` (the resolved recipe). The image digest is recorded from the first running container; every later execution uses `reference@digest`, so a moved tag does not change a resumed session.
 
 ### Bounds and capacity
 
@@ -221,10 +230,72 @@ Inactivity only pauses; it never deletes. Idle detection (turns, pending inputs,
 - **Delivery.** An init container from the runner image (`TEAMCODE_CLOUD_RUNNER_IMAGE`) copies the `teamcode` Linux binary (`TEAMCODE_CLOUD_RUNNER_BINARY`, default `/usr/local/bin/teamcode`) into an `emptyDir` at `/opt/teamcode`, with `cp`; the session container runs `/opt/teamcode/teamcode cloud runner`. The team image stays a pure toolchain (Linux with the published binaries' glibc baseline, `/bin/sh`, `git`, writable by UID 1000). Bundled agent CLIs come with the agent PR.
 - **Identity.** A projected ServiceAccount token, audience `teamcode`, 600 s expiry (the API minimum; the kubelet rotates the file, and the runner reads it for every call). The server reviews it with `TokenReview` using the cluster credential and requires the bound namespace to be the session's and the bound pod name to be the current execution's pod; the pod name always comes from the review, never from the request. A pod of the session with another epoch gets `409 execution_fenced` and exits. Reviews are cached 60 s per token (refusals 10 s, in a separate cache so bad tokens never evict accepted ones), so a heartbeat every 15 s costs one review a minute per pod. No TeamCode secret exists in the cluster, and the pod environment holds only the server URL, the token file path and the team, session and epoch identifiers.
 - **Channel.** HTTPS only (the client refuses plain HTTP except on loopback): register, heartbeat every 15 s (the response carries the desired state and pause deadline), checkpoint; later batched event upload and an input long-poll. It fits stateless replicas with MySQL as the only bus and needs no inbound connectivity to the pod. Network failures are retried with backoff; the server marks the execution lost after 90 s without heartbeats.
-- **Runner skeleton.** This release's runner starts no agent: it registers, reports ready, heartbeats, and checkpoints immediately when a pause is requested (there is nothing to drain yet). It exits on `409 execution_fenced` or when the session is being deleted, retries any other `409` (for example a checkpoint refused because the pause was cancelled), and exits with code 2 on `401`. The client reads only the error code of a failed runner call, never its message.
+- **Runner.** This release's runner starts no agent: it registers, [prepares the environment](#environment-preparation) while heartbeating, reports ready once prepared, and checkpoints immediately when a pause is requested (there is nothing to drain yet). It exits on `409 execution_fenced` or when the session is being deleted, retries any other `409` (for example a checkpoint refused because the pause was cancelled), and exits with code 2 on `401`. The client reads only the error code of a failed runner call, never its message.
 - **Token exposure (planned fix).** The projected token is readable by the pod's UID. With no agent in this release only the runner runs there; before the agent lands, the agent must run under a separate UID that cannot read the token, so it cannot drive the runner channel (for example report a clean checkpoint).
 - **Planned.** A `tcex_` execution credential (hashed, bound to session, epoch and owner, revoked on pause, transfer, delete and fencing) for the inference the runner's loopback proxy forwards, with the agent PR; a one-time Secret fallback where `TokenReview` is not permitted.
 - **Kubernetes client.** The adapter (`KubernetesClusterPort`) calls the Kubernetes REST API with the Ktor client the server already uses, rather than fabric8 or the official Java client. The surface is small (pods, claims, volumes, storage classes, TokenReview), the server stores each cluster's URL, CA and token instead of a kubeconfig, and the adapter is tested with Ktor's mock engine. Each cluster gets its own client whose trust store holds only that cluster's CA bundle; the connection is reloaded from the database at most every 30 s, so a rotated token applies quickly. Lists are paged (500 per page, at most 20 pages, 200 for the cluster-wide PersistentVolume list); a page missing mid-list fails the call rather than passing for a complete list. Concurrent first uses of a cluster build one client, and a client replaced after a rotation stays open until shutdown for requests in flight. API error bodies are never kept or logged. It adds no dependency, and nothing reaches the native CLI, which keeps `cli -> client -> api`.
+
+## Environment preparation
+
+Toolchain and preparation are separate. The **image** carries what is installed (for example Node.js, a JDK, Gradle); the **recipe** says what to do with it in each session. Neither contains a TeamCode or provider credential.
+
+### Image
+
+- **Per profile, per session.** The profile names the image; a session may name another one only if it matches the profile's `allowedImageOverrides`. Private registries authenticate through the profile's `imagePullSecrets`, Kubernetes Secrets the administrator manages in the namespace; TeamCode never stores registry credentials.
+- **Digest.** The digest of the first running container is recorded on the session (`image.digest`) and on the execution; every later execution starts `reference@digest`, so a resume prepares on the same bits even if the tag moved.
+- **Contract.** Linux with the published binaries' glibc baseline, `/bin/sh` and POSIX `mkdir`, `rm`, `mv`, `rmdir`, `dirname`, `touch`, `test`; `git` 2.31 or later (credentials are configured through `GIT_CONFIG_COUNT`); writable by UID 1000. `gh` is optional. Nothing from TeamCode: the runner binary is copied in by the init container, and the agent CLIs come with the agent PR.
+- **No baked identity.** Nothing in the pod spec identifies a member or a provider account: the pod environment holds only the server URL, the token file path and the team, session and epoch identifiers. Credentials reach the pod only through the runner channel, at preparation time, for the current owner.
+
+### Recipe
+
+The recipe is part of the immutable profile version (`spec.environment`). At creation, the session's `environment` overrides are merged in and the result is stored on the session (`cloud_sessions.environment`, JSON without any secret), so a resume prepares exactly what the first execution did, even after the profile changed. It is never edited afterwards.
+
+| Field | Meaning |
+| --- | --- |
+| `repositories` | Up to 16 `{url, path, ref?, branch?}`. `https://` URLs without credentials, query or fragment; `path` relative to `/workspace` (not under `.teamcode` or `.home`, never nested in another repository); `ref` is a branch, tag or commit; `branch` is a local branch created at `ref`. Option-like and malformed refs are refused |
+| `workingDirectory` | Relative to `/workspace`; must exist after cloning. Setup commands run there |
+| `setup.create` | Up to 16 commands run once per workspace, in order, with `/bin/sh -c` |
+| `setup.start` | Up to 16 commands run on every execution, after `create` |
+| `requiredVariables` | Variable names the owner must be assigned; preparation fails without them |
+| `requireGitHub` | Preparation fails when the owner has no usable GitHub access |
+| `gitEmailDomain` | Email domain of the Git identity for owners without a linked GitHub account |
+
+### What the runner does
+
+After registering, the runner prepares while it keeps heartbeating (`ready: false`), so a long clone or dependency install never looks like a lost pod:
+
+1. `POST /cloud/runner/environment` returns the recipe and, resolved for the **current owner** on every call: the Git identity, the variable values and the GitHub token. A transferred session therefore never keeps its former owner's values.
+2. **Git identity** (`configuring_git`): `git config --global user.name/user.email` under `HOME=/workspace/.home`, rewritten on every execution. A linked GitHub account gives `<login>` and `<id>+<login>@users.noreply.github.com`; otherwise the member name and `<name>@<gitEmailDomain>` (`users.noreply.teamcode.invalid` by default).
+3. **Repositories.** If `/workspace/<path>/.git` exists, only `git fetch --prune origin` (`fetching_repositories`): work on the workspace is never reset or re-cloned. Otherwise (`cloning_repositories`) clone into `/workspace/.teamcode/clone-<n>`, check out `ref`, create `branch`, then move it into place; an interrupted clone is cleaned and retried, and a non-empty directory at the path is never overwritten.
+4. The **working directory** must exist.
+5. **Setup** (`running_setup`): each `create` command whose marker `/workspace/.teamcode/setup/create-<n>-<hash>.done` is missing (the hash is the command's, so an edited command runs again on a new session), then every `start` command.
+6. The next heartbeat reports `ready: true`, and only then does the session become `ready`.
+
+Command output goes to `/workspace/.teamcode/logs/prepare-e<epoch>.log` on the session's own workspace, with known variable values and the token replaced by `[REDACTED]` after each command, and the last 4 MiB kept. It never reaches the server, the pod log or the transcript.
+
+### Credentials in child processes only
+
+Variable values and the GitHub token live in the runner's memory and in the environment of the preparation's child processes. They are never written to the pod spec, a Kubernetes Secret, a remote URL, a Git config file, the workspace or the server's database:
+
+- `git` gets the token from a credential helper defined through `GIT_CONFIG_COUNT` for `https://github.com` only (helpers from the image are reset first), which prints `x-access-token` and the token from its own environment; other hosts never see it.
+- `gh` reads `GH_TOKEN`.
+- `GIT_TERMINAL_PROMPT=0`, and children do not inherit the runner's token file path.
+
+The child processes run with the pod UID, like the planned agent: see the token exposure note in [the runner and the pod](#the-runner-and-the-pod).
+
+### Variables and GitHub sources
+
+- **Variables** come from `CloudVariableSource`. Its real source is the environment/MCP variants work (`ResolveEffectiveVariantsUseCase`, environment entries only, `unavailable` slots by name); the adapter is a few lines in `CloudServer` once that work is merged. Until then members receive no variables, and a profile with `requiredVariables` fails preparation with the missing names.
+- **GitHub** comes from `GitHubAccessSource`: GitHub App user-to-server tokens of the effective member (8-hour tokens refreshed on the server, scoped to what both the App installation and the user can reach). Installation tokens are reserved for dedicated service members and personal access tokens are refused. The member linking flow (`teamcode github link`, dashboard), the encrypted token store and the serialized refresh come in their own PR; until then every owner counts as not linked, public repositories clone anonymously and `requireGitHub` profiles fail preparation.
+
+### Progress and failures
+
+`phase` shows `configuring_git`, `cloning_repositories`, `fetching_repositories` or `running_setup`. A failed step is reported as `{step, index, exitCode}` only; the server writes the message (for example "Cloning https://github.com/example/api.git into api failed (exit code 128). Private repositories need the owner's GitHub access."), so no command output or runner text reaches the API. The session gets `failure.code = preparation_failed`, is never reported ready, and the reconciler then stops the pod and:
+
+- on the first execution, fails the session and deletes its workspace;
+- on a resume, returns the session to `paused` with `resumeBlocked = preparation_failed` and keeps the workspace.
+
+Clone, fetch and GitHub failures are `retryable`; setup and path failures are not. The 30-minute preparation timeout applies to resumes too once the runner registered.
 
 ## Deployment
 
@@ -250,8 +321,7 @@ Each server replica runs the reconciler continuously (leased per session) and, t
 
 ## Other planned parts
 
-- **Environment preparation.** Repositories and refs cloned into `/workspace/<path>` on the first execution and only fetched on resume (never reset or re-cloned over work); `create` and `start` setup steps with completion markers; the owner's Git identity rewritten on every execution; variant values from the environment/MCP variants work, injected into processes only.
-- **GitHub.** GitHub App user-to-server tokens per member (8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern); installation tokens only for dedicated service members; personal access tokens refused. Members link GitHub in the dashboard or with `teamcode github link`. Tokens reach Git and `gh` through a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
+- **GitHub.** The linking flow and token store for GitHub App user-to-server tokens (see [variables and GitHub sources](#variables-and-github-sources)): 8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern, members link in the dashboard or with `teamcode github link`. Preparation already passes the token to Git and `gh` through child-process environments only; for the long-lived agent, the token moves to a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
 - **Transcript.** Normalized events (`message.user`, `message.agent`, `tool.call`, `tool.result`, `turn`, `status`, `error`) with per-session sequence numbers, bounded sizes, secret masking, no thinking blocks; cursor pagination in both directions; per-session SSE with `Last-Event-ID`; a caller-wide SSE feed of notices for orchestrators; webhooks later.
 - **Messages.** `POST .../messages` with `Idempotency-Key` or `clientMessageId`; acknowledgement levels `queued`, `delivered`, `consumed`, `cancelled`, `rejected`; queue and wake by default (`wake: false` per message, `wakeOnMessage` per profile); `expectedLastEventSeq` against stale views; at most 100 pending messages.
 - **Attach.** `teamcode cloud attach`: structured attach over the shared event stream and message routes, with an attachment lease; it may come after the other CLI commands if it proves more complex. A PTY attach is a possible later addition.
@@ -261,7 +331,7 @@ Each server replica runs the reconciler continuously (leased per session) and, t
 ## CLI
 
 ```sh
-teamcode cloud create --name TEXT --profile ID [--label K=V]... [--image REF] [--model M] [--effort E] [--idle-minutes N] [--member MEMBER_ID] [--idempotency-key KEY] [--json]
+teamcode cloud create --name TEXT --profile ID [--label K=V]... [--image REF] [--repo [PATH=]URL[#REF]]... [--branch NAME] [--workdir PATH] [--model M] [--effort E] [--idle-minutes N] [--member MEMBER_ID] [--idempotency-key KEY] [--json]
 teamcode cloud list [--all|--member ID] [--state STATE]... [--label K=V]... [--json]
 teamcode cloud show SESSION [--executions] [--json]
 teamcode cloud pause SESSION [--force] [--member ID]
@@ -270,7 +340,7 @@ teamcode cloud delete SESSION --yes [--member ID]
 teamcode cloud runner            # hidden; pod entrypoint only
 ```
 
-`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
+`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `--repo` (repeatable) replaces the profile's repositories, the path defaulting to the repository name; `--branch` creates that local branch in each of them. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
 
 ## Pull request sequence
 
@@ -278,7 +348,8 @@ teamcode cloud runner            # hidden; pod entrypoint only
 | --- | --- | --- |
 | 1 | Contract; domain, persistence, reconciler, deletion proof and GC over `ClusterPort`; management API and client; settings; audit columns | Not advertised by the server |
 | 2 (stacked on 1) | Kubernetes adapter, runner routes and skeleton, server wiring and workers, CLI commands, opt-in `kind` smoke | `cloud.sessions.v1` |
-| 3 | Environment preparation and GitHub | `cloud.environment.v1` |
+| 3 | Environment preparation (image contract, recipe, repositories, Git identity, setup, progress and failures), variable and GitHub interfaces | `cloud.environment.v1` |
+| 3b | GitHub App linking, encrypted user-token store and refresh; variants source wired once the variants work is merged | - |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
 | 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
 | 6 | Transfer and its settings | `cloud.transfer.v1` |
@@ -292,6 +363,10 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudRoutesTest` (runner): only the current pod's projected token is accepted; member credentials, another namespace and unbound tokens get `401`, another epoch `409`; reviews are cached.
 - `KubernetesClusterPortTest` (Ktor mock engine): claim, volume, storage-class and pod parsing; idempotent create and delete; the pod manifest (bare, non-root, no API token, projected token, resources, pull secrets); `TokenReview` parsing and refusals; label-selected paging; error bodies never surfaced.
 - `CloudRunnerTest`: the runner skeleton registers with backoff, checkpoints once when paused, exits when fenced or deleted, and stops on `401`.
+- `CloudSessionPersistenceTest` (environment): the recipe is stored in the immutable profile version and resolved onto the session with its overrides; missing required variables refuse the environment and fail the first execution with the names only, freeing the workspace; the owner's variables and Git identity reach the runner and no value is stored with the session; a failed preparation is never reported ready; a failed setup command on a resume returns the session to `paused` with `resumeBlocked` and keeps the workspace. Removing the reconciler's preparation check makes it fail.
+- `CloudRoutesTest` (environment): `cloud.environment.v1`; overrides on creation; credentials in a clone URL refused; only the registered runner reads its environment, with `no-store`; progress phases; unknown phases and step indexes refused; a reported failure blocks readiness.
+- `CloudEnvironmentRulesTest`: URL, path, ref, setup and variable validation, merge, Git identity, server-written messages, redacted diagnostics.
+- `CloudPreparationTest` and `CloudPreparationProcessTest` (real `/bin/sh` and `git` against a local repository): clone into staging, checkout, branch and move into place; fetch only on a second preparation, with uncommitted work intact; `create` steps once and `start` steps every time; values masked in the log; the token only in child environments and a github.com-scoped helper; failures reported as fields; heartbeats continue during preparation and report ready only after it.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 
 Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.

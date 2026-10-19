@@ -53,6 +53,7 @@ class CloudSessionPersistenceTest {
                 garbageCollection(ra, connected)
                 retentionExpiryAndLimits(ra, rb, admin, colleague, profile)
                 failureModesAndEarlyCheckpoint(ra, rb, admin, profile)
+                environmentPreparation(ra, rb, admin, colleague, connected)
             } }
         }
     }
@@ -352,6 +353,82 @@ class CloudSessionPersistenceTest {
         assertEquals(1, ra.garbage(narrowed).deletedPods, "Garbage collection still covers namespaces that hold sessions")
         ra.admin.saveCluster(admin, current.id, narrowed.version, input.copy(allowedNamespaces = current.allowedNamespaces))
         drain(ra) { listOf(early, orphaned).all { ra.store.find(team, it.id)!!.workspace.deletion == DeletionState.PROVEN } }
+    }
+
+    /**
+     * The recipe is versioned with the profile and resolved onto the session; the owner's variables are resolved on
+     * every execution; a failed preparation fails a first execution (workspace deleted) and blocks a resume
+     * (workspace kept), and is never reported ready.
+     */
+    private suspend fun environmentPreparation(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, connected: CloudCluster) {
+        val team = admin.teamId
+        ra.admin.saveSettings(admin, CloudSettings())
+        val assigned = mutableMapOf<String, String>()
+        val runner = RunnerChannelUseCase(ra.store, variables = { _, member -> CloudVariables(if (member == colleague.member.id) assigned.toMap() else emptyMap()) })
+        val recipe = CloudEnvironmentSpec(listOf(CloudRepository("https://github.com/example/api.git", "api", "main")), "api",
+            CloudSetup(listOf("npm ci"), listOf("npm run db:migrate")), listOf("NPM_TOKEN"), gitEmailDomain = "example.com")
+        val spec = CloudProfileSpec(connected.id, "teamcode", "registry.example/toolchain:2026-10", environment = recipe)
+        failure("invalid_environment") { ra.admin.saveProfile(admin, null, 0, "unsafe", spec.copy(environment = recipe.copy(workingDirectory = "../etc")), emptySet()) }
+        val profile = ra.admin.saveProfile(admin, null, 0, "prepared", spec, setOf(colleague.member.id))
+        assertEquals(recipe, rb.store.profileVersion(team, profile.id, 1)!!.environment, "The recipe is part of the immutable profile version")
+        suspend fun create(name: String) = (ra.sessions.create(colleague, null, CloudSessionDraft(name, profile.id, null, null, null, emptyMap(), null,
+            CloudEnvironmentOverride(listOf(CloudRepository("https://github.com/example/api.git", "api", "release", "task-$name")))), null) as CloudCreateOutcome.Created).session
+        suspend fun registered(id: String, epoch: Int) {
+            val pod = CloudSessionService.podName(id, epoch)
+            drain(ra) { pod in cluster(ra).podNames() }
+            cluster(ra).start(pod); pass(ra)
+            rb.runner.register(team, id, epoch, pod)
+        }
+
+        // Missing required variables: the environment is refused and the first execution fails, freeing the workspace.
+        val missing = create("missing")
+        assertEquals("task-missing", rb.store.find(team, missing.id)!!.environment.repositories.single().branch, "The resolved recipe is stored on the session")
+        assertEquals(recipe.setup, rb.store.find(team, missing.id)!!.environment.setup)
+        registered(missing.id, 1)
+        failure(CloudEnvironmentRules.PREPARATION_FAILED) { runner.environment(team, missing.id, 1) }
+        rb.runner.heartbeat(team, missing.id, 1, ready = true)
+        assertEquals(PREPARING, ra.store.find(team, missing.id)!!.state, "A failed preparation is never reported ready")
+        pass(ra)
+        val failed = ra.store.find(team, missing.id)!!
+        assertEquals(FAILED, failed.state); assertEquals(CloudEnvironmentRules.PREPARATION_FAILED, failed.failure?.code)
+        assertTrue(failed.failure!!.message.contains("NPM_TOKEN"), "Names, never values, explain the failure")
+        drain(ra) { ra.store.find(team, missing.id)!!.workspace.deletion == DeletionState.PROVEN }
+
+        // Assigned: the runner receives the owner's values and Git identity, reports progress, then ready.
+        assigned["NPM_TOKEN"] = "npm_synthetic_value"
+        val prepared = create("ok")
+        registered(prepared.id, 1)
+        val environment = runner.environment(team, prepared.id, 1)
+        assertEquals(mapOf("NPM_TOKEN" to "npm_synthetic_value"), environment.variables.values)
+        assertEquals(GitIdentity("cloud-colleague", "cloud-colleague@example.com"), environment.git)
+        runner.progress(team, prepared.id, 1, "cloning_repositories", null)
+        assertEquals("cloning_repositories", rb.store.find(team, prepared.id)!!.phase)
+        assertFalse(ra.database.query { CloudSessions.selectAll().where { CloudSessions.id eq prepared.id }.single()[CloudSessions.environment] }!!.contains("npm_synthetic_value"),
+            "No variable value is stored with the session")
+        rb.runner.heartbeat(team, prepared.id, 1, ready = true)
+        assertEquals(READY, ra.store.find(team, prepared.id)!!.state)
+        failure("not_preparing") { runner.environment(team, prepared.id, 1) }
+
+        // A resume whose preparation fails is blocked back to paused; the workspace and its work are kept.
+        ra.sessions.pause(colleague, null, prepared.id, false)
+        pass(ra)
+        rb.runner.checkpoint(team, prepared.id, 1, completed = true)
+        drain(ra) { ra.store.find(team, prepared.id)!!.state == PAUSED }
+        ra.sessions.resume(colleague, null, prepared.id)
+        registered(prepared.id, 2)
+        assertEquals(RESUMING, ra.store.find(team, prepared.id)!!.state)
+        runner.environment(team, prepared.id, 2)
+        failure("execution_fenced") { runner.progress(team, prepared.id, 1, "running_setup", null) }
+        runner.progress(team, prepared.id, 2, "running_setup", PreparationFailure(PreparationStep.SETUP_START, 0, 1))
+        pass(ra)
+        val blocked = ra.store.find(team, prepared.id)!!
+        assertEquals(PAUSED, blocked.state); assertEquals(CloudEnvironmentRules.PREPARATION_FAILED, blocked.resumeBlocked?.code)
+        assertTrue(blocked.resumeBlocked!!.message.startsWith("Setup command 1 (start) failed (exit code 1)"))
+        assertNull(blocked.failure, "The session itself has not failed")
+        assertNotNull(cluster(ra).claims["teamcode/${blocked.workspace.claimName}"], "A blocked resume keeps the workspace")
+        assertTrue(cluster(ra).podNames().none { it.startsWith("tc-${prepared.id}-") }, "Its pod is stopped")
+        ra.sessions.delete(colleague, null, prepared.id)
+        drain(ra) { ra.store.find(team, prepared.id)!!.workspace.deletion == DeletionState.PROVEN }
     }
 
     private fun cluster(r: Replica) = r.cluster

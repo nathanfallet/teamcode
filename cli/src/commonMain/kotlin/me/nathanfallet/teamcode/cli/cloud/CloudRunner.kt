@@ -4,7 +4,10 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.cli.platform.environment
@@ -21,9 +24,9 @@ internal interface RunnerCalls {
 }
 
 /**
- * The runner skeleton: register, report ready, heartbeat every 15 s, and checkpoint when a pause is requested.
- * It starts no agent yet (the agent, its loopback proxy and transcript come with later releases), so there is
- * nothing to drain and the checkpoint is immediately complete.
+ * The runner: register, prepare the environment while heartbeating every 15 s, report ready once prepared, and
+ * checkpoint when a pause is requested. It starts no agent yet (the agent, its loopback proxy and transcript come
+ * with later releases), so there is nothing to drain and the checkpoint is immediately complete.
  *
  * `409 execution_fenced` means this execution is fenced: stop and exit without checkpointing; any other `409` is
  * retried. A `401` means the pod's token is not accepted. Network failures are retried; the server marks the execution lost after 90 s without heartbeats.
@@ -33,6 +36,12 @@ internal class RunnerLoop(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val log: (String) -> Unit = {},
     private val maxIterations: Int = Int.MAX_VALUE,
+    /**
+     * Prepares the environment after registration, concurrently with the heartbeats (a clone or a dependency
+     * install can outlast the 90-second heartbeat deadline). The runner reports ready only once it returns true;
+     * after a failure it keeps heartbeating unready until the server stops the pod.
+     */
+    private val prepare: suspend () -> Boolean = { true },
 ) {
     private sealed interface Outcome {
         data class Done(val instruction: RunnerInstructionView) : Outcome
@@ -43,27 +52,41 @@ internal class RunnerLoop(
     }
 
     /** Returns the process exit code. */
-    suspend fun run(): Int {
+    suspend fun run(): Int = coroutineScope {
         var registered: RunnerInstructionView? = null
         while (registered == null) {
             when (val outcome = attempt { calls.register() }) {
                 is Outcome.Done -> registered = outcome.instruction
-                Outcome.Fenced -> return EXIT_FENCED_OR_DONE
+                Outcome.Fenced -> return@coroutineScope EXIT_FENCED_OR_DONE
                 Outcome.Conflict -> sleep(HEARTBEAT_MILLIS)
             }
         }
         log("Registered for epoch ${registered.epoch}.")
+        var prepared = false
+        val preparation = launch {
+            prepared = try { prepare() }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { log("The environment could not be prepared."); false }
+            if (prepared) log("Environment prepared.")
+        }
+        try { heartbeats { prepared } } finally { preparation.cancel() }
+    }
+
+    private suspend fun heartbeats(prepared: () -> Boolean): Int {
         var checkpointed = false
         var iterations = 0
         while (iterations++ < maxIterations) {
-            val instruction = when (val outcome = attempt { calls.heartbeat(ready = true) }) {
+            yield() // Let the preparation progress between heartbeats.
+            val ready = prepared()
+            val instruction = when (val outcome = attempt { calls.heartbeat(ready = ready) }) {
                 is Outcome.Done -> outcome.instruction
                 Outcome.Fenced -> return EXIT_FENCED_OR_DONE
                 Outcome.Conflict -> null
             }
             when (instruction?.desiredState) {
                 "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
-                "paused" -> if (!checkpointed) when (attempt { calls.checkpoint(completed = true) }) {
+                // Nothing to checkpoint before the environment is ready: the server stops a resume it cancels.
+                "paused" -> if (!checkpointed && ready) when (attempt { calls.checkpoint(completed = true) }) {
                     is Outcome.Done -> { checkpointed = true; log("Checkpoint complete; waiting for the pod to stop.") }
                     Outcome.Fenced -> return EXIT_FENCED_OR_DONE
                     Outcome.Conflict -> Unit // The pause may have been cancelled; the next heartbeat tells.
@@ -122,7 +145,15 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun heartbeat(ready: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready))
                 override suspend fun checkpoint(completed: Boolean) = client.runnerCheckpoint(RunnerCheckpointRequest(team, session, epoch, completed))
             }
-            try { RunnerLoop(calls, log = { echo(it, err = true) }).run() }
+            val preparation = object : PreparationCalls {
+                override suspend fun environment() = client.runnerEnvironment(RunnerEnvironmentRequest(team, session, epoch))
+                override suspend fun progress(phase: String, failure: RunnerPreparationFailureView?) =
+                    client.runnerPreparation(RunnerPreparationRequest(team, session, epoch, phase, failure))
+            }
+            val log: (String) -> Unit = { echo(it, err = true) }
+            val workspace = EnvironmentPreparation.WORKSPACE
+            val commands = ShellCommandRunner(EnvironmentPreparation.logFile(workspace, epoch))
+            try { RunnerLoop(calls, log = log, prepare = { EnvironmentPreparation(preparation, commands, workspace, log = log).run() }).run() }
             catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
         }
         if (code != 0) SystemExit.exit(code)
