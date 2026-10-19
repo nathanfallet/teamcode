@@ -52,6 +52,7 @@ class CloudSessionPersistenceTest {
                 deletionIsProvenAndRetainedVolumesAlert(ra, rb, admin, colleague, profile, connected)
                 garbageCollection(ra, connected)
                 retentionExpiryAndLimits(ra, rb, admin, colleague, profile)
+                failureModesAndEarlyCheckpoint(ra, rb, admin, profile)
             } }
         }
     }
@@ -262,7 +263,7 @@ class CloudSessionPersistenceTest {
 
     private suspend fun retentionExpiryAndLimits(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile) {
         ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 1, maxRunningSessionsPerMember = 2, maxRetainedSessionsPerMember = 2))
-        val lost = ra.store.list(admin.teamId, CloudSessionQuery(owner = colleague.member.id, states = setOf(PAUSED)), null).sessions.single()
+        val lost = ra.store.list(admin.teamId, CloudSessionQuery(owner = colleague.member.id, states = setOf(PAUSED))).sessions.single()
         // Settings apply to sessions paused afterwards; expire this one explicitly.
         ra.database.query { CloudSessions.update({ CloudSessions.id eq lost.id }) { it[expiresAt] = 1; it[reconcileAfter] = 0 } }
         drain(ra) { ra.store.find(admin.teamId, lost.id)!!.workspace.deletion == DeletionState.PROVEN }
@@ -274,6 +275,83 @@ class CloudSessionPersistenceTest {
         val next = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 50, beforeId = page.nextBeforeId))
         assertTrue(next.sessions.none { it.id in page.sessions.map(CloudSession::id) })
         assertEquals(8, page.sessions.size + next.sessions.size)
+    }
+
+    private suspend fun failureModesAndEarlyCheckpoint(ra: Replica, rb: Replica, admin: Principal, profile: CloudProfile) {
+        val team = admin.teamId
+        suspend fun create(name: String) = (ra.sessions.create(admin, null, CloudSessionDraft(name, profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        suspend fun ageExecution(id: String) = ra.database.query { CloudExecutions.update({ CloudExecutions.sessionId eq id }) { it[createdAt] = 1 } }
+        suspend fun ready(id: String): String {
+            pass(ra); pass(ra)
+            val pod = CloudSessionService.podName(id, 1)
+            cluster(ra).start(pod); pass(ra)
+            ra.runner.register(team, id, 1, pod)
+            rb.runner.heartbeat(team, id, 1, ready = true)
+            assertEquals(READY, ra.store.find(team, id)!!.state)
+            return pod
+        }
+
+        // A pull error is retried by the kubelet: the session keeps starting until the grace period is over.
+        val pulling = create("Pulling")
+        pass(ra); pass(ra)
+        cluster(ra).fail(CloudSessionService.podName(pulling.id, 1), "ErrImagePull")
+        pass(ra)
+        assertEquals(CREATING, ra.store.find(team, pulling.id)!!.state, "A transient pull error does not fail the session")
+        ageExecution(pulling.id)
+        pass(ra)
+        assertEquals("image_unavailable", ra.store.find(team, pulling.id)!!.failure?.code)
+        drain(ra) { ra.store.find(team, pulling.id)!!.workspace.deletion == DeletionState.PROVEN }
+        assertEquals(FAILED, ra.store.find(team, pulling.id)!!.state)
+        // Deleting a failed session whose workspace is already gone still terminates it.
+        ra.sessions.delete(admin, null, pulling.id)
+        drain(ra) { ra.store.find(team, pulling.id)!!.state == TERMINATED }
+        assertEquals(DeletionState.PROVEN, ra.store.find(team, pulling.id)!!.workspace.deletion)
+
+        // The runner may checkpoint as soon as its heartbeat reports the pause, before the reconciler moves to pausing.
+        val early = create("Early checkpoint")
+        ready(early.id)
+        rb.sessions.pause(admin, null, early.id, false)
+        assertEquals(DesiredState.PAUSED, ra.runner.heartbeat(team, early.id, 1, ready = true).desiredState)
+        ra.runner.checkpoint(team, early.id, 1, completed = true)
+        assertEquals(PAUSING, ra.store.find(team, early.id)!!.state)
+        drain(ra) { ra.store.find(team, early.id)!!.state == PAUSED }
+        assertEquals(WorkspaceResume.CONSISTENT, ra.store.find(team, early.id)!!.resumeWorkspace)
+        ra.sessions.delete(admin, null, early.id)
+
+        // A running session without its execution row pauses crash-consistent instead of an illegal ready -> failed.
+        val orphaned = create("No execution")
+        ready(orphaned.id)
+        ra.database.query { CloudExecutions.deleteWhere { sessionId eq orphaned.id } }
+        drain(ra) { ra.store.find(team, orphaned.id)!!.state == PAUSED }
+        assertTrue(cluster(ra).podNames().none { it.startsWith("tc-${orphaned.id}-") }, "Its pod is removed first")
+        val paused = ra.store.find(team, orphaned.id)!!
+        assertEquals(PAUSED, paused.state); assertEquals("execution_missing", paused.failure?.code); assertEquals(WorkspaceResume.CRASH_CONSISTENT, paused.resumeWorkspace)
+        ra.sessions.delete(admin, null, orphaned.id)
+
+        // Preparation that never reports ready fails after its timeout and frees the workspace.
+        val preparing = create("Never ready")
+        pass(ra); pass(ra)
+        val pod = CloudSessionService.podName(preparing.id, 1)
+        cluster(ra).start(pod); pass(ra)
+        ra.runner.register(team, preparing.id, 1, pod)
+        ageExecution(preparing.id)
+        pass(ra)
+        assertEquals("prepare_timeout", ra.store.find(team, preparing.id)!!.failure?.code)
+        drain(ra) { ra.store.find(team, preparing.id)!!.workspace.deletion == DeletionState.PROVEN }
+
+        // A namespace removed from the cluster is refused at creation and never used by a pending session.
+        val pending = create("Narrowed")
+        val current = ra.admin.clusters(admin).single()
+        val input = CloudClusterInput(current.name, current.apiUrl, null, null, listOf("elsewhere"), current.maxRunningPods, current.defaultStorageClass)
+        val narrowed = ra.admin.saveCluster(admin, current.id, current.version, input)
+        failure("namespace_not_allowed") { create("Refused") }
+        pass(ra)
+        assertEquals("namespace_not_allowed", ra.store.find(team, pending.id)!!.failure?.code)
+        assertNull(cluster(ra).claims["teamcode/${pending.workspace.claimName}"], "No object is created in a namespace no longer allowed")
+        cluster(ra).plantOrphans(current.id, "teamcode")
+        assertEquals(1, ra.garbage(narrowed).deletedPods, "Garbage collection still covers namespaces that hold sessions")
+        ra.admin.saveCluster(admin, current.id, narrowed.version, input.copy(allowedNamespaces = current.allowedNamespaces))
+        drain(ra) { listOf(early, orphaned).all { ra.store.find(team, it.id)!!.workspace.deletion == DeletionState.PROVEN } }
     }
 
     private fun cluster(r: Replica) = r.cluster

@@ -48,7 +48,7 @@ interface CloudSessionStore {
      */
     suspend fun insert(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int): CloudCreateOutcome
     suspend fun find(teamId: String, id: String): CloudSession?
-    suspend fun list(teamId: String, query: CloudSessionQuery, viewer: String?): CloudSessionPage
+    suspend fun list(teamId: String, query: CloudSessionQuery): CloudSessionPage
     suspend fun executions(teamId: String, sessionId: String): List<CloudExecution>
     suspend fun execution(sessionId: String, epoch: Int): CloudExecution?
 
@@ -73,6 +73,8 @@ interface CloudSessionStore {
 
     /** Sessions (live or not) known for a cluster, for garbage collection of orphaned objects. */
     suspend fun liveObjects(clusterId: String): LiveObjects
+    /** Namespaces of the cluster's sessions whose deletion is not proven, including ones no longer allowed. */
+    suspend fun namespaces(clusterId: String): Set<String>
     suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int)
 }
 /** Workspace claims not yet deleted and current-epoch pods. Anything else labelled by TeamCode for the cluster is orphaned. */
@@ -91,7 +93,7 @@ data class PodRequest(
 enum class ClaimPhase { PENDING, BOUND, LOST }
 data class ClaimObservation(val phase: ClaimPhase, val volumeName: String?, val storageClass: String?)
 data class VolumeObservation(val name: String, val phase: String, val reclaimPolicy: String, val volumeHandle: String?, val claimNamespace: String?, val claimName: String?, val managed: Boolean)
-data class StorageClassObservation(val name: String, val reclaimPolicy: String, val volumeBindingMode: String?)
+data class StorageClassObservation(val name: String, val reclaimPolicy: String)
 enum class PodPhase { PENDING, RUNNING, SUCCEEDED, FAILED, UNKNOWN }
 data class PodObservation(
     val name: String,
@@ -118,10 +120,13 @@ interface ClusterPort {
     suspend fun volume(clusterId: String, name: String): VolumeObservation?
     /** Released or failed volumes whose claim was a TeamCode workspace. */
     suspend fun orphanedVolumes(clusterId: String): List<VolumeObservation>
-    suspend fun deleteVolume(clusterId: String, name: String)
     suspend fun createPod(clusterId: String, request: PodRequest)
     suspend fun pod(clusterId: String, namespace: String, name: String): PodObservation?
     suspend fun deletePod(clusterId: String, namespace: String, name: String, force: Boolean)
+    /**
+     * Pods and claims in [namespace] labelled both `app.kubernetes.io/managed-by=teamcode` and with this cluster's
+     * id, so objects of another TeamCode cluster record (or another server) sharing the namespace are never listed.
+     */
     suspend fun managed(clusterId: String, namespace: String): ManagedObjects
     /** Verifies a projected service-account token through the cluster's TokenReview API. */
     suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity?

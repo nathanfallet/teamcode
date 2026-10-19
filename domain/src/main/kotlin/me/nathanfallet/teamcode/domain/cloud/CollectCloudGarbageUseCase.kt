@@ -11,7 +11,9 @@ data class GarbageReport(val deletedPods: Int, val deletedClaims: Int, val orpha
  */
 class CollectCloudGarbageUseCase(private val store: CloudSessionStore, private val cluster: ClusterPort) {
     suspend operator fun invoke(cloudCluster: CloudCluster): GarbageReport {
-        val observed = cloudCluster.allowedNamespaces.associateWith { cluster.managed(cloudCluster.id, it) }
+        // Namespaces removed from the cluster's allowed list still hold objects until their sessions are cleaned up.
+        val namespaces = cloudCluster.allowedNamespaces.toSet() + store.namespaces(cloudCluster.id)
+        val observed = namespaces.associateWith { cluster.managed(cloudCluster.id, it) }
         val volumes = cluster.orphanedVolumes(cloudCluster.id)
         val live = store.liveObjects(cloudCluster.id)
         var pods = 0

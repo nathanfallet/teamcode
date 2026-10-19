@@ -7,8 +7,6 @@ enum class CloudSessionState(val wire: String) {
     CREATING("creating"), PREPARING("preparing"), READY("ready"), ACTIVE("active"), PAUSING("pausing"), PAUSED("paused"),
     RESUMING("resuming"), TRANSFERRING("transferring"), TERMINATED("terminated"), FAILED("failed");
 
-    /** States in which an execution may hold a pod and count against running capacity. */
-    val holdsPod get() = this in setOf(PREPARING, READY, ACTIVE, PAUSING)
     val terminal get() = this == TERMINATED || this == FAILED
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }
@@ -29,8 +27,6 @@ enum class ExecutionState(val wire: String) {
     PENDING("pending"),
     /** The runner registered for this epoch. */
     RUNNING("running"),
-    /** Deletion of the pod was requested and is being confirmed. */
-    STOPPING("stopping"),
     ENDED("ended");
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }

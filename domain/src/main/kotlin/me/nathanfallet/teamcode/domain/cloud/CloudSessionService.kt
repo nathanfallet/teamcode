@@ -33,6 +33,7 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
                 throw TeamFailure("image_not_allowed", 403, "This image does not match the profile's allowed image overrides.")
         } ?: spec.image
         val cluster = store.cluster(principal.teamId, spec.clusterId) ?: throw TeamFailure("cluster_unavailable", 409, "The profile's cluster is no longer configured.")
+        if (spec.namespace !in cluster.allowedNamespaces) throw TeamFailure("namespace_not_allowed", 409, "The profile's namespace is no longer allowed on its cluster.")
         val settings = store.settings(principal.teamId)
         val now = store.now()
         val id = UUID.randomUUID().toString()
@@ -59,7 +60,7 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
         val owner = query.owner ?: principal.member.id
         if (owner != principal.member.id) principal.requireAdmin()
         store.revalidate(principal)
-        return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }), null)
+        return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }))
     }
 
     suspend fun get(principal: Principal, id: String): CloudSession {

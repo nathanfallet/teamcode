@@ -15,16 +15,28 @@ class ReconcileCloudSessionsUseCase(
     private val store: CloudSessionStore,
     private val cluster: ClusterPort,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(store),
+    /** Called for every failed step, so the server can log and count it; the session is retried either way. */
+    private val onError: (sessionId: String, error: Exception) -> Unit = { _, _ -> },
 ) {
-    /** Reconciles up to [limit] due sessions; returns how many were claimed. */
+    /**
+     * Reconciles up to [limit] due sessions; returns how many were claimed. All leases are taken together, so
+     * sessions not started within half a lease are handed back due immediately rather than worked on with a
+     * lease about to expire.
+     */
     suspend operator fun invoke(owner: String = UUID.randomUUID().toString(), limit: Int = 8): Int {
         val claimed = store.claimDue(owner, LEASE_MILLIS, limit)
+        val claimedAt = store.now()
         for (session in claimed) {
             var next: Long? = null
-            try { next = reconcile(session, owner) }
+            try {
+                val now = store.now()
+                next = if (now - claimedAt > LEASE_MILLIS / 2) now else reconcile(session, owner)
+            }
             catch (error: CancellationException) { throw error }
-            catch (_: Exception) {
-                // Cluster or database unavailable: retry later without exposing the raw failure.
+            catch (error: Exception) {
+                // Cluster or database unavailable, or a bug: report it and retry later. The raw failure never
+                // reaches the session row or its API view.
+                onError(session.id, error)
                 next = store.now() + RETRY_MILLIS
             } finally {
                 withContext(NonCancellable) { store.release(session.id, owner, next) }
@@ -38,8 +50,9 @@ class ReconcileCloudSessionsUseCase(
         val now = store.now()
         val s = session
         return when {
-            s.state == TERMINATED || (s.state == FAILED && s.workspace.deletion != DeletionState.NONE) -> cleanup(s, owner, now)
+            s.state == TERMINATED -> cleanup(s, owner, now)
             s.desiredState == DesiredState.TERMINATED -> terminate(s, owner, now)
+            s.state == FAILED && s.workspace.deletion != DeletionState.NONE -> cleanup(s, owner, now)
             s.state == FAILED -> if (s.expiresAt != null && s.expiresAt <= now) {
                 commit(s, owner, s.copy(workspace = s.workspace.copy(deletion = DeletionState.PENDING), phase = "cleanup_pending", updatedAt = now)); now
             } else s.expiresAt
@@ -65,6 +78,16 @@ class ReconcileCloudSessionsUseCase(
 
     private suspend fun start(s: CloudSession, owner: String, now: Long): Long? {
         val first = s.state == CREATING
+        // A cluster narrowed after the session was created: never create objects outside its allowed namespaces.
+        val target = store.cluster(s.teamId, s.clusterId)
+        if (target == null || s.namespace !in target.allowedNamespaces) {
+            val problem = CloudProblem("namespace_not_allowed", "The session's cluster or namespace is no longer allowed.")
+            if (first) return fail(s, owner, now, problem)
+            val execution = if (s.currentEpoch > 0) store.execution(s.id, s.currentEpoch) else null
+            if (execution != null && execution.state != ExecutionState.ENDED) return block(s, owner, now, execution, problem)
+            commit(s, owner, pausedCopy(s, now, s.resumeWorkspace).copy(resumeBlocked = problem), "cloud.session.resume_blocked")
+            return now
+        }
         // Workspace: one claim per session, refused when its storage class would retain the provider volume.
         var claim = cluster.claim(s.clusterId, s.namespace, s.workspace.claimName)
         if (claim == null) {
@@ -114,8 +137,10 @@ class ReconcileCloudSessionsUseCase(
             }
             return lost(current, owner, now, execution, "pod_missing")
         }
-        if (pod.reason in IMAGE_FAILURES || pod.phase == PodPhase.FAILED || pod.phase == PodPhase.SUCCEEDED) {
-            val problem = if (pod.reason in IMAGE_FAILURES) CloudProblem("image_unavailable", "The session image could not be pulled (${pod.reason}).", true)
+        // Pulls are retried by the kubelet: a pull error fails the start only once it has lasted past the grace period.
+        val imageFailed = pod.reason in IMAGE_FAILURES || (pod.reason in IMAGE_PULL_RETRIES && now - execution.createdAt > IMAGE_PULL_GRACE_MILLIS)
+        if (imageFailed || pod.phase == PodPhase.FAILED || pod.phase == PodPhase.SUCCEEDED) {
+            val problem = if (imageFailed) CloudProblem("image_unavailable", "The session image could not be pulled (${pod.reason}).", true)
                 else CloudProblem("execution_failed", "The session pod stopped before the runner was ready.", true)
             return if (first) fail(current, owner, now, problem) else block(current, owner, now, execution, problem)
         }
@@ -138,6 +163,8 @@ class ReconcileCloudSessionsUseCase(
         val pod = cluster.pod(s.clusterId, s.namespace, execution.podName)
         if (pod == null || pod.phase == PodPhase.FAILED || pod.phase == PodPhase.SUCCEEDED || now - seen > HEARTBEAT_LOSS_MILLIS)
             return lost(s, owner, now, execution, if (pod == null) "pod_missing" else "heartbeat_lost")
+        if (s.state == PREPARING && now - execution.createdAt > PREPARE_TIMEOUT_MILLIS)
+            return fail(s, owner, now, CloudProblem("prepare_timeout", "The session did not become ready within 30 minutes.", true))
         return now + MONITOR_MILLIS
     }
 
@@ -174,7 +201,10 @@ class ReconcileCloudSessionsUseCase(
             commit(s, owner, s.copy(phase = "stopping_pod", updatedAt = now), updateExecution = execution.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = "deleted"))
             return now
         }
-        commit(s, owner, s.copy(state = TERMINATED, phase = "cleanup_pending", expiresAt = null, workspace = s.workspace.copy(deletion = DeletionState.PENDING), updatedAt = now), "cloud.session.terminated")
+        // A failed session may already be cleaning up, or done: keep its deletion progress.
+        val deletion = if (s.workspace.deletion == DeletionState.NONE) DeletionState.PENDING else s.workspace.deletion
+        commit(s, owner, s.copy(state = TERMINATED, phase = if (deletion == DeletionState.PROVEN) "cleaned" else "cleanup_pending", expiresAt = null,
+            workspace = s.workspace.copy(deletion = deletion), updatedAt = now), "cloud.session.terminated")
         return now
     }
 
@@ -219,8 +249,19 @@ class ReconcileCloudSessionsUseCase(
         return now
     }
 
-    private suspend fun lostWithoutExecution(s: CloudSession, owner: String, now: Long): Long? =
-        fail(s, owner, now, CloudProblem("execution_missing", "The session has no execution record."))
+    /** A running state without its execution row: preparation fails, otherwise the session pauses crash-consistent. */
+    private suspend fun lostWithoutExecution(s: CloudSession, owner: String, now: Long): Long? {
+        val problem = CloudProblem("execution_missing", "The session has no execution record.", true)
+        // Without the row the pod name is unknown: remove any pod of this session before leaving the running states.
+        val pods = cluster.managed(s.clusterId, s.namespace).pods.filter { it.name.startsWith("tc-${s.id}-e") }
+        if (pods.isNotEmpty()) {
+            pods.forEach { cluster.deletePod(s.clusterId, s.namespace, it.name, force = true) }
+            return now + STEP_MILLIS
+        }
+        if (s.state == PREPARING) return fail(s, owner, now, problem)
+        commit(s, owner, pausedCopy(s, now, WorkspaceResume.CRASH_CONSISTENT).copy(failure = problem), "cloud.session.execution_lost")
+        return now
+    }
 
     /** Asynchronous resume failure: back to paused with `resumeBlocked`, never `failed`; the workspace is kept. */
     private suspend fun block(s: CloudSession, owner: String, now: Long, execution: CloudExecution, problem: CloudProblem): Long? {
@@ -276,10 +317,15 @@ class ReconcileCloudSessionsUseCase(
         const val HEARTBEAT_LOSS_MILLIS = 90_000L
         const val PAUSING_DEADLINE_MILLIS = 15 * 60_000L
         const val START_TIMEOUT_MILLIS = 15 * 60_000L
+        const val PREPARE_TIMEOUT_MILLIS = 30 * 60_000L
+        const val IMAGE_PULL_GRACE_MILLIS = 5 * 60_000L
         const val VOLUME_DELETION_TIMEOUT_MILLIS = 60 * 60_000L
         const val BLOCKED_RECHECK_MILLIS = 10 * 60_000L
         const val DAY_MILLIS = 86_400_000L
-        val IMAGE_FAILURES = setOf("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull")
+        /** Pod reasons that no retry can fix. */
+        val IMAGE_FAILURES = setOf("InvalidImageName", "ErrImageNeverPull")
+        /** Pod reasons the kubelet keeps retrying (registry outage, rate limit, missing tag). */
+        val IMAGE_PULL_RETRIES = setOf("ErrImagePull", "ImagePullBackOff")
         fun labels(s: CloudSession) = mapOf(MANAGED_LABEL to "teamcode", SESSION_LABEL to s.id, CLUSTER_LABEL to s.clusterId)
     }
 }

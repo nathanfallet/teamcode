@@ -43,14 +43,19 @@ class RunnerChannelUseCase(private val store: CloudSessionStore, private val tra
         return instruction(session)
     }
 
-    /** Accepted only while pausing; the reconciler then deletes the pod and advertises the checkpoint quality. */
+    /**
+     * Accepted once a pause is requested, including before the reconciler has moved the session to `pausing`
+     * (the runner learns of the pause from its heartbeat and may finish first); the reconciler then deletes the
+     * pod and advertises the checkpoint quality.
+     */
     suspend fun checkpoint(teamId: String, sessionId: String, epoch: Int, completed: Boolean) {
         transition(teamId, sessionId) { current ->
             val execution = live(current, epoch)
-            if (current.state != PAUSING) throw TeamFailure("not_pausing", 409, "A checkpoint is accepted only while the session is pausing.")
+            val pauseRequested = current.desiredState == DesiredState.PAUSED && (current.state == READY || current.state == ACTIVE)
+            if (current.state != PAUSING && !pauseRequested) throw TeamFailure("not_pausing", 409, "A checkpoint is accepted only once a pause is requested.")
             if (execution.checkpoint != null) return@transition null
             val now = store.now()
-            CloudTransition(current.copy(phase = "checkpointing", updatedAt = now),
+            CloudTransition(current.copy(state = PAUSING, pauseRequestedAt = current.pauseRequestedAt ?: now, phase = "checkpointing", updatedAt = now),
                 CloudWrite(updateExecution = execution.copy(checkpoint = if (completed) "completed" else "failed"), reconcileAt = now))
         } ?: throw fenced()
     }
@@ -58,7 +63,7 @@ class RunnerChannelUseCase(private val store: CloudSessionStore, private val tra
     private suspend fun live(session: CloudSession, epoch: Int): CloudExecution {
         if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
         val execution = store.execution(session.id, epoch) ?: throw fenced()
-        if (execution.state == ExecutionState.ENDED || execution.state == ExecutionState.STOPPING) throw fenced()
+        if (execution.state == ExecutionState.ENDED) throw fenced()
         return execution
     }
     private fun instruction(session: CloudSession) = RunnerInstruction(session.desiredState,

@@ -78,7 +78,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
 
     override suspend fun find(teamId: String, id: String): CloudSession? = database.query { readSession(teamId, id) }
 
-    override suspend fun list(teamId: String, query: CloudSessionQuery, viewer: String?): CloudSessionPage = database.query {
+    override suspend fun list(teamId: String, query: CloudSessionQuery): CloudSessionPage = database.query {
         val cursor = query.beforeId?.let { before ->
             CloudSessions.select(CloudSessions.createdAt).where { (CloudSessions.id eq before) and (CloudSessions.teamId eq teamId) }.singleOrNull()?.get(CloudSessions.createdAt)
                 ?: throw TeamFailure("invalid_cursor", 400, "Unknown session cursor.")
@@ -196,6 +196,12 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         LiveObjects(claims, pods)
     }
 
+    override suspend fun namespaces(clusterId: String): Set<String> = database.query {
+        CloudSessions.select(CloudSessions.namespace).withDistinct().where {
+            (CloudSessions.clusterId eq clusterId) and (CloudSessions.deletionState neq DeletionState.PROVEN.wire)
+        }.map { it[CloudSessions.namespace] }.toSet()
+    }
+
     override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = database.query {
         val now = nowMillis()
         CloudClusters.update({ CloudClusters.id eq clusterId }) { it[CloudClusters.orphanedVolumes] = orphanedVolumes; it[lastGarbageCollectionAt] = now }
@@ -203,7 +209,11 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     }
 
     /** Clusters due for garbage collection, for the scheduled worker. */
-    suspend fun clusters(): List<CloudCluster> = database.query { CloudClusters.selectAll().orderBy(CloudClusters.id).limit(100).map(::readCluster) }
+    /** All clusters, in id order, one bounded page after [after] at a time. */
+    suspend fun clusters(after: String? = null, limit: Int = 100): List<CloudCluster> = database.query {
+        CloudClusters.selectAll().apply { if (after != null) where { CloudClusters.id greater after } }
+            .orderBy(CloudClusters.id).limit(limit).map(::readCluster)
+    }
 
     /** Expired idempotency records, in bounded batches. */
     suspend fun maintain() = database.query {

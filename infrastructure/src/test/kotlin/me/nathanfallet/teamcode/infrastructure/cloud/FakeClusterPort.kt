@@ -14,7 +14,7 @@ class FakeClusterPort : ClusterPort {
     data class Pod(val namespace: String, val request: PodRequest, val phase: PodPhase, val terminating: Boolean, val reason: String?, val nodeName: String?)
     data class Volume(val observation: VolumeObservation, val releasedObservations: Int)
 
-    val storageClasses = mutableMapOf("standard" to StorageClassObservation("standard", "Delete", "WaitForFirstConsumer"), "keep" to StorageClassObservation("keep", "Retain", null))
+    val storageClasses = mutableMapOf("standard" to StorageClassObservation("standard", "Delete"), "keep" to StorageClassObservation("keep", "Retain"))
     var defaultStorageClass = "standard"
     val claims = mutableMapOf<String, Claim>()
     val pods = mutableMapOf<String, Pod>()
@@ -60,7 +60,6 @@ class FakeClusterPort : ClusterPort {
     override suspend fun orphanedVolumes(clusterId: String) = op("orphanedVolumes") {
         volumes.values.map { it.observation }.filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
     }
-    override suspend fun deleteVolume(clusterId: String, name: String) = op("deleteVolume") { volumes.remove(name); Unit }
     override suspend fun createPod(clusterId: String, request: PodRequest) = op("createPod") {
         pods.getOrPut(key(request.namespace, request.name)) { Pod(request.namespace, request, PodPhase.PENDING, false, null, null) }
         Unit

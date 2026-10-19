@@ -42,7 +42,7 @@ class CloudRoutesTest {
             return CloudCreateOutcome.Created(created)
         }
         override suspend fun find(teamId: String, id: String) = sessions[id]
-        override suspend fun list(teamId: String, query: CloudSessionQuery, viewer: String?) =
+        override suspend fun list(teamId: String, query: CloudSessionQuery) =
             CloudSessionPage(sessions.values.filter { query.owner == null || it.ownerId == query.owner }.filter { s -> query.labels.all { (k, v) -> s.labels[k] == v } }, null)
         override suspend fun executions(teamId: String, sessionId: String) = emptyList<CloudExecution>()
         override suspend fun execution(sessionId: String, epoch: Int): CloudExecution? = null
@@ -55,6 +55,7 @@ class CloudRoutesTest {
         override suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int) = StartOutcome.Conflict
         override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean) = false
         override suspend fun liveObjects(clusterId: String) = LiveObjects(emptySet(), emptySet())
+        override suspend fun namespaces(clusterId: String) = emptySet<String>()
         override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = Unit
     }
     private class Admin : CloudAdminStore {
@@ -148,13 +149,12 @@ class CloudRoutesTest {
     }
 
     private object FakeCluster : ClusterPort {
-        override suspend fun storageClass(clusterId: String, name: String?) = StorageClassObservation("standard", "Delete", null)
+        override suspend fun storageClass(clusterId: String, name: String?) = StorageClassObservation("standard", "Delete")
         override suspend fun ensureClaim(clusterId: String, request: WorkspaceRequest) = Unit
         override suspend fun claim(clusterId: String, namespace: String, name: String): ClaimObservation? = null
         override suspend fun deleteClaim(clusterId: String, namespace: String, name: String) = Unit
         override suspend fun volume(clusterId: String, name: String): VolumeObservation? = null
         override suspend fun orphanedVolumes(clusterId: String) = emptyList<VolumeObservation>()
-        override suspend fun deleteVolume(clusterId: String, name: String) = Unit
         override suspend fun createPod(clusterId: String, request: PodRequest) = Unit
         override suspend fun pod(clusterId: String, namespace: String, name: String): PodObservation? = null
         override suspend fun deletePod(clusterId: String, namespace: String, name: String, force: Boolean) = Unit

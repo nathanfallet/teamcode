@@ -57,6 +57,21 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
                 (input.serviceAccountToken != null && (input.serviceAccountToken.length !in 16..16_384 || input.serviceAccountToken.any { it.isWhitespace() })) ||
                 (input.caCertificate != null && (input.caCertificate.length > 65_536 || !input.caCertificate.contains("-----BEGIN CERTIFICATE-----"))))
                 throw TeamFailure("invalid_cluster", 400, "Provide a name, an https API URL, a PEM CA bundle, a service-account token, 1–32 namespaces and a pod cap of 1–1000.")
+            if (!allowedApiHost(url)) throw TeamFailure("cluster_host_not_allowed", 400, "The API URL must not point at a link-local or cloud metadata address.")
+        }
+
+        /**
+         * The API URL is trusted administrator input: loopback (a local `kind` cluster) and private addresses (a
+         * private control plane) are allowed. Link-local and unspecified addresses and the cloud metadata host
+         * names are refused, so the server's own instance credentials are never a cluster target.
+         */
+        fun allowedApiHost(url: String): Boolean {
+            val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+            val host = (if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']') else authority.substringBefore(':')).lowercase().trimEnd('.')
+            if (host.isEmpty() || host in setOf("metadata", "metadata.google.internal", "metadata.goog", "0.0.0.0", "::", "0", "instance-data")) return false
+            if (Regex("169\\.254\\.[0-9.]+").matches(host) || (':' in host && listOf("fe8", "fe9", "fea", "feb").any(host::startsWith))) return false
+            if (host.startsWith("::ffff:")) return allowedApiHost("https://" + host.removePrefix("::ffff:"))
+            return true
         }
         fun validate(name: String, spec: CloudProfileSpec, assigned: Set<String>) {
             val image = Regex("[^\\s]{1,512}")
