@@ -42,7 +42,7 @@ class CloudConversationPersistenceTest {
                 coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
                 a.query {
                     val drift = MigrationUtils.statementsRequiredForDatabaseMigration(CloudSettingsTable, CloudSessions, CloudSessionEvents, CloudSessionInputs,
-                        CloudSessionAttachments, CloudAccessPolicies, withLogs = false)
+                        CloudSessionAttachments, CloudAccessPolicies, CloudSessionTranscripts, withLogs = false)
                     assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
                 }
                 val cluster = FakeClusterPort()
@@ -235,6 +235,15 @@ class CloudConversationPersistenceTest {
         rb.agent.acknowledge(team, s.id, 2, redelivered.map { RunnerInputAck(it.id, true, null) })
         failure("execution_fenced") { ra.agent.acknowledge(team, s.id, 1, emptyList()) }
 
+        // A delivery lost on the way to this same execution is offered again once it went unacknowledged.
+        val lost = (ra.conversation.send(colleague, s.id, InputRequest("Lost response", true, null, null, null)) as InputOutcome.Accepted).input
+        assertEquals(lost.id, rb.agent.inputs(team, s.id, 2, 0).single().id)
+        assertEquals(emptyList(), ra.agent.inputs(team, s.id, 2, 0), "A fresh delivery is not repeated")
+        ra.database.query { CloudSessionInputs.update({ CloudSessionInputs.id eq lost.id }) { it[deliveredAt] = 1 } }
+        val again = ra.agent.inputs(team, s.id, 2, 0).single()
+        assertEquals(lost.id to 2, again.id to again.attempts)
+        rb.agent.acknowledge(team, s.id, 2, listOf(RunnerInputAck(lost.id, true, null)))
+
         // Wake on a paused session happens synchronously; wake = false leaves it paused.
         ra.sessions.pause(colleague, null, s.id, true)
         pass(ra); rb.runner.checkpoint(team, s.id, 2, completed = true); pass(ra)
@@ -279,6 +288,10 @@ class CloudConversationPersistenceTest {
         val remaining = ra.conversation.events(colleague, s.id, 0, null, 200)
         assertEquals(4L, remaining.firstSeq, "Expired events are gone and the page says where the transcript starts")
         assertEquals(last, remaining.lastSeq)
+        ra.database.query { CloudSessionEvents.update({ CloudSessionEvents.sessionId eq s.id }) { it[at] = 1 } }
+        rb.conversations.purgeTranscripts(1_000)
+        assertEquals(emptyList(), ra.conversation.events(colleague, s.id, 0, null, 200).events)
+        assertEquals(last, rb.conversations.lastSeq(s.id), "Numbering never restarts after a purge")
     }
 
     private suspend fun makeDue(r: Replica) = r.database.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }

@@ -16,6 +16,8 @@ object CloudConversationRules {
     const val MAX_PAGE = 200
     const val MAX_RUNNER_WAIT_MILLIS = 20_000L
     const val ATTACHMENT_LEASE_MILLIS = 60_000L
+    /** A delivery not acknowledged within this time is offered again (the runner deduplicates by input id). */
+    const val REDELIVERY_MILLIS = 60_000L
     const val TRUNCATION_MARK = "…[truncated]"
     const val MASK = "[REDACTED]"
 
@@ -25,17 +27,19 @@ object CloudConversationRules {
      * names that look secret.
      */
     private val secrets = listOf(
-        Regex("sk-(?:ant-)?[A-Za-z0-9_-]{16,}"),
-        Regex("(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
+        // Prefixed shapes start at a word boundary and contain a digit, so `task-management-…` or `etc_…` stay readable.
+        Regex("(?<![A-Za-z0-9_-])sk-(?:ant-)?(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
+        Regex("(?<![A-Za-z0-9_])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
         Regex("github_pat_[A-Za-z0-9_]{20,}"),
-        Regex("tc(?:ex|sk|dv|ss)?_[A-Za-z0-9_-]{16,}"),
+        Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?:AKIA|ASIA)[A-Z0-9]{16}"),
         Regex("xox[abprs]-[A-Za-z0-9-]{10,}"),
         Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
         Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     )
     private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+[A-Za-z0-9._~+/=-]{12,}")
-    private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)\\s*([=:])\\s*(\"[^\"]*\"|'[^']*'|[^\\s\"']+)")
+    /** A name ending in a secret word (`GITHUB_TOKEN`, `"api_key"`, not `max_tokens`) assigned a value of 8 characters or more. */
+    private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIALS?))(\"?\\s*[=:]\\s*)(\"[^\"]{8,}\"|'[^']{8,}'|[^\\s\"',;]{8,})")
     private val urlCredentials = Regex("(?i)(\\b[a-z][a-z0-9+.-]*://)[^\\s/@:]+:[^\\s/@]+@")
 
     fun mask(text: String): String {

@@ -32,6 +32,8 @@ interface AgentAdapter {
     /** Lines interrupting the current turn, or empty when no turn runs. */
     fun interrupt(): List<String>
     fun parse(line: String): AgentOutput
+    /** Events the adapter produced outside [parse] (for example a turn started by [message]); emptied by the call. */
+    fun takeEvents(): List<AgentEvent> = emptyList()
 }
 
 private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -69,8 +71,12 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
     })
     override fun startup(resume: String?, workingDirectory: String) = emptyList<String>()
 
+    private val started = mutableListOf<AgentEvent>()
+    override fun takeEvents(): List<AgentEvent> = started.toList().also { started.clear() }
+
     override fun message(text: String): List<String> {
-        pending++
+        // Claude Code reports no turn start: the first message of an idle agent starts one.
+        if (pending++ == 0) started += turn("started")
         return listOf(buildJsonObject {
             put("type", "user")
             putJsonObject("message") { put("role", "user"); putJsonArray("content") { addJsonObject { put("type", "text"); put("text", text) } } }

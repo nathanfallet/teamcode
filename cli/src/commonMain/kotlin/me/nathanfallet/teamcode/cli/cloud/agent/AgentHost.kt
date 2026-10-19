@@ -59,7 +59,12 @@ internal class AgentHost(
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) : RunnerAgent {
     override var fenced = false; private set
+    /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
     private val lock = Mutex()
+    /** Serializes writes to the agent's stdin (fair, so lines keep their order). */
+    private val writeLock = Mutex()
+    /** Acknowledgements already sent, by input id: a redelivered input is acknowledged again, never written twice. */
+    private val handled = LinkedHashMap<String, RunnerInputAckView>()
     private val buffer = ArrayDeque<RunnerEventView>()
     private var sequence = 0L
     private var settings: AgentSettings? = null
@@ -90,7 +95,7 @@ internal class AgentHost(
         var clean = true
         if (running()) {
             clean = false
-            lock.withLock { adapter?.interrupt()?.let { writeAll(it) } }
+            lock.withLock { process?.let { child -> adapter?.interrupt()?.let { child to it } } }?.let { (child, lines) -> write(child, lines) }
             val until = now() + INTERRUPT_GRACE_MILLIS
             while (now() < until && running()) sleep(250)
         }
@@ -116,32 +121,47 @@ internal class AgentHost(
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { if (handle(error)) return; sleep(wait); wait = (wait * 2).coerceAtMost(15_000); continue }
             if (inputs.isEmpty()) continue
-            val acks = inputs.map { deliver(it) }
-            retrying { channel.acknowledge(acks) }
+            val acks = inputs.mapNotNull { input -> handled[input.id] ?: deliver(input)?.also { remember(it) } }
+            if (acks.isEmpty()) continue
+            try { retrying { channel.acknowledge(acks) } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { return } // Fenced or refused: [retrying] already recorded it.
         }
     }
 
-    private suspend fun deliver(input: RunnerInputView): RunnerInputAckView = lock.withLock {
-        if (stopping) return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_stopping")
+    private fun remember(ack: RunnerInputAckView) {
+        handled[ack.id] = ack
+        if (handled.size > MAX_HANDLED) handled.remove(handled.keys.first())
+    }
+
+    /** Hands one input to the agent; null leaves it unacknowledged, so the server offers it again later. */
+    private suspend fun deliver(input: RunnerInputView): RunnerInputAckView? {
+        val consumed = RunnerInputAckView(input.id, CloudInputStatuses.CONSUMED)
+        val unavailable = RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
         if (input.kind == "interrupt") {
-            val lines = adapter?.interrupt().orEmpty()
-            if (lines.isEmpty()) return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "no_turn")
-            return@withLock if (writeAll(lines)) RunnerInputAckView(input.id, CloudInputStatuses.CONSUMED) else RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
+            val (child, lines) = lock.withLock { process?.let { it to adapter?.interrupt().orEmpty() } } ?: (null to emptyList())
+            if (child == null || lines.isEmpty()) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "no_turn")
+            return if (write(child, lines)) consumed else unavailable
         }
-        val text = input.text ?: return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
-        val active = try { ensureStarted() } catch (error: CancellationException) { throw error } catch (error: Exception) {
-            log("The agent could not start (${error::class.simpleName}).")
-            enqueue(CloudEventTypes.ERROR, buildJsonObject { put("code", "agent_start_failed"); put("message", "The agent process could not start.") })
-            null
-        } ?: return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
-        val lines = active.message(text)
-        if (writeAll(lines)) RunnerInputAckView(input.id, CloudInputStatuses.CONSUMED) else RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
+        val text = input.text ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+        val (child, lines) = lock.withLock {
+            // Stopping for a pause: the message stays queued on the server for the next execution, never lost.
+            if (stopping) return null
+            val active = try { ensureStarted() } catch (error: CancellationException) { throw error } catch (error: Exception) {
+                log("The agent could not start (${error::class.simpleName}).")
+                enqueue(CloudEventTypes.ERROR, buildJsonObject { put("code", "agent_start_failed"); put("message", "The agent process could not start.") })
+                null
+            } ?: return unavailable
+            val lines = active.message(text)
+            active.takeEvents().forEach { enqueue(it.type, it.data) }
+            process to lines
+        }
+        if (child == null) return unavailable
+        return if (write(child, lines)) consumed else unavailable
     }
 
-    private suspend fun writeAll(lines: List<String>): Boolean {
-        val target = process ?: return false
-        for (line in lines) if (!target.writeLine(line)) return false
-        return true
+    private suspend fun write(child: AgentProcess, lines: List<String>): Boolean = writeLock.withLock {
+        lines.all { child.writeLine(it) }
     }
 
     /** Starts the agent process if none runs; resumes the stored conversation when it belongs to the same agent. */
@@ -160,7 +180,8 @@ internal class AgentHost(
         val command = next.command(resume)
         val child = start(command, AGENT_ENVIRONMENT, workingDirectory)
         process = child; adapter = next; resumed = resume
-        for (line in next.startup(resume, workingDirectory)) child.writeLine(line)
+        val startup = next.startup(resume, workingDirectory)
+        writeLock.withLock { for (line in startup) child.writeLine(line) }
         reader = scope.launch { readLoop(child, next) }
         log("Started the ${config.kind} agent" + if (resume != null) " (resuming its conversation)." else ".")
         return next
@@ -170,11 +191,13 @@ internal class AgentHost(
         var known = active.conversationId
         while (true) {
             val line = child.readLine() ?: break
-            lock.withLock {
+            val replies = lock.withLock {
                 val result = active.parse(line)
                 result.events.forEach { enqueue(it.type, it.data) }
-                result.replies.forEach { child.writeLine(it) }
+                result.replies
             }
+            // Written by another coroutine: this loop must keep reading even while stdin is full.
+            if (replies.isNotEmpty()) scope.launch { write(child, replies) }
             val id = active.conversationId
             if (id != null && id != known) {
                 known = id
@@ -199,9 +222,10 @@ internal class AgentHost(
 
     private fun enqueue(type: String, data: kotlinx.serialization.json.JsonObject) {
         if (buffer.size >= MAX_BUFFERED) {
-            // Never grow without bound while the server is unreachable: keep the newest events and say so.
-            buffer.removeFirst()
+            // Never grow without bound while the server is unreachable. Newer events are dropped without a sequence
+            // number, so the numbering the server expects has no gap; an overflow event says how many were lost.
             dropped++
+            return
         }
         buffer.addLast(RunnerEventView(++sequence, type, data))
     }
@@ -268,6 +292,7 @@ internal class AgentHost(
         const val MAX_BATCH = 200
         const val MAX_BATCH_BYTES = 1_000_000
         const val MAX_BUFFERED = 5_000
+        const val MAX_HANDLED = 1_000
         const val DEFAULT_DRAIN_MILLIS = 10 * 60_000L
         const val SAFETY_MARGIN_MILLIS = 60_000L
         const val INTERRUPT_GRACE_MILLIS = 15_000L

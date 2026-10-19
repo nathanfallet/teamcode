@@ -21,12 +21,15 @@ class CloudAgentTest {
 
     @Test fun claudeStreamJsonIsBypassResumableAndDropsThinking() {
         val adapter = ClaudeStreamJsonAdapter(claude)
+        assertTrue(adapter.takeEvents().isEmpty())
         assertEquals(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
             "--model", "opus", "--effort", "high", "--resume", "c1"), adapter.command("c1").arguments)
         assertTrue(adapter.interrupt().isEmpty(), "No turn, nothing to interrupt")
         val message = obj(adapter.message("Fix it").single())
         assertEquals("user", message.str("type"))
         assertTrue(adapter.turnActive)
+        assertEquals("started", adapter.takeEvents().single().data.str("phase"), "The first message starts a turn")
+        adapter.message("More"); assertTrue(adapter.takeEvents().isEmpty(), "A message during a turn starts none")
         assertEquals("interrupt", obj(adapter.interrupt().single())["request"]!!.jsonObject.str("subtype"))
 
         val init = adapter.parse("""{"type":"system","subtype":"init","session_id":"c1","model":"opus"}""").events.single()
@@ -38,6 +41,8 @@ class CloudAgentTest {
         val result = adapter.parse("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a.txt"}],"is_error":false}]}}""").events.single()
         assertEquals("a.txt", result.data.str("output"))
         assertEquals("completed", adapter.parse("""{"type":"result","subtype":"success","is_error":false,"duration_ms":5}""").events.single().data.str("phase"))
+        assertTrue(adapter.turnActive, "The queued message runs next")
+        adapter.parse("""{"type":"result","subtype":"success","is_error":false}""")
         assertFalse(adapter.turnActive)
         assertTrue(adapter.parse("not json").events.isEmpty(), "Stray output is ignored")
     }
@@ -139,20 +144,25 @@ class CloudAgentTest {
         val (command, process) = started.single()
         assertFalse("--resume" in command.arguments)
         assertTrue("Fix it" in process.written.single())
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Fix it", 2)))
+        until { channel.acks.size == 3 }
+        assertEquals(channel.acks[1], channel.acks[2], "A redelivered input is acknowledged again")
+        assertEquals(1, process.written.size, "and never written twice")
         process.output.send("""{"type":"system","subtype":"init","session_id":"c1"}""")
         process.output.send("""{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"secret"},{"type":"text","text":"Done"}]}}""")
         process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
-        until { channel.uploaded.size == 3 }
-        assertEquals(listOf(1L, 2L, 3L), channel.uploaded.map { it.sequence })
-        assertEquals(listOf(CloudEventTypes.STATUS, CloudEventTypes.AGENT_MESSAGE, CloudEventTypes.TURN), channel.uploaded.map { it.type })
+        until { channel.uploaded.size == 4 }
+        assertEquals(listOf(1L, 2L, 3L, 4L), channel.uploaded.map { it.sequence })
+        assertEquals(listOf(CloudEventTypes.TURN, CloudEventTypes.STATUS, CloudEventTypes.AGENT_MESSAGE, CloudEventTypes.TURN), channel.uploaded.map { it.type })
+        assertEquals(listOf("started", "completed"), channel.uploaded.filter { it.type == CloudEventTypes.TURN }.map { it.data["phase"]!!.jsonPrimitive.content })
         assertEquals(AgentState("claude", "2.1", "c1"), state.value)
 
         // A pause drains: nothing runs, so the agent stops at once and the transcript is flushed.
         assertTrue(host.drain(testScheduler.currentTime + 120_000))
         assertNotNull(process.exit, "The agent process stopped")
         channel.inputs.send(listOf(RunnerInputView("in-2", "message", "Later", 1)))
-        until { channel.acks.size == 3 }
-        assertEquals("agent_stopping", channel.acks[2].reason, "A draining host refuses messages, which the server requeues")
+        delay(5_000)
+        assertEquals(3, channel.acks.size, "A draining host leaves a message unacknowledged, so the server offers it to the next execution")
         job.cancel()
 
         // The next pod resumes the stored conversation.

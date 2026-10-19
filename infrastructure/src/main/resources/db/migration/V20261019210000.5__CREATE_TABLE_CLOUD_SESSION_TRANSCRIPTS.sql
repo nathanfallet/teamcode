@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS cloud_session_transcripts (session_id VARCHAR(36) PRIMARY KEY, last_seq BIGINT NOT NULL, runner_epoch INT NOT NULL, runner_seq BIGINT NOT NULL, CONSTRAINT cloud_session_transcripts_session FOREIGN KEY (session_id) REFERENCES cloud_sessions(id) ON DELETE CASCADE);

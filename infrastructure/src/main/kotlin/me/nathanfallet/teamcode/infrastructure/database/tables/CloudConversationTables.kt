@@ -22,6 +22,18 @@ object CloudSessionEvents : Table("cloud_session_events") {
     }
 }
 
+/**
+ * Per-session transcript cursors, kept apart from the events so the retention purge never resets them: the last
+ * event sequence, and the runner sequence accepted in the latest execution (used to deduplicate retried batches).
+ */
+object CloudSessionTranscripts : Table("cloud_session_transcripts") {
+    val sessionId = reference("session_id", CloudSessions.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_session_transcripts_session")
+    val lastSeq = long("last_seq")
+    val runnerEpoch = integer("runner_epoch")
+    val runnerSeq = long("runner_seq")
+    override val primaryKey = PrimaryKey(sessionId)
+}
+
 /** Messages and interrupts with their acknowledgement. Attribution is kept on the row; the text is never logged. */
 object CloudSessionInputs : Table("cloud_session_inputs") {
     val id = varchar("id", 36)

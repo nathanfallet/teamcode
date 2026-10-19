@@ -7,13 +7,17 @@ import me.nathanfallet.teamcode.cli.interop.process.*
 
 private const val NEWLINE = '\n'.code.toByte()
 
-private class PosixAgentProcess(private val pid: Int, private var input: Int, private val output: Int) : AgentProcess {
+private class PosixAgentProcess(private val pid: Int, private var input: Int, private var output: Int) : AgentProcess {
     private var exit: Int? = null
     private var pending = ByteArray(65_536)
     private var size = 0
     /** Bytes kept of the last, unfinished line in [pending]. */
     private var lineLength = 0
     private var outputClosed = false
+    /** The output descriptor is closed once, by whichever of [readLine] and [stop] finishes last, so it is never reused under a reader. */
+    private var reading = false
+    private var stopped = false
+    private fun closeOutput() { if (output >= 0) { teamcode_pipe_close(output); output = -1 } }
 
     private fun take(length: Int, consumed: Int, maxLine: Int): String {
         val line = pending.decodeToString(0, minOf(length, maxLine))
@@ -37,11 +41,19 @@ private class PosixAgentProcess(private val pid: Int, private var input: Int, pr
     }
 
     override suspend fun readLine(maxLine: Int): String? {
+        reading = true
+        try { return readBounded(maxLine) } finally {
+            reading = false
+            if (stopped || outputClosed) closeOutput()
+        }
+    }
+
+    private suspend fun readBounded(maxLine: Int): String? {
         val buffer = ByteArray(65_536)
         while (true) {
             val newline = (0 until size).firstOrNull { pending[it] == NEWLINE }
             if (newline != null) return take(newline, newline + 1, maxLine)
-            if (outputClosed) return if (size == 0) null else take(size, size, maxLine)
+            if (outputClosed || output < 0) { outputClosed = true; return if (size == 0) null else take(size, size, maxLine) }
             val count = buffer.usePinned { teamcode_pipe_read(output, it.addressOf(0).reinterpret(), buffer.size) }
             when {
                 count > 0 -> for (i in 0 until count) {
@@ -53,7 +65,8 @@ private class PosixAgentProcess(private val pid: Int, private var input: Int, pr
                     pending[size++] = buffer[i]
                 }
                 count == 0 || count == -2 -> outputClosed = true
-                else -> delay(20)
+                // Once stopped, a descendant still holding the pipe open must not keep the reader waiting.
+                else -> if (stopped) outputClosed = true else delay(20)
             }
         }
     }
@@ -78,7 +91,8 @@ private class PosixAgentProcess(private val pid: Int, private var input: Int, pr
         while (exitCode() == null && waited < graceMillis) { delay(50); waited += 50 }
         if (exitCode() == null) { teamcode_terminate(pid, 0); repeat(100) { if (exitCode() == null) delay(50) } }
         if (exitCode() == null) { teamcode_terminate(pid, 1); repeat(100) { if (exitCode() == null) delay(10) } }
-        teamcode_pipe_close(output)
+        stopped = true
+        if (!reading) closeOutput()
         exitCode() ?: -1
     }
 }

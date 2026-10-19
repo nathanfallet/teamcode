@@ -19,18 +19,19 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
 
     override suspend fun appendRunnerEvents(sessionId: String, epoch: Int, events: List<RunnerEvent>): RunnerEventsAck = database.query {
         val teamId = lockSession(sessionId)[CloudSessions.teamId]
-        var through = CloudSessionEvents.select(CloudSessionEvents.runnerSeq).where {
-            (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.epoch eq epoch) and CloudSessionEvents.runnerSeq.isNotNull()
-        }.orderBy(CloudSessionEvents.runnerSeq to SortOrder.DESC).limit(1).singleOrNull()?.get(CloudSessionEvents.runnerSeq) ?: 0L
-        var last = lastSeqOf(sessionId)
+        val cursor = cursorOf(sessionId)
+        // The cursor survives retention, so a long-lived execution keeps its numbering after old events are purged.
+        var through = cursor?.takeIf { it[CloudSessionTranscripts.runnerEpoch] == epoch }?.get(CloudSessionTranscripts.runnerSeq) ?: 0L
+        var last = cursor?.get(CloudSessionTranscripts.lastSeq) ?: 0L
+        val start = last
         val now = nowMillis()
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
             if (event.sequence != through + 1) break // A gap: the runner resends from acceptedThrough + 1.
-            last += 1
-            insertEvent(sessionId, teamId, last, epoch, event.sequence, event.type, now, event.data)
+            insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data)
             through = event.sequence
         }
+        if (last != start) saveCursor(sessionId, cursor != null, last, epoch, through)
         RunnerEventsAck(through, last)
     }
 
@@ -121,13 +122,16 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     override suspend fun deliver(sessionId: String, epoch: Int, limit: Int): List<CloudInput> = database.query {
         val teamId = lockSession(sessionId)[CloudSessions.teamId]
         val now = nowMillis()
-        // Deliveries to an execution that ended without consuming them: retry messages, drop stale interrupts.
+        // Deliveries never acknowledged: to an execution that ended, or to this one but lost on the way (a dropped
+        // long-poll response) or left alone while the agent stopped. Messages are retried, stale interrupts dropped.
         val stale = CloudSessionInputs.selectAll().where {
-            (CloudSessionInputs.sessionId eq sessionId) and (CloudSessionInputs.status eq CloudInputStatus.DELIVERED.wire) and (CloudSessionInputs.deliveredEpoch neq epoch)
+            (CloudSessionInputs.sessionId eq sessionId) and (CloudSessionInputs.status eq CloudInputStatus.DELIVERED.wire) and
+                ((CloudSessionInputs.deliveredEpoch neq epoch) or (CloudSessionInputs.deliveredAt less (now - CloudConversationRules.REDELIVERY_MILLIS)))
         }.map(::readInput)
         for (input in stale) {
             if (input.kind == CloudInputKind.INTERRUPT || input.attempts >= CloudConversationRules.MAX_ATTEMPTS) {
-                finish(teamId, input, CloudInputStatus.REJECTED, if (input.kind == CloudInputKind.INTERRUPT) "execution_ended" else "delivery_failed", now)
+                val reason = if (input.kind == CloudInputKind.MESSAGE) "delivery_failed" else if (input.deliveredEpoch != epoch) "execution_ended" else "delivery_failed"
+                finish(teamId, input, CloudInputStatus.REJECTED, reason, now)
             } else CloudSessionInputs.update({ (CloudSessionInputs.id eq input.id) and (CloudSessionInputs.status eq CloudInputStatus.DELIVERED.wire) }) {
                 it[status] = CloudInputStatus.QUEUED.wire
             }
@@ -221,11 +225,18 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     override suspend fun purgeTranscripts(limit: Int): Int = database.query {
         val now = nowMillis()
         var deleted = 0
-        for (team in Teams.select(Teams.id).limit(100).map { it[Teams.id] }) {
-            val days = readCloudSettings(team).transcriptRetentionDays ?: continue
-            val cutoff = now - days * DAY_MILLIS
-            deleted += CloudSessionEvents.deleteWhere(limit = limit) { (CloudSessionEvents.teamId eq team) and (CloudSessionEvents.at less cutoff) }
-            deleted += CloudSessionInputs.deleteWhere(limit = limit) { (CloudSessionInputs.teamId eq team) and (CloudSessionInputs.finishedAt less cutoff) }
+        // Every team, in pages; each team's deletes are bounded so one large transcript cannot hold the job.
+        var after = ""
+        while (true) {
+            val teams = Teams.select(Teams.id).where { Teams.id greater after }.orderBy(Teams.id to SortOrder.ASC).limit(100).map { it[Teams.id] }
+            for (team in teams) {
+                val days = readCloudSettings(team).transcriptRetentionDays ?: continue
+                val cutoff = now - days * DAY_MILLIS
+                deleted += CloudSessionEvents.deleteWhere(limit = limit) { (CloudSessionEvents.teamId eq team) and (CloudSessionEvents.at less cutoff) }
+                deleted += CloudSessionInputs.deleteWhere(limit = limit) { (CloudSessionInputs.teamId eq team) and (CloudSessionInputs.finishedAt less cutoff) }
+            }
+            after = teams.lastOrNull() ?: break
+            if (teams.size < 100) break
         }
         CloudSessionAttachments.deleteWhere(limit = limit) { CloudSessionAttachments.leaseUntil less (now - DAY_MILLIS) }
         deleted
@@ -233,14 +244,16 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
 
     /** Final status for an input, with its transcript event: the consumed message itself, or an `input` notice. */
     private fun JdbcTransaction.finish(teamId: String, input: CloudInput, status: CloudInputStatus, reason: String?, now: Long): CloudInput {
-        val seq = lastSeqOf(input.sessionId) + 1
         val data = if (status == CloudInputStatus.CONSUMED && input.kind == CloudInputKind.MESSAGE) buildJsonObject {
             put("inputId", input.id); put("authorId", input.authorId); put("text", CloudConversationRules.bound(input.text.orEmpty()))
         } else buildJsonObject {
             put("inputId", input.id); put("kind", input.kind.wire); put("status", status.wire); reason?.let { put("reason", it) }
         }
         val type = if (status == CloudInputStatus.CONSUMED && input.kind == CloudInputKind.MESSAGE) CloudEventType.USER_MESSAGE else CloudEventType.INPUT
+        val cursor = cursorOf(input.sessionId)
+        val seq = (cursor?.get(CloudSessionTranscripts.lastSeq) ?: 0L) + 1
         insertEvent(input.sessionId, teamId, seq, 0, null, type, now, data.toString())
+        saveCursor(input.sessionId, cursor != null, seq, cursor?.get(CloudSessionTranscripts.runnerEpoch) ?: 0, cursor?.get(CloudSessionTranscripts.runnerSeq) ?: 0L)
         CloudSessionInputs.update({ CloudSessionInputs.id eq input.id }) {
             it[CloudSessionInputs.status] = status.wire; it[finishedAt] = now; it[CloudSessionInputs.reason] = reason; it[eventSeq] = seq
             if (status == CloudInputStatus.CONSUMED) it[consumedAt] = now
@@ -249,6 +262,7 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         return input.copy(status = status, finishedAt = now, reason = reason, eventSeq = seq, consumedAt = if (status == CloudInputStatus.CONSUMED) now else input.consumedAt)
     }
 
+    /** The caller holds the session row lock, so sequences are dense; [saveCursor] records the new last sequence. */
     private fun insertEvent(sessionId: String, teamId: String, seq: Long, epoch: Int, runnerSeq: Long?, type: CloudEventType, at: Long, data: String) {
         CloudSessionEvents.insert {
             it[CloudSessionEvents.sessionId] = sessionId; it[CloudSessionEvents.seq] = seq; it[CloudSessionEvents.teamId] = teamId
@@ -257,12 +271,20 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         }
     }
 
+    private fun saveCursor(sessionId: String, exists: Boolean, last: Long, epoch: Int, through: Long) {
+        if (exists) CloudSessionTranscripts.update({ CloudSessionTranscripts.sessionId eq sessionId }) {
+            it[lastSeq] = last; it[runnerEpoch] = epoch; it[runnerSeq] = through
+        } else CloudSessionTranscripts.insert {
+            it[CloudSessionTranscripts.sessionId] = sessionId; it[lastSeq] = last; it[runnerEpoch] = epoch; it[runnerSeq] = through
+        }
+    }
+
     private fun lockSession(sessionId: String): ResultRow =
         CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode)
             .where { CloudSessions.id eq sessionId }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Cloud session not found.")
 
-    private fun lastSeqOf(sessionId: String): Long = CloudSessionEvents.select(CloudSessionEvents.seq).where { CloudSessionEvents.sessionId eq sessionId }
-        .orderBy(CloudSessionEvents.seq to SortOrder.DESC).limit(1).singleOrNull()?.get(CloudSessionEvents.seq) ?: 0L
+    private fun cursorOf(sessionId: String): ResultRow? = CloudSessionTranscripts.selectAll().where { CloudSessionTranscripts.sessionId eq sessionId }.singleOrNull()
+    private fun lastSeqOf(sessionId: String): Long = cursorOf(sessionId)?.get(CloudSessionTranscripts.lastSeq) ?: 0L
 
     private companion object {
         const val DAY_MILLIS = 86_400_000L

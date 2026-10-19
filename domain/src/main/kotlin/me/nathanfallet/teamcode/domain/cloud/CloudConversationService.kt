@@ -36,7 +36,9 @@ class CloudConversationService(
         var checkedAt = sessions.now()
         var quiet = 0L
         while (true) {
-            val page = store.events(session.id, cursor, null, CloudConversationRules.MAX_PAGE)
+            // One indexed read per poll; the page is read only when something new arrived.
+            val page = if (store.lastSeq(session.id) > cursor) store.events(session.id, cursor, null, CloudConversationRules.MAX_PAGE)
+                else CloudEventPage(emptyList(), null, cursor, null, null)
             if (page.events.isNotEmpty()) {
                 emit(page.events)
                 cursor = page.events.last().seq
