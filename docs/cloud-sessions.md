@@ -71,7 +71,7 @@ Other fields: `desiredState` (`running`, `paused`, `terminated`), `failure` and 
 | `ready`, `active` | `pausing` | Desired state `paused` (explicit pause; idle timeout and transfer are planned), or the runner's checkpoint arriving before the reconciler's own move |
 | `pausing` | `paused` | Checkpoint completed (`consistent`), or failed, missed heartbeats or 15-minute pausing deadline (`crash_consistent`) |
 | `ready`, `active`, `pausing` | `paused` | Execution lost: no heartbeat for 90 s, the pod disappeared or stopped, or the execution row is missing (`execution_missing`, after deleting any pod of the session). `crash_consistent`, and the desired state becomes `paused`, so a lost execution never restarts by itself. |
-| `paused` | `resuming` | Desired state `running` (explicit resume; wake by message is planned) |
+| `paused` | `resuming` | Desired state `running` (explicit resume, or a [message](cloud-conversations.md#messages-and-interrupts) with `wake`) |
 | `resuming` | `paused` | Image unavailable, start failure or timeout, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
 | `resuming` | `failed` | The workspace claim is lost |
 | any | `terminated` | `DELETE`, or retention expiry while paused. A `failed` session keeps its deletion progress (a workspace already proven deleted stays proven). |
@@ -123,7 +123,7 @@ Sessions record `createdBy {initiatorId, credentialId, effectiveMemberId}`; `cre
 
 The replay returns the **current** view of the created session rather than a byte copy of the first response. Records expire after 24 hours (bounded purge).
 
-Pause, resume and delete are naturally idempotent through the desired state. `Idempotency-Key` for messages and transfers, and the `clientMessageId` alias, are planned with those routes.
+Pause, resume and delete are naturally idempotent through the desired state. Messages take `Idempotency-Key` or its `clientMessageId` alias ([messages](cloud-conversations.md#messages-and-interrupts)); transfers will too.
 
 ### Routes
 
@@ -141,8 +141,8 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | `POST /cloud/sessions/{id}/resume` | `202`; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
 | `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
-| `/cloud/sessions/{id}/events`, `.../events/stream`, `/cloud/events/stream` | Transcript pages, per-session SSE, caller-wide SSE feed | | Planned |
-| `/cloud/sessions/{id}/messages`, `.../interrupt`, `.../attachments` | Messages, interrupt, CLI attach lease | | Planned |
+| `/cloud/sessions/{id}/events`, `.../events/stream`, `.../messages`, `.../interrupt`, `.../attachments`, `/cloud/access`, `/cloud/runner/agent`, `.../events`, `.../inputs` | Transcript, messages, interrupt, attach lease, access policy, agent channel: see [transcript, messages and attach](cloud-conversations.md) | Access policy | Implemented |
+| `/cloud/events/stream` | Caller-wide SSE feed | | Planned |
 | `/cloud/sessions/{id}/transfer`, `/cloud/transfers...` | Ownership transfer | | Planned |
 
 A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
@@ -190,6 +190,7 @@ Administrators edit them through `PUT /api/v1/cloud/settings` or **Dashboard →
 | `failedWorkspaceRetentionDays` | 7 | Days a session that failed after its first execution keeps its workspace. |
 | `maxRunningSessionsPerMember` | 2 | Running cap per member. |
 | `maxRetainedSessionsPerMember` | 20 | Retained cap per member. |
+| `transcriptRetentionDays` | 30 | Days transcript events are kept (1 to 3,650). `null` keeps them indefinitely. |
 
 `expiresAt` is computed when the session pauses, from the setting in force at that moment; changing the setting applies to sessions paused afterwards, so shortening it never deletes existing work by surprise. Resuming clears it. At expiry the session is terminated with reason `expired` and its workspace deleted as below. The 7-day and 1-day expiry notices need the transcript and feed, and are planned.
 
@@ -213,7 +214,7 @@ Each session has one PersistentVolumeClaim, `tc-ws-<session>`, created before it
 4. A failed checkpoint, missed heartbeats or the 15-minute pausing deadline force-delete the pod: `paused` with `crash_consistent`. It is never advertised as `consistent`.
 5. `POST /resume` rechecks the owner and assignment, then sets `desiredState = running`. The reconciler moves the session to `resuming`, waits for capacity, starts epoch n+1 on the same workspace with the pinned digest, and the runner's ready heartbeat makes it `ready`.
 
-Inactivity only pauses; it never deletes. Idle detection (turns, pending inputs, preparation), the idle warning and `maxTurnMinutes` are planned with the agent and messages.
+Inactivity only pauses; it never deletes. Idle detection (turns, pending inputs, preparation), the idle warning and `maxTurnMinutes` are planned.
 
 ## The runner and the pod
 
@@ -241,20 +242,14 @@ The cluster's service account (its token is saved with the cluster) needs, in ea
 
 Each server replica runs the reconciler continuously (leased per session) and, through scheduled work, garbage collection every 10 minutes and the idempotency-record purge every minute. A failed reconciliation step is logged with the session id and the error class or Kubernetes status only.
 
-## The agent in the pod (planned)
+## The agent in the pod
 
-- **Permissions.** Agents run in bypass mode inside the sandboxed pod: `claude --dangerously-skip-permissions` and `codex --dangerously-bypass-approvals-and-sandbox`. Cluster prerequisites: a non-root pod, an egress NetworkPolicy, no cluster credentials in the pod. API approval round-trips are a later extension behind their own capability.
-- **One long-lived process with streaming input**, not one process per turn: Claude Code with `--input-format stream-json` on stdin, Codex through `codex app-server` (JSON-RPC). Messages can arrive at any time and are injected while the agent works; an interrupt stops the current turn. After a new pod, the runner resumes the conversation by its id (`--resume <id>` for Claude, thread resume for Codex) from the agent state kept on the workspace volume. Exact flags are verified against the pinned agent versions in the adapter tests. Fallback, where an agent version cannot accept input mid-turn: queue the message for the next turn.
-- **Resume quality.** Resume is attempted only when the native state exists and the agent version is unchanged, or after an explicit upgrade with the agent's own compatibility check; otherwise `resume.conversation` becomes `transcript_only` and a fresh conversation starts.
-- **Credential files.** Agents authenticate only through the loopback proxy; the runner refuses to checkpoint a credential file found under the agent homes.
+See [transcript, messages and attach](cloud-conversations.md#the-agent-in-the-pod): Claude Code and Codex run in bypass mode as one long-lived process with streaming input, resumed by conversation id after a new pod. Agents authenticate only through the loopback proxy; refusing to checkpoint a credential file found under the agent homes is planned.
 
 ## Other planned parts
 
 - **Environment preparation.** Repositories and refs cloned into `/workspace/<path>` on the first execution and only fetched on resume (never reset or re-cloned over work); `create` and `start` setup steps with completion markers; the owner's Git identity rewritten on every execution; variant values from the environment/MCP variants work, injected into processes only.
 - **GitHub.** GitHub App user-to-server tokens per member (8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern); installation tokens only for dedicated service members; personal access tokens refused. Members link GitHub in the dashboard or with `teamcode github link`. Tokens reach Git and `gh` through a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
-- **Transcript.** Normalized events (`message.user`, `message.agent`, `tool.call`, `tool.result`, `turn`, `status`, `error`) with per-session sequence numbers, bounded sizes, secret masking, no thinking blocks; cursor pagination in both directions; per-session SSE with `Last-Event-ID`; a caller-wide SSE feed of notices for orchestrators; webhooks later.
-- **Messages.** `POST .../messages` with `Idempotency-Key` or `clientMessageId`; acknowledgement levels `queued`, `delivered`, `consumed`, `cancelled`, `rejected`; queue and wake by default (`wake: false` per message, `wakeOnMessage` per profile); `expectedLastEventSeq` against stale views; at most 100 pending messages.
-- **Attach.** `teamcode cloud attach`: structured attach over the shared event stream and message routes, with an attachment lease; it may come after the other CLI commands if it proves more complex. A PTY attach is a possible later addition.
 - **Transfer.** Administrator transfer is immediate; an owner's request is an offer the recipient accepts within 7 days. Transfer happens at a checkpoint, revokes execution and attachment credentials, rechecks the recipient, and charges future work to the recipient while historical usage stays with the original member. The policy follows the settings above.
 - **Keys.** `cloud:read`/`cloud:write` personal scopes and `admin:cloud` administrator keys with `TeamCode-On-Behalf-Of`, with the V2 API keys. This enables the driving integration: an external orchestrator creating one session per task on behalf of a member, relaying messages from mobile through its own backend, without administrator keys ever reaching a device.
 

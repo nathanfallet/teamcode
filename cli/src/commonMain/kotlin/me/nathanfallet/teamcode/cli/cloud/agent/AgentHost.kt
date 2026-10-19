@@ -1,0 +1,297 @@
+package me.nathanfallet.teamcode.cli.cloud.agent
+
+import kotlin.time.Clock
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.platform.AgentProcess
+import me.nathanfallet.teamcode.client.TeamCodeException
+import okio.FileSystem
+import okio.Path.Companion.toPath
+
+/** What the runner loop needs from the agent: run beside heartbeats, drain before a checkpoint, stop on the way out. */
+internal interface RunnerAgent {
+    val fenced: Boolean
+    suspend fun run()
+    suspend fun drain(deadline: Long?): Boolean
+    fun resumeAfterDrain()
+    suspend fun stop()
+}
+
+/** The agent half of the runner channel, bound to one session epoch. */
+interface AgentChannel {
+    suspend fun agent(): RunnerAgentView
+    suspend fun events(events: List<RunnerEventView>): RunnerEventsAckView
+    suspend fun inputs(waitMillis: Long): List<RunnerInputView>
+    suspend fun acknowledge(acks: List<RunnerInputAckView>)
+}
+
+/** The agent's conversation id, kept on the workspace volume so the next pod resumes it. */
+@Serializable
+data class AgentState(val kind: String, val version: String? = null, val conversationId: String)
+interface AgentStateStore {
+    fun read(): AgentState?
+    fun write(state: AgentState)
+    fun clear()
+}
+
+/**
+ * Runs the session's agent as one long-lived process with streaming input. The process starts with the first
+ * message (resuming the stored conversation when the agent kind and version are unchanged), messages and
+ * interrupts are written as they arrive and acknowledged once handed to the agent, and the normalized output is
+ * uploaded in ordered batches. [drain] finishes or interrupts the running turn before a checkpoint.
+ *
+ * An execution fenced by the server (`409 execution_fenced`) stops everything; [fenced] tells the runner loop.
+ */
+internal class AgentHost(
+    private val channel: AgentChannel,
+    private val start: (AgentCommand, Map<String, String?>, String) -> AgentProcess,
+    private val state: AgentStateStore,
+    private val workingDirectory: String,
+    private val clientVersion: String,
+    private val log: (String) -> Unit = {},
+    private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+) : RunnerAgent {
+    override var fenced = false; private set
+    private val lock = Mutex()
+    private val buffer = ArrayDeque<RunnerEventView>()
+    private var sequence = 0L
+    private var settings: AgentSettings? = null
+    private var adapter: AgentAdapter? = null
+    private var process: AgentProcess? = null
+    private var reader: Job? = null
+    private var resumed: String? = null
+    private var stopping = false
+    private lateinit var scope: CoroutineScope
+
+    /** Runs input delivery and uploads until cancelled or fenced. */
+    override suspend fun run() = coroutineScope {
+        scope = this
+        val uploads = launch { uploadLoop() }
+        try { inputLoop() } finally {
+            uploads.cancel()
+            // Fenced: another execution owns the session, so this agent stops now (and its reader with it).
+            if (fenced) withContext(NonCancellable) { stop() }
+        }
+    }
+
+    /** Finishes the running turn before [deadline] (interrupting it when needed), stops the agent and flushes the transcript. Returns whether the stop was clean. */
+    override suspend fun drain(deadline: Long?): Boolean {
+        stopping = true
+        val limit = (deadline ?: (now() + DEFAULT_DRAIN_MILLIS)) - SAFETY_MARGIN_MILLIS
+        suspend fun running() = lock.withLock { adapter?.turnActive == true && process?.exitCode() == null }
+        while (now() < limit && running()) sleep(250)
+        var clean = true
+        if (running()) {
+            clean = false
+            lock.withLock { adapter?.interrupt()?.let { writeAll(it) } }
+            val until = now() + INTERRUPT_GRACE_MILLIS
+            while (now() < until && running()) sleep(250)
+        }
+        lock.withLock { process }?.stop(STOP_GRACE_MILLIS)
+        reader?.join()
+        return flush(now() + FLUSH_MILLIS) && clean
+    }
+
+    /** A pause was cancelled before the pod stopped: accept messages again (the agent restarts with the next one). */
+    override fun resumeAfterDrain() { stopping = false }
+
+    /** Stops the agent at once; used when fenced or when the session is deleted. Nothing more is uploaded. */
+    override suspend fun stop() {
+        stopping = true
+        process?.stop(1_000)
+        reader?.cancel()
+    }
+
+    private suspend fun inputLoop() {
+        var wait = 1_000L
+        while (!fenced) {
+            val inputs = try { channel.inputs(INPUT_WAIT_MILLIS).also { wait = 1_000L } }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { if (handle(error)) return; sleep(wait); wait = (wait * 2).coerceAtMost(15_000); continue }
+            if (inputs.isEmpty()) continue
+            val acks = inputs.map { deliver(it) }
+            retrying { channel.acknowledge(acks) }
+        }
+    }
+
+    private suspend fun deliver(input: RunnerInputView): RunnerInputAckView = lock.withLock {
+        if (stopping) return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_stopping")
+        if (input.kind == "interrupt") {
+            val lines = adapter?.interrupt().orEmpty()
+            if (lines.isEmpty()) return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "no_turn")
+            return@withLock if (writeAll(lines)) RunnerInputAckView(input.id, CloudInputStatuses.CONSUMED) else RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
+        }
+        val text = input.text ?: return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+        val active = try { ensureStarted() } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            log("The agent could not start (${error::class.simpleName}).")
+            enqueue(CloudEventTypes.ERROR, buildJsonObject { put("code", "agent_start_failed"); put("message", "The agent process could not start.") })
+            null
+        } ?: return@withLock RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
+        val lines = active.message(text)
+        if (writeAll(lines)) RunnerInputAckView(input.id, CloudInputStatuses.CONSUMED) else RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "agent_unavailable")
+    }
+
+    private suspend fun writeAll(lines: List<String>): Boolean {
+        val target = process ?: return false
+        for (line in lines) if (!target.writeLine(line)) return false
+        return true
+    }
+
+    /** Starts the agent process if none runs; resumes the stored conversation when it belongs to the same agent. */
+    private suspend fun ensureStarted(): AgentAdapter {
+        adapter?.let { current -> if (process?.exitCode() == null) return current }
+        reader?.cancel()
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort) }.also { settings = it }
+        val stored = state.read()
+        val resume = stored?.takeIf { it.kind == config.kind && it.version == config.version }?.conversationId
+        if (stored != null && resume == null) {
+            // Another agent or version: never resume across them; history stays in the transcript.
+            state.clear()
+            enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
+        }
+        val next = agentAdapter(config, clientVersion)
+        val command = next.command(resume)
+        val child = start(command, AGENT_ENVIRONMENT, workingDirectory)
+        process = child; adapter = next; resumed = resume
+        for (line in next.startup(resume, workingDirectory)) child.writeLine(line)
+        reader = scope.launch { readLoop(child, next) }
+        log("Started the ${config.kind} agent" + if (resume != null) " (resuming its conversation)." else ".")
+        return next
+    }
+
+    private suspend fun readLoop(child: AgentProcess, active: AgentAdapter) {
+        var known = active.conversationId
+        while (true) {
+            val line = child.readLine() ?: break
+            lock.withLock {
+                val result = active.parse(line)
+                result.events.forEach { enqueue(it.type, it.data) }
+                result.replies.forEach { child.writeLine(it) }
+            }
+            val id = active.conversationId
+            if (id != null && id != known) {
+                known = id
+                settings?.let { state.write(AgentState(it.kind, it.version, id)) }
+            }
+        }
+        val code = child.stop(1_000)
+        lock.withLock {
+            if (process === child) {
+                val failedResume = resumed != null && active.conversationId == null
+                if (failedResume) {
+                    // The stored conversation could not be resumed: the next message starts a fresh one.
+                    state.clear()
+                    enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", active.command(null).command); put("conversation", "transcript_only") })
+                }
+                if (!stopping) enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", "exited"); put("exitCode", code) })
+                if (active.turnActive && !stopping) enqueue(CloudEventTypes.TURN, buildJsonObject { put("phase", "failed") })
+                process = null; adapter = null; resumed = null
+            }
+        }
+    }
+
+    private fun enqueue(type: String, data: kotlinx.serialization.json.JsonObject) {
+        if (buffer.size >= MAX_BUFFERED) {
+            // Never grow without bound while the server is unreachable: keep the newest events and say so.
+            buffer.removeFirst()
+            dropped++
+        }
+        buffer.addLast(RunnerEventView(++sequence, type, data))
+    }
+    private var dropped = 0
+
+    private suspend fun uploadLoop() {
+        while (!fenced) {
+            if (!uploadOnce()) sleep(UPLOAD_MILLIS)
+        }
+    }
+
+    /** Uploads one batch; returns true when more is waiting. */
+    private suspend fun uploadOnce(): Boolean {
+        val batch = lock.withLock {
+            if (dropped > 0) {
+                val lost = dropped; dropped = 0
+                buffer.addLast(RunnerEventView(++sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", "transcript_overflow"); put("dropped", lost) }))
+            }
+            var bytes = 0
+            buffer.takeWhile { event -> bytes += event.data.toString().length; bytes <= MAX_BATCH_BYTES }.take(MAX_BATCH).ifEmpty { buffer.take(1) }
+        }
+        if (batch.isEmpty()) return false
+        val ack = try { channel.events(batch) } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            if (handle(error)) return false
+            sleep(UPLOAD_MILLIS * 4); return false
+        }
+        lock.withLock { while (buffer.isNotEmpty() && buffer.first().sequence <= ack.acceptedThrough) buffer.removeFirst() }
+        return lock.withLock { buffer.isNotEmpty() }
+    }
+
+    private suspend fun flush(deadline: Long): Boolean {
+        while (now() < deadline && !fenced) {
+            if (lock.withLock { buffer.isEmpty() }) return true
+            if (!uploadOnce()) sleep(UPLOAD_MILLIS)
+        }
+        return lock.withLock { buffer.isEmpty() }
+    }
+
+    /** True when the error ends the host (fenced or refused); logs the error code only. */
+    private fun handle(error: Exception): Boolean {
+        if (error is TeamCodeException && (error.code == "execution_fenced" || error.statusCode in setOf(401, 403, 404))) {
+            fenced = true
+            return true
+        }
+        log(if (error is TeamCodeException) "The server returned HTTP ${error.statusCode}${error.code?.let { " ($it)" } ?: ""}; retrying." else "The server is unreachable; retrying.")
+        return false
+    }
+
+    private suspend fun <T> retrying(call: suspend () -> T): T {
+        var wait = 1_000L
+        while (true) {
+            try { return call() }
+            catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (handle(error)) throw error
+                sleep(wait); wait = (wait * 2).coerceAtMost(15_000)
+            }
+        }
+    }
+
+    companion object {
+        const val INPUT_WAIT_MILLIS = 20_000L
+        const val UPLOAD_MILLIS = 500L
+        const val MAX_BATCH = 200
+        const val MAX_BATCH_BYTES = 1_000_000
+        const val MAX_BUFFERED = 5_000
+        const val DEFAULT_DRAIN_MILLIS = 10 * 60_000L
+        const val SAFETY_MARGIN_MILLIS = 60_000L
+        const val INTERRUPT_GRACE_MILLIS = 15_000L
+        const val STOP_GRACE_MILLIS = 10_000L
+        const val FLUSH_MILLIS = 30_000L
+        /** Runner coordinates are not the agent's business; the token path in particular stays out of its environment. */
+        val AGENT_ENVIRONMENT: Map<String, String?> = listOf("TEAMCODE_SERVER_URL", "TEAMCODE_CLOUD_TOKEN_FILE", "TEAMCODE_CLOUD_TEAM", "TEAMCODE_CLOUD_SESSION", "TEAMCODE_CLOUD_EPOCH")
+            .associateWith { null }
+        val stateJson = Json { ignoreUnknownKeys = true }
+    }
+}
+
+/** The state file on the workspace volume; a missing or unreadable file means "no conversation to resume". */
+internal class FileAgentStateStore(private val path: String) : AgentStateStore {
+    private val file = path.toPath()
+    override fun read(): AgentState? = try {
+        if (!FileSystem.SYSTEM.exists(file)) null
+        else AgentHost.stateJson.decodeFromString<AgentState>(FileSystem.SYSTEM.read(file) { readUtf8() })
+    } catch (_: Exception) { null }
+    override fun write(state: AgentState) {
+        file.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
+        val temporary = "$path.tmp".toPath()
+        FileSystem.SYSTEM.write(temporary) { writeUtf8(AgentHost.stateJson.encodeToString(state)) }
+        FileSystem.SYSTEM.atomicMove(temporary, file)
+    }
+    override fun clear() { FileSystem.SYSTEM.delete(file, mustExist = false) }
+}

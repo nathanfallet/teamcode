@@ -54,6 +54,8 @@ object CloudSettingsTable : Table("cloud_settings") {
     val failedWorkspaceRetentionDays = integer("failed_workspace_retention_days")
     val maxRunningSessionsPerMember = integer("max_running_sessions_per_member")
     val maxRetainedSessionsPerMember = integer("max_retained_sessions_per_member")
+    /** Null keeps transcripts indefinitely. Existing rows get the 30-day default. */
+    val transcriptRetentionDays = integer("transcript_retention_days").nullable().default(30)
     override val primaryKey = PrimaryKey(teamId)
 }
 object CloudSessions : Table("cloud_sessions") {

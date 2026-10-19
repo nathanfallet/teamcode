@@ -1,0 +1,1 @@
+ALTER TABLE cloud_settings ADD transcript_retention_days INT DEFAULT 30 NULL;

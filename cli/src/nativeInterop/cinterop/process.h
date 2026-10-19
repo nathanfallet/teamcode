@@ -98,6 +98,62 @@ static inline int teamcode_spawn(const char *command, char *const argv[], char *
     return result;
 }
 
+/*
+ * Spawns a child with piped stdin and stdout and stderr on /dev/null (agent output may hold prompts, never logged).
+ * Both parent ends are non-blocking and close-on-exec, so no other child inherits them.
+ */
+static inline int teamcode_spawn_piped(const char *command, char *const argv[], char *const envp[], int *child, int *input, int *output) {
+    int in_pipe[2], out_pipe[2];
+    if (pipe(in_pipe) != 0) return errno;
+    if (pipe(out_pipe) != 0) { int error = errno; close(in_pipe[0]); close(in_pipe[1]); return error; }
+    posix_spawnattr_t attributes;
+    int result = posix_spawnattr_init(&attributes);
+    if (result != 0) goto fail_pipes;
+    sigset_t defaults;
+    sigemptyset(&defaults);
+    sigaddset(&defaults, SIGINT); sigaddset(&defaults, SIGTERM); sigaddset(&defaults, SIGHUP); sigaddset(&defaults, SIGQUIT); sigaddset(&defaults, SIGPIPE);
+    posix_spawnattr_setsigdefault(&attributes, &defaults);
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGDEF);
+    posix_spawn_file_actions_t actions;
+    result = posix_spawn_file_actions_init(&actions);
+    if (result != 0) { posix_spawnattr_destroy(&attributes); goto fail_pipes; }
+    result = posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO);
+    if (result == 0) result = posix_spawn_file_actions_adddup2(&actions, out_pipe[1], STDOUT_FILENO);
+    if (result == 0) result = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    if (result == 0) result = posix_spawn_file_actions_addclose(&actions, in_pipe[1]);
+    if (result == 0) result = posix_spawn_file_actions_addclose(&actions, out_pipe[0]);
+    pid_t pid = 0;
+    if (result == 0) result = posix_spawnp(&pid, command, &actions, &attributes, argv, envp);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attributes);
+    if (result != 0) goto fail_pipes;
+    close(in_pipe[0]); close(out_pipe[1]);
+    fcntl(in_pipe[1], F_SETFL, fcntl(in_pipe[1], F_GETFL) | O_NONBLOCK);
+    fcntl(out_pipe[0], F_SETFL, fcntl(out_pipe[0], F_GETFL) | O_NONBLOCK);
+    fcntl(in_pipe[1], F_SETFD, FD_CLOEXEC);
+    fcntl(out_pipe[0], F_SETFD, FD_CLOEXEC);
+    *child = (int)pid; *input = in_pipe[1]; *output = out_pipe[0];
+    return 0;
+fail_pipes:
+    close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);
+    return result;
+}
+
+/* Non-blocking pipe I/O: returns bytes moved, 0 at end of stream (read), -1 when it would block, -2 on error. */
+static inline int teamcode_pipe_read(int fd, unsigned char *buffer, int capacity) {
+    ssize_t count = read(fd, buffer, (size_t)capacity);
+    if (count >= 0) return (int)count;
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? -1 : -2;
+}
+static inline int teamcode_pipe_write(int fd, const unsigned char *buffer, int length) {
+    ssize_t count = write(fd, buffer, (size_t)length);
+    if (count >= 0) return (int)count;
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? -1 : -2;
+}
+static inline void teamcode_pipe_close(int fd) { close(fd); }
+/* A child that exits must not kill the runner with SIGPIPE; writes then fail with EPIPE instead. */
+static inline void teamcode_ignore_sigpipe(void) { signal(SIGPIPE, SIG_IGN); }
+
 /* Poll only this exact owned child. A reaped PID is never signalled. */
 static inline int teamcode_poll(int child, int *code) {
     int status;

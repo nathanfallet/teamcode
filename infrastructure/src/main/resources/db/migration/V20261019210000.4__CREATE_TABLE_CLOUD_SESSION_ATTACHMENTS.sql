@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS cloud_session_attachments (id VARCHAR(36) PRIMARY KEY, session_id VARCHAR(36) NOT NULL, team_id VARCHAR(36) NOT NULL, member_id VARCHAR(36) NOT NULL, credential_id VARCHAR(36) NOT NULL, permissions VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL, lease_until BIGINT NOT NULL, CONSTRAINT cloud_session_attachments_session FOREIGN KEY (session_id) REFERENCES cloud_sessions(id) ON DELETE CASCADE);
+CREATE INDEX cloud_attachment_session ON cloud_session_attachments (session_id, lease_until);

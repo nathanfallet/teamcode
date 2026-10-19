@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS cloud_access_policies (team_id VARCHAR(36) PRIMARY KEY, version INT NOT NULL, rules text NOT NULL, updated_at BIGINT NOT NULL, updated_by VARCHAR(36) NOT NULL, CONSTRAINT cloud_access_policies_team FOREIGN KEY (team_id) REFERENCES teams(id));

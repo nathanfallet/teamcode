@@ -95,6 +95,7 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
             it[teamId] = actor.teamId; it[pausedRetentionDays] = settings.pausedRetentionDays
             it[failedWorkspaceRetentionDays] = settings.failedWorkspaceRetentionDays
             it[maxRunningSessionsPerMember] = settings.maxRunningSessionsPerMember; it[maxRetainedSessionsPerMember] = settings.maxRetainedSessionsPerMember
+            it[transcriptRetentionDays] = settings.transcriptRetentionDays
         }
         audit(actor.teamId, actor.member.id, "cloud.settings.updated", actor.teamId, null, actor.tokenId)
         settings
@@ -138,6 +139,7 @@ internal fun readCluster(row: ResultRow) = CloudCluster(
     row[CloudClusters.lastGarbageCollectionAt], row[CloudClusters.createdAt], row[CloudClusters.updatedAt],
 )
 internal fun readCloudSettings(teamId: String): CloudSettings = CloudSettingsTable.selectAll().where { CloudSettingsTable.teamId eq teamId }.singleOrNull()?.let {
-    CloudSettings(it[CloudSettingsTable.pausedRetentionDays], it[CloudSettingsTable.failedWorkspaceRetentionDays], it[CloudSettingsTable.maxRunningSessionsPerMember], it[CloudSettingsTable.maxRetainedSessionsPerMember])
+    CloudSettings(it[CloudSettingsTable.pausedRetentionDays], it[CloudSettingsTable.failedWorkspaceRetentionDays], it[CloudSettingsTable.maxRunningSessionsPerMember], it[CloudSettingsTable.maxRetainedSessionsPerMember],
+        it[CloudSettingsTable.transcriptRetentionDays])
 } ?: CloudSettings()
 internal fun readMember(row: ResultRow) = Member(row[Members.id], row[Members.username], Role.valueOf(row[Members.role]), row[Members.disabled], row[Members.mustChangePassword])

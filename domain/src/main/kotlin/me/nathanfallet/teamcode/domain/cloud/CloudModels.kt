@@ -187,6 +187,8 @@ data class CloudSettings(
     val failedWorkspaceRetentionDays: Int = 7,
     val maxRunningSessionsPerMember: Int = 2,
     val maxRetainedSessionsPerMember: Int = 20,
+    /** Days transcript events and finished messages are kept, counted from each event; null keeps them indefinitely. Independent of pods and workspaces. */
+    val transcriptRetentionDays: Int? = 30,
 )
 
 data class CloudSessionQuery(

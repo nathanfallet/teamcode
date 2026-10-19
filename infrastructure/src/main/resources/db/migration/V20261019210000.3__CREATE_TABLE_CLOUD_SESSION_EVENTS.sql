@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS cloud_session_events (session_id VARCHAR(36), seq BIGINT, team_id VARCHAR(36) NOT NULL, epoch INT NOT NULL, runner_seq BIGINT NULL, `type` VARCHAR(32) NOT NULL, `at` BIGINT NOT NULL, `data` text NOT NULL, CONSTRAINT pk_cloud_session_events PRIMARY KEY (session_id, seq), CONSTRAINT cloud_session_events_session FOREIGN KEY (session_id) REFERENCES cloud_sessions(id) ON DELETE CASCADE);
+ALTER TABLE cloud_session_events ADD CONSTRAINT cloud_event_runner_seq UNIQUE (session_id, epoch, runner_seq);
+CREATE INDEX cloud_event_retention ON cloud_session_events (team_id, `at`);

@@ -7,7 +7,12 @@ import me.nathanfallet.teamcode.domain.team.*
  * Management use cases. Routes only write the desired state here; the reconciler performs every cluster call.
  * Authorization uses the caller's own rights; `onBehalfOf` only selects the effective member.
  */
-class CloudSessionService(private val store: CloudSessionStore, private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(store)) {
+class CloudSessionService(
+    private val store: CloudSessionStore,
+    private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(store),
+    /** The team access policy; null (tests of the lifecycle alone) lets every member create their own sessions. */
+    private val access: CloudAccessService? = null,
+) {
     /** Resolves `TeamCode-On-Behalf-Of`. Only an interactive administrator may name another member. */
     suspend fun actor(principal: Principal, onBehalfOf: String?): CloudActor {
         principal.requireReady()
@@ -27,6 +32,8 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
         val profile = store.profile(principal.teamId, draft.profileId) ?: throw missingProfile()
         val owner = store.member(principal.teamId, actor.effectiveMemberId) ?: throw missingProfile()
         if (owner.role != Role.ADMIN && owner.id !in profile.assignedMemberIds) throw missingProfile()
+        // The owner must hold `create` under the access policy, also when an administrator creates on their behalf.
+        access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
         val spec = profile.spec
         val image = draft.image?.also { requested ->
             if (requested != spec.image && spec.allowedImageOverrides.none { matchesImagePattern(it, requested) })

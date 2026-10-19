@@ -8,9 +8,11 @@ import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
+import me.nathanfallet.teamcode.presentation.CloudConversation
 import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
 
 /**
@@ -34,11 +36,35 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     })
     private val garbage = CollectCloudGarbageUseCase(store, cluster)
 
-    val sessions = CloudSessionService(store)
+    private val conversationStore = SqlCloudConversationStore(database)
+    // Groups do not exist in TeamCode yet; a group directory plugs in here when they land.
+    private val access = CloudAccessService(conversationStore, store, CloudGroupDirectory.NONE)
+    val sessions = CloudSessionService(store, access = access)
     val admin = CloudAdministrationService(adminStore, cluster)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster))
 
+    private val conversationService = CloudConversationService(conversationStore, store, access)
+    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
+
     fun launch(scope: CoroutineScope) {
+        scope.launch {
+            // Messages sent while a session was pausing wake it once paused; inputs of ended sessions are cancelled.
+            while (isActive) {
+                try { conversationService.wakePending(); conversationStore.cancelEnded(50) }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { System.err.println("TeamCode cloud message delivery is temporarily unavailable (${describe(error)}).") }
+                delay(5_000)
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                try { work.runDue("cloud-transcript-retention", intervalMillis = 10 * 60_000, timeoutMillis = 120_000) { conversationStore.purgeTranscripts(1_000) } }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode cloud transcript retention deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { System.err.println("TeamCode cloud transcript retention is temporarily unavailable (${describe(error)}).") }
+                delay(60_000)
+            }
+        }
         scope.launch {
             while (isActive) {
                 val claimed = try { reconciler(replica) }

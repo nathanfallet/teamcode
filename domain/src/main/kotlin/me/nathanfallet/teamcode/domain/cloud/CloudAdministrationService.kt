@@ -44,8 +44,9 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
         fun validate(settings: CloudSettings) {
             if ((settings.pausedRetentionDays != null && settings.pausedRetentionDays !in 1..3650) || settings.failedWorkspaceRetentionDays !in 0..365 ||
                 settings.maxRunningSessionsPerMember !in 1..100 || settings.maxRetainedSessionsPerMember !in 1..1000 ||
-                settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember)
-                throw TeamFailure("invalid_cloud_settings", 400, "Use a paused retention of 1–3650 days (or indefinite), a failed-workspace retention of 0–365 days and running/retained caps of 1–100/1–1000 with retained ≥ running.")
+                settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember ||
+                (settings.transcriptRetentionDays != null && settings.transcriptRetentionDays !in 1..3650))
+                throw TeamFailure("invalid_cloud_settings", 400, "Use a paused retention of 1–3650 days (or indefinite), a transcript retention of 1–3650 days (or indefinite), a failed-workspace retention of 0–365 days and running/retained caps of 1–100/1–1000 with retained ≥ running.")
         }
         fun validate(input: CloudClusterInput, creating: Boolean) {
             val url = input.apiUrl

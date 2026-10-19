@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS cloud_session_inputs (id VARCHAR(36) PRIMARY KEY, session_id VARCHAR(36) NOT NULL, team_id VARCHAR(36) NOT NULL, kind VARCHAR(16) NOT NULL, status VARCHAR(16) NOT NULL, author_id VARCHAR(36) NOT NULL, credential_id VARCHAR(36) NOT NULL, text MEDIUMTEXT NULL, wake BOOLEAN NOT NULL, wake_pending BOOLEAN DEFAULT FALSE NOT NULL, client_key VARCHAR(128) NULL, request_digest VARCHAR(64) NULL, created_at BIGINT NOT NULL, delivered_at BIGINT NULL, delivered_epoch INT NULL, attempts INT DEFAULT 0 NOT NULL, consumed_at BIGINT NULL, finished_at BIGINT NULL, reason VARCHAR(64) NULL, event_seq BIGINT NULL, CONSTRAINT cloud_session_inputs_session FOREIGN KEY (session_id) REFERENCES cloud_sessions(id) ON DELETE CASCADE);
+ALTER TABLE cloud_session_inputs ADD CONSTRAINT cloud_input_client_key UNIQUE (session_id, author_id, client_key);
+CREATE INDEX cloud_input_session_status ON cloud_session_inputs (session_id, status, created_at);
+CREATE INDEX cloud_input_status ON cloud_session_inputs (status, created_at);
+CREATE INDEX cloud_input_wake ON cloud_session_inputs (wake_pending);
+CREATE INDEX cloud_input_retention ON cloud_session_inputs (team_id, finished_at);

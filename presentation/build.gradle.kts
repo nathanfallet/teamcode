@@ -11,6 +11,8 @@ dependencies {
     testImplementation(projects.client)
     testImplementation(libs.ktor.server.tests)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.ktor.server.cio)
+    testImplementation(libs.ktor.client.cio)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.coroutines.test)
     testRuntimeOnly(libs.junit)
