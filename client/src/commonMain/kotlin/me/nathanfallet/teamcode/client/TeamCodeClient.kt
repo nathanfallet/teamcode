@@ -137,7 +137,7 @@ class TeamCodeClient(
      */
     suspend fun forwardMcp(server: String, body: ByteArray, protocolVersion: String? = null): McpRelayResponse {
         require(MCP_SERVER_NAME.matches(server)) { "Invalid MCP server name." }
-        val response = http.post("$origin/mcp/$server") {
+        return http.preparePost("$origin/mcp/$server") {
             contentType(ContentType.Application.Json)
             accept(ContentType.Application.Json)
             protocolVersion?.let { header("MCP-Protocol-Version", it) }
@@ -145,10 +145,12 @@ class TeamCodeClient(
             // The gateway bounds every upstream call; this only stops a stalled connection.
             timeout { requestTimeoutMillis = 15 * 60_000 }
             setBody(body)
+        }.execute { response ->
+            // Streamed and bounded: the response is never buffered whole before the size check.
+            val bytes = response.bodyAsChannel().readRemaining(MCP_RESPONSE_LIMIT + 1L).readByteArray()
+            if (bytes.size > MCP_RESPONSE_LIMIT) throw TeamCodeException(502, "The MCP gateway response exceeds the limit.")
+            McpRelayResponse(response.status.value, bytes)
         }
-        val bytes = response.bodyAsChannel().readRemaining(MCP_RESPONSE_LIMIT + 1L).readByteArray()
-        if (bytes.size > MCP_RESPONSE_LIMIT) throw TeamCodeException(502, "The MCP gateway response exceeds the limit.")
-        return McpRelayResponse(response.status.value, bytes)
     }
 
     /** The body must be consumed inside [receive]; no full response is buffered by this SDK. */

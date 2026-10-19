@@ -134,6 +134,7 @@ class McpGatewayAcceptanceTest {
                     assertTrue(rpc(carol.token, "tracker", "initialize").denied(), "An unassigned server cannot even be initialized")
                     assertTrue(rpc(alice.token, "unknown", "ping").denied())
                     assertEquals(HttpStatusCode.Accepted, client.post("/mcp/tracker") { bearerAuth(alice.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","method":"notifications/initialized"}""") }.status)
+                    assertEquals(HttpStatusCode.NotFound, client.post("/mcp/tracker") { bearerAuth(carol.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","method":"notifications/initialized"}""") }.status, "Notifications are authorized too")
                     assertEquals(HttpStatusCode.MethodNotAllowed, client.get("/mcp/tracker") { bearerAuth(alice.token) }.status)
                     assertEquals(HttpStatusCode.NotFound, client.post("/mcp") { bearerAuth(alice.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status, "No aggregated endpoint")
                     assertEquals(HttpStatusCode.Unauthorized, client.post("/mcp/tracker") { contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)

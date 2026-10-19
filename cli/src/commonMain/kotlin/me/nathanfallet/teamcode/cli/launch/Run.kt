@@ -61,7 +61,10 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     private suspend fun assignedMcpServers(client: TeamCodeClient, capabilities: Capabilities): List<String> {
         if (noMcp || "mcp.gateway.v1" !in capabilities.features) return emptyList()
         return try {
-            client.mcpServers().map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }
+            client.mcpServers().map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }.also { servers ->
+                val skipped = servers.groupBy(::mcpLabel).filterValues { it.size > 1 }.values.flatten()
+                if (skipped.isNotEmpty()) echo("MCP servers with conflicting names were not connected: ${skipped.joinToString(", ")}.", err = true)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -98,6 +101,9 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
 }
 
+/** The agent-side name of a team MCP server; two servers with the same label are both left out. */
+internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
+
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
 internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", mcpServers: List<String> = emptyList()): AgentLaunch {
@@ -106,7 +112,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
     val origin = "http://127.0.0.1:$port" + if (workload == "background") "/_teamcode/workloads/background" else ""
     // One agent-side MCP server per team server, each on its own local relay endpoint; never one merged server.
     // The `teamcode-` prefix keeps them apart from personal servers, and '.' is not allowed in Codex config keys.
-    val mcp = mcpServers.associateBy { "teamcode-" + it.replace('.', '_') }.filterKeys { label -> mcpServers.count { "teamcode-" + it.replace('.', '_') == label } == 1 }
+    val mcp = mcpServers.groupBy(::mcpLabel).filterValues { it.size == 1 }.mapValues { it.value.single() }
     fun mcpUrl(server: String) = "http://127.0.0.1:$port/mcp/$server"
     // Agent options go before a literal "--" delimiter, and after the caller's own options because
     // Claude Code's --mcp-config is variadic and would otherwise swallow a following prompt argument.

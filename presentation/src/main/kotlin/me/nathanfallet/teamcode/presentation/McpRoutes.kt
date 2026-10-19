@@ -72,11 +72,14 @@ internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
             if (message !is JsonObject) return@post call.respondJson(rpcError(JsonNull, JsonRpc.INVALID_REQUEST, "Send one JSON-RPC message per request; batches are not supported."), HttpStatusCode.BadRequest)
             val method = (message["method"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             val id = message["id"]
-            // Notifications and responses to the server need no answer.
-            if (method == null || id == null) return@post call.respond(HttpStatusCode.Accepted)
+            val server = call.parameters["server"].orEmpty()
+            // Notifications and responses to the server need no answer, but only on a server the member can use.
+            if (method == null || id == null) {
+                try { gateway.requireServer(call.principal, server) } catch (_: McpServerDenied) { return@post call.respond(HttpStatusCode.NotFound) }
+                return@post call.respond(HttpStatusCode.Accepted)
+            }
             if (id !is JsonPrimitive || id is JsonNull || (!id.isString && id.booleanOrNull != null)) return@post call.respondJson(rpcError(JsonNull, JsonRpc.INVALID_REQUEST, "Use a string or number request id."), HttpStatusCode.BadRequest)
             val params = message["params"] as? JsonObject ?: JsonObject(emptyMap())
-            val server = call.parameters["server"].orEmpty()
             val response = try {
                 when (method) {
                     "initialize" -> { gateway.requireServer(call.principal, server); rpcResult(id, buildJsonObject {

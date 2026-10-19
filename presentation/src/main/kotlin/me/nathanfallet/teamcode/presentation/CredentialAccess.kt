@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import me.nathanfallet.teamcode.domain.mcp.McpGateway
 import me.nathanfallet.teamcode.domain.team.CredentialAction
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
@@ -9,7 +10,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && path == "/api/v1/auth/logout" -> CredentialAction.LOGOUT
     method == "POST" && path in inferencePaths -> CredentialAction.INFERENCE
     method == "POST" && Regex("/api/v1/requests/[0-9a-f-]{36}/cancel").matches(path) -> CredentialAction.INFERENCE
-    path.startsWith("$MCP_PATH/") && path.count { it == '/' } == 2 -> CredentialAction.MCP
+    method == "POST" && path.startsWith("$MCP_PATH/") && McpGateway.SERVER_NAME.matches(path.removePrefix("$MCP_PATH/")) -> CredentialAction.MCP
     method == "GET" && path == MCP_SERVERS_PATH -> CredentialAction.MCP
     method == "GET" && path == "/api/v1/mcp/usage" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/capacity" -> CredentialAction.USAGE_READ

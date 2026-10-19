@@ -142,6 +142,12 @@ private fun Routing.mcpRelay(client: TeamCodeClient, localToken: String, maximum
                 return@post
             }
             call.response.header(HttpHeaders.CacheControl, "no-store")
+            // A 401/403 here is about the TeamCode sign-in, not the MCP server: agents would otherwise start an
+            // OAuth flow against the local relay.
+            if (relayed.status == 401 || relayed.status == 403) {
+                call.respondText("TeamCode refused the MCP request; run `teamcode login` or check your access.", status = HttpStatusCode.BadGateway)
+                return@post
+            }
             if (relayed.body.isEmpty()) call.respond(HttpStatusCode.fromValue(relayed.status))
             else call.respondBytes(relayed.body, ContentType.Application.Json, HttpStatusCode.fromValue(relayed.status))
         }
