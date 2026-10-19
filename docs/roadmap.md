@@ -58,6 +58,7 @@ TeamCode will extend team administration to agent tools and reusable skills. Thi
 - Track installation/version status separately from permission to use protected resources. Skills are instructions and files loaded by the agent, not server-executed MCP tools.
 - Do not treat downloaded skill files as an access-control mechanism: users can copy instructions they have received. Enforce access to protected tools, credentials and data at the MCP gateway or backing service.
 - Acceptance: clean setup and subsequent launches install the assigned pinned versions, updates/rollback are reproducible, removed assignments stop being provisioned, and personal configuration is preserved.
+- Server side in progress on a V2 branch: catalog, CI publication with `skills:publish`, pins, yes/no member decisions, delivery and installation status. CLI synchronization and GitHub synchronization remain planned. See [skills](skills.md).
 
 The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these require explicit gateway and CLI capabilities.
 

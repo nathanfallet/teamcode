@@ -12,5 +12,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && path == "/api/v1/capacity" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/directives/current" -> CredentialAction.GUIDANCE
     method == "POST" && path in setOf("/api/v1/directives/current", "/api/v1/directives/claim", "/api/v1/directives/receipt") -> CredentialAction.GUIDANCE
+    method == "POST" && Regex("/api/v1/skills/[a-z0-9-]{1,64}/versions").matches(path) -> CredentialAction.SKILLS_PUBLISH
+    method == "GET" && path == "/api/v1/skill-delivery" -> CredentialAction.SKILLS_READ
+    method == "GET" && Regex("/api/v1/skill-delivery/[a-z0-9-]{1,64}/[^/]{1,64}").matches(path) -> CredentialAction.SKILLS_READ
     else -> CredentialAction.INTERACTIVE
 }
