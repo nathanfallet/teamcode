@@ -20,7 +20,7 @@ The capabilities are advertised with `cloud.sessions.v1`, when cloud sessions ar
 
 ## The agent in the pod
 
-The runner (`teamcode cloud runner`) starts the session's agent with the first message, as one long-lived process with streaming input, in bypass mode inside the sandboxed pod:
+The runner (`teamcode cloud runner`) starts the session's agent with the first message, through the exec supervisor of the pod's agent container (its own UID, no runner token), as one long-lived process with streaming input, in bypass mode inside the sandboxed pod:
 
 - **Claude Code**: `claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions [--model M] [--effort E] [--resume ID]`. Each message is a `user` line on stdin; Claude Code queues messages sent during a turn. An interrupt is a `control_request` with subtype `interrupt`.
 - **Codex**: `codex app-server` (JSON-RPC lines without the `jsonrpc` member): `initialize`, `initialized`, then `thread/start` or `thread/resume` with `approvalPolicy: never` and `sandbox: danger-full-access` (the app-server form of `--dangerously-bypass-approvals-and-sandbox`). A message during a turn is `turn/steer`, otherwise `turn/start`; a steer that arrives after the turn ended starts the next turn instead of being lost. An interrupt is `turn/interrupt`. Server requests (approvals) are refused, since bypass mode should produce none.
@@ -121,7 +121,7 @@ Migrations `V20261019210000*`: `cloud_settings.transcript_retention_days`, `clou
 
 ## Known limits
 
-- The agent runs with the pod UID like the runner, so it can read the projected token file; a separate UID or a token that the runner drops after reading is a follow-up.
+- The agent runs in its own container under its own UID with no projected token, started by the supervisor there for the runner (see [the runner and the pod](cloud-sessions.md#the-runner-and-the-pod)). Its conversation files live under `/workspace/.agent-home`; a workspace from before this split keeps them in `.home`, so such a session starts a fresh conversation (the transcript is kept).
 - The caller-wide feed and webhooks are not implemented.
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).

@@ -31,6 +31,7 @@ class ClusterApiException(val status: Int) : Exception("The Kubernetes API retur
  * @param serverUrl the TeamCode origin the runner calls back, reachable from the cluster.
  * @param runnerImage an image holding the `teamcode` Linux binary at [runnerBinary]; an init container copies
  *   it into the pod, so session images need no TeamCode installation.
+ * @param runAsUser the runner container's UID, the owner of the pod's group (`fsGroup`); [agentRunAsUser] runs the agent container.
  * @param workspaceAccessMode `ReadWriteOncePod` where the CSI driver supports it (one pod per workspace,
  *   enforced by the cluster); `ReadWriteOnce` otherwise, for example on a local `kind` cluster.
  */
@@ -40,12 +41,15 @@ data class KubernetesPodOptions(
     val runnerBinary: String = "/usr/local/bin/teamcode",
     val workspaceAccessMode: String = "ReadWriteOncePod",
     val runAsUser: Long = 1000,
+    /** The agent's UID: it must not be the runner's, whose files and projected token it must never read. */
+    val agentRunAsUser: Long = 1001,
 ) {
     init {
         // The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server.
         require(Regex("https://[^/?#@\\s]+/?").matches(serverUrl) && !Regex("https://(localhost|127\\.[0-9.]+|\\[::1])(:[0-9]+)?/?").matches(serverUrl)) {
             "Set TEAMCODE_CLOUD_SERVER_URL (or TEAMCODE_PUBLIC_URL) to the HTTPS origin session pods reach."
         }
+        require(runAsUser > 0 && agentRunAsUser > 0 && runAsUser != agentRunAsUser) { "The runner and the agent run as different non-root UIDs." }
         require(workspaceAccessMode in setOf("ReadWriteOncePod", "ReadWriteOnce")) { "Use ReadWriteOncePod or ReadWriteOnce." }
     }
 }
@@ -143,7 +147,16 @@ class KubernetesClusterPort(
         return TokenIdentity(parts[2], parts[3], extra("authentication.kubernetes.io/pod-name"), extra("authentication.kubernetes.io/pod-uid"))
     }
 
-    /** The session pod: bare (`restartPolicy: Never`), non-root, no API token mounted, a projected runner token. */
+    /**
+     * The session pod: bare (`restartPolicy: Never`), non-root, no API token mounted. Two containers share the
+     * workspace and a memory-backed volume holding two sockets, and nothing else:
+     *
+     * - `session` is the runner. It alone mounts the projected token, and it holds the server credentials.
+     * - `agent` is the same image under another UID with no token. It runs the exec supervisor, which starts the
+     *   agent and the preparation commands for the runner, and the git helper reaches the runner's credential socket.
+     *
+     * The containers do not share a process namespace, so the agent cannot read the runner's memory or environment.
+     */
     internal fun podManifest(request: PodRequest): JsonObject = buildJsonObject {
         put("apiVersion", "v1"); put("kind", "Pod")
         putJsonObject("metadata") { put("name", request.name); putLabels(request.labels) }
@@ -151,6 +164,7 @@ class KubernetesClusterPort(
             put("restartPolicy", "Never")
             put("automountServiceAccountToken", false)
             put("enableServiceLinks", false)
+            put("shareProcessNamespace", false)
             put("terminationGracePeriodSeconds", 30)
             putJsonObject("securityContext") {
                 put("runAsNonRoot", true); put("runAsUser", pods.runAsUser); put("runAsGroup", pods.runAsUser); put("fsGroup", pods.runAsUser)
@@ -174,10 +188,39 @@ class KubernetesClusterPort(
                         fun env(name: String, value: String) = addJsonObject { put("name", name); put("value", value) }
                         env("TEAMCODE_SERVER_URL", pods.serverUrl)
                         env("TEAMCODE_CLOUD_TOKEN_FILE", "$TOKEN_DIR/token")
+                        env("TEAMCODE_AGENT_SOCKET", AGENT_SOCKET)
+                        env("TEAMCODE_CREDENTIAL_SOCKET", CREDENTIAL_SOCKET)
                         env("HOME", "$WORKSPACE_DIR/.home")
                         request.env.toSortedMap().forEach { (name, value) -> env(name, value) }
                     }
-                    put("securityContext", containerSecurity())
+                    put("securityContext", containerSecurity(pods.runAsUser))
+                    // The runner only relays: heartbeats, the transcript buffer and the loopback proxy.
+                    putJsonObject("resources") {
+                        putJsonObject("requests") { put("cpu", RUNNER_CPU); put("memory", RUNNER_MEMORY) }
+                        putJsonObject("limits") { put("cpu", RUNNER_CPU); put("memory", RUNNER_MEMORY) }
+                    }
+                    putJsonArray("volumeMounts") {
+                        addJsonObject { put("name", "workspace"); put("mountPath", WORKSPACE_DIR) }
+                        addJsonObject { put("name", "runner"); put("mountPath", RUNNER_DIR); put("readOnly", true) }
+                        addJsonObject { put("name", "runner-token"); put("mountPath", TOKEN_DIR); put("readOnly", true) }
+                        addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
+                    }
+                }
+                addJsonObject {
+                    put("name", AGENT_CONTAINER); put("image", request.image); put("workingDir", WORKSPACE_DIR)
+                    putJsonArray("command") { add("$RUNNER_DIR/teamcode"); add("cloud"); add("agent-supervisor") }
+                    putJsonArray("env") {
+                        fun env(name: String, value: String) = addJsonObject { put("name", name); put("value", value) }
+                        // No server URL, token path or session identifier: the agent's side knows nothing of the runner channel.
+                        env("TEAMCODE_AGENT_SOCKET", AGENT_SOCKET)
+                        env("TEAMCODE_CREDENTIAL_SOCKET", CREDENTIAL_SOCKET)
+                        env("HOME", AGENT_HOME)
+                        env("GIT_TERMINAL_PROMPT", "0")
+                        env("GIT_CONFIG_COUNT", "1")
+                        env("GIT_CONFIG_KEY_0", "credential.helper")
+                        env("GIT_CONFIG_VALUE_0", "!$RUNNER_DIR/teamcode cloud credential")
+                    }
+                    put("securityContext", containerSecurity(pods.agentRunAsUser))
                     putJsonObject("resources") {
                         val cpu = "${request.resources.cpuMillis}m"; val memory = "${request.resources.memoryMebibytes}Mi"
                         putJsonObject("requests") { put("cpu", cpu); put("memory", memory) }
@@ -186,13 +229,14 @@ class KubernetesClusterPort(
                     putJsonArray("volumeMounts") {
                         addJsonObject { put("name", "workspace"); put("mountPath", WORKSPACE_DIR) }
                         addJsonObject { put("name", "runner"); put("mountPath", RUNNER_DIR); put("readOnly", true) }
-                        addJsonObject { put("name", "runner-token"); put("mountPath", TOKEN_DIR); put("readOnly", true) }
+                        addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
                     }
                 }
             }
             putJsonArray("volumes") {
                 addJsonObject { put("name", "workspace"); putJsonObject("persistentVolumeClaim") { put("claimName", request.claimName) } }
                 addJsonObject { put("name", "runner"); putJsonObject("emptyDir") { put("sizeLimit", "256Mi") } }
+                addJsonObject { put("name", "sockets"); putJsonObject("emptyDir") { put("medium", "Memory"); put("sizeLimit", "1Mi") } }
                 addJsonObject {
                     put("name", "runner-token")
                     putJsonObject("projected") { putJsonArray("sources") { addJsonObject { putJsonObject("serviceAccountToken") {
@@ -203,7 +247,8 @@ class KubernetesClusterPort(
         }
     }
 
-    private fun containerSecurity() = buildJsonObject {
+    private fun containerSecurity(user: Long? = null) = buildJsonObject {
+        user?.let { put("runAsUser", it); put("runAsNonRoot", true) }
         put("allowPrivilegeEscalation", false)
         putJsonObject("capabilities") { putJsonArray("drop") { add("ALL") } }
     }
@@ -303,10 +348,20 @@ class KubernetesClusterPort(
     }
 
     companion object {
+        /** The runner: the container the server observes, and the only one holding the projected token. */
         const val SESSION_CONTAINER = "session"
+        const val AGENT_CONTAINER = "agent"
         const val WORKSPACE_DIR = "/workspace"
         const val RUNNER_DIR = "/opt/teamcode"
         const val TOKEN_DIR = "/var/run/secrets/teamcode"
+        /** A memory volume shared by the two containers: the supervisor socket (served by the agent side) and the credential socket (served by the runner). */
+        const val SOCKET_DIR = "/run/teamcode"
+        const val AGENT_SOCKET = "$SOCKET_DIR/agent.sock"
+        const val CREDENTIAL_SOCKET = "$SOCKET_DIR/credential.sock"
+        /** The agent's `HOME`, created by the agent's UID on the workspace volume (the runner's lives in `.home`). */
+        const val AGENT_HOME = "$WORKSPACE_DIR/.agent-home"
+        private const val RUNNER_CPU = "250m"
+        private const val RUNNER_MEMORY = "256Mi"
         /** The minimum the API server accepts; the kubelet rotates the file before expiry. */
         const val TOKEN_SECONDS = 600
         private const val CONNECTION_REFRESH_MILLIS = 30_000L

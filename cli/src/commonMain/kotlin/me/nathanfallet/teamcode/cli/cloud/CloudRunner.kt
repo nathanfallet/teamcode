@@ -8,6 +8,8 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.api.BuildInfo
 import me.nathanfallet.teamcode.cli.cloud.agent.*
+import me.nathanfallet.teamcode.cli.platform.UnixConnection
+import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
@@ -125,6 +127,12 @@ internal class RunnerLoop(
     }
 }
 
+/**
+ * The token sources the runner serves to the agent's git helper. None yet: the GitHub link adds its own, which is the
+ * only place a source is plugged in. Until then the helper finds no credential and git asks for none.
+ */
+internal fun credentialSources(): List<CredentialSource> = emptyList()
+
 /** `teamcode cloud runner`: started inside the session pod; reads its coordinates from the pod environment. */
 internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
     override val hiddenFromHelp = true
@@ -155,13 +163,25 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             val inference = RunnerInference({ client.runnerInference(RunnerInferenceRequest(team, session, epoch)) }, log = { echo(it, err = true) })
             val inferenceClient = TeamCodeClient(server, { inference.token() }) { configure -> HttpClient { configure(this) } }
             val localToken = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+            val scope = CoroutineScope(SupervisorJob())
+            var lifeline: UnixConnection? = null
             val proxy = proxyServer(inferenceClient, localToken, 0, upstreamReady = { inference.available() }) { echo(it, err = true) }
             try {
                 proxy.start(wait = false)
                 val port = proxy.engine.resolvedConnectors().single().port
                 // HOME is on the workspace volume, so the conversation id survives pauses and new pods.
                 val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
-                val agent = AgentHost(agentChannel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
+                // In a session pod the agent runs in its own container under another UID: processes start through the
+                // supervisor there, and the helper in that container fetches git credentials from this process.
+                val processes = environment("TEAMCODE_AGENT_SOCKET")?.takeIf { it.isNotBlank() }?.let { RemoteProcesses(it, scope, log = { message -> echo(message, err = true) }) }
+                lifeline = processes?.let { try { it.hold() } catch (error: CancellationException) { throw error } catch (_: Exception) { echo("The agent container is not reachable.", err = true); null } }
+                environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { socket ->
+                    val broker = CredentialBroker(listenUnix(socket), credentialSources(), log = { message -> echo(message, err = true) })
+                    scope.launch { broker.serve() }
+                }
+                val agent = AgentHost(agentChannel, { command, overrides, directory ->
+                    processes?.start(command.command, command.arguments, overrides, directory) ?: startAgentProcess(command.command, command.arguments, overrides, directory)
+                },
                     FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
                     BuildInfo.VERSION, log = { echo(it, err = true) }, inference = {
                         // Fetched before the agent starts, so a server without the route is known and the agent keeps its own configuration.
@@ -172,6 +192,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
             } finally {
                 withContext(NonCancellable) {
+                    scope.cancel()
+                    lifeline?.close()
                     inference.clear()
                     proxy.stop(500, 5_000)
                     inferenceClient.close()

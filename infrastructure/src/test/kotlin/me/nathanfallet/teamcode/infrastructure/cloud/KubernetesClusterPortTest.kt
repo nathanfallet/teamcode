@@ -65,9 +65,11 @@ class KubernetesClusterPortTest {
         assertEquals("Never", spec["restartPolicy"]!!.jsonPrimitive.content)
         assertFalse(spec["automountServiceAccountToken"]!!.jsonPrimitive.boolean, "The default API token is never mounted")
         assertTrue(spec["securityContext"]!!.jsonObject["runAsNonRoot"]!!.jsonPrimitive.boolean)
-        val session = spec["containers"]!!.jsonArray.single().jsonObject
+        val containers = spec["containers"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("session", "agent"), containers.map { it["name"]!!.jsonPrimitive.content })
+        val session = containers.first()
         assertEquals(false, session["securityContext"]!!.jsonObject["allowPrivilegeEscalation"]!!.jsonPrimitive.boolean)
-        assertEquals("2000m", session["resources"]!!.jsonObject["limits"]!!.jsonObject["cpu"]!!.jsonPrimitive.content)
+        assertEquals("2000m", containers.last()["resources"]!!.jsonObject["limits"]!!.jsonObject["cpu"]!!.jsonPrimitive.content, "The agent gets the profile's resources")
         val env = session["env"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["value"]!!.jsonPrimitive.content }
         assertEquals("2", env["TEAMCODE_CLOUD_EPOCH"]); assertEquals("https://teamcode.example.test", env["TEAMCODE_SERVER_URL"])
         assertTrue(env.values.none { it.contains(token) }, "No credential in the pod environment")
@@ -75,6 +77,37 @@ class KubernetesClusterPortTest {
         val source = projected["projected"]!!.jsonObject["sources"]!!.jsonArray.single().jsonObject["serviceAccountToken"]!!.jsonObject
         assertEquals("teamcode", source["audience"]!!.jsonPrimitive.content); assertEquals(600, source["expirationSeconds"]!!.jsonPrimitive.int)
         assertEquals("registry", spec["imagePullSecrets"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun agentRunsInItsOwnContainerUnderAnotherUidWithoutTheRunnerToken(): Unit = runBlocking {
+        val port = port { json("{}", HttpStatusCode.Created) }
+        port.createPod("c1", PodRequest("teamcode", "tc-1-e2", "registry.example/toolchain@sha256:" + "a".repeat(64), "tc-ws-1",
+            mapOf("teamcode.nathanfallet.me/epoch" to "2"), CloudResources(2000, 4096), emptyList(),
+            mapOf("TEAMCODE_CLOUD_SESSION" to "1", "TEAMCODE_CLOUD_EPOCH" to "2", "TEAMCODE_CLOUD_TEAM" to "t")))
+        val spec = bodies.single()!!["spec"]!!.jsonObject
+        assertFalse(spec["shareProcessNamespace"]!!.jsonPrimitive.boolean, "The agent must not see the runner's processes")
+        val containers = spec["containers"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
+        val runner = containers.getValue("session"); val agent = containers.getValue("agent")
+        fun JsonObject.mounts() = this["volumeMounts"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["mountPath"]!!.jsonPrimitive.content }
+        fun JsonObject.env() = this["env"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["value"]!!.jsonPrimitive.content }
+        fun JsonObject.uid() = this["securityContext"]!!.jsonObject["runAsUser"]!!.jsonPrimitive.long
+
+        assertNotEquals(runner.uid(), agent.uid(), "Two UIDs: the agent cannot read the runner's files")
+        assertTrue(agent["securityContext"]!!.jsonObject["runAsNonRoot"]!!.jsonPrimitive.boolean)
+        assertEquals(setOf("workspace", "runner", "runner-token", "sockets"), runner.mounts().keys)
+        assertEquals(setOf("workspace", "runner", "sockets"), agent.mounts().keys, "The agent never mounts the projected token")
+        val volumes = spec["volumes"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
+        assertEquals("Memory", volumes.getValue("sockets")["emptyDir"]!!.jsonObject["medium"]!!.jsonPrimitive.content)
+        assertEquals("/run/teamcode/agent.sock", runner.env()["TEAMCODE_AGENT_SOCKET"]); assertEquals(runner.env()["TEAMCODE_AGENT_SOCKET"], agent.env()["TEAMCODE_AGENT_SOCKET"])
+        assertEquals("/run/teamcode/credential.sock", agent.env()["TEAMCODE_CREDENTIAL_SOCKET"])
+        assertEquals("credential.helper", agent.env()["GIT_CONFIG_KEY_0"]); assertEquals("!/opt/teamcode/teamcode cloud credential", agent.env()["GIT_CONFIG_VALUE_0"])
+        // Nothing of the runner channel reaches the agent's container.
+        assertTrue(agent.env().keys.none { it.startsWith("TEAMCODE_CLOUD_") || it == "TEAMCODE_SERVER_URL" }, "No runner coordinates: ${agent.env().keys}")
+        assertEquals("/workspace/.agent-home", agent.env()["HOME"]); assertNotEquals(runner.env()["HOME"], agent.env()["HOME"])
+        assertEquals(listOf("/opt/teamcode/teamcode", "cloud", "agent-supervisor"), agent["command"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(runner["image"], agent["image"], "The same image: the agent's toolchain is the team's")
+        assertFailsWith<IllegalArgumentException> { KubernetesPodOptions("https://teamcode.example.test", "runner:1", runAsUser = 1000, agentRunAsUser = 1000) }
+        assertFailsWith<IllegalArgumentException> { KubernetesPodOptions("https://teamcode.example.test", "runner:1", agentRunAsUser = 0) }
     }
 
     @Test fun podObservationTokenReviewAndPagedLists(): Unit = runBlocking {

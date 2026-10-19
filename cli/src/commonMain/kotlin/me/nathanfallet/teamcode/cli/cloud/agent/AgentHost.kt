@@ -51,7 +51,7 @@ interface AgentStateStore {
  */
 internal class AgentHost(
     private val channel: AgentChannel,
-    private val start: (AgentCommand, Map<String, String?>, String) -> AgentProcess,
+    private val start: suspend (AgentCommand, Map<String, String?>, String) -> AgentProcess,
     private val state: AgentStateStore,
     private val workingDirectory: String,
     private val clientVersion: String,

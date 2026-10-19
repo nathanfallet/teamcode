@@ -9,6 +9,10 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <time.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 
 /* Hook commands receive a pipe, never interactive input. Bound both input and wait. */
 static inline int teamcode_hook_input(unsigned char *buffer, int capacity) {
@@ -166,4 +170,50 @@ static inline int teamcode_poll(int child, int *code) {
     return 1;
 }
 static inline void teamcode_terminate(int child, int force) { kill((pid_t)child, force ? SIGKILL : SIGTERM); }
+/*
+ * Unix domain sockets for the in-pod agent supervisor and credential broker. A listener is created with mode 0660 (the
+ * umask is narrowed around bind, so the socket never exists with wider rights) and is non-blocking, as are accepted
+ * and connected descriptors; all are close-on-exec. Returns a descriptor, or -1 with errno set.
+ */
+static inline int teamcode_unix_address(const char *path, struct sockaddr_un *address) {
+    memset(address, 0, sizeof(*address));
+    address->sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof(address->sun_path)) { errno = ENAMETOOLONG; return -1; }
+    strcpy(address->sun_path, path);
+    return 0;
+}
+static inline int teamcode_unix_prepare(int fd) {
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    return fd;
+}
+static inline int teamcode_unix_listen(const char *path) {
+    struct sockaddr_un address;
+    if (teamcode_unix_address(path, &address) != 0) return -1;
+    int fd = teamcode_unix_prepare(socket(AF_UNIX, SOCK_STREAM, 0));
+    if (fd < 0) return -1;
+    unlink(path);
+    mode_t previous = umask(0117);
+    int bound = bind(fd, (struct sockaddr *)&address, sizeof(address));
+    int error = errno;
+    umask(previous);
+    if (bound != 0 || listen(fd, 16) != 0) { if (bound == 0) error = errno; close(fd); errno = error; return -1; }
+    return fd;
+}
+/* A new connection, -1 when none is waiting, -2 on error. */
+static inline int teamcode_unix_accept(int listener) {
+    int fd = accept(listener, NULL, NULL);
+    if (fd >= 0) return teamcode_unix_prepare(fd);
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ECONNABORTED) ? -1 : -2;
+}
+static inline int teamcode_unix_connect(const char *path) {
+    struct sockaddr_un address;
+    if (teamcode_unix_address(path, &address) != 0) return -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0) { int error = errno; close(fd); errno = error; return -1; }
+    return teamcode_unix_prepare(fd);
+}
+static inline void teamcode_unix_remove(const char *path) { unlink(path); }
 #endif
