@@ -17,7 +17,9 @@ import me.nathanfallet.teamcode.domain.variants.VariantService
 
 /** MCP protocol revisions the gateway speaks to agents, newest first. */
 internal val MCP_PROTOCOL_VERSIONS = listOf("2025-11-25", "2025-06-18", "2025-03-26")
+/** Each assigned upstream server has its own endpoint, `$MCP_PATH/<server>`; sources are never aggregated. */
 internal const val MCP_PATH = "/mcp"
+internal const val MCP_SERVERS_PATH = "/api/v1/mcp/servers"
 
 private object JsonRpc {
     const val PARSE_ERROR = -32700
@@ -45,13 +47,18 @@ private suspend fun ApplicationCall.respondJson(value: JsonElement, status: Http
     respondText(value.toString(), ContentType.Application.Json, status)
 
 /**
- * The agent-facing MCP endpoint (Streamable HTTP, stateless): every POST carries one JSON-RPC message and receives
- * one JSON response, without an `Mcp-Session-Id`. Any replica can serve any message, and authorization is evaluated
- * on each of them from the bearer credential.
+ * One agent-facing MCP endpoint per assigned upstream server (Streamable HTTP, stateless): every POST to
+ * `/mcp/<server>` carries one JSON-RPC message and receives one JSON response, without an `Mcp-Session-Id`. Tools keep
+ * their upstream names. Any replica can serve any message, and authorization is evaluated on each of them from the
+ * bearer credential: an unassigned or revoked server answers 404 for every method.
  */
 internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
-    route(MCP_PATH) {
+    get(MCP_SERVERS_PATH) {
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        call.respond(gateway.servers(call.principal).map { McpServerView(it, "$MCP_PATH/$it") })
+    }
+    route("$MCP_PATH/{server}") {
         install(io.ktor.server.http.HttpRequestLifecycle) { cancelCallOnClose = true }
         post {
             // Browsers send Origin; a foreign page must not drive a member's gateway session (DNS rebinding).
@@ -69,36 +76,42 @@ internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
             if (method == null || id == null) return@post call.respond(HttpStatusCode.Accepted)
             if (id !is JsonPrimitive || id is JsonNull || (!id.isString && id.booleanOrNull != null)) return@post call.respondJson(rpcError(JsonNull, JsonRpc.INVALID_REQUEST, "Use a string or number request id."), HttpStatusCode.BadRequest)
             val params = message["params"] as? JsonObject ?: JsonObject(emptyMap())
-            call.respondJson(when (method) {
-                "initialize" -> rpcResult(id, buildJsonObject {
-                    val requested = (params["protocolVersion"] as? JsonPrimitive)?.content
-                    put("protocolVersion", requested?.takeIf { it in MCP_PROTOCOL_VERSIONS } ?: MCP_PROTOCOL_VERSIONS.first())
-                    putJsonObject("capabilities") { putJsonObject("tools") { put("listChanged", false) } }
-                    putJsonObject("serverInfo") { put("name", "teamcode"); put("version", me.nathanfallet.teamcode.api.BuildInfo.VERSION) }
-                    put("instructions", "Tools are named <server>__<tool>. Only the MCP servers and tools assigned to you in TeamCode are listed and callable.")
-                })
-                "ping" -> rpcResult(id, JsonObject(emptyMap()))
-                "tools/list" -> {
-                    val tools = gateway.listTools(call.principal).map { tool ->
-                        JsonObject(Serialization.json.parseToJsonElement(tool.definition).jsonObject + ("name" to JsonPrimitive(tool.name)))
-                    }
-                    rpcResult(id, buildJsonObject { put("tools", JsonArray(tools)) })
-                }
-                "tools/call" -> {
-                    val name = (params["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                    val arguments = params["arguments"]
-                    if (name == null || (arguments != null && arguments !is JsonObject && arguments !is JsonNull)) rpcError(id, JsonRpc.INVALID_PARAMS, "tools/call needs a tool name and object arguments.")
-                    else try {
-                        when (val outcome = gateway.callTool(call.principal, name, (arguments as? JsonObject)?.toString())) {
-                            is McpCallOutcome.Completed -> rpcResult(id, Serialization.json.parseToJsonElement(outcome.result.result).jsonObject)
-                            is McpCallOutcome.Failed -> rpcResult(id, toolError(outcome.message))
+            val server = call.parameters["server"].orEmpty()
+            val response = try {
+                when (method) {
+                    "initialize" -> { gateway.requireServer(call.principal, server); rpcResult(id, buildJsonObject {
+                        val requested = (params["protocolVersion"] as? JsonPrimitive)?.content
+                        put("protocolVersion", requested?.takeIf { it in MCP_PROTOCOL_VERSIONS } ?: MCP_PROTOCOL_VERSIONS.first())
+                        putJsonObject("capabilities") { putJsonObject("tools") { put("listChanged", false) } }
+                        putJsonObject("serverInfo") { put("name", "teamcode"); put("version", me.nathanfallet.teamcode.api.BuildInfo.VERSION) }
+                        put("instructions", "TeamCode relays the $server MCP server. Only the tools assigned to you in TeamCode are listed and callable.")
+                    }) }
+                    "ping" -> { gateway.requireServer(call.principal, server); rpcResult(id, JsonObject(emptyMap())) }
+                    "tools/list" -> {
+                        val tools = gateway.listTools(call.principal, server).map { tool ->
+                            JsonObject(Serialization.json.parseToJsonElement(tool.definition).jsonObject + ("name" to JsonPrimitive(tool.name)))
                         }
-                    } catch (_: McpToolDenied) {
-                        rpcError(id, JsonRpc.INVALID_PARAMS, "Unknown tool.")
+                        rpcResult(id, buildJsonObject { put("tools", JsonArray(tools)) })
                     }
+                    "tools/call" -> {
+                        val name = (params["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        val arguments = params["arguments"]
+                        if (name == null || (arguments != null && arguments !is JsonObject && arguments !is JsonNull)) rpcError(id, JsonRpc.INVALID_PARAMS, "tools/call needs a tool name and object arguments.")
+                        else try {
+                            when (val outcome = gateway.callTool(call.principal, server, name, (arguments as? JsonObject)?.toString())) {
+                                is McpCallOutcome.Completed -> rpcResult(id, Serialization.json.parseToJsonElement(outcome.result.result).jsonObject)
+                                is McpCallOutcome.Failed -> rpcResult(id, toolError(outcome.message))
+                            }
+                        } catch (_: McpToolDenied) {
+                            rpcError(id, JsonRpc.INVALID_PARAMS, "Unknown tool.")
+                        }
+                    }
+                    else -> rpcError(id, JsonRpc.METHOD_NOT_FOUND, "Method not supported by the TeamCode MCP gateway.")
                 }
-                else -> rpcError(id, JsonRpc.METHOD_NOT_FOUND, "Method not supported by the TeamCode MCP gateway.")
-            })
+            } catch (_: McpServerDenied) {
+                return@post call.respondJson(rpcError(id, JsonRpc.INVALID_REQUEST, "Unknown MCP server."), HttpStatusCode.NotFound)
+            }
+            call.respondJson(response)
         }
         // No server-initiated stream and no session to delete: the gateway is stateless.
         get { call.response.header(HttpHeaders.Allow, "POST"); call.respond(HttpStatusCode.MethodNotAllowed) }
@@ -143,7 +156,7 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
             """<tr><td><code>${escape(variant.target)}</code> · ${escape(variant.name)}</td><td>${if (policy.mode == McpToolMode.ALL) "All tools" else escape(policy.tools.sorted().joinToString(", "))}</td><td><form method="post" action="/dashboard/mcp/${escape(variant.id)}/tools">${csrf(actor)}<label>Allowed tools (one per line, empty for all) <textarea name="tools" rows="3">${escape(policy.tools.sorted().joinToString("\n"))}</textarea></label><button>Save</button></form></td></tr>"""
         }
         val older = page.nextBeforeId?.let { """<a href="/dashboard/mcp?before=$it">Older calls</a>""" } ?: ""
-        call.respondText(page("MCP gateway", """<p>Agents reach assigned MCP servers through <code>$MCP_PATH</code>. Discovery and every call are checked against current assignments and tool policies; credentials stay on the server. The journal keeps metadata only: never arguments or results.</p>
+        call.respondText(page("MCP gateway", """<p>Agents reach each assigned MCP server on its own endpoint, <code>$MCP_PATH/&lt;server&gt;</code>. Discovery and every call are checked against current assignments and tool policies; credentials stay on the server. The journal keeps metadata only: never arguments or results.</p>
 <h2>Tool policies</h2><table><thead><tr><th>MCP variant</th><th>Exposed tools</th><th>Change</th></tr></thead><tbody>$policyRows</tbody></table>${if (servers.isEmpty()) "<p>No MCP variants yet. Create them on the variants page.</p>" else ""}
 <h2>Usage, last ${call.days()} days</h2><table><thead><tr><th>Member</th><th>Server</th><th>Calls</th><th>Lists</th><th>Errors</th><th>Denied</th><th>Bytes</th><th>Average</th></tr></thead><tbody>$usageRows</tbody></table>
 <h2>Recent operations</h2><p><a href="/dashboard/mcp">Latest</a> $older</p><table><thead><tr><th>Call / UTC</th><th>Member ID</th><th>Server</th><th>Operation</th><th>Outcome</th><th>ms</th></tr></thead><tbody>$callRows</tbody></table>"""), ContentType.Text.Html)

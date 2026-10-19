@@ -107,59 +107,78 @@ class McpGatewayAcceptanceTest {
                     application { configureGateway(inference, team = team, publicOrigin = "http://localhost", variants = SqlVariantService(a, cipher), mcp = gateway, mcpAccess = SqlMcpAccessStore(a)) }
                     val bodies = mutableListOf<String>()
                     var nextId = 1
-                    suspend fun rpc(token: String, method: String, params: JsonObject? = null): Pair<HttpStatusCode, JsonObject?> {
-                        val response = client.post("/mcp") {
+                    suspend fun rpc(token: String, server: String, method: String, params: JsonObject? = null): Pair<HttpStatusCode, JsonObject?> {
+                        val response = client.post("/mcp/$server") {
                             bearerAuth(token); contentType(ContentType.Application.Json); accept(ContentType.Application.Json); accept(ContentType.Text.EventStream)
                             setBody(buildJsonObject { put("jsonrpc", "2.0"); put("id", nextId++); put("method", method); params?.let { put("params", it) } }.toString())
                         }
                         val text = response.bodyAsText().also { bodies += it }
                         return response.status to text.takeIf { it.isNotEmpty() }?.let { Json.parseToJsonElement(it).jsonObject }
                     }
-                    suspend fun tools(token: String) = rpc(token, "tools/list").second!!["result"]!!.jsonObject["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
-                    suspend fun invoke(token: String, name: String, arguments: JsonObject = buildJsonObject { put("q", "synthetic-argument") }) =
-                        rpc(token, "tools/call", buildJsonObject { put("name", name); put("arguments", arguments) }).second!!
-                    fun JsonObject.text() = this["result"]!!.jsonObject["content"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content
-                    fun JsonObject.denied() = this["error"]?.jsonObject?.get("code")?.jsonPrimitive?.int == -32602
+                    suspend fun tools(token: String, server: String) = rpc(token, server, "tools/list").let { (status, body) ->
+                        if (status == HttpStatusCode.NotFound) null else body!!["result"]!!.jsonObject["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+                    }
+                    suspend fun servers(token: String) = Json.parseToJsonElement(client.get("/api/v1/mcp/servers") { bearerAuth(token) }.bodyAsText())
+                        .jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["path"]!!.jsonPrimitive.content }
+                    suspend fun invoke(token: String, server: String, name: String, arguments: JsonObject = buildJsonObject { put("q", "synthetic-argument") }) =
+                        rpc(token, server, "tools/call", buildJsonObject { put("name", name); put("arguments", arguments) })
+                    fun Pair<HttpStatusCode, JsonObject?>.text() = second!!["result"]!!.jsonObject["content"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content
+                    // An unknown tool on an assigned server, or any request to a server the member cannot use.
+                    fun Pair<HttpStatusCode, JsonObject?>.denied() = second?.get("error")?.jsonObject?.get("code")?.jsonPrimitive?.int ==
+                        if (first == HttpStatusCode.NotFound) -32600 else -32602
 
                     // Handshake and transport rules.
-                    val (status, init) = rpc(alice.token, "initialize", buildJsonObject { put("protocolVersion", "2025-06-18"); putJsonObject("capabilities") {}; putJsonObject("clientInfo") { put("name", "test"); put("version", "1") } })
+                    val (status, init) = rpc(alice.token, "tracker", "initialize", buildJsonObject { put("protocolVersion", "2025-06-18"); putJsonObject("capabilities") {}; putJsonObject("clientInfo") { put("name", "test"); put("version", "1") } })
                     assertEquals(HttpStatusCode.OK, status)
                     assertEquals("2025-06-18", init!!["result"]!!.jsonObject["protocolVersion"]!!.jsonPrimitive.content)
-                    assertEquals(HttpStatusCode.Accepted, client.post("/mcp") { bearerAuth(alice.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","method":"notifications/initialized"}""") }.status)
-                    assertEquals(HttpStatusCode.MethodNotAllowed, client.get("/mcp") { bearerAuth(alice.token) }.status)
-                    assertEquals(HttpStatusCode.Unauthorized, client.post("/mcp") { contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
-                    assertEquals(HttpStatusCode.Forbidden, client.post("/mcp") { bearerAuth(alice.token); header(HttpHeaders.Origin, "https://attacker.test"); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
-                    assertEquals(HttpStatusCode.Forbidden, client.post("/mcp") { bearerAuth(inferenceKey.accessToken); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
+                    assertTrue(rpc(carol.token, "tracker", "initialize").denied(), "An unassigned server cannot even be initialized")
+                    assertTrue(rpc(alice.token, "unknown", "ping").denied())
+                    assertEquals(HttpStatusCode.Accepted, client.post("/mcp/tracker") { bearerAuth(alice.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","method":"notifications/initialized"}""") }.status)
+                    assertEquals(HttpStatusCode.MethodNotAllowed, client.get("/mcp/tracker") { bearerAuth(alice.token) }.status)
+                    assertEquals(HttpStatusCode.NotFound, client.post("/mcp") { bearerAuth(alice.token); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status, "No aggregated endpoint")
+                    assertEquals(HttpStatusCode.Unauthorized, client.post("/mcp/tracker") { contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
+                    assertEquals(HttpStatusCode.Forbidden, client.post("/mcp/tracker") { bearerAuth(alice.token); header(HttpHeaders.Origin, "https://attacker.test"); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
+                    assertEquals(HttpStatusCode.Forbidden, client.post("/mcp/tracker") { bearerAuth(inferenceKey.accessToken); contentType(ContentType.Application.Json); setBody("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""") }.status)
+                    assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/mcp/servers") { bearerAuth(inferenceKey.accessToken) }.status)
 
-                    // Two members with different assignments see different tools; a member without one sees nothing.
-                    assertEquals(listOf("tracker__delete_issue", "tracker__search", "tracker__whoami", "wiki__page"), tools(alice.token))
-                    assertEquals(listOf("tracker__search"), tools(bob.token))
-                    assertEquals(listOf("tracker__search"), tools(mcpKey.accessToken), "A service key with the mcp scope acts for its owner")
-                    assertEquals(emptyList(), tools(carol.token))
+                    // Two members with different assignments see different servers and tools; a member without one sees nothing.
+                    assertEquals(listOf("tracker" to "/mcp/tracker", "wiki" to "/mcp/wiki"), servers(alice.token))
+                    assertEquals(listOf("tracker" to "/mcp/tracker"), servers(bob.token))
+                    assertEquals(listOf("tracker" to "/mcp/tracker"), servers(mcpKey.accessToken), "An mcp-scoped key lists its owner's servers")
+                    assertEquals(emptyList(), servers(carol.token))
+                    assertEquals(listOf("delete_issue", "search", "whoami"), tools(alice.token, "tracker"))
+                    assertEquals(listOf("page"), tools(alice.token, "wiki"), "Each source keeps its own endpoint and upstream tool names")
+                    assertEquals(listOf("search"), tools(bob.token, "tracker"))
+                    assertEquals(listOf("search"), tools(mcpKey.accessToken, "tracker"), "A service key with the mcp scope acts for its owner")
+                    assertNull(tools(bob.token, "wiki"))
+                    assertNull(tools(carol.token, "tracker"))
 
                     // Each member invokes only their own tools; direct calls to anything else fail before reaching the upstream.
-                    assertEquals("search({\"q\":\"synthetic-argument\"})", invoke(alice.token, "tracker__search").text())
-                    assertEquals("page({\"q\":\"synthetic-argument\"})", invoke(alice.token, "wiki__page").text(), "Delegated credential over an SSE upstream session")
-                    assertEquals("search({\"q\":\"synthetic-argument\"})", invoke(bob.token, "tracker__search").text())
+                    assertEquals("search({\"q\":\"synthetic-argument\"})", invoke(alice.token, "tracker", "search").text())
+                    assertEquals("page({\"q\":\"synthetic-argument\"})", invoke(alice.token, "wiki", "page").text(), "Delegated credential over an SSE upstream session")
+                    assertEquals("search({\"q\":\"synthetic-argument\"})", invoke(bob.token, "tracker", "search").text())
                     val before = trackerCalls.size to wikiCalls.size
-                    for (name in listOf("tracker__delete_issue", "wiki__page", "tracker__unknown", "delete_issue")) assertTrue(invoke(bob.token, name).denied(), name)
-                    assertTrue(invoke(carol.token, "tracker__search").denied())
+                    for ((server, name) in listOf("tracker" to "delete_issue", "wiki" to "page", "tracker" to "unknown", "tracker" to "tracker__search", "unknown" to "search"))
+                        assertTrue(invoke(bob.token, server, name).denied(), "$server/$name")
+                    assertTrue(invoke(carol.token, "tracker", "search").denied())
                     assertEquals(before, trackerCalls.size to wikiCalls.size, "Unauthorized calls never reach an upstream")
 
                     // Revocation and policy changes made on the other replica apply to the very next call.
                     adminVariants.unassign(admin, bob.principal.member.id, VariantTarget(VariantKind.MCP, "tracker"))
-                    assertTrue(invoke(bob.token, "tracker__search").denied())
-                    assertEquals(emptyList(), tools(bob.token))
+                    assertTrue(invoke(bob.token, "tracker", "search").denied())
+                    assertNull(tools(bob.token, "tracker"))
+                    assertEquals(emptyList(), servers(bob.token))
                     adminAccess.setToolPolicy(admin, full.id, McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search", "whoami")))
-                    assertTrue(invoke(alice.token, "tracker__delete_issue").denied())
+                    assertTrue(invoke(alice.token, "tracker", "delete_issue").denied())
                     adminVariants.exclude(admin, alice.principal.member.id, VariantTarget(VariantKind.MCP, "wiki"))
-                    assertTrue(invoke(alice.token, "wiki__page").denied())
-                    assertEquals(listOf("tracker__search", "tracker__whoami"), tools(alice.token))
+                    assertTrue(invoke(alice.token, "wiki", "page").denied())
+                    assertEquals(listOf("search", "whoami"), tools(alice.token, "tracker"))
+                    assertEquals(listOf("tracker" to "/mcp/tracker"), servers(alice.token))
 
                     // Upstream credentials never reach the workstation, even when an upstream echoes them.
-                    assertEquals("you are Bearer [REDACTED]", invoke(alice.token, "tracker__whoami").text())
+                    assertEquals("you are Bearer [REDACTED]", invoke(alice.token, "tracker", "whoami").text())
                     team.updateMember(admin, alice.principal.member.id, Role.MEMBER, true)
-                    assertEquals(HttpStatusCode.Unauthorized, rpc(alice.token, "tools/list").first, "A disabled member's credential stops working at once")
+                    assertEquals(HttpStatusCode.Unauthorized, rpc(alice.token, "tracker", "tools/list").first, "A disabled member's credential stops working at once")
                     for (body in bodies) for (secret in listOf(trackerCredential, wikiCredential)) assertFalse(body.contains(secret), body)
 
                     // Usage per member is visible; the journal holds metadata only.

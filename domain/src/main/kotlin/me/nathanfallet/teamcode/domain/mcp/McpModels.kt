@@ -49,14 +49,13 @@ data class McpLimits(
     val serverCallsPerMinute: Int = 1_200,
     val maxServers: Int = 32,
     val maxToolsPerServer: Int = 256,
-    val listParallelism: Int = 8,
 ) {
     init {
         require(callTimeoutMillis in 1_000..600_000 && listTimeoutMillis in 1_000..120_000)
         require(maxResponseBytes in 1_024..64 * 1024 * 1024 && maxRequestBytes in 1_024..16 * 1024 * 1024)
         require(memberConcurrentPerServer in 1..256 && serverConcurrent in memberConcurrentPerServer..4_096)
         require(memberCallsPerMinute in 1..100_000 && serverCallsPerMinute in memberCallsPerMinute..1_000_000)
-        require(maxServers in 1..256 && maxToolsPerServer in 1..4_096 && listParallelism in 1..64)
+        require(maxServers in 1..256 && maxToolsPerServer in 1..4_096)
     }
     /** A lease outlives the operation's own deadline, so a crashed replica's slot is reclaimed shortly after. */
     fun leaseMillis(operation: McpOperation) = (if (operation == McpOperation.CALL) callTimeoutMillis else listTimeoutMillis) + 30_000

@@ -13,6 +13,12 @@ import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.cli.service.serviceResponds
+import me.nathanfallet.teamcode.api.models.Capabilities
+import me.nathanfallet.teamcode.client.TeamCodeClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 class Run : SuspendingNoOpCliktCommand(name = "run") {
     override fun help(context: Context) = "Run Claude Code or Codex through an automatically managed local proxy. Pass agent arguments after --."
@@ -21,15 +27,18 @@ class Run : SuspendingNoOpCliktCommand(name = "run") {
 
 private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(name = agent) {
     private val noGuidance by option("--no-guidance", help = "Disable automatic session guidance for this launch.").flag()
+    private val noMcp by option("--no-mcp", help = "Do not connect the team MCP servers assigned to you for this launch.").flag()
     private val workload by option("--workload", help = "Scheduling class for this launch; quotas and permissions still apply.").choice("interactive", "background").default("interactive")
     private val arguments by argument("AGENT_ARGS").multiple()
     override suspend fun run() {
         val config = loadConfig()
         val service = loadService(configPath())
-        if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background")) {
-            sdk(config).use { it.capabilities() }
+        // Fails before launching the agent when the saved session is invalid.
+        val servers = sdk(config).use { assignedMcpServers(it, it.capabilities()) }
+        // A user service started by an older CLI has no MCP relay: use a launch proxy instead.
+        if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", mcpRelay = servers.isNotEmpty())) {
             echo("Running $agent through the TeamCode user service.", err = true)
-            val code = launch(service.port, service.localToken)
+            val code = launch(service.port, service.localToken, servers)
             if (code != 0) SystemExit.exit(code)
             return
         }
@@ -38,18 +47,29 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         // A dedicated ephemeral listener avoids collisions between concurrent launches or a user service.
         val server = proxyServer(client, token, 0) { echo(it, err = true) }
         val code = try {
-            client.capabilities() // Fail before launching the agent when the saved session is invalid.
             server.start(wait = false)
             val port = server.engine.resolvedConnectors().single().port
             echo("Running $agent through TeamCode.", err = true)
-            launch(port, token)
+            launch(port, token, servers)
         } finally {
             server.stop(500, 5_000)
             client.close()
         }
         if (code != 0) SystemExit.exit(code)
     }
-    private suspend fun launch(port: Int, token: String): Int {
+    /** The team MCP servers to connect for this launch: names only, never an upstream address or credential. */
+    private suspend fun assignedMcpServers(client: TeamCodeClient, capabilities: Capabilities): List<String> {
+        if (noMcp || "mcp.gateway.v1" !in capabilities.features) return emptyList()
+        return try {
+            client.mcpServers().map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            echo("Team MCP servers could not be listed; continuing without them.", err = true)
+            emptyList()
+        }
+    }
+    private suspend fun launch(port: Int, token: String, mcpServers: List<String>): Int {
         val options = arguments.takeWhile { it != "--" }
         val plugin = if (agent == "claude" && !noGuidance && "--bare" !in options) try {
             GuidancePlugin.create(configPath(), port)
@@ -70,7 +90,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             AgentLaunch(emptyList(), emptyMap())
         } else AgentLaunch(emptyList(), emptyMap())
         try {
-            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload)
+            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, mcpServers)
             return runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment)
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
@@ -80,11 +100,30 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive"): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", mcpServers: List<String> = emptyList()): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
+    require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
     val origin = "http://127.0.0.1:$port" + if (workload == "background") "/_teamcode/workloads/background" else ""
-    return if (agent == "claude") AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments, mapOf(
+    // One agent-side MCP server per team server, each on its own local relay endpoint; never one merged server.
+    // The `teamcode-` prefix keeps them apart from personal servers, and '.' is not allowed in Codex config keys.
+    val mcp = mcpServers.associateBy { "teamcode-" + it.replace('.', '_') }.filterKeys { label -> mcpServers.count { "teamcode-" + it.replace('.', '_') == label } == 1 }
+    fun mcpUrl(server: String) = "http://127.0.0.1:$port/mcp/$server"
+    // Agent options go before a literal "--" delimiter, and after the caller's own options because
+    // Claude Code's --mcp-config is variadic and would otherwise swallow a following prompt argument.
+    val delimiter = arguments.indexOf("--").let { if (it < 0) arguments.size else it }
+    return if (agent == "claude") {
+        val mcpConfig = if (mcp.isEmpty()) emptyList() else listOf("--mcp-config", buildJsonObject {
+            putJsonObject("mcpServers") {
+                for ((label, server) in mcp) putJsonObject(label) {
+                    put("type", "http"); put("url", mcpUrl(server))
+                    // Expanded by Claude Code from its environment, so the token is not on the command line.
+                    putJsonObject("headers") { put("Authorization", "Bearer \${TEAMCODE_MCP_TOKEN}") }
+                }
+            }
+        }.toString())
+        AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null) token else null,
+        "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty()) token else null,
         "ANTHROPIC_BASE_URL" to origin,
         "ANTHROPIC_API_KEY" to token,
         "ANTHROPIC_AUTH_TOKEN" to null,
@@ -92,14 +131,13 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         "CLAUDE_CODE_USE_BEDROCK" to null,
         "CLAUDE_CODE_USE_VERTEX" to null,
         "CLAUDE_CODE_USE_FOUNDRY" to null,
-    )) else {
+    )) } else {
         val overrides = codexGuidance + listOf(
         "-c", "model_provider=\"teamcode\"",
         "-c", "model_providers.teamcode={name=\"TeamCode\",base_url=\"$origin/v1\",env_key=\"TEAMCODE_LOCAL_TOKEN\",wire_api=\"responses\",request_max_retries=0,stream_max_retries=0}",
-        )
+        ) + mcp.flatMap { (label, server) -> listOf("-c", "mcp_servers.$label={url=\"${mcpUrl(server)}\",bearer_token_env_var=\"TEAMCODE_LOCAL_TOKEN\"}") }
         // Put overrides in the leaf command scope (exec/resume/review), before any literal delimiter.
         // Root overrides can be discarded by exec --ignore-user-config in some Codex versions.
-        val delimiter = arguments.indexOf("--").let { if (it < 0) arguments.size else it }
         AgentLaunch(arguments.take(delimiter) + overrides + arguments.drop(delimiter),
             mapOf("TEAMCODE_LOCAL_TOKEN" to token, "TEAMCODE_HOOK_TOKEN" to null))
     }

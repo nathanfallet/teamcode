@@ -22,3 +22,7 @@ data class McpCallView(
 
 @Serializable
 data class McpCallPageView(val calls: List<McpCallView>, val nextBeforeId: Long? = null)
+
+/** One MCP server assigned to the caller and the gateway path that serves it. No upstream address or credential. */
+@Serializable
+data class McpServerView(val name: String, val path: String)

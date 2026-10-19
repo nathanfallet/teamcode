@@ -9,7 +9,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && path == "/api/v1/auth/logout" -> CredentialAction.LOGOUT
     method == "POST" && path in inferencePaths -> CredentialAction.INFERENCE
     method == "POST" && Regex("/api/v1/requests/[0-9a-f-]{36}/cancel").matches(path) -> CredentialAction.INFERENCE
-    path == MCP_PATH -> CredentialAction.MCP
+    path.startsWith("$MCP_PATH/") && path.count { it == '/' } == 2 -> CredentialAction.MCP
+    method == "GET" && path == MCP_SERVERS_PATH -> CredentialAction.MCP
     method == "GET" && path == "/api/v1/mcp/usage" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/capacity" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/directives/current" -> CredentialAction.GUIDANCE

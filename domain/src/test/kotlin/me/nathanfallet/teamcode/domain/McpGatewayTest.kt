@@ -51,13 +51,6 @@ class McpGatewayTest {
             }, emptySet())
         }), store, upstream)
 
-    @Test fun namesResolveToTheLongestServerPrefix() {
-        assertEquals("a" to "b", McpToolNames.resolve("a__b", listOf("a")))
-        assertEquals("a__b" to "c", McpToolNames.resolve("a__b__c", listOf("a", "a__b")))
-        assertNull(McpToolNames.resolve("a__", listOf("a")))
-        assertNull(McpToolNames.resolve("b__x", listOf("a")))
-    }
-
     @Test fun policiesValidate() {
         McpToolPolicy.validate(McpToolPolicy.ALL)
         McpToolPolicy.validate(McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search")))
@@ -65,41 +58,51 @@ class McpGatewayTest {
             assertEquals("invalid_tool_policy", assertFailsWith<TeamFailure> { McpToolPolicy.validate(invalid) }.code)
     }
 
-    @Test fun discoveryFiltersByPolicyAndSkipsFailingOrCollidingServers() = runTest {
+    @Test fun eachServerListsOnlyItsOwnAllowedToolsUnderTheirUpstreamNames() = runTest {
         val store = Store(mapOf("v-tracker" to McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search"))))
-        // `a__b` on server `a` would collide with server `a__b`'s namespace, so it is not exposed.
-        val upstream = Upstream(mapOf("tracker" to listOf("search", "delete", "bad name"), "a" to listOf("b__x", "ok"), "a__b" to listOf("x")))
-        val tools = gateway(listOf(server("tracker"), server("down"), server("a"), server("a__b")), store, upstream).listTools(member)
-        assertEquals(listOf("a__b__x", "a__ok", "tracker__search"), tools.map { it.name })
-        assertEquals(4, store.finished.size, "Every admitted listing settles its lease")
+        val upstream = Upstream(mapOf("tracker" to listOf("search", "delete", "bad name"), "wiki" to listOf("page", "search")))
+        val gateway = gateway(listOf(server("tracker"), server("wiki"), server("down")), store, upstream)
+        assertEquals(listOf("down", "tracker", "wiki"), gateway.servers(member))
+        assertEquals(listOf("search"), gateway.listTools(member, "tracker").map { it.name })
+        assertEquals(listOf("page", "search"), gateway.listTools(member, "wiki").map { it.name }, "Sources are never merged or renamed")
+        assertTrue(gateway.listTools(member, "down").isEmpty(), "A failing upstream lists no tools")
+        assertEquals(3, store.finished.size, "Every admitted listing settles its lease")
+        for (name in listOf("other", "Bad/Name", "")) assertFailsWith<McpServerDenied>(name) { gateway.listTools(member, name) }
+        assertFailsWith<McpServerDenied> { gateway.requireServer(member, "other") }
+        assertEquals(listOf<Pair<String, String?>>("other" to null, "" to null, "" to null, "other" to null), store.denials)
+        store.refuse = TeamFailure("mcp_tool_denied", 403, "Unknown tool.")
+        assertFailsWith<McpServerDenied>("Revoked between resolution and admission") { gateway.listTools(member, "tracker") }
     }
 
     @Test fun callsAreDeniedUnlessAssignedAndAllowed() = runTest {
         val store = Store(mapOf("v-tracker" to McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search", "fails"))))
         val upstream = Upstream(emptyMap())
         val gateway = gateway(listOf(server("tracker")), store, upstream)
-        for (name in listOf("tracker__delete", "wiki__page", "search", "tracker__bad name")) assertFailsWith<McpToolDenied>(name) { gateway.callTool(member, name, null) }
-        assertEquals(listOf("tracker" to "delete", "" to "wiki__page", "" to "search", "" to null), store.denials)
+        for (name in listOf("delete", "bad name", "tracker__search")) assertFailsWith<McpToolDenied>(name) { gateway.callTool(member, "tracker", name, null) }
+        assertFailsWith<McpServerDenied> { gateway.callTool(member, "wiki", "page", null) }
+        assertEquals(listOf("tracker" to "delete", "tracker" to null, "tracker" to "tracker__search", "wiki" to null), store.denials)
         assertTrue(upstream.called.isEmpty(), "A denied call never reaches the upstream")
-        assertIs<McpCallOutcome.Completed>(gateway.callTool(member, "tracker__search", "{}"))
-        assertTrue(assertIs<McpCallOutcome.Completed>(gateway.callTool(member, "tracker__fails", null)).result.isError)
+        assertIs<McpCallOutcome.Completed>(gateway.callTool(member, "tracker", "search", "{}"))
+        assertTrue(assertIs<McpCallOutcome.Completed>(gateway.callTool(member, "tracker", "fails", null)).result.isError)
+        assertEquals(listOf("tracker/search", "tracker/fails"), upstream.called)
         assertEquals(listOf(McpOutcome.OK, McpOutcome.TOOL_ERROR), store.finished)
         store.refuse = TeamFailure("mcp_tool_denied", 403, "Unknown tool.")
-        assertFailsWith<McpToolDenied> { gateway.callTool(member, "tracker__search", null) }
+        assertFailsWith<McpToolDenied> { gateway.callTool(member, "tracker", "search", null) }
         store.refuse = TeamFailure("mcp_member_rate", 429, "slow down")
-        assertEquals("mcp_member_rate", assertIs<McpCallOutcome.Failed>(gateway.callTool(member, "tracker__search", null)).code)
+        assertEquals("mcp_member_rate", assertIs<McpCallOutcome.Failed>(gateway.callTool(member, "tracker", "search", null)).code)
         store.refuse = TeamFailure("authentication_required", 401, "Sign in")
-        assertFailsWith<TeamFailure> { gateway.callTool(member, "tracker__search", null) }
+        assertFailsWith<TeamFailure> { gateway.callTool(member, "tracker", "search", null) }
         val service = member.copy(serviceScopes = setOf(ServiceScope.INFERENCE))
-        assertEquals("credential_scope", assertFailsWith<TeamFailure> { gateway.callTool(service, "tracker__search", null) }.code)
-        assertEquals("credential_scope", assertFailsWith<TeamFailure> { gateway.listTools(service) }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { gateway.callTool(service, "tracker", "search", null) }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { gateway.listTools(service, "tracker") }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { gateway.servers(service) }.code)
     }
 
     @Test fun aCancelledCallStillReleasesItsLease() = runTest {
         val store = Store()
         val upstream = Upstream(emptyMap()).apply { block = CompletableDeferred() }
         val gateway = gateway(listOf(server("tracker")), store, upstream)
-        val job = launch { gateway.callTool(member, "tracker__search", null) }
+        val job = launch { gateway.callTool(member, "tracker", "search", null) }
         testScheduler.advanceUntilIdle()
         job.cancel(); job.join()
         assertEquals(listOf(McpOutcome.CANCELLED), store.finished)

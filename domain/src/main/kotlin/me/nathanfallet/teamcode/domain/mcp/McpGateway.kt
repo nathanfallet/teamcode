@@ -2,11 +2,6 @@ package me.nathanfallet.teamcode.domain.mcp
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.team.ServiceScope
@@ -53,8 +48,8 @@ interface McpAccessStore {
     }
 }
 
-/** One tool as the gateway exposes it: `<server>__<tool>`, with the upstream definition. */
-data class GatewayTool(val name: String, val server: String, val tool: String, val definition: String)
+/** One upstream tool as the gateway exposes it on its server's endpoint: the upstream name and definition, unchanged. */
+data class GatewayTool(val name: String, val definition: String)
 
 /** Result of an authorized call. Rate limits and upstream failures are tool errors, so the agent can report them. */
 sealed interface McpCallOutcome {
@@ -65,20 +60,13 @@ sealed interface McpCallOutcome {
 /** A tool the member cannot call: unknown, not assigned, restricted or revoked. Reported identically for all four. */
 class McpToolDenied : Exception("Unknown tool.")
 
-/** Gateway names: the server name, two underscores, the upstream tool name. Server names may contain underscores. */
-object McpToolNames {
-    const val SEPARATOR = "__"
-    const val MAX_LENGTH = 128
-    fun expose(server: String, tool: String) = server + SEPARATOR + tool
-    /** The longest matching server prefix wins, so listing and calling always agree on the same pair. */
-    fun resolve(name: String, servers: Collection<String>): Pair<String, String>? =
-        servers.filter { name.length > it.length + SEPARATOR.length && name.startsWith(it + SEPARATOR) }
-            .maxByOrNull { it.length }?.let { it to name.substring(it.length + SEPARATOR.length) }
-}
+/** A server endpoint the member cannot use: unknown, never assigned or revoked. Reported identically for all three. */
+class McpServerDenied : Exception("Unknown MCP server.")
 
 /**
- * The authenticated MCP gateway: discovery and invocation through the member's effective MCP variants. Hiding a tool
- * is never the boundary: every call resolves the member's variants again and is admitted against current MySQL state.
+ * The authenticated MCP gateway. Each assigned upstream server has its own endpoint (`/mcp/<server>`), so tools keep
+ * their upstream names and sources are never merged into one MCP server. Hiding a tool is never the boundary: every
+ * operation resolves the member's variants again and is admitted against current MySQL state.
  */
 class McpGateway(
     private val resolve: ResolveEffectiveVariantsUseCase,
@@ -87,52 +75,57 @@ class McpGateway(
     val limits: McpLimits = McpLimits(),
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
-    /** Tools of every assigned server the member can currently reach. A failing or saturated server is omitted. */
-    suspend fun listTools(actor: Principal): List<GatewayTool> {
+    /** Names of the MCP servers currently assigned to the member, each reachable on its own endpoint. */
+    suspend fun servers(actor: Principal): List<String> {
         actor.requireScope(ServiceScope.MCP)
-        val servers = servers(actor)
-        if (servers.isEmpty()) return emptyList()
-        val policies = store.policies(actor.teamId, servers.map { it.variantId })
-        val names = servers.map { it.name }
-        val permits = Semaphore(limits.listParallelism)
-        return coroutineScope {
-            servers.map { server ->
-                async {
-                    permits.withPermit {
-                        val policy = policies[server.variantId] ?: McpToolPolicy.ALL
-                        val tools = try {
-                            run(actor, server, McpOperation.LIST, null) { upstream.listTools(server, limits).let { it to 0L } }
-                        } catch (failure: TeamFailure) {
-                            if (failure.status != 429 && failure.code != "mcp_tool_denied") throw failure
-                            null
-                        } catch (_: McpUpstreamFailure) { null }
-                        tools.orEmpty().asSequence()
-                            .filter { McpToolPolicy.isToolName(it.name) && policy.allows(it.name) }
-                            .map { GatewayTool(McpToolNames.expose(server.name, it.name), server.name, it.name, it.definition) }
-                            .filter { it.name.length <= McpToolNames.MAX_LENGTH && McpToolNames.resolve(it.name, names) == (server.name to it.tool) }
-                            .distinctBy { it.name }.take(limits.maxToolsPerServer).toList()
-                    }
-                }
-            }.awaitAll().flatten().sortedBy { it.name }
-        }
+        return servers(actor.teamId, actor.member.id).map { it.name }
     }
 
     /**
-     * Calls one exposed tool. [arguments] is the caller's JSON object text.
+     * Checks that [server] is currently assigned to the member, for `initialize` and `ping`.
+     * @throws McpServerDenied otherwise.
+     */
+    suspend fun requireServer(actor: Principal, server: String) {
+        actor.requireScope(ServiceScope.MCP)
+        server(actor, server)
+    }
+
+    /**
+     * Tools of one assigned server, filtered by the variant's tool policy. A saturated or failing upstream lists none.
+     * @throws McpServerDenied when [server] is not assigned to the member.
+     */
+    suspend fun listTools(actor: Principal, server: String): List<GatewayTool> {
+        actor.requireScope(ServiceScope.MCP)
+        val target = server(actor, server)
+        val policy = store.policies(actor.teamId, listOf(target.variantId))[target.variantId] ?: McpToolPolicy.ALL
+        val tools = try {
+            run(actor, target, McpOperation.LIST, null) { upstream.listTools(target, limits).let { it to 0L } }
+        } catch (failure: TeamFailure) {
+            if (failure.code == "mcp_tool_denied") throw McpServerDenied() // Revoked between resolution and admission.
+            if (failure.status != 429) throw failure
+            return emptyList()
+        } catch (_: McpUpstreamFailure) { return emptyList() }
+        return tools.asSequence()
+            .filter { McpToolPolicy.isToolName(it.name) && policy.allows(it.name) }
+            .map { GatewayTool(it.name, it.definition) }
+            .distinctBy { it.name }.take(limits.maxToolsPerServer).sortedBy { it.name }.toList()
+    }
+
+    /**
+     * Calls [tool] on one assigned server. [arguments] is the caller's JSON object text.
+     * @throws McpServerDenied when [server] is not assigned to the member.
      * @throws McpToolDenied when the member cannot call this tool now, whatever the reason.
      */
-    suspend fun callTool(actor: Principal, name: String, arguments: String?): McpCallOutcome {
+    suspend fun callTool(actor: Principal, server: String, tool: String, arguments: String?): McpCallOutcome {
         actor.requireScope(ServiceScope.MCP)
-        val servers = servers(actor)
-        val (serverName, tool) = McpToolNames.resolve(name, servers.map { it.name })?.takeIf { McpToolPolicy.isToolName(it.second) }
-            ?: return deny(actor, "", name.takeIf { it.length <= McpToolNames.MAX_LENGTH && McpToolPolicy.isToolName(it) })
-        val server = servers.single { it.name == serverName }
-        val policy = store.policies(actor.teamId, listOf(server.variantId))[server.variantId] ?: McpToolPolicy.ALL
-        if (!policy.allows(tool)) return deny(actor, serverName, tool)
+        val target = server(actor, server)
+        if (!McpToolPolicy.isToolName(tool)) return deny(actor, server, null)
+        val policy = store.policies(actor.teamId, listOf(target.variantId))[target.variantId] ?: McpToolPolicy.ALL
+        if (!policy.allows(tool)) return deny(actor, server, tool)
         return try {
-            McpCallOutcome.Completed(run(actor, server, McpOperation.CALL, tool) { upstream.callTool(server, tool, arguments, limits).let { it to it.bytes } })
+            McpCallOutcome.Completed(run(actor, target, McpOperation.CALL, tool) { upstream.callTool(target, tool, arguments, limits).let { it to it.bytes } })
         } catch (failure: TeamFailure) {
-            if (failure.code == "mcp_tool_denied") deny(actor, serverName, tool) // Revoked between resolution and admission.
+            if (failure.code == "mcp_tool_denied") deny(actor, server, tool) // Revoked between resolution and admission.
             if (failure.status != 429) throw failure
             McpCallOutcome.Failed(failure.code, failure.message ?: "The MCP gateway limit was reached.")
         } catch (failure: McpUpstreamFailure) {
@@ -140,12 +133,26 @@ class McpGateway(
         }
     }
 
-    private suspend fun servers(actor: Principal): List<EffectiveMcpServer> =
-        resolve(actor.teamId, actor.member.id).mcpServers.sortedBy { it.name }.take(limits.maxServers)
+    private suspend fun server(actor: Principal, name: String): EffectiveMcpServer {
+        val server = servers(actor.teamId, actor.member.id).singleOrNull { it.name == name }
+        if (server == null) {
+            store.denied(actor, name.takeIf { SERVER_NAME.matches(it) }.orEmpty(), null, limits)
+            throw McpServerDenied()
+        }
+        return server
+    }
+
+    private suspend fun servers(teamId: String, memberId: String): List<EffectiveMcpServer> =
+        resolve(teamId, memberId).mcpServers.sortedBy { it.name }.take(limits.maxServers)
 
     private suspend fun deny(actor: Principal, server: String, tool: String?): Nothing {
         store.denied(actor, server, tool, limits)
         throw McpToolDenied()
+    }
+
+    companion object {
+        /** MCP variant targets, as validated by the variant service; also the last segment of `/mcp/<server>`. */
+        val SERVER_NAME = Regex("[a-z0-9][a-z0-9._-]{0,63}")
     }
 
     /** Admits, runs and always settles the lease, even when the caller disconnects. */
