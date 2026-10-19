@@ -18,9 +18,9 @@ class McpGatewayTest {
         val denials = mutableListOf<Pair<String, String?>>()
         var refuse: TeamFailure? = null
         override suspend fun policies(teamId: String, variantIds: Collection<String>) = policies.filterKeys { it in variantIds }
-        override suspend fun admit(actor: Principal, server: String, variantId: String, operation: McpOperation, tool: String?, limits: McpLimits): McpLease {
+        override suspend fun admit(actor: Principal, server: McpServerRef, operation: McpOperation, tool: String?, limits: McpLimits): McpLease {
             refuse?.let { throw it }
-            return McpLease(1, actor.teamId, actor.member.id, server)
+            return McpLease(1, actor.teamId, actor.member.id, server.name)
         }
         override suspend fun finish(lease: McpLease, outcome: McpOutcome, durationMillis: Long, responseBytes: Long) { finished += outcome }
         override suspend fun denied(actor: Principal, server: String, tool: String?, limits: McpLimits) { denials += server to tool }

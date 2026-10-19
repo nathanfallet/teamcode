@@ -24,11 +24,12 @@ interface McpAccessStore {
     suspend fun policies(teamId: String, variantIds: Collection<String>): Map<String, McpToolPolicy>
     /**
      * Admits one operation under the team lock, the same lock variant writes take: revalidates the credential, checks
-     * that the member is still assigned [variantId] for [server] and not excluded, that the variant's current policy
+     * that the member is still assigned exactly the resolved [server] (same variant, version and assignment time, so a
+     * rotated credential is never used afterwards) and not excluded, that the variant's current policy
      * allows [tool] (calls only), then the concurrency and rate limits. Writes the ACTIVE journal row that holds the slot.
      * @throws TeamFailure `mcp_tool_denied` (403) after a revocation, or `mcp_*_concurrency` / `mcp_*_rate` (429).
      */
-    suspend fun admit(actor: Principal, server: String, variantId: String, operation: McpOperation, tool: String?, limits: McpLimits): McpLease
+    suspend fun admit(actor: Principal, server: McpServerRef, operation: McpOperation, tool: String?, limits: McpLimits): McpLease
     /** Releases the slot and records the outcome. Idempotent: only an ACTIVE row changes. */
     suspend fun finish(lease: McpLease, outcome: McpOutcome, durationMillis: Long, responseBytes: Long)
     /** Journals a refused call within the member's rate; past it, the refusal is not stored, which bounds the table. */
@@ -149,7 +150,7 @@ class McpGateway(
 
     /** Admits, runs and always settles the lease, even when the caller disconnects. */
     private suspend fun <T> run(actor: Principal, server: EffectiveMcpServer, operation: McpOperation, tool: String?, block: suspend () -> Pair<T, Long>): T {
-        val lease = store.admit(actor, server.name, server.variantId, operation, tool, limits)
+        val lease = store.admit(actor, McpServerRef(server.name, server.variantId, server.version, server.assignedAt), operation, tool, limits)
         val started = monotonicMillis()
         var outcome = McpOutcome.CANCELLED
         var bytes = 0L

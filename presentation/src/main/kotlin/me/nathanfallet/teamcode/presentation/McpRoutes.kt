@@ -67,7 +67,7 @@ internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
             val id = message["id"]
             // Notifications and responses to the server need no answer.
             if (method == null || id == null) return@post call.respond(HttpStatusCode.Accepted)
-            if (id !is JsonPrimitive || id is JsonNull || id.booleanOrNull != null) return@post call.respondJson(rpcError(JsonNull, JsonRpc.INVALID_REQUEST, "Use a string or number request id."), HttpStatusCode.BadRequest)
+            if (id !is JsonPrimitive || id is JsonNull || (!id.isString && id.booleanOrNull != null)) return@post call.respondJson(rpcError(JsonNull, JsonRpc.INVALID_REQUEST, "Use a string or number request id."), HttpStatusCode.BadRequest)
             val params = message["params"] as? JsonObject ?: JsonObject(emptyMap())
             call.respondJson(when (method) {
                 "initialize" -> rpcResult(id, buildJsonObject {

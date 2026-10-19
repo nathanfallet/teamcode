@@ -19,17 +19,21 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
                 .associate { it[McpToolPolicies.variantId] to policy(it) }
         }
 
-    override suspend fun admit(actor: Principal, server: String, variantId: String, operation: McpOperation, tool: String?, limits: McpLimits): McpLease = database.query {
+    override suspend fun admit(actor: Principal, server: McpServerRef, operation: McpOperation, tool: String?, limits: McpLimits): McpLease = database.query {
+        val variantId = server.variantId
         actor.requireScope(ServiceScope.MCP)
         lockTeam(actor.teamId)
         val now = nowMillis()
         requireCurrent(this, actor, now)
-        val assigned = !VariantAssignments.select(VariantAssignments.memberId).where {
+        // The resolved endpoint and credential must still be current: a rotated shared secret bumps the variant
+        // version, a new selection or delegated credential changes assignedAt.
+        val assigned = !(VariantAssignments innerJoin Variants).select(VariantAssignments.memberId).where {
             (VariantAssignments.memberId eq actor.member.id) and (VariantAssignments.teamId eq actor.teamId) and
-                (VariantAssignments.kind eq VariantKind.MCP.name) and (VariantAssignments.target eq server) and (VariantAssignments.variantId eq variantId)
+                (VariantAssignments.kind eq VariantKind.MCP.name) and (VariantAssignments.target eq server.name) and (VariantAssignments.variantId eq variantId) and
+                (VariantAssignments.assignedAt eq server.assignedAt) and (Variants.version eq server.version)
         }.empty()
         val excluded = !VariantExclusions.select(VariantExclusions.memberId).where {
-            (VariantExclusions.memberId eq actor.member.id) and (VariantExclusions.kind eq VariantKind.MCP.name) and (VariantExclusions.target eq server)
+            (VariantExclusions.memberId eq actor.member.id) and (VariantExclusions.kind eq VariantKind.MCP.name) and (VariantExclusions.target eq server.name)
         }.empty()
         if (!assigned || excluded) throw denied()
         if (operation == McpOperation.CALL) {
@@ -37,19 +41,19 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
                 .singleOrNull()?.let(::policy) ?: McpToolPolicy.ALL
             if (tool == null || !policy.allows(tool)) throw denied()
         }
-        val window = now - maxOf(RATE_WINDOW_MILLIS, limits.leaseMillis(McpOperation.CALL), limits.leaseMillis(McpOperation.LIST))
-        val member = load((McpCalls.memberId eq actor.member.id) and (McpCalls.server eq server) and (McpCalls.startedAt greater window), now)
+        val window = now - maxOf(limits.leaseMillis(McpOperation.CALL), limits.leaseMillis(McpOperation.LIST))
+        val member = load((McpCalls.memberId eq actor.member.id) and (McpCalls.server eq server.name), window, now)
         if (member.active >= limits.memberConcurrentPerServer) throw TeamFailure("mcp_member_concurrency", 429, "You already have the maximum number of running calls on this MCP server.")
         if (member.recent >= limits.memberCallsPerMinute) throw TeamFailure("mcp_member_rate", 429, "You reached the per-minute call limit for this MCP server. Retry shortly.")
-        val team = load((McpCalls.teamId eq actor.teamId) and (McpCalls.server eq server) and (McpCalls.startedAt greater window), now)
+        val team = load((McpCalls.teamId eq actor.teamId) and (McpCalls.server eq server.name), window, now)
         if (team.active >= limits.serverConcurrent) throw TeamFailure("mcp_server_concurrency", 429, "This MCP server is busy for the team. Retry shortly.")
         if (team.recent >= limits.serverCallsPerMinute) throw TeamFailure("mcp_server_rate", 429, "The team reached the per-minute call limit for this MCP server. Retry shortly.")
         val id = McpCalls.insert {
-            it[teamId] = actor.teamId; it[memberId] = actor.member.id; it[McpCalls.server] = server; it[McpCalls.variantId] = variantId
+            it[teamId] = actor.teamId; it[memberId] = actor.member.id; it[McpCalls.server] = server.name; it[McpCalls.variantId] = variantId
             it[McpCalls.operation] = operation.name; it[McpCalls.tool] = tool; it[outcome] = McpOutcome.ACTIVE.name
             it[startedAt] = now; it[leaseExpiresAt] = now + limits.leaseMillis(operation)
         }[McpCalls.id]
-        McpLease(id, actor.teamId, actor.member.id, server)
+        McpLease(id, actor.teamId, actor.member.id, server.name)
     }
 
     override suspend fun finish(lease: McpLease, outcome: McpOutcome, durationMillis: Long, responseBytes: Long) {
@@ -62,8 +66,8 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
         }
     }
 
+    /** No team lock: a flood of refused calls must not queue behind admissions and administrator writes. The bound is approximate under races. */
     override suspend fun denied(actor: Principal, server: String, tool: String?, limits: McpLimits) = database.query {
-        lockTeam(actor.teamId)
         val now = nowMillis()
         requireCurrent(this, actor, now)
         val recent = McpCalls.select(McpCalls.id).where {
@@ -142,15 +146,12 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
         Unit
     }
 
-    private class Load(val active: Int, val recent: Int)
-    private fun JdbcTransaction.load(scope: Op<Boolean>, now: Long): Load {
-        var active = 0; var recent = 0
-        McpCalls.select(McpCalls.outcome, McpCalls.leaseExpiresAt, McpCalls.startedAt).where { scope }.forEach {
-            if (it[McpCalls.outcome] == McpOutcome.ACTIVE.name && it[McpCalls.leaseExpiresAt] > now) active++
-            if (it[McpCalls.startedAt] > now - RATE_WINDOW_MILLIS) recent++
-        }
-        return Load(active, recent)
-    }
+    private class Load(val active: Long, val recent: Long)
+    /** Two indexed counts; [scope] matches an index prefix ending before `started_at`. */
+    private fun load(scope: Op<Boolean>, leaseWindow: Long, now: Long) = Load(
+        McpCalls.select(McpCalls.id).where { scope and (McpCalls.startedAt greater leaseWindow) and (McpCalls.outcome eq McpOutcome.ACTIVE.name) and (McpCalls.leaseExpiresAt greater now) }.count(),
+        McpCalls.select(McpCalls.id).where { scope and (McpCalls.startedAt greater now - RATE_WINDOW_MILLIS) }.count(),
+    )
     private fun requireMcpVariant(team: String, id: String, lock: Boolean) {
         val query = Variants.select(Variants.kind).where { (Variants.id eq id) and (Variants.teamId eq team) }
         if (lock) query.forUpdate()

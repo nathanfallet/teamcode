@@ -11,6 +11,7 @@ import java.net.URI
 import java.net.UnknownHostException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
@@ -42,6 +43,11 @@ fun interface McpAddressPolicy {
             if (address is Inet6Address) {
                 val first = bytes[0].toInt() and 0xff
                 if (first and 0xfe == 0xfc) return false // fc00::/7 unique local
+                val prefix = bytes.take(4).map { it.toInt() and 0xff }
+                // 6to4 (2002::/16), Teredo (2001:0::/32) and NAT64 (64:ff9b::/96, 64:ff9b:1::/48) can reach embedded IPv4 destinations.
+                if (prefix[0] == 0x20 && prefix[1] == 0x02) return false
+                if (prefix == listOf(0x20, 0x01, 0, 0)) return false
+                if (prefix[0] == 0 && prefix[1] == 0x64 && prefix[2] == 0xff && prefix[3] == 0x9b) return false
                 // IPv4-mapped and IPv4-compatible addresses are checked as their IPv4 address.
                 if (bytes.take(10).all { it == 0.toByte() } && ((bytes[10].toInt() and 0xff == 0xff && bytes[11].toInt() and 0xff == 0xff) || (bytes[10] == 0.toByte() && bytes[11] == 0.toByte())))
                     return isPublic(InetAddress.getByAddress(bytes.copyOfRange(12, 16)))
@@ -75,7 +81,7 @@ class HttpMcpUpstream(
                 for (entry in entries) {
                     val tool = entry as? JsonObject ?: continue
                     val name = (tool["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
-                    tools += UpstreamTool(name, scrub(tool.toString()))
+                    tools += UpstreamTool(name, scrub(tool).toString())
                     if (tools.size >= limits.maxToolsPerServer) return@session tools
                 }
                 cursor = (result["nextCursor"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: break
@@ -91,10 +97,10 @@ class HttpMcpUpstream(
         return session(server, limits, limits.callTimeoutMillis) {
             val response = request("tools/call", buildJsonObject { put("name", tool); parsed?.let { put("arguments", it) } })
             response.error()?.let { (code, message) ->
-                throw McpUpstreamFailure(McpOutcome.TOOL_ERROR, scrub("The MCP server returned error $code: ${message.take(1_000)}"))
+                throw McpUpstreamFailure(McpOutcome.TOOL_ERROR, "The MCP server returned error $code: ${scrub(message).take(1_000)}")
             }
             val result = response.result()
-            UpstreamCallResult(scrub(result.toString()), (result["isError"] as? JsonPrimitive)?.booleanOrNull == true, bytesRead)
+            UpstreamCallResult(scrub(result).toString(), (result["isError"] as? JsonPrimitive)?.booleanOrNull == true, bytesRead)
         }
     }
 
@@ -103,8 +109,14 @@ class HttpMcpUpstream(
         var protocolVersion: String? = null
         var nextId = 1L
         var bytesRead = 0L
-        val secrets = listOfNotNull(secret, secret?.let { Json.encodeToString(it).removeSurrounding("\"") }).filter { it.isNotEmpty() }.distinct()
-        fun scrub(text: String) = secrets.fold(text) { value, secret -> value.replace(secret, "[REDACTED]") }
+        fun scrub(text: String) = if (secret.isNullOrEmpty()) text else text.replace(secret, "[REDACTED]")
+        /** Scrubs decoded string values and keys, so the result stays valid JSON whatever the secret looks like. */
+        fun scrub(element: JsonElement): JsonElement = when (element) {
+            is JsonObject -> JsonObject(element.entries.associate { (key, value) -> scrub(key) to scrub(value) })
+            is JsonArray -> JsonArray(element.map { scrub(it) })
+            is JsonPrimitive -> if (element is JsonNull || secret.isNullOrEmpty() || !element.content.contains(secret)) element else JsonPrimitive(scrub(element.content))
+        }
+        fun scrub(element: JsonObject) = scrub(element as JsonElement) as JsonObject
     }
 
     private suspend fun <T> session(server: EffectiveMcpServer, limits: McpLimits, timeoutMillis: Long, block: suspend Session.() -> T): T {
@@ -127,7 +139,8 @@ class HttpMcpUpstream(
                 session.notify("notifications/initialized")
                 Holder(session.block())
             } finally {
-                session.sessionId?.let { session.close() }
+                // Also on timeout or disconnect: each operation opened its own upstream session.
+                session.sessionId?.let { withContext(NonCancellable) { withTimeoutOrNull(CLOSE_TIMEOUT_MILLIS) { session.close() } } }
             }
         } ?: throw McpUpstreamFailure(McpOutcome.TIMEOUT, "The MCP server did not answer in time.")
         return outcome.value
@@ -258,6 +271,7 @@ class HttpMcpUpstream(
         const val SESSION_HEADER = "Mcp-Session-Id"
         const val PROTOCOL_HEADER = "MCP-Protocol-Version"
         private const val MAX_LIST_PAGES = 16
+        private const val CLOSE_TIMEOUT_MILLIS = 2_000L
         private const val MAX_DISCARD_BYTES = 64L * 1024
         private val headerName = Regex("[A-Za-z0-9-]{1,64}")
         private val sessionIdPattern = Regex("[\\x21-\\x7E]{1,256}")

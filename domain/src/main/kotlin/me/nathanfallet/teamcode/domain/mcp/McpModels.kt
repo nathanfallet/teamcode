@@ -81,6 +81,9 @@ interface McpUpstream {
     suspend fun callTool(server: EffectiveMcpServer, tool: String, arguments: String?, limits: McpLimits): UpstreamCallResult
 }
 
+/** The resolved assignment an operation was prepared from; admission refuses it once any part changed. */
+data class McpServerRef(val name: String, val variantId: String, val version: Int, val assignedAt: Long)
+
 /** A concurrency slot and journal row for one admitted operation. */
 data class McpLease(val id: Long, val teamId: String, val memberId: String, val server: String)
 

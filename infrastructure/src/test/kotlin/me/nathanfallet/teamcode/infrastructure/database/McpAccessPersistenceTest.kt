@@ -36,9 +36,11 @@ class McpAccessPersistenceTest {
                 val limits = McpLimits(memberConcurrentPerServer = 2, serverConcurrent = 3, memberCallsPerMinute = 4, serverCallsPerMinute = 5)
                 suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)
 
-                failure("mcp_tool_denied") { first.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits) }
-                variants.assign(admin, alice.member.id, tracker.id)
-                val lease = first.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits)
+                var aliceRef = McpServerRef("tracker", tracker.id, tracker.version, 0)
+                failure("mcp_tool_denied") { first.admit(alice, aliceRef, McpOperation.CALL, "search", limits) }
+                val assigned = variants.assign(admin, alice.member.id, tracker.id)
+                aliceRef = aliceRef.copy(assignedAt = assigned.assignedAt)
+                val lease = first.admit(alice, aliceRef, McpOperation.CALL, "search", limits)
                 first.finish(lease, McpOutcome.OK, 12, 34)
                 first.finish(lease, McpOutcome.TIMEOUT, 99, 99) // Idempotent: an already settled row keeps its outcome.
 
@@ -48,30 +50,35 @@ class McpAccessPersistenceTest {
                 assertEquals(McpToolPolicy.ALL, second.toolPolicy(admin, tracker.id))
                 second.setToolPolicy(admin, tracker.id, McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search")))
                 assertEquals(mapOf(tracker.id to McpToolPolicy(McpToolMode.ALLOWLIST, setOf("search"))), first.policies("default", listOf(tracker.id)))
-                failure("mcp_tool_denied") { first.admit(alice, "tracker", tracker.id, McpOperation.CALL, "delete", limits) }
-                first.admit(alice, "tracker", tracker.id, McpOperation.LIST, null, limits).also { first.finish(it, McpOutcome.OK, 1, 1) }
+                failure("mcp_tool_denied") { first.admit(alice, aliceRef, McpOperation.CALL, "delete", limits) }
+                first.admit(alice, aliceRef, McpOperation.LIST, null, limits).also { first.finish(it, McpOutcome.OK, 1, 1) }
+                // A credential rotated after resolution makes the resolved reference stale: it is refused, the fresh one is admitted.
+                val rotated = variants.update(admin, tracker.id, VariantUpdate(tracker.version, "team", sharedSecret = SecretValue("synthetic-rotated")))
+                failure("mcp_tool_denied") { first.admit(alice, aliceRef, McpOperation.LIST, null, limits) }
+                aliceRef = aliceRef.copy(version = rotated.version)
 
                 // Concurrency and rate are shared: two held slots on replica A block a third on replica B.
-                val held = listOf(first.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits), second.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits))
-                failure("mcp_member_concurrency") { second.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits) }
+                val held = listOf(first.admit(alice, aliceRef, McpOperation.CALL, "search", limits), second.admit(alice, aliceRef, McpOperation.CALL, "search", limits))
+                failure("mcp_member_concurrency") { second.admit(alice, aliceRef, McpOperation.CALL, "search", limits) }
                 held.forEach { first.finish(it, McpOutcome.OK, 1, 1) }
-                failure("mcp_member_rate") { second.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", limits) }
+                failure("mcp_member_rate") { second.admit(alice, aliceRef, McpOperation.CALL, "search", limits) }
                 val roomy = limits.copy(memberCallsPerMinute = 10, serverCallsPerMinute = 10)
-                first.finish(first.admit(alice, "tracker", tracker.id, McpOperation.CALL, "search", roomy), McpOutcome.OK, 1, 1)
-                variants.assign(admin, admin.member.id, tracker.id)
+                first.finish(first.admit(alice, aliceRef, McpOperation.CALL, "search", roomy), McpOutcome.OK, 1, 1)
+                val adminAssigned = variants.assign(admin, admin.member.id, tracker.id)
+                val adminRef = McpServerRef("tracker", tracker.id, aliceRef.version, adminAssigned.assignedAt)
                 // The administrator has no recent call of their own, but the team's five calls fill the server's rate.
-                failure("mcp_server_rate") { second.admit(admin, "tracker", tracker.id, McpOperation.CALL, "search", limits.copy(memberCallsPerMinute = 5, serverCallsPerMinute = 5)) }
+                failure("mcp_server_rate") { second.admit(admin, adminRef, McpOperation.CALL, "search", limits.copy(memberCallsPerMinute = 5, serverCallsPerMinute = 5)) }
 
                 // Revocation, exclusion and a disabled member are refused at the next admission.
                 variants.unassign(admin, alice.member.id, VariantTarget(VariantKind.MCP, "tracker"))
-                failure("mcp_tool_denied") { first.admit(alice, "tracker", tracker.id, McpOperation.LIST, null, limits.copy(memberCallsPerMinute = 50, serverCallsPerMinute = 50)) }
+                failure("mcp_tool_denied") { first.admit(alice, aliceRef, McpOperation.LIST, null, limits.copy(memberCallsPerMinute = 50, serverCallsPerMinute = 50)) }
                 variants.exclude(admin, admin.member.id, VariantTarget(VariantKind.MCP, "tracker"))
-                failure("mcp_tool_denied") { first.admit(admin, "tracker", tracker.id, McpOperation.LIST, null, limits.copy(memberCallsPerMinute = 50, serverCallsPerMinute = 50)) }
+                failure("mcp_tool_denied") { first.admit(admin, adminRef, McpOperation.LIST, null, limits.copy(memberCallsPerMinute = 50, serverCallsPerMinute = 50)) }
                 team.updateMember(admin, alice.member.id, Role.MEMBER, true)
-                failure("authentication_required") { first.admit(alice, "tracker", tracker.id, McpOperation.LIST, null, limits) }
+                failure("authentication_required") { first.admit(alice, aliceRef, McpOperation.LIST, null, limits) }
                 team.updateMember(admin, alice.member.id, Role.MEMBER, false)
                 val restored = team.login("alice", "alice replacement password", "MCP").principal
-                failure("credential_scope") { first.admit(restored.copy(serviceScopes = setOf(ServiceScope.INFERENCE)), "tracker", tracker.id, McpOperation.LIST, null, limits) }
+                failure("credential_scope") { first.admit(restored.copy(serviceScopes = setOf(ServiceScope.INFERENCE)), aliceRef, McpOperation.LIST, null, limits) }
 
                 // Refusals are journaled within the member's rate and dropped past it, so storage stays bounded.
                 repeat(6) { first.denied(restored, "", "probe", limits) }
