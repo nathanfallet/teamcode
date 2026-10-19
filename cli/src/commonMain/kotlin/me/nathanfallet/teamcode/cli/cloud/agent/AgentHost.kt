@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
@@ -57,6 +58,8 @@ internal class AgentHost(
     private val log: (String) -> Unit = {},
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    /** The runner's loopback inference proxy; null starts the agent without TeamCode inference (tests, old servers). */
+    private val inference: AgentInferenceEndpoint? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
@@ -177,14 +180,24 @@ internal class AgentHost(
             enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
         }
         val next = agentAdapter(config, clientVersion)
-        val command = next.command(resume)
-        val child = start(command, AGENT_ENVIRONMENT, workingDirectory)
+        val (command, environment) = launch(config.kind, next.command(resume))
+        val child = start(command, environment, workingDirectory)
         process = child; adapter = next; resumed = resume
         val startup = next.startup(resume, workingDirectory)
         writeLock.withLock { for (line in startup) child.writeLine(line) }
         reader = scope.launch { readLoop(child, next) }
         log("Started the ${config.kind} agent" + if (resume != null) " (resuming its conversation)." else ".")
         return next
+    }
+
+    /**
+     * Points the agent at the runner's loopback proxy exactly as `teamcode run` does for a local session: the agent
+     * receives only the proxy's random local token, and its own provider credentials are removed from its environment.
+     */
+    private fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
+        val endpoint = inference ?: return base to AGENT_ENVIRONMENT
+        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token)
+        return AgentCommand(base.command, plan.arguments) to AGENT_ENVIRONMENT + plan.environment
     }
 
     private suspend fun readLoop(child: AgentProcess, active: AgentAdapter) {
@@ -303,6 +316,11 @@ internal class AgentHost(
             .associateWith { null }
         val stateJson = Json { ignoreUnknownKeys = true }
     }
+}
+
+/** The runner's loopback inference proxy: its port and the random local token the agent presents to it. */
+internal class AgentInferenceEndpoint(val port: Int, val token: String) {
+    override fun toString() = "AgentInferenceEndpoint(port=$port, token=[REDACTED])"
 }
 
 /** The state file on the workspace volume; a missing or unreadable file means "no conversation to resume". */

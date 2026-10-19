@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.cloud.RunnerCalls
+import me.nathanfallet.teamcode.cli.cloud.RunnerInference
 import me.nathanfallet.teamcode.cli.cloud.RunnerLoop
 import me.nathanfallet.teamcode.cli.cloud.agent.*
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
@@ -230,5 +231,68 @@ class CloudAgentTest {
         assertTrue(calls.subList(calls.lastIndexOf("drain:600000"), drained).count { it == "heartbeat" } >= 2, "Heartbeats continued during the drain: $calls")
         assertEquals("checkpoint:false", calls.drop(drained).first { it.startsWith("checkpoint") }, "An interrupted drain is reported as such")
         assertEquals(1, calls.count { it.startsWith("checkpoint") })
+    }
+
+    @Test fun agentInferenceGoesThroughTheRunnerProxyWithALocalToken() = runTest {
+        val channel = FakeChannel()
+        val environments = mutableListOf<Map<String, String?>>()
+        val started = mutableListOf<AgentCommand>()
+        val local = "l".repeat(64)
+        val host = AgentHost(channel, { command, environment, _ -> environments += environment; started += command; FakeProcess() },
+            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = AgentInferenceEndpoint(41234, local))
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Go", 1)))
+        until { started.isNotEmpty() }
+        val environment = environments.single()
+        assertEquals("http://127.0.0.1:41234", environment["ANTHROPIC_BASE_URL"])
+        assertEquals(local, environment["ANTHROPIC_API_KEY"], "The agent holds only the proxy's local token")
+        for (name in listOf("ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "TEAMCODE_CLOUD_TOKEN_FILE", "TEAMCODE_SERVER_URL"))
+            assertTrue(environment.containsKey(name) && environment[name] == null, "$name is removed from the agent")
+        assertFalse(environment.values.any { it?.startsWith("tcex_") == true }, "The execution credential never reaches the agent")
+        assertEquals("--dangerously-skip-permissions" in started.single().arguments, true)
+        job.cancel()
+
+        // Codex: the same proxy through a model provider override and its token variable.
+        val codexChannel = object : AgentChannel by channel { override suspend fun agent() = RunnerAgentView("codex", "0.163", "gpt-5", null, "none") }
+        val codexStarted = mutableListOf<Pair<AgentCommand, Map<String, String?>>>()
+        val codexHost = AgentHost(codexChannel, { command, environment, _ -> codexStarted += command to environment; FakeProcess() },
+            MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime }, inference = AgentInferenceEndpoint(41234, local))
+        val codexJob = launch { codexHost.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-2", "message", "Go", 1)))
+        until { codexStarted.isNotEmpty() }
+        val (codexCommand, codexEnvironment) = codexStarted.single()
+        assertEquals("app-server", codexCommand.arguments.first())
+        assertTrue(codexCommand.arguments.any { "base_url=\"http://127.0.0.1:41234/v1\"" in it }, codexCommand.arguments.toString())
+        assertEquals(local, codexEnvironment["TEAMCODE_LOCAL_TOKEN"])
+        codexJob.cancel()
+    }
+
+    @Test fun runnerInferenceCredentialIsRenewedAndDroppedWhenRefused() = runTest {
+        var clock = 0L
+        var fetches = 0
+        var refuse: Exception? = null
+        val inference = RunnerInference({
+            refuse?.let { throw it }
+            fetches++
+            RunnerInferenceCredentialView("tcex_credential-$fetches", 3_600_000)
+        }, now = { clock })
+        assertEquals("tcex_credential-1", inference.token())
+        clock += 60_000
+        assertEquals("tcex_credential-1", inference.token(), "Reused until renewal is due")
+        clock += RunnerInference.RENEW_MILLIS
+        assertEquals("tcex_credential-2", inference.token(), "Renewed well before it expires")
+        // A network failure keeps the current credential while it is still usable, and retries later.
+        clock += RunnerInference.RENEW_MILLIS
+        refuse = IllegalStateException("offline")
+        assertEquals("tcex_credential-2", inference.token())
+        clock += RunnerInference.USABLE_MILLIS
+        assertNull(inference.token(), "Never offered past its usable life")
+        // A refusal by the server (fenced execution) drops it at once.
+        refuse = null
+        clock += RunnerInference.RETRY_MILLIS
+        assertEquals("tcex_credential-3", inference.token())
+        clock += RunnerInference.RENEW_MILLIS
+        refuse = TeamCodeException(409, "fenced", "execution_fenced")
+        assertNull(inference.token())
     }
 }

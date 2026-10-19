@@ -29,6 +29,8 @@ class CloudTransferPersistenceTest {
         val runner = RunnerChannelUseCase(store)
         val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
         val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val team = SqlTeamService(database)
+        val inference = RunnerInferenceUseCase(store, SqlCloudInferenceCredentialStore(database))
     }
     private data class Team(val admin: Principal, val owner: Principal, val recipient: Principal, val outsider: Principal)
 
@@ -133,6 +135,9 @@ class CloudTransferPersistenceTest {
         rb.agent.acknowledge(teamId, s.id, 1, rb.agent.inputs(teamId, s.id, 1, 0).map { RunnerInputAck(it.id, true, null) })
         val lease = ra.conversation.attach(t.owner, s.id)
         val offer = rb.transfers.request(t.owner, null, s.id, CloudTransferRequest(to, true, false), key("offer-run", "d7")).transfer
+        // Inference of epoch 1 is charged to the former owner, through a credential of that execution.
+        val former = ra.inference.issue(teamId, s.id, 1)
+        assertEquals(from, ra.team.authenticate(former.token)?.member?.id)
 
         // Both replicas accept at once: one acceptance, the same transfer for both.
         val accepted = coroutineScope { listOf(ra, rb).map { r -> async(Dispatchers.IO) { r.transfers.accept(t.recipient, null, offer.id, null) } }.awaitAll() }
@@ -162,6 +167,7 @@ class CloudTransferPersistenceTest {
 
         current = ra.store.find(teamId, s.id)!!
         assertEquals(to, current.ownerId)
+        assertNull(ra.team.authenticate(former.token), "No credential of the former owner survives the boundary")
         assertEquals(RESUMING to DesiredState.RUNNING, current.state to current.desiredState, "The recipient asked to resume")
         assertNull(current.transferId)
         val completed = ra.transfers.get(t.recipient, offer.id)
@@ -198,6 +204,7 @@ class CloudTransferPersistenceTest {
         rb.runner.heartbeat(teamId, s.id, 2, ready = true)
         assertEquals(READY, ra.store.find(teamId, s.id)!!.state)
         assertEquals(listOf(2 to to, 1 to from), ra.sessions.executions(t.recipient, s.id).map { it.epoch to it.ownerId })
+        assertEquals(to, ra.team.authenticate(rb.inference.issue(teamId, s.id, 2).token)?.member?.id, "The recipient's execution is charged to the recipient")
         assertEquals(0, ra.agent.inputs(teamId, s.id, 2, 0).size, "The former owner's unconsumed message never reaches the recipient's agent")
         failure("execution_fenced") { ra.runner.heartbeat(teamId, s.id, 1, ready = true) }
         assertEquals(profile.id, ra.store.find(teamId, s.id)!!.profileId)

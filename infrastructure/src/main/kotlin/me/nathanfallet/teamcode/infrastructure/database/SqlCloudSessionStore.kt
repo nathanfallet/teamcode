@@ -119,6 +119,9 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             require(execution.sessionId == expected.id)
             CloudExecutions.update({ (CloudExecutions.sessionId eq execution.sessionId) and (CloudExecutions.epoch eq execution.epoch) }) { writeExecution(it, execution) }
         }
+        // Inference credentials die with their execution, in the transaction that ends it.
+        if (next.state !in RunnerInferenceUseCase.INFERENCE_STATES || next.desiredState == DesiredState.TERMINATED) revokeInferenceCredentials(expected.id)
+        else write.updateExecution?.takeIf { it.state == ExecutionState.ENDED }?.let { revokeInferenceCredentials(expected.id, it.epoch) }
         write.auditAction?.let { action ->
             val actor = write.actor
             if (actor != null) audit(expected.teamId, actor.principal.member.id, action, expected.id, actor.effectiveMemberId, actor.principal.tokenId)
@@ -150,6 +153,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[sessionId] = execution.sessionId; it[epoch] = execution.epoch; it[createdAt] = now
             writeExecution(it, execution.copy(createdAt = now))
         }
+        revokeInferenceCredentialsBefore(expected.id, execution.epoch)
         StartOutcome.Started(next.copy(generation = expected.generation + 1))
     }
 

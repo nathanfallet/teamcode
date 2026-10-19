@@ -9,6 +9,7 @@ import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlCloudInferenceCredentialStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudTransferStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlMemberAllowance
@@ -51,7 +52,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     }, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients))
     private val garbage = CollectCloudGarbageUseCase(store, cluster)
     val admin = CloudAdministrationService(adminStore, cluster)
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster))
+    private val inferenceCredentials = SqlCloudInferenceCredentialStore(database)
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials))
 
     private val conversationService = CloudConversationService(conversationStore, store, access)
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
@@ -87,7 +89,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             while (isActive) {
                 try {
-                    work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain(); transferStore.maintain(); transfers.expireOffers() }
+                    work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain(); transferStore.maintain(); transfers.expireOffers(); inferenceCredentials.purge(500) }
                     work.runDue("cloud-gc", intervalMillis = 10 * 60_000, timeoutMillis = 240_000) { collectGarbage() }
                 }
                 // runDue's deadline is a cancellation of the block only; the loop must survive it.

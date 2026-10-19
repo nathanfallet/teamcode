@@ -8,7 +8,9 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.api.BuildInfo
 import me.nathanfallet.teamcode.cli.cloud.agent.*
+import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
+import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
@@ -148,13 +150,27 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun inputs(waitMillis: Long) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis)).inputs
                 override suspend fun acknowledge(acks: List<RunnerInputAckView>) = client.runnerAcknowledge(RunnerInputAckRequest(team, session, epoch, acks))
             }
-            // HOME is on the workspace volume, so the conversation id survives pauses and new pods.
-            val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
-            val agent = AgentHost(agentChannel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
-                FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
-                BuildInfo.VERSION, log = { echo(it, err = true) })
-            try { RunnerLoop(calls, log = { echo(it, err = true) }, agent = agent).run() }
-            catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
+            // The agent's inference goes through a loopback proxy in this process, authenticated to the server with
+            // the execution's `tcex_` credential; the agent only gets the proxy's random local token.
+            val inference = RunnerInference({ client.runnerInference(RunnerInferenceRequest(team, session, epoch)) }, log = { echo(it, err = true) })
+            val inferenceClient = TeamCodeClient(server, { inference.token() }) { configure -> HttpClient { configure(this) } }
+            val localToken = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+            val proxy = proxyServer(inferenceClient, localToken, 0) { echo(it, err = true) }
+            try {
+                proxy.start(wait = false)
+                val port = proxy.engine.resolvedConnectors().single().port
+                // HOME is on the workspace volume, so the conversation id survives pauses and new pods.
+                val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
+                val agent = AgentHost(agentChannel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
+                    FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
+                    BuildInfo.VERSION, log = { echo(it, err = true) }, inference = AgentInferenceEndpoint(port, localToken))
+                try { RunnerLoop(calls, log = { echo(it, err = true) }, agent = agent).run() }
+                catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
+            } finally {
+                inference.clear()
+                proxy.stop(500, 5_000)
+                inferenceClient.close()
+            }
         }
         if (code != 0) SystemExit.exit(code)
     }

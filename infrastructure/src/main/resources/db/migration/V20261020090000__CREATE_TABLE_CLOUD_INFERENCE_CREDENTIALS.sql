@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS cloud_inference_credentials (token_id VARCHAR(36) PRIMARY KEY, session_id VARCHAR(36) NOT NULL, epoch INT NOT NULL, team_id VARCHAR(36) NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, CONSTRAINT cloud_inference_credentials_token FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE, CONSTRAINT cloud_inference_credentials_session FOREIGN KEY (session_id) REFERENCES cloud_sessions(id) ON DELETE CASCADE);
+CREATE INDEX cloud_inference_execution ON cloud_inference_credentials (session_id, epoch);
+CREATE INDEX cloud_inference_expiry ON cloud_inference_credentials (expires_at);

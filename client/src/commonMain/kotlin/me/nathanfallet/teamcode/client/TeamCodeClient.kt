@@ -309,6 +309,8 @@ class TeamCodeClient(
     suspend fun runnerInputs(input: RunnerInputsRequest): RunnerInputsView =
         coded(HttpMethod.Post, "/api/v1/cloud/runner/inputs", input) { timeout { requestTimeoutMillis = input.waitMillis + 30_000 } }
     suspend fun runnerAcknowledge(input: RunnerInputAckRequest) { coded<Unit, RunnerInputAckRequest>(HttpMethod.Post, "/api/v1/cloud/runner/inputs/ack", input) }
+    /** A `tcex_` inference credential for this execution; keep it in memory only. */
+    suspend fun runnerInference(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/inference", input)
 
     /** Failures carry the server's error code (for example `cloud_permission_denied`), never its message. */
     private suspend inline fun <reified R, reified B> coded(method: HttpMethod, path: String, body: B?, crossinline configure: HttpRequestBuilder.() -> Unit = {}): R {

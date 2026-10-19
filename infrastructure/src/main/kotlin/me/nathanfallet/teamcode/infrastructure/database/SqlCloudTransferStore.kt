@@ -122,6 +122,9 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
         // Former-owner access ends here: attachment leases go (a renewal then fails and the CLI detaches), and the
         // session's own routes now authorize against the recipient.
         CloudSessionAttachments.deleteWhere { CloudSessionAttachments.sessionId eq expected.id }
+        // The pause already revoked the former owner's inference credentials with their execution; nothing issued
+        // for them may survive the change of owner.
+        revokeInferenceCredentials(expected.id)
         val event = buildJsonObject {
             put("transferId", transfer.id); put("fromMemberId", transfer.fromMemberId); put("toMemberId", transfer.toMemberId); put("atEpoch", expected.currentEpoch)
         }

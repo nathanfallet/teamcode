@@ -9,7 +9,12 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.cloud.*
 
 /** The runner channel, authenticated by the pod's projected token (see [AuthenticateRunnerUseCase]). */
-class CloudRunnerChannel(val runner: RunnerChannelUseCase, val authenticate: AuthenticateRunnerUseCase)
+class CloudRunnerChannel(
+    val runner: RunnerChannelUseCase,
+    val authenticate: AuthenticateRunnerUseCase,
+    /** `tcex_` inference credentials for the agent's inference; null where the server does not issue them. */
+    val inference: RunnerInferenceUseCase? = null,
+)
 
 internal const val RUNNER_PATH = "/api/v1/cloud/runner/"
 
@@ -32,5 +37,15 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         val body = call.jsonBody<RunnerCheckpointRequest>()
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
         call.respond(channel.runner.checkpoint(pod.teamId, pod.sessionId, pod.epoch, body.completed).view())
+    }
+    channel.inference?.let { inference ->
+        // The credential is returned only to the registered runner of the current epoch, and never stored or logged.
+        post(RUNNER_PATH + "inference") {
+            val body = call.jsonBody<RunnerInferenceRequest>()
+            val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
+            val credential = inference.issue(pod.teamId, pod.sessionId, pod.epoch)
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt))
+        }
     }
 }

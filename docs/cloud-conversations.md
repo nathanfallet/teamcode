@@ -24,7 +24,7 @@ The runner (`teamcode cloud runner`) starts the session's agent with the first m
 - **Claude Code**: `claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions [--model M] [--effort E] [--resume ID]`. Each message is a `user` line on stdin; Claude Code queues messages sent during a turn. An interrupt is a `control_request` with subtype `interrupt`.
 - **Codex**: `codex app-server` (JSON-RPC lines without the `jsonrpc` member): `initialize`, `initialized`, then `thread/start` or `thread/resume` with `approvalPolicy: never` and `sandbox: danger-full-access` (the app-server form of `--dangerously-bypass-approvals-and-sandbox`). A message during a turn is `turn/steer`, otherwise `turn/start`; a steer that arrives after the turn ended starts the next turn instead of being lost. An interrupt is `turn/interrupt`. Server requests (approvals) are refused, since bypass mode should produce none.
 
-The agent kind, version, model and effort come from the session (`POST /cloud/runner/agent`). The conversation id is kept in `$HOME/.teamcode/cloud-agent.json` on the workspace volume; a new pod resumes it only when the agent kind and version are unchanged. Otherwise, or when the resume fails, a fresh conversation starts and `resume.conversation` becomes `transcript_only` (`resumable` once the agent reported its id). The agent runs in `TEAMCODE_CLOUD_WORKDIR` (default `/workspace`) and never inherits the runner's `TEAMCODE_*` variables.
+The agent kind, version, model and effort come from the session (`POST /cloud/runner/agent`). Its inference goes through the runner's loopback proxy, authenticated to the gateway with the execution's `tcex_` credential (see [inference from the pod](cloud-sessions.md#inference-from-the-pod)); the agent only holds the proxy's local token. The conversation id is kept in `$HOME/.teamcode/cloud-agent.json` on the workspace volume; a new pod resumes it only when the agent kind and version are unchanged. Otherwise, or when the resume fails, a fresh conversation starts and `resume.conversation` becomes `transcript_only` (`resumable` once the agent reported its id). The agent runs in `TEAMCODE_CLOUD_WORKDIR` (default `/workspace`) and never inherits the runner's `TEAMCODE_*` variables.
 
 Output is normalized in the runner (thinking and reasoning are dropped there) and uploaded in ordered batches (at most 200 events or 1 MB, buffer bounded to 5,000 events: further events are dropped without a sequence number and reported by a `transcript_overflow` error event). Each message is acknowledged once written to the agent's stdin; a redelivered input is acknowledged again without being written twice. Claude Code reports no turn start, so the runner emits `turn` `started` when a message reaches an idle agent. Agent stderr is discarded.
 
@@ -40,6 +40,7 @@ All take `{teamId, sessionId, epoch}` and the pod's projected token, like the li
 | `POST /cloud/runner/events` | `{events: [{sequence, type, data}]}`, the runner's own consecutive sequence per epoch (a retried batch is deduplicated); returns `{acceptedThrough, lastSeq}`. Body at most 2 MB, 200 events |
 | `POST /cloud/runner/inputs` | Long-poll (`waitMillis` at most 20,000) for queued inputs, interrupts first; returns them `delivered`. Nothing is delivered unless the session is `ready` or `active` and desired `running` |
 | `POST /cloud/runner/inputs/ack` | `{acks: [{id, status: consumed or rejected, reason}]}` |
+| `POST /cloud/runner/inference` | The execution's `tcex_` inference credential, see [inference from the pod](cloud-sessions.md#inference-from-the-pod) |
 
 A `turn` event with phase `started` makes a `ready` session `active`; `completed`, `interrupted` or `failed` makes it `ready` again. Both refresh `lastActivityAt`. A `status` event with `conversation` updates `resume.conversation`.
 
@@ -120,7 +121,6 @@ Migrations `V20261019210000*`: `cloud_settings.transcript_retention_days`, `clou
 ## Known limits
 
 - The agent runs with the pod UID like the runner, so it can read the projected token file; a separate UID or a token that the runner drops after reading is a follow-up.
-- No `tcex_` inference credential is issued to the pod yet, so the agent cannot authenticate to the TeamCode gateway in a real cluster until that lands.
 - Idle pause, the attachment lease in idle detection, `initialMessage`, the caller-wide feed and webhooks are not implemented.
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).

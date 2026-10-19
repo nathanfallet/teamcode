@@ -186,3 +186,10 @@ data class RunnerCheckpointRequest(val teamId: String, val sessionId: String, va
 /** What the runner must do next: keep running, or pause before [pauseDeadline] (epoch milliseconds). */
 @Serializable
 data class RunnerInstructionView(val desiredState: String, val pauseDeadline: Long? = null, val epoch: Int)
+@Serializable
+data class RunnerInferenceRequest(val teamId: String, val sessionId: String, val epoch: Int)
+/** A `tcex_` inference credential for the execution's owner, kept in the runner's memory only. */
+@Serializable
+data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long) {
+    override fun toString() = "RunnerInferenceCredentialView(token=[REDACTED], expiresAt=$expiresAt)"
+}

@@ -298,6 +298,55 @@ class CloudRoutesTest {
         assertEquals(1, reviews.count { it == "projected-pod-token-1" }, "Token reviews are cached")
     }
 
+    @Test fun runnerReceivesAnInferenceCredentialForItsOwnExecutionOnly() = testApplication {
+        val store = Store()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity? =
+                if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
+        }
+        val issued = mutableListOf<Triple<String, Int, Long>>()
+        val credentials = object : CloudInferenceCredentialStore {
+            override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int): IssuedInferenceCredential {
+                issued += Triple(sessionId, epoch, ttlMillis)
+                return IssuedInferenceCredential("tcex_synthetic-inference-credential-${issued.size}", 1_000 + ttlMillis)
+            }
+            override suspend fun purge(limit: Int) = 0
+        }
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, credentials)),
+                publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1)
+        assertTrue("cloud.inference.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        suspend fun call(token: String?, epoch: Int = 1) = client.post("/api/v1/cloud/runner/inference") {
+            token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":$epoch}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, call(null).status)
+        assertEquals(HttpStatusCode.Unauthorized, call("colleague").status, "A member credential cannot mint inference credentials")
+        assertEquals(HttpStatusCode.Conflict, call("projected-pod-token-1", epoch = 2).status, "Another epoch is fenced")
+        assertEquals(HttpStatusCode.Conflict, call("projected-pod-token-1").status, "Not before the runner registered")
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            runner.runnerRegister(RunnerRegisterRequest("default", "s1", 1))
+            runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
+            val response = call("projected-pod-token-1")
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+            val credential = runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
+            assertTrue(credential.token.startsWith("tcex_")); assertFalse(credential.token in credential.toString())
+            assertEquals(listOf(Triple("s1", 1, RunnerInferenceUseCase.TTL_MILLIS), Triple("s1", 1, RunnerInferenceUseCase.TTL_MILLIS)), issued)
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED)
+            assertEquals("inference_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
+                runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
+            }.code)
+        } finally { runner.close() }
+    }
+
     private object FakeCluster : ClusterPort {
         override suspend fun storageClass(clusterId: String, name: String?) = StorageClassObservation("standard", "Delete")
         override suspend fun ensureClaim(clusterId: String, request: WorkspaceRequest) = Unit
