@@ -12,18 +12,18 @@ This page is the contract and the record of what is implemented. It follows the 
 | `TransitionCloudSessionUseCase`: compare-and-set on `generation`, epoch advance with its execution row | Implemented (PR 1) |
 | Leased reconciler, capacity admission (FIFO), pause/checkpoint, lost-execution handling, retention expiry | Implemented (PR 1), against the `ClusterPort` interface |
 | Proven workspace deletion (claim and provider volume), `Retain` refusal and alert, orphan garbage collection | Implemented (PR 1), against the `ClusterPort` interface |
-| Runner channel rules (register, heartbeat, checkpoint) with epoch fencing | Implemented in the domain and persistence (PR 1); HTTP routes planned (PR 2) |
+| Runner channel (register, heartbeat, checkpoint) with epoch fencing, authenticated by `TokenReview` | Implemented (rules in PR 1, routes in PR 2) |
 | MySQL tables and migration: clusters, versioned profiles, assignments, sessions, labels, executions, idempotency; audit attribution columns | Implemented (PR 1) |
 | Management API: settings, clusters, profiles, sessions create/list/get/executions/pause/resume/delete, `TeamCode-On-Behalf-Of` for interactive administrators, `Idempotency-Key` | Implemented (PR 1), typed client included |
 | Dashboard page for cloud settings (`/dashboard/cloud`) | Implemented (PR 1) |
-| Server wiring, `cloud.sessions.v1` advertised by the server | Planned (PR 2): the server enables the cloud routes and the reconciler only together with the Kubernetes adapter |
-| Kubernetes adapter (pods, claims, volumes, storage classes, TokenReview) | Planned (PR 2) |
-| Runner skeleton `teamcode cloud runner` (register, heartbeat, checkpoint; no agent) | Planned (PR 2) |
-| CLI `teamcode cloud create/list/show/pause/resume/delete` | Planned (PR 2) |
-| Opt-in `kind` smoke test | Planned (PR 2) |
+| Server wiring (reconciler, garbage collection and maintenance workers), `cloud.sessions.v1` advertised when `TEAMCODE_CLOUD_RUNNER_IMAGE` is set | Implemented (PR 2) |
+| Kubernetes adapter (pods, claims, volumes, storage classes, TokenReview) | Implemented (PR 2) |
+| Runner skeleton `teamcode cloud runner` (register, heartbeat, checkpoint; no agent) | Implemented (PR 2) |
+| CLI `teamcode cloud create/list/show/pause/resume/delete` | Implemented (PR 2) |
+| Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
 | Environment preparation, GitHub, transcript, messages, attach, transfer, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
-Until PR 2 merges, the server does not mount the cloud routes and does not advertise `cloud.sessions.v1`. Clients must check that capability before using any route below.
+The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
 
 ## Resources
 
@@ -88,8 +88,8 @@ API routes only write the desired state. A **leased reconciler** running on any 
 - **Runner fencing.** Every runner call is bound to `(session, epoch)` and to the pod name of the execution. Anything else returns `409 execution_fenced`; the runner must then stop its agent and exit without checkpointing.
 - **Image pulls.** `InvalidImageName` and `ErrImageNeverPull` fail the start at once. `ErrImagePull` and `ImagePullBackOff` are retried by the kubelet (registry outage, rate limit, tag pushed late), so they fail the start only after 5 minutes.
 - **Errors.** A step that throws (cluster or database unavailable, or a defect) is retried after 30 s; the reconciler takes an error callback so the server logs and counts it, and the raw error never reaches the session or its API view.
-- **Bare pods.** A Job controller could recreate a pod outside TeamCode's epoch control, so the adapter (PR 2) creates bare pods with `restartPolicy: Never`; the reconciler alone decides whether to start again.
-- **Exclusive volume.** The workspace claim requests `ReadWriteOncePod` where the CSI driver supports it (adapter, PR 2).
+- **Bare pods.** A Job controller could recreate a pod outside TeamCode's epoch control, so the adapter creates bare pods with `restartPolicy: Never`; the reconciler alone decides whether to start again.
+- **Exclusive volume.** The workspace claim requests `ReadWriteOncePod` by default, so the cluster itself refuses a second pod on the workspace. `TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE=ReadWriteOnce` is for drivers without it (the local `kind` provisioner); the epoch rule above still applies.
 
 Due times: about 2 s while a step is in progress, 5 s while waiting for capacity, 15 s while running (heartbeat watch), the expiry time while paused, 10 minutes while a deletion is blocked, and nothing once a deletion is proven.
 
@@ -103,7 +103,7 @@ Due times: about 2 s while a step is in progress, 5 s while waiting for capacity
 | Administrator (interactive login) | Every team session; clusters, profiles and settings |
 | Service/CI key | None: every cloud path is classified interactive-only |
 | Personal key `cloud:read`/`cloud:write`, administrator key `admin:cloud` | Planned with the V2 API keys |
-| Runner | Planned (PR 2): `/api/v1/cloud/runner/*` only, for its own session and epoch |
+| Runner | `/api/v1/cloud/runner/*` only, for its own session and epoch, with its projected pod token |
 
 `TeamCode-On-Behalf-Of: <memberId>` sets the effective member. It is accepted only from an interactive administrator (administrator keys follow with the V2 keys). On any other credential the header must be absent or equal to the caller's own id; otherwise `403 on_behalf_forbidden`. The target must be an enabled team member who completed password setup (`422 invalid_effective_member`), and for creation it must hold the profile assignment. The header never grants rights: the call is authorized with the caller's own rights.
 
@@ -140,7 +140,7 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | `POST /cloud/sessions/{id}/pause` | `{force?: false}`; `202`. `409 session_preparing` while creating or preparing; repeated pauses write nothing | Owner, administrator | Implemented |
 | `POST /cloud/sessions/{id}/resume` | `202`; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
-| `/cloud/runner/*` | Runner channel | Execution credential | Planned (PR 2) |
+| `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `/cloud/events/stream` | Transcript pages, per-session SSE, caller-wide SSE feed | | Planned |
 | `/cloud/sessions/{id}/messages`, `.../interrupt`, `.../attachments` | Messages, interrupt, CLI attach lease | | Planned |
 | `/cloud/sessions/{id}/transfer`, `/cloud/transfers...` | Ownership transfer | | Planned |
@@ -202,8 +202,8 @@ Each session has one PersistentVolumeClaim, `tc-ws-<session>`, created before it
 - **Refusing retention.** Publishing a profile checks the workspace storage class on the cluster and refuses one whose `reclaimPolicy` is not `Delete` (`422 storage_class_retains_volumes`), or a missing one (`422 storage_class_missing`). The reconciler checks again before creating a claim and fails the session with the same code, since the class can change after publication.
 - **Proof.** When a session ends, the reconciler records the bound PersistentVolume name and the provider volume handle (for CSI volumes, `spec.csi.volumeHandle`), deletes the claim, waits until the claim is gone, then waits until the PersistentVolume is gone. With `reclaimPolicy: Delete`, the external provisioner removes the PersistentVolume only after the driver's `DeleteVolume` call succeeded on the provider, so its disappearance is the proof that the provider volume was deleted. `workspaceDeletion.state` becomes `proven` with `claimDeletedAt` and `volumeDeletedAt`; the handle stays on the session as evidence, and `cloud.session.workspace_deleted` is journaled.
 - **Alerts.** A volume found with a non-`Delete` policy, in phase `Failed`, or still present one hour after its claim was deleted marks the deletion `blocked` with `volume_retained` or `volume_deletion_stalled`, rechecked every 10 minutes. The administrator deletes the provider volume and the PersistentVolume; the next check then proves the deletion.
-- **Garbage collection.** For each cluster, a pass lists TeamCode-labelled pods and claims (`app.kubernetes.io/managed-by=teamcode` and the cluster id label, so another cluster record or server sharing a namespace is never touched) in the allowed namespaces and in any namespace that still holds a session not yet proven deleted, and the released or failed volumes of TeamCode workspaces, before reading which claims and current-epoch pods the database still accounts for. Objects are created only after their row commits, so this order never mistakes a fresh object for an orphan. Orphaned pods and claims are deleted; orphaned volumes that would not be deleted by their provisioner are counted in the cluster's `orphanedVolumes`, with `lastGarbageCollectionAt`. The server's scheduled GC worker is wired with the adapter (PR 2).
-- **Acceptance.** `CloudSessionPersistenceTest` verifies that no claim or volume remains after deletion with a fake cluster that models the provisioner. The opt-in cluster smoke (PR 2) will verify it on a real cluster, and on OpenStack can also check the recorded handle with `openstack volume show`.
+- **Garbage collection.** For each cluster, a pass lists TeamCode-labelled pods and claims (`app.kubernetes.io/managed-by=teamcode` and the cluster id label, so another cluster record or server sharing a namespace is never touched) in the allowed namespaces and in any namespace that still holds a session not yet proven deleted, and the released or failed volumes of TeamCode workspaces, before reading which claims and current-epoch pods the database still accounts for. Objects are created only after their row commits, so this order never mistakes a fresh object for an orphan. Orphaned pods and claims are deleted; orphaned volumes that would not be deleted by their provisioner are counted in the cluster's `orphanedVolumes`, with `lastGarbageCollectionAt`. A scheduled worker runs it every 10 minutes on one replica.
+- **Acceptance.** `CloudSessionPersistenceTest` verifies that no claim or volume remains after deletion with a fake cluster that models the provisioner. `KindSmokeTest` verifies it on a real cluster through the Kubernetes adapter; on OpenStack, the recorded handle can also be checked with `openstack volume show`.
 
 ## Pause and resume
 
@@ -215,15 +215,30 @@ Each session has one PersistentVolumeClaim, `tc-ws-<session>`, created before it
 
 Inactivity only pauses; it never deletes. Idle detection (turns, pending inputs, preparation), the idle warning and `maxTurnMinutes` are planned with the agent and messages.
 
-## The runner and the pod (planned, PR 2)
+## The runner and the pod
 
-The domain rules are implemented (`RunnerChannelUseCase`); the routes, the pod identity exchange and the runner binary are planned.
+- **Pod.** One bare pod per execution, `tc-<session>-e<epoch>`, `restartPolicy: Never`, labelled `app.kubernetes.io/managed-by=teamcode` with the session, cluster and epoch. Non-root (UID/GID/fsGroup 1000, `runAsNonRoot`), `seccompProfile: RuntimeDefault`, no privilege escalation, all capabilities dropped, `automountServiceAccountToken: false`, no service links. CPU and memory requests equal limits from the profile. The workspace claim is mounted at `/workspace`, `HOME` is `/workspace/.home` so agent state survives pauses.
+- **Delivery.** An init container from the runner image (`TEAMCODE_CLOUD_RUNNER_IMAGE`) copies the `teamcode` Linux binary (`TEAMCODE_CLOUD_RUNNER_BINARY`, default `/usr/local/bin/teamcode`) into an `emptyDir` at `/opt/teamcode`, with `cp`; the session container runs `/opt/teamcode/teamcode cloud runner`. The team image stays a pure toolchain (Linux with the published binaries' glibc baseline, `/bin/sh`, `git`, writable by UID 1000). Bundled agent CLIs come with the agent PR.
+- **Identity.** A projected ServiceAccount token, audience `teamcode`, 600 s expiry (the API minimum; the kubelet rotates the file, and the runner reads it for every call). The server reviews it with `TokenReview` using the cluster credential and requires the bound namespace to be the session's and the bound pod name to be the current execution's pod; the pod name always comes from the review, never from the request. A pod of the session with another epoch gets `409 execution_fenced` and exits. Reviews are cached 60 s per token (refusals 10 s), so a heartbeat every 15 s costs one review a minute per pod. No TeamCode secret exists in the cluster, and the pod environment holds only the server URL, the token file path and the team, session and epoch identifiers.
+- **Channel.** HTTPS only (the client refuses plain HTTP except on loopback): register, heartbeat every 15 s (the response carries the desired state and pause deadline), checkpoint; later batched event upload and an input long-poll. It fits stateless replicas with MySQL as the only bus and needs no inbound connectivity to the pod. Network failures are retried with backoff; the server marks the execution lost after 90 s without heartbeats.
+- **Runner skeleton.** This release's runner starts no agent: it registers, reports ready, heartbeats, and checkpoints immediately when a pause is requested (there is nothing to drain yet). It exits on `409` (fenced) or when the session is being deleted, and with code 2 on `401`.
+- **Planned.** A `tcex_` execution credential (hashed, bound to session, epoch and owner, revoked on pause, transfer, delete and fencing) for the inference the runner's loopback proxy forwards, with the agent PR; a one-time Secret fallback where `TokenReview` is not permitted.
+- **Kubernetes client.** The adapter (`KubernetesClusterPort`) calls the Kubernetes REST API with the Ktor client the server already uses, rather than fabric8 or the official Java client. The surface is small (pods, claims, volumes, storage classes, TokenReview), the server stores each cluster's URL, CA and token instead of a kubeconfig, and the adapter is tested with Ktor's mock engine. Each cluster gets its own client whose trust store holds only that cluster's CA bundle; the connection is reloaded from the database at most every 30 s, so a rotated token applies quickly. Lists are paged (500 per page, at most 20 pages); API error bodies are never kept or logged. It adds no dependency, and nothing reaches the native CLI, which keeps `cli -> client -> api`.
 
-- **Delivery.** An init container from a TeamCode runner image copies the `teamcode` Linux binary (used as `teamcode cloud runner`) and pinned agent CLIs into an `emptyDir` at `/teamcode/bin`; the main container runs the runner as PID 1 with signal forwarding. The team image stays a pure toolchain (Linux `amd64`/`arm64` with the published binaries' glibc baseline, `/bin/sh`, `git`, non-root UID, writable `$HOME`). A profile option will let teams that pin agents in their image skip the bundled CLIs.
-- **Identity.** A projected ServiceAccount token with audience `teamcode` and a 10-minute expiry. The server verifies it through `TokenReview` with the cluster credential and checks that the bound pod name and UID match the current execution. No TeamCode secret exists in the cluster. Where `TokenReview` is not permitted, a one-time Secret created with the pod is the fallback. A token in the pod environment is rejected.
-- **Execution credential.** A hashed `tcex_` token in the shared token table, bound to `(session, epoch, owner)`, rotated hourly, revoked on pause, transfer, delete and fencing; charged to the owner's ledger. Agents never see it: they use the runner's loopback proxy, as with `teamcode run`.
-- **Channel.** HTTPS only: register, heartbeat every 15 s (the response carries the desired state and pause deadline), checkpoint; later batched event upload and an input long-poll. It fits stateless replicas with MySQL as the only bus and needs no inbound connectivity to the pod.
-- **Kubernetes client.** The adapter calls the Kubernetes REST API with the Ktor client the server already uses, rather than fabric8 or the official Java client. The surface is small (pods, claims, volumes, storage classes, TokenReview), the server stores each cluster's URL, CA and token instead of a kubeconfig, and the adapter is tested against recorded API fixtures with Ktor's mock engine. It adds no dependency, and nothing reaches the native CLI, which keeps `cli -> client -> api`.
+## Deployment
+
+Cloud sessions are enabled by setting `TEAMCODE_CLOUD_RUNNER_IMAGE` on the server; without it the routes stay unmounted and the capability is not advertised.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TEAMCODE_CLOUD_RUNNER_IMAGE` | (unset: disabled) | Image holding the `teamcode` Linux binary, copied into each session pod |
+| `TEAMCODE_CLOUD_RUNNER_BINARY` | `/usr/local/bin/teamcode` | Path of the binary in that image |
+| `TEAMCODE_CLOUD_SERVER_URL` | `TEAMCODE_PUBLIC_URL` | HTTPS origin the runner calls, reachable from the cluster |
+| `TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE` | `ReadWriteOncePod` | `ReadWriteOnce` for drivers without `ReadWriteOncePod` |
+
+The cluster's service account (its token is saved with the cluster) needs, in each allowed namespace, `get`, `list`, `create` and `delete` on `pods` and `persistentvolumeclaims`; cluster-wide `get` and `list` on `persistentvolumes` and `storageclasses`; and `system:auth-delegator` for `TokenReview`. Nothing else: TeamCode never deletes a PersistentVolume itself. `scripts/smoke-cloud-kind.py` creates exactly these roles. Egress from the session namespace should be limited by a NetworkPolicy to the TeamCode server, the registries and the repositories the team uses.
+
+Each server replica runs the reconciler continuously (leased per session) and, through scheduled work, garbage collection every 10 minutes and the idempotency-record purge every minute. A failed reconciliation step is logged with the session id and the error class or Kubernetes status only.
 
 ## The agent in the pod (planned)
 
@@ -242,25 +257,25 @@ The domain rules are implemented (`RunnerChannelUseCase`); the routes, the pod i
 - **Transfer.** Administrator transfer is immediate; an owner's request is an offer the recipient accepts within 7 days. Transfer happens at a checkpoint, revokes execution and attachment credentials, rechecks the recipient, and charges future work to the recipient while historical usage stays with the original member. The policy follows the settings above.
 - **Keys.** `cloud:read`/`cloud:write` personal scopes and `admin:cloud` administrator keys with `TeamCode-On-Behalf-Of`, with the V2 API keys. This enables the driving integration: an external orchestrator creating one session per task on behalf of a member, relaying messages from mobile through its own backend, without administrator keys ever reaching a device.
 
-## CLI (planned, PR 2)
+## CLI
 
 ```sh
-teamcode cloud create --profile ID [--name TEXT] [--label K=V]... [--model M] [--effort E] [--member MEMBER_ID] [--json]
-teamcode cloud list [--all|--member ID] [--state STATE] [--label K=V] [--json]
-teamcode cloud show SESSION [--json]
-teamcode cloud pause SESSION [--force]
-teamcode cloud resume SESSION
-teamcode cloud delete SESSION [--yes]
+teamcode cloud create --name TEXT --profile ID [--label K=V]... [--image REF] [--model M] [--effort E] [--idle-minutes N] [--member MEMBER_ID] [--idempotency-key KEY] [--json]
+teamcode cloud list [--all|--member ID] [--state STATE]... [--label K=V]... [--json]
+teamcode cloud show SESSION [--executions] [--json]
+teamcode cloud pause SESSION [--force] [--member ID]
+teamcode cloud resume SESSION [--member ID]
+teamcode cloud delete SESSION --yes [--member ID]
 teamcode cloud runner            # hidden; pod entrypoint only
 ```
 
-`--member` sends `TeamCode-On-Behalf-Of`, `--json` prints the API DTOs unchanged, and `create` generates the idempotency key and reuses it on retry. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
+`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
 
 ## Pull request sequence
 
 | PR | Content | Capability |
 | --- | --- | --- |
-| 1 (this one) | Contract; domain, persistence, reconciler, deletion proof and GC over `ClusterPort`; management API and client; settings; audit columns | Not advertised by the server |
+| 1 | Contract; domain, persistence, reconciler, deletion proof and GC over `ClusterPort`; management API and client; settings; audit columns | Not advertised by the server |
 | 2 (stacked on 1) | Kubernetes adapter, runner routes and skeleton, server wiring and workers, CLI commands, opt-in `kind` smoke | `cloud.sessions.v1` |
 | 3 | Environment preparation and GitHub | `cloud.environment.v1` |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
@@ -272,6 +287,10 @@ teamcode cloud runner            # hidden; pod entrypoint only
 
 - `CloudSessionPersistenceTest` (real MySQL 8.4, two independent connection pools): the reviewed migration matches the Exposed tables; encrypted cluster credentials; profile versioning and the `Retain` refusal; administrator delegation with attribution in the session and the audit journal; concurrent creations with one idempotency key creating one session; the full create, prepare, ready, pause, checkpoint and paused cycle with no pod left; runner fencing by epoch and pod name; concurrent resumes from both pools producing one epoch, including two reconcilers holding the same lease; stale-owner fencing after lease expiry; lost-execution handling; FIFO capacity admission; proven deletion leaving no claim or volume; the blocked deletion and orphaned-volume alert for a retained volume; garbage collection of orphaned pods and claims; retention expiry; the retained cap and keyset pagination.
 - `CloudRoutesTest`: service keys refused on cloud routes, `Idempotency-Key` validation and canonical replay, `TeamCode-On-Behalf-Of` refused for members, visibility as `404`, natural idempotency of pause and delete through the typed client, query validation, and the settings API and dashboard form with CSRF.
-- `CloudLifecycleRulesTest`: the transition table, request validation, image override patterns and settings bounds.
+- `CloudLifecycleRulesTest`: the transition table, request validation, image override patterns, cluster API hosts and settings bounds.
+- `CloudRoutesTest` (runner): only the current pod's projected token is accepted; member credentials, another namespace and unbound tokens get `401`, another epoch `409`; reviews are cached.
+- `KubernetesClusterPortTest` (Ktor mock engine): claim, volume, storage-class and pod parsing; idempotent create and delete; the pod manifest (bare, non-root, no API token, projected token, resources, pull secrets); `TokenReview` parsing and refusals; label-selected paging; error bodies never surfaced.
+- `CloudRunnerTest`: the runner skeleton registers with backoff, checkpoints once when paused, exits when fenced or deleted, and stops on `401`.
+- `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 
 Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.

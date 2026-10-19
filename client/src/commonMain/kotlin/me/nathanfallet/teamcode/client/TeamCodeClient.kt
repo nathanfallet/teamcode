@@ -163,6 +163,10 @@ class TeamCodeClient(
         cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }
+    /** Runner channel; construct the client with the pod's projected token as its credential. */
+    suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = request("/api/v1/cloud/runner/register", HttpMethod.Post, input)
+    suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = request("/api/v1/cloud/runner/heartbeat", HttpMethod.Post, input)
+    suspend fun runnerCheckpoint(input: RunnerCheckpointRequest): RunnerInstructionView = request("/api/v1/cloud/runner/checkpoint", HttpMethod.Post, input)
     private suspend fun cloudAction(path: String, id: String, onBehalfOf: String?, body: PauseCloudSessionRequest?, method: HttpMethod = HttpMethod.Post): HttpResponse {
         identifier(id); onBehalfOf?.let(::identifier)
         val response = http.request("$origin$path") {

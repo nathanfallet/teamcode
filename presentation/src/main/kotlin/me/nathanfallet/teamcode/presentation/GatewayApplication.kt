@@ -26,7 +26,7 @@ import me.nathanfallet.teamcode.domain.gateway.*
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     install(io.ktor.server.resources.Resources)
@@ -49,7 +49,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         val path = call.request.path()
         if (team != null) {
             if (path.startsWith("/dashboard")) call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-            if (path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
+            // Runner calls carry the pod's projected token, which the runner routes verify themselves.
+            val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH)
+            if (!runnerCall && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
                 val principal = credential?.let { team.authenticate(it) }
@@ -87,6 +89,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (serviceKeys != null && team != null) serviceKeyRoutes(serviceKeys, publicOrigin)
         if (audit != null && team != null) auditRoutes(audit)
         if (cloudSessions != null && cloudAdmin != null && team != null) cloudRoutes(cloudSessions, cloudAdmin, publicOrigin)
+        if (cloudRunner != null && cloudSessions != null && team != null) cloudRunnerRoutes(cloudRunner)
         if (cancellation != null && team != null) {
             post("/api/v1/requests/{id}/cancel") {
                 cancellation.cancel(call.principal, call.parameters["id"].orEmpty())

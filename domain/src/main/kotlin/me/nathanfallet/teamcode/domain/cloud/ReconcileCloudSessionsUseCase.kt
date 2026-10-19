@@ -132,7 +132,8 @@ class ReconcileCloudSessionsUseCase(
                     ?: return fail(current, owner, now, CloudProblem("profile_unavailable", "The pinned profile version no longer exists."))
                 val image = current.imageDigest?.let { digest -> current.imageReference.substringBefore('@') + "@" + digest } ?: current.imageReference
                 cluster.createPod(current.clusterId, PodRequest(current.namespace, execution.podName, image, current.workspace.claimName,
-                    labels(current) + (EPOCH_LABEL to execution.epoch.toString()), profile.resources, profile.imagePullSecrets))
+                    labels(current) + (EPOCH_LABEL to execution.epoch.toString()), profile.resources, profile.imagePullSecrets,
+                    mapOf(TEAM_ENV to current.teamId, SESSION_ENV to current.id, EPOCH_ENV to execution.epoch.toString())))
                 return now + STEP_MILLIS
             }
             return lost(current, owner, now, execution, "pod_missing")
@@ -309,6 +310,9 @@ class ReconcileCloudSessionsUseCase(
         const val SESSION_LABEL = "teamcode.nathanfallet.me/session"
         const val CLUSTER_LABEL = "teamcode.nathanfallet.me/cluster"
         const val EPOCH_LABEL = "teamcode.nathanfallet.me/epoch"
+        const val TEAM_ENV = "TEAMCODE_CLOUD_TEAM"
+        const val SESSION_ENV = "TEAMCODE_CLOUD_SESSION"
+        const val EPOCH_ENV = "TEAMCODE_CLOUD_EPOCH"
         const val LEASE_MILLIS = 60_000L
         const val RETRY_MILLIS = 30_000L
         const val STEP_MILLIS = 2_000L

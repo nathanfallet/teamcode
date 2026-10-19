@@ -159,3 +159,14 @@ object CloudHeaders {
     const val IDEMPOTENCY_REPLAYED = "Idempotency-Replayed"
     val idempotencyKey = Regex("[A-Za-z0-9._:-]{1,128}")
 }
+
+/** Runner channel. The runner authenticates with its projected service-account token, never a member credential. */
+@Serializable
+data class RunnerRegisterRequest(val teamId: String, val sessionId: String, val epoch: Int)
+@Serializable
+data class RunnerHeartbeatRequest(val teamId: String, val sessionId: String, val epoch: Int, val ready: Boolean)
+@Serializable
+data class RunnerCheckpointRequest(val teamId: String, val sessionId: String, val epoch: Int, val completed: Boolean)
+/** What the runner must do next: keep running, or pause before [pauseDeadline] (epoch milliseconds). */
+@Serializable
+data class RunnerInstructionView(val desiredState: String, val pauseDeadline: Long? = null, val epoch: Int)

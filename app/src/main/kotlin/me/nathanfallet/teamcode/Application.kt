@@ -78,6 +78,8 @@ fun main() {
             }
         }
     }
+    val cloud = System.getenv("TEAMCODE_CLOUD_RUNNER_IMAGE")?.takeIf { it.isNotBlank() && database != null }
+        ?.let { image -> CloudServer(database!!, cipher!!, origin, image).also { it.launch(workers) } }
     val team = database?.let { SqlTeamService(it) }
     val devices = database?.let { SqlDeviceService(it) }
     val serviceKeys = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlServiceKeyService(it) }
@@ -98,6 +100,7 @@ fun main() {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); providerHttp.close(); database?.close() }
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit,
+            cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner) }.start(wait = true)
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); database?.close() }
 }

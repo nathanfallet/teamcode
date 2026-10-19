@@ -48,8 +48,8 @@ class RunnerChannelUseCase(private val store: CloudSessionStore, private val tra
      * (the runner learns of the pause from its heartbeat and may finish first); the reconciler then deletes the
      * pod and advertises the checkpoint quality.
      */
-    suspend fun checkpoint(teamId: String, sessionId: String, epoch: Int, completed: Boolean) {
-        transition(teamId, sessionId) { current ->
+    suspend fun checkpoint(teamId: String, sessionId: String, epoch: Int, completed: Boolean): RunnerInstruction {
+        val session = transition(teamId, sessionId) { current ->
             val execution = live(current, epoch)
             val pauseRequested = current.desiredState == DesiredState.PAUSED && (current.state == READY || current.state == ACTIVE)
             if (current.state != PAUSING && !pauseRequested) throw TeamFailure("not_pausing", 409, "A checkpoint is accepted only once a pause is requested.")
@@ -58,6 +58,7 @@ class RunnerChannelUseCase(private val store: CloudSessionStore, private val tra
             CloudTransition(current.copy(state = PAUSING, pauseRequestedAt = current.pauseRequestedAt ?: now, phase = "checkpointing", updatedAt = now),
                 CloudWrite(updateExecution = execution.copy(checkpoint = if (completed) "completed" else "failed"), reconcileAt = now))
         } ?: throw fenced()
+        return instruction(session)
     }
 
     private suspend fun live(session: CloudSession, epoch: Int): CloudExecution {

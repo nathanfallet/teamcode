@@ -45,15 +45,21 @@ class CloudRoutesTest {
         override suspend fun list(teamId: String, query: CloudSessionQuery) =
             CloudSessionPage(sessions.values.filter { query.owner == null || it.ownerId == query.owner }.filter { s -> query.labels.all { (k, v) -> s.labels[k] == v } }, null)
         override suspend fun executions(teamId: String, sessionId: String) = emptyList<CloudExecution>()
-        override suspend fun execution(sessionId: String, epoch: Int): CloudExecution? = null
+        val runs = mutableMapOf<Pair<String, Int>, CloudExecution>()
+        override suspend fun execution(sessionId: String, epoch: Int): CloudExecution? = runs[sessionId to epoch]
         override suspend fun compareAndSet(expected: CloudSession, next: CloudSession, write: CloudWrite): CloudSession? {
             if (sessions[expected.id]?.generation != expected.generation) return null
+            write.updateExecution?.let { runs[it.sessionId to it.epoch] = it }
             return next.copy(generation = expected.generation + 1).also { sessions[it.id] = it }
         }
         override suspend fun claimDue(owner: String, leaseMillis: Long, limit: Int) = emptyList<CloudSession>()
         override suspend fun release(sessionId: String, owner: String, reconcileAt: Long?) = Unit
         override suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int) = StartOutcome.Conflict
-        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean) = false
+        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean {
+            val run = runs[sessionId to epoch]?.takeIf { sessions[sessionId]?.currentEpoch == epoch } ?: return false
+            runs[sessionId to epoch] = run.copy(lastHeartbeatAt = clock, runnerReady = runnerReady)
+            return true
+        }
         override suspend fun liveObjects(clusterId: String) = LiveObjects(emptySet(), emptySet())
         override suspend fun namespaces(clusterId: String) = emptySet<String>()
         override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = Unit
@@ -146,6 +152,52 @@ class CloudRoutesTest {
             contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=admin-session&pausedRetentionDays=14&failedWorkspaceRetentionDays=7&maxRunning=2&maxRetained=20")
         }.status)
         assertEquals(14, settings.settings.pausedRetentionDays)
+    }
+
+    @Test fun runnerChannelAcceptsOnlyTheCurrentPodByItsProjectedToken() = testApplication {
+        val store = Store()
+        val reviews = mutableListOf<String>()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity? {
+                reviews += token
+                assertEquals("teamcode", audience)
+                return when (token) {
+                    "projected-pod-token-1" -> TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1")
+                    "projected-other-namespace" -> TokenIdentity("elsewhere", "default", "tc-s1-e1", "uid-2")
+                    "projected-unbound-token" -> TokenIdentity("teamcode", "default", null, null)
+                    else -> null
+                }
+            }
+        }
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1)
+        suspend fun call(path: String, token: String?, body: String) = client.post("/api/v1/cloud/runner/$path") {
+            token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody(body)
+        }
+        val register = """{"teamId":"default","sessionId":"s1","epoch":1}"""
+        assertEquals(HttpStatusCode.Unauthorized, call("register", null, register).status)
+        assertEquals(HttpStatusCode.Unauthorized, call("register", "colleague-session-token", register).status, "Member credentials are not runner credentials")
+        assertEquals(HttpStatusCode.Unauthorized, call("register", "projected-other-namespace", register).status)
+        assertEquals(HttpStatusCode.Unauthorized, call("register", "projected-unbound-token", register).status)
+        assertEquals(HttpStatusCode.Conflict, call("register", "projected-pod-token-1", """{"teamId":"default","sessionId":"s1","epoch":2}""").status, "Another epoch is fenced")
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            assertEquals(RunnerInstructionView("running", null, 1), runner.runnerRegister(RunnerRegisterRequest("default", "s1", 1)))
+            assertEquals(CloudSessionState.PREPARING, store.sessions.getValue("s1").state)
+            runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
+            assertEquals(CloudSessionState.READY, store.sessions.getValue("s1").state)
+            assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
+                runner.runnerCheckpoint(RunnerCheckpointRequest("default", "s1", 1, completed = true))
+            }.statusCode, "No checkpoint before a pause is requested")
+        } finally { runner.close() }
+        assertEquals(1, reviews.count { it == "projected-pod-token-1" }, "Token reviews are cached")
     }
 
     private object FakeCluster : ClusterPort {

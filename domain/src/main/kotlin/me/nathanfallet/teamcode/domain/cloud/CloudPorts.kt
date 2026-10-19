@@ -89,6 +89,8 @@ data class PodRequest(
     val labels: Map<String, String>,
     val resources: CloudResources,
     val imagePullSecrets: List<String>,
+    /** Non-secret runner coordinates (team, session, epoch). Credentials never travel through pod environment. */
+    val env: Map<String, String> = emptyMap(),
 )
 enum class ClaimPhase { PENDING, BOUND, LOST }
 data class ClaimObservation(val phase: ClaimPhase, val volumeName: String?, val storageClass: String?)
