@@ -207,7 +207,8 @@ class CloudRoutesTest {
                 if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
         }
         val variables = CloudVariableSource { _, member -> CloudVariables(if (member == colleague.id) mapOf("NPM_TOKEN" to "npm_synthetic_value") else emptyMap()) }
-        val github = GitHubAccessSource { _, _ -> GitHubAccess.Linked(GitHubUserToken("ghu_synthetic_user_token", 99, "octo", 42)) }
+        // Only the session owner's link exists; another member's token must never reach this runner.
+        val github = GitHubAccessSource { _, member -> if (member == colleague.id) GitHubAccess.Linked(GitHubUserToken("ghu_synthetic_user_token", 99, "octo", 42)) else GitHubAccess.Linked(GitHubUserToken("ghu_admin_token", 99, "boss", 1)) }
         val sessions = CloudSessionService(store)
         application {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
@@ -241,7 +242,7 @@ class CloudRoutesTest {
             assertEquals("no-store", raw.headers[HttpHeaders.CacheControl])
             val prepared = runner.runnerEnvironment(RunnerEnvironmentRequest("default", "s1", 1))
             assertEquals(mapOf("NPM_TOKEN" to "npm_synthetic_value"), prepared.variables, "The owner's variables, resolved for the owner")
-            assertEquals("ghu_synthetic_user_token", prepared.github.token); assertEquals("linked", prepared.github.status)
+            assertEquals("ghu_synthetic_user_token", prepared.github.token, "The owner's token, not the caller's or anyone else's"); assertEquals("linked", prepared.github.status)
             assertEquals(RunnerGitIdentityView("octo", "42+octo@users.noreply.github.com"), prepared.git)
             assertEquals("task-1", prepared.environment.repositories.single().branch)
             assertFalse(prepared.toString().contains("npm_synthetic_value") || prepared.toString().contains("ghu_synthetic"))

@@ -22,7 +22,8 @@ This page is the contract and the record of what is implemented. It follows the 
 | CLI `teamcode cloud create/list/show/pause/resume/delete` | Implemented (PR 2) |
 | Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
 | Environment preparation: recipe on the profile version and the session, repositories, working directory, Git identity, setup commands, progress and failures in the lifecycle, `cloud.environment.v1` | Implemented (PR 3) |
-| Environment variables from environment variants, GitHub access through GitHub App user tokens | Interfaces and delivery implemented (PR 3); sources planned (variants work, GitHub linking PR) |
+| Environment variables from environment variants | Interface and delivery implemented (PR 3); source planned (variants work) |
+| [GitHub access](#github-access): team GitHub App configuration, member linking (`teamcode github link`, dashboard), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store, `github.link.v1` | Implemented (PR 3b) |
 | Transcript, messages, attach, transfer, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
 The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
@@ -37,9 +38,12 @@ The server mounts the cloud routes and advertises `cloud.sessions.v1` only when 
 | Execution | `cloud_executions` | Session | One pod lifetime, unique on `(session_id, epoch)`: pod name, node, image digest, registration, heartbeats, exit reason, checkpoint result |
 | Idempotency record | `cloud_idempotency` | Team + initiating member | The session created by a keyed request, kept 24 hours |
 
-Planned tables: `cloud_session_events` (transcript), `cloud_session_inputs` (messages and interrupts), `cloud_transfers`, GitHub grants.
+| GitHub App | `github_apps` | Administrator | App id, client id, slug and name; client secret and private key encrypted, bound to the team |
+| GitHub link | `github_links`, `github_link_attempts` | Member | The member's GitHub account (id, login) and App user tokens, encrypted and bound to the team and member; pending device or web links, single-use, encrypted and bound to the attempt and member |
 
-Credentials are never stored in these tables, except the cluster's service-account token, encrypted with the server's credential key and bound to the cluster id. No API returns it.
+Planned tables: `cloud_session_events` (transcript), `cloud_session_inputs` (messages and interrupts), `cloud_transfers`.
+
+Credentials are never stored in these tables, except the cluster's service-account token, the GitHub App's client secret and private key, and members' GitHub tokens and pending device codes, all encrypted with the server's credential key and bound to their row. No API returns them.
 
 Groups do not exist in TeamCode yet, so profiles are assigned to members. Administrators may use every profile.
 
@@ -292,7 +296,7 @@ The child processes run with the pod UID, like the planned agent: see the token 
 ### Variables and GitHub sources
 
 - **Variables** come from `CloudVariableSource`. Its real source is the environment/MCP variants work (`ResolveEffectiveVariantsUseCase`, environment entries only, `unavailable` slots by name); the adapter is a few lines in `CloudServer` once that work is merged. Until then members receive no variables, and a profile with `requiredVariables` fails preparation with the missing names.
-- **GitHub** comes from `GitHubAccessSource`: GitHub App user-to-server tokens of the effective member (8-hour tokens refreshed on the server, scoped to what both the App installation and the user can reach). Installation tokens are reserved for dedicated service members and personal access tokens are refused. The member linking flow (`teamcode github link`, dashboard), the encrypted token store and the serialized refresh come in their own PR; until then every owner counts as not linked, public repositories clone anonymously and `requireGitHub` profiles fail preparation.
+- **GitHub** comes from `GitHubAccessSource`, implemented on the members' links (see [GitHub access](#github-access)): the owner's GitHub App user-to-server token, refreshed on the server, scoped to what both the App installation and the owner can reach. An owner without a usable link gets `not_linked`: public repositories clone anonymously and `requireGitHub` profiles fail preparation. Installation tokens and personal access tokens are never handed to a session.
 
 ### Progress and failures
 
@@ -302,6 +306,53 @@ The child processes run with the pod UID, like the planned agent: see the token 
 - on a resume, returns the session to `paused` with `resumeBlocked = preparation_failed` and keeps the workspace.
 
 Clone, fetch and GitHub failures are `retryable`; setup and path failures are not. The 30-minute preparation timeout applies to resumes too once the runner registered.
+
+## GitHub access
+
+Each member links their own GitHub account to the team's GitHub App. The link gives **only that member's cloud sessions** Git and `gh` access, with the member's own permissions intersected with the App installation's; it serves no other purpose (the skill catalog is published from CI, not synchronized from GitHub). The token is handed out on one path only: `POST /cloud/runner/environment`, to the registered runner of the current epoch of a session the member owns, resolved for the current owner on every call. No other API returns it, and it is never logged, journaled or written to the session.
+
+### The team's App (administrator)
+
+Create a GitHub App owned by the organization:
+
+- **User-to-server token expiration** enabled (the default): 8-hour access tokens, 6-month rotating refresh tokens.
+- **Repository permissions** the sessions need, for example Contents and Pull requests: read and write; Metadata: read. No organization or account permissions are required.
+- **Callback URL**: `<TEAMCODE_PUBLIC_URL>/dashboard/github/callback` (shown on the dashboard and in `GET /github/app`).
+- **Enable Device Flow** for `teamcode github link`; without it members link from the dashboard.
+- Install it on the repositories sessions may reach.
+
+Then save the App id, client id, client secret and private key on **Dashboard → GitHub** (`/dashboard/github`) or with `PUT /api/v1/github/app`. Before storing anything the server signs a JWT with the private key and reads `GET /app`: the key must belong to that App id and client id (`422 github_app_rejected`, `422 github_app_mismatch`). Only GitHub App client ids (`Iv...`) are accepted; an OAuth App's tokens (`gho_`) are refused at link time. The client secret and key are encrypted at rest; an update may omit them to keep the stored ones, except when the client id changes. `version` is required to update (`409 github_app_conflict`). Links made with a previous App show as `reconnect_required`.
+
+### Linking (member)
+
+- **CLI, device flow.** `teamcode github link` asks the server to start GitHub's device flow and prints the verification URL and user code. The member enters it on github.com; the CLI polls `POST /github/link/device/{id}` at the interval GitHub asked for. The server asks GitHub at most once per interval whatever the client's pace, honors `slow_down`, and stores the device code encrypted; the attempt expires with GitHub's code (15 minutes at most) and is single-use. The token exchange happens on the server: the CLI never sees a GitHub token.
+- **Dashboard, web flow.** **Link GitHub** on `/dashboard/github` starts an authorization with `state` and PKCE (S256) and sets a browser-binding cookie (`HttpOnly`, `SameSite=Lax`, path `/dashboard/github/callback`, 10 minutes). The callback runs without the strict session cookie (GitHub's redirect is cross-site), so it is authenticated by the single-use state, whose hash identifies the attempt and its member, and by that cookie: a link sent to someone else cannot bind their GitHub authorization to the sender's member (`403 github_link_browser_mismatch`).
+- One GitHub account per member and per team (`409 github_account_in_use`; the fresh token is revoked). Linking again replaces the member's link. Disabled members and members awaiting a password change cannot link.
+- Device-flow phishing is inherent to the flow: a member must enter only codes their own `teamcode github link` printed. GitHub shows the App's name on the authorization page.
+
+### Refresh and revocation
+
+- A token that expires within an hour is refreshed before it is handed out. The refresh is serialized like provider accounts: the right to spend the rotating refresh token (`refresh_pending`, start time) is committed before GitHub is called, other replicas wait for it (up to 20 s, then `unavailable`), and an owner silent for 60 s is taken over. The owner writes only if it still holds the claim (same token version and start time), so a relink or a takeover is never overwritten.
+- GitHub refusing the refresh token (`bad_refresh_token`: revoked by the member on GitHub, expired or already used) marks the link `reconnect_required`: sessions get `not_linked` until the member links again. Any other failure (GitHub unreachable, wrong client secret) keeps the tokens for a later attempt; the session gets the current token while it is valid for more than 5 minutes, `unavailable` otherwise.
+- **Unlink** (`teamcode github unlink`, dashboard, `DELETE /github/link`; administrators `DELETE /github/links/{memberId}`) deletes the link and pending attempts in one transaction, then revokes the access token at GitHub (`DELETE /applications/{client_id}/token`, best effort). The member's authorization of the App stays on GitHub, where only they manage it; TeamCode no longer holds any token for it. Members deleted from the team lose their link with them.
+- Journaled actions: `github.app.saved`, `github.link.created` and `github.link.removed` (actor, member as subject and effective member). Refreshes are not journaled.
+
+### Routes under `/api/v1/github`
+
+Advertised by `github.link.v1`, mounted with cloud sessions. Interactive logins only: service and CI keys are refused.
+
+| Route | Purpose | Authorization |
+| --- | --- | --- |
+| `GET /github/app` | `{configured, appId, clientId, slug, name, version, updatedAt, callbackUrl}`; never the secret or key | Administrator |
+| `PUT /github/app` | `{appId, clientId, clientSecret?, privateKey?, version?}`; verified with GitHub first | Administrator |
+| `GET /github/link` | The caller's link: `{memberId, state, appConfigured, login, userId, linkedAt, refreshedAt, accessExpiresAt}`, `state` is `not_linked`, `linked` or `reconnect_required` | Member |
+| `DELETE /github/link` | Unlink; `204`, also when not linked | Member |
+| `POST /github/link/device` | Start the device flow: `{id, userCode, verificationUri, expiresAt, interval}`; `409 github_app_not_configured`, `409 github_device_flow_disabled` | Member |
+| `POST /github/link/device/{id}` | Poll: `{status: pending\|linked\|expired\|denied, interval?, link?}` | The member who started it |
+| `GET /github/links`, `GET/DELETE /github/links/{memberId}` | Every member's link; another member's link; unlink a member | Administrator |
+| `GET /dashboard/github`, `POST .../link`, `GET .../callback`, `POST .../unlink`, `POST .../app`, `POST .../links/{memberId}/unlink` | Dashboard pages and forms (Origin and CSRF checked) | Member; App and members' links for administrators |
+
+GitHub failures are `502 github_unreachable` without GitHub's response, which may echo request content. GitHub Enterprise Server is not supported: the runner's credential helper and the App endpoints are github.com only.
 
 ## Deployment
 
@@ -327,7 +378,7 @@ Each server replica runs the reconciler continuously (leased per session) and, t
 
 ## Other planned parts
 
-- **GitHub.** The linking flow and token store for GitHub App user-to-server tokens (see [variables and GitHub sources](#variables-and-github-sources)): 8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern, members link in the dashboard or with `teamcode github link`. Preparation already passes the token to Git and `gh` through child-process environments only; for the long-lived agent, the token moves to a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
+- **GitHub in the long-lived agent.** Preparation passes the token to Git and `gh` through child-process environments only (see [GitHub access](#github-access)); for the long-lived agent, the token moves to a credential helper over a tmpfs socket that asks the runner channel again before expiry, never the workspace, a remote URL, an event or an image. On transfer, the recipient's link replaces the former owner's at the next preparation.
 - **Transcript.** Normalized events (`message.user`, `message.agent`, `tool.call`, `tool.result`, `turn`, `status`, `error`) with per-session sequence numbers, bounded sizes, secret masking, no thinking blocks; cursor pagination in both directions; per-session SSE with `Last-Event-ID`; a caller-wide SSE feed of notices for orchestrators; webhooks later.
 - **Messages.** `POST .../messages` with `Idempotency-Key` or `clientMessageId`; acknowledgement levels `queued`, `delivered`, `consumed`, `cancelled`, `rejected`; queue and wake by default (`wake: false` per message, `wakeOnMessage` per profile); `expectedLastEventSeq` against stale views; at most 100 pending messages.
 - **Attach.** `teamcode cloud attach`: structured attach over the shared event stream and message routes, with an attachment lease; it may come after the other CLI commands if it proves more complex. A PTY attach is a possible later addition.
@@ -344,9 +395,12 @@ teamcode cloud pause SESSION [--force] [--member ID]
 teamcode cloud resume SESSION [--member ID]
 teamcode cloud delete SESSION --yes [--member ID]
 teamcode cloud runner            # hidden; pod entrypoint only
+teamcode github link             # device flow; the token stays on the server
+teamcode github status [--member ID] [--json]
+teamcode github unlink [--member ID]
 ```
 
-`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `--repo` (repeatable) replaces the profile's repositories, the path defaulting to the repository name; `--branch` creates that local branch in each of them. `logs`, `send`, `attach`, `interrupt`, `transfer(s)`, the administration commands and `teamcode github ...` come with their features.
+`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `--repo` (repeatable) replaces the profile's repositories, the path defaulting to the repository name; `--branch` creates that local branch in each of them. `teamcode github link` prints the verification URL and code, then waits until GitHub authorizes, the code expires or the member cancels; it points to the dashboard when the App is not configured or device flow is disabled. `--member` on `github status` and `github unlink` is for administrators. The GitHub App itself is configured on the dashboard or through the API, which keeps the client secret and private key off command lines. `logs`, `send`, `attach`, `interrupt`, `transfer(s)` and the administration commands come with their features.
 
 ## Pull request sequence
 
@@ -355,7 +409,8 @@ teamcode cloud runner            # hidden; pod entrypoint only
 | 1 | Contract; domain, persistence, reconciler, deletion proof and GC over `ClusterPort`; management API and client; settings; audit columns | Not advertised by the server |
 | 2 (stacked on 1) | Kubernetes adapter, runner routes and skeleton, server wiring and workers, CLI commands, opt-in `kind` smoke | `cloud.sessions.v1` |
 | 3 | Environment preparation (image contract, recipe, repositories, Git identity, setup, progress and failures), variable and GitHub interfaces | `cloud.environment.v1` |
-| 3b | GitHub App linking, encrypted user-token store and refresh; variants source wired once the variants work is merged | - |
+| 3b | GitHub App configuration and member linking (device and web flows), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store | `github.link.v1` |
+| 3c | Variants source wired once the variants work is merged | - |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
 | 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
 | 6 | Transfer and its settings | `cloud.transfer.v1` |
@@ -375,4 +430,9 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudPreparationTest` and `CloudPreparationProcessTest` (real `/bin/sh` and `git` against a local repository): clone into staging, checkout, branch and move into place; fetch only on a second preparation, with uncommitted work intact; `create` steps once and `start` steps every time; values masked in the log; the token only in child environments and a github.com-scoped helper; failures reported as fields; heartbeats continue during preparation and report ready only after it.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 
-Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.
+- `GitHubLinkPersistenceTest` (real MySQL 8.4, two pools): the reviewed migration matches the Exposed tables; App configuration for administrators only, with optimistic versions and the client secret and key encrypted at rest (kept when omitted); a device link started on one replica and completed on the other, with the device code and the user tokens encrypted; one GitHub account per team, the unstored token revoked; access resolved for the owner only; four concurrent resolutions on two replicas spend the refresh token exactly once (removing the wait on a pending refresh makes it fail: four refreshes); a stalled refresh owner taken over after a minute, never before; a relink fencing a slower refresh owner; `bad_refresh_token` ending the link without further refreshes; unlink deleting the link and attempts and revoking the token; the journal entries.
+- `GitHubLinkTest` (domain, in-memory ports): App validation and verification (OAuth App client ids, missing secrets, a key of another App, an outage never echoing GitHub's text, secrets kept on update but required for another App); device polling at most once per interval, `slow_down`, expiry, denial and single use; the web callback bound to the browser (removing the check makes it fail), single-use, expiring, and the PKCE verifier matching the challenge; unlink and administrator unlink; refresh before expiry, the old token while GitHub is unreachable, waiting on another replica, and `reconnect_required`.
+- `GitHubAppClientTest` (Ktor mock engine): the App JWT (RS256, signature checked with the public key, `iss` = client id, 10-minute window) from GitHub's PKCS#1 keys and from PKCS#8; App id mismatch and rejected keys; device-flow requests and every polling answer; a verification URL on another host refused; `ghu_` tokens only; web exchange with PKCE and the client secret; refresh outcomes (`bad_refresh_token` versus a wrong client secret); bounded bodies never surfacing in errors; the revocation request.
+- `GitHubRoutesTest`: `github.link.v1`; service keys refused; App configuration for administrators only and never returning a secret; the device flow through the typed client without a token in any response; member and administrator unlink; the dashboard web flow with CSRF, the browser cookie's attributes, a callback refused without that cookie and accepted with it, then single use. `CloudRoutesTest` (environment): the runner receives the session owner's token, not another member's.
+
+Migration note: this branch's migration is numbered after its base (`V20261019153908`); the GitHub tables (`V20261019210000*`, generated from the Exposed tables) after PR 3's hand-written one. V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.

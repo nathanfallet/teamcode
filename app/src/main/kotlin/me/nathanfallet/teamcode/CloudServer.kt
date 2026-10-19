@@ -3,12 +3,16 @@ package me.nathanfallet.teamcode
 import java.util.UUID
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.cloud.*
+import me.nathanfallet.teamcode.domain.github.GitHubLinkService
+import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
 import me.nathanfallet.teamcode.infrastructure.cloud.ClusterApiException
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlGitHubStore
+import me.nathanfallet.teamcode.infrastructure.github.GitHubAppClient
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
@@ -34,11 +38,16 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     })
     private val garbage = CollectCloudGarbageUseCase(store, cluster)
 
+    private val githubStore = SqlGitHubStore(database, cipher)
+    private val githubClient = GitHubAppClient()
+
     val sessions = CloudSessionService(store)
     val admin = CloudAdministrationService(adminStore, cluster)
-    // Variables come from the environment/MCP variants work and GitHub App user tokens from the GitHub linking work;
-    // both plug in here. Until they land, sessions get no variables and owners count as not linked to GitHub.
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = CloudVariableSource.NONE, github = GitHubAccessSource.NONE), AuthenticateRunnerUseCase(store, cluster))
+    /** Members' GitHub App links; their tokens are used only by the members' own cloud sessions. */
+    val github = GitHubLinkService(githubStore, githubStore, githubClient)
+    // Variables come from the environment/MCP variants work and plug in here; until it lands, sessions get none.
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = CloudVariableSource.NONE, github = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)),
+        AuthenticateRunnerUseCase(store, cluster))
 
     fun launch(scope: CoroutineScope) {
         scope.launch {
@@ -78,7 +87,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         }
     }
 
-    override fun close() = cluster.close()
+    override fun close() { cluster.close(); githubClient.close() }
 
     private companion object {
         fun describe(error: Exception) = if (error is ClusterApiException) "Kubernetes HTTP ${error.status}" else error::class.simpleName ?: "error"

@@ -24,7 +24,7 @@ const val VERSION = me.nathanfallet.teamcode.api.BuildInfo.VERSION
 
 class Cli : SuspendingNoOpCliktCommand(name = "teamcode") {
     override fun help(context: Context) = "A self-hosted team gateway. First use: teamcode login."
-    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), me.nathanfallet.teamcode.cli.cloud.Cloud()) }
+    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), me.nathanfallet.teamcode.cli.cloud.Cloud(), me.nathanfallet.teamcode.cli.github.GitHub()) }
 }
 
 private class Version : SuspendingCliktCommand(name = "version") {
