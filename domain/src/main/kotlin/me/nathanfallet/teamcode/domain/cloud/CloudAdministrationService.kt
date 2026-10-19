@@ -1,0 +1,74 @@
+package me.nathanfallet.teamcode.domain.cloud
+
+import kotlinx.coroutines.CancellationException
+import me.nathanfallet.teamcode.domain.team.*
+
+/** Validation for clusters, profiles and settings. Persistence revalidates the administrator in its transaction. */
+class CloudAdministrationService(private val store: CloudAdminStore, private val cluster: ClusterPort) {
+    suspend fun clusters(actor: Principal) = admin(actor).let { store.clusters(actor) }
+    suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput): CloudCluster {
+        admin(actor)
+        validate(input, creating = id == null)
+        return store.saveCluster(actor, id, expectedVersion, input)
+    }
+    suspend fun profiles(actor: Principal): List<CloudProfile> {
+        actor.requireReady(); actor.requireInteractive()
+        return store.profiles(actor)
+    }
+    /** Refuses a storage class that would keep provider volumes after a workspace is deleted. */
+    suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile {
+        admin(actor)
+        validate(name, spec, assignedMemberIds)
+        val target = store.clusters(actor).singleOrNull { it.id == spec.clusterId } ?: throw TeamFailure("cluster_not_found", 404, "Cluster not found.")
+        if (spec.namespace !in target.allowedNamespaces) throw TeamFailure("namespace_not_allowed", 422, "The namespace is not allowed on this cluster.")
+        val storageClass = try { cluster.storageClass(target.id, spec.storageClass ?: target.defaultStorageClass) }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { throw TeamFailure("cluster_unreachable", 502, "The cluster could not be reached to verify the storage class.") }
+            ?: throw TeamFailure("storage_class_missing", 422, "The workspace storage class does not exist on the cluster.")
+        if (storageClass.reclaimPolicy != "Delete")
+            throw TeamFailure("storage_class_retains_volumes", 422, "Storage class ${storageClass.name} has reclaimPolicy ${storageClass.reclaimPolicy}; workspaces require reclaimPolicy Delete so deleted sessions leave no provider volume.")
+        return store.saveProfile(actor, id, expectedVersion, name, spec, assignedMemberIds)
+    }
+    suspend fun settings(actor: Principal) = admin(actor).let { store.settings(actor) }
+    suspend fun saveSettings(actor: Principal, settings: CloudSettings): CloudSettings {
+        admin(actor)
+        validate(settings)
+        return store.saveSettings(actor, settings)
+    }
+
+    private fun admin(actor: Principal) = actor.requireAdmin()
+
+    companion object {
+        private val dnsLabel = Regex("[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
+        private val dnsSubdomain = Regex("[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+        fun validate(settings: CloudSettings) {
+            if ((settings.pausedRetentionDays != null && settings.pausedRetentionDays !in 1..3650) || settings.failedWorkspaceRetentionDays !in 0..365 ||
+                settings.maxRunningSessionsPerMember !in 1..100 || settings.maxRetainedSessionsPerMember !in 1..1000 ||
+                settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember)
+                throw TeamFailure("invalid_cloud_settings", 400, "Use a paused retention of 1–3650 days (or indefinite), a failed-workspace retention of 0–365 days and running/retained caps of 1–100/1–1000 with retained ≥ running.")
+        }
+        fun validate(input: CloudClusterInput, creating: Boolean) {
+            val url = input.apiUrl
+            if (input.name.isBlank() || input.name.length > 120 || input.name.any(Char::isISOControl) ||
+                !url.startsWith("https://") || url.length > 512 || url.any { it.isWhitespace() || it.isISOControl() } ||
+                input.allowedNamespaces.isEmpty() || input.allowedNamespaces.size > 32 || input.allowedNamespaces.any { !dnsLabel.matches(it) } ||
+                input.maxRunningPods !in 1..1000 || input.defaultStorageClass?.let { !dnsSubdomain.matches(it) } == true ||
+                (creating && (input.serviceAccountToken.isNullOrBlank() || input.caCertificate.isNullOrBlank())) ||
+                (input.serviceAccountToken != null && (input.serviceAccountToken.length !in 16..16_384 || input.serviceAccountToken.any { it.isWhitespace() })) ||
+                (input.caCertificate != null && (input.caCertificate.length > 65_536 || !input.caCertificate.contains("-----BEGIN CERTIFICATE-----"))))
+                throw TeamFailure("invalid_cluster", 400, "Provide a name, an https API URL, a PEM CA bundle, a service-account token, 1–32 namespaces and a pod cap of 1–1000.")
+        }
+        fun validate(name: String, spec: CloudProfileSpec, assigned: Set<String>) {
+            val image = Regex("[^\\s]{1,512}")
+            if (name.isBlank() || name.length > 120 || name.any(Char::isISOControl) || !dnsLabel.matches(spec.namespace) || !image.matches(spec.image) ||
+                spec.allowedImageOverrides.size > 32 || spec.allowedImageOverrides.any { !image.matches(it) } ||
+                spec.imagePullSecrets.size > 8 || spec.imagePullSecrets.any { !dnsSubdomain.matches(it) } ||
+                spec.resources.cpuMillis !in 100..64_000 || spec.resources.memoryMebibytes !in 128..262_144 ||
+                spec.workspaceSizeGibibytes !in 1..2048 || spec.storageClass?.let { !dnsSubdomain.matches(it) } == true ||
+                spec.agentKind !in setOf("claude", "codex") || spec.agentVersion?.let { !Regex("[0-9A-Za-z.+-]{1,64}").matches(it) } == true ||
+                spec.minIdleTimeoutMinutes !in 5..1440 || spec.maxIdleTimeoutMinutes !in spec.minIdleTimeoutMinutes..1440 ||
+                spec.idleTimeoutMinutes !in spec.minIdleTimeoutMinutes..spec.maxIdleTimeoutMinutes || assigned.size > 1000)
+                throw TeamFailure("invalid_profile", 400, "Check the profile namespace, image, resources (100–64000 mCPU, 128–262144 MiB), workspace size (1–2048 GiB), agent and idle bounds (5–1440 minutes).")
+        }
+    }
+}

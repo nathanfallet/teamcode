@@ -64,7 +64,7 @@ The dashboard, team identity, native launcher and shared persistence provide the
 
 ## V2: Kubernetes cloud agent sessions
 
-Explore running agent sessions remotely on a connected Kubernetes cluster. This is V2 scope; the API contracts and interaction model remain to be discussed before implementation.
+Explore running agent sessions remotely on a connected Kubernetes cluster. This is V2 scope. The contract and the implementation status are in [cloud sessions](cloud-sessions.md); the list below is the original direction.
 
 - Administrators connect a Kubernetes cluster and configure the namespaces, execution templates and resources available to the team.
 - Start sessions from either the authenticated API or native CLI, with the same authorization and lifecycle rules, automatic provisioning and cleanup. The CLI uses the typed client/API modules rather than talking directly to Kubernetes. A proposed command family is `teamcode cloud ...`; exact commands and HTTP contracts remain to be designed.
