@@ -31,14 +31,16 @@ private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespac
 private fun CloudProfile.view() = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt)
 private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
     memberTransfers.wire, transferOfferDays, transferPendingInputs.wire)
-private fun CloudSettingsView.domain() = CloudSettings(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
-    MemberTransfers.parse(memberTransfers) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use memberTransfers offer or disabled."), transferOfferDays,
-    TransferPendingInputs.parse(transferPendingInputs) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use transferPendingInputs cancel or keep."))
+/** An absent transfer field keeps [current]'s value. */
+private fun CloudSettingsView.domain(current: CloudSettings) = CloudSettings(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
+    memberTransfers?.let { MemberTransfers.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use memberTransfers offer or disabled.") } ?: current.memberTransfers,
+    transferOfferDays ?: current.transferOfferDays,
+    transferPendingInputs?.let { TransferPendingInputs.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use transferPendingInputs cancel or keep.") } ?: current.transferPendingInputs)
 
 /** `TeamCode-On-Behalf-Of`: at most one value; the domain decides whether the caller may use it. */
 internal fun ApplicationCall.onBehalfOf(): String? {
     val values = request.headers.getAll(CloudHeaders.ON_BEHALF_OF) ?: return null
-    return values.singleOrNull()?.takeIf { Regex("[a-zA-Z0-9-]{1,36}").matches(it) }
+    return values.singleOrNull()?.takeIf(CloudIdentifier::valid)
         ?: throw TeamFailure("invalid_on_behalf", 400, "Send one member identifier in ${CloudHeaders.ON_BEHALF_OF}.")
 }
 internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
@@ -51,12 +53,15 @@ internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
         ?: throw TeamFailure("invalid_idempotency_key", 400, "Use one ${CloudHeaders.IDEMPOTENCY_KEY} of 1–128 characters from A-Z a-z 0-9 . _ : -.")
 }
 internal fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
-private fun ApplicationCall.id() = parameters["id"]!!.also { if (!Regex("[a-zA-Z0-9-]{1,36}").matches(it)) throw TeamFailure("not_found", 404, "Not found.") }
+private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("not_found", 404, "Not found.") }
 
 internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String) {
     route("/api/v1/cloud") {
         get("/settings") { call.respond(admin.settings(call.principal).view()) }
-        put("/settings") { call.respond(admin.saveSettings(call.principal, call.jsonBody<CloudSettingsView>().domain()).view()) }
+        put("/settings") {
+            val input = call.jsonBody<CloudSettingsView>()
+            call.respond(admin.saveSettings(call.principal, input.domain(admin.settings(call.principal))).view())
+        }
 
         get("/clusters") { call.respond(admin.clusters(call.principal).map { it.view() }) }
         post("/clusters") {

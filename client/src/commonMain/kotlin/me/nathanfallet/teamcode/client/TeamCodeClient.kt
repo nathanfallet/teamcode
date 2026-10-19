@@ -295,7 +295,7 @@ class TeamCodeClient(
         }
     }
     suspend fun cloudTransfer(id: String): CloudTransferView { identifier(id); return coded(HttpMethod.Get, "/api/v1/cloud/transfers/$id", null as Unit?) }
-    suspend fun acceptCloudTransfer(id: String, resume: Boolean = false, onBehalfOf: String? = null): CloudTransferView =
+    suspend fun acceptCloudTransfer(id: String, resume: Boolean? = null, onBehalfOf: String? = null): CloudTransferView =
         transferDecision(id, "accept", AcceptCloudTransferRequest(resume), onBehalfOf)
     suspend fun declineCloudTransfer(id: String, onBehalfOf: String? = null): CloudTransferView = transferDecision<Unit>(id, "decline", null, onBehalfOf)
     suspend fun cancelCloudTransfer(id: String, onBehalfOf: String? = null): CloudTransferView = transferDecision<Unit>(id, "cancel", null, onBehalfOf)

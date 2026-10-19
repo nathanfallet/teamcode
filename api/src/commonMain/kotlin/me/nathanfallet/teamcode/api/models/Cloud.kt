@@ -148,7 +148,11 @@ class SaveCloudClusterRequest(
     override fun toString() = "SaveCloudClusterRequest(name=$name, apiUrl=$apiUrl, serviceAccountToken=[REDACTED])"
 }
 
-/** Persistent administrator settings. `pausedRetentionDays = null` keeps paused workspaces indefinitely. */
+/**
+ * Persistent administrator settings. `pausedRetentionDays = null` keeps paused workspaces indefinitely.
+ * The transfer fields are always present in responses; in a `PUT`, an absent (null) transfer field keeps the stored value,
+ * so a client written before transfers existed does not reset the policy.
+ */
 @Serializable
 data class CloudSettingsView(
     val pausedRetentionDays: Int? = 30,
@@ -158,11 +162,11 @@ data class CloudSettingsView(
     /** Days transcript events and finished messages are kept; null keeps them indefinitely. */
     val transcriptRetentionDays: Int? = 30,
     /** `offer` (owners may offer their sessions; the recipient accepts) or `disabled` (administrators only). */
-    val memberTransfers: String = "offer",
+    val memberTransfers: String? = null,
     /** Days a recipient has to accept an offer (1 to 30). */
-    val transferOfferDays: Int = 7,
+    val transferOfferDays: Int? = null,
     /** `cancel` or `keep`: unconsumed messages when a session changes owner. */
-    val transferPendingInputs: String = "cancel",
+    val transferPendingInputs: String? = null,
 )
 
 object CloudHeaders {

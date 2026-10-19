@@ -59,6 +59,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     override suspend fun insertInput(new: NewInput, pendingLimit: Int): InputOutcome = database.query {
         val input = new.input
         val session = lockSession(input.sessionId)
+        // Serialized with a transfer's completion by the session lock: an input authorized against the former owner is refused.
+        if (new.expectedOwnerId != null && session[CloudSessions.ownerId] != new.expectedOwnerId) throw ownerChanged()
         val state = CloudSessionState.parse(session[CloudSessions.state])
         val desired = DesiredState.parse(session[CloudSessions.desiredState])
         if (state.terminal || desired == DesiredState.TERMINATED) throw TeamFailure("session_not_running", 409, "The cloud session is terminated or being deleted.")
@@ -177,7 +179,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         changed
     }
 
-    override suspend fun attach(attachment: CloudAttachment): CloudAttachment = database.query {
+    override suspend fun attach(attachment: CloudAttachment, expectedOwnerId: String): CloudAttachment = database.query {
+        if (lockSession(attachment.sessionId)[CloudSessions.ownerId] != expectedOwnerId) throw ownerChanged()
         val now = nowMillis()
         val stored = attachment.copy(createdAt = now, leaseUntil = now + CloudConversationRules.ATTACHMENT_LEASE_MILLIS)
         CloudSessionAttachments.insert {
@@ -294,8 +297,10 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }
 
     private fun lockSession(sessionId: String): ResultRow =
-        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode)
+        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode)
             .where { CloudSessions.id eq sessionId }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Cloud session not found.")
+
+    private fun ownerChanged() = TeamFailure("session_busy", 409, "The cloud session changed owner. Retry the request.")
 
     private fun cursorOf(sessionId: String): ResultRow? = CloudSessionTranscripts.selectAll().where { CloudSessionTranscripts.sessionId eq sessionId }.singleOrNull()
     private fun lastSeqOf(sessionId: String): Long = cursorOf(sessionId)?.get(CloudSessionTranscripts.lastSeq) ?: 0L

@@ -161,7 +161,13 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                         delay(20_000)
                         lease = try { client.renewCloudAttachment(id, lease.id) }
                             catch (error: CancellationException) { throw error }
-                            catch (error: TeamCodeException) { if (error.code == "attachment_expired") reattach(client, id, notice) else lease }
+                            catch (error: TeamCodeException) {
+                                when {
+                                    error.statusCode == 403 || error.statusCode == 404 -> revoked(notice)
+                                    error.code == "attachment_expired" -> reattach(client, id, notice) ?: lease
+                                    else -> lease
+                                }
+                            }
                             catch (_: Exception) { lease }
                     }
                 }
@@ -194,14 +200,17 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
         SystemExit.exit(0)
     }
 
-    /** A lease removed by a change of owner cannot be taken again: the caller lost access, like a denied stream. */
-    private suspend fun reattach(client: TeamCodeClient, id: String, notice: (String) -> Unit): CloudAttachmentView =
+    /** A lease removed by a change of owner cannot be taken again: the caller lost access, like a denied stream. Null on a transient error. */
+    private suspend fun reattach(client: TeamCodeClient, id: String, notice: (String) -> Unit): CloudAttachmentView? =
         try { client.attachCloudSession(id) }
-        catch (error: TeamCodeException) {
-            if (error.statusCode != 403 && error.statusCode != 404) throw error
-            notice("Access to this session was revoked.")
-            SystemExit.exit(1)
-        }
+        catch (error: CancellationException) { throw error }
+        catch (error: TeamCodeException) { if (error.statusCode == 403 || error.statusCode == 404) revoked(notice) else null }
+        catch (_: Exception) { null }
+
+    private fun revoked(notice: (String) -> Unit): Nothing {
+        notice("Access to this session was revoked.")
+        SystemExit.exit(1)
+    }
 
     private suspend fun select(a: Job, b: Job) {
         val done = CompletableDeferred<Unit>()

@@ -25,7 +25,7 @@ class CloudTransferService(
     suspend fun request(principal: Principal, onBehalfOf: String?, sessionId: String, request: CloudTransferRequest, idempotency: IdempotencyRequest): CloudTransferOutcome {
         val actor = sessions.actor(principal, onBehalfOf)
         store.revalidate(principal)
-        if (!identifier.matches(request.toMemberId)) throw TeamFailure("invalid_transfer", 400, "Name the recipient by member identifier.")
+        if (!CloudIdentifier.valid(request.toMemberId)) throw TeamFailure("invalid_transfer", 400, "Name the recipient by member identifier.")
         // A retry of a request that already succeeded replays it, whatever the session became since.
         transfers.byKey(principal.teamId, principal.member.id, idempotency.key)?.let { existing ->
             if (existing.requestDigest != idempotency.requestDigest)
@@ -55,7 +55,8 @@ class CloudTransferService(
     }
 
     /** The recipient (or an administrator) accepts an offer; the session then pauses and changes owner. Idempotent. */
-    suspend fun accept(principal: Principal, onBehalfOf: String?, id: String, resume: Boolean): CloudTransfer {
+    /** [resume] `null` keeps what the offer asked for. */
+    suspend fun accept(principal: Principal, onBehalfOf: String?, id: String, resume: Boolean?): CloudTransfer {
         val actor = sessions.actor(principal, onBehalfOf)
         repeat(ATTEMPTS) {
             val transfer = visible(principal, id)
@@ -64,12 +65,16 @@ class CloudTransferService(
             if (transfer.state == CloudTransferState.ACCEPTED || transfer.state == CloudTransferState.COMPLETED) return transfer
             val now = store.now()
             open(transfer, now)
+            val settings = store.settings(transfer.teamId)
+            // Disabling member transfers also stops offers made before; an administrator can still accept one.
+            if (principal.member.role != Role.ADMIN && settings.memberTransfers == MemberTransfers.DISABLED)
+                throw TeamFailure("transfer_disabled", 403, "Your team no longer allows members to transfer their sessions. Ask an administrator.")
             val session = store.find(transfer.teamId, transfer.sessionId) ?: throw ended()
             if (session.ownerId != transfer.fromMemberId) return close(transfer, actor, CloudTransferState.CANCELLED, "cloud.transfer.cancelled", now, CloudProblem("owner_changed", "The session changed owner since the offer."))
             if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return close(transfer, actor, CloudTransferState.CANCELLED, "cloud.transfer.cancelled", now, endedProblem)
             transferable(session, transfer.id)
             recipients.require(session, transfer.toMemberId)
-            val accepted = transfer.copy(state = CloudTransferState.ACCEPTED, resume = resume, pendingInputs = store.settings(transfer.teamId).transferPendingInputs,
+            val accepted = transfer.copy(state = CloudTransferState.ACCEPTED, resume = resume ?: transfer.resume, pendingInputs = settings.transferPendingInputs,
                 decidedBy = actor.attribution, decidedAt = now, updatedAt = now, version = transfer.version + 1)
             transfers.update(transfer, accepted, actor, "cloud.transfer.accepted", SessionChange(session, toward(session, accepted, now)))?.let { return it }
         }
@@ -120,15 +125,20 @@ class CloudTransferService(
         throw busy()
     }
 
-    suspend fun get(principal: Principal, id: String): CloudTransfer = visible(principal, id)
+    suspend fun get(principal: Principal, id: String): CloudTransfer = expiredAsOf(visible(principal, id), store.now())
 
     suspend fun list(principal: Principal, query: CloudTransferQuery): CloudTransferPage {
         principal.requireReady(); principal.requireInteractive()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
         if (query.team) principal.requireAdmin()
         store.revalidate(principal)
-        return transfers.list(principal.teamId, principal.member.id, query)
+        val now = store.now()
+        return transfers.list(principal.teamId, principal.member.id, query).let { page -> page.copy(transfers = page.transfers.map { expiredAsOf(it, now) }) }
     }
+
+    /** A read shows an offer past its validity as `expired` before the maintenance worker records it. */
+    private fun expiredAsOf(transfer: CloudTransfer, now: Long) =
+        if (transfer.state == CloudTransferState.OFFERED && transfer.expiresAt != null && transfer.expiresAt <= now) transfer.copy(state = CloudTransferState.EXPIRED) else transfer
 
     /** Offers past their validity become `expired`; run by a maintenance worker. Reads also treat them as expired. */
     suspend fun expireOffers(limit: Int = 100): Int = transfers.expireOffers(limit)
@@ -137,7 +147,7 @@ class CloudTransferService(
     private suspend fun visible(principal: Principal, id: String): CloudTransfer {
         principal.requireReady(); principal.requireInteractive()
         store.revalidate(principal)
-        if (!identifier.matches(id)) throw missingTransfer()
+        if (!CloudIdentifier.valid(id)) throw missingTransfer()
         val transfer = transfers.find(principal.teamId, id) ?: throw missingTransfer()
         val member = principal.member.id
         if (principal.member.role != Role.ADMIN && member != transfer.fromMemberId && member != transfer.toMemberId) throw missingTransfer()
@@ -164,7 +174,6 @@ class CloudTransferService(
     companion object {
         const val DAY_MILLIS = 86_400_000L
         private const val ATTEMPTS = 5
-        private val identifier = Regex("[a-zA-Z0-9-]{1,36}")
         private val endedProblem = CloudProblem("session_not_running", "The cloud session is terminated or being deleted.")
 
         /** States a transfer may start from: anything but creation, preparation and the end of the session. */

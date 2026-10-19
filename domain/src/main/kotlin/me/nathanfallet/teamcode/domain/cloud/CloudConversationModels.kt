@@ -62,6 +62,8 @@ data class NewInput(
     val input: CloudInput,
     /** Refuse with `409 stale_view` when the session has events after this sequence. */
     val expectedLastEventSeq: Long?,
+    /** The owner the caller was authorized against; an owner change since then refuses the input (`session_busy`). */
+    val expectedOwnerId: String? = null,
 )
 sealed interface InputOutcome {
     val input: CloudInput

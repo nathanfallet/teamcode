@@ -106,7 +106,7 @@ class CloudConversationRoutesTest {
             input.copy(status = if (ack.consumed) CloudInputStatus.CONSUMED else CloudInputStatus.REJECTED, eventSeq = seq).also { inputs[it.id] = it }
         }
         override suspend fun cancelEnded(limit: Int) = 0
-        override suspend fun attach(attachment: CloudAttachment) = attachment.also { attachments[it.id] = it }
+        override suspend fun attach(attachment: CloudAttachment, expectedOwnerId: String) = attachment.also { attachments[it.id] = it }
         override suspend fun renew(sessionId: String, id: String, memberId: String, leaseUntil: Long) =
             attachments[id]?.takeIf { it.memberId == memberId }?.copy(leaseUntil = leaseUntil)?.also { attachments[id] = it }
         override suspend fun detach(sessionId: String, id: String, memberId: String) { attachments.remove(id) }

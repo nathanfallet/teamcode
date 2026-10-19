@@ -5,7 +5,9 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 /**
  * The reconciler's side of a transfer, run under the session lease. The owner changes only at a paused boundary:
  *
- * 1. `paused` with an accepted transfer moves to `transferring`, which refuses resumes, wakes and new transfers.
+ * 1. `paused` with an accepted transfer moves to `transferring`, which refuses resumes, wakes and new transfers. The
+ *    transfer's `updatedAt` marks the start; past [DEADLINE_MILLIS] (a cluster that never confirms a pod deletion) the
+ *    transfer fails with `transfer_timeout` and the session returns to `paused` for its former owner.
  * 2. No pod of the session may exist: any one left is deleted and confirmed gone first, so nothing that ran for the
  *    former owner (their Git token, variables, MCP credentials, agent process) survives the change.
  * 3. The recipient is checked again on fresh data; a recipient no longer eligible fails the transfer and the session
@@ -29,8 +31,9 @@ class CompleteCloudTransferUseCase(
             transition.commit(s, CloudTransition(s.copy(transferId = null, updatedAt = now), CloudWrite(leaseOwner = owner)))
             return now
         }
-        transition.commit(s, CloudTransition(s.copy(state = TRANSFERRING, phase = "transferring", updatedAt = now),
-            CloudWrite(leaseOwner = owner, auditAction = "cloud.session.transferring")))
+        // One transaction: the session enters `transferring` and the transfer records when (its deadline starts there).
+        transfers.update(transfer, transfer.copy(updatedAt = now, version = transfer.version + 1), null, "cloud.transfer.started",
+            SessionChange(s, s.copy(state = TRANSFERRING, phase = "transferring", updatedAt = now), owner))
         return now
     }
 
@@ -41,6 +44,9 @@ class CompleteCloudTransferUseCase(
             transition.commit(s, CloudTransition(s.copy(state = PAUSED, phase = null, transferId = null, updatedAt = now), CloudWrite(leaseOwner = owner)))
             return now
         }
+        // Checked before any cluster call, so an unreachable cluster cannot hold the session in `transferring`.
+        if (now - transfer.updatedAt > DEADLINE_MILLIS)
+            return fail(s, transfer, owner, now, CloudProblem("transfer_timeout", "The owner change did not finish in time. The session stays with its owner; offer it again."))
         // Belt and braces: every execution ended when the session paused, but a pod of an older epoch must not outlive
         // its owner either. Listing by label also finds a pod whose execution row was lost.
         val pods = cluster.managed(s.clusterId, s.namespace).pods.filter { it.name.startsWith("tc-${s.id}-e") }
@@ -84,5 +90,10 @@ class CompleteCloudTransferUseCase(
         transfers.update(transfer, transfer.copy(state = CloudTransferState.FAILED, failure = problem, updatedAt = now, version = transfer.version + 1), null, "cloud.transfer.failed",
             SessionChange(s, s.copy(state = PAUSED, phase = null, transferId = null, updatedAt = now), owner))
         return now
+    }
+
+    companion object {
+        /** How long `transferring` may last; deleting a pod and committing normally take seconds. */
+        const val DEADLINE_MILLIS = 30 * 60_000L
     }
 }

@@ -47,7 +47,8 @@ interface CloudConversationStore {
     /** Cancels queued and delivered inputs of sessions that ended (bounded); returns how many changed. */
     suspend fun cancelEnded(limit: Int): Int
 
-    suspend fun attach(attachment: CloudAttachment): CloudAttachment
+    /** Refuses with `session_busy` when the session no longer belongs to [expectedOwnerId] (a transfer completed meanwhile). */
+    suspend fun attach(attachment: CloudAttachment, expectedOwnerId: String): CloudAttachment
     /** Extends a live lease owned by [memberId]; null when it expired, was released or belongs to someone else. */
     suspend fun renew(sessionId: String, id: String, memberId: String, leaseUntil: Long): CloudAttachment?
     suspend fun detach(sessionId: String, id: String, memberId: String)

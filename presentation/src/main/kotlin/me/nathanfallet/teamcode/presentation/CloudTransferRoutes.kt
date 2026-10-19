@@ -18,8 +18,7 @@ internal fun CloudTransfer.view() = CloudTransferView(
     atEpoch = atEpoch, eventSeq = eventSeq, failure = failure?.view(),
 )
 
-private val transferIdentifier = Regex("[a-zA-Z0-9-]{1,36}")
-private fun ApplicationCall.pathId(name: String) = parameters[name]!!.also { if (!transferIdentifier.matches(it)) throw TeamFailure("not_found", 404, "Not found.") }
+private fun ApplicationCall.pathId(name: String) = parameters[name]!!.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("not_found", 404, "Not found.") }
 private suspend inline fun <reified T : Any> ApplicationCall.optionalJson(default: T): T =
     if (request.contentType().withoutParameters() == ContentType.Application.Json) jsonBody<T>() else default
 
@@ -49,7 +48,7 @@ internal fun Route.cloudTransferRoutes(transfers: CloudTransferService) {
             }
             val team = when (single("scope")) { null, "mine" -> false; "team" -> true; else -> throw TeamFailure("invalid_query", 400, "Use scope mine or team.") }
             val states = q.getAll("state").orEmpty().map { CloudTransferState.parse(it) ?: throw TeamFailure("invalid_state", 400, "Unknown transfer state.") }.toSet()
-            val session = single("session")?.also { if (!transferIdentifier.matches(it)) throw TeamFailure("invalid_query", 400, "Unknown session.") }
+            val session = single("session")?.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("invalid_query", 400, "Unknown session.") }
             val limit = single("limit")?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.") } ?: 50
             val page = transfers.list(call.principal, CloudTransferQuery(team, direction, states, session, single("before"), limit))
             call.respond(CloudTransferPageView(page.transfers.map { it.view() }, page.nextBeforeId))

@@ -17,7 +17,10 @@ data class CreateCloudTransferRequest(
     val force: Boolean = false,
 )
 @Serializable
-data class AcceptCloudTransferRequest(val resume: Boolean = false)
+data class AcceptCloudTransferRequest(
+    /** Resume once the session is the recipient's; null keeps what the offer asked for. */
+    val resume: Boolean? = null,
+)
 
 @Serializable
 data class CloudTransferView(

@@ -92,7 +92,7 @@ private class CloudTransfersShow : SuspendingCliktCommand(name = "show") {
 private class CloudTransfersAccept : SuspendingCliktCommand(name = "accept") {
     override fun help(context: Context) = "Accept a session offered to you. The session pauses, then becomes yours."
     private val id by argument()
-    private val resume by option("--resume", help = "Resume the session for you once it is yours.").flag()
+    private val resume by option(help = "Resume the session for you once it is yours, or not (default: what the offer asked for).").switch("--resume" to true, "--no-resume" to false)
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")
     override suspend fun run() { echo(sdk(loadConfig()).use { it.acceptCloudTransfer(id, resume, onBehalfOf) }.line()) }
 }

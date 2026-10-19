@@ -62,7 +62,7 @@ class CloudConversationService(
         val session = open(principal, id, CloudPermission.MESSAGE)
         val pausing = session.state == PAUSING
         val input = newInput(principal, session, CloudInputKind.MESSAGE, text, request)
-        return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq), CloudConversationRules.MAX_PENDING_INPUTS)) {
+        return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)) {
             is InputOutcome.Replayed -> outcome
             is InputOutcome.Accepted -> if (request.wake && !pausing) InputOutcome.Accepted(outcome.input.copy(woke = wake(principal.teamId, session.id, principal))) else outcome
         }
@@ -74,7 +74,7 @@ class CloudConversationService(
         if (session.state != READY && session.state != ACTIVE)
             throw TeamFailure("nothing_to_interrupt", 409, "The session has no running agent to interrupt.")
         val input = newInput(principal, session, CloudInputKind.INTERRUPT, null, request.copy(wake = false))
-        return store.insertInput(NewInput(input, null), CloudConversationRules.MAX_PENDING_INPUTS)
+        return store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
     }
 
     suspend fun inputs(principal: Principal, id: String, beforeId: String?, limit: Int): CloudInputPage {
@@ -99,7 +99,7 @@ class CloudConversationService(
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw ended()
         val now = store.now()
         return store.attach(CloudAttachment(UUID.randomUUID().toString(), principal.teamId, session.id, principal.member.id, principal.tokenId,
-            granted.intersect(setOf(CloudPermission.TRANSCRIPT, CloudPermission.MESSAGE)), now, now + CloudConversationRules.ATTACHMENT_LEASE_MILLIS))
+            granted.intersect(setOf(CloudPermission.TRANSCRIPT, CloudPermission.MESSAGE)), now, now + CloudConversationRules.ATTACHMENT_LEASE_MILLIS), session.ownerId)
     }
 
     suspend fun renew(principal: Principal, id: String, attachmentId: String): CloudAttachment {

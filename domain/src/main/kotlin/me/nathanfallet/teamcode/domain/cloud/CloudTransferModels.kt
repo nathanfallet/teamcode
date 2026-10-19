@@ -2,6 +2,12 @@ package me.nathanfallet.teamcode.domain.cloud
 
 import me.nathanfallet.teamcode.domain.team.Member
 
+/** The shape of every cloud identifier in a path, a header or a body (UUIDs and member identifiers). */
+object CloudIdentifier {
+    private val pattern = Regex("[a-zA-Z0-9-]{1,36}")
+    fun valid(value: String): Boolean = pattern.matches(value)
+}
+
 /**
  * A change of session owner. An administrator's transfer starts `accepted`; an owner's offer starts `offered` and
  * waits for the recipient. `accepted` lasts until the session reached its paused boundary and the owner changed
