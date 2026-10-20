@@ -26,7 +26,7 @@ import me.nathanfallet.teamcode.domain.gateway.*
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, cloudConversation: CloudConversation? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, cloudConversation: CloudConversation? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     install(io.ktor.server.resources.Resources)
@@ -45,7 +45,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     intercept(ApplicationCallPipeline.Plugins) {
         call.response.header(HttpHeaders.CacheControl, "no-store")
         call.response.header("X-Content-Type-Options", "nosniff")
-        call.response.header("Referrer-Policy", "no-referrer")
+        // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
+        call.response.header("Referrer-Policy", "same-origin")
         val path = call.request.path()
         if (team != null) {
             if (path.startsWith("/dashboard")) {
@@ -98,6 +99,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (devices != null && team != null) deviceRoutes(devices, publicOrigin)
         if (serviceKeys != null && team != null) serviceKeyRoutes(serviceKeys, publicOrigin)
         if (audit != null && team != null) auditRoutes(audit)
+        if (skills != null && team != null) skillRoutes(skills, team, publicOrigin)
+        if (variants != null && team != null) variantRoutes(variants, publicOrigin)
+        if (mcp != null && team != null) mcpGatewayRoutes(mcp, publicOrigin)
+        if (mcpAccess != null && team != null) mcpAdminRoutes(mcpAccess, variants, publicOrigin)
         if (cloudSessions != null && cloudAdmin != null && team != null) cloudRoutes(cloudSessions, cloudAdmin, publicOrigin)
         if (cloudRunner != null && cloudSessions != null && team != null) cloudRunnerRoutes(cloudRunner)
         if (cloudConversation != null && cloudSessions != null && team != null) {
@@ -130,8 +135,11 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && serviceKeys != null) listOf("team.service-keys.v1") else emptyList()) +
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
+                    (if (team != null && skills != null) listOf("team.skills.v1") else emptyList()) +
+                    (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
+                    (if (team != null && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1") else emptyList()) +
-                    (if (team != null && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList())))
+                    (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()
