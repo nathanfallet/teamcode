@@ -145,7 +145,7 @@ Linux systemd rejects quotes/backslashes in its first executable token even afte
 
 ## Kotlin libraries on Maven Central
 
-The `api` and `client` modules are published to Maven Central for reuse in external services, as `me.nathanfallet.teamcode:teamcode-api` and `me.nathanfallet.teamcode:teamcode-client` (Kotlin Multiplatform: JVM, macOS arm64/x64, Linux arm64/x64, Windows x64; the base artifact carries Gradle module metadata). The version is `teamcodeVersion`. The configuration follows kourier (Vanniktech `com.vanniktech.maven.publish`, empty javadoc jars, signed publications). Publication is manual, from a checkout of the exact release commit, with the Central and signing properties in `~/.gradle/gradle.properties` (`mavenCentralUsername`, `mavenCentralPassword`, `signing.keyId`, `signing.password`, `signing.secretKeyRingFile`):
+The `api` and `client` modules are published to Maven Central for reuse in external services, as `me.nathanfallet.teamcode:api` and `me.nathanfallet.teamcode:client` (artifact ids are the module names) (Kotlin Multiplatform: JVM, macOS arm64/x64, Linux arm64/x64, Windows x64; the base artifact carries Gradle module metadata). The version is `teamcodeVersion`. The configuration follows kourier (Vanniktech `com.vanniktech.maven.publish`, empty javadoc jars, signed publications). Publication is manual, from a checkout of the exact release commit, with the Central and signing properties in `~/.gradle/gradle.properties` (`mavenCentralUsername`, `mavenCentralPassword`, `signing.keyId`, `signing.password`, `signing.secretKeyRingFile`):
 
 ```sh
 ./gradlew --no-daemon -PteamcodeVersion=X.Y.Z :api:publishToMavenCentral :client:publishToMavenCentral

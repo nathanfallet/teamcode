@@ -10,11 +10,10 @@ plugins {
 mavenPublishing {
     // Empty javadoc jars, as in kourier: sources are published, API docs live in the repository.
     configure(KotlinMultiplatform(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
-    coordinates(artifactId = "teamcode-client")
     publishToMavenCentral()
     signAllPublications()
     pom {
-        name.set("teamcode-client")
+        name.set(project.name)
         description.set("Ktor client for the TeamCode API.")
         url.set(project.ext.get("url")?.toString())
         licenses {
