@@ -108,6 +108,8 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
             val now = store.now()
             when {
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.state == CloudSessionState.PAUSING ->
+                    throw TeamFailure("session_pausing", 409, "The session is still pausing. Resume it once the pause has finished.")
                 current.desiredState == DesiredState.RUNNING && current.resumeBlocked == null -> null
                 else -> CloudTransition(
                     current.copy(desiredState = DesiredState.RUNNING, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, updatedAt = now),

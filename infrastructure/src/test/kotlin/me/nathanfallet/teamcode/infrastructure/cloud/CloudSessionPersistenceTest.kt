@@ -156,6 +156,9 @@ class CloudSessionPersistenceTest {
         assertEquals(paused.generation, ra.sessions.pause(colleague, null, s.id, false).generation, "A repeated pause writes nothing")
         pass(ra)
         assertEquals(PAUSING, ra.store.find(admin.teamId, s.id)!!.state)
+        // A resume while the pause is draining is refused: accepting it would wedge the drain and be dropped later.
+        failure("session_pausing") { rb.sessions.resume(colleague, null, s.id) }
+        assertEquals(DesiredState.PAUSED, ra.store.find(admin.teamId, s.id)!!.desiredState)
         val instruction = ra.runner.heartbeat(admin.teamId, s.id, 1, ready = true)
         assertEquals(DesiredState.PAUSED, instruction.desiredState); assertNotNull(instruction.pauseDeadline)
         rb.runner.checkpoint(admin.teamId, s.id, 1, completed = true)
