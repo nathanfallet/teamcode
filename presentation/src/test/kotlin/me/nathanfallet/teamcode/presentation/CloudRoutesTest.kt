@@ -349,6 +349,8 @@ class CloudRoutesTest {
             assertEquals("inference_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
                 runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
             }.code)
+        } finally { runner.close() }
+    }
 
     @Test fun runnerReadsItsEnvironmentAndReportsPreparationThroughTheTypedClient() = testApplication {
         val store = Store()
