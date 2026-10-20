@@ -144,15 +144,15 @@ class SaveCloudClusterRequest(
     override fun toString() = "SaveCloudClusterRequest(name=$name, apiUrl=$apiUrl, serviceAccountToken=[REDACTED])"
 }
 
-/** Persistent administrator settings. `pausedRetentionDays = null` keeps paused workspaces indefinitely. */
+/** Persistent administrator settings; every field is required so a partial update cannot reset the others. `pausedRetentionDays = null` keeps paused workspaces indefinitely. */
 @Serializable
 data class CloudSettingsView(
-    val pausedRetentionDays: Int? = 30,
-    val failedWorkspaceRetentionDays: Int = 7,
-    val maxRunningSessionsPerMember: Int = 2,
-    val maxRetainedSessionsPerMember: Int = 20,
+    val pausedRetentionDays: Int?,
+    val failedWorkspaceRetentionDays: Int,
+    val maxRunningSessionsPerMember: Int,
+    val maxRetainedSessionsPerMember: Int,
     /** Days transcript events and finished messages are kept; null keeps them indefinitely. */
-    val transcriptRetentionDays: Int? = 30,
+    val transcriptRetentionDays: Int?,
 )
 
 object CloudHeaders {

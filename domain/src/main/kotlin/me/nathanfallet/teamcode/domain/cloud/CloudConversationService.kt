@@ -141,7 +141,7 @@ class CloudConversationService(
         val owner = sessions.member(teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired) return false
         val profile = sessions.profile(teamId, session.profileId)
-        if (profile == null || (owner.role != Role.ADMIN && owner.id !in profile.assignedMemberIds)) return false
+        if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds)) return false
         var woke = false
         transition(teamId, sessionId) { current ->
             if (current.state.terminal || current.state == PAUSING || current.desiredState == DesiredState.TERMINATED) return@transition null
@@ -173,7 +173,7 @@ class CloudConversationService(
         val session = sessions.find(principal.teamId, id) ?: throw missing()
         val granted = access.permissions(principal.teamId, principal.member, session.ownerId)
         val owner = session.ownerId == principal.member.id
-        if (!owner && principal.member.role != Role.ADMIN && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
+        if (!owner && !principal.member.role.isAdministrator && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
         return session to granted
     }
 

@@ -1,4 +1,4 @@
-headers = process.h release_crypto.h
+headers = process.h release_crypto.h installation.h
 package = me.nathanfallet.teamcode.cli.interop.process
 
 linkerOpts.osx = -framework Security -framework CoreFoundation
