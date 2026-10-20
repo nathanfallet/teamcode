@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.api.BuildInfo
 import me.nathanfallet.teamcode.cli.cloud.agent.*
+import me.nathanfallet.teamcode.cli.platform.AgentProcess
 import me.nathanfallet.teamcode.cli.platform.UnixConnection
 import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
@@ -207,15 +208,21 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                     val broker = CredentialBroker(listenUnix(socket), credentialSources { client.runnerGitHub(RunnerGitHubRequest(team, session, epoch)) }, log = { message -> echo(message, err = true) })
                     scope.launch { broker.serve() }
                 }
-                val agent = AgentHost(agentChannel, { command, overrides, directory ->
+                val startProcess: suspend (AgentCommand, Map<String, String?>, String) -> AgentProcess = { command, overrides, directory ->
                     processes?.start(command.command, command.arguments, overrides, directory) ?: startAgentProcess(command.command, command.arguments, overrides, directory)
-                },
+                }
+                // Skills are installed by this binary in the agent's container, under the agent's UID, in its home.
+                val binary = environment("TEAMCODE_CLOUD_BINARY")?.takeIf { it.isNotBlank() } ?: "/opt/teamcode/teamcode"
+                val tools = RunnerAgentTools(inferenceClient, { arguments ->
+                    startProcess(AgentCommand(binary, arguments), AgentHost.AGENT_ENVIRONMENT, environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace")
+                }, log = { echo(it, err = true) })
+                val agent = AgentHost(agentChannel, startProcess,
                     FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
                     BuildInfo.VERSION, log = { echo(it, err = true) }, inference = {
                         // Fetched before the agent starts, so a server without the route is known and the agent keeps its own configuration.
                         inference.available()
                         if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
-                    })
+                    }, tools = tools)
                 try { RunnerLoop(calls, log = log, prepare = { EnvironmentPreparation(preparation, commands, workspace, log = log).run() }, agent = agent).run() }
                 catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
             } finally {

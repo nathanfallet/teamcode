@@ -173,10 +173,13 @@ Five additive tables: `skills`, `skill_versions`, `skill_files`, `skill_assignme
 
 Authorization and input validation live in `ManageSkillCatalogUseCase` and the publication/delivery use cases; rules that depend on shared state (retired skill, pinned version, limits) are enforced by the store inside its transaction. Administrative writes lock the team row briefly; a version's content insert holds only its skill row lock, so a 5 MiB upload does not delay team-wide admission. Concurrent publications of the same version on two replicas converge on one record (tested). Publication commits the catalog entry before the version: if the version step then fails (revoked key, conflict, database error), the skill remains with no version. It delivers nothing, counts toward the 500-skill limit, and can be retired; a retry reuses it. No content is cached in memory between requests.
 
+## Cloud sessions
+
+A cloud session installs the owner's effective skills for its agent every time the agent starts, under the agent's own UID, with the same digest checks and the same preservation of personal skills; see [cloud sessions](cloud-sessions.md#team-mcp-servers-and-skills). The execution's `tcex_` credential holds `skills:read` for this.
+
 ## What is planned
 
 - **Native CLI synchronization** before `teamcode run`: an isolated, agent-compatible local installation of the effective pinned versions, preserving personal skills and reporting naming conflicts through the installation route. It will come after the current V1 CLI work.
 - **Typed SDK methods** in the `client` module for these routes.
 - **Group decisions**, using the precedence above.
-- **Cloud sessions** resolving the effective member's skills on creation, resume and transfer.
 - **Pruning** of old, retired versions; versions are currently kept forever (bounded at 200 per skill).

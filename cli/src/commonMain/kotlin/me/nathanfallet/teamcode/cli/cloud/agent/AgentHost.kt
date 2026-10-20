@@ -63,6 +63,8 @@ internal class AgentHost(
      * issues no inference credentials) starts the agent with its own provider configuration.
      */
     private val inference: (suspend () -> AgentInferenceEndpoint?)? = null,
+    /** The owner's team MCP servers and skills, prepared before each agent start; needs [inference], whose proxy relays the MCP messages. */
+    private val tools: AgentTools? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
@@ -196,10 +198,12 @@ internal class AgentHost(
     /**
      * Points the agent at the runner's loopback proxy exactly as `teamcode run` does for a local session: the agent
      * receives only the proxy's random local token, and its own provider credentials are removed from its environment.
+     * The owner's team MCP servers are connected through the same proxy, one agent-side server per assignment.
      */
     private suspend fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
         val endpoint = inference?.invoke() ?: return base to AGENT_ENVIRONMENT
-        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token)
+        val servers = tools?.prepare(kind).orEmpty()
+        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, mcpServers = servers)
         return AgentCommand(base.command, plan.arguments) to AGENT_ENVIRONMENT + plan.environment
     }
 

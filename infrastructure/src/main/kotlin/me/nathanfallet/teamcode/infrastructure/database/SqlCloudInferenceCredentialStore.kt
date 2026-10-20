@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import java.util.UUID
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.ServiceScope
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -9,7 +11,7 @@ import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
 /**
- * `tcex_` credentials as [Tokens] rows limited to inference: the gateway authenticates them, revalidates them on
+ * `tcex_` credentials as [Tokens] rows limited to [EXECUTION_SCOPES]: the gateway authenticates them, revalidates them on
  * every request and applies the member's model policy, quotas and routing like any other member token. Only the
  * SHA-256 of the token is stored.
  */
@@ -45,7 +47,7 @@ class SqlCloudInferenceCredentialStore(private val database: Database) : CloudIn
         Tokens.insert {
             it[Tokens.id] = id; it[memberId] = member; it[tokenHash] = Passwords.digest(token)
             it[device] = "cloud session ${sessionId.take(8)} e$epoch"; it[deviceId] = null; it[createdAt] = now; it[Tokens.expiresAt] = expiresAt
-            it[serviceScopes] = "[\"${ServiceScope.INFERENCE.wire}\"]"
+            it[serviceScopes] = Json.encodeToString(EXECUTION_SCOPES.map { it.wire })
         }
         CloudInferenceCredentials.insert {
             it[tokenId] = id; it[CloudInferenceCredentials.sessionId] = sessionId; it[CloudInferenceCredentials.epoch] = epoch
@@ -104,3 +106,10 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
     }.map { it[CloudInferenceCredentials.tokenId] }
     if (ids.isNotEmpty()) Tokens.deleteWhere { Tokens.id inList ids }
 }
+
+/**
+ * What a cloud execution may do as its owner: inference, the owner's MCP servers through the gateway (the runner
+ * relays the agent's messages) and the owner's effective skills (the runner installs them). Nothing else: no usage,
+ * no publication, no cloud or interactive route.
+ */
+val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ)

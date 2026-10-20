@@ -435,6 +435,15 @@ class TeamCodeClient(
         return response.body()
     }
 
+    /** The skills the signed-in member is currently allowed to install: name, approved version and digest. */
+    suspend fun skillManifest(): SkillManifestView = request("/api/v1/skill-delivery", HttpMethod.Get)
+
+    /** The files of one effective skill version; fails with `404` once it is no longer the approved version. */
+    suspend fun skillArtifact(name: String, version: String): SkillArtifactView {
+        require(SKILL_NAME.matches(name) && SKILL_VERSION.matches(version)) { "Invalid skill name or version." }
+        return request("/api/v1/skill-delivery/$name/$version", HttpMethod.Get)
+    }
+
     /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
     suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
 
@@ -555,6 +564,8 @@ class TeamCodeClient(
         private const val MAX_SSE_LINE = 256 * 1024
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
         val MCP_SERVER_NAME = Regex("[a-z0-9][a-z0-9._-]{0,63}")
+        val SKILL_NAME = Regex("[a-z0-9]+(-[a-z0-9]+)*")
+        val SKILL_VERSION = Regex("[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}")
         private const val MCP_RESPONSE_LIMIT = 65 * 1024 * 1024 // The largest gateway response limit plus its JSON-RPC envelope.
     }
 }

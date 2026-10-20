@@ -57,13 +57,15 @@ class CloudInferencePersistenceTest {
                 rb.runner.heartbeat(teamId, created.id, 1, ready = true)
                 assertEquals(READY, ra.store.find(teamId, created.id)!!.state)
 
-                // Issued to the registered runner of the current epoch, for the member the execution runs for, inference only.
+                // Issued to the registered runner of the current epoch, for the member the execution runs for.
                 val first = rb.inference.issue(teamId, created.id, 1)
                 assertTrue(first.token.startsWith("tcex_")); assertFalse(first.toString().contains(first.token))
                 val principal = assertNotNull(ra.team.authenticate(first.token))
                 assertEquals(member.member.id, principal.member.id)
-                assertEquals(setOf(ServiceScope.INFERENCE), principal.serviceScopes)
-                AuthorizeCredentialUseCase().check(principal, CredentialAction.INFERENCE)
+                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ), principal.serviceScopes)
+                // The owner's inference, MCP gateway and skills; nothing that publishes, manages or reads usage or cloud sessions.
+                for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ)) AuthorizeCredentialUseCase().check(principal, action)
+                failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.SKILLS_PUBLISH) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.INTERACTIVE) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.USAGE_READ) }
                 ra.store.revalidate(principal) // The gateway's own recheck on every request and on its cancellation polls.

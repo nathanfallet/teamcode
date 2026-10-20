@@ -17,6 +17,7 @@ This page describes the authenticated MCP gateway for the V2 roadmap item [MCP g
 | Private-network (SSRF) refusal at connection time | Done, with the DNS rebinding limit below |
 | Member-driven delegated OAuth with the upstream server | Planned (credentials are supplied by an administrator today) |
 | `teamcode run claude` / `teamcode run codex` connecting one agent-side MCP server per assigned server, for the launch only | Done; not yet exercised with a real agent |
+| Cloud sessions: the runner connects the owner's servers to the agent through its loopback relay with the execution credential, see [cloud sessions](cloud-sessions.md#team-mcp-servers-and-skills) | Done; not yet exercised with a real agent |
 | Resources, prompts, sampling, elicitation, server-initiated notifications | Not supported |
 
 ## Endpoint and protocol
