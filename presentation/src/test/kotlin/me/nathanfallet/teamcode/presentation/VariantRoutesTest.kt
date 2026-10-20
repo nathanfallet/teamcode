@@ -25,7 +25,13 @@ class VariantRoutesTest {
             val id = "00000000-0000-0000-0000-${variants.size.toString().padStart(12, '0')}"
             return Variant(id, variant.kind, variant.target, variant.name, variant.binding, 1, variant.endpoint, variant.config, variant.sharedSecret != null, 1, 1).also { variants[id] = it }
         }
-        override suspend fun update(actor: Principal, id: String, update: VariantUpdate) = error("unused")
+        override suspend fun update(actor: Principal, id: String, update: VariantUpdate): Variant {
+            write(actor)
+            val current = variants[id] ?: throw TeamFailure("not_found", 404, "Variant not found.")
+            VariantService.validate(current, update)
+            update.sharedSecret?.let { secrets += it.reveal() }
+            return current.copy(name = update.name, config = update.config, version = current.version + 1).also { variants[id] = it }
+        }
         override suspend fun delete(actor: Principal, id: String) { write(actor); variants.remove(id) ?: throw TeamFailure("not_found", 404, "Variant not found.") }
         override suspend fun assign(actor: Principal, memberId: String, variantId: String, memberSecret: SecretValue?): VariantAssignment {
             write(actor)
@@ -124,5 +130,20 @@ class VariantRoutesTest {
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/$id/bulk-assign", "").status)
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/$id/delete", "").status)
         assertTrue(registry.exclusions.isEmpty()); assertTrue(registry.assignments.isEmpty())
+    }
+
+    @Test fun anEmptySecretIsRefusedInsteadOfSilentlyKeepingTheOldOne() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway, team = team(), variants = registry) }
+        val create = """{"kind":"MCP","target":"tracker","name":"team","endpoint":"https://mcp.example.test","secret":"synthetic-team-credential"}"""
+        assertEquals(HttpStatusCode.Created, client.post("/api/v1/variants") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody(create) }.status)
+        val id = registry.variants.keys.single()
+        val empty = client.patch("/api/v1/variants/$id") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"expectedVersion":1,"name":"team","secret":""}""") }
+        assertEquals(HttpStatusCode.BadRequest, empty.status)
+        val kept = client.patch("/api/v1/variants/$id") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"expectedVersion":1,"name":"renamed"}""") }
+        assertEquals(HttpStatusCode.OK, kept.status)
+        val personal = client.post("/api/v1/variants") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"kind":"ENV","target":"NPM_TOKEN","name":"own","binding":"PER_MEMBER"}""") }
+        val personalId = registry.variants.keys.last()
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/members/admin-id/variants") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"variantId":"$personalId","memberSecret":""}""") }.status)
     }
 }

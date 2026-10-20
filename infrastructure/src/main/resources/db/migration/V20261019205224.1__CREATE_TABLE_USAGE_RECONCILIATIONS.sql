@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS usage_reconciliations (id VARCHAR(36) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, member_id VARCHAR(36) NOT NULL, account_id VARCHAR(36) NOT NULL, pool_id VARCHAR(36) NOT NULL, run_id VARCHAR(36) NULL, day_number BIGINT NOT NULL, provider_request_id VARCHAR(128) NULL, previous_state VARCHAR(16) NOT NULL, previous_units BIGINT NOT NULL, actual_units BIGINT NOT NULL, evidence_source VARCHAR(32) NOT NULL, evidence_reference VARCHAR(240) NOT NULL, reason VARCHAR(240) NOT NULL, actor_id VARCHAR(36) NOT NULL, reconciled_at BIGINT NOT NULL);
+CREATE INDEX reconciliation_history ON usage_reconciliations (team_id, reconciled_at, id);
+CREATE INDEX reconciliation_member_history ON usage_reconciliations (team_id, member_id, reconciled_at, id);

@@ -15,7 +15,10 @@ private fun BulkAssignment.view() = BulkAssignmentResponse(assigned, keptDirect,
 
 private fun kind(value: String) = VariantKind.entries.find { it.name == value } ?: throw TeamFailure("invalid_variant", 400, "Use ENV or MCP.")
 private fun binding(value: String) = VariantBinding.entries.find { it.name == value } ?: throw TeamFailure("invalid_variant", 400, "Use SHARED or PER_MEMBER.")
-private fun secret(value: String?) = value?.takeIf { it.isNotEmpty() }?.let(::SecretValue)
+/** JSON: an explicit empty string is refused by validation instead of silently keeping the stored value. */
+private fun secret(value: String?) = value?.let(::SecretValue)
+/** Dashboard forms submit an empty field when nothing was typed, which means no value. */
+private fun formSecret(value: String?) = value?.takeIf { it.isNotEmpty() }?.let(::SecretValue)
 private fun Parameters.target() = VariantTarget(kind(this["kind"].orEmpty()), this["target"].orEmpty())
 private fun Parameters.required(name: String) = this[name]?.takeIf { it.isNotEmpty() } ?: throw TeamFailure("invalid_variant", 400, "Missing $name.")
 
@@ -98,14 +101,14 @@ internal fun Route.variantRoutes(variants: VariantService, publicOrigin: String)
     post("/dashboard/variants") {
         val input = call.form(origin)
         val endpoint = input["endpoint"]?.takeIf { it.isNotBlank() }
-        variants.create(call.principal, NewVariant(kind(input.required("kind")), input.required("target"), input.required("name"), binding(input.required("binding")), endpoint, config(input["config"]), secret(input["secret"])))
+        variants.create(call.principal, NewVariant(kind(input.required("kind")), input.required("target"), input.required("name"), binding(input.required("binding")), endpoint, config(input["config"]), formSecret(input["secret"])))
         call.respondRedirect("/dashboard/variants")
     }
     post("/dashboard/variants/{id}/bulk-assign") { call.form(origin); variants.bulkAssign(call.principal, call.parameters["id"]!!); call.respondRedirect("/dashboard/variants") }
     post("/dashboard/variants/{id}/delete") { call.form(origin); variants.delete(call.principal, call.parameters["id"]!!); call.respondRedirect("/dashboard/variants") }
     post("/dashboard/variants/assign") {
         val input = call.form(origin)
-        variants.assign(call.principal, input.required("member"), input.required("variant"), secret(input["secret"]))
+        variants.assign(call.principal, input.required("member"), input.required("variant"), formSecret(input["secret"]))
         call.respondRedirect("/dashboard/variants")
     }
     post("/dashboard/variants/unassign") {

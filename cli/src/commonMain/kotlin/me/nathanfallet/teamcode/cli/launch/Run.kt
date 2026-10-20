@@ -5,6 +5,11 @@ import com.github.ajalt.clikt.core.*
 import com.github.ajalt.clikt.parameters.arguments.*
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
@@ -31,31 +36,40 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     private val workload by option("--workload", help = "Scheduling class for this launch; quotas and permissions still apply.").choice("interactive", "background").default("interactive")
     private val arguments by argument("AGENT_ARGS").multiple()
     override suspend fun run() {
-        val config = loadConfig()
-        val service = loadService(configPath())
-        // Fails before launching the agent when the saved session is invalid.
-        val servers = sdk(config).use { assignedMcpServers(it, it.capabilities()) }
-        // A user service started by an older CLI has no MCP relay: use a launch proxy instead.
-        if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", mcpRelay = servers.isNotEmpty())) {
-            echo("Running $agent through the TeamCode user service.", err = true)
-            val code = launch(service.port, service.localToken, servers)
-            if (code != 0) SystemExit.exit(code)
-            return
-        }
-        val client = sdk(config)
-        val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
-        // A dedicated ephemeral listener avoids collisions between concurrent launches or a user service.
-        val server = proxyServer(client, token, 0) { echo(it, err = true) }
-        val code = try {
-            server.start(wait = false)
-            val port = server.engine.resolvedConnectors().single().port
-            echo("Running $agent through TeamCode.", err = true)
-            launch(port, token, servers)
-        } finally {
-            server.stop(500, 5_000)
-            client.close()
+        val code = coroutineScope {
+            val service = loadService(configPath())
+            val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(service?.executable)
+            val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates { echo(it, err = true) } }
+            try { runAgent() } finally {
+                try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally { lease?.close() }
+            }
         }
         if (code != 0) SystemExit.exit(code)
+    }
+    private suspend fun runAgent(): Int {
+        val config = loadConfig()
+        return sdk(config).use { client ->
+            val capabilities = client.capabilities()
+            // Fails before launching the agent when the saved session is invalid; names only, never an address or credential.
+            val servers = assignedMcpServers(client, capabilities)
+            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }) { runId ->
+                val service = loadService(configPath())
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty())) {
+                    echo("Running $agent through the TeamCode user service.", err = true)
+                    launch(service.port, service.localToken, runId, servers)
+                } else {
+                    val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+                    // A dedicated listener also avoids stopping an older, incompatible shared service.
+                    val server = proxyServer(client, token, 0) { echo(it, err = true) }
+                    try {
+                        server.start(wait = false)
+                        val port = server.engine.resolvedConnectors().single().port
+                        echo("Running $agent through TeamCode.", err = true)
+                        launch(port, token, runId, servers)
+                    } finally { server.stop(500, 5_000) }
+                }
+            }
+        }
     }
     /** The team MCP servers to connect for this launch: names only, never an upstream address or credential. */
     private suspend fun assignedMcpServers(client: TeamCodeClient, capabilities: Capabilities): List<String> {
@@ -72,7 +86,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             emptyList()
         }
     }
-    private suspend fun launch(port: Int, token: String, mcpServers: List<String>): Int {
+    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>): Int {
         val options = arguments.takeWhile { it != "--" }
         val plugin = if (agent == "claude" && !noGuidance && "--bare" !in options) try {
             GuidancePlugin.create(configPath(), port)
@@ -93,7 +107,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             AgentLaunch(emptyList(), emptyMap())
         } else AgentLaunch(emptyList(), emptyMap())
         try {
-            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, mcpServers)
+            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers)
             return runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment)
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
@@ -106,10 +120,15 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", mcpServers: List<String> = emptyList()): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList()): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
+    require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
-    val origin = "http://127.0.0.1:$port" + if (workload == "background") "/_teamcode/workloads/background" else ""
+    val origin = "http://127.0.0.1:$port" + when {
+        runId != null -> "/_teamcode/runs/$runId/$workload"
+        workload == "background" -> "/_teamcode/workloads/background"
+        else -> ""
+    }
     // One agent-side MCP server per team server, each on its own local relay endpoint; never one merged server.
     // The `teamcode-` prefix keeps them apart from personal servers, and '.' is not allowed in Codex config keys.
     val mcp = mcpServers.groupBy(::mcpLabel).filterValues { it.size == 1 }.mapValues { it.value.single() }

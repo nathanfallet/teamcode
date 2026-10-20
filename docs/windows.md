@@ -1,10 +1,14 @@
 # Windows workstations
 
-Windows x64 native runtime acceptance passed in [CI run 39178163269](https://github.com/nathanfallet/teamcode/actions/runs/39178163269), including authentication, TLS, Unicode paths, agent launchers and Task Scheduler lifecycle. V1 release acceptance and actual workstation reboot/logon checks remain open; see [implementation status](status.md). TeamCode runs directly on Windows, without WSL, Java or Gradle at runtime.
+Windows x64 native runtime acceptance passed in [CI run 39178163269](https://github.com/nathanfallet/teamcode/actions/runs/39178163269), including authentication, TLS, Unicode paths, agent launchers and Task Scheduler lifecycle. Additional real-workstation reboot/logon checks are owner-deferred to V2; see [implementation status](status.md). TeamCode runs directly on Windows, without WSL, Java or Gradle at runtime.
+
+## Release installer
+
+The pipeline generates a [PowerShell installer](bootstrap.md) for the signed Windows x64 release. Use the version-pinned `0.1.0` command in that guide for the published release. It targets Windows PowerShell 5.1 and PowerShell 7, prints a stable launcher path to add to user PATH and preserves saved authentication and personal agent configuration. All-platform bootstrap runtime acceptance remains separate from the earlier native transport/service evidence above.
 
 ## Install a tested development build
 
-Open a successful [Build workflow run](https://github.com/nathanfallet/teamcode/actions/workflows/build.yml) and download its `teamcode-windows-x64` artifact. It is uploaded only after that run's Windows acceptance test passes. Extract `teamcode.exe` and keep it at a stable location, for example `%LOCALAPPDATA%\TeamCode\bin\teamcode.exe`. These are development builds; versioned releases and automatic updates are still planned.
+Open a successful [Build workflow run](https://github.com/nathanfallet/teamcode/actions/workflows/build.yml) and download its `teamcode-windows-x64` artifact. It is uploaded only after that run's Windows acceptance test passes. Extract `teamcode.exe` and keep it at a stable location, for example `%LOCALAPPDATA%\TeamCode\bin\teamcode.exe`. These artifacts are development builds; use the signed release installer for versioned installation. Managed signed updates and the new [opt-in user update job](automatic-updates.md) have separate acceptance requirements; inspect the versioned workflow results for the actual Windows installation/update evidence.
 
 In a regular PowerShell session:
 
@@ -39,7 +43,7 @@ This registers a task for the current user's login and starts the authenticated 
 & $teamcode service uninstall
 ```
 
-Stopping disables automatic login startup and waits for accepted streams to finish; starting enables it again. Uninstall preserves your TeamCode login. A service running before anyone signs in is a separate planned feature. See [service lifecycle and recovery](services.md) for the full behavior.
+Stopping disables automatic login startup and waits for accepted streams to finish; starting enables it again. Uninstall preserves your TeamCode login. Use `service install --at-boot` (or `--system`) in an elevated terminal for startup before login. The masked prompt requires your Windows account password; Task Scheduler protects it, and TeamCode does not store it. Uninstall the login task before switching modes. Additional boot/password/reboot validation is tracked for V2. See [service lifecycle and recovery](services.md) for the full behavior.
 
 ## Build and test from source
 

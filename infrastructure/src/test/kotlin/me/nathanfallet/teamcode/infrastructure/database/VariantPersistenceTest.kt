@@ -148,7 +148,7 @@ class VariantPersistenceTest {
                 val key = SqlServiceKeyService(a).create(admin, admin.member.id, "Variant reader", setOf(ServiceScope.USAGE_READ), 1)
                 failure("credential_scope") { first.list(team.authenticate(key.accessToken)!!) }
                 failure("authentication_required") { first.list(admin.copy(teamId = "other-team")) }
-                a.query { Members.update({ Members.id eq admin.member.id }) { it[role] = "MEMBER" } }
+                a.query { Members.update({ Members.id eq admin.member.id }) { it[role] = "MEMBER"; it[isOwner] = false } }
                 failure("authentication_required") { second.assign(admin, carol, orgA.id) }
             } }
         }

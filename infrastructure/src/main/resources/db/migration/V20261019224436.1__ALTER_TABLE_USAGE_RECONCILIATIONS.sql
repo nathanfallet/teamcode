@@ -1,0 +1,1 @@
+ALTER TABLE usage_reconciliations ADD source_pool_id VARCHAR(36) NULL;

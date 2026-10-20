@@ -14,6 +14,34 @@ class LocalProxyTest {
     private val localToken = "synthetic-local-token-long-enough-for-tests"
     private fun payload() = """{"model":"fixture","stream":true,"messages":[]}"""
 
+    @Test fun registeredLaunchPathsIsolateSharedServiceMetadataAndRejectConflictingIds() = testApplication {
+        val id = "11111111-1111-1111-1111-111111111111"
+        val other = "22222222-2222-2222-2222-222222222222"
+        var calls = 0
+        val sdk = TeamCodeClient("https://team.example", { "server-token" }) { config -> HttpClient(MockEngine { request ->
+            calls++; assertTrue(request.headers["x-teamcode-run-id"] in setOf(id, other))
+            assertEquals(if (request.headers["x-teamcode-run-id"] == id) "background" else "interactive", request.headers["x-teamcode-workload"])
+            assertTrue(request.url.encodedPath in setOf("/v1/messages", "/v1/responses"))
+            respond("data: {}\n\n", headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { config(this) } }
+        application { localProxy(sdk, localToken) }
+        try {
+            for (path in listOf("/v1/messages", "/v1/responses")) {
+                suspend fun request(run: String = id, ids: List<String> = emptyList(), workload: String? = null, pathWorkload: String = "background") = client.post("/_teamcode/runs/$run/$pathWorkload$path") {
+                    bearerAuth(localToken); ids.forEach { header("x-teamcode-run-id", it) }; workload?.let { header("x-teamcode-workload", it) }
+                    contentType(ContentType.Application.Json); setBody(payload())
+                }
+                assertEquals(HttpStatusCode.OK, request().status)
+                assertEquals(HttpStatusCode.OK, request(run = other, pathWorkload = "interactive").status)
+                assertEquals(HttpStatusCode.BadRequest, request(ids = listOf(other)).status)
+                assertEquals(HttpStatusCode.BadRequest, request(ids = listOf(id, id)).status)
+                assertEquals(HttpStatusCode.BadRequest, request(run = "invalid").status)
+                assertEquals(HttpStatusCode.BadRequest, request(workload = "interactive").status)
+            }
+            assertEquals(4, calls)
+        } finally { sdk.close() }
+    }
+
     @Test fun `local gateway credential replaces caller auth and SSE bytes are preserved`() = testApplication {
         var calls = 0
         val engine = MockEngine { request ->

@@ -26,7 +26,7 @@ class TeamCodeClient(
     serverUrl: String,
     private val token: suspend () -> String?,
     private val createHttpClient: (io.ktor.client.HttpClientConfig<*>.() -> Unit) -> HttpClient,
-) : AutoCloseable {
+) : AutoCloseable, RunLifecycleClient {
     private val origin = Url(serverUrl.also { require(it.isNotBlank()) { "A TeamCode server URL is required." } }).also {
         require(it.protocol == URLProtocol.HTTPS ||
             (it.protocol == URLProtocol.HTTP && it.host in setOf("localhost", "127.0.0.1", "::1"))) {
@@ -73,7 +73,50 @@ class TeamCodeClient(
         request("/api/v1/directives/current", HttpMethod.Get) else request("/api/v1/directives/current", HttpMethod.Post, DirectiveScope(sessionId))
     suspend fun claimDirective(sessionId: String, stage: String): DirectiveClaimResponse = request("/api/v1/directives/claim", HttpMethod.Post, DirectiveClaimRequest(sessionId, stage))
     suspend fun acknowledgeDirective(id: String, stage: String, sessionId: String? = null, claimId: String? = null): SuccessResponse = request("/api/v1/directives/receipt", HttpMethod.Post, DirectiveReceipt(id, stage, sessionId, claimId))
+    /** Request-specific evidence and reconciliation are restricted to interactive administrators. */
+    suspend fun pendingUsage(memberId: String? = null, beforeId: String? = null): PendingUsagePageView =
+        request(usagePage("pending", memberId, beforeId), HttpMethod.Get)
+    suspend fun reconciledUsage(memberId: String? = null, beforeId: String? = null): ReconciledUsagePageView =
+        request(usagePage("reconciliations", memberId, beforeId), HttpMethod.Get)
+    suspend fun usageReview(id: String): UsageReviewView { identifier(id); return request("/api/v1/usage/reservations/$id", HttpMethod.Get) }
+    suspend fun reconcileUsage(id: String, input: UsageReconciliationRequest): ReconciledUsageView {
+        identifier(id); return request("/api/v1/usage/reservations/$id/reconcile", HttpMethod.Post, input)
+    }
+    private fun usagePage(resource: String, memberId: String?, beforeId: String?): String {
+        memberId?.let(::identifier); beforeId?.let(::identifier)
+        val parameters = listOfNotNull(memberId?.let { "member=$it" }, beforeId?.let { "before=$it" }).joinToString("&")
+        return "/api/v1/usage/$resource" + if (parameters.isEmpty()) "" else "?$parameters"
+    }
+    /** Temporary daily allocations require an interactive administrator and never reset usage. */
+    suspend fun budgetOverrides(memberId: String, beforeId: String? = null): BudgetOverridePageView {
+        identifier(memberId); beforeId?.let(::identifier)
+        return request("/api/v1/members/$memberId/budget-overrides" + (beforeId?.let { "?before=$it" } ?: ""), HttpMethod.Get)
+    }
+    suspend fun grantBudgetOverride(memberId: String, input: BudgetOverrideRequest): BudgetOverrideView {
+        identifier(memberId); input.replacesId?.let(::identifier)
+        return request("/api/v1/members/$memberId/budget-overrides", HttpMethod.Post, input)
+    }
+    suspend fun revokeBudgetOverride(memberId: String, id: String, reason: String): BudgetOverrideView {
+        identifier(memberId); identifier(id)
+        return request("/api/v1/members/$memberId/budget-overrides/$id/revoke", HttpMethod.Post, RevokeBudgetOverrideRequest(reason))
+    }
     suspend fun capacity(): CapacityView = request("/api/v1/capacity", HttpMethod.Get)
+    /** Allocation and shared physical reserves require an interactive administrator. */
+    suspend fun saveMemberPolicy(memberId: String, input: PolicyRequest): CapacityView {
+        identifier(memberId); return request("/api/v1/members/$memberId/policy", HttpMethod.Patch, input)
+    }
+    suspend fun poolBudgets(): List<PoolBudgetView> = request("/api/v1/pools/budgets", HttpMethod.Get)
+    suspend fun savePoolBudget(input: PoolBudgetView): PoolBudgetView = request("/api/v1/pools/budgets", HttpMethod.Put, input)
+    /** Controller configuration is managed with an interactive administrator login. */
+    suspend fun pacingSettings(): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Get)
+    suspend fun savePacingSettings(settings: PacingSettingsView): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Put, settings)
+    /** Read proposed advice for the current member, even when automatic delivery is disabled. */
+    suspend fun pacingPreview(): PacingPreviewResponse = request("/api/v1/directives/preview", HttpMethod.Get)
+    /** Administrative per-account quota history and conditional forecasts, without provider credentials. */
+    suspend fun forecasts(accountId: String? = null): ForecastSnapshotView {
+        accountId?.let(::identifier)
+        return request("/api/v1/forecasts" + (accountId?.let { "?account=$it" } ?: ""), HttpMethod.Get)
+    }
     suspend fun accounts(): List<AccountView> = request("/api/v1/accounts", HttpMethod.Get)
     suspend fun enrollAccount(input: EnrollAccountRequest): EnrollAccountResponse = request("/api/v1/accounts", HttpMethod.Post, input)
     suspend fun handoverAccount(id: String, accessOnly: Boolean = false): AccountView {
@@ -94,6 +137,38 @@ class TeamCodeClient(
         return request("/api/v1/audit" + (beforeId?.let { "?before=$it" } ?: ""), HttpMethod.Get)
     }
     suspend fun members(): List<MemberView> = request("/api/v1/members", HttpMethod.Get)
+    /** Register one local wrapper launch. The UUID makes a repeated start idempotent. */
+    override suspend fun startRun(input: StartRunRequest): RunLeaseView { identifier(input.id); return request("/api/v1/runs", HttpMethod.Post, input) }
+    override suspend fun heartbeatRun(id: String): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/heartbeat", HttpMethod.Post) }
+    override suspend fun endRun(id: String, exitCode: Int?): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/end", HttpMethod.Post, EndRunRequest(exitCode)) }
+    suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null): RunPageView {
+        require(!all || memberId == null) { "Choose one member or all members." }
+        memberId?.let(::identifier); beforeId?.let(::identifier)
+        val query = buildList {
+            memberId?.let { add("member=$it") }; if (all) add("all=true"); beforeId?.let { add("before=$it") }
+        }.joinToString("&")
+        return request("/api/v1/runs" + if (query.isEmpty()) "" else "?$query", HttpMethod.Get)
+    }
+    suspend fun run(id: String): RunDetailView { identifier(id); return request("/api/v1/runs/$id", HttpMethod.Get) }
+    suspend fun saveRunPolicy(id: String, policy: RunPolicyView): AgentRunView {
+        identifier(id); return request("/api/v1/runs/$id/policy", HttpMethod.Put, policy)
+    }
+    /** Group manager authority is scoped; budget and membership writes require a team administrator. */
+    suspend fun groups(): List<GroupView> = request("/api/v1/groups", HttpMethod.Get)
+    suspend fun group(id: String): GroupDetailView { identifier(id); return request("/api/v1/groups/$id", HttpMethod.Get) }
+    suspend fun createGroup(policy: GroupPolicyRequest): GroupDetailView = request("/api/v1/groups", HttpMethod.Post, policy)
+    suspend fun saveGroup(id: String, policy: GroupPolicyRequest): GroupDetailView {
+        identifier(id); return request("/api/v1/groups/$id", HttpMethod.Put, policy)
+    }
+    suspend fun assignGroupMember(id: String, memberId: String, assignment: GroupAssignmentRequest): GroupDetailView {
+        identifier(id); identifier(memberId); return request("/api/v1/groups/$id/members/$memberId", HttpMethod.Put, assignment)
+    }
+    suspend fun removeGroupMember(id: String, memberId: String): SuccessResponse {
+        identifier(id); identifier(memberId); return request("/api/v1/groups/$id/members/$memberId", HttpMethod.Delete)
+    }
+    suspend fun pauseGroupMember(id: String, memberId: String, paused: Boolean): GroupDetailView {
+        identifier(id); identifier(memberId); return request("/api/v1/groups/$id/members/$memberId/pause", HttpMethod.Patch, GroupPauseRequest(paused))
+    }
     suspend fun serviceKeys(memberId: String? = null): List<ServiceKeyView> = request(memberPath(memberId) + "/service-keys", HttpMethod.Get)
     suspend fun createServiceKey(input: CreateServiceKeyRequest, memberId: String? = null): CreatedServiceKeyResponse =
         request(memberPath(memberId) + "/service-keys", HttpMethod.Post, input)

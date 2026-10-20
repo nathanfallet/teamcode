@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-team-smoke-') as directory:
         devices = json.loads(device_json)
         assert status == 200 and len(devices) == 1 and devices[0]['current'] and devices[0]['activeSessions'] == 1
         device_id = devices[0]['id']
-        assert 'admin (admin)' in command([binary, 'whoami'], env=env, timeout=15).stdout
+        assert 'admin (owner)' in command([binary, 'whoami'], env=env, timeout=15).stdout
         assert device_id in command([binary, 'devices', 'list'], env=env, timeout=15).stdout
         assert 'current' in command([binary, 'auth', 'sessions', 'list'], env=env, timeout=15).stdout
         command([binary, 'devices', 'rename', device_id, '--name', 'Administrator workstation'], env=env, timeout=15)
@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-team-smoke-') as directory:
         assert key_id in key_list and key_secret not in key_list
         ci_env = dict(env, XDG_CONFIG_HOME=str(root / 'ci-config'))
         command([binary, 'configure', '--server', origin], env=ci_env, input=key_secret + '\n', timeout=15)
-        assert 'admin (admin)' in command([binary, 'whoami'], env=ci_env, timeout=15).stdout
+        assert 'admin (owner)' in command([binary, 'whoami'], env=ci_env, timeout=15).stdout
         assert request('/api/v1/capacity', token=key_secret)[0] == 200
         for denied in ('/api/v1/service-keys', '/api/v1/accounts', '/api/v1/members', '/api/v1/quotas', '/api/v1/status', '/api/v1/audit'):
             assert request(denied, token=key_secret)[0] == 403, 'Service key escaped its owner/scopes'
