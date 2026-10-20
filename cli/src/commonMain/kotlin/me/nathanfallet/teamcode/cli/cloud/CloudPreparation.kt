@@ -74,7 +74,7 @@ internal class EnvironmentPreparation(
         val spec = prepared.environment
         val token = prepared.github.token?.takeIf { prepared.github.status == "linked" }
         val secrets = (prepared.variables.values + listOfNotNull(token)).filter { it.length >= MIN_MASKED }.toSet()
-        val ignored = prepared.variables.keys.filter { !variableName.matches(it) || RESERVED_VARIABLES.any(it::startsWith) }
+        val ignored = prepared.variables.keys.filter { !variableName.matches(it) || (it in RESERVED_VARIABLES || RESERVED_PREFIXES.any(it::startsWith)) }
         if (ignored.isNotEmpty()) log("Ignored variables that would change how preparation runs: ${ignored.sorted().joinToString(", ")}.")
         val environment = buildMap<String, String?> {
             // Owner values first, without names that steer the shell, the loader, Git or the runner; ours always win.
@@ -178,8 +178,10 @@ internal class EnvironmentPreparation(
         private const val MIN_MASKED = 4
         private val STOP_CODES = setOf("execution_fenced", "not_preparing", "preparation_failed")
         private val variableName = Regex("[A-Za-z_][A-Za-z0-9_]{0,127}")
-        /** Prefixes and names the runner's own commands depend on; an owner variable never overrides them. */
-        private val RESERVED_VARIABLES = listOf("PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "LD_", "DYLD_", "GIT_", "GH_", "TEAMCODE_", "XDG_CONFIG_HOME", "SSH_")
+        /** Names the runner's own commands depend on; an owner variable never overrides them. */
+        private val RESERVED_VARIABLES = setOf("PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "XDG_CONFIG_HOME")
+        /** Families that steer the loader, Git, the GitHub CLI, SSH or the runner itself. */
+        private val RESERVED_PREFIXES = listOf("LD_", "DYLD_", "GIT_", "GH_", "TEAMCODE_", "SSH_")
         /** Answers `get` with the token from its own environment; `store` and `erase` do nothing. */
         const val CREDENTIAL_HELPER = "!f() { test \"\$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"\$$TOKEN_VARIABLE\"; }; f"
         private const val MOVE_INTO_PLACE = "mkdir -p \"\$(dirname \"\$2\")\" && { [ ! -e \"\$2\" ] || rmdir \"\$2\"; } && mv \"\$1\" \"\$2\""
