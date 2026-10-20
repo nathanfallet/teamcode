@@ -353,7 +353,7 @@ class KubernetesClusterPort(
      * Resolution happens off the event loop. The check cannot pin the address the HTTP client later dials.
      */
     private suspend fun requireAllowedHost(apiUrl: String) {
-        val host = try { Url(apiUrl).host.removePrefix("[").removeSuffix("]") } catch (_: IllegalArgumentException) { throw ClusterHostNotAllowedException() }
+        val host = try { Url(apiUrl).host.removePrefix("[").removeSuffix("]") } catch (_: Exception) { throw ClusterHostNotAllowedException() }
         val addresses = try { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { resolver(host) } }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (_: Exception) { throw ClusterHostNotAllowedException() }

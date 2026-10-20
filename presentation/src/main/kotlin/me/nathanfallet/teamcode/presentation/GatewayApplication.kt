@@ -53,7 +53,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none';" + live)
             }
             // Runner calls carry the pod's projected token, which the runner routes verify themselves.
-            val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH)
+            // Plain segments only: dot segments, escapes and path parameters never reach another route through this exemption.
+            val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH) && ".." !in path && '%' !in path && ';' !in path
             if (!runnerCall && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
