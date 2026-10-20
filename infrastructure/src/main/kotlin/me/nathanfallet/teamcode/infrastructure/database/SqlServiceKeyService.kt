@@ -20,7 +20,10 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
     override suspend fun create(actor: Principal, memberId: String, name: String, scopes: Set<ServiceScope>, validDays: Int): CreatedServiceKey {
         ServiceKeyService.validate(name, scopes, validDays)
         return database.query {
-            lockTeam(actor.teamId); authorize(this, actor); requireMember(actor, memberId, lock = true)
+            lockTeam(actor.teamId); authorize(this, actor)
+            val role = requireMember(actor, memberId, lock = true)
+            if (ServiceScope.SKILLS_PUBLISH in scopes && role != Role.ADMIN.name)
+                throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can receive the skills:publish scope.")
             if (Tokens.select(Tokens.id).where { (Tokens.memberId eq memberId) and serviceKey() }.count() >= ServiceKeyService.LIMIT)
                 throw TeamFailure("service_key_limit", 409, "Remove an unused service key before creating another.")
             val now = nowMillis()
@@ -48,13 +51,14 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
         member
     }
     private fun authorize(transaction: JdbcTransaction, actor: Principal) { actor.requireInteractive(); requireCurrent(transaction, actor) }
-    private fun requireMember(actor: Principal, id: String, lock: Boolean = false) {
+    /** Returns the eligible member's current role. */
+    private fun requireMember(actor: Principal, id: String, lock: Boolean = false): String {
         if (actor.member.id != id) actor.requireAdmin()
-        val query = Members.select(Members.id).where {
+        val query = Members.select(Members.id, Members.role).where {
             (Members.id eq id) and (Members.teamId eq actor.teamId) and (Members.disabled eq false) and (Members.mustChangePassword eq false)
         }
         if (lock) query.forUpdate()
-        if (query.singleOrNull() == null) throw missing()
+        return query.singleOrNull()?.get(Members.role) ?: throw missing()
     }
     private fun metadata(row: ResultRow) = ServiceKey(row[Tokens.id], row[Tokens.memberId], row[Tokens.device], requireNotNull(readServiceScopes(row[Tokens.serviceScopes])), requireNotNull(row[Tokens.createdAt]), row[Tokens.expiresAt])
     private fun missing() = TeamFailure("not_found", 404, "Service key or eligible member not found.")
