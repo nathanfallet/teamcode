@@ -6,10 +6,24 @@ data class PacingAdvice(val pace: Pace, val maxConcurrent: Int, val minIntervalM
 data class AgentDirective(val id: String, val memberId: String, val advice: PacingAdvice, val createdAtMillis: Long, val expiresAtMillis: Long)
 
 class ForecastHistoryUseCase {
+    /** Curves and rate learning share the same reset, gap and monotonicity boundaries. */
+    fun segments(history: List<AccountQuota>, now: Long): List<List<AccountQuota>> {
+        val sorted = history.filter { it.observedAtMillis in maxOf(0, now - 3_600_000)..now && it.utilization.isFinite() && it.utilization in 0.0..1.0 }
+            .sortedBy { it.observedAtMillis }
+        val latest = sorted.lastOrNull() ?: return emptyList()
+        val output = mutableListOf<MutableList<AccountQuota>>()
+        sorted.filter { it.accountId == latest.accountId && it.window == latest.window }.forEach { sample ->
+            val previous = output.lastOrNull()?.lastOrNull()
+            if (previous == null || sample.resetsAtMillis != previous.resetsAtMillis || sample.utilization < previous.utilization ||
+                sample.observedAtMillis - previous.observedAtMillis !in 1..MAX_QUOTA_OBSERVATION_AGE_MILLIS) output.add(mutableListOf())
+            output.last().add(sample)
+        }
+        return output
+    }
     fun evaluate(history: List<AccountQuota>, now: Long): WindowPacing? {
         val sorted = history.filter { it.observedAtMillis <= now }.sortedBy { it.observedAtMillis }
         val latest = sorted.lastOrNull() ?: return null
-        val sameWindow = sorted.filter { it.resetsAtMillis == latest.resetsAtMillis && it.observedAtMillis >= now - 3_600_000 }
+        val sameWindow = segments(sorted, now).lastOrNull().orEmpty()
         var rate: Double? = null
         if (latest.resetsAtMillis != null && sameWindow.size >= 3 && sameWindow.last().observedAtMillis - sameWindow.first().observedAtMillis >= 60_000) {
             var weighted = 0.0
@@ -56,6 +70,8 @@ class PacingUseCase {
 data class DirectiveDelivery(val directive: AgentDirective, val claimId: String)
 
 interface DirectiveService {
+    /** Informational controller output, including when automatic delivery is disabled. */
+    suspend fun preview(actor: me.nathanfallet.teamcode.domain.team.Principal): AgentDirective? = current(actor)
     suspend fun current(actor: me.nathanfallet.teamcode.domain.team.Principal, sessionId: String? = null): AgentDirective?
     suspend fun claim(actor: me.nathanfallet.teamcode.domain.team.Principal, sessionId: String, stage: String): DirectiveDelivery?
     suspend fun acknowledge(actor: me.nathanfallet.teamcode.domain.team.Principal, id: String, stage: String, sessionId: String? = null, claimId: String? = null)

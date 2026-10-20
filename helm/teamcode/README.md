@@ -4,7 +4,7 @@ This chart follows the structure of the [pkg chart](https://github.com/guimauved
 
 ## Install
 
-The image job runs only after JVM/database tests, Helm checks and both native CI jobs succeed. Pushes to `main` publish to Docker Hub using the repository secret `DOCKER_HUB_PASSWORD` for the `nathanfallet` login; pull requests build without publishing. No registry token belongs in chart values.
+Ordinary main-branch image publication runs after Linux JVM/database and Helm checks succeed. Version tags additionally require the full five-target native and signed installation acceptance; paid native jobs are skipped on ordinary pushes. Pushes to `main` publish to Docker Hub using the repository secret `DOCKER_HUB_PASSWORD` for the `nathanfallet` login; pull requests build without publishing. No registry token belongs in chart values.
 
 The chart defaults to `nathanfallet/teamcode:latest` with `imagePullPolicy: Always`. The CI workflow builds and publishes this image for AMD64 and ARM64 after all verification jobs pass. New pods resolve the latest published image; publishing alone does not restart existing pods. Roll out the Deployment to pick up a new build. An immutable `sha-<commit>` tag can also be selected through `image.tag`. Configure an image pull secret if your Docker Hub repository is private.
 
@@ -46,6 +46,16 @@ helm upgrade --install teamcode ./helm/teamcode \
 helm test teamcode --namespace teamcode
 ```
 
+Versioned GitHub releases include the chart package, with chart version and application version matching the unprefixed tag. Install the `0.1.0` archive without a source checkout:
+
+```sh
+helm upgrade --install teamcode \
+  https://github.com/nathanfallet/teamcode/releases/download/0.1.0/teamcode-0.1.0.tgz \
+  --namespace teamcode --create-namespace -f values.yaml --wait --timeout 10m
+```
+
+Users supply their own namespace, Secret, ingress and database settings; no operator cluster deployment is performed by the publisher. The chart continues to default to `latest`; set `image.tag: "0.1.0"` to pin the matching released server image.
+
 The chart does not issue TLS certificates. Supply the TLS secret using your existing certificate management. For ingress controllers other than NGINX, configure equivalent streaming settings: no response buffering, 2 MiB request bodies, and at least 660-second read/send timeouts. Keep the public origin identical on every replica, without a trailing slash.
 
 The creating pod logs the initial `admin` temporary password exactly once. Find it with the command printed by Helm, sign in at `/dashboard`, and replace it. Administrators create team members; there is no public registration.
@@ -77,6 +87,8 @@ HPA is optional. CPU/memory utilization is an infrastructure signal, separate fr
 ## Backups and upgrades
 
 Back up MySQL **and the exact encryption key**. Test restoration to an isolated installation before relying on backups. Provider refresh ownership must remain exclusive: do not activate a restored copy while the original still refreshes the same accounts.
+
+The [recovery guide and automated restoration acceptance](../../docs/operations.md) describe a quiesced logical checkpoint, credential/access reconciliation and current limits. The acceptance test restores into a new MySQL instance and checks full schema/row equality, encrypted credentials, management HTTP routes and quota/authentication continuity; it does not validate your cluster or backup system.
 
 Application pods have no persistent filesystem state. The MySQL StatefulSet's PVC is retained on uninstall by Kubernetes' default retention behavior; it is not a backup. Do not delete it to fix an application rollout.
 

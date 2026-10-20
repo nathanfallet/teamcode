@@ -84,7 +84,7 @@ class SqlDeviceService(private val database: Database) : DeviceService {
         if (lock) query.forUpdate()
         if (query.singleOrNull() == null) throw missing()
     }
-    private fun visible(actor: Principal, column: Column<String>): Op<Boolean> = if (actor.member.role == Role.ADMIN) Op.TRUE else column eq actor.member.id
+    private fun visible(actor: Principal, column: Column<String>): Op<Boolean> = if (actor.member.role.isAdministrator) Op.TRUE else column eq actor.member.id
     private fun deviceRow(actor: Principal, id: String) = (Devices innerJoin Members).select(Devices.columns).where {
         (Devices.id eq id) and (Members.teamId eq actor.teamId) and visible(actor, Devices.memberId)
     }.singleOrNull() ?: throw missing()

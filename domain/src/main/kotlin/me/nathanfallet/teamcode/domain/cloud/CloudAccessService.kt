@@ -34,7 +34,7 @@ class CloudAccessService(
 
     /** The permissions [member] holds on a session owned by [ownerId] (or on creation, with [ownerId] = the member). */
     suspend fun permissions(teamId: String, member: Member, ownerId: String): Set<CloudPermission> {
-        if (member.role == Role.ADMIN) return CloudPermission.entries.toSet()
+        if (member.role.isAdministrator) return CloudPermission.entries.toSet()
         val policy = store.accessPolicy(teamId)
         var resolvedGroups: Set<String>? = null // Resolved only when a group rule needs it.
         val granted = mutableSetOf<CloudPermission>()

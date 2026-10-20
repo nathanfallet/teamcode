@@ -2,7 +2,21 @@
 
 An open-source, self-hosted model gateway for teams: pooled provider accounts, fair access, predictive capacity management, a web dashboard, and a native Kotlin Multiplatform CLI.
 
-**Early development.** Claude Max and Codex subscription inference, native account import/proxy, team administration, weighted daily budgets, model/effort policies and capacity guidance are implemented. Real Claude Code → Haiku and Codex CLI → GPT-6 Luna acceptance runs have passed through the native proxy and central server. Explicit native model routes and macOS/Linux user service installation are implemented. Cross-provider translation is experimental, disabled by default and outside V1 release acceptance; system services before login and versioned distribution remain in progress. Native Windows runtime and user service acceptance have passed. See [implementation status](docs/status.md) before using a command from the [product roadmap](docs/product.md).
+**Initial release: 0.1.0.** Claude Max and Codex subscription inference, native account import/proxy, team administration, weighted daily budgets, model/effort policies and capacity guidance are implemented. Real Claude Code → Haiku and Codex CLI → GPT-6 Luna acceptance runs have passed through the native proxy and central server. Explicit native model routes and macOS/Linux user service installation are implemented. Cross-provider translation is experimental, disabled by default and outside V1 release acceptance; explicit startup before login and signed native distribution are included. Additional workstation/load/operational validation moves to V2 under the owner decision; see the [handoff](docs/v2-validation-handoff.md). Native Windows runtime and user service acceptance have passed. See [implementation status](docs/status.md) before using a command from the [product roadmap](docs/product.md).
+
+## Install the native CLI
+
+The release pipeline includes [one-command installers for macOS, Linux and Windows](docs/bootstrap.md). Install **0.1.0** from its published release assets:
+
+```sh
+curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.sh | sh
+```
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.ps1').Content))
+```
+
+No JVM is required. The installer prints the stable launcher directory to add to PATH and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
 
 ## Run the team server
 
@@ -21,7 +35,7 @@ java -jar app/build/libs/app-all.jar
 
 Put an HTTPS reverse proxy in front of port 8080, or use `http://localhost:8080` as the public URL for local development. `TEAMCODE_HOST` defaults to loopback. The public URL must match the browser origin for form protection.
 
-On an empty database, TeamCode creates `admin` and prints its random temporary password **once** to the bootstrap log. Sign in at `/dashboard` and change it. Restarting does not print or reset it. There is no public registration, email setup or OAuth requirement for team membership. Administrators create users and receive a one-time temporary password to share privately. Password changes and resets revoke every existing session; disabling or changing a member's role also revokes their sessions. The last active administrator cannot be disabled or demoted.
+On an empty database, TeamCode creates owner account `admin` and prints its random temporary password **once** to the bootstrap log. Sign in at `/dashboard` and change it. Restarting does not print or reset it. There is no public registration, email setup or OAuth requirement for team membership. Administrators create users and receive a one-time temporary password to share privately. Password changes and resets revoke every existing session; disabling or changing a member's role also revokes their sessions. The [last ready owner](docs/team-roles.md) cannot be disabled, demoted or have their password reset; administrators cannot grant ownership or change an owner account. Administrators can also create [groups with cumulative budgets and scoped managers](docs/groups.md); managers can pause/resume admission within their groups without changing global roles or quotas.
 
 ```sh
 teamcode login --server https://teamcode.example.org
@@ -38,7 +52,7 @@ The CLI prompts for username/password, handles required password changes, and sa
 
 ## Service and CI credentials
 
-Create a scoped, expiring key from **Dashboard → Service keys** or `teamcode keys create --name ci --scopes inference,guidance --days 30`. The secret is shown once; store it in your CI secret manager and use `teamcode configure --server ...` with the credential on stdin. Keys share the owner's quotas and cannot administer the server, even when the owner is an administrator. Use `teamcode keys list` and `teamcode keys revoke KEY_ID` from an interactive login. See [permissions, API and automation setup](docs/service-keys.md).
+Create a scoped, expiring key from **Dashboard → Service keys** or `teamcode keys create --name ci --scopes inference,guidance --days 30`. The secret is shown once; store it in your CI secret manager and use `teamcode configure --server ...` with the credential on stdin. Keys share the owner's quotas and cannot administer the server, even when the owner is an administrator. Use `teamcode keys list` and `teamcode keys revoke KEY_ID` from an interactive login. See [permissions, API and automation setup](docs/service-keys.md). Current native launchers also register [agent sessions](docs/agent-sessions.md): inspect them with `teamcode sessions list --json` or **Dashboard → Sessions**, including run budgets and gateway activity.
 
 ## Devices and authentication sessions
 
@@ -53,7 +67,7 @@ teamcode auth sessions revoke SESSION_ID
 teamcode devices revoke DEVICE_ID
 ```
 
-Revoking a device signs out its sessions across replicas. Usage remains shared by member; adding or reconnecting devices does not reset allowances. The non-secret installation identity survives logout, while the credential file is removed. See [device lifecycle and authorization](docs/devices.md). Authentication sessions are separate from the planned agent-run registry.
+Revoking a device signs out its sessions across replicas. Usage remains shared by member; adding or reconnecting devices does not reset allowances. The non-secret installation identity survives logout, while the credential file is removed. See [device lifecycle and authorization](docs/devices.md). Authentication sessions are separate from the [agent-run registry](docs/agent-sessions.md).
 
 ## Kubernetes
 
@@ -65,7 +79,11 @@ Administrators can configure ordered model replacements and fallbacks in **Dashb
 
 ## Local service
 
-After login, `teamcode service install` starts a local proxy automatically at user login on macOS, Linux and Windows. `teamcode run claude -- …` and `teamcode run codex -- …` reuse the authenticated service when available. Use `service status`, `service logs`, `service stop`, `service start`, `service restart` or `service uninstall` to manage it. Installation requires a stable native binary path and preserves your saved login on uninstall. See [service behavior and verification](docs/services.md); Native Windows Task Scheduler acceptance has passed; actual workstation reboot/logon checks and startup before login remain planned. See the [Windows workstation guide](docs/windows.md).
+After login, `teamcode service install` starts a local proxy automatically at user login on macOS, Linux and Windows. `teamcode run claude -- …` and `teamcode run codex -- …` reuse the authenticated service when available. Use `service status`, `service logs`, `service stop`, `service start`, `service restart` or `service uninstall` to manage it. Installation requires a stable native binary path and preserves your saved login on uninstall. See [service behavior and verification](docs/services.md); Native Windows Task Scheduler acceptance has passed; `teamcode service install --at-boot` (`--system`) enables startup before login with the OS authorization described in that guide. Extra real-workstation reboot/logon checks are V2 follow-up. See the [Windows workstation guide](docs/windows.md).
+
+## Native updates
+
+Managed installations support signed `teamcode update` and offline `teamcode update --rollback`. Automatic installation is off by default; opt in with `teamcode update --automatic on`, inspect it with `--automatic status`, or disable it with `--automatic off`. A separate current-user job uses the existing installer and defers activation while an agent holds its activity lease. Notifications are configured independently with `--notifications on/off/status`. See [automatic behavior and platform evidence](docs/automatic-updates.md). Versioned publication is gated by the release workflow.
 
 ## Try the transport fixture
 
@@ -95,6 +113,8 @@ The proxy accepts authenticated JSON `POST /v1/messages` and `POST /v1/responses
 
 ## Verification
 
+See the [end-to-end testing playbook](docs/testing.md) for native, real-account/client, replica, hook, service and signed-distribution procedures, expected assertions and evidence limits.
+
 ```sh
 python3 scripts/check-module-graph.py
 ./gradlew :api:jvmTest :client:jvmTest :domain:test :infrastructure:test :presentation:test :cli:jvmTest
@@ -103,7 +123,7 @@ python3 scripts/smoke-native.py \
   --jar app/build/libs/app-all.jar
 ```
 
-The smoke test starts and stops only its own processes, uses an isolated configuration directory and synthetic credentials, and checks private file permissions, authentication and progressive SSE. Native targets are declared for desktop macOS/Linux/Windows. Native runtime checks pass on macOS, Linux and Windows, including configuration, TLS, streaming, agent launchers and user services. MySQL integration tests require Docker. `scripts/smoke-team.py` verifies the team server with its own isolated MySQL and the native CLI. CI verifies the JVM and runs native transport and service checks on macOS/Linux/Windows; it does not use provider credentials. Each platform uploads its development binary only after its acceptance tests pass.
+The smoke test starts and stops only its own processes, uses an isolated configuration directory and synthetic credentials, and checks private file permissions, authentication and progressive SSE. Native targets are declared for desktop macOS/Linux/Windows. Native runtime checks pass on macOS, Linux and Windows, including configuration, TLS, streaming, agent launchers and user services. MySQL integration tests require Docker. `scripts/smoke-team.py` verifies the team server with its own isolated MySQL and the native CLI. Ordinary CI runs JVM/replica tests, Helm checks and Docker on Linux. Native transport/service and signed installation checks across macOS/Linux/Windows run only on version tags or explicit manual full validation; see [distribution and CI controls](docs/distribution.md). CI does not use provider credentials. Each native platform uploads its development binary only after its acceptance tests pass.
 
 ## Architecture
 
@@ -122,7 +142,7 @@ Read [architecture](docs/architecture.md), [product](docs/product.md), [roadmap]
 
 Interactive administrators can inspect **Dashboard → Audit** or `GET /api/v1/audit` for paginated administrative and authentication metadata. Service/CI keys cannot read this journal. See [audit coverage and API pagination](docs/audit.md).
 
-The dashboard exposes member weights, per-member concurrency and optional hard daily caps, pool budgets, observed provider quota windows, model/effort restrictions and current agent guidance. Daily credits are an internal team budget, not a conversion of Max subscription percentages. With weights 5/5/1 and a budget of 1,100 credits, members receive 500/500/100; changing weights does not erase spend. Reservations and actual usage survive restarts. Separate pool identifiers isolate accounts for protected members.
+The dashboard exposes member weights, per-member concurrency and optional hard daily caps, pool budgets, observed provider quota windows, model/effort restrictions and current agent guidance. Daily credits are an internal team budget, not a conversion of Max subscription percentages. With weights 5/5/1 and a budget of 1,100 credits, members receive 500/500/100; changing weights does not erase spend. Reservations and actual usage survive restarts. Administrators can grant [temporary daily allocations](docs/budget-overrides.md) with reasons, expiry and retained history; these never reset spend or bypass pool/group/run limits. Separate pool identifiers isolate accounts for protected members. Administrators can [review unknown usage](docs/usage-reconciliation.md) and reconcile it from request-specific provider evidence; lease expiry never refunds a charge.
 
 Default model policy permits `claude-*` and `gpt-*` (existing saved policies are not broadened) and denies `*fable*`. Administrators can set allowed/denied patterns and reasoning efforts in `/dashboard/models`. Requests are rejected before dispatch when a policy is violated. No effort is silently replaced.
 
@@ -182,4 +202,4 @@ The subscription adapter uses ChatGPT's Codex endpoint, never the metered OpenAI
 
 To exercise the actual Codex CLI instead of Claude in the opt-in acceptance script, add `--skip-claude --codex-model gpt-6-luna`. Model availability depends on the subscription. Native Codex-to-Codex transport is verified; Claude-to-Codex translation requires the experimental settings flag and the documented compatible profile.
 
-Versioned native assets are being prepared with shared CLI/server build identity, five-target runtime acceptance and a checked release manifest. See [native distribution and remaining update/rollback work](docs/distribution.md). No `teamcode update` command or published stable CLI release is currently claimed.
+Native `install`, `update --check`, managed `update` and offline `update --rollback` are implemented, with signed metadata, an immutable launcher and service-aware switching. Managed services/agent launches check signed release metadata in the background with a shared daily cache; use `teamcode update --notifications off` to disable notifications. Automatic installation is opt-in with `teamcode update --automatic on`. The versioned workflow gates publication on five-target installation/bootstrap/update checks; extended real-workstation validation is tracked for V2. See [native distribution, commands and remaining gates](docs/distribution.md).

@@ -1,0 +1,1 @@
+CREATE INDEX run_member_request ON agent_runs (team_id, member_id, last_request_at);

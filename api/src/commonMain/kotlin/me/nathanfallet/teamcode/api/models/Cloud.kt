@@ -149,18 +149,18 @@ class SaveCloudClusterRequest(
 }
 
 /**
- * Persistent administrator settings. `pausedRetentionDays = null` keeps paused workspaces indefinitely.
- * The transfer fields are always present in responses; in a `PUT`, an absent (null) transfer field keeps the stored value,
- * so a client written before transfers existed does not reset the policy.
+ * Persistent administrator settings; the retention and limit fields are required so a partial update cannot reset the others.
+ * `pausedRetentionDays = null` keeps paused workspaces indefinitely. The transfer fields are always present in responses;
+ * in a `PUT`, an absent (null) transfer field keeps the stored value, so a client written before transfers existed does not reset the policy.
  */
 @Serializable
 data class CloudSettingsView(
-    val pausedRetentionDays: Int? = 30,
-    val failedWorkspaceRetentionDays: Int = 7,
-    val maxRunningSessionsPerMember: Int = 2,
-    val maxRetainedSessionsPerMember: Int = 20,
+    val pausedRetentionDays: Int?,
+    val failedWorkspaceRetentionDays: Int,
+    val maxRunningSessionsPerMember: Int,
+    val maxRetainedSessionsPerMember: Int,
     /** Days transcript events and finished messages are kept; null keeps them indefinitely. */
-    val transcriptRetentionDays: Int? = 30,
+    val transcriptRetentionDays: Int?,
     /** `offer` (owners may offer their sessions; the recipient accepts) or `disabled` (administrators only). */
     val memberTransfers: String? = null,
     /** Days a recipient has to accept an offer (1 to 30). */

@@ -18,3 +18,13 @@ dependencies {
     testRuntimeOnly(libs.junit)
 }
 tasks.test { useJUnitPlatform() }
+
+// Local, content-free UI inspection; never connects to a provider or operator database.
+tasks.register<JavaExec>("previewForecastDashboard") {
+    group = "verification"
+    description = "Render the real forecast dashboard with synthetic observations into build/preview/forecasts.html"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("me.nathanfallet.teamcode.presentation.ForecastPreviewKt")
+    args(layout.buildDirectory.file("preview/forecasts.html").get().asFile.absolutePath)
+}
