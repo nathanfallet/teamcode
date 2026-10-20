@@ -151,4 +151,4 @@ The `api` and `client` modules are published to Maven Central for reuse in exter
 ./gradlew --no-daemon -PteamcodeVersion=X.Y.Z :api:publishToMavenCentral :client:publishToMavenCentral
 ```
 
-This uploads a deployment that is then released from the Central Portal. Check locally with `:api:publishToMavenLocal :client:publishToMavenLocal`; the publications are signed only when signing properties are present.
+This uploads a deployment that is then released from the Central Portal. Check locally with `:api:publishToMavenLocal :client:publishToMavenLocal`.
