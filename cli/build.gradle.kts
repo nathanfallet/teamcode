@@ -78,6 +78,9 @@ kotlin {
         // Shared POSIX implementation compiled with each platform's own process interop.
         macosMain.get().kotlin.srcDir("src/posixMain/kotlin")
         linuxMain.get().kotlin.srcDir("src/posixMain/kotlin")
+        // Tests that need Unix sockets: the cloud runner only ever runs in a Linux pod, never on Windows.
+        macosTest.get().kotlin.srcDir("src/posixTest/kotlin")
+        linuxTest.get().kotlin.srcDir("src/posixTest/kotlin")
         commonMain { kotlin.srcDir(generateReleaseTrust) }
         commonMain.dependencies {
             implementation(projects.client)

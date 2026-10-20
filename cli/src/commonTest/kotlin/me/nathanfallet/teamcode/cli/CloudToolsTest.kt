@@ -110,7 +110,7 @@ class CloudToolsTest {
         sync(root, listOf(bundle), process = { process = it })()
         assertEquals(big, fs.read(root.resolve("big/data/big.txt")) { readUtf8() })
         assertEquals(3, process!!.received.count { it.path == "data/big.txt" })
-        assertTrue(process!!.received.filter { it.path == "data/big.txt" }.all { (it.data!!.length) < 400_000 }, "Each line stays small")
+        assertTrue(process.received.filter { it.path == "data/big.txt" }.all { (it.data!!.length) < 400_000 }, "Each line stays small")
         fs.deleteRecursively(root.parent!!)
     }
 
