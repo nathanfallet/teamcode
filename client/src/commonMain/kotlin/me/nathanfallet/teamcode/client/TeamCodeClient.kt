@@ -12,6 +12,9 @@ import io.ktor.client.plugins.resources.Resources
 import io.ktor.client.plugins.resources.get
 import io.ktor.client.request.*
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import me.nathanfallet.teamcode.api.Serialization
@@ -279,6 +282,31 @@ class TeamCodeClient(
         return response.body()
     }
 
+    /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
+    suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
+
+    /**
+     * Relays one MCP JSON-RPC message to the gateway endpoint of an assigned [server] and returns the gateway's status
+     * and bounded JSON body unchanged, including JSON-RPC errors, so the agent sees what the gateway decided.
+     */
+    suspend fun forwardMcp(server: String, body: ByteArray, protocolVersion: String? = null): McpRelayResponse {
+        require(MCP_SERVER_NAME.matches(server)) { "Invalid MCP server name." }
+        return http.preparePost("$origin/mcp/$server") {
+            contentType(ContentType.Application.Json)
+            accept(ContentType.Application.Json)
+            protocolVersion?.let { header("MCP-Protocol-Version", it) }
+            authenticate()
+            // The gateway bounds every upstream call; this only stops a stalled connection.
+            timeout { requestTimeoutMillis = 15 * 60_000 }
+            setBody(body)
+        }.execute { response ->
+            // Streamed and bounded: the response is never buffered whole before the size check.
+            val bytes = response.bodyAsChannel().readRemaining(MCP_RESPONSE_LIMIT + 1L).readByteArray()
+            if (bytes.size > MCP_RESPONSE_LIMIT) throw TeamCodeException(502, "The MCP gateway response exceeds the limit.")
+            McpRelayResponse(response.status.value, bytes)
+        }
+    }
+
     /** The body must be consumed inside [receive]; no full response is buffered by this SDK. */
     suspend fun forwardMessages(
         body: ByteArray,
@@ -371,7 +399,13 @@ class TeamCodeClient(
 
     companion object {
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
+        /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
+        val MCP_SERVER_NAME = Regex("[a-z0-9][a-z0-9._-]{0,63}")
+        private const val MCP_RESPONSE_LIMIT = 65 * 1024 * 1024 // The largest gateway response limit plus its JSON-RPC envelope.
     }
 }
 
 class TeamCodeException(val statusCode: Int, message: String, val code: String? = null) : Exception(message)
+
+/** A gateway MCP response relayed as is: HTTP status and JSON body (empty for an accepted notification). */
+class McpRelayResponse(val status: Int, val body: ByteArray)

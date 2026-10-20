@@ -27,7 +27,7 @@ private class KeyList : SuspendingCliktCommand(name = "list") {
 private class KeyCreate : SuspendingCliktCommand(name = "create") {
     private val member by option("--member", help = "Another member ID; requires administrator access.")
     private val name by option("--name").required()
-    private val scopes by option("--scopes", help = "Comma-separated inference,usage:read,guidance permissions.").default("inference")
+    private val scopes by option("--scopes", help = "Comma-separated inference,usage:read,guidance,mcp permissions.").default("inference")
     private val days by option("--days", help = "Lifetime in days, 1–90.").int().default(30)
     private val json by option("--json", help = "Return the one-time credential and metadata as JSON.").flag()
     override suspend fun run() {

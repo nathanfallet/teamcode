@@ -115,4 +115,39 @@ class LocalProxyTest {
             assertEquals(HttpStatusCode.NotFound, client.post("/_teamcode/workloads/urgent/v1/messages") { bearerAuth(localToken) }.status)
         } finally { sdk.close() }
     }
+
+    @Test fun `MCP relay forwards each server to its own gateway endpoint with the TeamCode credential`() = testApplication {
+        val forwarded = mutableListOf<Triple<String, String?, String>>()
+        val sdk = TeamCodeClient("https://team.example", { "server-token" }) { config -> HttpClient(MockEngine { request ->
+            forwarded += Triple(request.url.encodedPath, request.headers[HttpHeaders.Authorization], (request.body as io.ktor.http.content.OutgoingContent.ByteArrayContent).bytes().decodeToString())
+            assertEquals("2025-06-18", request.headers["MCP-Protocol-Version"])
+            when (request.url.encodedPath) {
+                "/mcp/revoked" -> respond("", HttpStatusCode.Unauthorized)
+                "/mcp/tracker" -> respond("""{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+                else -> respond("""{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Unknown MCP server."}}""", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+        }) { config(this) } }
+        application { localProxy(sdk, localToken, maximumBodyBytes = 256) }
+        try {
+            suspend fun relay(server: String, body: String = """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""", token: String? = localToken, origin: String? = null) = client.post("/mcp/$server") {
+                token?.let { bearerAuth(it) }; origin?.let { header(HttpHeaders.Origin, it) }
+                header("MCP-Protocol-Version", "2025-06-18"); contentType(ContentType.Application.Json); setBody(body)
+            }
+            val listed = relay("tracker")
+            assertEquals(HttpStatusCode.OK, listed.status)
+            assertEquals("""{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}""", listed.bodyAsText())
+            assertEquals(HttpStatusCode.NotFound, relay("wiki").status, "The gateway's refusal is relayed as is")
+            assertEquals(HttpStatusCode.BadGateway, relay("revoked").status, "A TeamCode sign-in failure must not look like an MCP OAuth challenge")
+            assertEquals(listOf("/mcp/tracker", "/mcp/wiki", "/mcp/revoked"), forwarded.map { it.first })
+            assertTrue(forwarded.all { it.second == "Bearer server-token" && it.third.contains("tools/list") })
+            assertEquals(HttpStatusCode.Unauthorized, relay("tracker", token = null).status)
+            assertEquals(HttpStatusCode.Unauthorized, relay("tracker", token = "server-token").status)
+            assertEquals(HttpStatusCode.Forbidden, relay("tracker", origin = "https://attacker.example").status)
+            assertEquals(HttpStatusCode.NotFound, relay("Bad.Name").status)
+            assertEquals(HttpStatusCode.PayloadTooLarge, relay("tracker", body = "x".repeat(257)).status)
+            assertEquals(HttpStatusCode.MethodNotAllowed, client.get("/mcp/tracker") { bearerAuth(localToken) }.status)
+            assertEquals(HttpStatusCode.NotFound, client.post("/mcp") { bearerAuth(localToken); contentType(ContentType.Application.Json); setBody("{}") }.status)
+            assertEquals(3, forwarded.size, "Rejected requests must not reach the server")
+        } finally { sdk.close() }
+    }
 }
