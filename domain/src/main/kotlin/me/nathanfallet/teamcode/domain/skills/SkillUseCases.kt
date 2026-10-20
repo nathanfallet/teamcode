@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.domain.team.*
 fun Principal.requireSkillPublisher() {
     if (serviceScopes == null) return requireAdmin()
     requireScope(ServiceScope.SKILLS_PUBLISH)
-    if (member.role != Role.ADMIN) throw TeamFailure("forbidden", 403, "Skill publication requires a key owned by an administrator.")
+    if (!member.role.isAdministrator) throw TeamFailure("forbidden", 403, "Skill publication requires a key owned by an administrator.")
 }
 
 /** Reading one's own delivery: an interactive member, or a service key with `skills:read`. Others require an administrator. */

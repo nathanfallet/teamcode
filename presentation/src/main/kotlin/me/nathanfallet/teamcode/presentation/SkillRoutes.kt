@@ -120,7 +120,7 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
     val store = skills.manage
     get("/dashboard/skills") {
         val actor = call.principal
-        if (actor.member.role != Role.ADMIN) return@get call.respondRedirect("/dashboard/members/${actor.member.id}/skills")
+        if (!actor.member.role.isAdministrator) return@get call.respondRedirect("/dashboard/members/${actor.member.id}/skills")
         val rows = store.catalog(actor).joinToString("") { skill ->
             """<tr><td><a href="/dashboard/skills/${escape(skill.name)}">${escape(skill.name)}</a></td><td>${skill.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td>${if (skill.retired) "Retired" else "Active"}</td><td><small>${date(skill.updatedAt)}</small></td></tr>"""
         }
