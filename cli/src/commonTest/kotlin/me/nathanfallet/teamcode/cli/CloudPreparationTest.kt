@@ -98,12 +98,15 @@ class CloudPreparationTest {
 
     @Test fun ownerVariablesNeverSteerTheRunnersOwnCommands() = runTest {
         val hostile = RunnerEnvironmentView(recipe, RunnerGitIdentityView("o", "o@example.test"),
-            mapOf("HOME" to "/tmp/x", "PATH" to "/tmp/bin", "LD_PRELOAD" to "/tmp/x.so", "GIT_CONFIG_COUNT" to "1", "GIT_CONFIG_KEY_0" to "core.sshCommand", "BAD=NAME" to "x", "NPM_TOKEN" to "kept-value"),
+            mapOf("HOME" to "/tmp/x", "PATH" to "/tmp/bin", "LD_PRELOAD" to "/tmp/x.so", "GIT_CONFIG_COUNT" to "1", "GIT_CONFIG_KEY_0" to "core.sshCommand", "BAD=NAME" to "x", "NPM_TOKEN" to "kept-value", "ENVIRONMENT" to "staging", "HOME_DIR" to "/srv", "PATH_TO_CONFIG" to "/etc/x", "SHELL_THEME" to "dark"),
             emptyList(), RunnerGitHubView("not_linked"))
         val shell = Shell(mutableSetOf("/workspace/api"))
         assertTrue(EnvironmentPreparation(Calls { hostile }, shell, sleep = {}).run())
         val environment = shell.calls.first().environment
         assertEquals("kept-value", environment["NPM_TOKEN"])
+        // Only the exact reserved names and the real families are dropped, not every name that merely starts with them.
+        assertEquals("staging", environment["ENVIRONMENT"]); assertEquals("/srv", environment["HOME_DIR"])
+        assertEquals("/etc/x", environment["PATH_TO_CONFIG"]); assertEquals("dark", environment["SHELL_THEME"])
         for (name in listOf("HOME", "PATH", "LD_PRELOAD", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "BAD=NAME")) assertFalse(name in environment, name)
     }
 

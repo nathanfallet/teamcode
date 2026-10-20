@@ -53,7 +53,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none';" + live)
             }
             // Runner calls carry the pod's projected token, which the runner routes verify themselves.
-            val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH)
+            // Plain segments only: dot segments, escapes and path parameters never reach another route through this exemption.
+            val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH) && ".." !in path && '%' !in path && ';' !in path
             // GitHub's redirect back to the dashboard carries no session cookie (SameSite=Strict); the route checks its own state.
             val githubCallback = github != null && path == GITHUB_CALLBACK_PATH
             if (!runnerCall && !githubCallback && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
