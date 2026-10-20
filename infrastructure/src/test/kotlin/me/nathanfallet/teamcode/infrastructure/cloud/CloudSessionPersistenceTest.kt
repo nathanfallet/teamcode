@@ -315,7 +315,8 @@ class CloudSessionPersistenceTest {
         val page = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 2))
         val next = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 50, beforeId = page.nextBeforeId))
         assertTrue(next.sessions.none { it.id in page.sessions.map(CloudSession::id) })
-        assertEquals(8, page.sessions.size + next.sessions.size)
+        // Includes the deleted session created by the `cloud:*` keys step.
+        assertEquals(9, page.sessions.size + next.sessions.size)
     }
 
     private suspend fun failureModesAndEarlyCheckpoint(ra: Replica, rb: Replica, admin: Principal, profile: CloudProfile) {
