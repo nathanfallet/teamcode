@@ -12,6 +12,8 @@ The API module generates `BuildInfo.VERSION` from the Gradle project version. Bo
 
 Ordinary main pushes and pull requests run JVM/replica tests, Helm checks and the multi-architecture Docker build on Linux. Main pushes publish the server image after JVM and Helm pass, independently of native CLI validation. They do not schedule macOS, Windows, native cross-build, bundle-signing or native installation jobs.
 
+The image is built by the Ktor Gradle plugin (Jib), not a Dockerfile: `./gradlew :app:buildImage -PimagePlatforms=arm64` writes `app/build/jib-image.tar` for `docker load` (a tarball holds one platform), and `:app:publishImage` pushes the amd64/arm64 manifest with `DOCKER_HUB_USERNAME`/`DOCKER_HUB_PASSWORD` in the environment. `-PimageTags=a,b` sets the tags (default `latest`).
+
 Full native validation runs only for unprefixed version tags such as `0.1.0` or an explicit **Actions → Build → Run workflow → full_validation** selection (unchecked by default). For example, `gh workflow run build.yml --ref main -f full_validation=true` opts into the paid runners; omit that input for the regular Linux-only checks. Batch native changes and request this matrix deliberately before a release candidate, rather than on every commit. A selected full validation must pass its signed installation matrix before Docker publication.
 
 A manual full validation can additionally set `validation_version=0.1.0` to compile that exact stable candidate before a tag exists. With `publish_release=false` (the default), it produces acceptance artifacts without creating a tag/release or pushing an image. Snapshot candidates exercise automatic prerelease refusal instead. Ordinary push/PR builds remain snapshots, and tag builds always use the exact unprefixed tag.

@@ -14,6 +14,47 @@ Use [progress](progress.md), [detailed evidence](status.md) and the [TeamClaude 
 
 Use the [end-to-end testing playbook](testing.md) for prerequisites, native build commands, isolated real-account import/upsert, tiny Claude/Codex prompts, real coding tasks, dispatch/usage evidence, hooks/browser fixtures, services and signed distribution checks. It distinguishes actual subscriptions from synthetic upstreams and records what each method does not establish.
 
+## Validation log
+
+Per-section result of the post-release pass of 2026-10-20 (source `1726630`, the head of `main` after `0.1.0`; macOS 27.0.1 ARM64, JDK 21, Docker Desktop, Claude Code 2.1.303, Codex 0.163.0). Every result is **synthetic** (no subscription requests) unless stated. Anything not listed as passed is not validated. Commands are listed after the table.
+
+| Section | State | Evidence and limits |
+| --- | --- | --- |
+| 1. Boot and lifecycle | Partly validated | Default-user `smoke-service.py` passes natively on macOS ARM64. `--at-boot` could not run: no `sudo -n` authorization, so the root LaunchDaemon, actual boot, logout, offline recovery and locked-home scenarios are **not validated**; `service print --at-boot` renders a non-root headless manifest. Linux and Windows boot/password scenarios are **not validated** (no such host). |
+| 2. Native clients | Not validated | Needs an explicitly authorized provider configuration and a live Codex browser login; neither was provided. Provider-free native run/launcher smokes pass. Quota-exhaustion failover, Codex Windows hooks and subagent fan-out are not validated. |
+| 3. Scheduling and performance | Not validated | The controlled two-replica `FairSchedulingHttpTest` passes inside `:app:test`. Sustained multi-replica workloads, latency/memory/SQL cost measurements and SLOs need a purpose-built bounded benchmark and are not done. |
+| 4. Predictive control and hooks | Partly validated | Real Claude 2.1.303 and Codex 0.163.0 guidance smokes, agent-run registry and the live forecast browser fixture pass on macOS. Real Codex on Windows, outside-proxy spend replay, forecast-error measurement and fan-out are not validated. |
+| 5. Administration and audit | Partly validated | Team, device, replica and full-database restore acceptance pass. The upgrade/rollback procedure is now written in [operations](operations.md#rolling-upgrade-and-rollback) (not run on a cluster). Role-change walkthrough, CSRF/escaping review and audit-coverage review are not done. |
+| 6. Distribution | Partly validated | Workflow 39344895836 conclusions and the 11 release assets were inspected; the released chart renders and passes `check-helm.py` for bundled and external MySQL, including `image.tag=0.1.0`; the public `install.sh` installs 0.1.0 on a clean macOS ARM64 home and into a custom root with spaces and Unicode. The scripted `smoke-installation.py`, `smoke-release-verification.py` and `smoke-automatic-updates.py` need the publisher-signed bundles of the full workflow and were not re-run locally (their CI runs are the evidence). No second release exists, so cross-version update/rollback, Intel macOS, Linux and PowerShell 5.1/7 public-download installs are not validated here. |
+
+Commands (from the repository root; `$B` is `cli/build/bin/macosArm64/releaseExecutable/teamcode.kexe`, `$J` is `app/build/libs/app-all.jar`):
+
+```sh
+python3 scripts/check-module-graph.py
+python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'
+python3 -m unittest discover -s scripts -p 'test_release_*.py'
+./gradlew --no-daemon :api:jvmTest :client:jvmTest :domain:test :infrastructure:test \
+  :presentation:test :cli:jvmTest :app:test :app:buildFatJar \
+  :cli:linkReleaseExecutableMacosArm64 :cli:macosArm64Test           # BUILD SUCCESSFUL in 8m 43s
+python3 scripts/smoke-native.py --binary "$B" --jar "$J"
+python3 scripts/smoke-run.py --binary "$B" --jar "$J"
+python3 scripts/smoke-queued-cancel.py --binary "$B"
+python3 scripts/smoke-devices.py --binary "$B"
+python3 scripts/smoke-hook.py --binary "$B"
+python3 scripts/smoke-team.py --binary "$B" --jar "$J"
+python3 scripts/smoke-replicas.py --jar "$J"
+python3 scripts/smoke-service.py --binary "$B"                       # passes
+python3 scripts/smoke-service.py --binary "$B" --at-boot             # refused: no sudo -n
+python3 scripts/smoke-claude-guidance.py --binary "$B" --claude ~/.local/bin/claude
+python3 scripts/smoke-codex-guidance.py --binary "$B" --codex ~/.local/bin/codex
+./gradlew --no-daemon :app:smokeAgentRuns -PteamcodeCliBinary="$B" :app:smokeForecastBrowser
+python3 scripts/check-helm.py                                        # also against the downloaded teamcode-0.1.0.tgz
+curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.sh | sh   # empty HOME
+teamcode install --version=0.1.0 --root "<private dir with spaces and non-ASCII>"
+```
+
+All of the above exited 0 except the `--at-boot` fixture, which exited 1 on its own `sudo -n` precondition and therefore tested nothing. The executable was built from `1726630` (reporting `0.1.0-SNAPSHOT`); the installed public binaries report `0.1.0`. Smoke logs are local, not portable evidence.
+
 ## 1. Boot startup and workstation lifecycle
 
 Implementation: `teamcode service install --at-boot` (`--system` alias). macOS uses a root-owned LaunchDaemon that drops to the configuration owner's username; Linux enables user-manager lingering; Windows uses a least-privilege boot-triggered task with password logon. Windows keeps the password in Task Scheduler, not TeamCode configuration. Default installation remains user-logon startup. See [service setup](services.md) and [Windows](windows.md).
