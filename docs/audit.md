@@ -27,20 +27,28 @@ The API returns at most 50 events, newest identifier first. Response shape (even
 
 ## Current coverage
 
+- Ownership grants/removal and one-time legacy ownership migration (`member.owner_granted`, `member.owner_removed`, `member.owner_migrated`); [recovery and role rules](team-roles.md).
 - First administrator creation (`member.bootstrap`), successful login/logout, password replacement/reset, member creation and access changes.
 - Device registration/rename/revocation and explicit authentication-session revocation.
 - Service/CI credential creation and revocation, including self-revocation through logout.
 - Account enrollment and credential replacement, operator metadata configuration, access-only activation and refresh-ownership handover.
 - Member allowance/concurrency/weight policy, pool budgets, model/effort/experimental settings and routing rule changes.
+- Group creation/policy/archive changes and assignments/removal/pause/resume. Assignment event subjects use `groupId/memberId`; the metadata field supports 100 characters. Group writes and their audit event commit together under the team lock. See [groups](groups.md).
+- Local agent-launch start/end and run policy changes (`run.started`, `run.ended`, `run.policy_updated`); no per-heartbeat journal entry.
+- Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`).
 
 Account writes and their audit event commit in the same team-locked transaction. The write names either an authenticated principal or an explicit trusted system operation. Current interactive administrator permissions are checked again after provider identity verification and before any write or idempotency replay is returned. Revocation during a remote verification therefore prevents the later mutation. Repeating the same enrollment operation does not append a duplicate event; conflicting or denied writes append none. Repeating an unchanged handover state also appends none.
 
 Existing events remain readable after the additive index migration; historical unaudited operations are not reconstructed. Upgrade every replica before relying on complete attribution and account-write authorization fencing, because older binaries do not enforce this new path.
 
-This is an administrative/authentication journal, not the inference request ledger. Existing request/settlement metadata and directive receipts remain separate. Automatic refresh, every failed login and every automatic session expiry/rotation are not individually journaled here. Cascading session revocations are represented by their triggering password/member/device event. Group/role expansion, agent-run administration, retention/export and operational audit coverage remain V1 acceptance work; this page does not claim a complete compliance archive.
+This is an administrative/authentication journal, not the inference request ledger. Existing request/settlement metadata and directive receipts remain separate. Automatic refresh, every failed login and every automatic session expiry/rotation are not individually journaled here. Cascading session revocations are represented by their triggering password/member/device event. Temporary budget overrides have linked retained grant/revocation history and metadata-only journal events; retention/export and operational audit coverage remain V1 acceptance work; this page does not claim a complete compliance archive.
 
 ## Reference and verification
 
 TeamClaude's `src/config-ops.js`, `test/import-credentials.test.js` and `test/server-account-controls.test.js` remain the reference for account metadata controls and local credential import. TeamCode retains verified identity-based updates and metadata preservation while adding authenticated team attribution, shared transactions and cross-replica revocation checks. TeamClaude's local configuration hooks do not provide this shared team journal.
 
 `AccountAuditPersistenceTest` uses real MySQL and two independent pools to exercise enrollment/reimport/idempotency, metadata/handover events and revocation during delayed provider verification. `AuditPersistenceTest` checks bounded pagination across concurrent appends, team isolation, current role/scope/expiry checks and restart-compatible migrations. `AuditRoutesTest` covers the typed SDK, administrator-only API/dashboard access, malformed cursors, escaped content and private-cache headers. The packaged-server/native-team smoke additionally checks journal persistence across server restart and native logout. These fixtures make no real provider requests.
+
+Temporary daily allocations record `budget_override.granted`, `.superseded`, `.revoked` and `.pool_changed` with a `memberId/overrideId` subject. Administrative [override history](budget-overrides.md) retains allocation, expiry, actors and reasons; the shared journal does not copy those user-supplied reasons. Expiry follows the recorded deadline without a periodic event.
+
+`usage.reconciled` records the request/reservation UUID. Its [retained reconciliation record](usage-reconciliation.md) holds original attribution/charge, verified-credit attestation, provider correlation, evidence reference, reason, actor and time. The journal does not copy evidence content; inference bodies and credentials are never collected. An identical retry emits no second event, and quota percentages or lease expiry never trigger an automatic refund.

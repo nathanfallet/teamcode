@@ -13,7 +13,7 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
         principal.requireReady()
         principal.requireInteractive()
         if (onBehalfOf == null || onBehalfOf == principal.member.id) return CloudActor(principal, principal.member.id)
-        if (principal.member.role != Role.ADMIN)
+        if (!principal.member.role.isAdministrator)
             throw TeamFailure("on_behalf_forbidden", 403, "Only an administrator can act on behalf of another member.")
         val target = store.member(principal.teamId, onBehalfOf)
         if (target == null || target.disabled || target.passwordChangeRequired)
@@ -26,7 +26,7 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
         validate(draft)
         val profile = store.profile(principal.teamId, draft.profileId) ?: throw missingProfile()
         val owner = store.member(principal.teamId, actor.effectiveMemberId) ?: throw missingProfile()
-        if (owner.role != Role.ADMIN && owner.id !in profile.assignedMemberIds) throw missingProfile()
+        if (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds) throw missingProfile()
         val spec = profile.spec
         val image = draft.image?.also { requested ->
             if (requested != spec.image && spec.allowedImageOverrides.none { matchesImagePattern(it, requested) })
@@ -103,12 +103,14 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
         if (owner == null || owner.disabled || owner.passwordChangeRequired)
             throw TeamFailure("owner_unavailable", 403, "The session owner is disabled or has not completed password setup.")
         val profile = store.profile(principal.teamId, session.profileId)
-        if (profile == null || (owner.role != Role.ADMIN && owner.id !in profile.assignedMemberIds))
+        if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds))
             throw TeamFailure("profile_unassigned", 403, "The session owner is no longer assigned to this profile.")
         return transition(principal.teamId, id) { current ->
             val now = store.now()
             when {
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.state == CloudSessionState.PAUSING ->
+                    throw TeamFailure("session_pausing", 409, "The session is still pausing. Resume it once the pause has finished.")
                 current.desiredState == DesiredState.RUNNING && current.resumeBlocked == null -> null
                 else -> CloudTransition(
                     current.copy(desiredState = DesiredState.RUNNING, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, updatedAt = now),
@@ -133,7 +135,7 @@ class CloudSessionService(private val store: CloudSessionStore, private val tran
     }
 
     private fun visible(principal: Principal, session: CloudSession?): CloudSession {
-        if (session == null || (session.ownerId != principal.member.id && principal.member.role != Role.ADMIN)) throw missing()
+        if (session == null || (session.ownerId != principal.member.id && !principal.member.role.isAdministrator)) throw missing()
         return session
     }
 

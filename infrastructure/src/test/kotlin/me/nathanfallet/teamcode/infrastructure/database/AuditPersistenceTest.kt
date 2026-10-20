@@ -57,9 +57,9 @@ class AuditPersistenceTest {
                 failure("credential_scope") { service.list(credential) }
                 // Stripping the scopes in memory does not turn a persisted service key into an interactive session.
                 failure("authentication_required") { service.list(credential.copy(serviceScopes = null)) }
-                a.query { Members.update({ Members.id eq actor.member.id }) { it[role] = "MEMBER" } }
+                a.query { Members.update({ Members.id eq actor.member.id }) { it[role] = "MEMBER"; it[isOwner] = false } }
                 failure("authentication_required") { service.list(actor) }
-                a.query { Members.update({ Members.id eq actor.member.id }) { it[role] = "ADMIN" } }
+                a.query { Members.update({ Members.id eq actor.member.id }) { it[role] = "ADMIN"; it[isOwner] = true } }
                 team.logout(actor)
                 failure("authentication_required") { service.list(actor) }
                 assertNull(team.authenticate(login.token))

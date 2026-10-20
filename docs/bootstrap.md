@@ -1,0 +1,73 @@
+# One-command native installation
+
+The release pipeline generates `install.sh` and `install.ps1` from the exact publisher-signed five-target bundle. The commands below install the version-pinned **0.1.0** release assets after its built-in publication checks pass. The owner moved additional clean-machine and operational validation to V2. Source implementation, local acceptance and public-download acceptance are separate; consult [current evidence](status.md).
+
+## Install a release
+
+macOS Apple Silicon/Intel or glibc Linux ARM64/x64, as your own user:
+
+```sh
+curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.sh | sh
+```
+
+Windows x64, in Windows PowerShell 5.1 or PowerShell 7:
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.ps1').Content))
+```
+
+For the latest stable release, replace `releases/download/0.1.0/` with `releases/latest/download/`. This downloads a version-pinned script: subsequent asset downloads use its exact version, never a moving latest-version alias. Explicit prereleases use their version-specific URL.
+
+The installer prints the stable launcher path and its `bin` directory. Add that directory to your user's PATH once, or invoke the printed absolute path directly. Shell profiles, the Windows environment, personal Claude/Codex configuration and saved TeamCode authentication are not rewritten. Then connect to your own deployment:
+
+```sh
+teamcode login --server https://teamcode.example.org
+teamcode run claude -- --dangerously-skip-permissions
+teamcode run codex -- exec "Explain this repository"
+teamcode service install
+```
+
+Agent installation and optional user-service registration remain explicit steps. Installing TeamCode does not start a proxy, enroll provider accounts or create a team login. Re-running the installer reuses its managed installation. A saved login causes the native installer to check compatibility with that self-hosted server before activation.
+
+## Requirements and locations
+
+No platform needs Java, Gradle, Python or Node to install TeamCode. POSIX bootstrap needs the system shell, curl and `sha256sum` or `shasum`; macOS selects ARM64 on Apple Silicon even when the shell uses Rosetta. Linux binaries additionally require glibc, libcurl, `libcrypt.so.1` and OpenSSL libcrypto 3 or a compatible libcrypto 4. Windows bootstrap uses PowerShell/.NET and a private current-user NTFS directory. Windows ARM64 and 32-bit operating systems are not advertised targets.
+
+| System | Default managed root |
+| --- | --- |
+| macOS | `~/Library/Application Support/TeamCode`, or `$XDG_DATA_HOME/TeamCode` |
+| Linux | `~/.local/share/teamcode`, or `$XDG_DATA_HOME/teamcode` |
+| Windows | `%LOCALAPPDATA%\TeamCode` |
+
+Set `TEAMCODE_INSTALL_ROOT` to an absolute private directory before invoking the script to override the root. The native installer refuses an unrelated nonempty layout. Configuration remains under the existing XDG/home `.config/teamcode` location. POSIX bootstrap refuses root; system-service provisioning is a separate operation.
+
+## Reviewed or offline installation
+
+You may first download and inspect the script. For offline bootstrap, download the version's script, `manifest.json`, `manifest.sig` and your target asset into one directory. Set `TEAMCODE_INSTALL_BUNDLE` to that directory:
+
+```sh
+TEAMCODE_INSTALL_BUNDLE=/absolute/path/to/release sh /absolute/path/to/release/install.sh
+```
+
+```powershell
+$env:TEAMCODE_INSTALL_BUNDLE = 'C:\Downloads\teamcode-release'
+& 'C:\Downloads\teamcode-release\install.ps1'
+```
+
+The offline source is copied into a private temporary snapshot and checked against the script's embedded lengths/hashes. It cannot select another version or trust root. Without a saved login, installation needs no central server; an existing login retains the ordinary compatibility check. See [native distribution](distribution.md) for update/rollback.
+
+## Trust and failures
+
+The initial command trusts the install script served over GitHub HTTPS. At build time, `scripts/release-bootstrap.py` authenticates a private manifest snapshot against the pinned publisher root and checks exact hashes, lengths and native headers of all five assets. Each generated script embeds its version and the exact binary/manifest/signature hashes and lengths. Downloaded bytes must match before the first native executable starts. The native installer then verifies the publisher signature with its compiled roots and applies existing compatibility, locking, staging, selection and recovery rules. Bootstrap does not introduce another installation-state format or parse team/provider configuration.
+
+POSIX disables `.curlrc`, allows HTTPS-only redirects, limits redirects/time/file size and verifies the final exact length/hash. A scoped file-size resource limit additionally bounds disk use on older curl versions with incomplete unknown-length enforcement. PowerShell uses a credential-free HTTP client, an HTTPS GitHub/CDN allowlist, at most five redirects and a 120-second cancellation deadline spanning response/stream reads; encoded, oversized and truncated responses fail. Neither downloader receives a team/provider credential. Offline files undergo the same identity checks.
+
+Private downloads are removed on normal success/failure. A download/hash failure cannot start the executable. Once native installation starts, its transaction/recovery rules apply; a bootstrap failure does not prove activation never began. POSIX preserves a failing native installer's exit code; PowerShell reports failure. Neither script stops unrelated processes or replaces an arbitrary PATH executable.
+
+## Acceptance
+
+Ordinary tests cover signed-bundle generation/refusal and shell flow using executable shims: four targets, Rosetta, literal arguments, tampering, root refusal, offline mode, HTTP failure and cleanup. The PowerShell HTTP fixture exercises the actual helper with an in-memory .NET handler: HTTPS/host restrictions, redirect limits, bounded unknown-length bodies, exact sizes and encoded/error refusal. It makes no network or provider call.
+
+`scripts/smoke-bootstrap.py --bundle SIGNED_RELEASE_DIRECTORY` runs the generated script and actual native executable on its target host. It checks clean installation, the compiled version, idempotence, saved self-hosted URL/login/device and agent-file preservation, corrupt-byte refusal and cleanup. On Windows it uses both Windows PowerShell and PowerShell 7 when available. Full validation invokes it in the existing signed-installation matrix; no paid runner is added to ordinary pushes. Accepted scripts travel unchanged in the native release artifact. Actual public-download installation and all five-target results remain gates until their evidence passes.
+
+TeamClaude's `src/updater.js` is the reference for preserving source/manual installations and explicit update behavior. Its global npm replacement does not bootstrap a standalone Kotlin/Native executable. TeamCode delegates to its managed native installer instead of adding npm or JVM requirements.

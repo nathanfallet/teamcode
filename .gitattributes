@@ -1,0 +1,3 @@
+# Signatures authenticate exact bytes; Windows checkouts must not translate these fixtures.
+scripts/fixtures/release-publisher-manifest.json -text
+scripts/fixtures/release-publisher-manifest.sig -text

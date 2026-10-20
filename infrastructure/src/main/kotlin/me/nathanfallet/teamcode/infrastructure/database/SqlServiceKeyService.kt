@@ -39,7 +39,7 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
         lockTeam(actor.teamId); authorize(this, actor)
         val row = (Tokens innerJoin Members).select(Tokens.memberId).where {
             (Tokens.id eq id) and Tokens.serviceScopes.isNotNull() and (Members.teamId eq actor.teamId) and
-                (if (actor.member.role == Role.ADMIN) Op.TRUE else Tokens.memberId eq actor.member.id)
+                (if (actor.member.role.isAdministrator) Op.TRUE else Tokens.memberId eq actor.member.id)
         }.singleOrNull() ?: throw missing()
         val member = row[Tokens.memberId]
         requireMember(actor, member, lock = true)

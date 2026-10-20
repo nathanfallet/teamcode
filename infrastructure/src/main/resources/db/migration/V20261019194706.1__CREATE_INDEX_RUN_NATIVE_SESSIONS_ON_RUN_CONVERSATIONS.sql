@@ -1,0 +1,1 @@
+CREATE INDEX run_native_sessions ON run_conversations (run_id, session_key);

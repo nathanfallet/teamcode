@@ -42,7 +42,7 @@ class ReleaseBundleTest(unittest.TestCase):
             root = Path(directory); inputs = root / 'inputs'; self.fixture(inputs)
             manifest = release.assemble(inputs, self.revision, self.source_commit, root / 'output')
             self.assertEqual(set(release.TARGETS), set(manifest['assets']))
-            self.assertEqual('v' + self.revision, manifest['tag'])
+            self.assertEqual(self.revision, manifest['tag'])
             sums = (root / 'output/SHA256SUMS').read_text().splitlines()
             self.assertEqual(6, len(sums))
             for line in sums:

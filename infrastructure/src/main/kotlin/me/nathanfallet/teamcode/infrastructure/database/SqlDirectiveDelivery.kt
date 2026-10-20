@@ -10,16 +10,24 @@ import org.jetbrains.exposed.v1.jdbc.*
 
 /** A short delivery lease avoids concurrent duplicates without claiming the agent obeyed advice. */
 internal class SqlDirectiveDelivery(private val database: Database) {
+    suspend fun preview(actor: Principal): AgentDirective? = database.query {
+        actor.requireInteractive(); actor.requireReady(); requireCurrent(this, actor)
+        read(actor, "", nowMillis())
+    }
     suspend fun current(actor: Principal, sessionId: String?): AgentDirective? {
         actor.requireScope(ServiceScope.GUIDANCE)
         val scope = sessionId?.let(::sessionHash).orEmpty()
-        return database.query { requireCurrent(this, actor); read(actor, scope, nowMillis()) }
+        return database.query {
+            requireCurrent(this, actor)
+            if (readPacingSettings(actor.teamId).observationOnly) null else read(actor, scope, nowMillis())
+        }
     }
     suspend fun claim(actor: Principal, sessionId: String, stage: String): DirectiveDelivery? {
         actor.requireScope(ServiceScope.GUIDANCE); validateStage(stage)
         val scope = sessionHash(sessionId)
         return database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
+            if (readPacingSettings(actor.teamId).observationOnly) return@query null
             val now = nowMillis()
             val directive = read(actor, scope, now) ?: return@query null
             val previous = DirectiveDeliveries.selectAll().where {
