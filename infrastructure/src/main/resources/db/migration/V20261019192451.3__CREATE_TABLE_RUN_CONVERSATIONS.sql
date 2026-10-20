@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS run_conversations (run_id VARCHAR(36), conversation_key CHAR(64) COLLATE ascii_bin, session_key CHAR(64) COLLATE ascii_bin NOT NULL, requested_model VARCHAR(120) NOT NULL, provider VARCHAR(32) NOT NULL, model VARCHAR(128) NOT NULL, last_seen_at BIGINT NOT NULL, CONSTRAINT pk_run_conversations PRIMARY KEY (run_id, conversation_key), CONSTRAINT fk_run_conversations_run_id__id FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE ON UPDATE RESTRICT);
+CREATE INDEX run_context_page ON run_conversations (run_id, last_seen_at);

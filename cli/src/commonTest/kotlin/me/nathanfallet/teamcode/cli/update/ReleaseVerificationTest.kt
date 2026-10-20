@@ -20,6 +20,7 @@ class ReleaseVerificationTest {
     @Test fun authenticManifestOnlyApprovesMatchingBinaryBytesForTheSelectedTarget() {
         val release = valid()
         assertEquals("1.2.3-alpha.1", release.manifest.version)
+        assertEquals(release.manifest.version, release.manifest.tag)
         assertEquals(ReleaseFixtures.firstKey.id, release.keyId)
         for (target in ReleaseFormat.targets) release.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText), target)
         failure("release_binary_invalid") { release.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText + "extra"), "linux-x64") }
@@ -30,6 +31,7 @@ class ReleaseVerificationTest {
     @Test fun authenticationPrecedesPayloadParsingAndMalformedAuthenticatedPayloadsStillFail() {
         failure("release_signature_invalid") { first.verify("not JSON".encodeToByteArray(), bytes(ReleaseFixtures.validEnvelope)) }
         failure("release_manifest_invalid") { first.verify(bytes(ReleaseFixtures.nonJsonPayload), bytes(ReleaseFixtures.nonJsonEnvelope)) }
+        failure("release_manifest_invalid") { first.verify(bytes(ReleaseFixtures.prefixedTagPayload), bytes(ReleaseFixtures.prefixedTagEnvelope)) }
         failure("release_manifest_invalid") { first.verify(bytes(ReleaseFixtures.wrongSchemaPayload), bytes(ReleaseFixtures.wrongSchemaEnvelope)) }
         failure("release_manifest_invalid") { first.verify(bytes(ReleaseFixtures.unsafePathPayload), bytes(ReleaseFixtures.unsafePathEnvelope)) }
         failure("release_manifest_invalid") { first.verify(bytes(ReleaseFixtures.oversizedAssetPayload), bytes(ReleaseFixtures.oversizedAssetEnvelope)) }

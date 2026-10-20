@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS group_members (group_id VARCHAR(36), member_id VARCHAR(36), `role` VARCHAR(16) DEFAULT 'MEMBER' NOT NULL, paused BOOLEAN DEFAULT FALSE NOT NULL, CONSTRAINT pk_group_members PRIMARY KEY (group_id, member_id), CONSTRAINT fk_group_members_group_id__id FOREIGN KEY (group_id) REFERENCES team_groups(id) ON DELETE CASCADE ON UPDATE RESTRICT, CONSTRAINT fk_group_members_member_id__id FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE RESTRICT);
+CREATE INDEX member_groups ON group_members (member_id, group_id);

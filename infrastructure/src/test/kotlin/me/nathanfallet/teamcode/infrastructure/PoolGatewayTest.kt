@@ -22,6 +22,32 @@ import kotlinx.serialization.json.*
 import io.ktor.http.content.TextContent
 
 class PoolGatewayTest {
+    @Test fun providerCorrelationIsCapturedBeforeStreamingWithoutBeingExposedToTheCaller() = runBlocking {
+        val store = FakeAdmission(account)
+        HttpClient(MockEngine { respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(
+            HttpHeaders.ContentType to listOf("text/event-stream"), "request-id" to listOf("req_fixture_001"))) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            gateway.forward(request()) { head, chunks ->
+                assertEquals(listOf("req_fixture_001"), store.providerRequests.map { it.second })
+                assertFalse(head.headers.values.contains("req_fixture_001"))
+                chunks.collect { }
+            }
+            assertTrue(store.didSettle)
+        }
+    }
+    @Test fun transportCorrelationRejectsConflictsDuplicatesUnsafeAndOversizedValues() {
+        HttpClient(MockEngine { error("No network request expected") }).use { http ->
+            for (transport in listOf(ClaudeTransport(http), CodexTransport(http))) {
+                assertEquals("req_fixture", transport.requestId(headersOf("request-id", "req_fixture")))
+                assertEquals("req_fixture", transport.requestId(headersOf("x-request-id", "req_fixture")))
+                assertNull(transport.requestId(headersOf("request-id" to listOf("req_one"), "x-request-id" to listOf("req_two"))))
+                assertNull(transport.requestId(headersOf("request-id", listOf("req_one", "req_two"))))
+                for (bad in listOf("https://untrusted.example/secret", "bad identifier", "x".repeat(129)))
+                    assertNull(transport.requestId(headersOf("request-id", bad)))
+            }
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test fun temporaryAdmissionPressureWaitsAndKeepsWorkloadOutOfProviderHeaders() = runTest {
         val store = FakeAdmission(account)
@@ -159,7 +185,32 @@ class PoolGatewayTest {
             assertEquals(1, calls)
             assertTrue(store.didSettle)
             assertNull(store.settled)
+            assertEquals(listOf(false), store.settlementCompletions)
             assertEquals(0, gateway.status().active)
+        }
+    }
+    @Test fun observedTerminalUsageCountsWhenTheClientClosesBeforeHttpEofWithoutReplaying() = runBlocking {
+        for (protocol in WireProtocol.entries) {
+            val provider = if (protocol == WireProtocol.MESSAGES) "anthropic" else "codex"
+            val store = FakeAdmission(account.copy(identity = account.identity.copy(provider = provider)))
+            var calls = 0
+            val events = if (protocol == WireProtocol.MESSAGES) FixtureGatewayService.EVENTS.joinToString("") else
+                "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+            HttpClient(MockEngine {
+                calls++; respond(events, headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+            }) { install(HttpTimeout) }.use { http ->
+                val transport = if (protocol == WireProtocol.MESSAGES) ClaudeTransport(http) else CodexTransport(http)
+                val body = if (protocol == WireProtocol.MESSAGES) request() else GenerationRequest(
+                    """{"model":"gpt-test","stream":true,"input":"synthetic"}""".toByteArray(), emptyMap(), actor, protocol)
+                val gateway = PoolGateway(store, credentials, listOf(transport), FakeModelPolicies())
+                val closed = assertFailsWith<CancellationException> {
+                    gateway.forward(body) { _, chunks -> chunks.collect { throw CancellationException("client closed after terminal event") } }
+                }
+                assertEquals("client closed after terminal event", closed.message)
+                assertEquals(1, calls)
+                assertEquals(6, store.settled)
+                assertEquals(listOf(true), store.settlementCompletions)
+            }
         }
     }
     @Test fun providerRejectionDoesNotExposeCredentialsOrBurnAllowance() = runBlocking {
@@ -487,7 +538,10 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     val affinities = mutableMapOf<RequestAffinity, RouteTarget>()
     override suspend fun preferredTarget(actor: Principal, affinity: RequestAffinity): RouteTarget? = affinities[affinity]
     override suspend fun statistics() = AdmissionStatistics(0, 0)
+    val providerRequests = mutableListOf<Pair<String, String>>()
+    override suspend fun recordProviderRequest(reservation: Reservation, requestId: String) { providerRequests += reservation.id to requestId }
     val charges = mutableListOf<Long?>()
+    val settlementCompletions = mutableListOf<Boolean>()
     val observations = mutableListOf<Pair<String, QuotaUpdate>>()
     var settled: Long? = null
     var didSettle = false
@@ -501,7 +555,9 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
         affinity?.let { affinities[it] = RouteTarget(provider, model) }
         return Reservation("request-$id", account.copy(id = id, identity = account.identity.copy(provider = provider)), units)
     }
-    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) { didSettle = true; settled = actualUnits; charges += actualUnits }
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) {
+        didSettle = true; settled = actualUnits; charges += actualUnits; settlementCompletions += completed
+    }
     override suspend fun capacity(actor: Principal, memberId: String): MemberCapacity = error("unused")
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = error("unused")
     override suspend fun poolBudgets(actor: Principal) = emptyList<PoolBudget>()

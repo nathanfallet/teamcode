@@ -14,7 +14,7 @@ internal expect fun readHookInput(): ByteArray?
 
 expect suspend fun runInteractiveProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, quiet: Boolean = false): Int
 
-data class ServicePlatform(val os: String, val executable: String, val userId: String)
+data class ServicePlatform(val os: String, val executable: String, val userId: String, val userName: String? = null, val userHome: String? = null)
 expect fun servicePlatform(): ServicePlatform
 expect fun installServiceSignalHandlers()
 expect fun serviceStopRequested(): Boolean

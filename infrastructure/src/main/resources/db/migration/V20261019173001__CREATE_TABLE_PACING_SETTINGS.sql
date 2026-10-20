@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS pacing_settings (team_id VARCHAR(36) PRIMARY KEY, observation_only BOOLEAN DEFAULT FALSE NOT NULL, CONSTRAINT fk_pacing_settings_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT);

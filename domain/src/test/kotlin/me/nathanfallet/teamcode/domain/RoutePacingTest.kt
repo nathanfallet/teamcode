@@ -38,6 +38,18 @@ class RoutePacingTest {
         assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus, astra), listOf(busy, idle), 4, now).pace)
         assertEquals(Pace.UNKNOWN, controller.advise(setOf(opus, astra), listOf(lowerPriority), 4, now).pace)
     }
+    @Test fun idleOverflowCannotHidePressureOnTheHomeAccountButAnEligiblePinCanUseIt() {
+        val controller = RoutePacingUseCase()
+        val busy = account("anthropic", listOf(.1, .2, .3), 0).let { it.copy(account = it.account.copy(poolId = "home")) }
+        val idle = account("anthropic", listOf(.1, .1, .1), 10).let { it.copy(account = it.account.copy(poolId = "reserve")) }
+        assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true).pace)
+        assertEquals(Pace.CAN_INCREASE, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true,
+            pinnedAccountIds = mapOf(opus to setOf(idle.account.id))).pace)
+        assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true,
+            pinnedAccountIds = mapOf(opus to setOf(busy.account.id, idle.account.id))).pace)
+        val exhausted = busy.copy(windows = account("anthropic", listOf(1.0, 1.0, 1.0)).windows)
+        assertEquals(Pace.CAN_INCREASE, controller.advise(setOf(opus), listOf(exhausted, idle), 4, now, homePool = "home", preferHome = true).pace)
+    }
     @Test fun recoveryMustStayStableAndPressureOrMissingDataTakesEffectImmediately() {
         val useCase = PacingHysteresisUseCase()
         fun advice(pace: Pace) = PacingAdvice(pace, if (pace == Pace.SLOW_DOWN) 1 else 4, 0, pace.name)
