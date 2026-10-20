@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS mcp_tool_policies (variant_id VARCHAR(36) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, mode VARCHAR(16) NOT NULL, tools text NOT NULL, updated_at BIGINT NOT NULL, CONSTRAINT fk_mcp_tool_policies_variant_id__id FOREIGN KEY (variant_id) REFERENCES variants(id) ON DELETE CASCADE ON UPDATE RESTRICT, CONSTRAINT fk_mcp_tool_policies_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT);
+CREATE INDEX mcp_tool_policy_team ON mcp_tool_policies (team_id);
+CREATE TABLE IF NOT EXISTS mcp_calls (id BIGINT AUTO_INCREMENT PRIMARY KEY, team_id VARCHAR(36) NOT NULL, member_id VARCHAR(36) NOT NULL, server VARCHAR(64) NOT NULL, variant_id VARCHAR(36) NULL, operation VARCHAR(8) NOT NULL, tool VARCHAR(128) NULL, outcome VARCHAR(16) NOT NULL, started_at BIGINT NOT NULL, lease_expires_at BIGINT NOT NULL, duration_ms BIGINT NULL, response_bytes BIGINT NULL, CONSTRAINT fk_mcp_calls_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT, CONSTRAINT fk_mcp_calls_member_id__id FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE ON UPDATE RESTRICT);
+CREATE INDEX mcp_call_member ON mcp_calls (member_id, server, started_at);
+CREATE INDEX mcp_call_server ON mcp_calls (team_id, server, started_at);
+CREATE INDEX mcp_call_team ON mcp_calls (team_id, id);
+CREATE INDEX mcp_call_started ON mcp_calls (started_at);

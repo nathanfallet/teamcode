@@ -100,6 +100,18 @@ class TeamRoutesTest {
             setBody("username=admin&password=password")
         }.status)
     }
+    @Test fun dashboardPagesLetBrowsersSendTheirOriginOnForms() = testApplication {
+        application { configureGateway(NoGateway(), team = FakeTeam()) }
+        val page = client.get("/dashboard/login")
+        assertEquals(HttpStatusCode.OK, page.status)
+        // Under no-referrer a browser submits forms with `Origin: null`, which the dashboard always rejects.
+        assertEquals("same-origin", page.headers["Referrer-Policy"])
+        assertEquals(HttpStatusCode.Forbidden, client.post("/dashboard/login") {
+            header(HttpHeaders.Origin, "null")
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("username=admin&password=password")
+        }.status)
+    }
 }
 private class NoGateway : GatewayService {
     override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) { error("No inference expected") }
