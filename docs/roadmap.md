@@ -66,18 +66,19 @@ Designs set aside on 2026-10-19:
 ### Skill catalog and synchronization
 
 - Administrators manage a versioned skill catalog in the dashboard, pin approved versions and assign skill access to members or groups. Provide update, rollback and removal controls. Skills use versioned artifacts and yes/no access assignments, not the environment/MCP variant mechanism.
-- Populate the catalog through GitHub synchronization or publication through the API from a CI pipeline; decide whether to support one or both sources when designing V2. Define explicit published versions and authenticated publishing permissions, keeping a reproducible approved version for installation and rollback.
+- Populate the catalog only through publication through the API, called from a CI pipeline (owner decision, 2026-10-19). A repository publishes from its own workflow with a publication-scoped service key; TeamCode has no GitHub connection (no App, OAuth or server-side pull). Define explicit published versions and authenticated publishing permissions, keeping a reproducible approved version for installation and rollback.
 - The native CLI synchronizes assigned skills into an isolated, agent-compatible local installation before `teamcode run`. Preserve personal skills and report naming conflicts explicitly.
 - Track installation/version status separately from permission to use protected resources. Skills are instructions and files loaded by the agent, not server-executed MCP tools.
 - Do not treat downloaded skill files as an access-control mechanism: users can copy instructions they have received. Enforce access to protected tools, credentials and data at the MCP gateway or backing service.
 - Acceptance: clean setup and subsequent launches install the assigned pinned versions, updates/rollback are reproducible, removed assignments stop being provisioned, and personal configuration is preserved.
+- Server side in progress on a V2 branch: catalog, CI publication with `skills:publish`, pins, yes/no member decisions, delivery and installation status. CLI synchronization remains planned. See [skills](skills.md).
 
 The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these come from the MCP gateway, `teamcode run` and an explicit CLI skill capability.
 
 
 ## V2: Kubernetes cloud agent sessions
 
-Explore running agent sessions remotely on a connected Kubernetes cluster. This is V2 scope; the API contracts and interaction model remain to be discussed before implementation.
+Explore running agent sessions remotely on a connected Kubernetes cluster. This is V2 scope. The contract and the implementation status are in [cloud sessions](cloud-sessions.md); the list below is the original direction.
 
 - Administrators connect a Kubernetes cluster and configure the namespaces, execution templates and resources available to the team.
 - Start sessions from either the authenticated API or native CLI, with the same authorization and lifecycle rules, automatic provisioning and cleanup. The CLI uses the typed client/API modules rather than talking directly to Kubernetes. A proposed command family is `teamcode cloud ...`; exact commands and HTTP contracts remain to be designed.
@@ -122,4 +123,4 @@ Use one variant-assignment model for cloud environment variables and MCP servers
 
 Skills remain a separate versioned catalog with access assignments, described above. A user without skill access receives no provisioned copy. On session creation/resume/transfer, resolve the new effective user's authorized pinned catalog artifacts. Already delivered skill files cannot be made secret again; enforce protected tool/data access independently.
 
-Exact environment/MCP variant granularity, assignment UI/API and update semantics remain V2 design discussions. The GitHub-versus-CI-API skill publication choice is also open; no skill variants are planned at this stage.
+Exact environment/MCP variant granularity, assignment UI/API and update semantics remain V2 design discussions. A first server-side foundation (model, persistence, administrator API/dashboard and effective resolution, without gateway, cloud or CLI consumers) and its provisional choices are described in [variants](variants.md). The GitHub-versus-CI-API skill publication choice is also open; no skill variants are planned at this stage.

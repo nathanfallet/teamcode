@@ -189,6 +189,66 @@ class TeamCodeClient(
     }
     private fun identifier(id: String) { require(Regex("[a-zA-Z0-9-]{1,36}").matches(id)) { "Invalid identifier." } }
 
+    suspend fun cloudSettings(): CloudSettingsView = request("/api/v1/cloud/settings", HttpMethod.Get)
+    suspend fun saveCloudSettings(settings: CloudSettingsView): CloudSettingsView = request("/api/v1/cloud/settings", HttpMethod.Put, settings)
+    suspend fun cloudClusters(): List<CloudClusterView> = request("/api/v1/cloud/clusters", HttpMethod.Get)
+    suspend fun saveCloudCluster(input: SaveCloudClusterRequest, id: String? = null): CloudClusterView {
+        id?.let(::identifier)
+        return request("/api/v1/cloud/clusters" + (id?.let { "/$it" } ?: ""), if (id == null) HttpMethod.Post else HttpMethod.Put, input)
+    }
+    suspend fun cloudProfiles(): List<CloudProfileView> = request("/api/v1/cloud/profiles", HttpMethod.Get)
+    suspend fun saveCloudProfile(input: SaveCloudProfileRequest, id: String? = null): CloudProfileView {
+        id?.let(::identifier)
+        return request("/api/v1/cloud/profiles" + (id?.let { "/$it" } ?: ""), if (id == null) HttpMethod.Post else HttpMethod.Put, input)
+    }
+    /** Retrying with the same [idempotencyKey] and body returns the session created by the first attempt. */
+    suspend fun createCloudSession(input: CreateCloudSessionRequest, idempotencyKey: String = Uuid.random().toString(), onBehalfOf: String? = null): CloudSessionView {
+        require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        onBehalfOf?.let(::identifier)
+        val response = http.request("$origin/api/v1/cloud/sessions") {
+            method = HttpMethod.Post; contentType(ContentType.Application.Json); setBody(input); authenticate()
+            header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey)
+            onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+            timeout { requestTimeoutMillis = 30_000 }
+        }
+        checkResponse(response)
+        return response.body()
+    }
+    /** [owner] is a member id or `all` (administrators); null lists the caller's own sessions. */
+    suspend fun cloudSessions(owner: String? = null, states: List<String> = emptyList(), labels: Map<String, String> = emptyMap(), before: String? = null, limit: Int = 50): CloudSessionPageView {
+        owner?.takeIf { it != "all" }?.let(::identifier)
+        before?.let(::identifier)
+        require(limit in 1..50)
+        val response = http.request("$origin/api/v1/cloud/sessions") {
+            method = HttpMethod.Get; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            url {
+                owner?.let { parameters.append("owner", it) }
+                states.forEach { parameters.append("state", it) }
+                labels.forEach { (key, value) -> parameters.append("label", "$key=$value") }
+                before?.let { parameters.append("before", it) }
+                parameters.append("limit", limit.toString())
+            }
+        }
+        checkResponse(response)
+        return response.body()
+    }
+    suspend fun cloudSession(id: String): CloudSessionView { identifier(id); return request("/api/v1/cloud/sessions/$id", HttpMethod.Get) }
+    suspend fun cloudExecutions(id: String): List<CloudExecutionView> { identifier(id); return request("/api/v1/cloud/sessions/$id/executions", HttpMethod.Get) }
+    suspend fun pauseCloudSession(id: String, force: Boolean = false, onBehalfOf: String? = null): CloudSessionView =
+        cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
+    suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
+    suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }
+    private suspend fun cloudAction(path: String, id: String, onBehalfOf: String?, body: PauseCloudSessionRequest?, method: HttpMethod = HttpMethod.Post): HttpResponse {
+        identifier(id); onBehalfOf?.let(::identifier)
+        val response = http.request("$origin$path") {
+            this.method = method; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+            if (body != null) { contentType(ContentType.Application.Json); setBody(body) }
+        }
+        checkResponse(response)
+        return response
+    }
+
     private suspend inline fun <reified R> request(path: String, method: HttpMethod): R {
         val response = http.request("$origin$path") { this.method = method; authenticate(); timeout { requestTimeoutMillis = 10_000 } }
         checkResponse(response)
