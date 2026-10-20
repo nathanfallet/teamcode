@@ -29,7 +29,7 @@ This page is the contract and the record of what is implemented. It follows the 
 | Environment variables from environment variants | Implemented (PR 3, source wired in PR 3c) |
 | [GitHub access](#github-access): team GitHub App configuration, member linking (`teamcode github link`, dashboard), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store, `github.link.v1` | Implemented (PR 3b) |
 | Team MCP servers (through the runner's loopback relay) and pinned skills (installed under the agent's UID), resolved for the current owner at every agent start | Implemented, see [team MCP servers and skills](#team-mcp-servers-and-skills) |
-| Team MCP servers and pinned skills in the session (`GET /mcp/<server>` relayed by the runner, skills installed under the agent's UID) | Implemented, see [team MCP servers and skills](#team-mcp-servers-and-skills) |
+| Transcript, messages, attach, personal and administrator keys | Implemented (#9, #21) |
 
 The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
 
@@ -544,15 +544,14 @@ teamcode github unlink [--member ID]
 | 3 | Environment preparation (image contract, recipe, repositories, Git identity, setup, progress and failures), variable and GitHub interfaces | `cloud.environment.v1` |
 | 3b | GitHub App configuration and member linking (device and web flows), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store | `github.link.v1` |
 | 3c | Variants source wired (implemented) | - |
-| 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
-| 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
+| 4 | Agent adapters (long-lived streaming process), transcript, SSE (implemented) | `cloud.transcript.v1` |
+| 5 | Messages, interrupt, idle pause, attach (implemented) | `cloud.messages.v1`, `cloud.attach.v1` |
 | 6 | Transfer and its settings (implemented) | `cloud.transfer.v1` |
 | 7 | `tcex_` inference credentials and the runner's loopback proxy (implemented) | `cloud.inference.v1` |
 | 8 | Idle pause with attachment leases, `initialMessage` on creation (implemented) | `cloud.sessions.initial-message.v1` |
 | 9 | The agent in its own container and UID, the exec supervisor, credentials over a memory-volume socket (implemented) | - |
 | Cross-cutting | V2 keys (`cloud:read`, `cloud:write`, `admin:cloud`) (implemented) | `cloud.keys.v1` |
 | Cross-cutting | MCP gateway and skills in the runner (implemented) | - |
-| Cross-cutting | MCP gateway and skills in the runner | - |
 
 ## Evidence
 

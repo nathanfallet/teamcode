@@ -106,7 +106,7 @@ class McpGatewayAcceptanceTest {
                         override suspend fun status() = GatewaySnapshot("test", 0, 0)
                         override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = error("unused")
                     }
-                    application { configureGateway(inference, team = team, publicOrigin = "http://localhost", variants = SqlVariantService(a, cipher), mcp = gateway, mcpAccess = SqlMcpAccessStore(a)) }
+                    application { configureGateway(inference, team = team, publicOrigin = "http://localhost", variants = SqlVariantService(a, cipher), mcp = gateway, mcpAccess = SqlMcpAccessStore(a), skills = me.nathanfallet.teamcode.domain.skills.SkillCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlSkillStore(a))) }
                     val bodies = mutableListOf<String>()
                     var nextId = 1
                     suspend fun rpc(token: String, server: String, method: String, params: JsonObject? = null): Pair<HttpStatusCode, JsonObject?> {
