@@ -147,10 +147,11 @@ internal class RunnerLoop(
 }
 
 /**
- * The token sources the runner serves to the agent's git helper. None yet: the GitHub link adds its own, which is the
- * only place a source is plugged in. Until then the helper finds no credential and git asks for none.
+ * The token sources the runner serves to the agent's git helper: the execution owner's GitHub token, renewed through
+ * the runner channel. This is the only place a source is plugged in. A server that does not advertise GitHub
+ * answers an error, which the source treats as no credential.
  */
-internal fun credentialSources(): List<CredentialSource> = emptyList()
+internal fun credentialSources(github: suspend () -> RunnerGitHubView): List<CredentialSource> = listOf(GitHubCredentialSource(github))
 
 /** `teamcode cloud runner`: started inside the session pod; reads its coordinates from the pod environment. */
 internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
@@ -203,7 +204,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 val processes = environment("TEAMCODE_AGENT_SOCKET")?.takeIf { it.isNotBlank() }?.let { RemoteProcesses(it, scope, log = { message -> echo(message, err = true) }) }
                 lifeline = processes?.let { try { it.hold() } catch (error: CancellationException) { throw error } catch (_: Exception) { echo("The agent container is not reachable.", err = true); null } }
                 environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { socket ->
-                    val broker = CredentialBroker(listenUnix(socket), credentialSources(), log = { message -> echo(message, err = true) })
+                    val broker = CredentialBroker(listenUnix(socket), credentialSources { client.runnerGitHub(RunnerGitHubRequest(team, session, epoch)) }, log = { message -> echo(message, err = true) })
                     scope.launch { broker.serve() }
                 }
                 val agent = AgentHost(agentChannel, { command, overrides, directory ->

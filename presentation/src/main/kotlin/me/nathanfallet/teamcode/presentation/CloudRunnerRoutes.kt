@@ -15,6 +15,8 @@ class CloudRunnerChannel(
     val authenticate: AuthenticateRunnerUseCase,
     /** `tcex_` inference credentials for the agent's inference; null where the server does not issue them. */
     val inference: RunnerInferenceUseCase? = null,
+    /** Renews the owner's GitHub token for the credential helper; null where GitHub is not configured. */
+    val github: RunnerGitHubUseCase? = null,
 )
 
 internal const val RUNNER_PATH = "/api/v1/cloud/runner/"
@@ -60,6 +62,20 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         val body = call.jsonBody<RunnerCheckpointRequest>()
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
         call.respond(channel.runner.checkpoint(pod.teamId, pod.sessionId, pod.epoch, body.completed).view())
+    }
+    channel.github?.let { github ->
+        // Same audience as the environment route: the registered runner of the current epoch only, never cached.
+        post(RUNNER_PATH + "github") {
+            val body = call.jsonBody<RunnerGitHubRequest>()
+            val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
+            val view = when (val access = github.access(pod.teamId, pod.sessionId, pod.epoch)) {
+                is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt)
+                GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
+                GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
+            }
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.respond(view)
+        }
     }
     channel.inference?.let { inference ->
         // The credential is returned only to the registered runner of the current epoch, and never stored or logged.

@@ -67,8 +67,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     val github = GitHubLinkService(githubStore, githubStore, githubClient)
     /** The owner's environment variables come from the variants, resolved at every preparation. */
     private val variables = ResolveCloudVariablesUseCase(ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher)))
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)),
-        AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials))
+    private val githubAccess = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),
+        AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess))
 
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
 

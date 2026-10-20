@@ -407,6 +407,8 @@ class TeamCodeClient(
     suspend fun runnerAcknowledge(input: RunnerInputAckRequest) { coded<Unit, RunnerInputAckRequest>(HttpMethod.Post, "/api/v1/cloud/runner/inputs/ack", input) }
     /** A `tcex_` inference credential for this execution; keep it in memory only. */
     suspend fun runnerInference(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/inference", input)
+    /** The execution owner's current GitHub token (`status` `linked`), or why there is none; keep it in memory only. */
+    suspend fun runnerGitHub(input: RunnerGitHubRequest): RunnerGitHubView = coded(HttpMethod.Post, "/api/v1/cloud/runner/github", input)
 
     /** Failures carry the server's error code (for example `cloud_permission_denied`), never its message. */
     private suspend inline fun <reified R, reified B> coded(method: HttpMethod, path: String, body: B?, crossinline configure: HttpRequestBuilder.() -> Unit = {}): R {
