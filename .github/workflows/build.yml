@@ -84,27 +84,27 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-java@v4
         with:
-          name: server-jar
-          path: app/build/libs
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')
-        with:
-          username: nathanfallet
-          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main') }}
-          tags: |
-            ${{ (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) && format('nathanfallet/teamcode:{0}', env.ORG_GRADLE_PROJECT_teamcodeVersion) || 'nathanfallet/teamcode:latest' }}
-            nathanfallet/teamcode:sha-${{ github.sha }}${{ (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) && format('-{0}', env.ORG_GRADLE_PROJECT_teamcodeVersion) || '' }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/nathanfallet/teamcode
-            org.opencontainers.image.licenses=Apache-2.0
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Select image tags
+        run: |
+          if [ "${{ github.ref_type }}" = tag ] || [ "${{ github.event_name }}" = workflow_dispatch -a "${{ inputs.publish_release }}" = true ]; then
+            echo "IMAGE_TAGS=${ORG_GRADLE_PROJECT_teamcodeVersion},sha-${GITHUB_SHA}-${ORG_GRADLE_PROJECT_teamcodeVersion}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_TAGS=latest,sha-${GITHUB_SHA}" >> "$GITHUB_ENV"
+          fi
+      - name: Build the image without pushing
+        if: ${{ !((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')) }}
+        run: ./gradlew :app:buildImage -PimagePlatforms=amd64 "-PimageTags=${IMAGE_TAGS}"
+      - name: Build and push the multi-architecture image
+        if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main') }}
+        env:
+          DOCKER_HUB_USERNAME: nathanfallet
+          DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
+        run: ./gradlew :app:publishImage "-PimageTags=${IMAGE_TAGS}"
   native:
     # Keep paid native runners off ordinary pushes and pull requests.
     if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.full_validation)

@@ -1,6 +1,6 @@
 # Environment and MCP variants (V2, server foundation)
 
-This page describes the server-side foundation for the V2 roadmap item [Environment/MCP variants and per-user assignments](roadmap.md#environmentmcp-variants-and-per-user-assignments). It covers the model, persistence, administrator API and dashboard, and the effective-resolution use case. It does **not** yet deliver the MCP gateway, cloud sessions or any CLI command: those are the consumers this foundation prepares.
+This page describes the server-side foundation for the V2 roadmap item [Environment/MCP variants and per-user assignments](roadmap.md#environmentmcp-variants-and-per-user-assignments). It covers the model, persistence, administrator API and dashboard, and the effective-resolution use case. It does not deliver cloud sessions or any CLI command. The [MCP gateway](mcp-gateway.md) is its first consumer.
 
 ## Model
 
@@ -51,7 +51,7 @@ It is a trusted server-side port: it does not authenticate anyone. Callers must 
 - Secret values are write-only. API responses and the dashboard only say `hasSharedSecret` / `hasMemberSecret`. Request DTOs and `SecretValue` redact themselves in `toString`.
 - The audit journal records metadata only: `variant.created`, `variant.updated`, `variant.deleted` and `variant.bulk_assigned` (subject: the variant ID); `variant.assigned` (also written once per member affected by a bulk assignment), `variant.unassigned`, `variant.excluded` and `variant.included` (subject: the member ID). Values, endpoints and configuration never enter the journal. The journal has a single subject per event, so a member event does not name the slot or variant; the current assignment view does.
 - Endpoints and configuration are **not** secret: administrators can read them. Put credentials in the secret field, never in the endpoint URL (URLs with user information are refused; a query string is accepted and visible) or in configuration.
-- Endpoints are only syntactically checked (HTTPS, host, no user information or fragment). Refusing loopback, link-local and private destinations must happen in the MCP gateway at connection time, after DNS resolution; it is not done here.
+- Endpoints are only syntactically checked (HTTPS, host, no user information or fragment). Refusing loopback, link-local and private destinations happens in the MCP gateway at connection time, after DNS resolution (see [its limits](mcp-gateway.md#upstream-client)).
 
 ## Administrator API
 
@@ -82,9 +82,9 @@ Tables `variants`, `variant_assignments` (primary key member/kind/target, so at 
 - **Granularity**: one variant fills one slot (one variable or one server). Grouping several variables into one assignable bundle is not supported; it could be added as a layer that expands into slots.
 - **Update semantics**: assignees always get the latest version; there is no pinning and no stored history of earlier values, so there is no rollback to a previous value other than updating it again. Running sessions are not notified; consumers compare `version` and `assignedAt` when they resolve again.
 - **Delegated credentials** are supplied by an administrator at assignment. A member-driven delegated flow (e.g. OAuth with the upstream MCP server, with explicit ownership and revocation by the member) is not implemented.
-- **Per-tool MCP restrictions** are not modelled; an MCP assignment grants the whole server until the gateway lands.
+- **Per-tool MCP restrictions** are tool policies on the MCP variant, enforced by the [MCP gateway](mcp-gateway.md#tool-policies); a variant without a policy grants the whole server.
 - **Groups and defaults**: the precedence slot exists; group assignments, and whether a team default should exist at all, remain open. A default must never grant a member who has no assignment of any kind.
-- **Consumers**: the MCP gateway (discovery and per-call authorization), cloud session preparation, the typed SDK/CLI commands and the revocation behavior for running sessions remain to be built and accepted against the roadmap.
+- **Consumers**: the [MCP gateway](mcp-gateway.md) implements discovery and per-call authorization. Cloud session preparation, the typed SDK/CLI commands and the revocation behavior for running sessions remain to be built and accepted against the roadmap.
 
 ## TeamClaude reference
 

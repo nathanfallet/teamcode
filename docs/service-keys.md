@@ -9,8 +9,9 @@ Select only the required scopes:
 | Scope | Access |
 | --- | --- |
 | `inference` | Registered inference endpoints and authenticated request cancellation |
-| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs` |
+| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs`, and MCP gateway usage at `GET /api/v1/mcp/usage` |
 | `guidance` | The owner's current/session pacing directives, delivery claims and receipts |
+| `mcp` | The [MCP gateway](mcp-gateway.md) endpoints `/mcp/<server>` and `GET /api/v1/mcp/servers`, with the owner's MCP assignments (V2 branch) |
 | `skills:read` | The owner's effective skill manifest and artifacts (V2, see [skills](skills.md)) |
 | `skills:publish` | Publish skill versions to the catalog (V2). Only an administrator's key can receive it; it cannot pin, assign or read the catalog |
 

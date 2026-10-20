@@ -62,6 +62,7 @@ fun main() {
     val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> transports.single { it.provider == account.identity.provider }.refresh(token) } }
     val cancellationStore = database?.let { SqlRequestCancellationStore(it) }
     val cancellation = cancellationStore?.let { RequestCancellationService(it) }
+    val mcpAccess = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlMcpAccessStore(it) }
     val gateway = if (database != null) CancellableGateway(PoolGateway(admission!!, credentialSource!!, transports, modelPolicies!!, routes, queued = me.nathanfallet.teamcode.domain.capacity.AwaitAdmissionUseCase(admission)), cancellation!!) else FixtureGatewayService()
     val workers = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     if (accountStore != null) {
@@ -70,7 +71,7 @@ fun main() {
         workers.launch {
             while (isActive) {
                 try {
-                    work.runDue("maintenance") { admission.maintain(); cancellationStore!!.maintain(); directives!!.update() }
+                    work.runDue("maintenance") { admission.maintain(); cancellationStore!!.maintain(); directives!!.update(); mcpAccess!!.maintain() }
                     monitor.sample()
                 }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode maintenance deadline exceeded.") }
@@ -92,6 +93,15 @@ fun main() {
     val audit = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlAuditService(it) }
     val skills = database?.let { me.nathanfallet.teamcode.domain.skills.SkillCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlSkillStore(it)) }
     val variants = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(it, cipher!!) }
+    val mcpLimits = mcpLimits()
+    val mcpHttp = HttpClient(CIO) {
+        followRedirects = false
+        install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = maxOf(mcpLimits.callTimeoutMillis, mcpLimits.listTimeoutMillis) + 5_000 }
+    }
+    val mcp = mcpAccess?.let {
+        me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!), it,
+            me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpLimits)
+    }
     val initialPassword = runBlocking { team?.bootstrap() }
     if (initialPassword != null) {
         // The sole logging exception: explicitly requested, only after first-admin creation commits.
@@ -112,7 +122,28 @@ fun main() {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills,
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, mcp = mcp, mcpAccess = mcpAccess,
             cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); database?.close() }
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); database?.close() }
+}
+
+/** Gateway bounds from `TEAMCODE_MCP_*` variables; unset values keep the defaults documented in docs/mcp-gateway.md. */
+private fun mcpLimits(): me.nathanfallet.teamcode.domain.mcp.McpLimits {
+    val defaults = me.nathanfallet.teamcode.domain.mcp.McpLimits()
+    fun long(name: String, default: Long) = System.getenv(name)?.let { requireNotNull(it.toLongOrNull()) { "$name must be an integer." } } ?: default
+    fun int(name: String, default: Int) = long(name, default.toLong()).let { require(it in 1..Int.MAX_VALUE) { "$name is out of range." }; it.toInt() }
+    return try {
+        me.nathanfallet.teamcode.domain.mcp.McpLimits(
+            callTimeoutMillis = long("TEAMCODE_MCP_CALL_TIMEOUT_MS", defaults.callTimeoutMillis),
+            listTimeoutMillis = long("TEAMCODE_MCP_LIST_TIMEOUT_MS", defaults.listTimeoutMillis),
+            maxResponseBytes = int("TEAMCODE_MCP_MAX_RESPONSE_BYTES", defaults.maxResponseBytes),
+            maxRequestBytes = int("TEAMCODE_MCP_MAX_REQUEST_BYTES", defaults.maxRequestBytes),
+            memberConcurrentPerServer = int("TEAMCODE_MCP_MEMBER_CONCURRENCY", defaults.memberConcurrentPerServer),
+            serverConcurrent = int("TEAMCODE_MCP_SERVER_CONCURRENCY", defaults.serverConcurrent),
+            memberCallsPerMinute = int("TEAMCODE_MCP_MEMBER_CALLS_PER_MINUTE", defaults.memberCallsPerMinute),
+            serverCallsPerMinute = int("TEAMCODE_MCP_SERVER_CALLS_PER_MINUTE", defaults.serverCallsPerMinute),
+        )
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("Invalid TEAMCODE_MCP_* limits: ${error.message ?: "check the documented ranges."}", error)
+    }
 }

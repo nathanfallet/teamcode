@@ -47,14 +47,21 @@ The first open-source model provider is deferred to V2. V1 supports pooled Claud
 
 TeamCode will extend team administration to agent tools and reusable skills. This is planned V2 scope, not part of the current implementation or release acceptance.
 
-### MCP gateway and access control
+### MCP gateway with one endpoint per server
 
-- Administrators register remote MCP servers in the dashboard and assign access to members or groups, with optional per-tool restrictions.
-- TeamCode exposes an authenticated MCP gateway. Tool discovery shows only authorized tools, and every tool invocation checks current server-side permissions. Hiding tools in a client configuration is not an authorization boundary.
-- Upstream MCP credentials remain encrypted on the server. Support shared team credentials and, where required by the upstream service, individual delegated authorization with explicit ownership and revocation.
-- `teamcode run claude` and `teamcode run codex` configure the agent's TeamCode MCP connection using scoped credentials, without requiring manual setup on each workstation or overwriting unrelated personal configuration.
-- Add bounded tool execution, concurrency/rate limits, metadata-only audit records and per-member usage visibility. Keep authorization and any required session state compatible with multiple stateless server replicas.
-- Acceptance: two members with different assignments see and can invoke only their authorized tools; direct unauthorized calls fail; revocation takes effect server-side; upstream credentials never reach the workstation.
+Requirements fixed by the owner on 2026-10-19: the server decides which member can use which MCP server and tool, on every request, and upstream MCP credentials never reach the workstation. Nothing is installed or configured by hand on the workstation.
+
+- Administrators register remote MCP servers as MCP variants (see [environment/MCP variants](#environmentmcp-variants-and-per-user-assignments)), assign them to members and can restrict each variant to an allowlist of tools.
+- TeamCode exposes one authenticated MCP endpoint per upstream server, `/mcp/<server>`. Sources are never aggregated into a single MCP server, and tools keep their upstream names. Discovery shows only the tools the member's variant allows; every message re-resolves the member's assignments and every tool call is admitted against current server-side state, so a revocation applies to the next message on every replica. Hiding tools in a client configuration is not an authorization boundary.
+- Upstream credentials stay encrypted on the server and are added only to the server's request to the upstream; responses, errors and the journal are scrubbed of them. Support shared team credentials and individual credentials stored per member; a member-driven delegated OAuth flow comes later.
+- `teamcode run claude` and `teamcode run codex` read the member's assigned servers at launch and give the agent one MCP server per assignment, for that launch only, pointing at the local proxy, which relays to the server's endpoint with the member's TeamCode credential. The agent holds only the local proxy token; no file is written and personal MCP configuration is untouched.
+- Add bounded tool execution, concurrency/rate limits, metadata-only audit records and per-member usage visibility. Keep authorization stateless across replicas.
+- Acceptance: two members with different assignments list different servers and see and invoke only their authorized tools, each server on its own endpoint; a member without an assignment gets none; direct unauthorized calls fail without reaching the upstream; revocation takes effect at the next message; upstream credentials never reach the workstation, even when an upstream echoes them; one real launch of each agent uses an assigned server through `teamcode run`.
+
+Designs set aside on 2026-10-19:
+
+- **Provider-side injection** (the inference proxy adds Anthropic `mcp_servers` or OpenAI `type: "mcp"` tools to the provider request). OpenAI documents hosted MCP/connectors as unsupported for ChatGPT plan usage ([Sign in with ChatGPT limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)), and Anthropic documents its [MCP connector](https://platform.claude.com/docs/en/agents-and-tools/mcp-connector) for API-key access only, so neither is documented as working with the subscription credentials TeamCode pools (OpenAI explicitly excludes it). It would also require servers reachable from the provider over the Internet, give the provider the decrypted credential, and rely on agents replaying server-executed blocks they may not keep.
+- **Proxy-executed tools** (the proxy adds tool definitions, intercepts the model's call and runs it). The agent would replay a history without the proxy's hidden tool turns, a response that mixes team and agent tools cannot be completed by either side alone, reasoning items must be replayed unmodified, and one agent request becomes several provider requests to stream and account for. Not clearly feasible; reconsider only with evidence from both agents.
 
 ### Skill catalog and synchronization
 
@@ -66,7 +73,7 @@ TeamCode will extend team administration to agent tools and reusable skills. Thi
 - Acceptance: clean setup and subsequent launches install the assigned pinned versions, updates/rollback are reproducible, removed assignments stop being provisioned, and personal configuration is preserved.
 - Server side in progress on a V2 branch: catalog, CI publication with `skills:publish`, pins, yes/no member decisions, delivery and installation status. CLI synchronization remains planned. See [skills](skills.md).
 
-The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these require explicit gateway and CLI capabilities.
+The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these come from the MCP gateway, `teamcode run` and an explicit CLI skill capability.
 
 
 ## V2: Kubernetes cloud agent sessions
@@ -110,7 +117,7 @@ The cloud-specific operations and automation surface above are V2. This does not
 Use one variant-assignment model for cloud environment variables and MCP servers/configuration. Administrators define named variants and assign the selected variant to each authorized user; a user without an assigned variant has neither the environment variable nor MCP access. Shared/global values are reusable variants, not an implicit grant to every user. Provide bulk assignment with explicit exclusions and per-user variant selection; define any later group/default precedence without changing the no-assignment rule.
 
 - **Environment variables:** variants contain the variable values required by an execution environment, using shared values or individual-user values. Support excluding selected users even when a shared variant is assigned in bulk. Keep secret values encrypted and out of transcripts/logs; expose only authorized values to that user's cloud execution. Define whether variants group variables or belong to individual variables before fixing the contract.
-- **MCP:** variants define a server's endpoint, configuration and credential binding, allowing shared team configuration or individual delegated credentials. Assignment controls both discovery and server-side tool invocation. Removing an assignment or disabling a user removes access; retaining an old local MCP configuration must not bypass the gateway.
+- **MCP:** variants define a server's endpoint, configuration and credential binding, allowing a shared team credential or an individual credential stored per member. Assignment controls which server endpoints and tools the gateway serves to that member. Removing an assignment or disabling a user removes access from the next message; team MCP credentials never reach the workstation, so no local configuration can keep using them.
 - Show effective assignments in the dashboard and expose them through the authorized API. Persist variant versions and assignments for consistent behavior across replicas. On cloud creation, resume or ownership transfer, resolve the effective user's assignments again; do not retain the former owner's environment secrets or MCP credentials. Define explicit refresh/revocation behavior for running sessions rather than silently restarting active work.
 - Acceptance: two users receive different variants of the same variable/MCP, a third without an assignment receives none, and a user explicitly excluded from bulk assignment stays excluded. Verify assignment changes, current-user authorization, MCP direct-call denial, resume and ownership transfer without former-owner resource access.
 
