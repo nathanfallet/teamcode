@@ -18,12 +18,14 @@ class CloudSessionService(
     /** Whether creation accepts `initialMessage`; the server advertises `cloud.sessions.initial-message.v1` from it. */
     val acceptsInitialMessage: Boolean get() = initialMessages != null
 
-    /** Resolves `TeamCode-On-Behalf-Of`. Only an interactive administrator may name another member. */
+    /**
+     * Resolves `TeamCode-On-Behalf-Of` for a write. Only an interactive administrator or an administrator's
+     * `admin:cloud` key may name another member.
+     */
     suspend fun actor(principal: Principal, onBehalfOf: String?): CloudActor {
-        principal.requireReady()
-        principal.requireInteractive()
+        principal.requireCloudWrite()
         if (onBehalfOf == null || onBehalfOf == principal.member.id) return CloudActor(principal, principal.member.id)
-        if (!principal.member.role.isAdministrator)
+        if (!principal.isCloudAdministrator)
             throw TeamFailure("on_behalf_forbidden", 403, "Only an administrator can act on behalf of another member.")
         val target = store.member(principal.teamId, onBehalfOf)
         if (target == null || target.disabled || target.passwordChangeRequired)
@@ -43,7 +45,7 @@ class CloudSessionService(
             if (initialMessages == null) throw TeamFailure("initial_message_unsupported", 400, "This server does not accept an initial message.")
             CloudConversationRules.validateMessage(text)
             // The caller writes the message, as on the messages route: they need `message` on the owner's sessions.
-            access?.require(principal.teamId, principal.member, owner.id, CloudPermission.MESSAGE)
+            access?.require(principal.teamId, principal.member, owner.id, CloudPermission.MESSAGE, principal.isCloudAdministrator)
         }
         val spec = profile.spec
         val image = draft.image?.also { requested ->
@@ -80,17 +82,17 @@ class CloudSessionService(
     }
 
     suspend fun list(principal: Principal, query: CloudSessionQuery): CloudSessionPage {
-        principal.requireReady(); principal.requireInteractive()
+        principal.requireCloudRead()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
         if (query.labels.size > 16) throw TeamFailure("invalid_label", 400, "Filter on at most 16 labels.")
         val owner = query.owner ?: principal.member.id
-        if (owner != principal.member.id) principal.requireAdmin()
+        if (owner != principal.member.id) principal.requireCloudAdministrator()
         store.revalidate(principal)
         return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }))
     }
 
     suspend fun get(principal: Principal, id: String): CloudSession {
-        principal.requireReady(); principal.requireInteractive()
+        principal.requireCloudRead()
         store.revalidate(principal)
         return visible(principal, store.find(principal.teamId, id))
     }
@@ -162,7 +164,7 @@ class CloudSessionService(
     }
 
     private fun visible(principal: Principal, session: CloudSession?): CloudSession {
-        if (session == null || (session.ownerId != principal.member.id && !principal.member.role.isAdministrator)) throw missing()
+        if (session == null || (session.ownerId != principal.member.id && !principal.isCloudAdministrator)) throw missing()
         return session
     }
 

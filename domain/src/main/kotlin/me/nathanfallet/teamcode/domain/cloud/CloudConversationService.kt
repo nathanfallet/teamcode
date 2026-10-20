@@ -103,7 +103,7 @@ class CloudConversationService(
 
     /** Opens an attachment lease; requires `attach` and `transcript`. The lease lists whether the member may also send messages. */
     suspend fun attach(principal: Principal, id: String): CloudAttachment {
-        val (session, granted) = reach(principal, id)
+        val (session, granted) = reach(principal, id, write = true)
         if (CloudPermission.ATTACH !in granted || CloudPermission.TRANSCRIPT !in granted) throw denied(CloudPermission.ATTACH)
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw ended()
         val now = store.now()
@@ -112,14 +112,14 @@ class CloudConversationService(
     }
 
     suspend fun renew(principal: Principal, id: String, attachmentId: String): CloudAttachment {
-        val (session, granted) = reach(principal, id)
+        val (session, granted) = reach(principal, id, write = true)
         if (CloudPermission.ATTACH !in granted) throw denied(CloudPermission.ATTACH)
         return store.renew(session.id, attachmentId, principal.member.id, store.now() + CloudConversationRules.ATTACHMENT_LEASE_MILLIS)
             ?: throw TeamFailure("attachment_expired", 409, "The attachment expired or was released. Attach again.")
     }
 
     suspend fun detach(principal: Principal, id: String, attachmentId: String) {
-        val (session, _) = reach(principal, id)
+        val (session, _) = reach(principal, id, write = true)
         store.detach(session.id, attachmentId, principal.member.id)
     }
 
@@ -179,19 +179,23 @@ class CloudConversationService(
         )
     }
 
-    /** The session and the caller's permissions on it; `404` when the caller has no way to reach it. */
-    private suspend fun reach(principal: Principal, id: String): Pair<CloudSession, Set<CloudPermission>> {
-        principal.requireReady(); principal.requireInteractive()
+    /**
+     * The session and the caller's permissions on it; `404` when the caller has no way to reach it. A [write] needs an
+     * interactive login or a `cloud:write` key, a read a `cloud:read` key at least.
+     */
+    private suspend fun reach(principal: Principal, id: String, write: Boolean = false): Pair<CloudSession, Set<CloudPermission>> {
+        if (write) principal.requireCloudWrite() else principal.requireCloudRead()
         sessions.revalidate(principal)
         val session = sessions.find(principal.teamId, id) ?: throw missing()
-        val granted = access.permissions(principal.teamId, principal.member, session.ownerId)
+        val administrator = principal.isCloudAdministrator
+        val granted = access.permissions(principal.teamId, principal.member, session.ownerId, administrator)
         val owner = session.ownerId == principal.member.id
-        if (!owner && !principal.member.role.isAdministrator && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
+        if (!owner && !administrator && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
         return session to granted
     }
 
     private suspend fun open(principal: Principal, id: String, permission: CloudPermission): CloudSession {
-        val (session, granted) = reach(principal, id)
+        val (session, granted) = reach(principal, id, write = permission != CloudPermission.TRANSCRIPT)
         if (permission !in granted) throw denied(permission)
         return session
     }

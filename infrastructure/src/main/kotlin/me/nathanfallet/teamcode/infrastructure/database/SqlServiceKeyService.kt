@@ -22,8 +22,8 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
         return database.query {
             lockTeam(actor.teamId); authorize(this, actor)
             val role = requireMember(actor, memberId, lock = true)
-            if (ServiceScope.SKILLS_PUBLISH in scopes && role != Role.ADMIN.name)
-                throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can receive the skills:publish scope.")
+            for (scope in listOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.ADMIN_CLOUD)) if (scope in scopes && role != Role.ADMIN.name)
+                throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can receive the ${scope.wire} scope.")
             if (Tokens.select(Tokens.id).where { (Tokens.memberId eq memberId) and serviceKey() }.count() >= ServiceKeyService.LIMIT)
                 throw TeamFailure("service_key_limit", 409, "Remove an unused service key before creating another.")
             val now = nowMillis()

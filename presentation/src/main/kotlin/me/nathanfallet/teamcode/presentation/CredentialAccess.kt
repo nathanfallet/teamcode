@@ -6,6 +6,11 @@ import me.nathanfallet.teamcode.domain.team.CredentialAction
 private val cancelPath = Regex("/api/v1/requests/[0-9a-f-]{36}/cancel")
 private val skillPublishPath = Regex("/api/v1/skills/[a-z0-9-]{1,64}/versions")
 private val skillArtifactPath = Regex("/api/v1/skill-delivery/[a-z0-9-]{1,64}/[^/]{1,64}")
+private const val CLOUD_ID = "[a-zA-Z0-9-]{1,36}"
+/** Session, transcript, input and transfer reads open to `cloud:read`; clusters, settings and the access policy are not listed. */
+private val cloudReadPath = Regex("/api/v1/cloud/(profiles|sessions|sessions/$CLOUD_ID(/executions|/events|/events/stream|/messages|/messages/$CLOUD_ID)?|transfers|transfers/$CLOUD_ID)")
+private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(pause|resume|transfer|messages|interrupt|attachments|attachments/$CLOUD_ID/renew)|transfers/$CLOUD_ID/(accept|decline|cancel))")
+private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
 internal fun credentialAction(method: String, path: String, inferencePaths: Set<String>): CredentialAction = when {
@@ -25,5 +30,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && skillPublishPath.matches(path) -> CredentialAction.SKILLS_PUBLISH
     method == "GET" && path == "/api/v1/skill-delivery" -> CredentialAction.SKILLS_READ
     method == "GET" && skillArtifactPath.matches(path) -> CredentialAction.SKILLS_READ
+    method == "GET" && cloudReadPath.matches(path) -> CredentialAction.CLOUD_READ
+    method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
+    method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE
     else -> CredentialAction.INTERACTIVE
 }

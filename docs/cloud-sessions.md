@@ -116,12 +116,14 @@ Due times: about 2 s while a step is in progress, 5 s while waiting for capacity
 | --- | --- |
 | Member (interactive login) | Own sessions; assigned profiles |
 | Administrator (interactive login) | Every team session; clusters, profiles and settings |
-| Service/CI key | None: every cloud path is classified interactive-only |
-| Personal key `cloud:read`/`cloud:write`, administrator key `admin:cloud` | Planned with the V2 API keys |
+| Service key without a cloud scope | None |
+| Key with `cloud:read` | Its owner's sessions, executions, transcript, inputs and transfers, and the profiles the owner can use: `GET` only |
+| Key with `cloud:write` | Everything in `cloud:read`, plus creating, pausing, resuming and deleting the owner's sessions, messages, interrupts, attachments and transfers |
+| Administrator's key with `admin:cloud` | Everything in `cloud:write` with an administrator's rights over every team session and transfer, including `TeamCode-On-Behalf-Of` |
 | Runner | `/api/v1/cloud/runner/*` only, for its own session and epoch, with its projected pod token |
 | Execution credential (`tcex_`) | Inference only, as the member the execution runs for; issued to the runner, never to a person |
 
-`TeamCode-On-Behalf-Of: <memberId>` sets the effective member. It is accepted only from an interactive administrator (administrator keys follow with the V2 keys). On any other credential the header must be absent or equal to the caller's own id; otherwise `403 on_behalf_forbidden`. The target must be an enabled team member who completed password setup (`422 invalid_effective_member`), and for creation it must hold the profile assignment. The header never grants rights: the call is authorized with the caller's own rights.
+`TeamCode-On-Behalf-Of: <memberId>` sets the effective member. It is accepted only from an interactive administrator or an administrator's `admin:cloud` key. On any other credential the header must be absent or equal to the caller's own id; otherwise `403 on_behalf_forbidden`. The target must be an enabled team member who completed password setup (`422 invalid_effective_member`), and for creation it must hold the profile assignment. The header never grants rights: the call is authorized with the caller's own rights.
 
 For creation, the effective member becomes the owner; the retained-session cap and profile assignment resolve for that member.
 
@@ -493,7 +495,6 @@ See [transcript, messages and attach](cloud-conversations.md#the-agent-in-the-po
 
 - **GitHub in the long-lived agent.** Preparation passes the token to Git and `gh` through child-process environments only (see [GitHub access](#github-access)); for the long-lived agent, the token moves to a credential helper over a tmpfs socket that asks the runner channel again before expiry, never the workspace, a remote URL, an event or an image. On transfer, the recipient's link replaces the former owner's at the next preparation.
 - **Transfer.** Administrator transfer is immediate; an owner's request is an offer the recipient accepts within 7 days. Transfer happens at a checkpoint, revokes execution and attachment credentials, rechecks the recipient, and charges future work to the recipient while historical usage stays with the original member. The policy follows the settings above.
-- **Keys.** `cloud:read`/`cloud:write` personal scopes and `admin:cloud` administrator keys with `TeamCode-On-Behalf-Of`, with the V2 API keys. This enables the driving integration: an external orchestrator creating one session per task on behalf of a member, relaying messages from mobile through its own backend, without administrator keys ever reaching a device.
 
 ## CLI
 
@@ -534,12 +535,16 @@ teamcode github unlink [--member ID]
 | 7 | `tcex_` inference credentials and the runner's loopback proxy (implemented) | `cloud.inference.v1` |
 | 8 | Idle pause with attachment leases, `initialMessage` on creation (implemented) | `cloud.sessions.initial-message.v1` |
 | 9 | The agent in its own container and UID, the exec supervisor, credentials over a memory-volume socket (implemented) | - |
-| Cross-cutting | V2 keys (`cloud:*`, `admin:cloud`), MCP gateway and skills in the runner | - |
+| Cross-cutting | V2 keys (`cloud:read`, `cloud:write`, `admin:cloud`) (implemented) | `cloud.keys.v1` |
+| Cross-cutting | MCP gateway and skills in the runner | - |
 
 ## Evidence
 
 - `CloudSessionPersistenceTest` (real MySQL 8.4, two independent connection pools): the reviewed migration matches the Exposed tables; encrypted cluster credentials; profile versioning and the `Retain` refusal; administrator delegation with attribution in the session and the audit journal; concurrent creations with one idempotency key creating one session; the full create, prepare, ready, pause, checkpoint and paused cycle with no pod left; runner fencing by epoch and pod name; concurrent resumes from both pools producing one epoch, including two reconcilers holding the same lease; stale-owner fencing after lease expiry; lost-execution handling; FIFO capacity admission; proven deletion leaving no claim or volume; the blocked deletion and orphaned-volume alert for a retained volume; garbage collection of orphaned pods and claims; retention expiry; the retained cap and keyset pagination.
-- `CloudRoutesTest`: service keys refused on cloud routes, `Idempotency-Key` validation and canonical replay, `TeamCode-On-Behalf-Of` refused for members, visibility as `404`, natural idempotency of pause and delete through the typed client, query validation, and the settings API and dashboard form with CSRF.
+- `CloudRoutesTest`: keys without a cloud scope refused on cloud routes, `Idempotency-Key` validation and canonical replay, `TeamCode-On-Behalf-Of` refused for members, visibility as `404`, natural idempotency of pause and delete through the typed client, query validation, and the settings API and dashboard form with CSRF.
+- `CloudRoutesTest` (keys): `cloud.keys.v1`; `cloud:read` reads sessions, profiles and transfers but creates and pauses nothing; cluster, profile and settings administration refused even to `admin:cloud`; `cloud:write` creates for its owner, attributed to the key, and cannot delegate; an administrator's `cloud:write` key neither delegates nor sees, deletes or lists another member's session; `admin:cloud` creates on behalf of a member, lists every session, pauses for a member and transfers at once, attributed to the key. `CloudConversationRoutesTest`: `cloud:read` reads the transcript but cannot send; an administrator's `cloud:write` key gets `404` on another member's session.
+- `CloudSessionPersistenceTest` (keys, real MySQL): `admin:cloud` refused on a member's key; `admin:cloud` creates on behalf of a member with the key id in the session and the audit journal; `cloud:write` on an administrator's key cannot delegate or see another member's session; `cloud:read` reads but cannot create; a key revoked through one pool fails at its next call through the other.
+- `ServiceKeyAuthorizationTest`: `cloud:read` is granted by every cloud scope, `cloud:write` by `cloud:write` and `admin:cloud`; only `admin:cloud` on an administrator's key carries cloud administration, and never interactive administration.
 - `CloudLifecycleRulesTest`: the transition table, request validation, image override patterns, cluster API hosts and settings bounds.
 - `CloudRoutesTest` (runner): only the current pod's projected token is accepted; member credentials, another namespace and unbound tokens get `401`, another epoch `409`; reviews are cached.
 - `KubernetesClusterPortTest` (Ktor mock engine): claim, volume, storage-class and pod parsing; idempotent create and delete; the pod manifest (bare, non-root, no API token, projected token, resources, pull secrets); the agent container under another UID that mounts neither the projected token nor the runner's coordinates, the memory-backed socket volume in both containers, no shared process namespace; `TokenReview` parsing and refusals; label-selected paging; error bodies never surfaced.

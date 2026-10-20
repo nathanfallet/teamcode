@@ -11,8 +11,9 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
         validate(input, creating = id == null)
         return store.saveCluster(actor, id, expectedVersion, input)
     }
+    /** The profiles the caller can use; also readable with a `cloud:read` key, as its owner. */
     suspend fun profiles(actor: Principal): List<CloudProfile> {
-        actor.requireReady(); actor.requireInteractive()
+        actor.requireCloudRead()
         return store.profiles(actor)
     }
     /** Refuses a storage class that would keep provider volumes after a workspace is deleted. */

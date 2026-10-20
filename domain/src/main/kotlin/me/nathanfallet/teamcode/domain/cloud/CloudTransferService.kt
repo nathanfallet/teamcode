@@ -33,7 +33,7 @@ class CloudTransferService(
             return CloudTransferOutcome.Replayed(existing)
         }
         val session = store.find(principal.teamId, sessionId)
-        val admin = principal.member.role.isAdministrator
+        val admin = principal.isCloudAdministrator
         if (session == null || (session.ownerId != principal.member.id && !admin)) throw missingSession()
         transferable(session)
         if (request.toMemberId == session.ownerId) throw TeamFailure("invalid_transfer", 400, "The recipient already owns this session.")
@@ -60,14 +60,14 @@ class CloudTransferService(
         val actor = sessions.actor(principal, onBehalfOf)
         repeat(ATTEMPTS) {
             val transfer = visible(principal, id)
-            if (transfer.toMemberId != principal.member.id && !principal.member.role.isAdministrator)
+            if (transfer.toMemberId != principal.member.id && !principal.isCloudAdministrator)
                 throw TeamFailure("transfer_forbidden", 403, "Only the recipient or an administrator can accept this transfer.")
             if (transfer.state == CloudTransferState.ACCEPTED || transfer.state == CloudTransferState.COMPLETED) return transfer
             val now = store.now()
             open(transfer, now)
             val settings = store.settings(transfer.teamId)
             // Disabling member transfers also stops offers made before; an administrator can still accept one.
-            if (!principal.member.role.isAdministrator && settings.memberTransfers == MemberTransfers.DISABLED)
+            if (!principal.isCloudAdministrator && settings.memberTransfers == MemberTransfers.DISABLED)
                 throw TeamFailure("transfer_disabled", 403, "Your team no longer allows members to transfer their sessions. Ask an administrator.")
             val session = store.find(transfer.teamId, transfer.sessionId) ?: throw ended()
             if (session.ownerId != transfer.fromMemberId) return close(transfer, actor, CloudTransferState.CANCELLED, "cloud.transfer.cancelled", now, CloudProblem("owner_changed", "The session changed owner since the offer."))
@@ -85,7 +85,7 @@ class CloudTransferService(
         val actor = sessions.actor(principal, onBehalfOf)
         repeat(ATTEMPTS) {
             val transfer = visible(principal, id)
-            if (transfer.toMemberId != principal.member.id && !principal.member.role.isAdministrator)
+            if (transfer.toMemberId != principal.member.id && !principal.isCloudAdministrator)
                 throw TeamFailure("transfer_forbidden", 403, "Only the recipient or an administrator can decline this transfer.")
             if (transfer.state == CloudTransferState.DECLINED) return transfer
             val now = store.now()
@@ -104,7 +104,7 @@ class CloudTransferService(
         val actor = sessions.actor(principal, onBehalfOf)
         repeat(ATTEMPTS) {
             val transfer = visible(principal, id)
-            val admin = principal.member.role.isAdministrator
+            val admin = principal.isCloudAdministrator
             if (transfer.fromMemberId != principal.member.id && !admin)
                 throw TeamFailure("transfer_forbidden", 403, "Only the session owner or an administrator can cancel this transfer.")
             if (transfer.state == CloudTransferState.CANCELLED) return transfer
@@ -128,9 +128,9 @@ class CloudTransferService(
     suspend fun get(principal: Principal, id: String): CloudTransfer = expiredAsOf(visible(principal, id), store.now())
 
     suspend fun list(principal: Principal, query: CloudTransferQuery): CloudTransferPage {
-        principal.requireReady(); principal.requireInteractive()
+        principal.requireCloudRead()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
-        if (query.team) principal.requireAdmin()
+        if (query.team) principal.requireCloudAdministrator()
         store.revalidate(principal)
         val now = store.now()
         return transfers.list(principal.teamId, principal.member.id, query).let { page -> page.copy(transfers = page.transfers.map { expiredAsOf(it, now) }) }
@@ -145,12 +145,12 @@ class CloudTransferService(
 
     /** Visible to both members and administrators; anyone else gets `404`. */
     private suspend fun visible(principal: Principal, id: String): CloudTransfer {
-        principal.requireReady(); principal.requireInteractive()
+        principal.requireCloudRead()
         store.revalidate(principal)
         if (!CloudIdentifier.valid(id)) throw missingTransfer()
         val transfer = transfers.find(principal.teamId, id) ?: throw missingTransfer()
         val member = principal.member.id
-        if (!principal.member.role.isAdministrator && member != transfer.fromMemberId && member != transfer.toMemberId) throw missingTransfer()
+        if (!principal.isCloudAdministrator && member != transfer.fromMemberId && member != transfer.toMemberId) throw missingTransfer()
         return transfer
     }
 

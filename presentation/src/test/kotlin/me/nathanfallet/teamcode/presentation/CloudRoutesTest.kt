@@ -77,7 +77,11 @@ class CloudRoutesTest {
         override suspend fun authenticate(token: String): Principal? = when (token) {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
-            "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet())
+            "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD))
+            "colleague-read" -> Principal(colleague, "colleague-read-key", "default", setOf(ServiceScope.CLOUD_READ))
+            "colleague-write" -> Principal(colleague, "colleague-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
+            "admin-write" -> Principal(admin, "admin-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
+            "admin-cloud" -> Principal(admin, "admin-cloud-key", "default", setOf(ServiceScope.ADMIN_CLOUD))
             else -> null
         }
     }
@@ -96,7 +100,7 @@ class CloudRoutesTest {
             key?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) }; onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
         }
         assertTrue("cloud.sessions.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText()).features)
-        assertEquals(HttpStatusCode.Forbidden, create("service-admin", "k1").status, "Service keys never reach cloud routes")
+        assertEquals(HttpStatusCode.Forbidden, create("service-admin", "k1").status, "Keys without a cloud scope never reach cloud routes")
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/sessions") { bearerAuth("service-admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, create("admin", null).status)
         assertEquals(HttpStatusCode.BadRequest, create("admin", "has space").status)
@@ -135,6 +139,62 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions?owner=all&label=orchestrator.task=1234") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?state=sleeping") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?limit=51") { bearerAuth("admin") }.status)
+    }
+
+    @Test fun cloudKeysActForTheirOwnerAndOnlyAdminCloudKeysDelegate() = testApplication {
+        val store = Store()
+        val sessions = CloudSessionService(store)
+        val transfers = CloudTransferService(store, Transfers(store), sessions, CloudRecipientPolicy(store))
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudTransfers = transfers, publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.keys.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague-read") }.bodyAsText()).features)
+        suspend fun create(token: String, key: String, onBehalf: String? = null) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"name":"Task","profileId":"profile-id"}""")
+            header(CloudHeaders.IDEMPOTENCY_KEY, key); onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+        }
+        suspend fun get(token: String, path: String) = client.get(path) { bearerAuth(token) }
+        // cloud:read reads, never writes.
+        val readOnly = create("colleague-read", "r1")
+        assertEquals(HttpStatusCode.Forbidden, readOnly.status); assertTrue("credential_scope" in readOnly.bodyAsText())
+        assertEquals(HttpStatusCode.OK, get("colleague-read", "/api/v1/cloud/sessions").status)
+        assertEquals(HttpStatusCode.OK, get("colleague-read", "/api/v1/cloud/profiles").status)
+        assertEquals(HttpStatusCode.OK, get("colleague-read", "/api/v1/cloud/transfers").status)
+        // Cluster, profile and settings administration stays interactive, also with admin:cloud.
+        for (path in listOf("/api/v1/cloud/settings", "/api/v1/cloud/clusters")) assertEquals(HttpStatusCode.Forbidden, get("admin-cloud", path).status, path)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/profiles") { bearerAuth("admin-cloud"); contentType(ContentType.Application.Json); setBody("{}") }.status)
+        // cloud:write creates and manages the owner's own sessions.
+        val ownResponse = create("colleague-write", "w1")
+        assertEquals(HttpStatusCode.Accepted, ownResponse.status, ownResponse.bodyAsText())
+        val own = Serialization.json.decodeFromString<CloudSessionView>(ownResponse.bodyAsText())
+        assertEquals(CloudAttributionView("colleague-id", "colleague-write-key", "colleague-id"), own.createdBy)
+        assertTrue("on_behalf_forbidden" in create("colleague-write", "w2", onBehalf = "admin-id").bodyAsText())
+        assertEquals(HttpStatusCode.OK, get("colleague-read", "/api/v1/cloud/sessions/${own.id}").status)
+        store.sessions[own.id] = store.sessions.getValue(own.id).copy(state = CloudSessionState.READY)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/sessions/${own.id}/pause") { bearerAuth("colleague-read") }.status)
+        // An administrator's key without admin:cloud is only its owner: no delegation, no other member's session.
+        assertTrue("on_behalf_forbidden" in create("admin-write", "a1", onBehalf = "colleague-id").bodyAsText())
+        assertEquals(HttpStatusCode.NotFound, get("admin-write", "/api/v1/cloud/sessions/${own.id}").status)
+        assertEquals(HttpStatusCode.NotFound, client.delete("/api/v1/cloud/sessions/${own.id}") { bearerAuth("admin-write") }.status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-write", "/api/v1/cloud/sessions?owner=all").status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-write", "/api/v1/cloud/transfers?scope=team").status)
+        // admin:cloud: an orchestrator creating and driving sessions on behalf of a member, attributed to its key.
+        val delegatedResponse = create("admin-cloud", "o1", onBehalf = "colleague-id")
+        assertEquals(HttpStatusCode.Accepted, delegatedResponse.status, delegatedResponse.bodyAsText())
+        val delegated = Serialization.json.decodeFromString<CloudSessionView>(delegatedResponse.bodyAsText())
+        assertEquals("colleague-id", delegated.ownerId)
+        assertEquals(CloudAttributionView("admin-id", "admin-cloud-key", "colleague-id"), delegated.createdBy)
+        assertEquals(HttpStatusCode.OK, get("admin-cloud", "/api/v1/cloud/transfers?scope=team").status)
+        val orchestrator = TeamCodeClient("http://localhost", { "admin-cloud" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            assertEquals(setOf(own.id, delegated.id), orchestrator.cloudSessions(owner = "all").sessions.map { it.id }.toSet())
+            assertEquals("paused", orchestrator.pauseCloudSession(own.id, onBehalfOf = "colleague-id").desiredState)
+            store.sessions[delegated.id] = store.sessions.getValue(delegated.id).copy(state = CloudSessionState.READY)
+            val moved = orchestrator.transferCloudSession(delegated.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "o2", onBehalfOf = "colleague-id")
+            assertEquals("accepted", moved.state, "An admin:cloud transfer is immediate, like an interactive administrator's")
+            assertEquals(CloudAttributionView("admin-id", "admin-cloud-key", "colleague-id"), moved.initiatedBy)
+        } finally { orchestrator.close() }
     }
 
     /** Transfers in memory: the version compare-and-set and the session write of the real store, without SQL. */
@@ -179,7 +239,7 @@ class CloudRoutesTest {
             bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
             key?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) }; onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
         }
-        assertEquals(HttpStatusCode.Forbidden, transfer("service-admin", "t1").status, "Service keys never transfer sessions")
+        assertEquals(HttpStatusCode.Forbidden, transfer("service-admin", "t1").status, "Keys without a cloud scope never transfer sessions")
         assertEquals(HttpStatusCode.BadRequest, transfer("colleague", null).status, "An Idempotency-Key is required")
         assertEquals(HttpStatusCode.Forbidden, transfer("colleague", "t1", onBehalf = "admin-id").status)
         val offered = transfer("colleague", "t1")

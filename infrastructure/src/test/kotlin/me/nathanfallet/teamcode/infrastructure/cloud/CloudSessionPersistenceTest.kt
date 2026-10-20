@@ -46,6 +46,7 @@ class CloudSessionPersistenceTest {
                 val connected = administration(ra, rb, admin, colleague, cipher)
                 val profile = ra.admin.profiles(admin).single()
                 delegatedCreationAndIdempotency(ra, rb, admin, colleague, profile)
+                cloudKeys(ra, rb, admin, colleague, profile)
                 val session = lifecycle(ra, rb, admin, colleague, profile)
                 concurrentResumeHasOneEpoch(ra, rb, admin, colleague, session)
                 capacityIsFifoAndBounded(ra, rb, admin, colleague, profile, connected)
@@ -128,6 +129,35 @@ class CloudSessionPersistenceTest {
         rb.sessions.delete(colleague, null, created.id)
         drain(ra) { ra.store.find(admin.teamId, created.id)!!.workspace.deletion == DeletionState.PROVEN }
         assertEquals(TERMINATED, ra.store.find(admin.teamId, created.id)!!.state)
+    }
+
+    /** V2 keys: `cloud:*` act as their owner, `admin:cloud` (administrators' keys only) delegates; revalidated in SQL on every call. */
+    private suspend fun cloudKeys(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile) {
+        val keys = SqlServiceKeyService(ra.database)
+        val team = SqlTeamService(rb.database)
+        failure("invalid_service_key") { keys.create(colleague, colleague.member.id, "orchestrator", setOf(ServiceScope.ADMIN_CLOUD), 1) }
+        failure("invalid_service_key") { keys.create(admin, colleague.member.id, "orchestrator", setOf(ServiceScope.ADMIN_CLOUD), 1) }
+        val orchestratorKey = keys.create(admin, admin.member.id, "orchestrator", setOf(ServiceScope.ADMIN_CLOUD), 1)
+        val orchestrator = team.authenticate(orchestratorKey.accessToken)!!
+        val adminWriter = team.authenticate(keys.create(admin, admin.member.id, "admin writer", setOf(ServiceScope.CLOUD_WRITE), 1).accessToken)!!
+        val reader = team.authenticate(keys.create(colleague, colleague.member.id, "reader", setOf(ServiceScope.CLOUD_READ), 1).accessToken)!!
+        val draft = CloudSessionDraft("Task 5678", profile.id, null, null, null, mapOf("orchestrator.task" to "5678"), null)
+        failure("on_behalf_forbidden") { rb.sessions.create(adminWriter, colleague.member.id, draft, null) }
+        failure("credential_scope") { rb.sessions.create(reader, null, draft, null) }
+        val created = (rb.sessions.create(orchestrator, colleague.member.id, draft, IdempotencyRequest("POST /cloud/sessions", "task-5678", "c".repeat(64))) as CloudCreateOutcome.Created).session
+        assertEquals(Attribution(admin.member.id, orchestratorKey.metadata.id, colleague.member.id), created.createdBy, "Attributed to the key, never its token")
+        val audit = ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.created") and (AuditEvents.subjectId eq created.id) }.single() }
+        assertEquals(orchestratorKey.metadata.id, audit[AuditEvents.credentialId])
+        assertEquals(created.id, ra.sessions.get(reader, created.id).id, "cloud:read sees the owner's session")
+        failure("not_found") { ra.sessions.get(adminWriter, created.id) }
+        failure("forbidden") { ra.sessions.list(adminWriter, CloudSessionQuery(owner = "*")) }
+        assertTrue(created.id in ra.sessions.list(orchestrator, CloudSessionQuery(owner = "*")).sessions.map { it.id })
+        // Revocation on one replica stops the key on the other at its next call.
+        keys.revoke(admin, orchestratorKey.metadata.id)
+        failure("authentication_required") { rb.sessions.get(orchestrator, created.id) }
+        failure("authentication_required") { rb.sessions.delete(orchestrator, colleague.member.id, created.id) }
+        rb.sessions.delete(colleague, null, created.id)
+        drain(ra) { ra.store.find(admin.teamId, created.id)!!.workspace.deletion == DeletionState.PROVEN }
     }
 
     private suspend fun lifecycle(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile): CloudSession {

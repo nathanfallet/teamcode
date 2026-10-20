@@ -126,7 +126,9 @@ class CloudConversationRoutesTest {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
             "other" -> Principal(other, "other-session", "default")
-            "service-colleague" -> Principal(colleague, "colleague-key", "default", ServiceScope.entries.toSet())
+            "service-colleague" -> Principal(colleague, "colleague-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD))
+            "colleague-read" -> Principal(colleague, "colleague-read-key", "default", setOf(ServiceScope.CLOUD_READ))
+            "admin-write" -> Principal(admin, "admin-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
             else -> null
         }
     }
@@ -195,7 +197,10 @@ class CloudConversationRoutesTest {
                 bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
                 key?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) }; onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
             }
-            assertEquals(HttpStatusCode.Forbidden, send("service-colleague", """{"text":"hi"}""").status, "Service keys never reach cloud routes")
+            assertEquals(HttpStatusCode.Forbidden, send("service-colleague", """{"text":"hi"}""").status, "Keys without a cloud scope never reach cloud routes")
+            assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions/s1/events") { bearerAuth("colleague-read") }.status, "cloud:read reads the owner's transcript")
+            assertEquals(HttpStatusCode.Forbidden, send("colleague-read", """{"text":"hi"}""").status, "but cannot send")
+            assertEquals(HttpStatusCode.NotFound, send("admin-write", """{"text":"hi"}""").status, "An administrator's key without admin:cloud acts as its owner only")
             assertEquals(HttpStatusCode.NotFound, send("other", """{"text":"hi"}""").status, "Another member's session is invisible")
             assertEquals(HttpStatusCode.BadRequest, send("admin", """{"text":"hi"}""", onBehalf = "colleague-id").status, "Messages are never delegated")
             assertEquals(HttpStatusCode.BadRequest, send("colleague", """{"text":"hi","clientMessageId":"b"}""", key = "a").status)

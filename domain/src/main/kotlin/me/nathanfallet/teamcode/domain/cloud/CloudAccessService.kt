@@ -32,9 +32,12 @@ class CloudAccessService(
         return store.saveAccessPolicy(principal, expectedVersion, rules)
     }
 
-    /** The permissions [member] holds on a session owned by [ownerId] (or on creation, with [ownerId] = the member). */
-    suspend fun permissions(teamId: String, member: Member, ownerId: String): Set<CloudPermission> {
-        if (member.role.isAdministrator) return CloudPermission.entries.toSet()
+    /**
+     * The permissions [member] holds on a session owned by [ownerId] (or on creation, with [ownerId] = the member).
+     * [administrator] is false for a key without `admin:cloud`, which then holds only what the rules give its owner.
+     */
+    suspend fun permissions(teamId: String, member: Member, ownerId: String, administrator: Boolean = member.role.isAdministrator): Set<CloudPermission> {
+        if (administrator) return CloudPermission.entries.toSet()
         val policy = store.accessPolicy(teamId)
         var resolvedGroups: Set<String>? = null // Resolved only when a group rule needs it.
         val granted = mutableSetOf<CloudPermission>()
@@ -51,8 +54,8 @@ class CloudAccessService(
     }
 
     /** Fails with `403 cloud_permission_denied` unless [member] holds [permission] for [ownerId]. */
-    suspend fun require(teamId: String, member: Member, ownerId: String, permission: CloudPermission) {
-        if (permission !in permissions(teamId, member, ownerId))
+    suspend fun require(teamId: String, member: Member, ownerId: String, permission: CloudPermission, administrator: Boolean = member.role.isAdministrator) {
+        if (permission !in permissions(teamId, member, ownerId, administrator))
             throw TeamFailure("cloud_permission_denied", 403, "The team's cloud access policy does not allow ${permission.wire} here.")
     }
 

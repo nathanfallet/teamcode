@@ -21,6 +21,28 @@ class ServiceKeyAuthorizationTest {
         }
         for (action in CredentialAction.entries) authorize.check(admin, action)
     }
+    @Test fun cloudScopesNestReadUnderWriteAndOnlyAdminCloudCarriesAdministratorRights() {
+        val authorize = AuthorizeCredentialUseCase()
+        val member = admin.copy(member = admin.member.copy(id = "member", role = Role.MEMBER))
+        for (scope in ServiceScope.entries) {
+            val key = admin.copy(serviceScopes = setOf(scope))
+            val reads = scope in setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD)
+            val writes = scope in setOf(ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD)
+            if (reads) authorize.check(key, CredentialAction.CLOUD_READ)
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.CLOUD_READ) }.code)
+            if (writes) authorize.check(key, CredentialAction.CLOUD_WRITE)
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.CLOUD_WRITE) }.code)
+            // An administrator's key is an administrator for cloud sessions only with admin:cloud, and never for interactive administration.
+            assertEquals(scope == ServiceScope.ADMIN_CLOUD, key.isCloudAdministrator)
+            assertFailsWith<TeamFailure> { key.requireAdmin() }
+            assertFalse(member.copy(serviceScopes = setOf(scope)).isCloudAdministrator, "A member's key never becomes an administrator")
+        }
+        assertTrue(admin.isCloudAdministrator)
+        assertFalse(member.isCloudAdministrator)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { admin.copy(serviceScopes = setOf(ServiceScope.CLOUD_WRITE)).requireCloudAdministrator() }.code)
+        val temporary = admin.copy(member = admin.member.copy(passwordChangeRequired = true), serviceScopes = setOf(ServiceScope.ADMIN_CLOUD))
+        assertEquals("password_change_required", assertFailsWith<TeamFailure> { temporary.requireCloudRead() }.code)
+    }
     @Test fun interactiveTemporaryLoginCanReplacePasswordButCannotAdministerBeforeReplacement() {
         val temporary = admin.copy(member = admin.member.copy(passwordChangeRequired = true))
         temporary.requireInteractive() // Credential kind and readiness are separate checks.
