@@ -116,4 +116,4 @@ Use one variant-assignment model for cloud environment variables and MCP servers
 
 Skills remain a separate versioned catalog with access assignments, described above. A user without skill access receives no provisioned copy. On session creation/resume/transfer, resolve the new effective user's authorized pinned catalog artifacts. Already delivered skill files cannot be made secret again; enforce protected tool/data access independently.
 
-Exact environment/MCP variant granularity, assignment UI/API and update semantics remain V2 design discussions. Skills are published only through the CI-called API; no skill variants are planned at this stage.
+Exact environment/MCP variant granularity, assignment UI/API and update semantics remain V2 design discussions. A first server-side foundation (model, persistence, administrator API/dashboard and effective resolution, without gateway, cloud or CLI consumers) and its provisional choices are described in [variants](variants.md). The GitHub-versus-CI-API skill publication choice is also open; no skill variants are planned at this stage.
