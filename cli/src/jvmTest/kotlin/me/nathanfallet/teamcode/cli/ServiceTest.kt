@@ -32,6 +32,8 @@ class ServiceTest {
         assertTrue(serviceMatches(registered, "installation", "https://team.example", true, runRouting = true))
         assertFalse(serviceMatches(registered, "another-installation", "https://team.example", true, runRouting = true))
         assertFalse(serviceMatches(current, "installation", "https://team.example", false, mcpRelay = true), "A service without the MCP relay is not used for MCP launches")
+        assertFalse(serviceMatches(current, "installation", "https://team.example", false, localTokenHeader = true), "An older service cannot serve a Claude Code that keeps its login")
+        assertTrue(serviceMatches(JsonObject(old + ("capabilities" to JsonArray(listOf(JsonPrimitive("local-token-header-v1"))))), "installation", "https://team.example", false, localTokenHeader = true))
         val relay = JsonObject(old + ("capabilities" to JsonArray(listOf(JsonPrimitive("workload-routing-v1"), JsonPrimitive("mcp-relay-v1")))))
         assertTrue(serviceMatches(relay, "installation", "https://team.example", true, mcpRelay = true))
     }

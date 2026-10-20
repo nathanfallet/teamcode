@@ -42,12 +42,29 @@ class AgentLaunchTest {
         assertFailsWith<IllegalArgumentException> { agentLaunch("codex", emptyList(), 4242, token, mcpServers = listOf("../admin")) }
     }
 
-    @Test fun `claude sends the local token as a bearer that overrides a claude ai login`() {
-        // Interactive Claude Code ignores an unapproved ANTHROPIC_API_KEY when it is logged in with a claude.ai
-        // subscription (it asks, defaulting to "No", and the key changes on every launch), then sends its own OAuth
-        // bearer, which the local proxy refuses. ANTHROPIC_AUTH_TOKEN takes precedence without a prompt.
+    @Test fun `claude logged in with claude ai keeps its login and sends the capability in a custom header`() {
+        // Any environment credential, ANTHROPIC_AUTH_TOKEN included, puts Claude Code in API mode: "claude.ai
+        // connectors are disabled because ANTHROPIC_API_KEY or another auth source is set". TeamClaude sets only
+        // ANTHROPIC_BASE_URL and lets Claude Code keep its subscription login; so does this launch.
+        val launch = agentLaunch("claude", listOf("--dangerously-skip-permissions"), 4242, token, claudeLogin = true)
+        assertEquals("http://127.0.0.1:4242", launch.environment["ANTHROPIC_BASE_URL"], "The capability stays out of the displayed base URL")
+        assertEquals("x-teamcode-local-token: $token", launch.environment["ANTHROPIC_CUSTOM_HEADERS"])
+        for (name in listOf("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
+            assertTrue(launch.environment.containsKey(name) && launch.environment[name] == null, "An inherited $name is removed")
+        val inherited = "x-project: alpha\nX-TeamCode-Local-Token: stale\n\nx-team: beta"
+        assertEquals("x-project: alpha\nx-team: beta\nx-teamcode-local-token: $token",
+            agentLaunch("claude", emptyList(), 4242, token, claudeLogin = true, inheritedHeaders = inherited).environment["ANTHROPIC_CUSTOM_HEADERS"],
+            "The caller's own headers are kept; a stale capability is replaced")
+        assertEquals(inherited, agentLaunch("claude", emptyList(), 4242, token, inheritedHeaders = inherited).environment["ANTHROPIC_CUSTOM_HEADERS"],
+            "Without a login to keep, custom headers are left alone")
+    }
+
+    @Test fun `claude without its own login receives the local token as a bearer`() {
+        // Without a claude.ai login there is nothing to keep. Interactive Claude Code asks before using an
+        // ANTHROPIC_API_KEY (default "No"); ANTHROPIC_AUTH_TOKEN is used without a prompt.
         val launch = agentLaunch("claude", listOf("--dangerously-skip-permissions"), 4242, token)
         assertEquals(token, launch.environment["ANTHROPIC_AUTH_TOKEN"])
+        assertEquals("http://127.0.0.1:4242", launch.environment["ANTHROPIC_BASE_URL"])
         for (name in listOf("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
             assertTrue(launch.environment.containsKey(name) && launch.environment[name] == null, "An inherited $name is removed")
     }

@@ -14,6 +14,7 @@ import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.cli.platform.*
+import me.nathanfallet.teamcode.cli.proxy.LOCAL_TOKEN_HEADER
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.service.loadService
@@ -52,11 +53,12 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val capabilities = client.capabilities()
             // Fails before launching the agent when the saved session is invalid; names only, never an address or credential.
             val servers = assignedMcpServers(client, capabilities)
+            val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }) { runId ->
                 val service = loadService(configPath())
-                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty())) {
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin)) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(service.port, service.localToken, runId, servers)
+                    launch(service.port, service.localToken, runId, servers, claudeLogin)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
@@ -65,7 +67,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(port, token, runId, servers)
+                        launch(port, token, runId, servers, claudeLogin)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -86,7 +88,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             emptyList()
         }
     }
-    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>): Int {
+    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean): Int {
         val options = arguments.takeWhile { it != "--" }
         val plugin = if (agent == "claude" && !noGuidance && "--bare" !in options) try {
             GuidancePlugin.create(configPath(), port)
@@ -107,7 +109,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             AgentLaunch(emptyList(), emptyMap())
         } else AgentLaunch(emptyList(), emptyMap())
         try {
-            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers)
+            val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
+                claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"))
             return runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment)
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
@@ -115,12 +118,29 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
 }
 
+/** Provider settings that would take precedence over the local proxy; removed for every Claude Code launch. */
+private val claudeProviderOverrides: Map<String, String?> = listOf("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY").associateWith { null }
+
+/**
+ * Whether Claude Code has its own login (claude.ai, as TeamClaude requires), checked with the variables the launch
+ * removes. `claude auth status` exits 0 only when logged in; any failure or a slow answer counts as no login. A
+ * stored Console API key also counts: Claude Code then sends that key, which the proxy ignores like an OAuth login.
+ */
+internal suspend fun claudeLoggedIn(): Boolean = try {
+    kotlinx.coroutines.withTimeoutOrNull(5_000) { runInteractiveProcess("claude", listOf("auth", "status"), claudeProviderOverrides, quiet = true) } == 0
+} catch (error: CancellationException) {
+    throw error
+} catch (_: Exception) {
+    false
+}
+
 /** The agent-side name of a team MCP server; two servers with the same label are both left out. */
 internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList()): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -146,19 +166,21 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                 }
             }
         }.toString())
-        AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), mapOf(
+        // Logged in with claude.ai, Claude Code keeps that login, as under TeamClaude: an environment credential
+        // would put it in API mode, which disables the organization's claude.ai connectors. The local capability
+        // then rides in a custom header (kept out of the base URL, which Claude Code displays), beside the caller's
+        // own custom headers; the proxy ignores the OAuth bearer. Without its own login, the capability is a bearer
+        // (ANTHROPIC_AUTH_TOKEN), never ANTHROPIC_API_KEY, which interactive Claude Code asks about before use.
+        val keepLogin = claudeLogin && token.none { it.isWhitespace() || it.isISOControl() }
+        val headers = if (keepLogin) (inheritedHeaders.orEmpty().lines().filter {
+            it.isNotBlank() && !it.substringBefore(':').trim().equals(LOCAL_TOKEN_HEADER, ignoreCase = true)
+        } + "$LOCAL_TOKEN_HEADER: $token").joinToString("\n") else inheritedHeaders
+        AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null) token else null,
         "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty()) token else null,
         "ANTHROPIC_BASE_URL" to origin,
-        // A bearer token, not ANTHROPIC_API_KEY: interactive Claude Code logged in with claude.ai asks before using
-        // an environment API key (default "No", and this key changes on every launch), then sends its own OAuth
-        // token, which the local proxy refuses. ANTHROPIC_AUTH_TOKEN takes precedence over that login silently.
-        "ANTHROPIC_AUTH_TOKEN" to token,
-        "ANTHROPIC_API_KEY" to null,
-        "CLAUDE_CODE_OAUTH_TOKEN" to null,
-        "CLAUDE_CODE_USE_BEDROCK" to null,
-        "CLAUDE_CODE_USE_VERTEX" to null,
-        "CLAUDE_CODE_USE_FOUNDRY" to null,
+        "ANTHROPIC_AUTH_TOKEN" to if (keepLogin) null else token,
+        "ANTHROPIC_CUSTOM_HEADERS" to headers,
     )) } else {
         val overrides = codexGuidance + listOf(
         "-c", "model_provider=\"teamcode\"",

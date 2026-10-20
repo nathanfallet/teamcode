@@ -107,6 +107,34 @@ class LocalProxyTest {
         } finally { sdk.close() }
     }
 
+    @Test fun `the capability header admits a claude ai login and neither credential is forwarded`() = testApplication {
+        val run = "11111111-1111-1111-1111-111111111111"
+        val forwarded = mutableListOf<String>()
+        val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine { request ->
+            assertEquals("Bearer server-token", request.headers[HttpHeaders.Authorization])
+            assertNull(request.headers["x-api-key"])
+            assertNull(request.headers["x-teamcode-local-token"])
+            assertFalse(request.headers.entries().any { (_, values) -> values.any { "sk-ant-oat" in it } }, "The claude.ai login never leaves the machine")
+            forwarded += request.url.encodedPath + " " + request.headers["x-teamcode-workload"] + " " + request.headers["x-teamcode-run-id"]
+            respond("data: {}\n\n", headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { config(this) } }
+        application { localProxy(sdk, localToken) }
+        try {
+            // What Claude Code sends when it keeps its claude.ai login: its own OAuth bearer, "?beta=true", and the
+            // capability from ANTHROPIC_CUSTOM_HEADERS.
+            suspend fun post(url: String, capability: String? = localToken) = client.post(url) {
+                bearerAuth("sk-ant-oat01-synthetic-subscription-login"); capability?.let { header("x-teamcode-local-token", it) }
+                contentType(ContentType.Application.Json); setBody(payload())
+            }
+            assertEquals(HttpStatusCode.OK, post("/v1/messages?beta=true").status)
+            assertEquals(HttpStatusCode.OK, post("/_teamcode/workloads/background/v1/messages").status)
+            assertEquals(HttpStatusCode.OK, post("/_teamcode/runs/$run/interactive/v1/messages").status)
+            assertEquals(HttpStatusCode.Unauthorized, post("/v1/messages", localToken.dropLast(1) + "x").status)
+            assertEquals(HttpStatusCode.Unauthorized, post("/v1/messages", null).status)
+            assertEquals(listOf("/v1/messages null null", "/v1/messages background null", "/v1/messages interactive $run"), forwarded)
+        } finally { sdk.close() }
+    }
+
     @Test fun `shared proxy isolates background launches and rejects conflicting metadata`() = testApplication {
         val forwarded = mutableListOf<Pair<String, String?>>()
         val sdk = TeamCodeClient("https://team.example", { "server-token" }) { config -> HttpClient(MockEngine { request ->

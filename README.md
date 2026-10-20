@@ -109,7 +109,7 @@ export TEAMCODE_LOCAL_TOKEN="$(openssl rand -hex 32)"
 
 The CLI saves the self-hosted server URL and authentication in `$XDG_CONFIG_HOME/teamcode/config.json`, falling back to `~/.config/teamcode/config.json` (directory 0700/file 0600 on POSIX). Other invocations reuse it. Omit `--server` to be prompted for the URL. `configure` is a development helper for an existing test token. Normal installations use `login`. Do not enter secrets into shell history or command arguments.
 
-The proxy accepts authenticated JSON `POST /v1/messages` and `POST /v1/responses` on `127.0.0.1:8789`. In server mode it routes to eligible imported Claude Max or Codex subscription accounts; in fixture mode it returns synthetic events. Point Claude Code at this loopback origin with `ANTHROPIC_BASE_URL` and use the local proxy token as `ANTHROPIC_AUTH_TOKEN`. Host/port environment variables for the central fixture: `TEAMCODE_HOST` (default loopback) and `TEAMCODE_PORT` (default 8080).
+The proxy accepts authenticated JSON `POST /v1/messages` and `POST /v1/responses` on `127.0.0.1:8789`. In server mode it routes to eligible imported Claude Max or Codex subscription accounts; in fixture mode it returns synthetic events. Point Claude Code at this loopback origin with `ANTHROPIC_BASE_URL`, with the local proxy token either in the `x-teamcode-local-token` header (`ANTHROPIC_CUSTOM_HEADERS`, which keeps a claude.ai login) or as `ANTHROPIC_AUTH_TOKEN`. Host/port environment variables for the central fixture: `TEAMCODE_HOST` (default loopback) and `TEAMCODE_PORT` (default 8080).
 
 ## Verification
 
@@ -178,13 +178,17 @@ For a manually managed proxy:
 ```sh
 export TEAMCODE_LOCAL_TOKEN="$(openssl rand -hex 32)"
 teamcode proxy start
-# In another terminal with the same TEAMCODE_LOCAL_TOKEN:
+# In another terminal with the same TEAMCODE_LOCAL_TOKEN, Claude Code logged in with claude.ai:
+ANTHROPIC_BASE_URL=http://127.0.0.1:8789 \
+ANTHROPIC_CUSTOM_HEADERS="x-teamcode-local-token: $TEAMCODE_LOCAL_TOKEN" \
+claude --model claude-haiku-4-5-20251001
+# Claude Code without its own login:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8789 \
 ANTHROPIC_AUTH_TOKEN="$TEAMCODE_LOCAL_TOKEN" \
 claude --model claude-haiku-4-5-20251001
 ```
 
-Remove conflicting `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` environment overrides before using this manual setup. Use `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`: when Claude Code is logged in with a claude.ai subscription, an interactive session asks before using an environment API key and, if it is not approved, sends its own login instead, which the proxy refuses with `401 A local TeamCode capability is required.` The local capability protects the loopback proxy; the proxy uses your saved TeamCode session to reach the team server. Provider credentials remain on the server. The requested model and effort must satisfy your team's policy. Native Messages fields and tool definitions pass through unchanged.
+Remove conflicting `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN` environment overrides before using this manual setup. When Claude Code is logged in with a claude.ai subscription, keep that login and send the local capability in the `x-teamcode-local-token` header, as `teamcode run claude` does: any environment credential puts Claude Code in API mode, which disables your organization's claude.ai connectors. The proxy ignores the login Claude Code sends and never forwards it. Without a login, use `ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`, which an interactive session asks about before use; a refused key answers `401 A local TeamCode capability is required.` The local capability protects the loopback proxy; the proxy uses your saved TeamCode session to reach the team server. Provider credentials remain on the server. The requested model and effort must satisfy your team's policy. Native Messages fields and tool definitions pass through unchanged.
 
 ## Codex through the local proxy
 

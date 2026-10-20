@@ -16,6 +16,9 @@ import me.nathanfallet.teamcode.domain.routing.*
 import me.nathanfallet.teamcode.infrastructure.protocols.ConversationCodec
 import me.nathanfallet.teamcode.infrastructure.protocols.StreamTranslation
 
+private const val MAXIMUM_OUTPUT_TOKENS = 1_048_576L
+private const val HELD_OUTPUT_TOKENS = 65_536L
+
 /** Native passthrough by default; explicit routes translate only when the destination protocol changes. */
 class PoolGateway(private val admission: AdmissionStore, private val credentials: CredentialSource, private val transports: List<ProviderTransport>, private val modelPolicies: ModelPolicyStore, private val routes: RoutingStore? = null, private val codecs: ConversationCodec = ConversationCodec(), private val queued: AwaitAdmissionUseCase? = null) : GatewayService {
     override suspend fun status(): GatewaySnapshot = admission.statistics().let { GatewaySnapshot("subscription-pool", it.active, it.completed, it.queued) }
@@ -47,7 +50,9 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         CheckModelPolicyUseCase().check(policy, model, model, effort, thinkingBudget)
         val maximumOutput = if (request.protocol == WireProtocol.MESSAGES) (body["max_tokens"] as? JsonPrimitive)?.longOrNull
             else (body["max_output_tokens"] as? JsonPrimitive)?.longOrNull ?: 16_384
-        if (maximumOutput == null || maximumOutput !in 1..65_536) throw TeamFailure("invalid_max_tokens", 400, "max_tokens must be between 1 and 65536.")
+        // The provider enforces each model's own output ceiling (Claude Code asks for 128000); this bound only keeps
+        // the admission estimate finite.
+        if (maximumOutput == null || maximumOutput !in 1..MAXIMUM_OUTPUT_TOKENS) throw TeamFailure("invalid_max_tokens", 400, "max_tokens must be between 1 and $MAXIMUM_OUTPUT_TOKENS.")
         if (listOf("thread", "previous_response_id", "conversation").any { body[it] != null && body[it] != JsonNull }) throw TeamFailure("thread_unsupported", 400, "Send the complete conversation; provider-managed message threads are not supported by this pool.")
         val configuredTargets = ResolveRouteUseCase().resolve(routes?.list(actor.teamId).orEmpty(), model, request.protocol)
         val affinity = SessionAffinityKey.from(request.headers, body, request.protocol, model, configuredTargets)
@@ -90,7 +95,9 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 CheckModelPolicyUseCase().check(policy, model, resolved, if (disabled) "none" else targetEffort?.contentOrNull, null)
             }
             // Credits are team policy, not an asserted exchange rate for subscription percentages.
-            val estimate = maxOf(request.body.size, outgoing.toString().toByteArray().size).toLong() + 16_384 + maximumOutput * 5
+            // The hold counts at most 65536 output tokens, as before larger ceilings were accepted: a client that asks
+            // for the model maximum on every request must not need twice the allowance to be admitted.
+            val estimate = maxOf(request.body.size, outgoing.toString().toByteArray().size).toLong() + 16_384 + minOf(maximumOutput, HELD_OUTPUT_TOKENS) * 5
             while (true) {
                 if (attempts >= 64) throw TeamFailure("routing_attempt_limit", 503, "The request reached its bounded routing limit. Retry shortly; available capacity has not been ruled out.")
                 val reservation = try {

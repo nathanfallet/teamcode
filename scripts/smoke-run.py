@@ -36,11 +36,24 @@ import json, os, pathlib, signal, subprocess, sys, tomllib, urllib.request
 name = pathlib.Path(sys.argv[0]).name
 arguments = sys.argv[1:]
 plugin = None
+login = os.environ.get('TEAMCODE_TEST_CLAUDE_LOGIN') == '1'
+if name == 'claude' and arguments == ['auth', 'status']:
+    # The launcher's login probe: a claude.ai login is kept only when this exits 0.
+    assert 'ANTHROPIC_API_KEY' not in os.environ and 'CLAUDE_CODE_OAUTH_TOKEN' not in os.environ
+    sys.exit(0 if login else 1)
 if name == 'claude':
     assert 'ANTHROPIC_API_KEY' not in os.environ
     assert 'CLAUDE_CODE_OAUTH_TOKEN' not in os.environ
     origin = os.environ['ANTHROPIC_BASE_URL']
-    token = os.environ['ANTHROPIC_AUTH_TOKEN']
+    if login:
+        # Claude Code keeps its own login: no environment credential, the capability in a custom header.
+        assert 'ANTHROPIC_AUTH_TOKEN' not in os.environ
+        header, _, token = os.environ['ANTHROPIC_CUSTOM_HEADERS'].splitlines()[-1].partition(': ')
+        assert header == 'x-teamcode-local-token'
+        credentials = {'x-teamcode-local-token': token, 'Authorization': 'Bearer sk-ant-oat01-synthetic-smoke-login'}
+    else:
+        token = os.environ['ANTHROPIC_AUTH_TOKEN']
+        credentials = {'Authorization': 'Bearer ' + token}
     route = '/v1/messages'
     if os.environ.get('TEAMCODE_TEST_GUIDANCE', '1') == '1':
         assert arguments[0] == '--plugin-dir'
@@ -66,6 +79,7 @@ else:
     assert provider['request_max_retries'] == provider['stream_max_retries'] == 0
     origin = provider['base_url'].removesuffix('/v1')
     token = os.environ[provider['env_key']]
+    credentials = {'Authorization': 'Bearer ' + token}
     route = '/v1/responses'
     if os.environ.get('TEAMCODE_TEST_GUIDANCE', '1') == '1':
         for offset, event in [(8, 'UserPromptSubmit'), (6, 'PreToolUse')]:
@@ -81,7 +95,7 @@ assert len(token) >= 32 and token != os.environ['TEAMCODE_ACCESS_TOKEN']
 assert sys.stdin.read() == 'stdin reaches the child\n'
 payload = {'model':'fixture','stream':True,'messages':[],'input':[]}
 req = urllib.request.Request(origin + route, json.dumps(payload).encode(),
-                             {'Content-Type':'application/json','Authorization':'Bearer '+token})
+                             {'Content-Type':'application/json', **credentials})
 with urllib.request.urlopen(req, timeout=15) as response:
     assert response.status == 200 and b'message_stop' in response.read()
 pathlib.Path(os.environ['TEAMCODE_RUN_RECORD']).write_text(json.dumps({'args':arguments,'origin':origin,'cwd':os.getcwd(),'plugin':str(plugin) if plugin else None}))
@@ -114,12 +128,13 @@ sys.exit(37)
         original_config = config.read_bytes()
         supplied = ['--dangerously-skip-permissions', '--model', 'literal model with spaces',
                     '-p', 'literal $(touch should-not-exist); "quotes"\nand a newline']
-        def launch(name, arguments=supplied, expected=37, guidance=True, workload=None):
+        def launch(name, arguments=supplied, expected=37, guidance=True, workload=None, login=False):
             record = root / (name + ('-signal' if expected != 37 else '') + '.json')
             result = subprocess.run([binary, 'run', name, *([] if guidance else ['--no-guidance']),
                                     *(['--workload', workload] if workload else []), '--', *arguments],
                                     input='stdin reaches the child\n', text=True, capture_output=True,
-                                    env=dict(env, TEAMCODE_RUN_RECORD=str(record), TEAMCODE_TEST_GUIDANCE='1' if guidance and '--bare' not in arguments else '0'), cwd=root, timeout=45)
+                                    env=dict(env, TEAMCODE_RUN_RECORD=str(record), TEAMCODE_TEST_GUIDANCE='1' if guidance and '--bare' not in arguments else '0',
+                                             TEAMCODE_TEST_CLAUDE_LOGIN='1' if login else '0'), cwd=root, timeout=45)
             assert result.returncode == expected, f'{name} launch failed with exit code {result.returncode}'
             assert result.stdout == 'CHILD_STDOUT_OK\n', 'Wrapper logs contaminated agent stdout'
             assert 'CHILD_STDERR_OK' in result.stderr
@@ -147,12 +162,14 @@ sys.exit(37)
         launch('claude', workload='background')
         launch('codex', ['exec', '--ignore-user-config', '--', 'literal'], workload='background')
         launch('claude', ['--workload', 'literal-agent-value'], workload='interactive')
+        launch('claude', login=True)
+        launch('claude', workload='background', login=True)
         invalid = subprocess.run([binary, 'run', 'claude', '--workload', 'urgent', '--', 'literal'],
                                  env=env, text=True, capture_output=True, timeout=15)
         assert invalid.returncode != 0 and 'CHILD_STDOUT_OK' not in invalid.stdout
         assert config.read_bytes() == original_config
         assert not (root / 'should-not-exist').exists()
-        print('Native run smoke passed: Claude/Codex launch, per-launch workload, literal arguments, inherited stdio/cwd, isolated capabilities, simultaneous proxies, exit/signal status, unchanged config and cleanup.')
+        print('Native run smoke passed: Claude/Codex launch, kept claude.ai login, per-launch workload, literal arguments, inherited stdio/cwd, isolated capabilities, simultaneous proxies, exit/signal status, unchanged config and cleanup.')
     finally:
         server.terminate()
         try:

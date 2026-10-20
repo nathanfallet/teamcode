@@ -111,6 +111,25 @@ class PoolGatewayTest {
             assertEquals(1, released)
         }
     }
+    @Test fun claudeCodeOutputCeilingPassesThroughWithTheReservationHoldItAlwaysHad() = runBlocking {
+        // Claude Code 2.1 asks for max_tokens 128000 on every Messages request; the provider validates the model's
+        // own ceiling. TeamCode only bounds the field, and keeps the admission hold at its former 65536-token cap.
+        var forwarded: JsonElement? = null
+        HttpClient(MockEngine { req ->
+            forwarded = Json.parseToJsonElement((req.body as TextContent).text).jsonObject["max_tokens"]
+            respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }.use { http ->
+            val store = FakeAdmission(account)
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            fun body(maximum: Long) = GenerationRequest("""{"model":"claude-opus-test","stream":true,"max_tokens":$maximum,"messages":[{"role":"user","content":"Hello"}]}""".toByteArray(), emptyMap(), actor)
+            gateway.forward(body(128_000)) { head, chunks -> assertEquals(200, head.status); chunks.collect { } }
+            assertEquals(JsonPrimitive(128_000), forwarded)
+            gateway.forward(body(100_000)) { _, chunks -> chunks.collect { } }
+            assertEquals(1, store.reservedUnits.distinct().size, "Above 65536 the hold no longer grows: ${store.reservedUnits}")
+            for (invalid in listOf(0L, -1L, 1_048_577L))
+                assertEquals("invalid_max_tokens", assertFailsWith<TeamFailure> { gateway.forward(body(invalid)) { _, _ -> fail("No dispatch") } }.code)
+        }
+    }
     private val actor = Principal(Member("member", "alice", Role.MEMBER, false, false), "token", "team")
     private val account = AccountRecord("account", AccountIdentity("team", "anthropic", "provider-id", "org-id"), "Max", 1, false, null, 0, AccountState.READY)
     private fun request() = GenerationRequest("""{"model":"claude-opus-test","stream":true,"max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}""".toByteArray(), emptyMap(), actor)
@@ -548,7 +567,9 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     var cooled = false
     var reconnect = false
     var selectedProvider: String? = null
+    val reservedUnits = mutableListOf<Long>()
     override suspend fun reserve(actor: Principal, units: Long, model: String, provider: String, excludedAccountIds: Set<String>, affinity: RequestAffinity?): Reservation {
+        reservedUnits += units
         val id = (0 until accountsPerProvider).map { "$provider-$it" }.firstOrNull { it !in excludedAccountIds }
             ?: throw TeamFailure("pool_unavailable", 429, "No eligible account.")
         selectedProvider = provider

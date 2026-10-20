@@ -28,7 +28,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
                     put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
@@ -41,7 +41,10 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                     post {
                         val auth = call.request.header(HttpHeaders.Authorization)
                         val key = call.request.header("x-api-key")
-                        if (!equalToken(auth?.removePrefix("Bearer "), localToken) && !equalToken(key, localToken)) {
+                        // A Claude Code that keeps its claude.ai login sends the capability in LOCAL_TOKEN_HEADER and
+                        // its own OAuth bearer, which is ignored here and never forwarded (only InferenceHeaders are).
+                        val header = call.request.header(LOCAL_TOKEN_HEADER)
+                        if (!equalToken(auth?.removePrefix("Bearer "), localToken) && !equalToken(key, localToken) && !equalToken(header, localToken)) {
                             call.respondText("A local TeamCode capability is required.", status = HttpStatusCode.Unauthorized)
                             return@post
                         }
@@ -118,6 +121,9 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
         }
     }
 }
+
+/** Carries the local capability beside an agent's own login (Claude Code: through ANTHROPIC_CUSTOM_HEADERS). */
+internal const val LOCAL_TOKEN_HEADER = "x-teamcode-local-token"
 
 /**
  * Relays an agent's MCP messages to the gateway endpoint of one assigned server, `/mcp/<server>`. The agent holds
