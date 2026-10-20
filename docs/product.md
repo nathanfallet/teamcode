@@ -32,7 +32,7 @@ teamcode service start|stop|restart|status|logs|uninstall
 
 ### Two authentication lifecycles
 
-Implemented identity-management commands include `teamcode whoami`, `teamcode devices list|rename|revoke` and `teamcode auth sessions list|revoke`. See [devices and authentication sessions](devices.md). These login sessions are distinct from the target agent-activity registry behind `teamcode sessions list`, which remains planned.
+Implemented identity-management commands include `teamcode whoami`, `teamcode devices list|rename|revoke` and `teamcode auth sessions list|revoke`. See [devices and authentication sessions](devices.md). These login sessions are distinct from the [implemented local agent-launch registry](agent-sessions.md) behind `teamcode sessions list`.
 
 `login` asks for a username/password created by the team administrator, handles the required initial password change, and stores only a revocable session token. Persist the selected self-hosted server URL and TeamCode authentication under `$XDG_CONFIG_HOME/teamcode/`, falling back to `~/.config/teamcode/`. Ask for the server URL during first setup; subsequent invocations reuse the saved origin and authentication. Use an owner-only directory (0700) and configuration file (0600) on POSIX, and an equivalent owner-only DACL on Windows. Never store provider pool credentials or the user's password in this configuration.
 
@@ -48,7 +48,7 @@ Imports do not stop another program. Coordinate a refresh ownership handover bef
 
 Bind to loopback only and require a per-user capability even on localhost. Validate the destination and never implement an unrestricted forward proxy. `run` reuses an existing owned daemon and only changes its child's environment. Installing persistent integration is explicit and reversible.
 
-Default service installation starts at user logon: launchd LaunchAgent on macOS, systemd user unit on Linux, scheduled logon task on Windows. System installation starts at boot before login: launchd LaunchDaemon, systemd system service (or explicit linger configuration), Windows SCM. It requires appropriate elevation, a service identity and secrets available without an unlocked personal keychain. Never copy personal credentials into a system account implicitly.
+Default service installation starts at user logon: launchd LaunchAgent on macOS, systemd user unit on Linux, scheduled logon task on Windows. System installation starts at boot before login: launchd LaunchDaemon, systemd system service (or explicit linger configuration), a Windows least-privilege boot-triggered task with password logon. It requires appropriate elevation, a service identity and secrets available without an unlocked personal keychain. Never copy personal credentials into a system account implicitly.
 
 Track installed/running/authenticated/connected states separately. Retry network failures with backoff without opening a browser at boot. Keep logs bounded, use a stable absolute binary path, prevent duplicate daemons, drain streams during upgrades and support rollback. Uninstall only TeamCode-owned registrations/files and preserve credentials unless explicitly requested. A busy port is an error, not permission to kill another process. A daemon keeps transport available but never autonomously launches model tasks.
 
@@ -57,13 +57,13 @@ Track installed/running/authenticated/connected states separately. Retry network
 - Overview: usable capacity, 5-hour/weekly windows, reset times, forecast confidence, waiting work and controller decisions.
 - Provider accounts: CLI enrollment instructions, connection/refresh health, ownership, pools, permissions, pause/drain and reconnection status; no secret display.
 - Team: administrator-created users, groups, roles, devices and CI credentials.
-- Budgets: member/group/run limits, concurrency, protected reserves and audited temporary overrides.
+- Budgets: member/group/run limits, concurrency, protected reserves and [audited temporary daily-allocation overrides](budget-overrides.md).
 - Model routing: requested aliases, actual targets, capabilities, explicit fallbacks and a why-this-route explanation.
 - Sessions: activity metadata, directives, delivery/acknowledgment status; private content is not a team leaderboard.
 - Personal account: own usage, reservations, device management, CLI integration and refusal explanations.
 - Operations: audit history, versions, provider failures and dependency health.
 
-Proposed first UI: server-rendered FreeMarker with targeted client-side updates and SSE charts. Backend API remains usable independently. Roles: owner, admin, group manager, member and service identity. Team authentication uses administrator-created usernames and passwords, with no public registration, email infrastructure or mandatory external identity provider. First startup on an empty database creates `admin` and prints its temporary password once. It must be changed before other actions. Admin-created accounts follow the same temporary-password flow; password resets and role changes revoke sessions.
+Proposed first UI: server-rendered FreeMarker with targeted client-side updates and SSE charts. Backend API remains usable independently. Roles: owner, admin, group manager, member and service identity. [Owner/admin/member and scoped-manager authority](team-roles.md) is implemented; other planned dashboard/session work remains tracked separately. Team authentication uses administrator-created usernames and passwords, with no public registration, email infrastructure or mandatory external identity provider. First startup on an empty database creates `admin` and prints its temporary password once. It must be changed before other actions. Admin-created accounts follow the same temporary-password flow; password resets and role changes revoke sessions.
 
 ## Capacity and fairness
 

@@ -114,7 +114,7 @@ def assemble(inputs, revision, source_commit, output):
         raise ValueError('Assemble into an empty output directory.')
     for asset in assets.values():
         shutil.copyfile(inputs / asset['fileName'], output / asset['fileName'])
-    manifest = {'schemaVersion': 1, 'version': revision, 'tag': f'v{revision}', 'sourceCommit': source_commit, 'assets': assets}
+    manifest = {'schemaVersion': 1, 'version': revision, 'tag': revision, 'sourceCommit': source_commit, 'assets': assets}
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     sums = [f"{asset['sha256']}  {asset['fileName']}" for asset in assets.values()]
     sums.append(f"{digest(output / 'manifest.json')}  manifest.json")

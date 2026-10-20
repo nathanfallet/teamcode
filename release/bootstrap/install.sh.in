@@ -1,0 +1,79 @@
+#!/bin/sh
+# Generated from the publisher-verified @@VERSION@@ release. No JVM is required.
+set -eu
+umask 077
+
+fail() { printf '%s\n' "TeamCode: $1" >&2; exit 1; }
+[ "$#" -eq 0 ] || fail 'Use TEAMCODE_INSTALL_ROOT or TEAMCODE_INSTALL_BUNDLE to customize installation.'
+[ "$(id -u)" != 0 ] || fail 'Install as your own user, without sudo.'
+command -v curl >/dev/null 2>&1 || [ -n "${TEAMCODE_INSTALL_BUNDLE:-}" ] || fail 'Install curl first.'
+if command -v sha256sum >/dev/null 2>&1; then
+    checksum() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+    checksum() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+    fail 'Install sha256sum or shasum first.'
+fi
+
+system=$(uname -s)
+machine=$(uname -m)
+case "$system" in
+    Darwin)
+        system=macos
+        # Select Apple Silicon even if the invoking shell runs under Rosetta.
+        if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then machine=arm64; fi
+        ;;
+    Linux) system=linux ;;
+    *) fail 'Supported systems: macOS and glibc Linux; use install.ps1 on Windows.' ;;
+esac
+case "$machine" in
+    arm64|aarch64) machine=arm64 ;;
+    x86_64|amd64) machine=x64 ;;
+    *) fail 'Supported architectures: ARM64 and x64.' ;;
+esac
+target="$system-$machine"
+case "$target" in
+@@POSIX_ASSETS@@
+    *) fail 'Unsupported native target.' ;;
+esac
+
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/teamcode-install.XXXXXXXX")
+cleanup() { rm -rf -- "$temporary"; }
+trap cleanup 0
+trap 'exit 1' 1 2 3 15
+base='https://github.com/@@REPOSITORY@@/releases/download/@@VERSION@@'
+
+fetch() {
+    name=$1 expected_size=$2 expected_hash=$3
+    destination="$temporary/$name"
+    if [ -n "${TEAMCODE_INSTALL_BUNDLE:-}" ]; then
+        source_file="$TEAMCODE_INSTALL_BUNDLE/$name"
+        [ -f "$source_file" ] && [ ! -L "$source_file" ] || fail 'The offline bundle must contain regular release files.'
+        dd if="$source_file" of="$destination" bs=8192 count="$((expected_size / 8192 + 1))" 2>/dev/null
+    else
+        # Ignore .curlrc; preserve HTTPS across redirects and bound transfers.
+        # RLIMIT_FSIZE additionally bounds disk use on older curl versions which
+        # enforce --max-filesize only when the server supplies Content-Length.
+        (ulimit -f "$((expected_size / 512 + 1))"
+         exec curl --disable --fail --silent --show-error --location --max-redirs 5 \
+            --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 \
+            --max-filesize "$expected_size" --output "$destination" "$base/$name") \
+            || fail 'Download failed. Retry this installer; no version has been selected.'
+    fi
+    [ "$(wc -c < "$destination" | tr -d '[:space:]')" = "$expected_size" ] \
+        && [ "$(checksum "$destination")" = "$expected_hash" ] \
+        || fail 'Release integrity check failed; no downloaded executable was started.'
+}
+
+printf '%s\n' 'Installing TeamCode @@VERSION@@ for '"$target"'…'
+fetch manifest.json @@MANIFEST_SIZE@@ '@@MANIFEST_SHA256@@'
+fetch manifest.sig @@SIGNATURE_SIZE@@ '@@SIGNATURE_SHA256@@'
+fetch "$asset" "$size" "$hash"
+chmod 700 "$temporary/$asset"
+# The authenticated native installer verifies the publisher signature again and
+# owns installation locks, compatibility checks, immutable versions and recovery.
+if [ -n "${TEAMCODE_INSTALL_ROOT:-}" ]; then
+    "$temporary/$asset" install --version '@@VERSION@@' --bundle "$temporary" --root "$TEAMCODE_INSTALL_ROOT"
+else
+    "$temporary/$asset" install --version '@@VERSION@@' --bundle "$temporary"
+fi

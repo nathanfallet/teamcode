@@ -37,6 +37,16 @@ class CloudLifecycleRulesTest {
             assertFalse(CloudAdministrationService.allowedApiHost(url), url)
     }
 
+    @Test fun clusterApiHostsRefuseEveryEncodingOfAMetadataAddress() {
+        for (url in listOf(
+            "https://2852039166/", "https://0xa9fea9fe/", "https://0xA9.0xFE.0xA9.0xFE/", "https://0251.0376.0251.0376/", "https://169.254.43518/", "https://169.0xfea9fe/",
+            "https://[::ffff:a9fe:a9fe]/", "https://[::ffff:169.254.169.254]/", "https://[0:0:0:0:0:ffff:a9fe:a9fe]/", "https://[fd00:ec2::254]/", "https://[FE80::1]/",
+            "https://[febf::1]/", "https://0/", "https://0x0/", "https://[::]/", "https://169.254.169.254./", "https://METADATA.GOOGLE.INTERNAL./",
+        )) assertFalse(CloudAdministrationService.allowedApiHost(url), url)
+        for (url in listOf("https://[::ffff:10.0.0.1]/", "https://[::ffff:7f00:1]:6443", "https://2130706433:6443", "https://[fec0::1]/", "https://[fd00::1]:6443"))
+            assertTrue(CloudAdministrationService.allowedApiHost(url), url)
+    }
+
     @Test fun lifecycleTransitionsUsedByTheReconciler() {
         // A running session without its execution row, and a lost execution, pause crash-consistent.
         for (state in listOf(READY, ACTIVE, PAUSING)) assertTrue(CloudStateMachine.permits(state, PAUSED))

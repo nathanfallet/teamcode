@@ -27,6 +27,10 @@ class ServiceTest {
         assertTrue(serviceMatches(current, "installation", "https://team.example", true))
         assertFalse(serviceMatches(current, "another-installation", "https://team.example", true))
         assertFalse(serviceMatches(current, "installation", "https://other-team.example", true))
+        assertFalse(serviceMatches(current, "installation", "https://team.example", true, runRouting = true))
+        val registered = JsonObject(old + ("capabilities" to JsonArray(listOf(JsonPrimitive("workload-routing-v1"), JsonPrimitive("run-routing-v1")))))
+        assertTrue(serviceMatches(registered, "installation", "https://team.example", true, runRouting = true))
+        assertFalse(serviceMatches(registered, "another-installation", "https://team.example", true, runRouting = true))
     }
 
     @Test fun manifestsPreserveLiteralPathsWithoutExposingCredentials() {

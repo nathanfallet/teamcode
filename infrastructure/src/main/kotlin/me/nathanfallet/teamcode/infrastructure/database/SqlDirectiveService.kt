@@ -42,17 +42,25 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
             val contexts = ConversationAffinities.selectAll().where {
                 (ConversationAffinities.teamId eq "default") and (ConversationAffinities.lastSeenAt greater now - SqlSessionAffinity.ACTIVE_TTL) and (ConversationAffinities.expiresAt greater now)
             }.map { row -> with(ConversationAffinities) {
-                row[memberId] to Context(row[sessionKey], row[requestedModel], RouteTarget(row[provider], row[resolvedModel]), row[routeKey], row[wireProtocol], row[requestedEffort], row[thinkingTokens])
+                row[memberId] to Context(row[sessionKey], row[requestedModel], RouteTarget(row[provider], row[resolvedModel]), row[routeKey], row[wireProtocol], row[requestedEffort], row[thinkingTokens], row[accountId])
             } }.groupBy({ it.first }, { it.second })
+            val overflowBudgets = sharedOverflowBudgets("default")
+            val overflowSpends = poolSpends("default", overflowBudgets.keys, now / 86_400_000L)
+            val overflowPools = overflowBudgets.filter { (pool, budget) -> (overflowSpends[pool] ?: 0L) < budget }.keys
             members.forEach { (member, maximum, pool) ->
                 val memberContexts = contexts[member].orEmpty()
                 val scopes = mapOf("" to memberContexts) + memberContexts.groupBy { it.sessionKey }
-                val accessible = accounts.filter { it.poolId == pool }
+                val policy = readMemberPolicy(c, member)
+                val accessible = accounts.filter { it.poolId == pool || (policy.allowSharedOverflow && it.poolId in overflowPools) }
                 val accountPacing = accessible.map { account -> AccountPacing(account, samples.filterKeys { it.first == account.id }.values.filterNotNull(), modelLimits[account.id].orEmpty()) }
-                val capacity = readMemberCapacity(c, readMemberPolicy(c, member), now, "default")
+                val capacity = readMemberCapacity(c, policy, now, "default")
                 val poolSpent = poolSpent("default", pool.orEmpty(), now / 86_400_000)
-                val allowanceAvailable = capacity.dailyAllowanceUnits > capacity.chargedAndReservedUnits && capacity.poolDailyUnits > poolSpent
+                val allowanceAvailable = capacity.dailyAllowanceUnits > capacity.chargedAndReservedUnits && capacity.poolDailyUnits > poolSpent && capacity.groups.all { it.budgetAvailable }
+                val groupMaximum = CheckGroupAdmissionUseCase().maximum(capacity.groups, maximum)
+                val runPolicies = readRunPacingPolicies("default", member, now)
                 scopes.forEach { (scopeKey, scoped) ->
+                    val runLimits = CheckRunPacingUseCase().limits(runPolicies.scopes[scopeKey].orEmpty(), groupMaximum)
+                    val scopedAllowanceAvailable = allowanceAvailable && runLimits.allowanceAvailable
                     val table = if (scopeKey.isEmpty()) Directives else SessionDirectives
                     val active = scoped.distinct()
                     val valid = active.all { context ->
@@ -69,10 +77,14 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         }
                     }
                     val targets = if (valid) active.map { it.target }.toSet() else emptySet()
-                    val advice = pacing.advise(targets, accountPacing, maximum, now, allowanceAvailable)
+                    val advice = if (runPolicies.truncated && scopedAllowanceAvailable) PacingAdvice(Pace.UNKNOWN, runLimits.maxConcurrent, 0,
+                        "Recent launch/session metadata is incomplete. Do not increase parallelism from this signal; server-side limits remain authoritative.")
+                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() })
                     // A different route, policy, pool, priority or eligible account set must not
                     // inherit optimistic advice (or an old throttle) from another capacity context.
-                    val scope = listOf(maximum.toString(), pool.orEmpty(), modelPolicy.toString(), valid.toString(), allowanceAvailable.toString(),
+                    val scope = listOf(runLimits.maxConcurrent.toString(), pool.orEmpty(), policy.allowSharedOverflow.toString(), modelPolicy.toString(), valid.toString(), scopedAllowanceAvailable.toString(),
+                        runLimits.contextKey, runPolicies.truncated.toString(), capacity.budgetOverride?.id.orEmpty(),
+                        capacity.groups.map { "${it.group}:${it.paused}" }.sorted().joinToString("\n"),
                         active.map { it.toString() }.sorted().joinToString("\n"),
                         accessible.map { "${it.id}:${it.priority}" }.sorted().joinToString("\n")).joinToString("\n")
                     val key = MessageDigest.getInstance("SHA-256").digest(scope.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -104,11 +116,12 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
             DirectiveReceipts.deleteWhere(limit = 1000) { receivedAt less now - 7 * 86_400_000 }
         }
     }
+    override suspend fun preview(actor: Principal): AgentDirective? = delivery.preview(actor)
     override suspend fun current(actor: Principal, sessionId: String?): AgentDirective? = delivery.current(actor, sessionId)
     override suspend fun claim(actor: Principal, sessionId: String, stage: String): DirectiveDelivery? = delivery.claim(actor, sessionId, stage)
     override suspend fun acknowledge(actor: Principal, id: String, stage: String, sessionId: String?, claimId: String?) = delivery.acknowledge(actor, id, stage, sessionId, claimId)
     private data class Stored(val directive: AgentDirective, val key: String?, val memory: PacingMemory)
-    private data class Context(val sessionKey: String, val requested: String, val target: RouteTarget, val routeKey: String, val protocol: String?, val effort: String?, val thinkingTokens: Long?)
+    private data class Context(val sessionKey: String, val requested: String, val target: RouteTarget, val routeKey: String, val protocol: String?, val effort: String?, val thinkingTokens: Long?, val accountId: String)
 
 }
 

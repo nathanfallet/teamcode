@@ -1,0 +1,1 @@
+ALTER TABLE member_policies ADD allow_shared_overflow BOOLEAN DEFAULT FALSE NOT NULL;
