@@ -86,7 +86,9 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     private suspend fun publishVersion(actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact): SkillPublication {
         return database.query {
             requireCurrent(this, actor)
-            val row = Skills.selectAll().where { Skills.id eq skillId }.forUpdate().single()
+            // A concurrent first publication of the same name may have failed and discarded the empty entry just now.
+            val row = Skills.selectAll().where { Skills.id eq skillId }.forUpdate().singleOrNull()
+                ?: throw TeamFailure("skill_busy", 409, "This skill changed while it was being published. Retry the publication.")
             if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before publishing new versions.")
             val existing = SkillVersions.selectAll().where { (SkillVersions.skillId eq skillId) and (SkillVersions.version eq version) }.singleOrNull()
             if (existing != null) {
