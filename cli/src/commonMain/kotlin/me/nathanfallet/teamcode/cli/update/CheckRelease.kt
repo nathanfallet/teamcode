@@ -3,8 +3,9 @@ package me.nathanfallet.teamcode.cli.update
 import me.nathanfallet.teamcode.api.models.ReleaseVersion
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.client.ReleaseClient
+import me.nathanfallet.teamcode.client.DownloadedReleaseMetadata
 
-internal data class ReleaseCheck(val currentVersion: String, val release: VerifiedRelease) {
+internal data class ReleaseCheck(val currentVersion: String, val release: VerifiedRelease, val metadata: DownloadedReleaseMetadata) {
     val updateAvailable = ReleaseVersion.parse(release.manifest.version) > ReleaseVersion.parse(currentVersion)
 }
 
@@ -20,6 +21,6 @@ internal class CheckRelease(
         val metadata = transport.metadata(candidate)
         val verified = verifier.verify(metadata.manifest, metadata.signature)
         if (verified.manifest.version != candidate) throw CliOperationException("release_version_mismatch")
-        return ReleaseCheck(currentVersion, verified)
+        return ReleaseCheck(currentVersion, verified, metadata)
     }
 }

@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.api.models.ReleaseFormat
 import me.nathanfallet.teamcode.api.models.ReleaseVersion
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.runInteractiveProcess
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.cli.service.startManagedService
@@ -19,11 +20,12 @@ import okio.Path.Companion.toPath
 import okio.buffer
 import okio.use
 
-internal class InstallationOperations(private val store: InstallationStore) {
+internal class InstallationOperations(private val store: InstallationStore, private val configuration: String = configPath()) {
     private val fs = FileSystem.SYSTEM
     private val verifier = VerifyReleaseManifest()
 
-    suspend fun install(version: String?, bundle: String?, allowDowngrade: Boolean): InstalledVersion? {
+    suspend fun install(version: String?, bundle: String?, allowDowngrade: Boolean, approvedMetadata: DownloadedReleaseMetadata? = null): InstalledVersion? {
+        require(approvedMetadata == null || (version != null && bundle == null && !allowDowngrade))
         store.initialize()
         store.writerLock().use {
             recoverBeforeWriting()
@@ -31,7 +33,8 @@ internal class InstallationOperations(private val store: InstallationStore) {
                 val candidate = if (bundle == null) version ?: transport.latestVersion()
                     ?: throw CliOperationException("release_no_stable_version") else version
                 val directory = bundle?.toPath()
-                val metadata = if (directory == null) transport.metadata(requireNotNull(candidate)) else DownloadedReleaseMetadata(
+                val metadata = approvedMetadata?.let { DownloadedReleaseMetadata(it.manifest.copyOf(), it.signature.copyOf()) }
+                    ?: if (directory == null) transport.metadata(requireNotNull(candidate)) else DownloadedReleaseMetadata(
                     readReleaseFile(directory / "manifest.json", ReleaseFormat.MAX_MANIFEST_BYTES),
                     readReleaseFile(directory / "manifest.sig", ReleaseFormat.MAX_SIGNATURE_BYTES))
                 val verified = verifier.verify(metadata.manifest, metadata.signature)
@@ -89,7 +92,7 @@ internal class InstallationOperations(private val store: InstallationStore) {
     private suspend fun activate(version: InstalledVersion, rollback: Boolean) {
         store.lock(exclusive = true).use {
             val before = store.state()
-            val service = installationService(store, firstInstall = before == null)
+            val service = installationService(store, firstInstall = before == null, configuration = configuration)
             store.activate(version, rollback = rollback,
                 serviceConfig = service?.settings?.config, restartService = service?.running == true,
                 prepare = { if (service?.running == true) stopManagedService(service.settings) },
@@ -105,7 +108,7 @@ internal class InstallationOperations(private val store: InstallationStore) {
     }
 
     private suspend fun serverApiVersion(): Int {
-        val config = ConfigStore().load() ?: return 1
+        val config = ConfigStore(configuration).load() ?: return 1
         return try { sdk(config).use { it.capabilities().apiVersion } }
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { throw CliOperationException("release_server_unavailable") }

@@ -10,8 +10,8 @@ import okio.Path.Companion.toPath
 
 internal data class InstallationService(val settings: ServiceSettings, val running: Boolean)
 
-internal suspend fun installationService(store: InstallationStore, firstInstall: Boolean): InstallationService? {
-    val selected = loadService(configPath()) ?: return null
+internal suspend fun installationService(store: InstallationStore, firstInstall: Boolean, configuration: String = configPath()): InstallationService? {
+    val selected = loadService(configuration) ?: return null
     if (!sameInstallationPath(selected.executable.toPath(), store.paths.launcher, store.paths.target)) {
         if (firstInstall) return null // Preserve a manually installed/source-checkout service.
         throw CliOperationException("release_service_unmanaged")

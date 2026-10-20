@@ -18,10 +18,13 @@ import urllib.request
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=Path, required=True)
+parser.add_argument('--at-boot', action='store_true', help='Exercise an owned pre-login registration; needs OS administrator authorization')
 args = parser.parse_args()
 binary = str(args.binary.resolve())
 expected_version = subprocess.check_output([binary, 'version'], text=True, timeout=15).strip().split(' ', 1)[1]
-assert sys.platform in ('darwin', 'linux'), 'This acceptance script targets launchd/systemd user services'
+assert sys.platform in ('darwin', 'linux'), 'This acceptance script targets launchd/systemd services'
+if args.at_boot:
+    assert subprocess.run(['/usr/bin/sudo', '-n', 'true'], capture_output=True).returncode == 0, 'Boot acceptance needs pre-authorized sudo for this owned fixture'
 
 with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
     root = Path(directory)
@@ -100,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
                                                  headers={'Authorization': 'Bearer ' + settings['localToken']})
                 with urllib.request.urlopen(request, timeout=1) as response:
                     body = json.load(response)
-                running = body == {'id': settings['id'], 'serverUrl': origin, 'version': expected_version, 'capabilities': ['workload-routing-v1']}
+                running = all(body.get(key) == value for key, value in {'id': settings['id'], 'serverUrl': origin, 'version': expected_version}.items()) and {'workload-routing-v1', 'run-routing-v1'} <= set(body.get('capabilities', []))
                 observed = 'matching identity' if running else 'identity mismatch'
             except OSError as error:
                 observed = type(error).__name__ + (f' HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else '')
@@ -111,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
         print(command('service', 'logs', check=False).stdout, flush=True)
         print(command('service', 'status', check=False).stdout, flush=True)
         if sys.platform == 'darwin':
-            detail = subprocess.run(['/bin/launchctl', 'print', f'gui/{os.getuid()}/me.nathanfallet.teamcode.' + settings['id']], capture_output=True, text=True)
+            detail = subprocess.run(['/bin/launchctl', 'print', ('system/' if args.at_boot else f'gui/{os.getuid()}/') + 'me.nathanfallet.teamcode.' + settings['id']], capture_output=True, text=True)
             print('\n'.join(line for line in detail.stdout.splitlines() if any(key in line for key in ('state =', 'pid =', 'last exit', 'runs ='))), flush=True)
         raise AssertionError('Service did not reach its expected state: ' + observed)
 
@@ -121,6 +124,12 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.read()
 
+    def replace_registration(path, text):
+        if args.at_boot and sys.platform == 'darwin':
+            subprocess.run(['/usr/bin/sudo', '-n', '/usr/bin/tee', str(path)], input=text, text=True, capture_output=True, check=True, timeout=15)
+        else:
+            path.write_text(text)
+
     installed = False
     settings = None
     try:
@@ -128,16 +137,20 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
         original_config = config.read_bytes()
         # Actual OS registration and native daemon; it is uniquely named for this temporary configuration.
         installed = True
-        command('service', 'install', '--port', str(port))
+        command('service', 'install', '--port', str(port), *(['--at-boot'] if args.at_boot else []))
         settings = json.loads(config.with_name('service.json').read_text())
         registration = Path(settings['registration'])
         health(settings)
+        assert settings.get('atBoot', False) == args.at_boot
+        if args.at_boot and sys.platform == 'darwin':
+            assert registration.parent == Path('/Library/LaunchDaemons') and registration.stat().st_uid == 0
+            assert registration.stat().st_mode & 0o777 == 0o644
         assert command('service', 'serve', '--config', str(config), check=False).returncode != 0, 'Duplicate daemon bound the occupied port'
         health(settings)
         assert token not in registration.read_text() and settings['localToken'] not in registration.read_text()
         assert config.with_name('service.json').stat().st_mode & 0o777 == 0o600
         assert 'Running: true' in command('service', 'status').stdout
-        command('service', 'install', '--port', str(port))
+        command('service', 'install', '--port', str(port), *(['--at-boot'] if args.at_boot else []))
         assert json.loads(config.with_name('service.json').read_text()) == settings, 'Install was not idempotent'
         try:
             urllib.request.urlopen(service_origin + '/_teamcode/service', timeout=2)
@@ -235,10 +248,10 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
 
         # External edits are never overwritten/deleted, even when the label is recognizable.
         original_registration = registration.read_text()
-        registration.write_text(original_registration + '\n# external edit\n')
+        replace_registration(registration, original_registration + '\n# external edit\n')
         assert command('service', 'uninstall', check=False).returncode != 0
         assert registration.exists()
-        registration.write_text(original_registration)
+        replace_registration(registration, original_registration)
         saved = config.read_bytes()
         command('service', 'uninstall')
         health(settings, expected=False)
@@ -254,7 +267,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
         if installed:
             # Only this test's uniquely named registration and process may be stopped.
             if settings and Path(settings['registration']).exists() and 'original_registration' in locals():
-                Path(settings['registration']).write_text(original_registration)
+                replace_registration(Path(settings['registration']), original_registration)
             command('service', 'uninstall', check=False)
         upstream.shutdown()
         upstream.server_close()

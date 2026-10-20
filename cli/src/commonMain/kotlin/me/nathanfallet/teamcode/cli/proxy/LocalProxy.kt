@@ -25,13 +25,14 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
                     put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
         for (path in listOf("/v1/messages", "/v1/responses")) {
-            for (background in listOf(false, true)) {
-                route((if (background) "/_teamcode/workloads/background" else "") + path) {
+            for (mode in listOf("interactive", "background", "run")) {
+                val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
+                route(prefix + path) {
                     install(io.ktor.server.http.HttpRequestLifecycle) { cancelCallOnClose = true }
                     post {
                         val auth = call.request.header(HttpHeaders.Authorization)
@@ -68,12 +69,21 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                         var offset = 0
                         for (chunk in chunks) { chunk.copyInto(body, offset); offset += chunk.size }
                         val headers = me.nathanfallet.teamcode.api.InferenceHeaders.capture(call.request.headers::getAll).toMutableMap()
-                        if (background) {
-                            if (headers["x-teamcode-workload"]?.let { it != "background" } == true) {
-                                call.respondText("The workload header conflicts with this background launch.", status = HttpStatusCode.BadRequest)
+                        val launchWorkload = if (mode == "run") call.parameters["workload"] else mode.takeIf { it == "background" }
+                        if (launchWorkload != null) {
+                            if (launchWorkload !in setOf("interactive", "background") || headers["x-teamcode-workload"]?.let { it != launchWorkload } == true) {
+                                call.respondText("The workload header conflicts with this launch.", status = HttpStatusCode.BadRequest)
                                 return@post
                             }
-                            headers["x-teamcode-workload"] = "background"
+                            headers["x-teamcode-workload"] = launchWorkload
+                        }
+                        if (mode == "run") {
+                            val runId = call.parameters["runId"].orEmpty()
+                            if (!me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId) || headers["x-teamcode-run-id"]?.let { it != runId } == true) {
+                                call.respondText("Invalid or conflicting launch identifier.", status = HttpStatusCode.BadRequest)
+                                return@post
+                            }
+                            headers["x-teamcode-run-id"] = runId
                         }
                         client.forwardInference(path, body, headers) { upstream ->
                             listOf("retry-after", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider").forEach { name -> upstream.headers[name]?.let { call.response.header(name, it) } }

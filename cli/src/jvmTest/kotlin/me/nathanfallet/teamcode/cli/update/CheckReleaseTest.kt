@@ -45,7 +45,7 @@ class CheckReleaseTest {
         var calls = 0
         ReleaseClient { configure -> HttpClient(MockEngine {
             calls++
-            respond(if (calls == 1) """{"draft":false,"prerelease":false,"tag_name":"v2.0.0"}""" else "UNSIGNED")
+            respond(if (calls == 1) """{"draft":false,"prerelease":false,"tag_name":"2.0.0"}""" else "UNSIGNED")
         }) { configure(this) } }.use { client ->
             val error = assertFailsWith<CliOperationException> { CheckRelease(client, currentVersion = "1.0.0")() }
             assertEquals("release_signature_invalid", error.code)

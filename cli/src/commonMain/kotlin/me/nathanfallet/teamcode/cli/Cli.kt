@@ -16,6 +16,7 @@ import com.github.ajalt.mordant.terminal.Terminal
 import me.nathanfallet.teamcode.cli.accounts.Accounts
 import me.nathanfallet.teamcode.cli.agents.Agents
 import me.nathanfallet.teamcode.cli.launch.Run
+import me.nathanfallet.teamcode.cli.sessions.Sessions
 import me.nathanfallet.teamcode.cli.service.Service
 import me.nathanfallet.teamcode.cli.identity.*
 import me.nathanfallet.teamcode.cli.update.VerifyRelease
@@ -25,7 +26,7 @@ const val VERSION = me.nathanfallet.teamcode.api.BuildInfo.VERSION
 
 class Cli : SuspendingNoOpCliktCommand(name = "teamcode") {
     override fun help(context: Context) = "A self-hosted team gateway. First use: teamcode login."
-    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install()) }
+    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Sessions(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install()) }
 }
 
 private class Version : SuspendingCliktCommand(name = "version") {

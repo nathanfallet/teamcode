@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise actual native installation/update/rollback using two already signed local bundles."""
 import argparse
+import base64
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -8,6 +10,7 @@ from pathlib import Path
 import platform
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -25,6 +28,7 @@ def main():
     parser.add_argument('--first-bundle', type=Path, required=True)
     parser.add_argument('--second-bundle', type=Path, required=True)
     parser.add_argument('--service', action='store_true', help='Also exercise the actual owned OS service; Linux needs a user manager.')
+    parser.add_argument('--notification-bundle', type=Path, help='Optionally verify service notifications from fresh signed newer metadata without network checks.')
     args = parser.parse_args()
     binary = str(args.binary.resolve())
     target = ('windows-x64' if os.name == 'nt' else
@@ -41,7 +45,7 @@ def main():
         root = Path(directory) / "application é space's"
         install_root = root / 'installation'
         config_root = root / 'configuration'
-        env = dict(os.environ, XDG_CONFIG_HOME=str(config_root))
+        env = dict(os.environ, XDG_CONFIG_HOME=str(config_root), TEAMCODE_DISABLE_AUTOUPDATE='1')
         root.mkdir()
         launcher = install_root / 'bin' / ('teamcode.exe' if os.name == 'nt' else 'teamcode')
 
@@ -65,6 +69,17 @@ def main():
         run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
         selected(0)
         original_launcher = hashlib.sha256(launcher.read_bytes()).hexdigest()
+        before_settings = state()
+        def notifications(mode):
+            return run(binary, ['update', '--root', str(install_root), '--notifications', mode])
+        assert 'notifications: on.' in notifications('status')
+        notifications('off')
+        assert 'notifications: off.' in notifications('status')
+        notifications('on')
+        assert 'notifications: on.' in notifications('status')
+        # OS managers do not inherit the invoking shell's environment; persist the CI opt-out.
+        notifications('off')
+        assert state() == before_settings
         run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
         selected(0)
         run(launcher, ['update', '--bundle', str(second)])
@@ -111,6 +126,8 @@ def main():
             online = True
             api_version = 1
             calls = []
+            stream_started = threading.Event()
+            stream_release = threading.Event()
             class Handler(BaseHTTPRequestHandler):
                 def log_message(self, *_): pass
                 def do_GET(self):
@@ -125,6 +142,18 @@ def main():
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Content-Length', str(len(data)))
                     self.end_headers(); self.wfile.write(data)
+                def do_POST(self):
+                    self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                    if not online or self.headers.get('Authorization') != 'Bearer ' + token:
+                        self.send_error(503); return
+                    calls.append(self.path)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/event-stream')
+                    self.end_headers()
+                    self.wfile.write(b'data: {"start":true}\n\n'); self.wfile.flush()
+                    stream_started.set()
+                    assert stream_release.wait(180), 'Test did not release its synthetic active stream'
+                    self.wfile.write(b'data: {"done":true}\n\n'); self.wfile.flush()
             server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
             worker = threading.Thread(target=server.serve_forever, daemon=True)
             worker.start()
@@ -139,6 +168,19 @@ def main():
                 with socket.socket() as listener:
                     listener.bind(('127.0.0.1', 0)); local_port = listener.getsockname()[1]
                 installed_service = True
+                notification_cache = None
+                if args.notification_bundle:
+                    notification_manifest = (args.notification_bundle / 'manifest.json').read_bytes()
+                    notification_signature = (args.notification_bundle / 'manifest.sig').read_bytes()
+                    notice_version = json.loads(notification_manifest)['version']
+                    # Native install roots enforce a private inherited Windows DACL as well.
+                    notification_cache = json.dumps({'schemaVersion': 1, 'checkedAtMillis': int(time.time() * 1000),
+                        'manifest': base64.b64encode(notification_manifest).decode('ascii'),
+                        'signature': base64.b64encode(notification_signature).decode('ascii')}).encode()
+                    cache_path = install_root / 'update-check.json'
+                    cache_path.write_bytes(notification_cache)
+                    cache_path.chmod(0o600)
+                    notifications('on')
                 run(launcher, ['service', 'install', '--port', str(local_port)])
                 settings_path = config_root / 'teamcode/service.json'
                 saved_settings = settings_path.read_bytes()
@@ -166,11 +208,61 @@ def main():
                     raise AssertionError('No fresh owned-service startup was observed')
                 identity(manifests[0]['version'])
                 first_start = start_marker()
+                if notification_cache is not None:
+                    for _ in range(80):
+                        logs = settings_path.with_name('service.log').read_text(encoding='utf-8')
+                        if f'TeamCode {notice_version} is available.' in logs: break
+                        time.sleep(.1)
+                    else: raise AssertionError('The actual managed service did not report its authenticated cached release')
+                    assert cache_path.read_bytes() == notification_cache, 'A fresh cached check made a release fetch or rewrote metadata'
+                    notifications('off')
                 api_version = 2
                 try: run(launcher, ['update', '--bundle', str(second)], error='release_candidate_incompatible')
                 finally: api_version = 1
                 selected(0); identity(manifests[0]['version'])
                 assert start_marker() == first_start, 'Incompatible update restarted the service'
+                # Stop only our updater at the durable journal while its own service drains.
+                # This proves OS lock release/recovery after a real process death, not a fake PID.
+                def inference():
+                    request = urllib.request.Request(f'http://127.0.0.1:{local_port}/v1/messages', b'{"model":"fixture"}',
+                        {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + settings['localToken']})
+                    with urllib.request.urlopen(request, timeout=120) as response: return response.read()
+                before_interruption = state()
+                updater = None
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    streaming = pool.submit(inference)
+                    try:
+                        assert stream_started.wait(10), 'Synthetic stream did not reach the owned service'
+                        updater = subprocess.Popen([str(launcher), 'update', '--bundle', str(second)], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        for _ in range(400):
+                            assert updater.poll() is None, 'Updater exited before its interruption point'
+                            if (install_root / 'transaction.json').exists(): break
+                            time.sleep(.05)
+                        else: raise AssertionError('Updater did not persist its recovery journal')
+                        # Wait for actual cooperative stop/drain, leaving its request unfinished.
+                        for _ in range(600):
+                            if 'Stopping: draining existing requests' in settings_path.with_name('service.log').read_text(encoding='utf-8'): break
+                            assert updater.poll() is None, 'Updater exited before service drainage'
+                            time.sleep(.1)
+                        else: raise AssertionError('Owned service did not enter its drain phase')
+                        assert not streaming.done(), 'Update interrupted the active response before its commit'
+                        assert updater.poll() is None, 'Updater exited before the owned process interruption'
+                        updater.kill()  # Exact PID created above; never find/stop a process by name.
+                        # Wait for that PID, not pipe EOF: a draining manager child can inherit stdio.
+                        updater.wait(timeout=10)
+                        assert updater.returncode != 0
+                        if os.name != 'nt': assert updater.returncode == -signal.SIGKILL
+                        assert (install_root / 'transaction.json').exists(), 'Interrupted update lost its journal'
+                    finally:
+                        stream_release.set()
+                        if updater is not None and updater.poll() is None:
+                            updater.kill(); updater.wait(timeout=10)
+                    assert b'"done":true' in streaming.result(timeout=15), 'Updater death lost the active response'
+                    updater.communicate(timeout=15)
+                selected(0); identity(manifests[0]['version'])
+                assert state() == before_interruption, 'Real interruption did not restore the exact selection'
+                first_start = start_marker(first_start)
                 agents = root / 'fake agents'; agents.mkdir()
                 ready = root / 'quiet-agent-ready'
                 if os.name == 'nt':
@@ -232,6 +324,7 @@ def main():
                 assert configuration.read_bytes() == saved_configuration
                 assert settings_path.read_bytes() == saved_settings
             finally:
+                stream_release.set()
                 release.touch()
                 if agent is not None and agent.poll() is None:
                     try: agent.communicate(timeout=10)
@@ -250,7 +343,7 @@ def main():
             selected(0)
         assert hashlib.sha256(launcher.read_bytes()).hexdigest() == original_launcher
         for path, digest in inputs.items(): assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, 'Source bundle changed'
-    extra = ', actual service restart/version checks and quiet-agent protection' if args.service else ''
+    extra = ', actual service restart/version checks, real updater interruption with drained-response recovery and quiet-agent protection' if args.service else ''
     print('PASS: native signed installation, immutable launcher, update, offline rollback, interrupted-selection recovery, integrity refusal, private Unicode paths and preserved input/configuration' + extra + '.')
 
 

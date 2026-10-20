@@ -1,0 +1,126 @@
+# Generated from the publisher-verified @@VERSION@@ release. Works with Windows PowerShell 5.1 and PowerShell 7.
+[CmdletBinding()]
+param()
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 3
+
+function Assert-TeamCodeUri([Uri] $Address, [Uri] $Original) {
+    if ($Address.Scheme -ne 'https' -or $Address.Port -ne 443 -or $Address.UserInfo -or $Address.Fragment -or
+        $Address.Host -notin @('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com') -or
+        ($Address.Host -eq 'github.com' -and ($Address.AbsolutePath -ne $Original.AbsolutePath -or $Address.Query))) {
+        throw 'Invalid release redirect.'
+    }
+}
+
+function Receive-TeamCodeFile($Client, [Uri] $Address, [string] $Destination, [long] $ExpectedSize) {
+    $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(120))
+    $original = $Address
+    $response = $null
+    $body = $null
+    $outputFile = $null
+    try {
+        for ($attempt = 0; $attempt -le 5; $attempt++) {
+            Assert-TeamCodeUri $Address $original
+            $response = $Client.GetAsync($Address, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token).GetAwaiter().GetResult()
+            if ([int]$response.StatusCode -in @(301, 302, 303, 307, 308)) {
+                if ($attempt -eq 5 -or $null -eq $response.Headers.Location) { throw 'Invalid release redirect.' }
+                $Address = [Uri]::new($Address, $response.Headers.Location)
+                $response.Dispose(); $response = $null
+                continue
+            }
+            if ([int]$response.StatusCode -ne 200 -or $response.Content.Headers.ContentEncoding.Count -ne 0 -or
+                ($null -ne $response.Content.Headers.ContentLength -and $response.Content.Headers.ContentLength -ne $ExpectedSize)) {
+                throw 'Invalid release response.'
+            }
+            $body = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $outputFile = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $buffer = New-Object byte[] 8192
+            [long] $total = 0
+            while ($true) {
+                $count = $body.ReadAsync($buffer, 0, [int][Math]::Min(8192, $ExpectedSize - $total + 1), $deadline.Token).GetAwaiter().GetResult()
+                if ($count -eq 0) { break }
+                $total += $count
+                if ($total -gt $ExpectedSize) { throw 'Release exceeds its declared size.' }
+                $outputFile.Write($buffer, 0, $count)
+            }
+            if ($total -ne $ExpectedSize) { throw 'Incomplete release download.' }
+            return
+        }
+    } finally {
+        if ($null -ne $outputFile) { $outputFile.Dispose() }
+        if ($null -ne $body) { $body.Dispose() }
+        if ($null -ne $response) { $response.Dispose() }
+        $deadline.Dispose()
+    }
+}
+
+function Copy-TeamCodeAsset([string] $Name, [long] $ExpectedSize, [string] $ExpectedHash) {
+    $destination = Join-Path $TeamCodeTemporary $Name
+    if ($env:TEAMCODE_INSTALL_BUNDLE) {
+        $sourceFile = Get-Item -LiteralPath (Join-Path $env:TEAMCODE_INSTALL_BUNDLE $Name) -Force
+        if ($sourceFile -isnot [IO.FileInfo] -or $sourceFile.Length -ne $ExpectedSize -or
+            ($sourceFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'The offline bundle must contain regular release files.'
+        }
+        [IO.File]::Copy($sourceFile.FullName, $destination, $false)
+    } else {
+        Receive-TeamCodeFile $TeamCodeClient ([Uri]($TeamCodeBase + '/' + $Name)) $destination $ExpectedSize
+    }
+    if ((Get-Item -LiteralPath $destination).Length -ne $ExpectedSize -or
+        (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ExpectedHash) {
+        throw 'Release integrity check failed; no downloaded executable was started.'
+    }
+}
+
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Use install.sh on macOS or Linux.' }
+$TeamCodeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+if ($TeamCodeArchitecture -ne 'AMD64') { throw 'This installer supports Windows x64.' }
+
+$TeamCodeTemporary = $null
+$TeamCodeOwnsTemporary = $false
+$TeamCodeClient = $null
+$TeamCodeHandler = $null
+$TeamCodeOldTls = [Net.ServicePointManager]::SecurityProtocol
+try {
+    # Keep the downloaded files private to the invoking user.
+    $TeamCodeUser = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $TeamCodeAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $TeamCodeAcl.SetAccessRuleProtection($true, $false)
+    $TeamCodeAcl.SetOwner($TeamCodeUser)
+    $TeamCodeAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TeamCodeUser,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
+        [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))
+    $TeamCodeTemporary = Join-Path ([IO.Path]::GetTempPath()) ('teamcode-install-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $TeamCodeTemporary -ErrorAction Stop | Out-Null
+    $TeamCodeOwnsTemporary = $true
+    Set-Acl -LiteralPath $TeamCodeTemporary -AclObject $TeamCodeAcl
+
+    if (-not $env:TEAMCODE_INSTALL_BUNDLE) {
+        [Net.ServicePointManager]::SecurityProtocol = $TeamCodeOldTls -bor [Net.SecurityProtocolType]::Tls12
+        Add-Type -AssemblyName System.Net.Http
+        $TeamCodeHandler = [Net.Http.HttpClientHandler]::new()
+        $TeamCodeHandler.AllowAutoRedirect = $false
+        $TeamCodeHandler.UseDefaultCredentials = $false
+        $TeamCodeHandler.AutomaticDecompression = [Net.DecompressionMethods]::None
+        $TeamCodeClient = [Net.Http.HttpClient]::new($TeamCodeHandler)
+        $TeamCodeClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+        $TeamCodeClient.DefaultRequestHeaders.UserAgent.ParseAdd('TeamCode-Bootstrap/@@VERSION@@')
+    }
+    $TeamCodeBase = 'https://github.com/@@REPOSITORY@@/releases/download/@@VERSION@@'
+    Write-Output 'Installing TeamCode @@VERSION@@ for windows-x64…'
+    Copy-TeamCodeAsset 'manifest.json' @@MANIFEST_SIZE@@ '@@MANIFEST_SHA256@@'
+    Copy-TeamCodeAsset 'manifest.sig' @@SIGNATURE_SIZE@@ '@@SIGNATURE_SHA256@@'
+    Copy-TeamCodeAsset '@@WINDOWS_ASSET@@' @@WINDOWS_SIZE@@ '@@WINDOWS_SHA256@@'
+    $TeamCodeArguments = @('install', '--version', '@@VERSION@@', '--bundle', $TeamCodeTemporary)
+    if ($env:TEAMCODE_INSTALL_ROOT) { $TeamCodeArguments += @('--root', $env:TEAMCODE_INSTALL_ROOT) }
+    & (Join-Path $TeamCodeTemporary '@@WINDOWS_ASSET@@') @TeamCodeArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Native installation failed; inspect its diagnostic above.' }
+} catch {
+    throw 'TeamCode installation failed. Check network access, release integrity and the native diagnostic above, then retry.'
+} finally {
+    if ($null -ne $TeamCodeClient) { $TeamCodeClient.Dispose() }
+    if ($null -ne $TeamCodeHandler) { $TeamCodeHandler.Dispose() }
+    [Net.ServicePointManager]::SecurityProtocol = $TeamCodeOldTls
+    if ($TeamCodeOwnsTemporary) { Remove-Item -LiteralPath $TeamCodeTemporary -Recurse -Force -ErrorAction SilentlyContinue }
+}

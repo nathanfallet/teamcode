@@ -451,7 +451,8 @@ try:
                     request = urllib.request.Request(service_origin + '/_teamcode/service',
                         headers={'Authorization': 'Bearer ' + settings['localToken']})
                     with urllib.request.urlopen(request, timeout=1) as response:
-                        running = json.load(response) == {'id': settings['id'], 'serverUrl': origin, 'version': expected_version, 'capabilities': ['workload-routing-v1']}
+                        body = json.load(response)
+                        running = all(body.get(key) == value for key, value in {'id': settings['id'], 'serverUrl': origin, 'version': expected_version}.items()) and {'workload-routing-v1', 'run-routing-v1'} <= set(body.get('capabilities', []))
                 except OSError:
                     running = False
                 if running == expected:

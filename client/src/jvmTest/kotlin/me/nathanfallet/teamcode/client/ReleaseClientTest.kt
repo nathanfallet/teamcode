@@ -26,11 +26,11 @@ class ReleaseClientTest {
             when (request.url.host) {
                 "api.github.com" -> {
                     assertEquals("application/vnd.github+json", request.headers[HttpHeaders.Accept])
-                    respond("""{"draft":false,"prerelease":false,"tag_name":"v1.2.3","assets":[{"browser_download_url":"https://attacker.example/secret"}]}""")
+                    respond("""{"draft":false,"prerelease":false,"tag_name":"1.2.3","assets":[{"browser_download_url":"https://attacker.example/secret"}]}""")
                 }
                 else -> {
                     assertEquals("github.com", request.url.host)
-                    assertTrue(request.url.encodedPath.startsWith("/nathanfallet/teamcode/releases/download/v1.2.3/"))
+                    assertTrue(request.url.encodedPath.startsWith("/nathanfallet/teamcode/releases/download/1.2.3/"))
                     respond(if (request.url.encodedPath.endsWith("manifest.json")) " RAW MANIFEST BYTES " else " RAW SIGNATURE BYTES ")
                 }
             }
@@ -44,9 +44,9 @@ class ReleaseClientTest {
     }
 
     @Test fun invalidDiscoveryAndDraftPrereleaseOrRedirectResultsCannotChooseAVersion() = runBlocking {
-        for (body in listOf("{}", "not JSON", """{"draft":true,"prerelease":false,"tag_name":"v1.0.0"}""",
-            """{"draft":false,"prerelease":true,"tag_name":"v1.0.0-alpha"}""",
-            """{"draft":false,"prerelease":false,"tag_name":"v1.0.0-alpha"}""",
+        for (body in listOf("{}", "not JSON", """{"draft":false,"prerelease":false,"tag_name":"v1.0.0"}""", """{"draft":true,"prerelease":false,"tag_name":"1.0.0"}""",
+            """{"draft":false,"prerelease":true,"tag_name":"1.0.0-alpha"}""",
+            """{"draft":false,"prerelease":false,"tag_name":"1.0.0-alpha"}""",
             """{"draft":false,"prerelease":false,"tag_name":"v../escape"}""",
             """{"draft":false,"prerelease":false,"tag_name":123}""")) {
             client { respond(body) }.use { transport -> failure("release_discovery_invalid") { transport.latestVersion() } }
@@ -111,7 +111,7 @@ class ReleaseClientTest {
     @Test fun exactBinarySizeIsStreamedWithoutDeliveringOverflowBytes() = runBlocking {
         val received = mutableListOf<Byte>()
         client { request ->
-            assertEquals("/nathanfallet/teamcode/releases/download/v1.0.0/teamcode-1.0.0-windows-x64.exe", request.url.encodedPath)
+            assertEquals("/nathanfallet/teamcode/releases/download/1.0.0/teamcode-1.0.0-windows-x64.exe", request.url.encodedPath)
             respond("binary")
         }.use { transport ->
             transport.binary("1.0.0", "windows-x64", 6) { data, size -> received.addAll(data.take(size)) }

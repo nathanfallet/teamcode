@@ -47,7 +47,7 @@ class ReleaseClient(
             if (root == null || root["draft"] != JsonPrimitive(false) || root["prerelease"] != JsonPrimitive(false))
                 throw ReleaseDownloadException("release_discovery_invalid")
             val tag = (root["tag_name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            val version = tag?.takeIf { it.startsWith('v') }?.drop(1)
+            val version = tag
             if (version == null || !ReleaseFormat.validVersion(version) || '-' in version)
                 throw ReleaseDownloadException("release_discovery_invalid")
             version
@@ -82,7 +82,7 @@ class ReleaseClient(
         Unit
     }
 
-    private fun assetUrl(version: String, file: String) = "https://github.com/$repository/releases/download/v$version/$file"
+    private fun assetUrl(version: String, file: String) = "https://github.com/$repository/releases/download/$version/$file"
     private fun requireVersion(version: String) {
         if (!ReleaseFormat.validVersion(version)) throw ReleaseDownloadException("release_version_invalid")
     }

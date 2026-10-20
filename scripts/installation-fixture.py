@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Prepare public, same-build signed installation fixtures; never read a signing key."""
+"""Prepare two distinct compiled versions for signed native acceptance; never read a key."""
 import argparse
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -12,31 +11,26 @@ bundle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bundle)
 
 
-def variant(source, output):
-    payload = (source / 'manifest.json').read_bytes()
-    if not 1 <= len(payload) < 16 * 1024 or not isinstance(json.loads(payload), dict):
-        raise ValueError('Invalid bounded release manifest.')
+def prepare(first, second, output, target):
+    records = []
+    for source in (first, second):
+        if not 1 <= (source / 'manifest.json').stat().st_size <= 16 * 1024:
+            raise ValueError('Invalid bounded release manifest.')
+        manifest = json.loads((source / 'manifest.json').read_bytes())
+        asset = manifest['assets'][target]
+        name = bundle.asset_name(manifest['version'], target)
+        binary = source / name
+        if asset['fileName'] != name or binary.is_symlink() or not binary.is_file() or not 1 <= binary.stat().st_size <= bundle.MAX_BINARY:
+            raise ValueError('Invalid acceptance asset.')
+        if binary.stat().st_size != asset['size'] or bundle.digest(binary) != asset['sha256'] or bundle.binary_target(binary) != target:
+            raise ValueError('Acceptance asset integrity or architecture mismatch.')
+        records.append((manifest, name, binary))
+    if records[0][0]['sourceCommit'] != records[1][0]['sourceCommit']:
+        raise ValueError('Both acceptance builds must describe the same source commit.')
+    if records[0][0]['version'] == records[1][0]['version'] or records[0][0]['assets'][target]['sha256'] == records[1][0]['assets'][target]['sha256']:
+        raise ValueError('Acceptance requires distinct compiled versions and binary bytes.')
     output.mkdir(parents=True, exist_ok=False)
-    # Distinct authenticated bytes select a distinct immutable installation directory.
-    # Version, source commit and all binary claims remain identical to the real build.
-    (output / 'manifest.json').write_bytes(payload + b'\n')
-
-
-def prepare(source, alternate, output, target):
-    payload = (source / 'manifest.json').read_bytes()
-    changed = (alternate / 'manifest.json').read_bytes()
-    if not 1 <= len(payload) < 16 * 1024 or changed != payload + b'\n':
-        raise ValueError('The acceptance variant must preserve every build/asset claim.')
-    manifest = json.loads(payload)
-    asset = manifest['assets'][target]
-    name = bundle.asset_name(manifest['version'], target)
-    binary = source / name
-    if asset['fileName'] != name or binary.is_symlink() or not binary.is_file() or not 1 <= binary.stat().st_size <= bundle.MAX_BINARY:
-        raise ValueError('Invalid acceptance asset.')
-    if binary.stat().st_size != asset['size'] or bundle.digest(binary) != asset['sha256'] or bundle.binary_target(binary) != target:
-        raise ValueError('Acceptance asset integrity or architecture mismatch.')
-    output.mkdir(parents=True, exist_ok=False)
-    for label, metadata in (('first', source), ('second', alternate)):
+    for label, metadata, (_, name, binary) in zip(('first', 'second'), (first, second), records):
         destination = output / label
         destination.mkdir()
         for filename, maximum in (('manifest.json', 16 * 1024), ('manifest.sig', 2048)):
@@ -46,24 +40,18 @@ def prepare(source, alternate, output, target):
             (destination / filename).write_bytes(data)
         shutil.copyfile(binary, destination / name)
         (destination / name).chmod(0o755)
-    # Native smoke verifies both publisher signatures before installing either payload.
-    assert hashlib.sha256(payload).digest() != hashlib.sha256(changed).digest()
+    # Native smoke verifies both publisher signatures and exact executable versions.
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest='command', required=True)
-    for name in ('variant', 'prepare'):
-        command = commands.add_parser(name)
-        command.add_argument('--bundle', type=Path, required=True)
-        command.add_argument('--output', type=Path, required=True)
-        if name == 'prepare':
-            command.add_argument('--variant', type=Path, required=True)
-            command.add_argument('--target', choices=bundle.TARGETS, required=True)
+    parser.add_argument('--first-bundle', type=Path, required=True)
+    parser.add_argument('--second-bundle', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--target', choices=bundle.TARGETS, required=True)
     args = parser.parse_args()
-    if args.command == 'variant': variant(args.bundle, args.output)
-    else: prepare(args.bundle, args.variant, args.output, args.target)
-    print('Prepared same-build installation acceptance fixture; no version-transition claim.')
+    prepare(args.first_bundle, args.second_bundle, args.output, args.target)
+    print('Prepared distinct compiled versions for native installation acceptance.')
 
 
 if __name__ == '__main__': main()

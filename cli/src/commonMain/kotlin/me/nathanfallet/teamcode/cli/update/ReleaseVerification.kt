@@ -62,7 +62,7 @@ internal class VerifyReleaseManifest(trustedKeys: List<ReleasePublicKey> = Shipp
         if (data.keys != setOf("schemaVersion", "version", "tag", "sourceCommit", "assets") || data["schemaVersion"] != JsonPrimitive(1))
             throw failure("release_manifest_invalid")
         val version = data.string("version")?.takeIf(ReleaseFormat::validVersion) ?: throw failure("release_manifest_invalid")
-        val tag = data.string("tag")?.takeIf { it == "v$version" } ?: throw failure("release_manifest_invalid")
+        val tag = data.string("tag")?.takeIf { it == version } ?: throw failure("release_manifest_invalid")
         val commit = data.string("sourceCommit")?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: throw failure("release_manifest_invalid")
         val assets = data["assets"] as? JsonObject ?: throw failure("release_manifest_invalid")
         if (assets.size !in 1..32) throw failure("release_manifest_invalid")

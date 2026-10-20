@@ -13,6 +13,7 @@ class InstallationLockTest {
         try {
             store.initialize()
             store.lock(exclusive = false).use {
+                validatePrivateInstallationPath(store.paths.lock.toString(), directory = false)
                 store.lock(exclusive = false).use {
                     assertNull(acquireInstallationLock(store.paths.lock.toString(), exclusive = true))
                 }

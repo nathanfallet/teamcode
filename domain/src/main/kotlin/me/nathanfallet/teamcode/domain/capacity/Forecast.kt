@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.domain.capacity
 
+const val QUOTA_PRESSURE_THRESHOLD = 0.9
 /** An observation is one account/window; percentages from different plans are never summed. */
 data class QuotaObservation(val utilization: Double, val observedAtMillis: Long, val resetsAtMillis: Long?)
 data class QuotaForecast(val reachesThresholdAtMillis: Long?, val pointsPerHour: Double?, val state: State) {
@@ -7,7 +8,7 @@ data class QuotaForecast(val reachesThresholdAtMillis: Long?, val pointsPerHour:
 }
 
 class ForecastQuotaUseCase(private val maximumAgeMillis: Long = MAX_QUOTA_OBSERVATION_AGE_MILLIS) {
-    fun forecast(observation: QuotaObservation?, ratePerHour: Double?, nowMillis: Long, threshold: Double = 0.9): QuotaForecast {
+    fun forecast(observation: QuotaObservation?, ratePerHour: Double?, nowMillis: Long, threshold: Double = QUOTA_PRESSURE_THRESHOLD): QuotaForecast {
         require(threshold.isFinite() && threshold > 0 && threshold <= 1)
         if (observation == null ||
             !observation.utilization.isFinite() || observation.utilization !in 0.0..1.0) {

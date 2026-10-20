@@ -10,7 +10,30 @@ teamcode run claude -- --dangerously-skip-permissions
 teamcode run codex -- exec "Explain this repository"
 ```
 
-`service install` registers a macOS LaunchAgent, Linux systemd user unit or Windows scheduled logon task, starts it now, and enables startup at user login. Linux requires a running systemd user manager. These are user services; the Windows task uses the current user's interactive token at least privilege and stores no Windows password. Startup before login remains planned. Native binary updates are handled separately by the managed installer/updater below.
+`service install` registers a macOS LaunchAgent, Linux systemd user unit or Windows scheduled logon task, starts it now, and enables startup at user login. Linux requires a running systemd user manager. These are user services; the Windows task uses the current user's interactive token at least privilege and stores no Windows password. Use the explicit `--at-boot` (`--system`) mode below for startup before login. Native binary updates are handled separately by the managed installer/updater below.
+
+## Startup before login
+
+After signing in to TeamCode, run the native CLI as your own OS user:
+
+```sh
+teamcode service install --at-boot
+# Equivalent alias:
+teamcode service install --system
+teamcode service status
+```
+
+Changing an existing login registration to boot mode requires `service uninstall` followed by installation with this flag. Saved TeamCode authentication is preserved. `service print --at-boot` previews a new registration without installing it. `service status` distinguishes boot from login startup.
+
+- **macOS:** a root-owned 0644 plist in `/Library/LaunchDaemons` starts at boot and uses `UserName` to run the proxy as its configuration owner. Only fixed OS installation/launchctl/removal commands use sudo. The manifest includes absolute headless configuration/home paths and no credential. The CLI requests administrator authorization; do not run TeamCode itself as root. Updates that control this system registration also need authorization; quiet automatic operations use noninteractive sudo and fail safely if it is unavailable.
+- **Linux:** the existing systemd user unit is enabled with explicit user-manager lingering through `sudo loginctl enable-linger UID`. It can run at boot and after logout. Linger is shared policy for the user's services, so uninstall removes TeamCode's unit and deliberately leaves lingering enabled. Do not disable it without reviewing the user's other services.
+- **Windows:** use an elevated terminal for the same user, then answer the masked Windows-account password prompt. This creates a least-privilege boot-triggered task with password logon, running whether or not an interactive session exists. The password is supplied directly to Task Scheduler and never saved by TeamCode or placed in command arguments/environment. Use the Windows account password, not a PIN or TeamCode password. A password change or local/domain batch-logon restriction can require repairing the task by uninstalling/reinstalling it. Effective task identity, trigger and command are checked before control operations.
+
+The saved configuration and executable must be readable by that user before login. This does not unlock encrypted disks/homes or a personal keychain, create another service account or silently copy credentials. Offline startup keeps the local listener available and later requests retry connectivity. The Windows cooperative stop/drain behavior also applies to its boot task.
+
+TeamClaude's `src/service.js` and `test/service.test.js` remain the reference for explicit service registration, literal executable/configuration paths and user identity. Its user-only integration has no Windows/boot implementation. TeamCode extends the same native daemon lifecycle with OS boot mechanisms, rather than adding a second proxy daemon or elevating its inference process. References: [Apple launch daemons](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html), [systemd lingering](https://www.freedesktop.org/software/systemd/man/252/loginctl.html), [Windows boot task registration and password logon](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertask).
+
+Actual workstation reboot, Windows boot-password lifecycle and boot-mode update authorization follow-through are [owner-deferred V2 validations](v2-validation-handoff.md), not claims implied by rendering a manifest.
 
 ## Lifecycle
 
@@ -41,7 +64,7 @@ Each `run` invocation can select `--workload background` before the agent argume
 
 `scripts/smoke-service.py --binary /absolute/path/to/teamcode` creates a temporary configuration, synthetic HTTP upstream and uniquely named OS registration. It verifies native installation/idempotence, private files, authenticated discovery, login replacement, offline recovery, `run` reuse, stop during a live stream, restart, registration ownership checks and uninstall. It cleans up only its own registration and processes. No provider account or real team credential is used.
 
-This test exercises the actual OS service manager. It does not reboot the workstation or prove a machine-wide service setup. CI runs it on macOS and Linux.
+This test exercises the actual OS service manager. Add `--at-boot` to test an owned boot registration with pre-authorized sudo; macOS also verifies root-owned manifest installation and cleanup. Existing full native jobs run both modes on macOS/Linux. It does not reboot the workstation. Windows password-backed boot registration needs a separate authorized workstation check.
 
 `scripts/smoke-windows.py` separately runs the Windows executable, inspects real NTFS ACLs, checks Unicode paths/arguments and standard npm agent entry points, then exercises Task Scheduler installation, reuse, draining, restart and cleanup. Windows support is required for V1; its current evidence is recorded in [status](status.md).
 
@@ -61,6 +84,6 @@ The immutable launcher selects a private versioned payload, so Windows never rep
 
 An update cooperatively drains/stops a matching running service, switches the selected payload atomically, starts through the same registered launcher and checks the authenticated local identity/version. Stopped services stay stopped. Failed startup restores the previous selection and restarts the previous service where possible. A durable before/after journal supports recovery after updater interruption; a recovery failure retains the journal rather than claiming success. Service registration, configuration and credentials are preserved.
 
-Local real acceptance covers macOS ARM64 installation, two compiled versions, service restart, active quiet-agent refusal, offline rollback and interrupted selection. The unchanged manual-service lifecycle smoke also passes. Complete five-target signed installer/update acceptance, clean workstation reboot/logon and pre-login service support remain required. Cached periodic checks and opt-in unattended installation are not implemented yet; an explicit update is currently required.
+Local real acceptance covers macOS ARM64 installation, two compiled versions, service restart, active quiet-agent refusal, offline rollback and interrupted selection. The unchanged manual-service lifecycle smoke also passes. The versioned release workflow runs five-target signed installer/update checks. Additional clean-workstation reboot/logon and boot-mode update checks are V2 follow-up. Managed services now check signed release metadata in the background with a shared 24-hour cache; use `teamcode update --notifications off` to disable this installation's notifications. Checks never install code. Opt in to the independent updater with `teamcode update --automatic on`; it is disabled by default. See [notification behavior](distribution.md#background-release-notifications).
 
-Server upgrades use Helm rolling deployments with readiness and stream draining. CI publication alone does not restart Kubernetes pods. The chart keeps `latest` as its default, with immutable image tags available for explicit upgrades and rollback. Prefer additive database migrations that remain compatible with the preceding server release; document any exception before release. Application rollback must never automatically undo a database migration destructively. Restore testing and mixed-version rollout acceptance are still required.
+Server upgrades use Helm rolling deployments with readiness and stream draining. CI publication alone does not restart Kubernetes pods. The chart keeps `latest` as its default, with immutable image tags available for explicit upgrades and rollback. Prefer additive database migrations that remain compatible with the preceding server release; document any exception before release. Application rollback must never automatically undo a database migration destructively. Full-database restore acceptance has local evidence; additional operator and mixed-version rollout checks are tracked in the V2 handoff.

@@ -16,7 +16,13 @@ First PR/commit sequence: document architecture; wire seven modules and enforce 
 
 Tests use synthetic fixtures and local fake providers. Real-provider acceptance is opt-in, capacity-bounded and never a public PR CI dependency. Measure gateway-added latency, first-byte latency, queue wait, success rate, memory per stream, registry throughput and forecast error before choosing production SLOs or quoting hosting costs.
 
+## Finalized 0.1.0 scope (owner decision, 2026-10-20)
+
+Finish explicit boot startup, then create tag/release `0.1.0`. Additional native-client, load, forecasting, workstation and operational validation moves to V2 for another agent's PR, as detailed in the [handoff](v2-validation-handoff.md). The original milestones above describe the broader development sequence; their extended exit evidence is not all claimed complete. Built-in release CI and delivery of the native installers/image/deployable chart still gate publication.
+
 ## Release acceptance
+
+Under the finalized owner scope, complete boot-startup implementation and the built-in release checks when creating the `0.1.0` tag and publishing GitHub release **0.1.0**. The release must provide documented one-command installation on every advertised macOS/Linux/Windows target, accepted server images and a versioned, distributed Helm chart ready for users to deploy wherever they choose. Preparing and validating the deployable chart is in scope; deploying it on an owner or user cluster is not requested or required. The extended scenarios below are retained as V2 follow-up, not claimed as passed by publication.
 
 - Standalone public checkout; only `cli -> client -> api` on the local side.
 - Native HTTPS, streaming, backpressure and cancellation on advertised OS targets.
