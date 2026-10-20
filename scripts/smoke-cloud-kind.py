@@ -97,7 +97,7 @@ def main():
         run("kind", "create", "cluster", "--name", CLUSTER, "--kubeconfig", kubeconfig, "--wait", "120s")
         try:
             kubectl = ("kubectl", "--kubeconfig", kubeconfig)
-            build = os.path.join(work, "image")
+            build = os.path.join(work, "runner-image")
             os.makedirs(build)
             with open(os.path.join(build, "Dockerfile"), "w") as handle:
                 handle.write(DOCKERFILE)
