@@ -68,10 +68,65 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
         fun allowedApiHost(url: String): Boolean {
             val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
             val host = (if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']') else authority.substringBefore(':')).lowercase().trimEnd('.')
-            if (host.isEmpty() || host in setOf("metadata", "metadata.google.internal", "metadata.goog", "0.0.0.0", "::", "0", "instance-data")) return false
-            if (Regex("169\\.254\\.[0-9.]+").matches(host) || (':' in host && listOf("fe8", "fe9", "fea", "feb").any(host::startsWith))) return false
-            if (host.startsWith("::ffff:")) return allowedApiHost("https://" + host.removePrefix("::ffff:"))
+            if (host.isEmpty() || host in setOf("metadata", "metadata.google.internal", "metadata.goog", "instance-data")) return false
+            // Any numeric spelling of an address is decoded before it is judged, so decimal, hex, octal and short forms
+            // of a link-local or unspecified IPv4 address are refused like the dotted form.
+            literalIpv4(host)?.let { return allowedIpv4(it) }
+            if (':' in host) return literalIpv6(host)?.let(::allowedIpv6) ?: false
             return true
+        }
+
+        /** The names of a DNS host are checked again against their resolved addresses by the cluster adapter when it connects. */
+        private fun allowedIpv4(octets: IntArray) = !(octets[0] == 0 || (octets[0] == 169 && octets[1] == 254))
+
+        private fun allowedIpv6(bytes: IntArray): Boolean {
+            if (bytes.all { it == 0 }) return false
+            val mapped = bytes.take(10).all { it == 0 } && bytes[10] == 0xff && bytes[11] == 0xff
+            val compatible = bytes.take(12).all { it == 0 }
+            if (mapped || compatible) return allowedIpv4(intArrayOf(bytes[12], bytes[13], bytes[14], bytes[15]))
+            if (bytes[0] == 0xfe && (bytes[1] and 0xc0) == 0x80) return false // fe80::/10 link-local
+            if (bytes[0] == 0xfd && bytes[1] == 0x00 && bytes[2] == 0x0e && bytes[3] == 0xc2) return false // fd00:ec2::/32 cloud metadata
+            return true
+        }
+
+        /** inet_aton rules: one to four parts, decimal, `0x` hexadecimal or leading-zero octal; the last part fills the remaining bytes. */
+        private fun literalIpv4(host: String): IntArray? {
+            val parts = host.split('.')
+            if (parts.size !in 1..4 || parts.any { it.isEmpty() }) return null
+            val values = parts.map { part ->
+                val parsed = when {
+                    part.startsWith("0x") -> part.drop(2).takeIf { it.isNotEmpty() && it.all { c -> c in "0123456789abcdef" } }?.toLongOrNull(16)
+                    part.length > 1 && part.startsWith("0") -> part.drop(1).takeIf { it.all { c -> c in '0'..'7' } }?.toLongOrNull(8)
+                    else -> part.takeIf { it.all(Char::isDigit) }?.toLongOrNull()
+                }
+                parsed ?: return null
+            }
+            val last = values.last()
+            val lastBytes = 5 - parts.size
+            if (values.dropLast(1).any { it !in 0..255 } || last !in 0 until (1L shl (8 * lastBytes))) return null
+            var address = 0L
+            values.dropLast(1).forEach { address = (address shl 8) or it }
+            address = (address shl (8 * lastBytes)) or last
+            return IntArray(4) { ((address shr (8 * (3 - it))) and 0xff).toInt() }
+        }
+
+        private fun literalIpv6(host: String): IntArray? {
+            val tail = host.substringAfterLast(':')
+            val text = if ('.' in tail) {
+                val v4 = literalIpv4(tail) ?: return null
+                host.substringBeforeLast(':') + ":" + "%x:%x".format(v4[0] * 256 + v4[1], v4[2] * 256 + v4[3])
+            } else host
+            if (text.count { it == ':' } > 7 || ":::" in text || text.split("::").size > 2) return null
+            fun groups(s: String): List<Int>? = if (s.isEmpty()) emptyList() else s.split(':').map { g -> g.takeIf { it.length in 1..4 }?.toIntOrNull(16) ?: return null }
+            val halves = text.split("::")
+            val head = groups(halves[0]) ?: return null
+            val rest = if (halves.size == 2) groups(halves[1]) ?: return null else emptyList()
+            val all = if (halves.size == 2) {
+                if (head.size + rest.size > 7) return null
+                head + List(8 - head.size - rest.size) { 0 } + rest
+            } else head
+            if (all.size != 8) return null
+            return IntArray(16) { (all[it / 2] shr (if (it % 2 == 0) 8 else 0)) and 0xff }
         }
         fun validate(name: String, spec: CloudProfileSpec, assigned: Set<String>) {
             val image = Regex("[^\\s]{1,512}")
