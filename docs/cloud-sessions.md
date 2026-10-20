@@ -138,7 +138,7 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | `GET /cloud/sessions/{id}` | Read | Owner, administrator | Implemented |
 | `GET /cloud/sessions/{id}/executions` | Pod history: epoch, node, digest, exit reason, checkpoint | Owner, administrator | Implemented |
 | `POST /cloud/sessions/{id}/pause` | `{force?: false}`; `202`. `409 session_preparing` while creating or preparing; repeated pauses write nothing | Owner, administrator | Implemented |
-| `POST /cloud/sessions/{id}/resume` | `202`; `409 session_pausing` while a pause is still draining; `409 session_pausing` while a pause is still draining; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
+| `POST /cloud/sessions/{id}/resume` | `202`; `409 session_pausing` while a pause is still draining; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
 | `/cloud/runner/*` | Runner channel | Execution credential | Planned (PR 2) |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `/cloud/events/stream` | Transcript pages, per-session SSE, caller-wide SSE feed | | Planned |
