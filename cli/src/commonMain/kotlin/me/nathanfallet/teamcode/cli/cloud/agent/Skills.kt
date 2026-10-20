@@ -295,7 +295,7 @@ internal class SkillSync(
             while (true) {
                 val reply = SkillMessage.decode(child.readLine(MAX_LINE)) ?: break
                 if (reply.t == SkillMessage.DONE) break
-                if (reply.t == SkillMessage.RESULT) reply.status?.let { counts.merge(it, 1, Int::plus) }
+                if (reply.t == SkillMessage.RESULT) reply.status?.let { counts[it] = (counts[it] ?: 0) + 1 }
             }
             // Counts only: skill names and contents are not logged.
             log("Skills: " + (counts.entries.sortedBy { it.key }.joinToString(", ") { "${it.value} ${it.key}" }.ifEmpty { "none delivered" }) + ".")

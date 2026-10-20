@@ -12,7 +12,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.mcp.*
-import me.nathanfallet.teamcode.infrastructure.database.EXECUTION_SCOPES
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.variants.*
 import me.nathanfallet.teamcode.infrastructure.database.*
