@@ -89,7 +89,8 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
         private fun allowedIpv6(bytes: IntArray): Boolean {
             if (bytes.all { it == 0 }) return false
             val mapped = bytes.take(10).all { it == 0 } && bytes[10] == 0xff && bytes[11] == 0xff
-            val compatible = bytes.take(12).all { it == 0 }
+            // Deprecated IPv4-compatible form (::a.b.c.d); the loopback ::1 is not one.
+            val compatible = bytes.take(12).all { it == 0 } && !(bytes[12] == 0 && bytes[13] == 0 && bytes[14] == 0 && bytes[15] == 1)
             if (mapped || compatible) return allowedIpv4(intArrayOf(bytes[12], bytes[13], bytes[14], bytes[15]))
             if (bytes[0] == 0xfe && (bytes[1] and 0xc0) == 0x80) return false // fe80::/10 link-local
             if (bytes[0] == 0xfd && bytes[1] == 0x00 && bytes[2] == 0x0e && bytes[3] == 0xc2) return false // fd00:ec2::/32 cloud metadata
