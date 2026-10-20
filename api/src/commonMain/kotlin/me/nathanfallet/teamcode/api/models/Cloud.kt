@@ -31,6 +31,28 @@ data class CloudWorkspaceDeletionView(
     val problem: CloudProblemView? = null,
 )
 
+/** A repository cloned into `/workspace/<path>` on the first execution and only fetched on resume. */
+@Serializable
+data class CloudRepositoryView(val url: String, val path: String, val ref: String? = null, val branch: String? = null)
+/** `create` runs once per workspace, `start` on every execution, each with `/bin/sh -c` in the working directory. */
+@Serializable
+data class CloudSetupView(val create: List<String> = emptyList(), val start: List<String> = emptyList())
+/** The non-secret preparation recipe of a profile, and the resolved copy a session keeps. */
+@Serializable
+data class CloudEnvironmentView(
+    val repositories: List<CloudRepositoryView> = emptyList(),
+    val workingDirectory: String? = null,
+    val setup: CloudSetupView = CloudSetupView(),
+    val requiredVariables: List<String> = emptyList(),
+    val requireGitHub: Boolean = false,
+    val gitEmailDomain: String? = null,
+    /** Hosts repositories may be cloned from. */
+    val repositoryHosts: List<String> = listOf("github.com"),
+)
+/** What a session request may change in its profile's recipe; null keeps the profile's value. */
+@Serializable
+data class CloudEnvironmentRequest(val repositories: List<CloudRepositoryView>? = null, val workingDirectory: String? = null)
+
 @Serializable
 data class CloudSessionView(
     val id: String,
@@ -59,6 +81,7 @@ data class CloudSessionView(
     val terminatedReason: String? = null,
     /** The accepted transfer the session is moving toward (`cloud.transfer.v1`); null otherwise. */
     val transferId: String? = null,
+    val environment: CloudEnvironmentView = CloudEnvironmentView(),
 )
 @Serializable
 data class CloudSessionPageView(val sessions: List<CloudSessionView>, val nextBefore: String? = null)
@@ -73,6 +96,7 @@ data class CreateCloudSessionRequest(
     val agent: CloudAgentRequest? = null,
     val labels: Map<String, String> = emptyMap(),
     val idleTimeoutMinutes: Int? = null,
+    val environment: CloudEnvironmentRequest? = null,
 )
 @Serializable
 data class PauseCloudSessionRequest(val force: Boolean = false)
@@ -111,6 +135,7 @@ data class CloudProfileSpecView(
     val idleTimeoutMinutes: Int = 30,
     val minIdleTimeoutMinutes: Int = 5,
     val maxIdleTimeoutMinutes: Int = 1440,
+    val environment: CloudEnvironmentView = CloudEnvironmentView(),
 )
 @Serializable
 data class CloudProfileView(val id: String, val name: String, val version: Int, val spec: CloudProfileSpecView, val assignedMemberIds: List<String>, val createdAt: Long, val updatedAt: Long)
@@ -193,3 +218,29 @@ data class RunnerInferenceRequest(val teamId: String, val sessionId: String, val
 data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long, val expiresInMillis: Long? = null) {
     override fun toString() = "RunnerInferenceCredentialView(token=[REDACTED], expiresAt=$expiresAt, expiresInMillis=$expiresInMillis)"
 }
+/** Preparation: the runner reads its recipe and the owner's credentials, then reports progress or a failed step. */
+@Serializable
+data class RunnerEnvironmentRequest(val teamId: String, val sessionId: String, val epoch: Int)
+@Serializable
+data class RunnerGitIdentityView(val name: String, val email: String)
+/** `status`: `linked` (with a GitHub App user token), `not_linked` or `unavailable`. */
+@Serializable
+class RunnerGitHubView(val status: String, val token: String? = null, val expiresAt: Long? = null) {
+    override fun toString() = "RunnerGitHubView(status=$status, token=[REDACTED])"
+}
+/** Holds the owner's variable values and GitHub token: never log, persist or echo it. */
+@Serializable
+class RunnerEnvironmentView(
+    val environment: CloudEnvironmentView,
+    val git: RunnerGitIdentityView,
+    val variables: Map<String, String> = emptyMap(),
+    val unavailableVariables: List<String> = emptyList(),
+    val github: RunnerGitHubView,
+) {
+    override fun toString() = "RunnerEnvironmentView(repositories=${environment.repositories.size}, variables=${variables.keys.sorted()}, github=${github.status})"
+}
+/** A failed step as structured fields only; the server writes the message, and command output never leaves the pod. */
+@Serializable
+data class RunnerPreparationFailureView(val step: String, val index: Int? = null, val exitCode: Int? = null)
+@Serializable
+data class RunnerPreparationRequest(val teamId: String, val sessionId: String, val epoch: Int, val phase: String, val failure: RunnerPreparationFailureView? = null)

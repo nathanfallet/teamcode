@@ -103,7 +103,12 @@ data class CloudSession(
     val updatedAt: Long,
     /** The accepted transfer this session is moving toward; set from acceptance until the owner changed or the transfer ended. */
     val transferId: String? = null,
-)
+    /** The resolved preparation recipe, fixed at creation (profile version merged with the request). */
+    val environment: CloudEnvironmentSpec = CloudEnvironmentSpec(),
+) {
+    /** The runner reported a failed preparation; the reconciler fails the session or blocks the resume. */
+    val preparationFailed get() = failure?.code == CloudEnvironmentRules.PREPARATION_FAILED && (state == CloudSessionState.PREPARING || state == CloudSessionState.RESUMING)
+}
 
 data class CloudExecution(
     val sessionId: String,
@@ -145,6 +150,7 @@ data class CloudProfileSpec(
     val idleTimeoutMinutes: Int = 30,
     val minIdleTimeoutMinutes: Int = 5,
     val maxIdleTimeoutMinutes: Int = 1440,
+    val environment: CloudEnvironmentSpec = CloudEnvironmentSpec(),
 )
 data class CloudProfile(
     val id: String,
@@ -234,6 +240,7 @@ data class CloudSessionDraft(
     val agentEffort: String?,
     val labels: Map<String, String>,
     val idleTimeoutMinutes: Int?,
+    val environment: CloudEnvironmentOverride? = null,
 )
 
 /** Idempotency of a mutating request: scope is team + initiator + route + key, compared on a body digest. */

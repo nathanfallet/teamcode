@@ -349,6 +349,66 @@ class CloudRoutesTest {
             assertEquals("inference_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
                 runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
             }.code)
+
+    @Test fun runnerReadsItsEnvironmentAndReportsPreparationThroughTheTypedClient() = testApplication {
+        val store = Store()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String) =
+                if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
+        }
+        val variables = CloudVariableSource { _, member -> CloudVariables(if (member == colleague.id) mapOf("NPM_TOKEN" to "npm_synthetic_value") else emptyMap()) }
+        // Only the session owner's link exists; another member's token must never reach this runner.
+        val github = GitHubAccessSource { _, member -> if (member == colleague.id) GitHubAccess.Linked(GitHubUserToken("ghu_synthetic_user_token", 99, "octo", 42)) else GitHubAccess.Linked(GitHubUserToken("ghu_admin_token", 99, "boss", 1)) }
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store, variables, github), AuthenticateRunnerUseCase(store, cluster)), publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.environment.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText()).features)
+        val override = CloudEnvironmentRequest(listOf(CloudRepositoryView("https://github.com/example/api.git", "api", "main", "task-1")), "api")
+        val response = client.post("/api/v1/cloud/sessions") {
+            bearerAuth("colleague"); header(CloudHeaders.IDEMPOTENCY_KEY, "env-1"); contentType(ContentType.Application.Json)
+            setBody(Serialization.json.encodeToString(CreateCloudSessionRequest("Env", "profile-id", environment = override)))
+        }
+        assertEquals(HttpStatusCode.Accepted, response.status)
+        val view = Serialization.json.decodeFromString<CloudSessionView>(response.bodyAsText())
+        assertEquals(override.repositories, view.environment.repositories); assertEquals("api", view.environment.workingDirectory)
+        assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/cloud/sessions") {
+            bearerAuth("colleague"); header(CloudHeaders.IDEMPOTENCY_KEY, "env-2"); contentType(ContentType.Application.Json)
+            setBody(Serialization.json.encodeToString(CreateCloudSessionRequest("Env", "profile-id", environment = CloudEnvironmentRequest(listOf(CloudRepositoryView("https://u:p@github.com/x/y", "y"))))))
+        }.status, "Credentials in a clone URL are refused")
+        val created = store.sessions.getValue(view.id)
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1)
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { runner.runnerEnvironment(RunnerEnvironmentRequest("default", "s1", 1)) }.statusCode,
+                "Only a registered runner reads the environment")
+            runner.runnerRegister(RunnerRegisterRequest("default", "s1", 1))
+            val raw = client.post("/api/v1/cloud/runner/environment") {
+                bearerAuth("projected-pod-token-1"); contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":1}""")
+            }
+            assertEquals("no-store", raw.headers[HttpHeaders.CacheControl])
+            val prepared = runner.runnerEnvironment(RunnerEnvironmentRequest("default", "s1", 1))
+            assertEquals(mapOf("NPM_TOKEN" to "npm_synthetic_value"), prepared.variables, "The owner's variables, resolved for the owner")
+            assertEquals("ghu_synthetic_user_token", prepared.github.token, "The owner's token, not the caller's or anyone else's"); assertEquals("linked", prepared.github.status)
+            assertEquals(RunnerGitIdentityView("octo", "42+octo@users.noreply.github.com"), prepared.git)
+            assertEquals("task-1", prepared.environment.repositories.single().branch)
+            assertFalse(prepared.toString().contains("npm_synthetic_value") || prepared.toString().contains("ghu_synthetic"))
+            runner.runnerPreparation(RunnerPreparationRequest("default", "s1", 1, "cloning_repositories"))
+            assertEquals("cloning_repositories", store.sessions.getValue("s1").phase)
+            assertEquals(400, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { runner.runnerPreparation(RunnerPreparationRequest("default", "s1", 1, "rm -rf /")) }.statusCode)
+            assertEquals(400, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
+                runner.runnerPreparation(RunnerPreparationRequest("default", "s1", 1, "cloning_repositories", RunnerPreparationFailureView("clone", 5, 128)))
+            }.statusCode, "A step index outside the recipe is refused")
+            runner.runnerPreparation(RunnerPreparationRequest("default", "s1", 1, "cloning_repositories", RunnerPreparationFailureView("clone", 0, 128)))
+            val failed = store.sessions.getValue("s1")
+            assertEquals(CloudEnvironmentRules.PREPARATION_FAILED, failed.failure?.code)
+            assertTrue(failed.failure!!.message.contains("exit code 128"))
+            runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
+            assertEquals(CloudSessionState.PREPARING, store.sessions.getValue("s1").state, "A failed preparation is never reported ready")
+            assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { runner.runnerEnvironment(RunnerEnvironmentRequest("default", "s1", 1)) }.statusCode)
         } finally { runner.close() }
     }
 

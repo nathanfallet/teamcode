@@ -23,7 +23,10 @@ This page is the contract and the record of what is implemented. It follows the 
 | Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
 | Ownership transfer: offers and administrator transfers, recipient rechecks, owner change at a paused boundary, revocation, settings (`cloud.transfer.v1`) | Implemented, see [transfer](#transfer) |
 | `tcex_` inference credential per execution, the runner's loopback inference proxy (`cloud.inference.v1`) | Implemented, see [inference](#inference-from-the-pod) |
-| Environment preparation, GitHub, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
+| Environment preparation: recipe on the profile version and the session, repositories, working directory, Git identity, setup commands, progress and failures in the lifecycle, `cloud.environment.v1` | Implemented (PR 3) |
+| Environment variables from environment variants | Interface and delivery implemented (PR 3); source planned (variants work) |
+| [GitHub access](#github-access): team GitHub App configuration, member linking (`teamcode github link`, dashboard), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store, `github.link.v1` | Implemented (PR 3b) |
+| Transcript, messages, attach, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
 The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
 
@@ -32,16 +35,19 @@ The server mounts the cloud routes and advertises `cloud.sessions.v1` only when 
 | Resource | Table | Owner | Purpose |
 | --- | --- | --- | --- |
 | Cluster | `cloud_clusters` | Administrator | API URL, CA bundle, encrypted service-account credential, allowed namespaces, `maxRunningPods`, default storage class, garbage-collection report |
-| Profile | `cloud_profiles`, `cloud_profile_versions`, `cloud_profile_assignments` | Administrator; assigned to members (yes/no) | Versioned, immutable once published: cluster, namespace, image, `allowedImageOverrides`, `imagePullSecrets` names, resources, workspace size and storage class, agent kind/version, idle timeout and bounds |
-| Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
+| Profile | `cloud_profiles`, `cloud_profile_versions`, `cloud_profile_assignments` | Administrator; assigned to members (yes/no) | Versioned, immutable once published: cluster, namespace, image, `allowedImageOverrides`, `imagePullSecrets` names, resources, workspace size and storage class, agent kind/version, idle timeout and bounds, [environment recipe](#environment-preparation) |
+| Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, resolved environment recipe, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
 | Execution | `cloud_executions` | Session | One pod lifetime, unique on `(session_id, epoch)`: pod name, node, image digest, registration, heartbeats, exit reason, checkpoint result |
 | Inference credential | `cloud_inference_credentials` + `tokens` | Execution; the member it runs for | A `tcex_` token limited to inference, stored as a SHA-256 digest in `tokens` and linked to its `(session, epoch)`; deleted when the execution ends |
 | Idempotency record | `cloud_idempotency` | Team + initiating member | The session created by a keyed request, kept 24 hours |
 | Transfer | `cloud_transfers` | Session; former owner and recipient | From, to, initiator and decider, state, resume and pending-input policy, the last epoch of the former owner and the transcript event of the change. Kept after completion |
 
-Planned tables: GitHub grants. Each execution row also records the owner it ran for (`owner_id`), which is how history stays attributed after a transfer.
+| GitHub App | `github_apps` | Administrator | App id, client id, slug and name; client secret and private key encrypted, bound to the team |
+| GitHub link | `github_links`, `github_link_attempts` | Member | The member's GitHub account (id, login) and App user tokens, encrypted and bound to the team and member; pending device or web links, single-use, encrypted and bound to the attempt and member |
 
-Credentials are never stored in these tables, except the cluster's service-account token, encrypted with the server's credential key and bound to the cluster id. No API returns it.
+Each execution row also records the owner it ran for (`owner_id`), which is how history stays attributed after a transfer.
+
+Credentials are never stored in these tables, except the cluster's service-account token, the GitHub App's client secret and private key, and members' GitHub tokens and pending device codes, all encrypted with the server's credential key and bound to their row. No API returns them.
 
 Groups do not exist in TeamCode yet, so profiles are assigned to members. Administrators may use every profile.
 
@@ -70,13 +76,13 @@ Other fields: `desiredState` (`running`, `paused`, `terminated`), `failure` and 
 | --- | --- | --- |
 | (new) | `creating` | `POST /cloud/sessions` |
 | `creating` | `preparing` | The runner registered for the current epoch |
-| `creating`, `preparing` | `failed` | Missing or retaining storage class, namespace no longer allowed on the cluster, image or start failure, 15-minute start timeout, 30-minute preparation timeout, or execution lost during the first execution. The workspace is deleted right away. |
+| `creating`, `preparing` | `failed` | Missing or retaining storage class, namespace no longer allowed on the cluster, image or start failure, 15-minute start timeout, failed environment preparation (`preparation_failed`), 30-minute preparation timeout, or execution lost during the first execution. The workspace is deleted right away. |
 | `preparing`, `resuming` | `ready` | The runner reported ready on a heartbeat. The agent is never reported ready earlier. |
 | `ready`, `active` | `pausing` | Desired state `paused` (explicit pause, or an accepted [transfer](#transfer); idle timeout is planned), or the runner's checkpoint arriving before the reconciler's own move |
 | `pausing` | `paused` | Checkpoint completed (`consistent`), or failed, missed heartbeats or 15-minute pausing deadline (`crash_consistent`) |
 | `ready`, `active`, `pausing` | `paused` | Execution lost: no heartbeat for 90 s, the pod disappeared or stopped, or the execution row is missing (`execution_missing`, after deleting any pod of the session). `crash_consistent`, and the desired state becomes `paused`, so a lost execution never restarts by itself. |
 | `paused` | `resuming` | Desired state `running` (explicit resume, or a [message](cloud-conversations.md#messages-and-interrupts) with `wake`) |
-| `resuming` | `paused` | Image unavailable, start failure or timeout, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
+| `resuming` | `paused` | Image unavailable, start failure or timeout, failed environment preparation or 30-minute preparation timeout once the runner registered, lost execution, namespace no longer allowed, or a pause requested during the resume. Sets `resumeBlocked`, keeps the workspace, never `failed`. |
 | `resuming` | `failed` | The workspace claim is lost |
 | `paused` | `transferring` | An accepted transfer (`transferId` set) once the session is paused |
 | `transferring` | `paused` | Owner changed without `resume`, or the transfer failed or was dropped (the session keeps its former owner) |
@@ -150,6 +156,8 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
 | `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
 | `POST /cloud/runner/inference` | `{teamId, sessionId, epoch}`; returns `{token, expiresAt}`, a `tcex_` inference credential for the execution's member, `Cache-Control: no-store`. Only the registered runner of the current epoch, while the session is `preparing`, `resuming`, `ready`, `active` or `pausing` (`409 execution_fenced`, `409 inference_unavailable`) | Pod token (`TokenReview`) | Implemented |
+| `POST /cloud/runner/environment` | The recipe, the owner's Git identity, variable values and GitHub token for this execution (`Cache-Control: no-store`). Only the registered runner of the current epoch, while `preparing` or `resuming`; otherwise `409 not_preparing`. Missing required variables or GitHub access: `409 preparation_failed` | Pod token | Implemented |
+| `POST /cloud/runner/preparation` | `{phase}` progress, or `{phase, failure: {step, index, exitCode}}`; returns the instruction | Pod token | Implemented |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `.../messages`, `.../interrupt`, `.../attachments`, `/cloud/access`, `/cloud/runner/agent`, `.../events`, `.../inputs` | Transcript, messages, interrupt, attach lease, access policy, agent channel: see [transcript, messages and attach](cloud-conversations.md) | Access policy | Implemented |
 | `/cloud/events/stream` | Caller-wide SSE feed | | Planned |
 | `POST /cloud/sessions/{id}/transfer` | `{toMemberId, resume?, force?}` with `Idempotency-Key`; `202`. An administrator's transfer is `accepted` at once, an owner's is `offered` | Owner (when `memberTransfers` is `offer`), administrator | Implemented |
@@ -171,7 +179,11 @@ TeamCode-On-Behalf-Of: 6f1c...member-uuid
   "image": null,
   "agent": { "model": "opus", "effort": "high" },
   "labels": { "orchestrator.task": "1234" },
-  "idleTimeoutMinutes": 30
+  "idleTimeoutMinutes": 30,
+  "environment": {
+    "repositories": [{ "url": "https://github.com/example/api.git", "path": "api", "ref": "main", "branch": "task-1234" }],
+    "workingDirectory": "api"
+  }
 }
 ```
 
@@ -179,9 +191,10 @@ TeamCode-On-Behalf-Of: 6f1c...member-uuid
 - `labels`: at most 16 pairs, lowercase keys up to 63 characters, values up to 256, not secret, filterable.
 - `idleTimeoutMinutes` is clamped to the profile bounds (stored; automatic idle pause is planned with activity signals).
 - `agent.model` and `agent.effort` are recorded; they are checked against the member's model policy on every inference, as for local sessions.
-- `repositories` and `initialMessage` are planned (environment preparation and messages). The server ignores unknown fields, so do not send them before the matching capability is advertised.
+- `environment` (with `cloud.environment.v1`) replaces the profile's `repositories` and `workingDirectory` for this session; setup commands, required variables and the other recipe fields come from the profile only. Null fields keep the profile's values.
+- `initialMessage` is planned with messages. The server ignores unknown fields, so do not send them before the matching capability is advertised.
 
-The response is the session view: `id`, `name`, `ownerId`, `createdBy`, `state`, `phase`, `desiredState`, `generation`, `currentEpoch`, `profile {id, version}`, `image {reference, digest}`, `agent {kind, version, model, effort}`, `labels`, `activity {lastActivityAt, idleTimeoutMinutes}`, `resume`, `failure`, `resumeBlocked`, `workspaceDeletion`, `createdAt`, `updatedAt`, `pausedAt`, `expiresAt`, `terminatedReason`. The image digest is recorded from the first running container; every later execution uses `reference@digest`, so a moved tag does not change a resumed session.
+The response is the session view: `id`, `name`, `ownerId`, `createdBy`, `state`, `phase`, `desiredState`, `generation`, `currentEpoch`, `profile {id, version}`, `image {reference, digest}`, `agent {kind, version, model, effort}`, `labels`, `activity {lastActivityAt, idleTimeoutMinutes}`, `resume`, `failure`, `resumeBlocked`, `workspaceDeletion`, `createdAt`, `updatedAt`, `pausedAt`, `expiresAt`, `terminatedReason`, `environment` (the resolved recipe). The image digest is recorded from the first running container; every later execution uses `reference@digest`, so a moved tag does not change a resumed session.
 
 ### Bounds and capacity
 
@@ -306,10 +319,125 @@ Each execution records the owner it ran for (`ownerId` in `GET /cloud/sessions/{
 - **Delivery.** An init container from the runner image (`TEAMCODE_CLOUD_RUNNER_IMAGE`) copies the `teamcode` Linux binary (`TEAMCODE_CLOUD_RUNNER_BINARY`, default `/usr/local/bin/teamcode`) into an `emptyDir` at `/opt/teamcode`, with `cp`; the session container runs `/opt/teamcode/teamcode cloud runner`. The team image stays a pure toolchain (Linux with the published binaries' glibc baseline, `/bin/sh`, `git`, writable by UID 1000). Bundled agent CLIs come with the agent PR.
 - **Identity.** A projected ServiceAccount token, audience `teamcode`, 600 s expiry (the API minimum; the kubelet rotates the file, and the runner reads it for every call). The server reviews it with `TokenReview` using the cluster credential and requires the bound namespace to be the session's and the bound pod name to be the current execution's pod; the pod name always comes from the review, never from the request. A pod of the session with another epoch gets `409 execution_fenced` and exits. Reviews are cached 60 s per token (refusals 10 s, in a separate cache so bad tokens never evict accepted ones), so a heartbeat every 15 s costs one review a minute per pod. No TeamCode secret exists in the cluster, and the pod environment holds only the server URL, the token file path and the team, session and epoch identifiers.
 - **Channel.** HTTPS only (the client refuses plain HTTP except on loopback): register, heartbeat every 15 s (the response carries the desired state and pause deadline), checkpoint; later batched event upload and an input long-poll. It fits stateless replicas with MySQL as the only bus and needs no inbound connectivity to the pod. Network failures are retried with backoff; the server marks the execution lost after 90 s without heartbeats.
-- **Runner skeleton.** This release's runner starts no agent: it registers, reports ready, heartbeats, and checkpoints immediately when a pause is requested (there is nothing to drain yet). It exits on `409 execution_fenced` or when the session is being deleted, retries any other `409` (for example a checkpoint refused because the pause was cancelled), and exits with code 2 on `401`. The client reads only the error code of a failed runner call, never its message.
+- **Runner.** This release's runner starts no agent: it registers, [prepares the environment](#environment-preparation) while heartbeating, reports ready once prepared, and checkpoints immediately when a pause is requested (there is nothing to drain yet). It exits on `409 execution_fenced` or when the session is being deleted, retries any other `409` (for example a checkpoint refused because the pause was cancelled), and exits with code 2 on `401`. The client reads only the error code of a failed runner call, never its message.
 - **Token exposure (planned fix).** The projected token is readable by the pod's UID, and the agent runs with that UID too. The agent must run under a separate UID that cannot read the token, so it cannot drive the runner channel (for example report a clean checkpoint); that is the next pull request of this sequence.
 - **Planned.** A one-time Secret fallback where `TokenReview` is not permitted.
 - **Kubernetes client.** The adapter (`KubernetesClusterPort`) calls the Kubernetes REST API with the Ktor client the server already uses, rather than fabric8 or the official Java client. The surface is small (pods, claims, volumes, storage classes, TokenReview), the server stores each cluster's URL, CA and token instead of a kubeconfig, and the adapter is tested with Ktor's mock engine. Each cluster gets its own client whose trust store holds only that cluster's CA bundle; the connection is reloaded from the database at most every 30 s, so a rotated token applies quickly. Lists are paged (500 per page, at most 20 pages, 200 for the cluster-wide PersistentVolume list); a page missing mid-list fails the call rather than passing for a complete list. Concurrent first uses of a cluster build one client, and a client replaced after a rotation stays open until shutdown for requests in flight. API error bodies are never kept or logged. It adds no dependency, and nothing reaches the native CLI, which keeps `cli -> client -> api`.
+
+## Environment preparation
+
+Toolchain and preparation are separate. The **image** carries what is installed (for example Node.js, a JDK, Gradle); the **recipe** says what to do with it in each session. Neither contains a TeamCode or provider credential.
+
+### Image
+
+- **Per profile, per session.** The profile names the image; a session may name another one only if it matches the profile's `allowedImageOverrides`. Private registries authenticate through the profile's `imagePullSecrets`, Kubernetes Secrets the administrator manages in the namespace; TeamCode never stores registry credentials.
+- **Digest.** The digest of the first running container is recorded on the session (`image.digest`) and on the execution; every later execution starts `reference@digest`, so a resume prepares on the same bits even if the tag moved.
+- **Contract.** Linux with the published binaries' glibc baseline, `/bin/sh` and POSIX `mkdir`, `rm`, `mv`, `rmdir`, `dirname`, `touch`, `test`; `git` 2.31 or later (credentials are configured through `GIT_CONFIG_COUNT`); writable by UID 1000. `gh` is optional. Nothing from TeamCode: the runner binary is copied in by the init container, and the agent CLIs come with the agent PR.
+- **No baked identity.** Nothing in the pod spec identifies a member or a provider account: the pod environment holds only the server URL, the token file path and the team, session and epoch identifiers. Credentials reach the pod only through the runner channel, at preparation time, for the current owner.
+
+### Recipe
+
+The recipe is part of the immutable profile version (`spec.environment`). At creation, the session's `environment` overrides are merged in and the result is stored on the session (`cloud_sessions.environment`, JSON without any secret), so a resume prepares exactly what the first execution did, even after the profile changed. It is never edited afterwards.
+
+| Field | Meaning |
+| --- | --- |
+| `repositories` | Up to 16 `{url, path, ref?, branch?}`. `https://` URLs without credentials, query or fragment; `path` relative to `/workspace` (not under `.teamcode` or `.home`, never nested in another repository); `ref` is a branch, tag or commit; `branch` is a local branch created at `ref`. Option-like and malformed refs are refused |
+| `workingDirectory` | Relative to `/workspace`; must exist after cloning. Setup commands run there |
+| `setup.create` | Up to 16 commands run once per workspace, in order, with `/bin/sh -c` |
+| `setup.start` | Up to 16 commands run on every execution, after `create` |
+| `requiredVariables` | Variable names the owner must be assigned; preparation fails without them |
+| `requireGitHub` | Preparation fails when the owner has no usable GitHub access |
+| `gitEmailDomain` | Email domain of the Git identity for owners without a linked GitHub account |
+| `repositoryHosts` | Hosts repositories may be cloned from, `["github.com"]` by default; session repositories are checked against the profile's list, so a request cannot point the pod at metadata or cluster-internal endpoints |
+
+A session that replaces the repositories while the profile's working directory is not inside any of them must set `workingDirectory` too (`400 invalid_environment`), rather than failing in the pod after a full clone.
+
+### What the runner does
+
+After registering, the runner prepares while it keeps heartbeating (`ready: false`), so a long clone or dependency install never looks like a lost pod:
+
+1. `POST /cloud/runner/environment` returns the recipe and, resolved for the **current owner** on every call: the Git identity, the variable values and the GitHub token. A transferred session therefore never keeps its former owner's values.
+2. **Git identity** (`configuring_git`): `git config --global user.name/user.email` under `HOME=/workspace/.home`, rewritten on every execution. A linked GitHub account gives `<login>` and `<id>+<login>@users.noreply.github.com`; otherwise the member name and `<name>@<gitEmailDomain>` (`users.noreply.teamcode.invalid` by default).
+3. **Repositories.** If `/workspace/<path>/.git` exists, only `git fetch --prune origin` (`fetching_repositories`): work on the workspace is never reset or re-cloned. Otherwise (`cloning_repositories`) clone into `/workspace/.teamcode/clone-<n>`, check out `ref`, create `branch`, then move it into place; an interrupted clone is cleaned and retried, and a non-empty directory at the path is never overwritten.
+4. The **working directory** must exist.
+5. **Setup** (`running_setup`): each `create` command whose marker `/workspace/.teamcode/setup/create-<n>-<hash>.done` is missing (the hash is the command's, so an edited command runs again on a new session), then every `start` command.
+6. The next heartbeat reports `ready: true`, and only then does the session become `ready`.
+
+Command output goes to `/workspace/.teamcode/logs/prepare-e<epoch>.log` on the session's own workspace and never reaches the server, the pod log or the transcript. After each command the runner replaces known variable values and the token by `[REDACTED]` and keeps the last 4 MiB, rewriting the file atomically. Masking is best effort: a command that prints a credential (`env`, `set -x`) writes it to the log until the command ends, or for good if the pod dies first, and transformed values (base64, URL-encoded) are not recognized. Setup commands must not print credentials.
+
+A runner error (unwritable or full workspace) is reported as step `runner` right away instead of waiting for the preparation timeout, and a runner that stops heartbeating while it prepares a resume is lost after 90 seconds, as during a first preparation.
+
+### Credentials in child processes only
+
+Variable values and the GitHub token live in the runner's memory and in the environment of the preparation's child processes. The runner never writes them to the pod spec, a Kubernetes Secret, a remote URL, a Git config file, the workspace or the server's database (see the log caveat above):
+
+- `git` gets the token from a credential helper defined through `GIT_CONFIG_COUNT` for `https://github.com` only (helpers from the image are reset first), which prints `x-access-token` and the token from its own environment; other hosts never see it.
+- `gh` reads `GH_TOKEN`.
+- `GIT_TERMINAL_PROMPT=0`, and children do not inherit the runner's token file path.
+- Owner variables never steer the runner's own commands: names that are not shell identifiers, and `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `XDG_CONFIG_HOME` and the `LD_`, `DYLD_`, `GIT_`, `GH_`, `SSH_`, `TEAMCODE_` prefixes, are dropped (by name, in the pod log). The variants work refuses most of them at definition already.
+
+The child processes run with the pod UID, like the planned agent: see the token exposure note in [the runner and the pod](#the-runner-and-the-pod).
+
+### Variables and GitHub sources
+
+- **Variables** come from `CloudVariableSource`. Its real source is the environment/MCP variants work (`ResolveEffectiveVariantsUseCase`, environment entries only, `unavailable` slots by name); the adapter is a few lines in `CloudServer` once that work is merged. Until then members receive no variables, and a profile with `requiredVariables` fails preparation with the missing names.
+- **GitHub** comes from `GitHubAccessSource`, implemented on the members' links (see [GitHub access](#github-access)): the owner's GitHub App user-to-server token, refreshed on the server, scoped to what both the App installation and the owner can reach. An owner without a usable link gets `not_linked`: public repositories clone anonymously and `requireGitHub` profiles fail preparation. Installation tokens and personal access tokens are never handed to a session.
+
+### Progress and failures
+
+`phase` shows `configuring_git`, `cloning_repositories`, `fetching_repositories` or `running_setup`. A failed step is reported as `{step, index, exitCode}` only; the server writes the message (for example "Cloning https://github.com/example/api.git into api failed (exit code 128). Private repositories need the owner's GitHub access."), so no command output or runner text reaches the API. The session gets `failure.code = preparation_failed`, is never reported ready, and the reconciler then stops the pod and:
+
+- on the first execution, fails the session and deletes its workspace;
+- on a resume, returns the session to `paused` with `resumeBlocked = preparation_failed` and keeps the workspace.
+
+Clone, fetch and GitHub failures are `retryable`; setup and path failures are not. The 30-minute preparation timeout applies to resumes too once the runner registered.
+
+## GitHub access
+
+Each member links their own GitHub account to the team's GitHub App. The link gives **only that member's cloud sessions** Git and `gh` access, with the member's own permissions intersected with the App installation's; it serves no other purpose (the skill catalog is published from CI, not synchronized from GitHub). The token is handed out on one path only: `POST /cloud/runner/environment`, to the registered runner of the current epoch of a session the member owns, resolved for the current owner on every call. No other API returns it, and it is never logged, journaled or written to the session.
+
+### The team's App (administrator)
+
+Create a GitHub App owned by the organization:
+
+- **User-to-server token expiration** enabled (the default): 8-hour access tokens, 6-month rotating refresh tokens.
+- **Repository permissions** the sessions need, for example Contents and Pull requests: read and write; Metadata: read. No organization or account permissions are required.
+- **Callback URL**: `<TEAMCODE_PUBLIC_URL>/dashboard/github/callback` (shown on the dashboard and in `GET /github/app`).
+- **Enable Device Flow** for `teamcode github link`; without it members link from the dashboard.
+- Install it on the repositories sessions may reach.
+
+Then save the App id, client id, client secret and private key on **Dashboard → GitHub** (`/dashboard/github`) or with `PUT /api/v1/github/app`. Before storing anything the server signs a JWT with the private key and reads `GET /app`: the key must belong to that App id and client id (`422 github_app_rejected`, `422 github_app_mismatch`). Only GitHub App client ids (`Iv...`) are accepted; an OAuth App's tokens (`gho_`) are refused at link time. The client secret and key are encrypted at rest; an update may omit them to keep the stored ones, except when the client id changes. `version` is required to update (`409 github_app_conflict`). Replacing the App (another client id) deletes the links made with the previous one, which it could never refresh again, and revokes their access tokens with the previous App's credentials; members link again.
+
+### Linking (member)
+
+- **CLI, device flow.** `teamcode github link` asks the server to start GitHub's device flow and prints the verification URL and user code. The member enters it on github.com; the CLI polls `POST /github/link/device/{id}` at the interval GitHub asked for. The server asks GitHub at most once per interval whatever the client's pace: the next poll time is moved with a compare-and-set before GitHub is called, so concurrent polls and GitHub errors do not shorten it. It honors `slow_down`, and stores the device code encrypted; the attempt expires with GitHub's code (15 minutes at most) and is single-use. The token exchange happens on the server: the CLI never sees a GitHub token.
+- **Dashboard, web flow.** **Link GitHub** on `/dashboard/github` starts an authorization with `state` and PKCE (S256) and sets a browser-binding cookie (`HttpOnly`, `SameSite=Lax`, path `/dashboard/github/callback`, 10 minutes). The callback runs without the strict session cookie (GitHub's redirect is cross-site), so it is authenticated by the single-use state, whose hash identifies the attempt and its member, and by that cookie: a link sent to someone else cannot bind their GitHub authorization to the sender's member (`403 github_link_browser_mismatch`).
+- One GitHub account per member and per team (`409 github_account_in_use`; the fresh token is revoked). Linking again replaces the member's link. Disabled members and members awaiting a password change cannot link.
+- Device-flow phishing is inherent to the flow: a member must enter only codes their own `teamcode github link` printed. GitHub shows the App's name on the authorization page.
+
+### Refresh and revocation
+
+- A token that expires within an hour is refreshed before it is handed out. The refresh is serialized like provider accounts: the right to spend the rotating refresh token (`refresh_pending`, start time) is committed before GitHub is called, and an owner silent for 60 s is taken over. Other callers get the current token if it stays valid for more than 5 minutes, and otherwise wait for the owner (up to 20 s, then `unavailable`). The owner writes only if it still holds the claim (same token version and start time), so a relink, an unlink or a takeover is never overwritten; a token refreshed by a fenced owner is revoked. A refreshed pair that cannot be saved because of a database error is retried three times and the new token is still handed out.
+- GitHub refusing the refresh token (`bad_refresh_token`: revoked by the member on GitHub, expired or already used) marks the link `reconnect_required`: sessions get `not_linked` until the member links again. Any other failure (GitHub unreachable, wrong client secret) keeps the tokens for a later attempt; the session gets the current token while it is valid for more than 5 minutes, `unavailable` otherwise. Limit: GitHub rotates the refresh token as soon as it processes the request, so a response lost in transit (timeout after the request reached GitHub) or tokens that could not be saved leave a spent refresh token, and the next refresh ends the link: the member links again. GitHub offers no way to recover that pair.
+- **Unlink** (`teamcode github unlink`, dashboard, `DELETE /github/link`; administrators `DELETE /github/links/{memberId}`) deletes the link and pending attempts in one transaction, then revokes the access token at GitHub (`DELETE /applications/{client_id}/token`, best effort, only with the App that issued it). The member's authorization of the App stays on GitHub, where only they manage it; TeamCode no longer holds any token for it. Members deleted from the team lose their link with them.
+- Journaled actions: `github.app.saved`, `github.link.created` and `github.link.removed` (actor, member as subject and effective member). Refreshes are not journaled.
+
+### Routes under `/api/v1/github`
+
+Advertised by `github.link.v1`, mounted with cloud sessions. Interactive logins only: service and CI keys are refused.
+
+| Route | Purpose | Authorization |
+| --- | --- | --- |
+| `GET /github/app` | `{configured, appId, clientId, slug, name, version, updatedAt, callbackUrl}`; never the secret or key | Administrator |
+| `PUT /github/app` | `{appId, clientId, clientSecret?, privateKey?, version?}`; verified with GitHub first | Administrator |
+| `GET /github/link` | The caller's link: `{memberId, state, appConfigured, login, userId, linkedAt, refreshedAt, accessExpiresAt}`, `state` is `not_linked`, `linked` or `reconnect_required` | Member |
+| `DELETE /github/link` | Unlink; `204`, also when not linked | Member |
+| `POST /github/link/device` | Start the device flow: `{id, userCode, verificationUri, expiresAt, interval}`; `409 github_app_not_configured`, `409 github_device_flow_disabled` | Member |
+| `POST /github/link/device/{id}` | Poll: `{status: pending\|linked\|expired\|denied, interval?, link?}` | The member who started it |
+| `GET /github/links`, `GET/DELETE /github/links/{memberId}` | Every member's link; another member's link; unlink a member | Administrator |
+| `GET /dashboard/github`, `POST .../link`, `GET .../callback`, `POST .../unlink`, `POST .../app`, `POST .../links/{memberId}/unlink` | Dashboard pages and forms (Origin and CSRF checked) | Member; App and members' links for administrators |
+
+GitHub failures are `502 github_unreachable` without GitHub's response, which may echo request content. GitHub Enterprise Server is not supported: the runner's credential helper and the App endpoints are github.com only.
 
 ## Inference from the pod
 
@@ -341,14 +469,14 @@ See [transcript, messages and attach](cloud-conversations.md#the-agent-in-the-po
 
 ## Other planned parts
 
-- **Environment preparation.** Repositories and refs cloned into `/workspace/<path>` on the first execution and only fetched on resume (never reset or re-cloned over work); `create` and `start` setup steps with completion markers; the owner's Git identity rewritten on every execution; variant values from the environment/MCP variants work, injected into processes only.
-- **GitHub.** GitHub App user-to-server tokens per member (8-hour tokens, rotating refresh serialized with the existing `refresh_pending` pattern); installation tokens only for dedicated service members; personal access tokens refused. Members link GitHub in the dashboard or with `teamcode github link`. Tokens reach Git and `gh` through a credential helper over a tmpfs socket, never the workspace, a remote URL, an event or an image.
+- **GitHub in the long-lived agent.** Preparation passes the token to Git and `gh` through child-process environments only (see [GitHub access](#github-access)); for the long-lived agent, the token moves to a credential helper over a tmpfs socket that asks the runner channel again before expiry, never the workspace, a remote URL, an event or an image. On transfer, the recipient's link replaces the former owner's at the next preparation.
+- **Transfer.** Administrator transfer is immediate; an owner's request is an offer the recipient accepts within 7 days. Transfer happens at a checkpoint, revokes execution and attachment credentials, rechecks the recipient, and charges future work to the recipient while historical usage stays with the original member. The policy follows the settings above.
 - **Keys.** `cloud:read`/`cloud:write` personal scopes and `admin:cloud` administrator keys with `TeamCode-On-Behalf-Of`, with the V2 API keys. This enables the driving integration: an external orchestrator creating one session per task on behalf of a member, relaying messages from mobile through its own backend, without administrator keys ever reaching a device.
 
 ## CLI
 
 ```sh
-teamcode cloud create --name TEXT --profile ID [--label K=V]... [--image REF] [--model M] [--effort E] [--idle-minutes N] [--member MEMBER_ID] [--idempotency-key KEY] [--json]
+teamcode cloud create --name TEXT --profile ID [--label K=V]... [--image REF] [--repo [PATH=]URL[#REF]]... [--branch NAME] [--workdir PATH] [--model M] [--effort E] [--idle-minutes N] [--member MEMBER_ID] [--idempotency-key KEY] [--json]
 teamcode cloud list [--all|--member ID] [--state STATE]... [--label K=V]... [--json]
 teamcode cloud show SESSION [--executions] [--json]
 teamcode cloud pause SESSION [--force] [--member ID]
@@ -360,9 +488,12 @@ teamcode cloud transfers show TRANSFER [--json]
 teamcode cloud transfers accept TRANSFER [--resume] [--member ID]
 teamcode cloud transfers decline|cancel TRANSFER [--member ID]
 teamcode cloud runner            # hidden; pod entrypoint only
+teamcode github link             # device flow; the token stays on the server
+teamcode github status [--member ID] [--json]
+teamcode github unlink [--member ID]
 ```
 
-`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `logs`, `send`, `attach` and `interrupt` are described in [transcript, messages and attach](cloud-conversations.md#cli); the administration commands and `teamcode github ...` come with their features.
+`--member` sends `TeamCode-On-Behalf-Of` (and, for `list`, filters by owner), `--json` prints the API DTOs unchanged, and `create` sends a random idempotency key unless one is given, so a script can retry with its own. `list` follows pages up to 500 sessions. `delete` refuses without `--yes`. `--repo` (repeatable) replaces the profile's repositories, the path defaulting to the repository name; `--branch` creates that local branch in each of them. `teamcode github link` prints the verification URL and code, then waits until GitHub authorizes, the code expires or the member cancels; it points to the dashboard when the App is not configured or device flow is disabled. `--member` on `github status` and `github unlink` is for administrators. The GitHub App itself is configured on the dashboard or through the API, which keeps the client secret and private key off command lines. `logs`, `send`, `attach`, `interrupt` and the administration commands come with their features.
 
 ## Pull request sequence
 
@@ -370,7 +501,9 @@ teamcode cloud runner            # hidden; pod entrypoint only
 | --- | --- | --- |
 | 1 | Contract; domain, persistence, reconciler, deletion proof and GC over `ClusterPort`; management API and client; settings; audit columns | Not advertised by the server |
 | 2 (stacked on 1) | Kubernetes adapter, runner routes and skeleton, server wiring and workers, CLI commands, opt-in `kind` smoke | `cloud.sessions.v1` |
-| 3 | Environment preparation and GitHub | `cloud.environment.v1` |
+| 3 | Environment preparation (image contract, recipe, repositories, Git identity, setup, progress and failures), variable and GitHub interfaces | `cloud.environment.v1` |
+| 3b | GitHub App configuration and member linking (device and web flows), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store | `github.link.v1` |
+| 3c | Variants source wired once the variants work is merged | - |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
 | 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
 | 6 | Transfer and its settings (implemented) | `cloud.transfer.v1` |
@@ -387,13 +520,21 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudRoutesTest` (runner): only the current pod's projected token is accepted; member credentials, another namespace and unbound tokens get `401`, another epoch `409`; reviews are cached.
 - `KubernetesClusterPortTest` (Ktor mock engine): claim, volume, storage-class and pod parsing; idempotent create and delete; the pod manifest (bare, non-root, no API token, projected token, resources, pull secrets); `TokenReview` parsing and refusals; label-selected paging; error bodies never surfaced.
 - `CloudRunnerTest`: the runner skeleton registers with backoff, checkpoints once when paused, exits when fenced or deleted, and stops on `401`.
+- `CloudSessionPersistenceTest` (environment): the recipe is stored in the immutable profile version and resolved onto the session with its overrides; missing required variables refuse the environment and fail the first execution with the names only, freeing the workspace; the owner's variables and Git identity reach the runner and no value is stored with the session; a failed preparation is never reported ready; a failed setup command on a resume returns the session to `paused` with `resumeBlocked` and keeps the workspace. Removing the reconciler's preparation check makes it fail.
+- `CloudRoutesTest` (environment): `cloud.environment.v1`; overrides on creation; credentials in a clone URL refused; only the registered runner reads its environment, with `no-store`; progress phases; unknown phases and step indexes refused; a reported failure blocks readiness.
 - `CloudTransferPersistenceTest` (real MySQL 8.4, two pools): migration drift; offers refused for another member's session, for oneself, on behalf by a member, for an unassigned recipient or one without allowance, and when the team disabled them; one offer from concurrent identical requests on both replicas, replay and conflict; visibility and decision rights; decline, withdrawal, expiry on read and by the worker; concurrent acceptances on both replicas; the drain, checkpoint and pod deletion before `transferring`; no wake and no resume meanwhile; the owner change with attachment leases removed, unconsumed messages cancelled, the `transfer` event, the journal entry with initiator and both members, the former owner locked out, and the next epoch run for the recipient while epoch 1 stays the former owner's; an administrator transfer on behalf of a member superseding an offer, with `keep`; the recipient unassigned before the boundary failing the transfer (session kept by its owner); the retained cap at the boundary; deletion cancelling an accepted transfer; no transfer while creating.
 - `CloudRoutesTest` (transfers): `cloud.transfer.v1`, service keys refused, `Idempotency-Key` required with replay and conflict, on-behalf refused for members, offers through the typed client, query validation, acceptance pausing the session, cancellation rights, an administrator's direct transfer on behalf of a member, the transfer settings in the API and the dashboard form.
 - `CloudTransferRulesTest`: only `paused` moves to `transferring`; the owner never changes through an ordinary compare-and-set; acceptance toward a pause; refused states; model, effort and quota checks; settings bounds.
+- `CloudEnvironmentRulesTest`: URL, path, ref, setup and variable validation, merge, Git identity, server-written messages, redacted diagnostics.
+- `CloudPreparationTest` and `CloudPreparationProcessTest` (real `/bin/sh` and `git` against a local repository): clone into staging, checkout, branch and move into place; fetch only on a second preparation, with uncommitted work intact; `create` steps once and `start` steps every time; values masked in the log; the token only in child environments and a github.com-scoped helper; failures reported as fields; heartbeats continue during preparation and report ready only after it.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 - `CloudInferencePersistenceTest` (real MySQL 8.4, two pools): migration drift; no credential before the runner registered or for another epoch; a `tcex_` token for the session owner with the `inference` scope only, accepted by the gateway's revalidation and refused for interactive and usage actions; only its digest stored; absent from service keys; two renewals drop the oldest; a draining execution still gets one; all of them revoked when the pause ends the execution, and by a lost execution; the purge of expired credentials; none for a disabled member, whose credentials stop authenticating; revoked at once by deletion. Removing the revocation from the session store makes it fail (checked).
 - `CloudTransferPersistenceTest` (inference): epoch 1's credential authenticates as the former owner and is gone after the boundary; epoch 2's authenticates as the recipient.
 - `CloudRoutesTest` (inference): `cloud.inference.v1`; no credential without the pod token, for a member credential, for another epoch or before registration; `no-store`; refused once the session is paused.
 - `CloudAgentTest` (inference): the agent starts with the proxy's origin and local token, without provider variables, the runner's token path or any `tcex_` value, for Claude Code and Codex; the runner renews its credential before expiry, keeps it through a network failure while usable, and drops it when refused.
 
-Migration note: the cloud session migrations are numbered `V20261020100004` and `V20261020100004.1`, after the latest `main` migration at the time of the 0.1.0 release. The transfer migrations (`V20261020100010*`: transfer settings, `cloud_sessions.transfer_id`, `cloud_executions.owner_id`, `cloud_transfers`, `audit_events.related_member_id`) are generated from the Exposed tables and numbered after the transcript branch's `V20261020100009*`. Renumber again if another migration lands on `main` first. The inference credentials table is `V20261020100011`, after them.
+- `GitHubLinkPersistenceTest` (real MySQL 8.4, two pools): the reviewed migration matches the Exposed tables; App configuration for administrators only, with optimistic versions and the client secret and key encrypted at rest (kept when omitted); a device link started on one replica and completed on the other, with the device code and the user tokens encrypted; one GitHub account per team, the unstored token revoked; access resolved for the owner only; four concurrent resolutions on two replicas spend the refresh token exactly once (removing the wait on a pending refresh makes it fail: four refreshes); a stalled refresh owner taken over after a minute, never before; a relink fencing a slower refresh owner; `bad_refresh_token` ending the link without further refreshes; unlink deleting the link and attempts and revoking the token; the journal entries.
+- `GitHubLinkTest` (domain, in-memory ports): App validation and verification (OAuth App client ids, missing secrets, a key of another App, an outage never echoing GitHub's text, secrets kept on update but required for another App); device polling at most once per interval, `slow_down`, expiry, denial and single use; the web callback bound to the browser (removing the check makes it fail), single-use, expiring, and the PKCE verifier matching the challenge; unlink and administrator unlink; refresh before expiry, the old token while GitHub is unreachable, waiting on another replica, and `reconnect_required`.
+- `GitHubAppClientTest` (Ktor mock engine): the App JWT (RS256, signature checked with the public key, `iss` = client id, 10-minute window) from GitHub's PKCS#1 keys and from PKCS#8; App id mismatch and rejected keys; device-flow requests and every polling answer; a verification URL on another host refused; `ghu_` tokens only; web exchange with PKCE and the client secret; refresh outcomes (`bad_refresh_token` versus a wrong client secret); bounded bodies never surfacing in errors; the revocation request.
+- `GitHubRoutesTest`: `github.link.v1`; service keys refused; App configuration for administrators only and never returning a secret; the device flow through the typed client without a token in any response; member and administrator unlink; the dashboard web flow with CSRF, the browser cookie's attributes, a callback refused without that cookie and accepted with it, then single use. `CloudRoutesTest` (environment): the runner receives the session owner's token, not another member's.
+Migration note: the cloud session migrations are numbered `V20261020100004` and `V20261020100004.1`, the environment one `V20261020100007`, the GitHub tables `V20261020100008*` and the transfer ones (`V20261020100010*`: transfer settings, `cloud_sessions.transfer_id`, `cloud_executions.owner_id`, `cloud_transfers`, `audit_events.related_member_id`), after the latest `main` migration at the time of the 0.1.0 release. The inference credentials table is `V20261020100011`, after them. Renumber again if another migration lands on `main` first.
