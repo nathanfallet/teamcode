@@ -274,4 +274,4 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudRoutesTest`: service keys refused on cloud routes, `Idempotency-Key` validation and canonical replay, `TeamCode-On-Behalf-Of` refused for members, visibility as `404`, natural idempotency of pause and delete through the typed client, query validation, and the settings API and dashboard form with CSRF.
 - `CloudLifecycleRulesTest`: the transition table, request validation, image override patterns and settings bounds.
 
-Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.
+Migration note: the cloud session migrations are numbered `V20261020100004` and `V20261020100004.1`, after the latest `main` migration at the time of the 0.1.0 release. Renumber again if another migration lands on `main` first.
