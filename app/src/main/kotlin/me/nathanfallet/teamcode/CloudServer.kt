@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode
 import java.util.UUID
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.cloud.*
+import me.nathanfallet.teamcode.domain.github.GitHubLinkService
+import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
 import me.nathanfallet.teamcode.infrastructure.cloud.ClusterApiException
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
@@ -11,8 +13,10 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudTransferStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlGitHubStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlMemberAllowance
 import me.nathanfallet.teamcode.infrastructure.database.SqlModelPolicyStore
+import me.nathanfallet.teamcode.infrastructure.github.GitHubAppClient
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import me.nathanfallet.teamcode.presentation.CloudConversation
@@ -34,6 +38,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val work = SqlScheduledWork(database)
     private val replica = UUID.randomUUID().toString()
 
+    private val githubStore = SqlGitHubStore(database, cipher)
+    private val githubClient = GitHubAppClient()
+
     private val conversationStore = SqlCloudConversationStore(database)
     // Groups do not exist in TeamCode yet; a group directory plugs in here when they land.
     private val access = CloudAccessService(conversationStore, store, CloudGroupDirectory.NONE)
@@ -51,7 +58,11 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     }, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients))
     private val garbage = CollectCloudGarbageUseCase(store, cluster)
     val admin = CloudAdministrationService(adminStore, cluster)
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster))
+    /** Members' GitHub App links; their tokens are used only by the members' own cloud sessions. */
+    val github = GitHubLinkService(githubStore, githubStore, githubClient)
+    // Variables come from the environment/MCP variants work and plug in here; until it lands, sessions get none.
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = CloudVariableSource.NONE, github = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)),
+        AuthenticateRunnerUseCase(store, cluster))
 
     private val conversationService = CloudConversationService(conversationStore, store, access)
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
@@ -112,7 +123,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         }
     }
 
-    override fun close() = cluster.close()
+    override fun close() { cluster.close(); githubClient.close() }
 
     private companion object {
         fun describe(error: Exception) = if (error is ClusterApiException) "Kubernetes HTTP ${error.status}" else error::class.simpleName ?: "error"

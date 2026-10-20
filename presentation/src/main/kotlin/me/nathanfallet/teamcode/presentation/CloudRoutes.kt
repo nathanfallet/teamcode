@@ -21,13 +21,18 @@ internal fun CloudSession.view() = CloudSessionView(
     failure = failure?.view(), resumeBlocked = resumeBlocked?.view(),
     workspaceDeletion = CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
+    environment = environment.view(),
 )
+internal fun CloudEnvironmentSpec.view() = CloudEnvironmentView(repositories.map { CloudRepositoryView(it.url, it.path, it.ref, it.branch) }, workingDirectory,
+    CloudSetupView(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
+private fun CloudRepositoryView.domain() = CloudRepository(url, path, ref, branch)
+private fun CloudEnvironmentView.domain() = CloudEnvironmentSpec(repositories.map { it.domain() }, workingDirectory, CloudSetup(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 private fun CloudExecution.view() = CloudExecutionView(epoch, podName, state.wire, createdAt, registeredAt, lastHeartbeatAt, nodeName, imageDigest, endedAt, exitReason, checkpoint, ownerId)
 private fun CloudCluster.view() = CloudClusterView(id, name, apiUrl, allowedNamespaces, maxRunningPods, defaultStorageClass, version, orphanedVolumes, lastGarbageCollectionAt, createdAt, updatedAt)
 private fun CloudProfileSpec.view() = CloudProfileSpecView(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResourcesView(resources.cpuMillis, resources.memoryMebibytes),
-    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes)
+    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.view())
 private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResources(resources.cpuMillis, resources.memoryMebibytes),
-    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes)
+    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.domain())
 private fun CloudProfile.view() = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt)
 private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
     memberTransfers.wire, transferOfferDays, transferPendingInputs.wire)
@@ -88,7 +93,8 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val onBehalfOf = call.onBehalfOf()
             val input = call.jsonBody<CreateCloudSessionRequest>()
             val canonical = Serialization.json.encodeToString(input.copy(labels = input.labels.toSortedMap())) + "\n" + (onBehalfOf ?: call.principal.member.id)
-            val draft = CloudSessionDraft(input.name, input.profileId, input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes)
+            val draft = CloudSessionDraft(input.name, input.profileId, input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes,
+                input.environment?.let { CloudEnvironmentOverride(it.repositories?.map { repository -> repository.domain() }, it.workingDirectory) })
             when (val outcome = sessions.create(call.principal, onBehalfOf, draft, IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical)))) {
                 is CloudCreateOutcome.Created -> call.respond(HttpStatusCode.Accepted, outcome.session.view())
                 is CloudCreateOutcome.Replayed -> {

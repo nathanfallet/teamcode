@@ -63,6 +63,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[initiatorId] = created.createdBy.initiatorId; it[credentialId] = created.createdBy.credentialId; it[effectiveMemberId] = created.createdBy.effectiveMemberId
             it[profileId] = created.profileId; it[profileVersion] = created.profileVersion; it[clusterId] = created.clusterId; it[namespace] = created.namespace
             it[claimName] = created.workspace.claimName; it[storageClass] = created.workspace.storageClass; it[workspaceSize] = created.workspace.sizeGibibytes
+            it[environment] = encodeEnvironment(created.environment)
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
@@ -250,6 +251,7 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
         DeletionState.parse(row[CloudSessions.deletionState]), row[CloudSessions.claimDeletedAt], row[CloudSessions.volumeDeletedAt],
         problem(row[CloudSessions.deletionCode], row[CloudSessions.deletionMessage], false)),
     createdAt = row[CloudSessions.createdAt], updatedAt = row[CloudSessions.updatedAt], transferId = row[CloudSessions.transferId],
+    environment = decodeEnvironment(row[CloudSessions.environment]),
 )
 internal fun readExecution(row: ResultRow) = CloudExecution(
     row[CloudExecutions.sessionId], row[CloudExecutions.epoch], row[CloudExecutions.podName], ExecutionState.parse(row[CloudExecutions.state]), row[CloudExecutions.createdAt],
