@@ -22,7 +22,7 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
 
     override suspend fun saveApp(actor: Principal, expectedVersion: Int?, input: GitHubAppInput, metadata: GitHubAppMetadata): GitHubApp = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
-        if (actor.member.role != Role.ADMIN) throw TeamFailure("forbidden", 403, "Administrator access is required.")
+        if (!actor.member.role.isAdministrator) throw TeamFailure("forbidden", 403, "Administrator access is required.")
         val now = nowMillis()
         val row = GitHubApps.selectAll().where { GitHubApps.teamId eq actor.teamId }.forUpdate().singleOrNull()
         if ((row == null) != (expectedVersion == null) || (row != null && row[GitHubApps.version] != expectedVersion))
