@@ -48,7 +48,7 @@ class KindSmokeTest {
                 val password = team.bootstrap()!!
                 team.changePassword(team.login("admin", password, "smoke").principal, password, "kind smoke administrator password")
                 val principal = team.login("admin", "kind smoke administrator password", "smoke").principal
-                assertEquals(Role.ADMIN, principal.member.role)
+                assertEquals(Role.OWNER, principal.member.role, "The bootstrap member is the owner")
 
                 val cluster = admin.saveCluster(principal, null, null, CloudClusterInput("kind", read("api-url"), read("ca.pem") + "\n", read("token"), listOf(namespace), 2, "standard"))
                 val profile = admin.saveProfile(principal, null, 0, "smoke", CloudProfileSpec(cluster.id, namespace, read("image"),

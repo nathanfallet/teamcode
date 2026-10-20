@@ -77,7 +77,7 @@ subjects: [{{kind: ServiceAccount, name: teamcode-server, namespace: teamcode-sy
 # The stand-in runner: the init container copies it like the real binary; the session container runs it.
 DOCKERFILE = textwrap.dedent("""\
     FROM busybox:1.36.1
-    RUN printf '#!/bin/sh\\nexec sleep 3600\\n' > /usr/local/bin/teamcode && chmod 755 /usr/local/bin/teamcode
+    RUN mkdir -p /usr/local/bin && printf '#!/bin/sh\\nexec sleep 3600\\n' > /usr/local/bin/teamcode && chmod 755 /usr/local/bin/teamcode
 """)
 
 
