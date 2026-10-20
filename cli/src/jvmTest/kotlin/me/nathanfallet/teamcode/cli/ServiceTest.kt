@@ -31,6 +31,9 @@ class ServiceTest {
         val registered = JsonObject(old + ("capabilities" to JsonArray(listOf(JsonPrimitive("workload-routing-v1"), JsonPrimitive("run-routing-v1")))))
         assertTrue(serviceMatches(registered, "installation", "https://team.example", true, runRouting = true))
         assertFalse(serviceMatches(registered, "another-installation", "https://team.example", true, runRouting = true))
+        assertFalse(serviceMatches(current, "installation", "https://team.example", false, mcpRelay = true), "A service without the MCP relay is not used for MCP launches")
+        val relay = JsonObject(old + ("capabilities" to JsonArray(listOf(JsonPrimitive("workload-routing-v1"), JsonPrimitive("mcp-relay-v1")))))
+        assertTrue(serviceMatches(relay, "installation", "https://team.example", true, mcpRelay = true))
     }
 
     @Test fun manifestsPreserveLiteralPathsWithoutExposingCredentials() {
