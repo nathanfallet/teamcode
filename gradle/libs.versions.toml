@@ -9,6 +9,7 @@ mordant = "3.0.2"
 okio = "3.18.2"
 junit = "5.11.4"
 logback = "1.5.20"
+maven = "0.37.0"
 
 exposed = "1.5.0"
 hikari = "5.1.0"
@@ -22,6 +23,7 @@ jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ktor = { id = "io.ktor.plugin", version.ref = "ktor" }
+maven = { id = "com.vanniktech.maven.publish", version.ref = "maven" }
 
 [libraries]
 exposed-core = { module = "org.jetbrains.exposed:exposed-core", version.ref = "exposed" }
