@@ -76,7 +76,7 @@ internal class RunnerLoop(
                 catch (_: Exception) { log("The environment could not be prepared."); false }
             if (prepared) { log("Environment prepared."); started() }
         }
-        try { heartbeats(scope) { prepared } } finally { preparation.cancel() }
+        return try { heartbeats(scope) { prepared } } finally { preparation.cancel() }
     }
 
     private suspend fun heartbeats(scope: CoroutineScope, prepared: () -> Boolean): Int {
