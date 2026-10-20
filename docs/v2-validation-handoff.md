@@ -25,14 +25,14 @@ Per-section result of the post-release pass of 2026-10-20 (source `1726630`, the
 | 3. Scheduling and performance | Not validated | The controlled two-replica `FairSchedulingHttpTest` passes inside `:app:test`. Sustained multi-replica workloads, latency/memory/SQL cost measurements and SLOs need a purpose-built bounded benchmark and are not done. |
 | 4. Predictive control and hooks | Partly validated | Real Claude 2.1.303 and Codex 0.163.0 guidance smokes, agent-run registry and the live forecast browser fixture pass on macOS. Real Codex on Windows, outside-proxy spend replay, forecast-error measurement and fan-out are not validated. |
 | 5. Administration and audit | Partly validated | Team, device, replica and full-database restore acceptance pass. The upgrade/rollback procedure is now written in [operations](operations.md#rolling-upgrade-and-rollback) (not run on a cluster). Role-change walkthrough, CSRF/escaping review and audit-coverage review are not done. |
-| 6. Distribution | Mostly validated | Workflow 39344895836 conclusions and the 11 release assets were inspected; the released chart renders and passes `check-helm.py` for bundled and external MySQL, including `image.tag=0.1.0`; the public `install.sh` installs 0.1.0 on a clean macOS ARM64 home and into a custom root with spaces and Unicode. No second release exists, so cross-version update/rollback, Intel macOS, Linux and PowerShell 5.1/7 public-download installs are not validated here. |
+| 6. Distribution | Partly validated | Workflow 39344895836 conclusions and the 11 release assets were inspected; the released chart renders and passes `check-helm.py` for bundled and external MySQL, including `image.tag=0.1.0`; the public `install.sh` installs 0.1.0 on a clean macOS ARM64 home and into a custom root with spaces and Unicode. The scripted `smoke-installation.py`, `smoke-release-verification.py` and `smoke-automatic-updates.py` need the publisher-signed bundles of the full workflow and were not re-run locally (their CI runs are the evidence). No second release exists, so cross-version update/rollback, Intel macOS, Linux and PowerShell 5.1/7 public-download installs are not validated here. |
 
 Commands (from the repository root; `$B` is `cli/build/bin/macosArm64/releaseExecutable/teamcode.kexe`, `$J` is `app/build/libs/app-all.jar`):
 
 ```sh
 python3 scripts/check-module-graph.py
-python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'   # 8 tests
-python3 -m unittest discover -s scripts -p 'test_release_*.py'      # 21 tests
+python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'
+python3 -m unittest discover -s scripts -p 'test_release_*.py'
 ./gradlew --no-daemon :api:jvmTest :client:jvmTest :domain:test :infrastructure:test \
   :presentation:test :cli:jvmTest :app:test :app:buildFatJar \
   :cli:linkReleaseExecutableMacosArm64 :cli:macosArm64Test           # BUILD SUCCESSFUL in 8m 43s
@@ -53,7 +53,7 @@ curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.1.0/inst
 teamcode install --version=0.1.0 --root "<private dir with spaces and non-ASCII>"
 ```
 
-All of the above exited 0 except the `--at-boot` fixture. The executable was built from `1726630` (reporting `0.1.0-SNAPSHOT`); the installed public binaries report `0.1.0`. Smoke logs are local, not portable evidence.
+All of the above exited 0 except the `--at-boot` fixture, which exited 1 on its own `sudo -n` precondition and therefore tested nothing. The executable was built from `1726630` (reporting `0.1.0-SNAPSHOT`); the installed public binaries report `0.1.0`. Smoke logs are local, not portable evidence.
 
 ## 1. Boot startup and workstation lifecycle
 

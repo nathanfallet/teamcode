@@ -50,28 +50,29 @@ The fixture is small and quiesced. Its dump/restore timings are diagnostic measu
 
 Unknown request charges and [operator-attested reconciliation](usage-reconciliation.md) are included in MySQL backups. Restoring an expired active lease or unknown stream never refunds it. Pending charges remain available beyond ordinary resolved-detail retention; confirmed corrections preserve original member/group/pool/day/run attribution and their audit history. Provider quota percentages cannot prove per-request usage. Reconcile only from request-specific evidence, after reviewing the exact request/account, rather than clearing the ledger during recovery.
 
-# Rolling upgrade and rollback
+## Rolling upgrade and rollback
 
-This procedure restates behavior already documented in the [Helm guide](../helm/teamcode/README.md), [groups](groups.md), [team roles](team-roles.md) and [replicas](replicas.md). It has not been exercised against a real cluster by this repository; the mixed-version window below is therefore an operator rule, not an accepted scenario.
+This procedure combines behavior documented in the [Helm guide](../helm/teamcode/README.md), [groups](groups.md) and [team roles](team-roles.md) with conservative operator rules (marked as such). It has not been exercised against a real cluster by this repository; the mixed-version window is an operator rule, not an accepted scenario.
 
-## Before upgrading
+### Before upgrading
 
-1. Take a recovery checkpoint as described above and record the running image tag (pin `image.tag` to an exact version such as `0.1.0` rather than following `latest`), the chart version and the encryption-key version.
+1. Take a recovery checkpoint as described above and record the running image tag (pin `image.tag` to an exact version such as `0.1.0` rather than following `latest`), the chart version and which Secret holds the `encryption-key` (a reference, not the value).
 2. Read the release notes for migrations. Published migrations are additive and are never edited; Flyway applies new ones when the first upgraded pod starts and serializes concurrent starters.
 3. Keep the same `encryption-key` Secret. There is no key rotation or re-encryption procedure, so a different key makes stored provider credentials unreadable.
 
-## Rolling out
+### Rolling out
 
-The chart rolls with `maxUnavailable: 0`, a pod disruption budget keeping one replica and a 660-second termination period so accepted streams can drain; streams cannot move between pods and are never replayed. During the rollout the old and new versions run against the same database. Treat that window as supported only for features that the older version ignores safely:
+The chart rolls with `maxUnavailable: 0`, a pod disruption budget keeping one replica and a 660-second termination period so accepted streams can drain; streams cannot move between pods and are never replayed. During the rollout the old and new versions run against the same database. Operator rule: treat that window as supported only for features that the older version ignores safely:
 
 - Enforcement features introduced by a release (for example group caps, ownership restrictions or new run limits) are enforced only by upgraded replicas. Do not rely on them, and do not enable or configure them, until every replica runs the new version.
 - Do not perform administration that depends on a new feature (creating groups, caps or overrides) while old replicas are still serving traffic.
+- A first upgrade from a release without ownership promotes one existing enabled administrator to owner and revokes that account's sessions and service keys (see [team roles](team-roles.md)). Re-issue automation keys of that account afterwards.
 - Wait until `/ready` is healthy on all replicas and no old pod remains before declaring the upgrade complete.
 
-## Rolling back
+### Rolling back
 
-`helm rollback` or pinning the previous image tag restores the previous application code only. It does not reverse database migrations, so keep the additive schema and verify that the previous release tolerates it. Older replicas do not enforce newer policies (they may see owners as administrators and ignore group snapshots), so a rollback is not equivalent authorization behavior; re-check ownership, group and run policy after rolling back and before restoring traffic.
+`helm rollback` or pinning the previous image tag restores the previous application code only. It does not reverse database migrations, so keep the additive schema. Before rolling back, read the release notes of every release since the target for migrations that change existing columns, and test the previous image against a restored copy of the database; only additive changes are expected to be tolerated. Older replicas do not enforce newer policies (they may see owners as administrators and ignore group snapshots), so a rollback is not equivalent authorization behavior; re-check ownership, group and run policy after rolling back and before restoring traffic.
 
 If the schema is incompatible with the previous release, do not edit it by hand. Restore the pre-upgrade checkpoint into an isolated database as described above, with the original encryption key, and accept the loss of writes made after that checkpoint (including revocations; revoke them again).
 
-Never run two TeamCode instances that refresh the same subscription accounts at once.
+Operator rule: never run two TeamCode instances that refresh the same subscription accounts at once.
