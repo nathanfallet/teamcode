@@ -76,7 +76,27 @@ def main():
                                  '--signature', str(signature_file)], env=env,
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
         assert result.returncode != 0 and b'release_file_unreadable' in result.stderr + result.stdout
-    print('PASS: native compiled publisher root, Unicode paths, signature tampering, unknown keys, bounds, binary rejection and no login/configuration.')
+        if os.name != 'nt':
+            pipe = root / 'not a regular metadata file'
+            os.mkfifo(pipe)
+            result = subprocess.run([binary, 'verify-release', '--manifest', str(pipe), '--signature', str(signature_file)],
+                                    env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+            assert result.returncode != 0 and b'release_file_unreadable' in result.stderr + result.stdout
+        # These guards must fail before any network request; real GitHub is not a CI dependency.
+        for arguments, diagnostic in [
+            (['update'], b'release_not_managed'),
+            (['update', '--check', '--version', '../escape'], b'release_version_invalid'),
+        ]:
+            result = subprocess.run([binary, *arguments], env=env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=5)
+            assert result.returncode != 0 and diagnostic in result.stdout + result.stderr
+        compiled_version = subprocess.check_output([binary, 'version'], env=env, text=True, timeout=5).strip().split(' ', 1)[1]
+        for version, api, accepted in [(compiled_version, '1', True), (compiled_version, '2', False), ('99.0.0', '1', False)]:
+            result = subprocess.run([binary, '--teamcode-installation-probe', version, api], env=env,
+                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+            assert (result.returncode == 0) == accepted, 'Native candidate version/API compatibility probe disagreed'
+        assert not config_root.exists(), 'Release operations must not create team configuration'
+    print('PASS: native publisher trust, Unicode paths, tampering, bounds, binary rejection, update guards and no login/configuration.')
 
 
 if __name__ == '__main__':

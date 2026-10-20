@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS reservation_groups (reservation_id VARCHAR(36), group_id VARCHAR(36), day_number BIGINT NOT NULL, expires_at BIGINT NOT NULL, CONSTRAINT pk_reservation_groups PRIMARY KEY (reservation_id, group_id), CONSTRAINT fk_reservation_groups_reservation_id__id FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE CASCADE ON UPDATE RESTRICT, CONSTRAINT fk_reservation_groups_group_id__id FOREIGN KEY (group_id) REFERENCES team_groups(id) ON UPDATE RESTRICT);
+CREATE INDEX group_daily ON reservation_groups (group_id, day_number, reservation_id);
+CREATE INDEX group_active ON reservation_groups (group_id, expires_at, reservation_id);

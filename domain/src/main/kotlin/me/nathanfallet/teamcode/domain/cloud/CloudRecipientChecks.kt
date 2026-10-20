@@ -21,7 +21,7 @@ class CloudRecipientPolicy(
             return listOf(CloudProblem("recipient_unavailable", "The recipient is disabled or has not completed password setup."))
         val problems = mutableListOf<CloudProblem>()
         val profile = store.profile(session.teamId, session.profileId)
-        if (profile == null || (recipient.role != Role.ADMIN && recipient.id !in profile.assignedMemberIds))
+        if (profile == null || (!recipient.role.isAdministrator && recipient.id !in profile.assignedMemberIds))
             problems += CloudProblem("profile_unassigned", "The recipient is not assigned to the session's profile.")
         if (access != null && CloudPermission.CREATE !in access.permissions(session.teamId, recipient, recipient.id))
             problems += CloudProblem("cloud_permission_denied", "The team's cloud access policy does not let the recipient own sessions.")

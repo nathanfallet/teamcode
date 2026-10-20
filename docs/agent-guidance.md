@@ -83,3 +83,7 @@ python3 scripts/smoke-codex-guidance.py \
 The isolated fixture runs a real `exec_command` tool round trip through deterministic Responses streams. It verifies both hook events, session correlation, receipts, preserved user-file hooks, literal executable/configuration paths, refusal to run untrusted hooks, `--no-guidance`, `--ignore-user-config` and preservation of explicit CLI hooks. Only this fixture uses the hook-trust bypass with its two known synthetic hooks and an empty temporary home; the product never adds that flag.
 
 `scripts/smoke-hook.py` tests the native stdin bridge on every desktop CI platform, including exact byte limits, held-open stdin, lookup deadlines, deduplication and silent errors. Launcher acceptance also executes the actual generated hook command, including the encoded PowerShell command on Windows. The full real-client fixtures currently run on POSIX; their evidence does not imply a full real Codex Windows acceptance run.
+
+## Observation mode
+
+The administrator can enable [observation-only pacing](capacity.md#observation-only-controller-mode). Forecasts remain visible in the dashboard and informational preview API, but delivery reads/claims return no directive and predictive admission throttles are suspended. This applies to scoped and aggregate guidance, including manual hints and watchers. Hard team/provider limits remain enforced. Advice already emitted or in flight cannot be recalled.

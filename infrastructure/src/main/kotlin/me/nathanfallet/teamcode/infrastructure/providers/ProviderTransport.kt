@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import me.nathanfallet.teamcode.domain.accounts.*
 import me.nathanfallet.teamcode.domain.capacity.AccountQuota
 import me.nathanfallet.teamcode.domain.capacity.QuotaUpdate
+import me.nathanfallet.teamcode.domain.capacity.ProviderRequestIds
 import me.nathanfallet.teamcode.domain.gateway.WireProtocol
 
 /** Fixed provider destinations; no end-user URL can receive a subscription credential. */
@@ -20,4 +21,7 @@ interface ProviderTransport {
     fun quotas(accountId: String, headers: Headers, now: Long): List<AccountQuota>
     fun quotaUpdate(accountId: String, model: String, headers: Headers, now: Long): QuotaUpdate =
         QuotaUpdate(quotas(accountId, headers, now), now)
+    /** Override for a provider with a different correlation contract; conflicting IDs remain unknown. */
+    fun requestId(headers: Headers): String? = listOf("request-id", "x-request-id")
+        .mapNotNull { headers.getAll(it)?.singleOrNull()?.takeIf(ProviderRequestIds::valid) }.distinct().singleOrNull()
 }

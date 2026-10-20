@@ -25,6 +25,9 @@ import me.nathanfallet.teamcode.infrastructure.database.ClusterConnection
 /** A non-success Kubernetes API status. The response body is never kept: it may echo request content. */
 class ClusterApiException(val status: Int) : Exception("The Kubernetes API returned HTTP $status.")
 
+/** The cluster API host resolves to a link-local, unspecified or cloud metadata address, so the service-account token is not sent. */
+class ClusterHostNotAllowedException : Exception("The Kubernetes API host resolves to an address that is not allowed.")
+
 /**
  * How session pods are built.
  *
@@ -66,6 +69,8 @@ class KubernetesClusterPort(
     private val pods: KubernetesPodOptions,
     /** Tests pass a mock engine; production builds one CIO client per cluster. */
     private val engine: HttpClientEngine? = null,
+    /** Tests pass a fixed resolver; production resolves the API host with the system resolver. */
+    private val resolver: (String) -> List<java.net.InetAddress> = { host -> java.net.InetAddress.getAllByName(host).toList() },
 ) : ClusterPort, AutoCloseable {
     private class Client(val fingerprint: String, val connection: ClusterConnection, val http: HttpClient, val loadedAt: Long)
     private val clients = ConcurrentHashMap<String, Client>()
@@ -325,6 +330,7 @@ class KubernetesClusterPort(
 
     private suspend fun load(clusterId: String): Client {
         val connection = connections(clusterId) ?: throw ClusterApiException(404)
+        requireAllowedHost(connection.apiUrl)
         val fingerprint = MessageDigest.getInstance("SHA-256").digest((connection.apiUrl + "\u0000" + connection.caCertificate + "\u0000" + connection.token).encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
         clients[clusterId]?.takeIf { it.fingerprint == fingerprint }?.let { current ->
@@ -339,6 +345,19 @@ class KubernetesClusterPort(
         val created = Client(fingerprint, connection, http, System.currentTimeMillis())
         clients.put(clusterId, created)?.let { previous -> if (previous.http !== shared) retired += previous.http }
         return created
+    }
+
+    /**
+     * A DNS name is re-resolved whenever the connection is loaded (at least every 30 s) and refused if any answer is
+     * link-local, unspecified or a cloud metadata address, as for a literal address in the administration check.
+     * Resolution happens off the event loop. The check cannot pin the address the HTTP client later dials.
+     */
+    private suspend fun requireAllowedHost(apiUrl: String) {
+        val host = try { Url(apiUrl).host.removePrefix("[").removeSuffix("]") } catch (_: IllegalArgumentException) { throw ClusterHostNotAllowedException() }
+        val addresses = try { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { resolver(host) } }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { throw ClusterHostNotAllowedException() }
+        if (addresses.isEmpty() || addresses.any { !CloudAdministrationService.allowedResolvedAddress(it.address) }) throw ClusterHostNotAllowedException()
     }
 
     override fun close() {

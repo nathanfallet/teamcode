@@ -16,7 +16,8 @@ class KubernetesClusterPortTest {
     private val requests = mutableListOf<HttpRequestData>()
     private val bodies = mutableListOf<JsonObject?>()
 
-    private fun port(handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData) = KubernetesClusterPort(
+    private fun address(vararg octets: Int) = java.net.InetAddress.getByAddress(ByteArray(octets.size) { octets[it].toByte() })
+    private fun port(resolver: (String) -> List<java.net.InetAddress> = { listOf(address(10, 0, 0, 1)) }, handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData) = KubernetesClusterPort(
         { ClusterConnection("https://k8s.example.test:6443", "unused-with-mock", token) },
         KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0"),
         MockEngine { request ->
@@ -24,7 +25,24 @@ class KubernetesClusterPortTest {
             bodies += (request.body as? TextContent)?.text?.let { Json.parseToJsonElement(it).jsonObject }
             handler(request)
         },
+        resolver,
     )
+
+    @Test fun aClusterNameResolvingToAMetadataAddressIsNeverContacted(): Unit = runBlocking {
+        for (resolved in listOf(
+            listOf(address(169, 254, 169, 254)), listOf(address(10, 0, 0, 1), address(169, 254, 169, 254)), listOf(address(0, 0, 0, 0)),
+            listOf(java.net.InetAddress.getByAddress(ByteArray(16) { if (it == 0) 0xfe.toByte() else if (it == 1) 0x80.toByte() else 0 })),
+            listOf(java.net.InetAddress.getByAddress(byteArrayOf(0xfd.toByte(), 0, 0x0e, 0xc2.toByte(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0x54))),
+            emptyList(),
+        )) {
+            requests.clear()
+            val port = port({ resolved }) { json("{}", HttpStatusCode.OK) }
+            assertFailsWith<ClusterHostNotAllowedException>(resolved.toString()) { port.claim("c1", "teamcode", "tc-ws-1") }
+            assertTrue(requests.isEmpty(), "The service-account token must not be sent to $resolved")
+        }
+        val ok = port({ listOf(address(10, 0, 0, 1), address(127, 0, 0, 1)) }) { json("""{"spec":{"volumeName":"pv-1"},"status":{"phase":"Bound"}}""") }
+        assertNotNull(ok.claim("c1", "teamcode", "tc-ws-1"))
+    }
     private fun MockRequestHandleScope.json(value: String, status: HttpStatusCode = HttpStatusCode.OK) =
         respond(value, status, headersOf(HttpHeaders.ContentType, "application/json"))
 

@@ -117,7 +117,7 @@ teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]
 
 ## Storage
 
-Migrations `V20261019210000*`: `cloud_settings.transcript_retention_days`, `cloud_access_policies`, `cloud_session_inputs` (text as `MEDIUMTEXT`, unique `(session, author, client key)`), `cloud_session_events` (primary key `(session_id, seq)`, unique `(session_id, epoch, runner_seq)` for deduplication) and `cloud_session_attachments`, and `cloud_session_transcripts`, the per-session cursors (last sequence, runner sequence of the latest execution) that the retention purge never deletes, so numbering never restarts. Writes take the session row lock, so sequences stay dense across replicas.
+Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `cloud_access_policies`, `cloud_session_inputs` (text as `MEDIUMTEXT`, unique `(session, author, client key)`), `cloud_session_events` (primary key `(session_id, seq)`, unique `(session_id, epoch, runner_seq)` for deduplication) and `cloud_session_attachments`, and `cloud_session_transcripts`, the per-session cursors (last sequence, runner sequence of the latest execution) that the retention purge never deletes, so numbering never restarts. Writes take the session row lock, so sequences stay dense across replicas.
 
 ## Known limits
 

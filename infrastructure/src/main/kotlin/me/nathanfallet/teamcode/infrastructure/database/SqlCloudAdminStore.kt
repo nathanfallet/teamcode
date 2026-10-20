@@ -38,6 +38,10 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
                 it[defaultStorageClass] = input.defaultStorageClass; it[version] = 1; it[createdAt] = now; it[updatedAt] = now
             }
         } else {
+            val storedUrl = CloudClusters.select(CloudClusters.apiUrl).where { (CloudClusters.id eq id) and (CloudClusters.teamId eq actor.teamId) }.singleOrNull()?.get(CloudClusters.apiUrl)
+            // The stored token and CA belong to the stored API server; a different server must be given its own.
+            if (storedUrl != null && storedUrl != input.apiUrl && (input.serviceAccountToken == null || input.caCertificate == null))
+                throw TeamFailure("cluster_credentials_required", 400, "Changing the API URL requires the CA certificate and a service-account token for the new server.")
             val updated = CloudClusters.update({ (CloudClusters.id eq id) and (CloudClusters.teamId eq actor.teamId) and (CloudClusters.version eq (expectedVersion ?: -1)) }) {
                 it[name] = input.name; it[apiUrl] = input.apiUrl
                 input.caCertificate?.let { ca -> it[caCertificate] = ca }
@@ -53,7 +57,7 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
 
     override suspend fun profiles(actor: Principal): List<CloudProfile> = database.query {
         requireCurrent(this, actor)
-        val ids = if (actor.member.role == Role.ADMIN) CloudProfiles.select(CloudProfiles.id).where { CloudProfiles.teamId eq actor.teamId }.map { it[CloudProfiles.id] }
+        val ids = if (actor.member.role.isAdministrator) CloudProfiles.select(CloudProfiles.id).where { CloudProfiles.teamId eq actor.teamId }.map { it[CloudProfiles.id] }
             else (CloudProfiles innerJoin CloudProfileAssignments).select(CloudProfiles.id).where {
                 (CloudProfiles.teamId eq actor.teamId) and (CloudProfileAssignments.memberId eq actor.member.id)
             }.map { it[CloudProfiles.id] }

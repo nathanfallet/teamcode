@@ -16,15 +16,17 @@ import com.github.ajalt.mordant.terminal.Terminal
 import me.nathanfallet.teamcode.cli.accounts.Accounts
 import me.nathanfallet.teamcode.cli.agents.Agents
 import me.nathanfallet.teamcode.cli.launch.Run
+import me.nathanfallet.teamcode.cli.sessions.Sessions
 import me.nathanfallet.teamcode.cli.service.Service
 import me.nathanfallet.teamcode.cli.identity.*
 import me.nathanfallet.teamcode.cli.update.VerifyRelease
+import me.nathanfallet.teamcode.cli.update.Update
 
 const val VERSION = me.nathanfallet.teamcode.api.BuildInfo.VERSION
 
 class Cli : SuspendingNoOpCliktCommand(name = "teamcode") {
     override fun help(context: Context) = "A self-hosted team gateway. First use: teamcode login."
-    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), me.nathanfallet.teamcode.cli.cloud.Cloud()) }
+    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Sessions(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install(), me.nathanfallet.teamcode.cli.cloud.Cloud()) }
 }
 
 private class Version : SuspendingCliktCommand(name = "version") {
@@ -129,10 +131,17 @@ internal fun sdk(config: CliConfig) = TeamCodeClient(config.serverUrl, { config.
 }
 
 fun main(args: Array<String>): Unit = runBlocking {
-    try { Cli().main(platformArguments(args)) }
+    try {
+        val arguments = platformArguments(args)
+        if (arguments.firstOrNull() == "--teamcode-installation-probe") {
+            SystemExit.exit(if (arguments.toList() == listOf("--teamcode-installation-probe", VERSION, "1")) 0 else 1)
+        }
+        me.nathanfallet.teamcode.cli.update.dispatchInstalled(arguments)
+        Cli().main(arguments)
+    }
     catch (error: CancellationException) { throw error }
     catch (error: CliOperationException) {
-        if (error.code.startsWith("release_")) SystemExit.fail("TeamCode release verification failed (${error.code}). Check the release files and required platform crypto libraries.")
+        if (error.code.startsWith("release_")) SystemExit.fail("TeamCode release operation failed (${error.code}). Check connectivity, release files, private permissions and platform crypto libraries.")
         SystemExit.fail("TeamCode command failed (${error.code}). Check server connectivity, authentication and private file permissions.")
     }
     catch (_: Exception) {

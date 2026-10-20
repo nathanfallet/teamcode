@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS team_groups (id VARCHAR(36) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, `name` VARCHAR(100) NOT NULL, daily_units BIGINT DEFAULT 0 NOT NULL, max_concurrent INT DEFAULT 0 NOT NULL, archived BOOLEAN DEFAULT FALSE NOT NULL, CONSTRAINT fk_team_groups_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT);
+CREATE INDEX groups_team ON team_groups (team_id, id);
