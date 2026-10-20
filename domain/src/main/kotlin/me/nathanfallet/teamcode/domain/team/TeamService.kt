@@ -1,6 +1,10 @@
 package me.nathanfallet.teamcode.domain.team
 
-enum class Role { ADMIN, MEMBER }
+/** Ownership includes administration but reserves owner assignment and recovery to other owners. */
+enum class Role {
+    OWNER, ADMIN, MEMBER;
+    val isAdministrator: Boolean get() = this == OWNER || this == ADMIN
+}
 data class Member(val id: String, val username: String, val role: Role, val disabled: Boolean, val passwordChangeRequired: Boolean)
 data class Principal(val member: Member, val tokenId: String, val teamId: String, val serviceScopes: Set<ServiceScope>? = null)
 class LoginSession(val token: String, val principal: Principal, val expiresAt: Long) {
@@ -25,7 +29,13 @@ interface TeamService {
 
 fun Principal.requireAdmin() {
     requireInteractive()
-    if (member.role != Role.ADMIN) throw TeamFailure("forbidden", 403, "Administrator access is required.")
+    if (!member.role.isAdministrator) throw TeamFailure("forbidden", 403, "Administrator access is required.")
+    requireReady()
+}
+/** Service keys never inherit their member's ownership or interactive administration authority. */
+fun Principal.requireOwner() {
+    requireInteractive()
+    if (member.role != Role.OWNER) throw TeamFailure("owner_required", 403, "Team owner access is required.")
     requireReady()
 }
 fun Principal.requireReady() {

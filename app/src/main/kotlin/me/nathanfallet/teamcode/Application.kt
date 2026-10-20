@@ -56,6 +56,8 @@ fun main() {
     val modelPolicies = database?.let { SqlModelPolicyStore(it) }
     val routes = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlRoutingStore(it) }
     val directives = database?.let { SqlDirectiveService(it) }
+    val pacingSettings = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlPacingSettingsStore(it) }
+    val forecasts = database?.let { me.nathanfallet.teamcode.infrastructure.database.ForecastServiceImpl(it) }
     val transports = listOf(ClaudeTransport(providerHttp), CodexTransport(providerHttp))
     val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> transports.single { it.provider == account.identity.provider }.refresh(token) } }
     val cancellationStore = database?.let { SqlRequestCancellationStore(it) }
@@ -79,6 +81,10 @@ fun main() {
         }
     }
     val team = database?.let { SqlTeamService(it) }
+    val runs = database?.let { me.nathanfallet.teamcode.infrastructure.database.AgentRunServiceImpl(it) }
+    val reconciliation = database?.let { me.nathanfallet.teamcode.infrastructure.database.UsageReconciliationServiceImpl(it) }
+    val budgetOverrides = database?.let { me.nathanfallet.teamcode.infrastructure.database.BudgetOverrideServiceImpl(it) }
+    val groups = database?.let { me.nathanfallet.teamcode.infrastructure.database.GroupServiceImpl(it) }
     val devices = database?.let { SqlDeviceService(it) }
     val serviceKeys = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlServiceKeyService(it) }
     val audit = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlAuditService(it) }
@@ -94,11 +100,15 @@ fun main() {
     val koin = koinApplication { modules(module {
         single<GatewayService> { gateway }
         if (team != null) single<TeamService> { team }
+        if (runs != null) single<me.nathanfallet.teamcode.domain.team.AgentRunService> { runs }
+        if (reconciliation != null) single<me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService> { reconciliation }
+        if (budgetOverrides != null) single<me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService> { budgetOverrides }
+        if (groups != null) single<me.nathanfallet.teamcode.domain.team.GroupService> { groups }
     }) }
     try {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, skills = skills) }.start(wait = true)
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, skills = skills) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); providerHttp.close(); database?.close() }
 }

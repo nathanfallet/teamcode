@@ -1,0 +1,1 @@
+ALTER TABLE audit_events MODIFY COLUMN subject_id VARCHAR(100) NOT NULL;

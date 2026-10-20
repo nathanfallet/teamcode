@@ -16,7 +16,7 @@ teamcode devices revoke DEVICE_ID
 
 `devices list` and `auth sessions list` accept `--member MEMBER_ID` for administrative inspection. Renaming or revoking another member's device/session requires administrator access on the server. Device removal signs out every session attached to that device, including a copied credential. Session revocation signs out only that session. Removing the current device/session requires a new password login; the CLI does not open a browser or silently reauthenticate.
 
-Authentication sessions are login credentials. They are separate from agent conversations, runs, session affinity and guidance sessions. The planned top-level `teamcode sessions list` remains an agent-activity command; this feature does not claim to implement that registry.
+Authentication sessions are login credentials. They are separate from agent conversations, runs, session affinity and guidance sessions. The top-level [`teamcode sessions list`](agent-sessions.md) reads the separate local agent-launch registry.
 
 ## Installation identity and registration
 

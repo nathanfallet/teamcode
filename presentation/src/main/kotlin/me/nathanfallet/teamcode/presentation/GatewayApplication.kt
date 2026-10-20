@@ -26,7 +26,7 @@ import me.nathanfallet.teamcode.domain.gateway.*
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     install(io.ktor.server.resources.Resources)
@@ -48,7 +48,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         call.response.header("Referrer-Policy", "no-referrer")
         val path = call.request.path()
         if (team != null) {
-            if (path.startsWith("/dashboard")) call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            if (path.startsWith("/dashboard")) {
+                val live = if (path == "/dashboard/forecasts") " script-src 'self'; connect-src 'self';" else ""
+                call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none';" + live)
+            }
             if (path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
@@ -78,9 +81,15 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     }
     routing {
         if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin) }
+        if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
+        if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
-        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin)
-        if (directives != null) directiveRoutes(directives)
+        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null)
+        if (team != null && admission != null && budgetOverrides != null) { budgetOverrideRoutes(budgetOverrides); budgetOverrideDashboardRoutes(budgetOverrides, admission, publicOrigin) }
+        if (team != null && reconciliation != null) { usageReconciliationRoutes(reconciliation); usageReconciliationDashboardRoutes(reconciliation, publicOrigin) }
+        if (directives != null) directiveRoutes(directives, pacingSettings)
+        if (pacingSettings != null) pacingSettingsRoutes(pacingSettings, publicOrigin)
+        if (forecasts != null) { forecastRoutes(forecasts); forecastLiveRoutes(forecasts, forecastLivePolicy) }
         if (modelPolicies != null) modelPolicyRoutes(modelPolicies, publicOrigin)
         if (routes != null) routingRoutes(routes, publicOrigin)
         if (devices != null && team != null) deviceRoutes(devices, publicOrigin)
@@ -103,10 +112,16 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             call.respond(Capabilities(serverVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION, mode = mode,
                 features = listOf("status", if (mode == "fixture") "messages.fixture.streaming" else "subscriptions.streaming") +
                     (if (team != null) listOf("team.auth", "team.members", "dashboard") else emptyList()) +
+                    (if (team != null && admission != null) listOf("capacity.shared-overflow.v1") else emptyList()) +
                     (if (team != null && cancellation != null) listOf("requests.cancel.v1") else emptyList()) +
+                    (if (team != null && runs != null) listOf("team.runs.v1") else emptyList()) +
+                    (if (team != null && reconciliation != null) listOf("capacity.usage-reconciliation.v1") else emptyList()) +
+                    (if (team != null && budgetOverrides != null && admission != null) listOf("capacity.budget-overrides.v1") else emptyList()) +
+                    (if (team != null && groups != null) listOf("team.groups.v1") else emptyList()) +
                     (if (team != null && devices != null) listOf("team.devices") else emptyList()) +
                     (if (team != null && serviceKeys != null) listOf("team.service-keys.v1") else emptyList()) +
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
+                    (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
                     (if (team != null && skills != null) listOf("team.skills.v1") else emptyList())))
         }
         get<StatusResource> {

@@ -9,10 +9,12 @@ Select only the required scopes:
 | Scope | Access |
 | --- | --- |
 | `inference` | Registered inference endpoints and authenticated request cancellation |
-| `usage:read` | The owner's capacity/allowance at `GET /api/v1/capacity` |
+| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs` |
 | `guidance` | The owner's current/session pacing directives, delivery claims and receipts |
 | `skills:read` | The owner's effective skill manifest and artifacts (V2, see [skills](skills.md)) |
 | `skills:publish` | Publish skill versions to the catalog (V2). Only an administrator's key can receive it; it cannot pin, assign or read the catalog |
+
+Inference also permits registering, heartbeating and ending the key's own [agent launches](agent-sessions.md); narrow lifecycle replies contain no usage totals. Another login cannot renew or dispatch under that launch ID. Cross-member/all-team registry reads and run policy changes remain interactive administration.
 
 Every valid service key can read capabilities and its own authenticated member identity, and revoke itself through logout. Other endpoints require an interactive login unless explicitly added to this scope model. Service keys cannot administer users/accounts/policies/routes, change passwords, manage devices/sessions, inspect other members, or create/list/revoke other keys. Even a key owned by an administrator has only its selected service scopes. Team-wide status/account/quota endpoints are not part of `usage:read`; use the owner's capacity endpoint. `whoami` reports the owner's member role, not additional rights for the key.
 

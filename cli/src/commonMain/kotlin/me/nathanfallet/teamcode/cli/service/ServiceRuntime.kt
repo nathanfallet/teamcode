@@ -28,7 +28,7 @@ internal fun stopRequested(settings: ServiceSettings): Boolean {
 }
 
 /** A capability alone is insufficient: verify the installation ID and fixed upstream origin. */
-internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, backgroundWorkload: Boolean = false): Boolean = try {
+internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, backgroundWorkload: Boolean = false, expectedVersion: String? = null, runRouting: Boolean = false): Boolean = try {
     HttpClient { followRedirects = false; install(HttpTimeout) { requestTimeoutMillis = 2_000; connectTimeoutMillis = 1_000 } }.use { http ->
         http.prepareGet("http://127.0.0.1:${settings.port}/_teamcode/service") { bearerAuth(settings.localToken) }.execute { response ->
             if (response.status.value != 200 || (response.contentLength() ?: 0) > 4096) return@execute false
@@ -43,14 +43,15 @@ internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, 
             }
             if (size > 4096) return@execute false
             val body = Json.parseToJsonElement(bytes.decodeToString(0, size)).jsonObject
-            serviceMatches(body, settings.id, origin, backgroundWorkload)
+            serviceMatches(body, settings.id, origin, backgroundWorkload, runRouting) && (expectedVersion == null || body["version"]?.jsonPrimitive?.content == expectedVersion)
         }
     }
 } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 
-internal fun serviceMatches(body: JsonObject, id: String, origin: String, backgroundWorkload: Boolean): Boolean =
+internal fun serviceMatches(body: JsonObject, id: String, origin: String, backgroundWorkload: Boolean, runRouting: Boolean = false): Boolean =
     body["id"]?.jsonPrimitive?.content == id && body["serverUrl"]?.jsonPrimitive?.content == origin &&
-        (!backgroundWorkload || (body["capabilities"] as? JsonArray)?.contains(JsonPrimitive("workload-routing-v1")) == true)
+        (!backgroundWorkload || (body["capabilities"] as? JsonArray)?.contains(JsonPrimitive("workload-routing-v1")) == true) &&
+        (!runRouting || (body["capabilities"] as? JsonArray)?.contains(JsonPrimitive("run-routing-v1")) == true)
 
 internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
     installServiceSignalHandlers()
@@ -78,16 +79,18 @@ internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
             }
         }) { configure -> HttpClient { configure(this) } }
         val server = proxyServer(client, settings.localToken, settings.port, settings.id, origin, ::report)
+        var updates: Job? = null
         try {
             server.start(wait = false)
             // Ktor's Native startup registers its own signal handler. The service owns both
             // the proxy lifetime and the outer command loop, so install our handler last.
             installServiceSignalHandlers()
             report("Local proxy is listening. Upstream connectivity and authentication are checked on each request.")
+            updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(::report) }
             while (!stopRequested(settings)) delay(250)
             report("Stopping: draining existing requests for up to ten minutes.")
         } finally {
-            withContext(NonCancellable) { server.stop(600_000, 610_000); client.close() }
+            withContext(NonCancellable) { updates?.cancelAndJoin(); server.stop(600_000, 610_000); client.close() }
         }
         report("Local proxy stopped.")
     } catch (error: CancellationException) { throw error }
