@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS github_link_attempts (id VARCHAR(64) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, member_id VARCHAR(36) NOT NULL, kind VARCHAR(8) NOT NULL, secret text NOT NULL, browser_hash CHAR(64) NULL, poll_interval INT NOT NULL, next_poll_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, CONSTRAINT github_link_attempts_team FOREIGN KEY (team_id) REFERENCES teams(id), CONSTRAINT github_link_attempts_member FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE);
+CREATE INDEX github_attempt_member ON github_link_attempts (member_id);
+CREATE INDEX github_attempt_expiry ON github_link_attempts (expires_at);

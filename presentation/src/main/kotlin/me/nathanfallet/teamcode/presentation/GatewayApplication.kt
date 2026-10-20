@@ -26,7 +26,7 @@ import me.nathanfallet.teamcode.domain.gateway.*
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, cloudConversation: CloudConversation? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     install(io.ktor.server.resources.Resources)
@@ -56,7 +56,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             // Runner calls carry the pod's projected token, which the runner routes verify themselves.
             // Plain segments only: dot segments, escapes and path parameters never reach another route through this exemption.
             val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH) && ".." !in path && '%' !in path && ';' !in path
-            if (!runnerCall && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
+            // GitHub's redirect back to the dashboard carries no session cookie (SameSite=Strict); the route checks its own state.
+            val githubCallback = github != null && path == GITHUB_CALLBACK_PATH
+            if (!runnerCall && !githubCallback && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
                 val principal = credential?.let { team.authenticate(it) }
@@ -84,7 +86,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         }
     }
     routing {
-        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin) }
+        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null) }
         if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
         if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
@@ -105,6 +107,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (mcpAccess != null && team != null) mcpAdminRoutes(mcpAccess, variants, publicOrigin)
         if (cloudSessions != null && cloudAdmin != null && team != null) cloudRoutes(cloudSessions, cloudAdmin, publicOrigin)
         if (cloudRunner != null && cloudSessions != null && team != null) cloudRunnerRoutes(cloudRunner)
+        if (github != null && team != null) githubRoutes(github, team, publicOrigin)
         if (cloudConversation != null && cloudSessions != null && team != null) {
             cloudConversationRoutes(cloudConversation)
             if (cloudRunner != null) cloudRunnerConversationRoutes(cloudRunner, cloudConversation)
@@ -138,8 +141,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && skills != null) listOf("team.skills.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList()) +
+                    (if (team != null && cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else emptyList()) +
                     (if (team != null && cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1") else emptyList()) +
-                    (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList())))
+                    (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
+                    (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()

@@ -113,6 +113,8 @@ object CloudSessions : Table("cloud_sessions") {
     val reconcileAfter = long("reconcile_after").nullable()
     /** Set by a write during a pass so the lease release schedules another pass immediately. */
     val reconcileRequested = bool("reconcile_requested").default(false)
+    /** The resolved preparation recipe as JSON, fixed at creation; never holds a secret. Null for an empty recipe. */
+    val environment = text("environment").nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(id)

@@ -118,17 +118,35 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
 @Serializable
 private data class StoredResources(val cpuMillis: Int, val memoryMebibytes: Int)
 @Serializable
+private data class StoredRepository(val url: String, val path: String, val ref: String? = null, val branch: String? = null)
+/** Every field has a default, so versions published before environment preparation decode as an empty recipe. */
+@Serializable
+private data class StoredEnvironment(
+    val repositories: List<StoredRepository> = emptyList(), val workingDirectory: String? = null,
+    val setupCreate: List<String> = emptyList(), val setupStart: List<String> = emptyList(),
+    val requiredVariables: List<String> = emptyList(), val requireGitHub: Boolean = false, val gitEmailDomain: String? = null,
+    val repositoryHosts: List<String> = listOf("github.com"),
+)
+@Serializable
 private data class StoredProfileSpec(
     val clusterId: String, val namespace: String, val image: String, val allowedImageOverrides: List<String>, val imagePullSecrets: List<String>,
     val resources: StoredResources, val workspaceSizeGibibytes: Int, val storageClass: String?, val agentKind: String, val agentVersion: String?,
     val idleTimeoutMinutes: Int, val minIdleTimeoutMinutes: Int, val maxIdleTimeoutMinutes: Int,
+    val environment: StoredEnvironment = StoredEnvironment(),
 )
+private fun CloudEnvironmentSpec.stored() = StoredEnvironment(repositories.map { StoredRepository(it.url, it.path, it.ref, it.branch) }, workingDirectory,
+    setup.create, setup.start, requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
+private fun StoredEnvironment.domain() = CloudEnvironmentSpec(repositories.map { CloudRepository(it.url, it.path, it.ref, it.branch) }, workingDirectory,
+    CloudSetup(setupCreate, setupStart), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
+/** Null for an empty recipe, so sessions without preparation keep a null column. */
+internal fun encodeEnvironment(spec: CloudEnvironmentSpec): String? = if (spec == CloudEnvironmentSpec()) null else Json.encodeToString(spec.stored())
+internal fun decodeEnvironment(value: String?): CloudEnvironmentSpec = value?.let { Json.decodeFromString<StoredEnvironment>(it).domain() } ?: CloudEnvironmentSpec()
 internal fun encodeProfileSpec(s: CloudProfileSpec) = Json.encodeToString(StoredProfileSpec(s.clusterId, s.namespace, s.image, s.allowedImageOverrides, s.imagePullSecrets,
     StoredResources(s.resources.cpuMillis, s.resources.memoryMebibytes), s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion,
-    s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes))
+    s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.stored()))
 internal fun decodeProfileSpec(value: String) = Json.decodeFromString<StoredProfileSpec>(value).let { s ->
     CloudProfileSpec(s.clusterId, s.namespace, s.image, s.allowedImageOverrides, s.imagePullSecrets, CloudResources(s.resources.cpuMillis, s.resources.memoryMebibytes),
-        s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion, s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes)
+        s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion, s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.domain())
 }
 internal fun readProfile(teamId: String, profileId: String): CloudProfile? {
     val row = CloudProfiles.selectAll().where { (CloudProfiles.id eq profileId) and (CloudProfiles.teamId eq teamId) }.singleOrNull() ?: return null

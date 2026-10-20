@@ -22,7 +22,7 @@ internal suspend fun ApplicationCall.form(origin: String, authenticated: Boolean
 internal fun ApplicationCall.sessionCookie(value: String, origin: String, maxAge: Int = 28_800) {
     response.cookies.append(Cookie("teamcode_session", value, path = "/dashboard", httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to "Strict")))
 }
-internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String) {
+internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false) {
     val origin = publicOrigin.trimEnd('/')
     get("/") { call.respondRedirect("/dashboard") }
     get("/dashboard/login") {
@@ -36,7 +36,7 @@ internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String) {
     }
     get("/dashboard") {
         val member = call.principal.member
-        call.respondText(page("Welcome, ${member.username}", """<p class="muted">Your self-hosted team gateway</p><div class="notice">Signed in as ${escape(member.role.name.lowercase())}. Manage your team and connect subscription accounts from the CLI.</div><p>Local setup: <code>teamcode login --server ${escape(origin)}</code></p><form action="/dashboard/logout" method="post">${csrf(call.principal)}<button>Sign out</button></form>"""), ContentType.Text.Html)
+        call.respondText(page("Welcome, ${member.username}", """<p class="muted">Your self-hosted team gateway</p><div class="notice">Signed in as ${escape(member.role.name.lowercase())}. Manage your team and connect subscription accounts from the CLI.</div><p>Local setup: <code>teamcode login --server ${escape(origin)}</code></p>${if (githubLinks) """<p><a href="/dashboard/github">Link your GitHub account</a> for your cloud sessions.</p>""" else ""}<form action="/dashboard/logout" method="post">${csrf(call.principal)}<button>Sign out</button></form>"""), ContentType.Text.Html)
     }
     post("/dashboard/logout") {
         call.form(origin); team.logout(call.principal); call.sessionCookie("", origin, 0); call.respondRedirect("/dashboard/login")

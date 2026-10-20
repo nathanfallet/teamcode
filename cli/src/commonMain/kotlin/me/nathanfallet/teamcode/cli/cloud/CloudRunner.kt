@@ -23,9 +23,9 @@ internal interface RunnerCalls {
 }
 
 /**
- * The runner skeleton: register, report ready, heartbeat every 15 s, and checkpoint when a pause is requested.
- * It starts no agent yet (the agent, its loopback proxy and transcript come with later releases), so there is
- * nothing to drain and the checkpoint is immediately complete.
+ * The runner: register, prepare the environment while heartbeating every 15 s, report ready once prepared, and
+ * checkpoint when a pause is requested. It starts no agent yet (the agent, its loopback proxy and transcript come
+ * with later releases), so there is nothing to drain and the checkpoint is immediately complete.
  *
  * `409 execution_fenced` means this execution is fenced: stop and exit without checkpointing; any other `409` is
  * retried. A `401` means the pod's token is not accepted. Network failures are retried; the server marks the execution lost after 90 s without heartbeats.
@@ -35,6 +35,12 @@ internal class RunnerLoop(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val log: (String) -> Unit = {},
     private val maxIterations: Int = Int.MAX_VALUE,
+    /**
+     * Prepares the environment after registration, concurrently with the heartbeats (a clone or a dependency
+     * install can outlast the 90-second heartbeat deadline). The runner reports ready only once it returns true;
+     * after a failure it keeps heartbeating unready until the server stops the pod.
+     */
+    private val prepare: suspend () -> Boolean = { true },
     /** The session's agent; null runs the lifecycle alone. */
     private val agent: RunnerAgent? = null,
 ) {
@@ -63,21 +69,34 @@ internal class RunnerLoop(
             }
         }
         log("Registered for epoch ${registered.epoch}.")
-        started()
+        var prepared = false
+        val preparation = scope.launch {
+            prepared = try { prepare() }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { log("The environment could not be prepared."); false }
+            if (prepared) { log("Environment prepared."); started() }
+        }
+        try { heartbeats(scope) { prepared } } finally { preparation.cancel() }
+    }
+
+    private suspend fun heartbeats(scope: CoroutineScope, prepared: () -> Boolean): Int {
         var checkpointed = false
         // The agent drains beside the heartbeats: a silent runner would be declared lost after 90 s.
         var draining: Deferred<Boolean>? = null
         var iterations = 0
         while (iterations++ < maxIterations) {
+            yield() // Let the preparation progress between heartbeats.
             if (agent?.fenced == true) { log("This execution is fenced; exiting without a checkpoint."); return EXIT_FENCED_OR_DONE }
-            val instruction = when (val outcome = attempt { calls.heartbeat(ready = true) }) {
+            val ready = prepared()
+            val instruction = when (val outcome = attempt { calls.heartbeat(ready = ready) }) {
                 is Outcome.Done -> outcome.instruction
                 Outcome.Fenced -> return EXIT_FENCED_OR_DONE
                 Outcome.Conflict -> null
             }
             when (instruction?.desiredState) {
                 "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
-                "paused" -> if (!checkpointed) {
+                // Nothing to checkpoint before the environment is ready: the server stops a resume it cancels.
+                "paused" -> if (!checkpointed && ready) {
                     val drain = draining ?: (if (agent == null) CompletableDeferred(true) else scope.async { agent.drain(instruction.pauseDeadline) }).also { draining = it }
                     if (drain.isCompleted) when (attempt { calls.checkpoint(completed = drain.await()) }) {
                         is Outcome.Done -> { checkpointed = true; log("Checkpoint complete; waiting for the pod to stop.") }
@@ -142,6 +161,14 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun heartbeat(ready: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready))
                 override suspend fun checkpoint(completed: Boolean) = client.runnerCheckpoint(RunnerCheckpointRequest(team, session, epoch, completed))
             }
+            val preparation = object : PreparationCalls {
+                override suspend fun environment() = client.runnerEnvironment(RunnerEnvironmentRequest(team, session, epoch))
+                override suspend fun progress(phase: String, failure: RunnerPreparationFailureView?) =
+                    client.runnerPreparation(RunnerPreparationRequest(team, session, epoch, phase, failure))
+            }
+            val log: (String) -> Unit = { echo(it, err = true) }
+            val workspace = EnvironmentPreparation.WORKSPACE
+            val commands = ShellCommandRunner(EnvironmentPreparation.logFile(workspace, epoch))
             val agentChannel = object : AgentChannel {
                 override suspend fun agent() = client.runnerAgent(RunnerAgentRequest(team, session, epoch))
                 override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
@@ -153,7 +180,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             val agent = AgentHost(agentChannel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
                 FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
                 BuildInfo.VERSION, log = { echo(it, err = true) })
-            try { RunnerLoop(calls, log = { echo(it, err = true) }, agent = agent).run() }
+            try { RunnerLoop(calls, log = log, prepare = { EnvironmentPreparation(preparation, commands, workspace, log = log).run() }, agent = agent).run() }
             catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
         }
         if (code != 0) SystemExit.exit(code)
