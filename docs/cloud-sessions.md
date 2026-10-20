@@ -26,7 +26,7 @@ This page is the contract and the record of what is implemented. It follows the 
 | Idle pause (turns, waiting messages and attachment leases), `initialMessage` on create (`cloud.sessions.initial-message.v1`) | Implemented, see [idle pause](#idle-pause) and [create](#create-request-and-view) |
 | The agent in its own container under its own UID, the exec supervisor and the credential socket | Implemented, see [the runner and the pod](#the-runner-and-the-pod) |
 | Environment preparation: recipe on the profile version and the session, repositories, working directory, Git identity, setup commands, progress and failures in the lifecycle, `cloud.environment.v1` | Implemented (PR 3) |
-| Environment variables from environment variants | Interface and delivery implemented (PR 3); source planned (variants work) |
+| Environment variables from environment variants | Implemented (PR 3, source wired in PR 3c) |
 | [GitHub access](#github-access): team GitHub App configuration, member linking (`teamcode github link`, dashboard), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store, `github.link.v1` | Implemented (PR 3b) |
 | Transcript, messages, attach, personal and administrator keys | Planned (later PRs, see [sequence](#pull-request-sequence)) |
 
@@ -401,7 +401,7 @@ The child processes run with the pod UID, like the planned agent: see the token 
 
 ### Variables and GitHub sources
 
-- **Variables** come from `CloudVariableSource`. Its real source is the environment/MCP variants work (`ResolveEffectiveVariantsUseCase`, environment entries only, `unavailable` slots by name); the adapter is a few lines in `CloudServer` once that work is merged. Until then members receive no variables, and a profile with `requiredVariables` fails preparation with the missing names.
+- **Variables** come from `CloudVariableSource`. Its source is the environment/MCP variants (`ResolveCloudVariablesUseCase` over `ResolveEffectiveVariantsUseCase`, environment entries only, `unavailable` slots by name), resolved for the session owner at every preparation, so a rotation, an exclusion or a transfer applies at the next start or resume. A member without an assignment receives none, and a profile with `requiredVariables` fails preparation with the missing names.
 - **GitHub** comes from `GitHubAccessSource`, implemented on the members' links (see [GitHub access](#github-access)): the owner's GitHub App user-to-server token, refreshed on the server, scoped to what both the App installation and the owner can reach. An owner without a usable link gets `not_linked`: public repositories clone anonymously and `requireGitHub` profiles fail preparation. Installation tokens and personal access tokens are never handed to a session.
 
 ### Progress and failures
@@ -526,7 +526,7 @@ teamcode github unlink [--member ID]
 | 2 (stacked on 1) | Kubernetes adapter, runner routes and skeleton, server wiring and workers, CLI commands, opt-in `kind` smoke | `cloud.sessions.v1` |
 | 3 | Environment preparation (image contract, recipe, repositories, Git identity, setup, progress and failures), variable and GitHub interfaces | `cloud.environment.v1` |
 | 3b | GitHub App configuration and member linking (device and web flows), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store | `github.link.v1` |
-| 3c | Variants source wired once the variants work is merged | - |
+| 3c | Variants source wired (implemented) | - |
 | 4 | Agent adapters (long-lived streaming process), transcript, SSE | `cloud.transcript.v1` |
 | 5 | Messages, interrupt, idle pause, attach | `cloud.messages.v1`, `cloud.attach.v1` |
 | 6 | Transfer and its settings (implemented) | `cloud.transfer.v1` |
@@ -548,6 +548,7 @@ teamcode github unlink [--member ID]
 - `CloudTransferPersistenceTest` (real MySQL 8.4, two pools): migration drift; offers refused for another member's session, for oneself, on behalf by a member, for an unassigned recipient or one without allowance, and when the team disabled them; one offer from concurrent identical requests on both replicas, replay and conflict; visibility and decision rights; decline, withdrawal, expiry on read and by the worker; concurrent acceptances on both replicas; the drain, checkpoint and pod deletion before `transferring`; no wake and no resume meanwhile; the owner change with attachment leases removed, unconsumed messages cancelled, the `transfer` event, the journal entry with initiator and both members, the former owner locked out, and the next epoch run for the recipient while epoch 1 stays the former owner's; an administrator transfer on behalf of a member superseding an offer, with `keep`; the recipient unassigned before the boundary failing the transfer (session kept by its owner); the retained cap at the boundary; deletion cancelling an accepted transfer; no transfer while creating.
 - `CloudRoutesTest` (transfers): `cloud.transfer.v1`, service keys refused, `Idempotency-Key` required with replay and conflict, on-behalf refused for members, offers through the typed client, query validation, acceptance pausing the session, cancellation rights, an administrator's direct transfer on behalf of a member, the transfer settings in the API and the dashboard form.
 - `CloudTransferRulesTest`: only `paused` moves to `transferring`; the owner never changes through an ordinary compare-and-set; acceptance toward a pause; refused states; model, effort and quota checks; settings bounds.
+- `ResolveCloudVariablesTest`: environment entries become variables (shared and individual values) while MCP servers are left to the gateway; unreadable or missing slots are reported by name only and do not drop the other variables; an ineligible member or an exclusion yields nothing; no value in the string form.
 - `CloudEnvironmentRulesTest`: URL, path, ref, setup and variable validation, merge, Git identity, server-written messages, redacted diagnostics.
 - `CloudPreparationTest` and `CloudPreparationProcessTest` (real `/bin/sh` and `git` against a local repository): clone into staging, checkout, branch and move into place; fetch only on a second preparation, with uncommitted work intact; `create` steps once and `start` steps every time; values masked in the log; the token only in child environments and a github.com-scoped helper; failures reported as fields; heartbeats continue during preparation and report ready only after it.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.

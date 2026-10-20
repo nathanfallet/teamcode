@@ -51,8 +51,8 @@ class CloudVariables(val values: Map<String, String>, val unavailable: List<Stri
 }
 
 /**
- * Where a member's environment variables come from. The environment/MCP variants work provides the real source
- * (its `ResolveEffectiveVariantsUseCase`, environment entries only); until it lands, members receive none.
+ * Where a member's environment variables come from. The server uses [ResolveCloudVariablesUseCase] (the environment
+ * entries of the member's effective variants); [NONE] is for tests and servers without variants.
  */
 fun interface CloudVariableSource {
     suspend fun resolve(teamId: String, memberId: String): CloudVariables

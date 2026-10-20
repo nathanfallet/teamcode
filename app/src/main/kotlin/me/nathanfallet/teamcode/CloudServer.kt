@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
+import me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase
 import me.nathanfallet.teamcode.infrastructure.cloud.ClusterApiException
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
@@ -16,6 +17,7 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudTransferStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlGitHubStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlMemberAllowance
+import me.nathanfallet.teamcode.infrastructure.database.SqlVariantService
 import me.nathanfallet.teamcode.infrastructure.database.SqlModelPolicyStore
 import me.nathanfallet.teamcode.infrastructure.github.GitHubAppClient
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
@@ -63,8 +65,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val inferenceCredentials = SqlCloudInferenceCredentialStore(database)
     /** Members' GitHub App links; their tokens are used only by the members' own cloud sessions. */
     val github = GitHubLinkService(githubStore, githubStore, githubClient)
-    // Variables come from the environment/MCP variants work and plug in here; until it lands, sessions get none.
-    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = CloudVariableSource.NONE, github = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)),
+    /** The owner's environment variables come from the variants, resolved at every preparation. */
+    private val variables = ResolveCloudVariablesUseCase(ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher)))
+    val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)),
         AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials))
 
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
