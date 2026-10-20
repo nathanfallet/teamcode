@@ -18,3 +18,5 @@
 - Preserve coroutine cancellation. Bound request bodies, queues, retries and network waits. Never replay a stream after committed output.
 - Update `docs/status.md` with evidence when a milestone changes. Never present a planned command as implemented.
 - Never stop processes or Gradle daemons started by someone else. Never kill by process name.
+
+- Keep ordinary push/PR CI on Linux (JVM, Helm and Docker). Paid native matrices, including every macOS job, run only on version tags or explicit manual `full_validation=true`. Batch native changes before requesting that matrix; do not dispatch it per commit. Keep full native acceptance mandatory for versioned CLI releases.

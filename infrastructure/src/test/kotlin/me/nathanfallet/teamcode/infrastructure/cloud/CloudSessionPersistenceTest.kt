@@ -79,6 +79,13 @@ class CloudSessionPersistenceTest {
         failure("cluster_conflict") { rb.admin.saveCluster(admin, cluster.id, 7, input.copy(serviceAccountToken = null)) }
         val updated = rb.admin.saveCluster(admin, cluster.id, cluster.version, input.copy(serviceAccountToken = null, caCertificate = null, maxRunningPods = 3))
         assertEquals(3, updated.maxRunningPods)
+        // Pointing a cluster at another API server never reuses the stored token or CA: both must be supplied again.
+        val moved = input.copy(apiUrl = "https://other.example.test:6443")
+        failure("cluster_credentials_required") { rb.admin.saveCluster(admin, cluster.id, updated.version, moved.copy(serviceAccountToken = null, caCertificate = null)) }
+        failure("cluster_credentials_required") { rb.admin.saveCluster(admin, cluster.id, updated.version, moved.copy(serviceAccountToken = null)) }
+        failure("cluster_credentials_required") { rb.admin.saveCluster(admin, cluster.id, updated.version, moved.copy(caCertificate = null)) }
+        assertEquals(token, SqlCloudAdminStore(rb.database, cipher).connection(cluster.id)!!.token)
+        assertEquals("https://k8s.example.test:6443", ra.database.query { CloudClusters.select(CloudClusters.apiUrl).where { CloudClusters.id eq cluster.id }.single()[CloudClusters.apiUrl] })
         val spec = CloudProfileSpec(cluster.id, "teamcode", "registry.example/toolchain:2026-10", allowedImageOverrides = listOf("registry.example/toolchain:*"))
         failure("storage_class_retains_volumes") { ra.admin.saveProfile(admin, null, 0, "retained", spec.copy(storageClass = "keep"), setOf(colleague.member.id)) }
         failure("namespace_not_allowed") { ra.admin.saveProfile(admin, null, 0, "elsewhere", spec.copy(namespace = "default"), emptySet()) }
@@ -149,6 +156,9 @@ class CloudSessionPersistenceTest {
         assertEquals(paused.generation, ra.sessions.pause(colleague, null, s.id, false).generation, "A repeated pause writes nothing")
         pass(ra)
         assertEquals(PAUSING, ra.store.find(admin.teamId, s.id)!!.state)
+        // A resume while the pause is draining is refused: accepting it would wedge the drain and be dropped later.
+        failure("session_pausing") { rb.sessions.resume(colleague, null, s.id) }
+        assertEquals(DesiredState.PAUSED, ra.store.find(admin.teamId, s.id)!!.desiredState)
         val instruction = ra.runner.heartbeat(admin.teamId, s.id, 1, ready = true)
         assertEquals(DesiredState.PAUSED, instruction.desiredState); assertNotNull(instruction.pauseDeadline)
         rb.runner.checkpoint(admin.teamId, s.id, 1, completed = true)
