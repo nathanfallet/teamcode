@@ -53,7 +53,7 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
 
     override suspend fun profiles(actor: Principal): List<CloudProfile> = database.query {
         requireCurrent(this, actor)
-        val ids = if (actor.member.role == Role.ADMIN) CloudProfiles.select(CloudProfiles.id).where { CloudProfiles.teamId eq actor.teamId }.map { it[CloudProfiles.id] }
+        val ids = if (actor.member.role.isAdministrator) CloudProfiles.select(CloudProfiles.id).where { CloudProfiles.teamId eq actor.teamId }.map { it[CloudProfiles.id] }
             else (CloudProfiles innerJoin CloudProfileAssignments).select(CloudProfiles.id).where {
                 (CloudProfiles.teamId eq actor.teamId) and (CloudProfileAssignments.memberId eq actor.member.id)
             }.map { it[CloudProfiles.id] }
