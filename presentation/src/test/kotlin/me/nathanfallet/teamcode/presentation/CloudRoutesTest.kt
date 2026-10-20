@@ -235,7 +235,7 @@ class CloudRoutesTest {
         val settings = Admin()
         application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(Store()), cloudAdmin = CloudAdministrationService(settings, FakeCluster), publicOrigin = "http://localhost") }
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/settings") { bearerAuth("colleague") }.status)
-        val put = client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":null,"failedWorkspaceRetentionDays":3,"maxRunningSessionsPerMember":5,"maxRetainedSessionsPerMember":20}""") }
+        val put = client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":null,"failedWorkspaceRetentionDays":3,"maxRunningSessionsPerMember":5,"maxRetainedSessionsPerMember":20,"transcriptRetentionDays":null}""") }
         assertEquals(HttpStatusCode.OK, put.status)
         assertNull(settings.settings.pausedRetentionDays, "null keeps paused workspaces indefinitely")
         // A partial body must not silently reset the omitted fields (including the indefinite retention) to defaults.
