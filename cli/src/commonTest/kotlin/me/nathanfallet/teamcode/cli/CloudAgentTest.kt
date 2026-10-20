@@ -245,8 +245,8 @@ class CloudAgentTest {
         until { started.isNotEmpty() }
         val environment = environments.single()
         assertEquals("http://127.0.0.1:41234", environment["ANTHROPIC_BASE_URL"])
-        assertEquals(local, environment["ANTHROPIC_API_KEY"], "The agent holds only the proxy's local token")
-        for (name in listOf("ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "TEAMCODE_CLOUD_TOKEN_FILE", "TEAMCODE_SERVER_URL"))
+        assertEquals(local, environment["ANTHROPIC_AUTH_TOKEN"], "The agent holds only the proxy's local token")
+        for (name in listOf("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "TEAMCODE_CLOUD_TOKEN_FILE", "TEAMCODE_SERVER_URL"))
             assertTrue(environment.containsKey(name) && environment[name] == null, "$name is removed from the agent")
         assertFalse(environment.values.any { it?.startsWith("tcex_") == true }, "The execution credential never reaches the agent")
         assertEquals("--dangerously-skip-permissions" in started.single().arguments, true)

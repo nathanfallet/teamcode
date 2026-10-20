@@ -287,8 +287,8 @@ try:
           const name = process.env.TEAMCODE_TEST_AGENT;
           let args = process.argv.slice(2), url, token;
           if (name === 'claude') {
-            assert(!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.CLAUDE_CODE_OAUTH_TOKEN);
-            url = process.env.ANTHROPIC_BASE_URL + '/v1/messages'; token = process.env.ANTHROPIC_API_KEY;
+            assert(!process.env.ANTHROPIC_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN);
+            url = process.env.ANTHROPIC_BASE_URL + '/v1/messages'; token = process.env.ANTHROPIC_AUTH_TOKEN;
             assert.strictEqual(args[0], '--plugin-dir');
             const path = require('path'), plugin = args[1];
             assert.strictEqual(JSON.parse(fs.readFileSync(path.join(plugin, '.claude-plugin', 'plugin.json'), 'utf8')).name, 'teamcode-guidance');
@@ -366,7 +366,7 @@ try:
             file.write_text(agent_source, encoding='utf-8')
             (root / (name + '.cmd')).write_text('@echo THIS_SHIM_MUST_NOT_RUN\n', encoding='ascii')
         env['PATH'] = os.pathsep.join([str(root), str(node.parent), str(Path(os.environ['SystemRoot']) / 'System32')])
-        env['ANTHROPIC_AUTH_TOKEN'] = 'inherited-must-be-removed'
+        env['ANTHROPIC_API_KEY'] = 'inherited-must-be-removed'
         env['CLAUDE_CODE_OAUTH_TOKEN'] = 'inherited-must-be-removed'
         arguments = ['--dangerously-skip-permissions', '', 'équipe', 'two words', 'a"b',
                      'C:\\trailing\\', '& | < > %PATH% !value!', 'line\nbreak', '--', 'literal']

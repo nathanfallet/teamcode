@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 agent = os.environ['TEAMCODE_RUN_FIXTURE_AGENT']
 if agent == 'claude':
     base = os.environ['ANTHROPIC_BASE_URL']
-    token = os.environ['ANTHROPIC_API_KEY']
+    token = os.environ['ANTHROPIC_AUTH_TOKEN']
     endpoint = base + '/v1/messages'
     body = {'model':'claude-test','stream':True,'max_tokens':1,'messages':[{'role':'user','content':'synthetic'}]}
 else:

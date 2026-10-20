@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-run-smoke-') as directory:
     token = secrets.token_urlsafe(32)
     env = dict(os.environ, XDG_CONFIG_HOME=str(root / 'config'), TEAMCODE_MODE='fixture',
                TEAMCODE_HOST='127.0.0.1', TEAMCODE_PORT=str(port), TEAMCODE_ACCESS_TOKEN=token,
-               ANTHROPIC_AUTH_TOKEN='inherited-credential-must-be-removed',
+               ANTHROPIC_API_KEY='inherited-credential-must-be-removed',
                CLAUDE_CODE_OAUTH_TOKEN='inherited-oauth-must-be-removed',
                PATH=str(root) + os.pathsep + os.environ['PATH'])
     agent_source = r'''
@@ -37,10 +37,10 @@ name = pathlib.Path(sys.argv[0]).name
 arguments = sys.argv[1:]
 plugin = None
 if name == 'claude':
-    assert 'ANTHROPIC_AUTH_TOKEN' not in os.environ
+    assert 'ANTHROPIC_API_KEY' not in os.environ
     assert 'CLAUDE_CODE_OAUTH_TOKEN' not in os.environ
     origin = os.environ['ANTHROPIC_BASE_URL']
-    token = os.environ['ANTHROPIC_API_KEY']
+    token = os.environ['ANTHROPIC_AUTH_TOKEN']
     route = '/v1/messages'
     if os.environ.get('TEAMCODE_TEST_GUIDANCE', '1') == '1':
         assert arguments[0] == '--plugin-dir'

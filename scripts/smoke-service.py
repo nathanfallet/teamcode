@@ -205,9 +205,9 @@ with tempfile.TemporaryDirectory(prefix='teamcode-service-smoke-') as directory:
         agent = root / 'claude'
         agent.write_text('#!' + sys.executable + '\nimport os, sys, urllib.request\n'
                          f'assert os.environ["ANTHROPIC_BASE_URL"] == {service_origin!r} + os.environ.get("TEST_WORKLOAD_PREFIX", "")\n'
-                         'assert len(os.environ["ANTHROPIC_API_KEY"]) == 64\n'
+                         'assert len(os.environ["ANTHROPIC_AUTH_TOKEN"]) == 64\n'
                          'request = urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages", b\'{"model":"fixture"}\', '
-                         '{"Content-Type":"application/json", "Authorization":"Bearer " + os.environ["ANTHROPIC_API_KEY"]})\n'
+                         '{"Content-Type":"application/json", "Authorization":"Bearer " + os.environ["ANTHROPIC_AUTH_TOKEN"]})\n'
                          'with urllib.request.urlopen(request, timeout=5) as response: assert b"done" in response.read()\n'
                          'print("SERVICE_REUSED")\nsys.exit(17)\n')
         agent.chmod(0o700)

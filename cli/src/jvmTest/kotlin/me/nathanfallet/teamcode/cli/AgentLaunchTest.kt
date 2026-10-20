@@ -41,4 +41,14 @@ class AgentLaunchTest {
         assertEquals(listOf("mcp_servers.teamcode-wiki"), servers.map { it.substringBefore('=') }, "Two servers that map to one label are both left out")
         assertFailsWith<IllegalArgumentException> { agentLaunch("codex", emptyList(), 4242, token, mcpServers = listOf("../admin")) }
     }
+
+    @Test fun `claude sends the local token as a bearer that overrides a claude ai login`() {
+        // Interactive Claude Code ignores an unapproved ANTHROPIC_API_KEY when it is logged in with a claude.ai
+        // subscription (it asks, defaulting to "No", and the key changes on every launch), then sends its own OAuth
+        // bearer, which the local proxy refuses. ANTHROPIC_AUTH_TOKEN takes precedence without a prompt.
+        val launch = agentLaunch("claude", listOf("--dangerously-skip-permissions"), 4242, token)
+        assertEquals(token, launch.environment["ANTHROPIC_AUTH_TOKEN"])
+        for (name in listOf("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
+            assertTrue(launch.environment.containsKey(name) && launch.environment[name] == null, "An inherited $name is removed")
+    }
 }

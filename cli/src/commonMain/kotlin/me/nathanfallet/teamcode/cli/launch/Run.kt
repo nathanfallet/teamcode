@@ -150,8 +150,11 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null) token else null,
         "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty()) token else null,
         "ANTHROPIC_BASE_URL" to origin,
-        "ANTHROPIC_API_KEY" to token,
-        "ANTHROPIC_AUTH_TOKEN" to null,
+        // A bearer token, not ANTHROPIC_API_KEY: interactive Claude Code logged in with claude.ai asks before using
+        // an environment API key (default "No", and this key changes on every launch), then sends its own OAuth
+        // token, which the local proxy refuses. ANTHROPIC_AUTH_TOKEN takes precedence over that login silently.
+        "ANTHROPIC_AUTH_TOKEN" to token,
+        "ANTHROPIC_API_KEY" to null,
         "CLAUDE_CODE_OAUTH_TOKEN" to null,
         "CLAUDE_CODE_USE_BEDROCK" to null,
         "CLAUDE_CODE_USE_VERTEX" to null,

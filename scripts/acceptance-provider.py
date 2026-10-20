@@ -187,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-provider-acceptance-') as dire
         agent_env = {key: value for key, value in env.items()
                      if not key.startswith(('ANTHROPIC_', 'CLAUDE_', 'CLAUDECODE', 'CODEX_', 'OPENAI_', 'CMUX_'))}
         agent_env.update(ANTHROPIC_BASE_URL=f'http://127.0.0.1:{local_port}',
-                         ANTHROPIC_API_KEY=local_token, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
+                         ANTHROPIC_AUTH_TOKEN=local_token, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
                          CLAUDE_CONFIG_DIR=str(root / 'claude-config'), CODEX_HOME=str(root / 'codex-config'),
                          TEAMCODE_DISABLE_AUTOUPDATE='1', DISABLE_AUTOUPDATER='1', DISABLE_TELEMETRY='1', DISABLE_ERROR_REPORTING='1')
         Path(agent_env['CLAUDE_CONFIG_DIR']).mkdir()
