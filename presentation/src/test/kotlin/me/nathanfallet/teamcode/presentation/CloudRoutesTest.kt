@@ -137,9 +137,14 @@ class CloudRoutesTest {
         val settings = Admin()
         application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(Store()), cloudAdmin = CloudAdministrationService(settings, FakeCluster), publicOrigin = "http://localhost") }
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/settings") { bearerAuth("colleague") }.status)
-        val put = client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":null,"failedWorkspaceRetentionDays":3}""") }
+        val put = client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":null,"failedWorkspaceRetentionDays":3,"maxRunningSessionsPerMember":5,"maxRetainedSessionsPerMember":20}""") }
         assertEquals(HttpStatusCode.OK, put.status)
         assertNull(settings.settings.pausedRetentionDays, "null keeps paused workspaces indefinitely")
+        // A partial body must not silently reset the omitted fields (including the indefinite retention) to defaults.
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"failedWorkspaceRetentionDays":9}""") }.status)
+        assertNull(settings.settings.pausedRetentionDays)
+        assertEquals(5, settings.settings.maxRunningSessionsPerMember)
+        assertEquals(3, settings.settings.failedWorkspaceRetentionDays)
         assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":0}""") }.status)
         val page = client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
         assertTrue(page.bodyAsText().contains("Paused retention"))

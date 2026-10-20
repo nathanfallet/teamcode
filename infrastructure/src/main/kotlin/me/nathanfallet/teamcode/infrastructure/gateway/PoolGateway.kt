@@ -25,6 +25,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
     private suspend fun route(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) {
         val actor = request.principal ?: throw TeamFailure("authentication_required", 401, "Sign in to TeamCode.")
         actor.requireScope(ServiceScope.INFERENCE)
+        val runId = request.headers["x-teamcode-run-id"]?.also(AgentRunService::identifier)
         val workload = when (request.headers["x-teamcode-workload"]) {
             null, "interactive" -> Workload.INTERACTIVE
             "background" -> Workload.BACKGROUND
@@ -93,12 +94,12 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             while (true) {
                 if (attempts >= 64) throw TeamFailure("routing_attempt_limit", 503, "The request reached its bounded routing limit. Retry shortly; available capacity has not been ruled out.")
                 val reservation = try {
-                    if (queued == null) admission.reserve(actor, estimate, resolved, transport.provider, attemptedAccounts, affinity)
+                    if (queued == null) admission.reserve(actor, AdmissionInput(estimate, resolved, transport.provider, attemptedAccounts, affinity, workload, runId = runId))
                     else {
                         val targetEffort = (outgoing[if (transport.protocol == WireProtocol.MESSAGES) "output_config" else "reasoning"] as? JsonObject)?.get("effort") as? JsonPrimitive
                         val disabled = (outgoing["thinking"] as? JsonObject)?.get("type") == JsonPrimitive("disabled")
                         val context = AdmissionContext(model, request.protocol, configuredTargets, effort, thinkingBudget, translated, if (disabled) "none" else targetEffort?.contentOrNull)
-                        queued.reserve(actor, AdmissionInput(estimate, resolved, transport.provider, attemptedAccounts, affinity, workload, context))
+                        queued.reserve(actor, AdmissionInput(estimate, resolved, transport.provider, attemptedAccounts, affinity, workload, context, runId))
                     }
                 } catch (error: TeamFailure) {
                     if (error.code in setOf("queue_timeout", "queue_full", "queue_expired")) waitingFailure = error
@@ -125,7 +126,6 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         var knownCharge: Long? = null
         var dispatched = false
         var committed = false
-        var completed = false
         try {
             suspend fun credential(rejected: String? = null): ProviderCredentials = try {
                 credentials.fresh(reservation.account, rejected)
@@ -141,7 +141,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 while (true) {
                     var refreshRejected = false
                     knownCharge = null
-                    transport.send(reservation.account, token, body, request.headers) { response ->
+                    transport.send(reservation.account, token, body, request.headers - setOf("x-teamcode-run-id", "x-teamcode-workload")) { response ->
+                        transport.requestId(response.headers)?.let { admission.recordProviderRequest(reservation, it) }
                         val now = System.currentTimeMillis()
                         val observation = transport.quotaUpdate(reservation.account.id, model, response.headers, now)
                         val observations = observation.windows
@@ -191,7 +192,6 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                         }
                         val chunks = if (translated) StreamTranslation(codecs).translate(source, transport.protocol, request.protocol, requestedModel, replyTools) else source
                         receive(GenerationHead(status, "text/event-stream", mapOf("x-teamcode-request-id" to reservation.id, "x-teamcode-model" to model, "x-teamcode-provider" to transport.provider)), chunks)
-                        completed = meter.settledUnits != null
                     }
                     if (!refreshRejected) break
                     // execute has closed the rejected response before renewing or retrying.
@@ -208,9 +208,13 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             throw TeamFailure("upstream_unavailable", 502, "The provider request could not complete.")
         } finally {
             withContext(NonCancellable) {
-                val charge = if (!dispatched) 0 else knownCharge ?: meter.settledUnits
+                // Native clients can close immediately after the terminal SSE
+                // event, cancelling receive before HTTP EOF. Count the observed
+                // provider terminal usage, independently of downstream delivery.
+                val terminalUsage = meter.settledUnits
+                val charge = if (!dispatched) 0 else knownCharge ?: terminalUsage
                 try {
-                    withTimeout(5_000) { admission.settle(reservation, charge, completed) }
+                    withTimeout(5_000) { admission.settle(reservation, charge, terminalUsage != null) }
                     System.out.println("TeamCode inference settled request=${reservation.id} units=${charge ?: "unknown"} terminal=${meter.lastEvent} failure=${meter.failureCategory}")
                 } catch (_: Exception) {
                     // The durable reservation remains charged; never mask cancellation or a stream failure.

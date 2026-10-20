@@ -1,0 +1,1 @@
+ALTER TABLE pool_budgets ADD shared_overflow BOOLEAN DEFAULT FALSE NOT NULL;

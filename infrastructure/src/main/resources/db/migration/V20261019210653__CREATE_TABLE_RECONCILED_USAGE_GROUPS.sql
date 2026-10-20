@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS reconciled_usage_groups (reconciliation_id VARCHAR(36), group_id VARCHAR(36), CONSTRAINT pk_reconciled_usage_groups PRIMARY KEY (reconciliation_id, group_id), CONSTRAINT fk_reconciled_usage_groups_reconciliation_id__id FOREIGN KEY (reconciliation_id) REFERENCES usage_reconciliations(id) ON DELETE CASCADE ON UPDATE RESTRICT);
