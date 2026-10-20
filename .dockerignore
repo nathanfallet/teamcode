@@ -1,9 +1,0 @@
-*
-!app/
-app/*
-!app/build/
-app/build/*
-!app/build/libs/
-app/build/libs/*
-!app/build/libs/app-all.jar
-!Dockerfile
