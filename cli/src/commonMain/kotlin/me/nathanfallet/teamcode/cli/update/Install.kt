@@ -23,7 +23,10 @@ internal class Install : SuspendingCliktCommand(name = "install") {
         else {
             val outcome = CommandPath(store.paths.target, store.paths.launcher, ::environment).ensure()
             outcome.lines.forEach { echo(it, err = outcome is CommandPathOutcome.Conflict) }
-            if (outcome is CommandPathOutcome.Conflict) throw CliOperationException("release_command_link_conflict")
+            if (outcome is CommandPathOutcome.Conflict) {
+                echo("TeamCode ${requireNotNull(store.state()).current.version} itself is installed; once the name is free, run the install command again. Launcher: ${store.paths.launcher}", err = true)
+                throw CliOperationException("release_command_link_conflict")
+            }
         }
         echo("Then use $COMMAND_NAME login and $COMMAND_NAME service install.")
     }

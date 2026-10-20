@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.cli.update
 
+import me.nathanfallet.teamcode.cli.CliOperationException
 import okio.FileSystem
+import okio.IOException
 import okio.Path
 import okio.Path.Companion.toPath
 
@@ -41,17 +43,21 @@ internal class CommandPath(
     private fun value(name: String) = env(name)?.takeIf { it.isNotBlank() }
 
     private fun ensurePosix(): CommandPathOutcome {
-        val home = value("HOME") ?: throw me.nathanfallet.teamcode.cli.CliOperationException("release_home_unavailable")
+        val home = value("HOME")?.let { if (it.length > 1) it.trimEnd('/') else it } ?: throw CliOperationException("release_home_unavailable")
         val directory = "$home/.local/bin".toPath()
         val link = directory / COMMAND_NAME
-        val existing = fs.metadataOrNull(link)
-        if (existing == null) {
-            fs.createDirectories(directory)
-            fs.createSymlink(link, launcher)
-        } else {
-            val points = existing.symlinkTarget?.let { (if (it.isAbsolute) it else directory / it.toString()).normalized() }
-            if (points != launcher.normalized()) return CommandPathOutcome.Conflict(link)
+        fun ours() = fs.metadataOrNull(link)?.symlinkTarget
+            ?.let { (if (it.isAbsolute) it else directory / it.toString()).normalized() } == launcher.normalized()
+        if (fs.metadataOrNull(link) == null) {
+            try {
+                fs.createDirectories(directory)
+                fs.createSymlink(link, launcher)
+            } catch (_: IOException) {
+                // Another installer may have created the name meanwhile; anything else is a failure to report.
+                if (fs.metadataOrNull(link) == null) throw CliOperationException("release_command_link_failed")
+            }
         }
+        if (!ours()) return CommandPathOutcome.Conflict(link)
         val lines = mutableListOf("Command: $link -> $launcher")
         val onPath = value("PATH")?.split(':')?.any { it.isNotEmpty() && it.trimEnd('/') == directory.toString() } == true
         if (onPath) lines += "$COMMAND_NAME is on your PATH."
@@ -70,7 +76,9 @@ internal class CommandPath(
         val lines = mutableListOf("Command: $launcher")
         if (entries.any { sameDirectory(expand(it), directory) }) lines += "$directory is already in your user PATH."
         else {
-            writeUserPath(UserPathValue((entries + directory).joinToString(";"), current?.expandable ?: true))
+            // Keep the user's own value byte for byte and only append.
+            val kept = current?.value?.trimEnd(';').orEmpty()
+            writeUserPath(UserPathValue(if (kept.isEmpty()) directory else "$kept;$directory", current?.expandable ?: true))
             lines += "Added $directory to your user PATH. Open a new terminal to use '$COMMAND_NAME'."
         }
         return CommandPathOutcome.Ready(lines)

@@ -100,7 +100,7 @@ def main():
             assert launcher_directories().count(str(launcher.parent).lower()) == 1
         else:
             link = link_directory / 'teamcode'
-            assert link.is_symlink() and os.readlink(link) == str(launcher), 'The command must link to the stable launcher'
+            assert link.is_symlink() and os.path.realpath(link) == os.path.realpath(launcher), 'The command must link to the stable launcher'
             assert 'export PATH="$HOME/.local/bin:$PATH"' in installed, 'Missing the exact PATH line: ' + installed
         assert by_name() == 'TeamCode ' + manifests[0]['version']
         original_launcher = hashlib.sha256(launcher.read_bytes()).hexdigest()
@@ -118,7 +118,7 @@ def main():
         run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
         selected(0)
         if os.name != 'nt':
-            assert os.readlink(link) == str(launcher) and len(list(link_directory.iterdir())) == 1, 'Re-running install changed the command link'
+            assert os.path.realpath(link) == os.path.realpath(launcher) and len(list(link_directory.iterdir())) == 1, 'Re-running install changed the command link'
         run(launcher, ['update', '--bundle', str(second)])
         selected(1)
         assert by_name() == 'TeamCode ' + manifests[1]['version'], 'The command did not follow the update'

@@ -97,7 +97,7 @@ def main():
                 if os.name == 'nt':
                     assert str(command_directory).lower() in [entry.rstrip('\\').lower() for entry in user_path()[0].split(';')]
                 else:
-                    assert (command_directory / 'teamcode').is_symlink() and os.readlink(command_directory / 'teamcode') == str(launcher)
+                    assert (command_directory / 'teamcode').is_symlink() and os.path.realpath(command_directory / 'teamcode') == os.path.realpath(launcher)
                 by_name = shutil.which('teamcode', path=str(command_directory))
                 assert by_name and run([by_name, 'version']).stdout.decode().strip() == 'TeamCode ' + manifest['version']
                 assert run([str(launcher), 'version']).stdout.decode().strip() == 'TeamCode ' + manifest['version']
@@ -122,7 +122,7 @@ def main():
                 assert len(calls) > previous_calls, 'Saved self-hosted server compatibility was not checked'
                 assert {path: path.read_bytes() for path in preserved} == before
                 assert digest(launcher) == launcher_hash, 'Idempotent bootstrap replaced the stable launcher'
-                if os.name != 'nt': assert os.readlink(command_directory / 'teamcode') == str(launcher) and len(list(command_directory.iterdir())) == 1
+                if os.name != 'nt': assert os.path.realpath(command_directory / 'teamcode') == os.path.realpath(launcher) and len(list(command_directory.iterdir())) == 1
                 assert run([str(launcher), 'version']).stdout.decode().strip() == 'TeamCode ' + manifest['version']
 
                 corrupt = root / 'corrupt'; corrupt.mkdir()
