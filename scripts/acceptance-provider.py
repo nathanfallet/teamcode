@@ -185,13 +185,24 @@ with tempfile.TemporaryDirectory(prefix='teamcode-provider-acceptance-') as dire
             raise RuntimeError('Native proxy readiness timed out.')
         # This exact child uses no personal hooks, tools, keychain or conversation history.
         agent_env = {key: value for key, value in env.items()
-                     if not key.startswith(('ANTHROPIC_', 'CLAUDE_', 'CLAUDECODE', 'CMUX_'))}
+                     if not key.startswith(('ANTHROPIC_', 'CLAUDE_', 'CLAUDECODE', 'CODEX_', 'OPENAI_', 'CMUX_'))}
         agent_env.update(ANTHROPIC_BASE_URL=f'http://127.0.0.1:{local_port}',
-                         ANTHROPIC_API_KEY=local_token, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1')
+                         ANTHROPIC_API_KEY=local_token, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
+                         CLAUDE_CONFIG_DIR=str(root / 'claude-config'), CODEX_HOME=str(root / 'codex-config'),
+                         TEAMCODE_DISABLE_AUTOUPDATE='1', DISABLE_AUTOUPDATER='1', DISABLE_TELEMETRY='1', DISABLE_ERROR_REPORTING='1')
+        Path(agent_env['CLAUDE_CONFIG_DIR']).mkdir()
+        Path(agent_env['CODEX_HOME']).mkdir()
+        agent_bin = root / 'agent-bin'; agent_bin.mkdir()
+        for agent in ('claude', 'codex'):
+            executable = getattr(args, agent)
+            if executable is not None:
+                (agent_bin / agent).symlink_to(executable.resolve(strict=True))
+        agent_env['PATH'] = str(agent_bin) + os.pathsep + agent_env['PATH']
+        expected_launches = []
         if not args.skip_claude and not args.coding_task:
-            claude = shutil.which('claude')
+            claude = shutil.which('claude', path=agent_env['PATH'])
             assert claude, 'Claude Code must be installed for this acceptance test.'
-            launcher = [binary, 'run', 'claude', '--'] if args.launcher else [claude]
+            launcher = [binary, 'run', 'claude', '--no-guidance', '--'] if args.launcher else [claude]
             result = subprocess.run(launcher + ['--bare', '--setting-sources', '', '--strict-mcp-config',
                                      '--tools', '', '--no-session-persistence', '--disable-slash-commands',
                                      '--model', args.model, '--output-format', 'json',
@@ -206,15 +217,16 @@ with tempfile.TemporaryDirectory(prefix='teamcode-provider-acceptance-') as dire
             assert any('settled' in line and 'units=unknown' not in line for line in events)
             assert hashlib.sha256(args.source.read_bytes()).hexdigest() == source_digest
             print('Real Claude Code acceptance passed; usage settled.', flush=True)
+            if args.launcher: expected_launches.append(('claude', 'anthropic', args.model))
         if args.codex_model and not args.coding_task:
-            codex = shutil.which('codex')
+            codex = shutil.which('codex', path=agent_env['PATH'])
             assert codex, 'Codex CLI must be installed for this acceptance test.'
             provider_toml = ('model_providers.teamcode={name="TeamCode",base_url="http://127.0.0.1:'
                              + str(local_port) + '/v1",env_key="TEAMCODE_LOCAL_TOKEN",wire_api="responses",'
                              'request_max_retries=0,stream_max_retries=0}')
-            launcher = [binary, 'run', 'codex', '--'] if args.launcher else [codex]
+            launcher = [binary, 'run', 'codex', '--no-guidance', '--'] if args.launcher else [codex]
             overrides = [] if args.launcher else ['-c', 'model_provider="teamcode"', '-c', provider_toml]
-            result = subprocess.run(launcher + ['exec', *overrides, '--ignore-user-config', '--ignore-rules', '--ephemeral',
+            result = subprocess.run(launcher + ['--no-daemon', 'exec', *overrides, '--ignore-user-config', '--ignore-rules', '--ephemeral',
                                      '--skip-git-repo-check', '--sandbox', 'read-only', '--json',
                                      '-c', 'model_reasoning_effort="low"', '-c', 'web_search="disabled"',
                                      '--model', args.codex_model, 'Do not use tools. Reply with exactly TEAMCODE_OK.'],
@@ -240,6 +252,39 @@ with tempfile.TemporaryDirectory(prefix='teamcode-provider-acceptance-') as dire
             request_id = re.search(r'request=([a-zA-Z0-9-]+)', dispatch).group(1)
             assert any('settled request=' + request_id in line and 'units=unknown' not in line for line in metadata)
             print('Real Codex CLI acceptance passed through native proxy and subscription pool.', flush=True)
+            if args.launcher: expected_launches.append(('codex', 'codex', args.codex_model))
+        completed_launch_requests = 0
+        for agent, provider, model in expected_launches:
+            deadline = time.monotonic() + 5
+            while True:
+                status, payload = request('/api/v1/runs', token=token)
+                assert status == 200
+                runs = [run for run in json.loads(payload)['runs'] if run['agent'] == agent]
+                if len(runs) == 1 and runs[0]['state'] == 'ENDED' and runs[0]['activeRequests'] == 0: break
+                assert time.monotonic() < deadline, 'The real agent launch did not finish in the durable registry'
+                time.sleep(.1)
+            run = runs[0]
+            print(f'Real {agent} registry metadata: state={run["state"]}, exit={run["exitCode"]}, '
+                  f'attempts={run["attempts"]}, completed={run["completed"]}, '
+                  f'charged_credits={run["chargedAndReservedUnits"]}.', flush=True)
+            assert run['exitCode'] == 0 and run['completed'] >= 1 and run['attempts'] >= run['completed']
+            assert run['chargedAndReservedUnits'] > 0 and run['lastRequestAtMillis'] is not None
+            status, payload = request('/api/v1/runs/' + run['id'], token=token)
+            assert status == 200
+            detail = json.loads(payload)
+            assert any(conversation['provider'] == provider and conversation['model'] == model and
+                       conversation['requestedModel'] == model for conversation in detail['conversations']), \
+                'The real client did not preserve its native run prefix/session attribution'
+            shown = command([binary, 'sessions', 'show', run['id']], env=env, timeout=15)
+            assert json.loads(shown.stdout)['run']['id'] == run['id']
+            completed_launch_requests += run['completed']
+            print(f'Real {agent} launch registry passed: ended/exit 0, attributed native conversation, '
+                  f'completed={run["completed"]}, charged_credits={run["chargedAndReservedUnits"]}, sessions JSON.', flush=True)
+        if expected_launches:
+            status, payload = request('/api/v1/status', token=token)
+            assert status == 200
+            shared = json.loads(payload)
+            assert shared['activeRequests'] == 0 and shared['completedRequests'] == completed_launch_requests
         if args.coding_task:
             from acceptance_coding import run_coding_tasks
             run_coding_tasks(args, binary, root, env, request, token, log)

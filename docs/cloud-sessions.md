@@ -130,7 +130,7 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | Route | Purpose | Authorization | State |
 | --- | --- | --- | --- |
 | `GET/PUT /cloud/settings` | Persistent settings | Administrator | Implemented |
-| `GET/POST /cloud/clusters`, `PUT /cloud/clusters/{id}` | Clusters; `PUT` requires `version`; omitted CA/token keep the stored values. The API URL is trusted administrator input: `https` only, loopback (`kind`) and private addresses allowed, link-local, unspecified and cloud metadata hosts refused (`400 cluster_host_not_allowed`). A namespace removed from a cluster is refused for new sessions (`409 namespace_not_allowed`) and blocks the start of existing ones | Administrator | Implemented |
+| `GET/POST /cloud/clusters`, `PUT /cloud/clusters/{id}` | Clusters; `PUT` requires `version`; omitted CA/token keep the stored values, except when the API URL changes: the CA and a token for the new server are then required (`400 cluster_credentials_required`). The API URL is trusted administrator input: `https` only, loopback (`kind`) and private addresses allowed, link-local, unspecified and cloud metadata hosts refused (`400 cluster_host_not_allowed`). Numeric spellings (decimal, hex, octal, IPv4-mapped IPv6) are decoded before the check, and a DNS name is re-resolved whenever the connection is loaded: if any answer is link-local, unspecified or a metadata address the adapter refuses to send the token (`ClusterHostNotAllowedException`). The resolved address is not pinned for the connection itself. A namespace removed from a cluster is refused for new sessions (`409 namespace_not_allowed`) and blocks the start of existing ones | Administrator | Implemented |
 | `GET /cloud/profiles` | Profiles assigned to the caller (all for administrators) | Member, administrator | Implemented |
 | `POST /cloud/profiles`, `PUT /cloud/profiles/{id}` | Publish a new immutable version; `version` is the version being replaced | Administrator | Implemented |
 | `POST /cloud/sessions` | Create; `202` | Member, administrator; owner = effective member | Implemented |
@@ -138,7 +138,7 @@ Pause, resume and delete are naturally idempotent through the desired state. `Id
 | `GET /cloud/sessions/{id}` | Read | Owner, administrator | Implemented |
 | `GET /cloud/sessions/{id}/executions` | Pod history: epoch, node, digest, exit reason, checkpoint | Owner, administrator | Implemented |
 | `POST /cloud/sessions/{id}/pause` | `{force?: false}`; `202`. `409 session_preparing` while creating or preparing; repeated pauses write nothing | Owner, administrator | Implemented |
-| `POST /cloud/sessions/{id}/resume` | `202`; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
+| `POST /cloud/sessions/{id}/resume` | `202`; `409 session_pausing` while a pause is still draining; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |
 | `POST /cloud/runner/register`, `.../heartbeat`, `.../checkpoint` | Runner channel: `{teamId, sessionId, epoch}` (plus `ready` or `completed`); returns `{desiredState, pauseDeadline, epoch}`. `401 runner_unauthenticated`, `409 execution_fenced` | Pod token (`TokenReview`) | Implemented |
 | `/cloud/sessions/{id}/events`, `.../events/stream`, `/cloud/events/stream` | Transcript pages, per-session SSE, caller-wide SSE feed | | Planned |
@@ -294,4 +294,4 @@ teamcode cloud runner            # hidden; pod entrypoint only
 - `CloudRunnerTest`: the runner skeleton registers with backoff, checkpoints once when paused, exits when fenced or deleted, and stops on `401`.
 - `KindSmokeTest` through `scripts/smoke-cloud-kind.py` (opt-in): on a throwaway `kind` cluster with the least-privilege roles above, the real reconciler, stores and adapter create the claim and pod, a pod-bound token passes `TokenReview` (and one for another audience does not), the session pauses with a checkpoint and keeps its workspace, and deletion is proven with no claim or PersistentVolume left.
 
-Migration note: this branch's migration is numbered after its base (`V20261019153908`). V1 work on `main` adds migrations too; the files are renumbered after the latest `main` migration when this branch is updated for merge.
+Migration note: the cloud session migrations are numbered `V20261020100004` and `V20261020100004.1`, after the latest `main` migration at the time of the 0.1.0 release. Renumber again if another migration lands on `main` first.

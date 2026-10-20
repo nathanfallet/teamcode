@@ -9,12 +9,14 @@ object MemberPolicies : Table("member_policies") {
     val maxConcurrent = integer("max_concurrent").default(2)
     val poolId = varchar("pool_id", 36).nullable()
     val weight = integer("weight").default(1)
+    val allowSharedOverflow = bool("allow_shared_overflow").default(false)
     override val primaryKey = PrimaryKey(memberId)
 }
 object PoolBudgets : Table("pool_budgets") {
     val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "pool_budgets_ibfk_1")
     val poolId = varchar("pool_id", 36)
     val dailyUnits = long("daily_units")
+    val sharedOverflow = bool("shared_overflow").default(false)
     override val primaryKey = PrimaryKey(teamId, poolId)
 }
 object Reservations : Table("reservations") {
@@ -29,13 +31,20 @@ object Reservations : Table("reservations") {
     val createdAt = long("created_at")
     val poolId = varchar("pool_id", 36).default("")
     val sessionKey = char("session_key", 64, "ascii_bin").nullable()
+    val runId = reference("run_id", AgentRuns.id, onDelete = ReferenceOption.NO_ACTION).nullable()
+    val providerRequestId = varchar("provider_request_id", 128).nullable()
+    // Null on legacy rows means the logical pool was also the physical source.
+    val sourcePoolId = varchar("source_pool_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("member_daily", false, memberId, dayNumber)
         index("active_account", false, accountId, state, expiresAt)
         index("pool_daily", false, teamId, poolId, dayNumber)
+        index("source_pool_daily", false, teamId, sourcePoolId, dayNumber)
         index("team_active", false, teamId, state, expiresAt)
         index("reservation_session", false, memberId, sessionKey, state, expiresAt)
+        index("run_active", false, runId, state, expiresAt)
+        index("reconciliation_pending", false, teamId, state, createdAt, id)
     }
 }
 object QuotaWindows : Table("quota_windows") {
