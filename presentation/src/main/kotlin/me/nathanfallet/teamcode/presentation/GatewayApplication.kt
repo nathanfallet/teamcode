@@ -45,7 +45,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     intercept(ApplicationCallPipeline.Plugins) {
         call.response.header(HttpHeaders.CacheControl, "no-store")
         call.response.header("X-Content-Type-Options", "nosniff")
-        call.response.header("Referrer-Policy", "no-referrer")
+        // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
+        call.response.header("Referrer-Policy", "same-origin")
         val path = call.request.path()
         if (team != null) {
             if (path.startsWith("/dashboard")) {
