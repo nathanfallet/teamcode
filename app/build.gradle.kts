@@ -5,6 +5,44 @@ plugins {
 }
 kotlin { jvmToolchain(21) }
 application { mainClass.set("me.nathanfallet.teamcode.ApplicationKt") }
+
+// Multi-platform images can only be pushed to a registry; tarball and local builds pass a single platform.
+val imagePlatforms = providers.gradleProperty("imagePlatforms").orElse("amd64,arm64").get().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+// Image tags come from the workflow as a comma-separated list; the first one names the image.
+val imageTags = providers.gradleProperty("imageTags").orElse("latest").get().split(',').map { it.trim() }.filter { it.isNotEmpty() }
+ktor {
+    docker {
+        jreVersion.set(JavaVersion.VERSION_21)
+        localImageName.set("teamcode")
+        imageTag.set(imageTags.first())
+        portMappings.set(listOf(io.ktor.plugin.features.DockerPortMapping(8080, 8080, io.ktor.plugin.features.DockerPortMappingProtocol.TCP)))
+        externalRegistry.set(
+            io.ktor.plugin.features.DockerImageRegistry.dockerHub(
+                appName = provider { "teamcode" },
+                username = providers.environmentVariable("DOCKER_HUB_USERNAME").orElse("nathanfallet"),
+                password = providers.environmentVariable("DOCKER_HUB_PASSWORD")
+            )
+        )
+    }
+}
+jib {
+    from {
+        image = "eclipse-temurin:21-jre-jammy"
+        platforms {
+            imagePlatforms.forEach { arch -> platform { architecture = arch; os = "linux" } }
+        }
+    }
+    to { tags = imageTags.drop(1).toSet() }
+    container {
+        user = "10001:10001"
+        workingDirectory = "/opt/teamcode"
+        environment = mapOf("TEAMCODE_HOST" to "0.0.0.0")
+        labels.set(mapOf(
+            "org.opencontainers.image.source" to "https://github.com/nathanfallet/teamcode",
+            "org.opencontainers.image.licenses" to "Apache-2.0"
+        ))
+    }
+}
 dependencies {
     implementation(projects.api)
     implementation(projects.domain)
@@ -16,6 +54,7 @@ dependencies {
     implementation(libs.logback)
     testImplementation(kotlin("test-junit5"))
     testImplementation(libs.testcontainers.mysql)
+    testImplementation(libs.ktor.server.tests)
     testImplementation(libs.exposed.core)
     testImplementation(libs.exposed.jdbc)
     testRuntimeOnly(libs.junit)
