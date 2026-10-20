@@ -37,6 +37,8 @@ private fun CloudSessionView.details() = buildString {
     failure?.let { appendLine("Failure:      ${it.code}: ${it.message}") }
     resumeBlocked?.let { appendLine("Resume block: ${it.code}: ${it.message}") }
     if (workspaceDeletion.state != "none") appendLine("Workspace:    deletion ${workspaceDeletion.state}" + (workspaceDeletion.problem?.let { " (${it.code})" } ?: ""))
+    environment.repositories.forEach { appendLine("Repository:   ${it.path} <- ${it.url}" + (it.ref?.let { ref -> " @ $ref" } ?: "") + (it.branch?.let { branch -> " (branch $branch)" } ?: "")) }
+    environment.workingDirectory?.let { appendLine("Working dir:  $it") }
     labels.entries.sortedBy { it.key }.forEach { (key, value) -> appendLine("Label:        $key=$value") }
     pausedAt?.let { appendLine("Paused:       ${Instant.fromEpochMilliseconds(it)}") }
     expiresAt?.let { appendLine("Expires:      ${Instant.fromEpochMilliseconds(it)}") }
@@ -47,6 +49,18 @@ private fun parseLabels(labels: List<String>) = labels.associate { label ->
     val key = label.substringBefore('=', "")
     require(key.isNotEmpty()) { "Use --label key=value." }
     key to label.substringAfter('=')
+}
+
+/** `[PATH=]URL[#REF]`: the path defaults to the repository name. */
+internal fun parseRepository(value: String): CloudRepositoryView {
+    val path = value.substringBefore('=', "").takeIf { it.isNotEmpty() && !it.contains("://") }
+    val rest = if (path != null) value.substringAfter('=') else value
+    val url = rest.substringBefore('#')
+    val ref = rest.substringAfter('#', "").takeIf { it.isNotEmpty() }
+    require(url.startsWith("https://")) { "Use --repo [PATH=]https://host/owner/name[#REF]." }
+    val name = url.trimEnd('/').substringAfterLast('/').removeSuffix(".git")
+    require(path != null || name.isNotEmpty()) { "Name the directory: --repo PATH=$url." }
+    return CloudRepositoryView(url, path ?: name, ref)
 }
 
 private class CloudCreate : SuspendingCliktCommand(name = "create") {
@@ -61,17 +75,23 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
     private val message by option("--message", help = "First message for the agent, delivered once the session is ready; - reads standard input.")
     private val onBehalfOf by option("--member", help = "Create for this member (TeamCode-On-Behalf-Of); administrators only.")
     private val idempotencyKey by option("--idempotency-key", help = "Defaults to a random key.")
+    private val repositories by option("--repo", help = "[PATH=]URL[#REF]; repeatable. Replaces the profile's repositories.").multiple()
+    private val branch by option("--branch", help = "Create this local branch in every --repo after checking out its ref.")
+    private val workdir by option("--workdir", help = "Working directory relative to /workspace.")
     private val json by option("--json").flag()
     override suspend fun run() {
         val parsed = parseLabels(labels)
         val agent = if (model != null || effort != null) CloudAgentRequest(model, effort) else null
         val initial = message?.let { if (it == "-") generateSequence(::readlnOrNull).joinToString("\n") else it }
         if (initial != null && initial.isBlank()) throw CliktError("The --message text is empty.")
+        require(branch == null || repositories.isNotEmpty()) { "Use --branch with --repo." }
+        val environment = if (repositories.isNotEmpty() || workdir != null)
+            CloudEnvironmentRequest(repositories.map { parseRepository(it).copy(branch = branch) }.takeIf { it.isNotEmpty() }, workdir) else null
         val session = sdk(loadConfig()).use {
             // An older server ignores unknown fields: never let it drop the message silently.
             if (initial != null && INITIAL_MESSAGE_CAPABILITY !in it.capabilities().features)
                 throw CliktError("This server does not accept --message; create the session, then use teamcode cloud send.")
-            it.createCloudSession(CreateCloudSessionRequest(name, profile, image, agent, parsed, idle, initial), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
+            it.createCloudSession(CreateCloudSessionRequest(name, profile, image, agent, parsed, idle, environment, initial), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
         }
         echo(if (json) Serialization.json.encodeToString(session) else session.line())
     }

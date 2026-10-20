@@ -110,7 +110,7 @@ class CloudIdlePersistenceTest {
         }
     }
 
-    private fun draft(profile: CloudProfile, message: String) = CloudSessionDraft("Idle", profile.id, null, null, null, emptyMap(), 1, message)
+    private fun draft(profile: CloudProfile, message: String) = CloudSessionDraft("Idle", profile.id, null, null, null, emptyMap(), 1, initialMessage = message)
     private fun key(value: String) = IdempotencyRequest("POST /cloud/sessions", value, value.padEnd(64, '0').take(64))
     private suspend fun idleFor(a: Database, id: String, minutes: Long) = a.query {
         CloudSessions.update({ CloudSessions.id eq id }) { it[lastActivityAt] = nowMillis() - minutes * 60_000L }

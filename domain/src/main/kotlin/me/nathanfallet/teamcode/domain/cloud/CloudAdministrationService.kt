@@ -148,6 +148,7 @@ class CloudAdministrationService(private val store: CloudAdminStore, private val
                 spec.minIdleTimeoutMinutes !in 5..CloudIdleRules.MAX_TIMEOUT_MINUTES || spec.maxIdleTimeoutMinutes !in spec.minIdleTimeoutMinutes..CloudIdleRules.MAX_TIMEOUT_MINUTES ||
                 spec.idleTimeoutMinutes !in spec.minIdleTimeoutMinutes..spec.maxIdleTimeoutMinutes || assigned.size > 1000)
                 throw TeamFailure("invalid_profile", 400, "Check the profile namespace, image, resources (100–64000 mCPU, 128–262144 MiB), workspace size (1–2048 GiB), agent and idle bounds (5–1440 minutes).")
+            CloudEnvironmentRules.validate(spec.environment)
         }
     }
 }

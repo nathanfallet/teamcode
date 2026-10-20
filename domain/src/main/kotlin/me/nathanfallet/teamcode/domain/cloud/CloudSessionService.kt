@@ -67,6 +67,7 @@ class CloudSessionService(
             terminatedReason = null, waitingSince = null,
             workspace = CloudWorkspace(claimName(id), spec.storageClass ?: cluster.defaultStorageClass, spec.workspaceSizeGibibytes),
             createdAt = now, updatedAt = now,
+            environment = CloudEnvironmentRules.merge(spec.environment, draft.environment).also(CloudEnvironmentRules::validate),
         )
         val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
         // Queued after the session commits, idempotently: if this step fails, the client's retry with the same
@@ -178,6 +179,7 @@ class CloudSessionService(
                 throw TeamFailure("invalid_image", 400, "Use a valid image reference.")
             for (value in listOfNotNull(draft.agentModel, draft.agentEffort))
                 if (!Regex("[a-zA-Z0-9._:/-]{1,120}").matches(value)) throw TeamFailure("invalid_agent", 400, "Use a valid agent model and effort.")
+            draft.environment?.let(CloudEnvironmentRules::validate)
         }
         /** `*` matches any run of characters, including `/` and `:`; everything else is literal. */
         fun matchesImagePattern(pattern: String, image: String) =

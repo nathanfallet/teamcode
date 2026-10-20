@@ -151,13 +151,21 @@ class ReconcileCloudSessionsUseCase(
                 else CloudProblem("execution_failed", "The session pod stopped before the runner was ready.", true)
             return if (first) fail(current, owner, now, problem) else block(current, owner, now, execution, problem)
         }
-        if (now - execution.createdAt > START_TIMEOUT_MILLIS) {
-            val problem = CloudProblem("start_timeout", "The session pod did not start a runner within 15 minutes.", true)
+        // A registered runner on a resume is preparing the environment: it fails or blocks like a first preparation.
+        val registered = execution.state == ExecutionState.RUNNING
+        if (registered && current.preparationFailed) return block(current, owner, now, execution, current.failure!!)
+        // A registered runner heartbeats while it prepares; silence is a lost execution, as in monitor().
+        if (registered && now - (execution.lastHeartbeatAt ?: execution.registeredAt ?: execution.createdAt) > HEARTBEAT_LOSS_MILLIS)
+            return lost(current, owner, now, execution, "heartbeat_lost")
+        if (now - execution.createdAt > (if (registered) PREPARE_TIMEOUT_MILLIS else START_TIMEOUT_MILLIS)) {
+            val problem = if (registered) CloudProblem("prepare_timeout", "The session did not become ready within 30 minutes.", true)
+                else CloudProblem("start_timeout", "The session pod did not start a runner within 15 minutes.", true)
             return if (first) fail(current, owner, now, problem) else block(current, owner, now, execution, problem)
         }
         val digest = pod.imageId?.substringAfter('@', "")?.takeIf { it.startsWith("sha256:") }
         if (pod.phase == PodPhase.RUNNING && (execution.nodeName == null || (current.imageDigest == null && digest != null))) {
-            commit(current, owner, current.copy(imageDigest = current.imageDigest ?: digest, phase = "starting_runner", updatedAt = now),
+            // The phase is the runner's once it registered (preparation progress); only the digest and node are recorded then.
+            commit(current, owner, current.copy(imageDigest = current.imageDigest ?: digest, phase = if (registered) current.phase else "starting_runner", updatedAt = now),
                 updateExecution = execution.copy(nodeName = pod.nodeName, imageDigest = digest))
         }
         // The runner's registration moves the session forward; until then keep watching the pod.
@@ -170,6 +178,7 @@ class ReconcileCloudSessionsUseCase(
         val pod = cluster.pod(s.clusterId, s.namespace, execution.podName)
         if (pod == null || pod.phase == PodPhase.FAILED || pod.phase == PodPhase.SUCCEEDED || now - seen > HEARTBEAT_LOSS_MILLIS)
             return lost(s, owner, now, execution, if (pod == null) "pod_missing" else "heartbeat_lost")
+        if (s.preparationFailed) return fail(s, owner, now, s.failure!!)
         if (s.state == PREPARING && now - execution.createdAt > PREPARE_TIMEOUT_MILLIS)
             return fail(s, owner, now, CloudProblem("prepare_timeout", "The session did not become ready within 30 minutes.", true))
         idle(s, owner, now)?.let { return it }
@@ -288,8 +297,9 @@ class ReconcileCloudSessionsUseCase(
     /** Asynchronous resume failure: back to paused with `resumeBlocked`, never `failed`; the workspace is kept. */
     private suspend fun block(s: CloudSession, owner: String, now: Long, execution: CloudExecution, problem: CloudProblem): Long? {
         if (!stopPod(s, execution, force = true)) return now + STEP_MILLIS
-        commit(s, owner, pausedCopy(s, now, s.resumeWorkspace).copy(resumeBlocked = problem), "cloud.session.resume_blocked",
-            updateExecution = execution.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = problem.code))
+        // A failed preparation moves from `failure` to `resumeBlocked`: the session itself has not failed.
+        commit(s, owner, pausedCopy(s, now, s.resumeWorkspace).copy(resumeBlocked = problem, failure = s.failure.takeUnless { s.preparationFailed }),
+            "cloud.session.resume_blocked", updateExecution = execution.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = problem.code))
         return now
     }
 

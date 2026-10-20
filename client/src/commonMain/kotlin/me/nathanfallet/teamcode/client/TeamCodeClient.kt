@@ -242,12 +242,31 @@ class TeamCodeClient(
         cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }
+    suspend fun githubApp(): GitHubAppView = request("/api/v1/github/app", HttpMethod.Get)
+    suspend fun saveGitHubApp(input: SaveGitHubAppRequest): GitHubAppView = request("/api/v1/github/app", HttpMethod.Put, input)
+    /** The caller's link, or another member's for an administrator. Never contains a token. */
+    suspend fun githubLink(memberId: String? = null): GitHubLinkView {
+        memberId?.let(::identifier)
+        return request(if (memberId == null) "/api/v1/github/link" else "/api/v1/github/links/$memberId", HttpMethod.Get)
+    }
+    suspend fun githubLinks(): List<GitHubLinkView> = request("/api/v1/github/links", HttpMethod.Get)
+    /** Starts GitHub's device flow; show the user code, then call [pollGitHubDeviceLink] every `interval` seconds. */
+    suspend fun startGitHubDeviceLink(): GitHubDeviceLinkView = request("/api/v1/github/link/device", HttpMethod.Post, 30_000)
+    suspend fun pollGitHubDeviceLink(id: String): GitHubDeviceLinkPollView { identifier(id); return request("/api/v1/github/link/device/$id", HttpMethod.Post, 60_000) }
+    suspend fun unlinkGitHub(memberId: String? = null) {
+        memberId?.let(::identifier)
+        checkResponse(http.delete("$origin/api/v1/github/" + (memberId?.let { "links/$it" } ?: "link")) { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
+    }
+
     /** Runner channel; construct the client with the pod's projected token as its credential. */
     suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
     suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = runnerRequest("heartbeat", input)
     suspend fun runnerCheckpoint(input: RunnerCheckpointRequest): RunnerInstructionView = runnerRequest("checkpoint", input)
+    /** The preparation recipe with the owner's variable values and GitHub token; never log the result. */
+    suspend fun runnerEnvironment(input: RunnerEnvironmentRequest): RunnerEnvironmentView = runnerRequest("environment", input)
+    suspend fun runnerPreparation(input: RunnerPreparationRequest): RunnerInstructionView = runnerRequest("preparation", input)
     /** Failures carry the server's error code (for example `execution_fenced`), never its message. */
-    private suspend inline fun <reified B> runnerRequest(path: String, body: B): RunnerInstructionView {
+    private suspend inline fun <reified R, reified B> runnerRequest(path: String, body: B): R {
         val response = http.request("$origin/api/v1/cloud/runner/$path") {
             method = HttpMethod.Post; contentType(ContentType.Application.Json); setBody(body); authenticate(); timeout { requestTimeoutMillis = 30_000 }
         }
@@ -403,8 +422,8 @@ class TeamCodeClient(
         try { response.body<ApiError>().error.type.takeIf { Regex("[a-z_]{1,64}").matches(it) } }
         catch (error: CancellationException) { throw error } catch (_: Exception) { null }
 
-    private suspend inline fun <reified R> request(path: String, method: HttpMethod): R {
-        val response = http.request("$origin$path") { this.method = method; authenticate(); timeout { requestTimeoutMillis = 10_000 } }
+    private suspend inline fun <reified R> request(path: String, method: HttpMethod, timeoutMillis: Long = 10_000): R {
+        val response = http.request("$origin$path") { this.method = method; authenticate(); timeout { requestTimeoutMillis = timeoutMillis } }
         checkResponse(response)
         return response.body()
     }
