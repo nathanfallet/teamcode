@@ -43,7 +43,7 @@ The server mounts the cloud routes and advertises `cloud.sessions.v1` only when 
 | GitHub App | `github_apps` | Administrator | App id, client id, slug and name; client secret and private key encrypted, bound to the team |
 | GitHub link | `github_links`, `github_link_attempts` | Member | The member's GitHub account (id, login) and App user tokens, encrypted and bound to the team and member; pending device or web links, single-use, encrypted and bound to the attempt and member |
 
-Planned tables: `cloud_session_events` (transcript), `cloud_session_inputs` (messages and interrupts), `cloud_transfers`.
+Each execution row also records the owner it ran for (`owner_id`), which is how history stays attributed after a transfer.
 
 Credentials are never stored in these tables, except the cluster's service-account token, the GitHub App's client secret and private key, and members' GitHub tokens and pending device codes, all encrypted with the server's credential key and bound to their row. No API returns them.
 
