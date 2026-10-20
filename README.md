@@ -6,14 +6,14 @@ An open-source, self-hosted model gateway for teams: pooled provider accounts, f
 
 ## Install the native CLI
 
-The release pipeline includes [one-command installers for macOS, Linux and Windows](docs/bootstrap.md). Install **0.1.0** from its published release assets:
+The release pipeline includes [one-command installers for macOS, Linux and Windows](docs/bootstrap.md). Install **0.2.0** from its published release assets:
 
 ```sh
-curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.sh | sh
+curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.2.0/install.sh | sh
 ```
 
 ```powershell
-& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.1.0/install.ps1').Content))
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.2.0/install.ps1').Content))
 ```
 
 No JVM is required. The installer prints the stable launcher directory to add to PATH and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
