@@ -215,13 +215,13 @@ class CloudRoutesTest {
         } finally { owner.close(); recipient.close() }
 
         // Settings: the transfer policy is part of the persistent cloud settings and the dashboard form.
-        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"memberTransfers":"always"}""") }.status)
-        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"transferOfferDays":31}""") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":30,"failedWorkspaceRetentionDays":7,"maxRunningSessionsPerMember":2,"maxRetainedSessionsPerMember":20,"transcriptRetentionDays":30,"memberTransfers":"always"}""") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":30,"failedWorkspaceRetentionDays":7,"maxRunningSessionsPerMember":2,"maxRetainedSessionsPerMember":20,"transcriptRetentionDays":30,"transferOfferDays":31}""") }.status)
         assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json)
-            setBody("""{"memberTransfers":"disabled","transferOfferDays":3,"transferPendingInputs":"keep"}""") }.status)
+            setBody("""{"pausedRetentionDays":30,"failedWorkspaceRetentionDays":7,"maxRunningSessionsPerMember":2,"maxRetainedSessionsPerMember":20,"transcriptRetentionDays":30,"memberTransfers":"disabled","transferOfferDays":3,"transferPendingInputs":"keep"}""") }.status)
         assertEquals(CloudSettings(memberTransfers = MemberTransfers.DISABLED, transferOfferDays = 3, transferPendingInputs = TransferPendingInputs.KEEP), settings.settings)
         // A client that predates transfers omits the fields: the stored transfer policy is kept.
-        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"maxRunningSessionsPerMember":3}""") }.status)
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/settings") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"pausedRetentionDays":30,"failedWorkspaceRetentionDays":7,"maxRunningSessionsPerMember":3,"maxRetainedSessionsPerMember":20,"transcriptRetentionDays":30}""") }.status)
         assertEquals(CloudSettings(maxRunningSessionsPerMember = 3, memberTransfers = MemberTransfers.DISABLED, transferOfferDays = 3, transferPendingInputs = TransferPendingInputs.KEEP), settings.settings)
         assertTrue(client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText().contains("Members may offer their own sessions"))
         assertEquals(HttpStatusCode.Found, client.post("/dashboard/cloud") {
