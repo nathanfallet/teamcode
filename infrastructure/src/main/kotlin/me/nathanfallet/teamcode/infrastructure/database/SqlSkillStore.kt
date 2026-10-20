@@ -1,6 +1,9 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.domain.skills.*
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -39,10 +42,12 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         actor.requireSkillPublisher()
         // Short team-locked step: create the catalog entry once. The team lock also serializes admission, so the
         // content insert below holds only this skill's row lock.
+        var createdHere = false
         val skillId = database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
             Skills.select(Skills.id).where { (Skills.teamId eq actor.teamId) and (Skills.name eq name) }.singleOrNull()?.get(Skills.id)
                 ?: run {
+                    createdHere = true
                     if (Skills.select(Skills.id).where { Skills.teamId eq actor.teamId }.count() >= SkillStore.SKILL_LIMIT)
                         throw TeamFailure("skill_limit", 409, "The catalog is limited to ${SkillStore.SKILL_LIMIT} skills.")
                     val id = UUID.randomUUID().toString()
@@ -55,6 +60,30 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                     id
                 }
         }
+        try {
+            return publishVersion(actor, skillId, name, version, artifact)
+        } catch (failure: Throwable) {
+            // A first publication that fails must not leave an empty catalog entry that counts toward the skill limit.
+            if (createdHere) withContext(NonCancellable) { discardEmpty(actor, skillId) }
+            throw failure
+        }
+    }
+
+    private suspend fun discardEmpty(actor: Principal, skillId: String) = try {
+        database.query {
+            lockTeam(actor.teamId)
+            if (SkillVersions.select(SkillVersions.id).where { SkillVersions.skillId eq skillId }.limit(1).empty()) {
+                val removed = Skills.deleteWhere { (Skills.id eq skillId) and (Skills.teamId eq actor.teamId) }
+                if (removed > 0) audit(actor.teamId, actor.member.id, "skill.create_discarded", skillId)
+            }
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        // The original failure is the one to report; an empty entry left by a second failure is still harmless.
+    }
+
+    private suspend fun publishVersion(actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact): SkillPublication {
         return database.query {
             requireCurrent(this, actor)
             val row = Skills.selectAll().where { Skills.id eq skillId }.forUpdate().single()

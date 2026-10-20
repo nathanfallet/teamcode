@@ -161,4 +161,29 @@ class SkillPersistenceTest {
             } }
         }
     }
+
+    @Test fun aFailedFirstPublicationLeavesNoEmptyCatalogEntry() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+                a.migrate()
+                val team = SqlTeamService(a)
+                val initial = team.bootstrap()!!
+                team.changePassword(team.login("admin", initial, "fixture").principal, initial, "skill administrator password")
+                val admin = team.login("admin", "skill administrator password", "fixture").principal
+                val publisher = team.authenticate(SqlServiceKeyService(a).create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                val store = SqlSkillStore(a)
+                // A path above the column bound passes a hand-built artifact and fails in the content transaction.
+                val tooLong = "x".repeat(300)
+                val broken = SkillArtifact("0".repeat(64), listOf(SkillFile(tooLong, SkillFileMode.FILE, byteArrayOf(1))), listOf(SkillFileEntry(tooLong, SkillFileMode.FILE, 1, "0".repeat(64))))
+                assertFails { store.publish(publisher, "orphan", "1.0.0", broken) }
+                assertEquals(0L, a.query { Skills.selectAll().count() }, "A failed first publication must not leave an empty skill behind")
+                assertEquals(0L, a.query { SkillVersions.selectAll().count() })
+                // An existing skill is never removed by a failed later publication.
+                assertTrue(SkillCatalog(store).publish(publisher, "kept", "1.0.0", files("one")).created)
+                assertFails { store.publish(publisher, "kept", "2.0.0", broken) }
+                assertEquals(1L, a.query { Skills.selectAll().count() })
+            }
+        }
+    }
 }
