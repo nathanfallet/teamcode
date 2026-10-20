@@ -44,3 +44,5 @@ internal actual suspend fun executeInstalledPayload(path: String, arguments: Lis
     execv(path, vector)
     throw CliOperationException("release_launcher_failed")
 }
+internal actual fun readWindowsUserPath(): UserPathValue? = error("The Windows user PATH exists only on Windows.")
+internal actual fun writeWindowsUserPath(value: UserPathValue): Unit = error("The Windows user PATH exists only on Windows.")

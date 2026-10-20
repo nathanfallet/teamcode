@@ -76,7 +76,7 @@ The built-in Windows PowerShell service query uses system module paths explicitl
 
 ## Native installation and updates
 
-`teamcode install [--version VERSION | --bundle DIRECTORY] [--root ABSOLUTE_PATH]` creates a private managed installation. Add its printed `bin` directory to PATH, then use `teamcode service install` through that launcher. Existing login/device identity is preserved. A manual/source service registered to a different executable is left intact; uninstall/reinstall that service through the managed launcher to change its executable safely.
+`teamcode install [--version VERSION | --bundle DIRECTORY] [--root ABSOLUTE_PATH]` creates a private managed installation. It also links `teamcode` into `~/.local/bin` (macOS/Linux) or adds the launcher directory to the user PATH (Windows); see [Command on PATH](bootstrap.md#command-on-path). Then use `teamcode service install` through that launcher. Existing login/device identity is preserved. A manual/source service registered to a different executable is left intact; uninstall/reinstall that service through the managed launcher to change its executable safely.
 
 `teamcode update --check [--version VERSION]` authenticates published metadata without reading team authentication or touching the service. `teamcode update`, `update --version VERSION`, offline `update --bundle DIRECTORY` and `update --rollback` operate on a managed installation. New payloads pass publisher signature, exact hash/length and native version/API compatibility checks before activation. A configured server must be reachable for an installation/update compatibility check; a previously accepted rollback remains available offline. See [distribution behavior and remaining acceptance](distribution.md).
 

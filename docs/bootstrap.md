@@ -18,7 +18,7 @@ Windows x64, in Windows PowerShell 5.1 or PowerShell 7:
 
 For the latest stable release, replace `releases/download/0.2.0/` with `releases/latest/download/`. This downloads a version-pinned script: subsequent asset downloads use its exact version, never a moving latest-version alias. Explicit prereleases use their version-specific URL.
 
-The installer prints the stable launcher path and its `bin` directory. Add that directory to your user's PATH once, or invoke the printed absolute path directly. Shell profiles, the Windows environment, personal Claude/Codex configuration and saved TeamCode authentication are not rewritten. Then connect to your own deployment:
+The installer makes `teamcode` available by name, without administrator rights (see [Command on PATH](#command-on-path)). Shell profiles, personal Claude/Codex configuration and saved TeamCode authentication are not rewritten. Then connect to your own deployment:
 
 ```sh
 teamcode login --server https://teamcode.example.org
@@ -40,6 +40,25 @@ No platform needs Java, Gradle, Python or Node to install TeamCode. POSIX bootst
 | Windows | `%LOCALAPPDATA%\TeamCode` |
 
 Set `TEAMCODE_INSTALL_ROOT` to an absolute private directory before invoking the script to override the root. The native installer refuses an unrelated nonempty layout. Configuration remains under the existing XDG/home `.config/teamcode` location. POSIX bootstrap refuses root; system-service provisioning is a separate operation.
+
+## Command on PATH
+
+After installation, `teamcode` works by name:
+
+| System | What the installer adds |
+| --- | --- |
+| macOS, Linux | A symbolic link `~/.local/bin/teamcode` to the **stable launcher** (`<root>/bin/teamcode`), never to a versioned payload, so updates and `update --rollback` need no relinking. The directory is created if missing. |
+| Windows | The launcher directory (`%LOCALAPPDATA%\TeamCode\bin` by default) appended to the **current user's** PATH in the registry (`HKCU\Environment`), keeping its value type, then a `WM_SETTINGCHANGE` broadcast. Open a new terminal to see it. |
+
+Neither needs `sudo` or administrator rights, and `/usr/local/bin` or `/usr/bin` are never used. `~/.local/bin` is where many distributions already put user commands; when it is not in your PATH, the installer says so and prints the exact line to add to your shell profile, for example:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The installer never edits shell profiles. Re-running the installer changes nothing when the link already points at the launcher or the PATH entry exists (the check ignores case and trailing separators, and expands `%VAR%` entries). It never overwrites a file or link it did not create: if `~/.local/bin/teamcode` is something else, installation finishes, nothing is replaced, the installer explains and exits with an error; remove or rename that file and run it again. A link left by a previous installation in another `--root` is treated the same way. `teamcode install --no-path` (not available through the bootstrap scripts) skips this step.
+
+There is no `uninstall` command yet. To remove what was added, delete `~/.local/bin/teamcode` (macOS/Linux) or remove the launcher directory from the user PATH in *Edit environment variables for your account* (Windows).
 
 ## Reviewed or offline installation
 
@@ -68,6 +87,6 @@ Private downloads are removed on normal success/failure. A download/hash failure
 
 Ordinary tests cover signed-bundle generation/refusal and shell flow using executable shims: four targets, Rosetta, literal arguments, tampering, root refusal, offline mode, HTTP failure and cleanup. The PowerShell HTTP fixture exercises the actual helper with an in-memory .NET handler: HTTPS/host restrictions, redirect limits, bounded unknown-length bodies, exact sizes and encoded/error refusal. It makes no network or provider call.
 
-`scripts/smoke-bootstrap.py --bundle SIGNED_RELEASE_DIRECTORY` runs the generated script and actual native executable on its target host. It checks clean installation, the compiled version, idempotence, saved self-hosted URL/login/device and agent-file preservation, corrupt-byte refusal and cleanup. On Windows it uses both Windows PowerShell and PowerShell 7 when available. Full validation invokes it in the existing signed-installation matrix; no paid runner is added to ordinary pushes. Accepted scripts travel unchanged in the native release artifact. Actual public-download installation and all five-target results remain gates until their evidence passes.
+`scripts/smoke-bootstrap.py --bundle SIGNED_RELEASE_DIRECTORY` runs the generated script and actual native executable on its target host. It checks clean installation, that `teamcode` runs by name through the new link or PATH entry (in a temporary `HOME`; the Windows job restores the CI user's PATH afterwards), the compiled version, idempotence, saved self-hosted URL/login/device and agent-file preservation, corrupt-byte refusal and cleanup. On Windows it uses both Windows PowerShell and PowerShell 7 when available. Full validation invokes it in the existing signed-installation matrix; no paid runner is added to ordinary pushes. Accepted scripts travel unchanged in the native release artifact. Actual public-download installation and all five-target results remain gates until their evidence passes.
 
 TeamClaude's `src/updater.js` is the reference for preserving source/manual installations and explicit update behavior. Its global npm replacement does not bootstrap a standalone Kotlin/Native executable. TeamCode delegates to its managed native installer instead of adding npm or JVM requirements.

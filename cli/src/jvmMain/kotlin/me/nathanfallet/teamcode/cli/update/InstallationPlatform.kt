@@ -40,3 +40,5 @@ internal actual fun validatePrivateInstallationPath(path: String, directory: Boo
 internal actual fun installationTarget(): String = error("Managed installation requires the native executable.")
 internal actual suspend fun executeInstalledPayload(path: String, arguments: List<String>, root: String): Int =
     error("Managed installation requires the native executable.")
+internal actual fun readWindowsUserPath(): UserPathValue? = error("The Windows user PATH exists only on Windows.")
+internal actual fun writeWindowsUserPath(value: UserPathValue): Unit = error("The Windows user PATH exists only on Windows.")

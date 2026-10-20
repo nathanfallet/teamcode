@@ -4,7 +4,7 @@ Windows x64 native runtime acceptance passed in [CI run 39178163269](https://git
 
 ## Release installer
 
-The pipeline generates a [PowerShell installer](bootstrap.md) for the signed Windows x64 release. Use the version-pinned `0.2.0` command in that guide for the published release. It targets Windows PowerShell 5.1 and PowerShell 7, prints a stable launcher path to add to user PATH and preserves saved authentication and personal agent configuration. All-platform bootstrap runtime acceptance remains separate from the earlier native transport/service evidence above.
+The pipeline generates a [PowerShell installer](bootstrap.md) for the signed Windows x64 release. Use the version-pinned `0.2.0` command in that guide for the published release. It targets Windows PowerShell 5.1 and PowerShell 7, adds the stable launcher directory to your user PATH (no administrator rights; open a new terminal) and preserves saved authentication and personal agent configuration. All-platform bootstrap runtime acceptance remains separate from the earlier native transport/service evidence above.
 
 ## Install a tested development build
 

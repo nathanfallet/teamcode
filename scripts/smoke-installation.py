@@ -45,8 +45,12 @@ def main():
         root = Path(directory) / "application é space's"
         install_root = root / 'installation'
         config_root = root / 'configuration'
-        env = dict(os.environ, XDG_CONFIG_HOME=str(config_root), TEAMCODE_DISABLE_AUTOUPDATE='1')
+        home = root / 'home'
+        # Installation links the command under HOME: never let this smoke touch the real one.
+        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root), TEAMCODE_DISABLE_AUTOUPDATE='1')
+        env['PATH'] = os.pathsep.join(entry for entry in env['PATH'].split(os.pathsep) if Path(entry) != home / '.local' / 'bin')
         root.mkdir()
+        home.mkdir()
         launcher = install_root / 'bin' / ('teamcode.exe' if os.name == 'nt' else 'teamcode')
 
         def run(executable, arguments, error=None, input_text=None):
@@ -66,8 +70,39 @@ def main():
             assert state()['current']['manifestSha256'] == digests[index]
             assert not (install_root / 'transaction.json').exists(), 'A completed operation left a pending journal'
 
-        run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
+        if os.name == 'nt':
+            import winreg
+            def user_path():
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                    try: return winreg.QueryValueEx(key, 'Path')
+                    except FileNotFoundError: return None
+            def launcher_directories(): return [entry.rstrip('\\').lower() for entry in (user_path() or ('',))[0].split(';')]
+            original_user_path = user_path()
+            def restore_user_path():
+                # The Windows install edits the real HKCU PATH of the CI user: put it back exactly.
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_SET_VALUE) as key:
+                    if original_user_path is None: winreg.DeleteValue(key, 'Path')
+                    else: winreg.SetValueEx(key, 'Path', 0, original_user_path[1], original_user_path[0])
+            import atexit; atexit.register(restore_user_path)
+        installed = run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
         selected(0)
+        link_directory = home / '.local' / 'bin'
+        command_directory = launcher.parent if os.name == 'nt' else link_directory
+        def by_name():
+            # Resolved through PATH like an interactive shell would; never through the launcher's full path.
+            found = shutil.which('teamcode', path=str(command_directory))
+            assert found, 'teamcode is not found by name'
+            result = subprocess.run([found, 'version'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=45)
+            assert result.returncode == 0, result.stdout + result.stderr
+            return result.stdout.strip()
+        if os.name == 'nt':
+            assert str(launcher.parent).lower() in launcher_directories(), 'Install did not add the launcher directory to the user PATH'
+            assert launcher_directories().count(str(launcher.parent).lower()) == 1
+        else:
+            link = link_directory / 'teamcode'
+            assert link.is_symlink() and os.readlink(link) == str(launcher), 'The command must link to the stable launcher'
+            assert 'export PATH="$HOME/.local/bin:$PATH"' in installed, 'Missing the exact PATH line: ' + installed
+        assert by_name() == 'TeamCode ' + manifests[0]['version']
         original_launcher = hashlib.sha256(launcher.read_bytes()).hexdigest()
         before_settings = state()
         def notifications(mode):
@@ -82,12 +117,16 @@ def main():
         assert state() == before_settings
         run(binary, ['install', '--bundle', str(first), '--root', str(install_root)])
         selected(0)
+        if os.name != 'nt':
+            assert os.readlink(link) == str(launcher) and len(list(link_directory.iterdir())) == 1, 'Re-running install changed the command link'
         run(launcher, ['update', '--bundle', str(second)])
         selected(1)
+        assert by_name() == 'TeamCode ' + manifests[1]['version'], 'The command did not follow the update'
         assert state()['previous']['manifestSha256'] == digests[0]
         assert hashlib.sha256(launcher.read_bytes()).hexdigest() == original_launcher, 'The running launcher was replaced'
         run(launcher, ['update', '--rollback'])
         selected(0)
+        assert by_name() == 'TeamCode ' + manifests[0]['version'], 'The command did not follow the rollback'
         assert state()['previous']['manifestSha256'] == digests[1]
         for digest in digests: assert (install_root / 'versions' / digest).is_dir(), 'A previous payload was deleted'
 
@@ -111,6 +150,20 @@ def main():
         selected(0)
         assert state() == before
 
+        if os.name != 'nt':
+            # A command name owned by something else is never replaced, and the refusal says why.
+            other_home = root / 'other home'
+            (other_home / '.local' / 'bin').mkdir(parents=True)
+            occupied = other_home / '.local' / 'bin' / 'teamcode'
+            occupied.write_text('not ours')
+            result = subprocess.run([str(binary), 'install', '--bundle', str(first), '--root', str(root / 'other installation')],
+                                    env=dict(env, HOME=str(other_home)), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=45)
+            assert result.returncode != 0 and 'already exists and was not created by TeamCode' in result.stderr + result.stdout, result.stdout + result.stderr
+            assert occupied.read_text() == 'not ours' and not occupied.is_symlink()
+            result = subprocess.run([str(binary), 'install', '--no-path', '--bundle', str(first), '--root', str(root / 'other installation')],
+                                    env=dict(env, HOME=str(other_home)), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=45)
+            assert result.returncode == 0 and occupied.read_text() == 'not ours', result.stdout + result.stderr
+
         foreign = root / 'unrelated directory'
         foreign.mkdir()
         (foreign / 'keep.txt').write_bytes(b'preserve this user file')
@@ -119,9 +172,6 @@ def main():
         assert sorted(path.name for path in foreign.iterdir()) == ['keep.txt']
         assert not config_root.exists(), 'Installation without login created team configuration'
         if args.service:
-            home = root / 'home'
-            home.mkdir()
-            env['HOME'] = str(home)
             token = secrets.token_hex(32)
             online = True
             api_version = 1

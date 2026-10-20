@@ -313,4 +313,32 @@ static inline void teamcode_windows_close(void *process) {
 static inline void teamcode_windows_terminate(void *process) {
     TerminateJobObject(((teamcode_windows_child *)process)->job, 130);
 }
+/* Current user's PATH. Returns 1 and a NUL-terminated value, 0 if absent, -1 on failure; *expandable is 1 for REG_EXPAND_SZ. */
+static inline int teamcode_windows_user_path_read(wchar_t *buffer, DWORD capacity, int *expandable) {
+    HKEY key;
+    LONG status = RegOpenKeyExW(HKEY_CURRENT_USER, L"Environment", 0, KEY_QUERY_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return 0;
+    if (status != ERROR_SUCCESS) return -1;
+    DWORD type = 0, size = capacity * sizeof(wchar_t);
+    status = RegQueryValueExW(key, L"Path", NULL, &type, (LPBYTE)buffer, &size);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND) return 0;
+    if (status != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) return -1;
+    buffer[size / sizeof(wchar_t) < capacity ? size / sizeof(wchar_t) : capacity] = 0;
+    *expandable = type == REG_EXPAND_SZ;
+    return 1;
+}
+
+/* Replace the current user's PATH, then tell running applications (Explorer, new terminals) to reload the environment. */
+static inline int teamcode_windows_user_path_write(const wchar_t *value, int expandable) {
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Environment", 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS) return -1;
+    LONG status = RegSetValueExW(key, L"Path", 0, expandable ? REG_EXPAND_SZ : REG_SZ,
+        (const BYTE *)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS) return -1;
+    DWORD ignored;
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 5000, (PDWORD_PTR)&ignored);
+    return 1;
+}
 #endif

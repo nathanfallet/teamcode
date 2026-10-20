@@ -29,3 +29,18 @@ internal actual fun validatePrivateInstallationPath(path: String, directory: Boo
 internal actual fun installationTarget(): String = "windows-x64"
 internal actual suspend fun executeInstalledPayload(path: String, arguments: List<String>, root: String): Int =
     runInteractiveProcess(path, arguments, mapOf("TEAMCODE_INSTALL_ROOT" to root))
+
+private const val USER_PATH_CAPACITY = 32_768
+internal actual fun readWindowsUserPath(): UserPathValue? = memScoped {
+    val buffer = allocArray<UShortVar>(USER_PATH_CAPACITY + 1)
+    val expandable = alloc<IntVar>()
+    when (teamcode_windows_user_path_read(buffer, USER_PATH_CAPACITY.toUInt(), expandable.ptr)) {
+        0 -> null
+        1 -> UserPathValue(buffer.toKStringFromUtf16(), expandable.value != 0)
+        else -> throw CliOperationException("release_user_path_failed")
+    }
+}
+internal actual fun writeWindowsUserPath(value: UserPathValue): Unit = memScoped {
+    if (value.value.length > USER_PATH_CAPACITY || '\u0000' in value.value) throw CliOperationException("release_user_path_failed")
+    if (teamcode_windows_user_path_write(value.value.wcstr.ptr, if (value.expandable) 1 else 0) != 1) throw CliOperationException("release_user_path_failed")
+}

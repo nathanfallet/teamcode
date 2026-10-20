@@ -13,7 +13,7 @@ Use `--root ABSOLUTE_MANAGED_ROOT` to manage a specific installation. Source/man
 
 ## Scheduling and authentication
 
-An explicit opt-in records a current-user job with an installation-specific random ID. It invokes the stable managed launcher with `update --automatic-run --root ...`. The job is separate from the proxy's registration, process tree and systemd control group, so stopping the proxy does not kill the updater. No shell profile, global PATH, personal agent configuration or provider credential is changed.
+An explicit opt-in records a current-user job with an installation-specific random ID. It invokes the stable managed launcher with `update --automatic-run --root ...`. The job is separate from the proxy's registration, process tree and systemd control group, so stopping the proxy does not kill the updater. No shell profile, machine PATH, personal agent configuration or provider credential is changed.
 
 | System | User job |
 | --- | --- |
