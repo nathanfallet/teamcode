@@ -44,6 +44,9 @@ object AuditEvents : Table("audit_events") {
     val action = varchar("action", 64)
     val subjectId = varchar("subject_id", 100)
     val occurredAt = long("occurred_at")
+    /** Cloud actions only: the member a delegated action applied to, and the initiating credential's id (never its token). */
+    val effectiveMemberId = varchar("effective_member_id", 36).nullable()
+    val credentialId = varchar("credential_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init { index("audit_team_time", false, teamId, occurredAt); index("audit_team_id", false, teamId, id) }
 }

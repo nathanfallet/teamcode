@@ -13,7 +13,8 @@ class ServiceKeyAuthorizationTest {
             assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.INTERACTIVE) }
             for (action in listOf(CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT)) authorize.check(key, action)
             for ((action, needed) in listOf(CredentialAction.INFERENCE to ServiceScope.INFERENCE,
-                CredentialAction.USAGE_READ to ServiceScope.USAGE_READ, CredentialAction.GUIDANCE to ServiceScope.GUIDANCE)) {
+                CredentialAction.USAGE_READ to ServiceScope.USAGE_READ, CredentialAction.GUIDANCE to ServiceScope.GUIDANCE,
+                CredentialAction.SKILLS_READ to ServiceScope.SKILLS_READ, CredentialAction.SKILLS_PUBLISH to ServiceScope.SKILLS_PUBLISH)) {
                 if (scope == needed) authorize.check(key, action)
                 else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, action) }.code)
             }
