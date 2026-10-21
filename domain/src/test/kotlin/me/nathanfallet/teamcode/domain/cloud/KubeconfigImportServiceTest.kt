@@ -45,8 +45,17 @@ class KubeconfigImportServiceTest {
         val offer = service.offer(admin, config("a" to "{token: $token}", "b" to "{token: $token-b}"))
         val opened = service.open(admin, offer.sealed, "b")
         assertEquals("$token-b", opened.token); assertEquals(pem, opened.caCertificate); assertEquals("ns-b", opened.namespace)
-        assertEquals("ns-a", service.summary(admin, offer.sealed, "a").namespace)
+        assertEquals("ns-a", service.choose(admin, offer.sealed, "a").summary.namespace)
         assertFailsWith<TeamFailure> { service.open(admin, offer.sealed, "missing") }
+    }
+
+    @Test fun aChoiceKeepsOnlyTheChosenContextSecrets() {
+        val offer = service.offer(admin, config("a" to "{token: $token}", "b" to "{token: $token-b}", "c" to "{token: $token-c}"))
+        val choice = service.choose(admin, offer.sealed, "b")
+        assertEquals("$token-b", service.open(admin, choice.sealed, "b").token)
+        for (other in listOf("a", "c")) assertFailsWith<TeamFailure> { service.open(admin, choice.sealed, other) }
+        assertFalse(token in choice.toString() + choice.sealed)
+        assertTrue(choice.sealed.length < offer.sealed.length, "The envelope no longer grows with the file")
     }
 
     @Test fun unusableContextsAreListedWithTheirReasonButNeverSealed() {

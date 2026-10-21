@@ -29,6 +29,11 @@ class KubeconfigOffer(val sealed: String, val contexts: List<KubeconfigContextSu
     override fun toString() = "KubeconfigOffer(contexts=${contexts.map { it.name }}, defaultContext=$defaultContext, sealed=[REDACTED])"
 }
 
+/** One context picked from an offer: its summary, and a [sealed] value holding only its secrets. */
+class KubeconfigChoice(val sealed: String, val summary: KubeconfigContextSummary) {
+    override fun toString() = "KubeconfigChoice(summary=$summary, sealed=[REDACTED])"
+}
+
 /**
  * Reads a kubeconfig on the server and lets an administrator turn one of its contexts into a cluster without the
  * secrets ever returning to the browser. The CA bundle and the token go through [SecretSealer] into an opaque value
@@ -47,8 +52,14 @@ class KubeconfigImportService(private val sealer: SecretSealer, private val cloc
         return KubeconfigOffer(seal(actor, usable), kubeconfig.contexts.map { it.summary() }, kubeconfig.defaultContext?.name)
     }
 
-    /** The summary of context [name] in a [sealed] offer, to prefill the form. */
-    fun summary(actor: Principal, sealed: String, name: String): KubeconfigContextSummary = pick(actor, sealed, name).summary()
+    /**
+     * Context [name] of a [sealed] offer, to prefill the form. The result holds a new sealed value with only that
+     * context, so the other contexts' secrets are not carried (or replayable) beyond the choice.
+     */
+    fun choose(actor: Principal, sealed: String, name: String): KubeconfigChoice {
+        val context = pick(actor, sealed, name)
+        return KubeconfigChoice(seal(actor, listOf(context)), context.summary())
+    }
 
     /** The context [name] of a [sealed] offer, secrets included, for the server-side save only. */
     fun open(actor: Principal, sealed: String, name: String): KubeconfigContext = pick(actor, sealed, name)

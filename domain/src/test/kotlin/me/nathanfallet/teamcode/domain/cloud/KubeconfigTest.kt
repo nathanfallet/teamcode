@@ -26,6 +26,15 @@ class KubeconfigTest {
         assertNull(context.unsupported)
     }
 
+    @Test fun scalarsKeepTheirExactSpellingWhateverTheyLookLike() {
+        val parsed = Kubeconfig.parse(config(users = "- name: 42\n  user: {token: 0123456789012345}", contexts = "- name: 42\n  context: {cluster: lab, user: 42, namespace: 1234}", current = "42"))
+        val context = assertNotNull(parsed.defaultContext)
+        assertEquals("0123456789012345", context.token, "A numeric-looking token is not dropped or reformatted")
+        assertEquals("1234", context.namespace); assertEquals("42", context.name)
+        assertNotNull(Kubeconfig.parse(config(users = "- name: robot\n  user: {token: null}")).contexts.single().let { assertNull(it.token); it })
+        assertNotNull(Kubeconfig.parse(config(clusters = "- name: lab\n  cluster: {server: 'https://k.example.test', insecure-skip-tls-verify: \"true\"}")).contexts.single().unsupported)
+    }
+
     @Test fun jsonIsAccepted() {
         val json = """{"kind":"Config","current-context":"a","clusters":[{"name":"c","cluster":{"server":"https://k.example.test","certificate-authority-data":"$ca"}}],
             "users":[{"name":"u","user":{"token":"abcdefghijklmnopqrstuv"}}],"contexts":[{"name":"a","context":{"cluster":"c","user":"u"}}]}"""

@@ -193,16 +193,15 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         // The server reads the kubeconfig: its CA and token go back to the browser only sealed, never in the page.
         post("/dashboard/cloud/clusters/import") {
             val actor = call.principal
-            val offer = imports.offer(actor, call.form(origin.trimEnd('/'), limit = CLUSTER_FORM_BYTES)["kubeconfig"].orEmpty())
+            val offer = imports.offer(actor, call.form(origin.trimEnd('/'), limit = KUBECONFIG_FORM_BYTES)["kubeconfig"].orEmpty())
             val only = offer.contexts.singleOrNull()
             call.respondText(call.page("Import a kubeconfig", if (only != null) importedClusterForm(actor, offer.sealed, only) else contextPicker(actor, offer)), ContentType.Text.Html)
         }
         post("/dashboard/cloud/clusters/import/context") {
             val actor = call.principal
-            val input = call.form(origin.trimEnd('/'), limit = CLUSTER_FORM_BYTES)
-            val sealed = input["kubeconfigSealed"].orEmpty()
-            val summary = imports.summary(actor, sealed, input["context"].orEmpty())
-            call.respondText(call.page("Import a kubeconfig", importedClusterForm(actor, sealed, summary)), ContentType.Text.Html)
+            val input = call.form(origin.trimEnd('/'), limit = KUBECONFIG_FORM_BYTES)
+            val choice = imports.choose(actor, input["kubeconfigSealed"].orEmpty(), input["context"].orEmpty())
+            call.respondText(call.page("Import a kubeconfig", importedClusterForm(actor, choice.sealed, choice.summary)), ContentType.Text.Html)
         }
     }
     post("/dashboard/cloud/clusters") {
@@ -237,6 +236,8 @@ private fun SaveCloudClusterRequest.domain() = CloudClusterInput(name, apiUrl, c
 
 /** A CA bundle (up to 64 KiB) and a token (up to 16 KiB), form-encoded. */
 private const val CLUSTER_FORM_BYTES = 256 * 1024
+/** A kubeconfig of 128 K characters, percent-encoded (up to three bytes per character), or its sealed copy. */
+private const val KUBECONFIG_FORM_BYTES = 512 * 1024
 private const val KEPT = " (defined; leave empty to keep it, or paste a replacement)"
 
 private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: String): String {

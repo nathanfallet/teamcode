@@ -226,6 +226,9 @@ class CloudRuntimeRoutesTest {
         post("/dashboard/cloud/clusters", "kubeconfigSealed" to sealedOf(chosen), "kubeconfigContext" to "dev", "name" to "dev", "apiUrl" to "https://k8s.example.test:6443", "allowedNamespaces" to "dev-ns", "maxRunningPods" to "2")
         assertEquals("$token-dev", clusters.clusters.last().second.serviceAccountToken)
         assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters/import/context", "kubeconfigSealed" to sealedOf(picker), "context" to "sso").status, "An unusable context cannot be chosen")
+        assertNotEquals(sealedOf(picker), sealedOf(chosen), "Once a context is chosen, the other contexts' secrets are dropped")
+        assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters", "kubeconfigSealed" to sealedOf(chosen), "kubeconfigContext" to "prod", "name" to "prod", "apiUrl" to "https://k8s.example.test:6443",
+            "allowedNamespaces" to "prod-ns", "maxRunningPods" to "2").status, "A chosen import cannot be replayed for another context")
 
         // exec and auth-provider kubeconfigs are refused with a message that says why and what to do.
         for (user in listOf("{exec: {command: aws}}", "{auth-provider: {name: gcp}}")) {
@@ -233,6 +236,10 @@ class CloudRuntimeRoutesTest {
             assertEquals(HttpStatusCode.UnprocessableEntity, refused.status)
             assertContains(refused.bodyAsText(), "service-account token")
         }
+        // A large kubeconfig (percent-encoded, with a lot of newlines and colons) is read, or refused as a kubeconfig, never as an oversized body.
+        val large = "current-context: x\n" + "#:#:#:#:#:#:#:#:#\n".repeat(6_500)
+        assertTrue(large.length < Kubeconfig.MAX_CHARACTERS && listOf("kubeconfig" to large).formUrlEncode().length > 256 * 1024)
+        assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters/import", "kubeconfig" to large).status)
         val count = clusters.clusters.size
         assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters/import", "kubeconfig" to "not: [a kubeconfig").status)
         assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters", "kubeconfigSealed" to "forged", "kubeconfigContext" to "lab", "name" to "x", "apiUrl" to "https://k8s.example.test",
