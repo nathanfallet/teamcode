@@ -51,7 +51,8 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
         const val MAX_WAIT_MILLIS = 90_000L
         const val POLL_MILLIS = 500L
         const val LEASE_MILLIS = 15_000L
-        val WAITABLE = setOf("member_concurrency", "group_concurrency", "run_concurrency", "pacing_concurrency", "pacing_delay", "queue_turn")
+        // "pool_busy" is no longer emitted (accounts have no parallelism limit); it stays waitable for servers that predate this.
+        val WAITABLE = setOf("member_concurrency", "group_concurrency", "run_concurrency", "pacing_concurrency", "pacing_delay", "queue_turn", "pool_busy")
     }
 }
 

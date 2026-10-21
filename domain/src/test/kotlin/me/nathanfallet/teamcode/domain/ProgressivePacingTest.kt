@@ -31,6 +31,9 @@ class ProgressivePacingTest {
         assertEquals(SlowDownLevel.MODERATE, SlowDownLevel.of(.25))
         assertEquals(SlowDownLevel.SEVERE, SlowDownLevel.of(.2499))
         assertEquals(SlowDownLevel.SEVERE, SlowDownLevel.of(Double.NaN))
+        // An overshooting window without a known reset cannot be graded: it counts as severe, whatever the other window says.
+        val unknown = windows(.75).let { listOf(it[0], WindowPacing(AccountQuota("a", "seven_day", .6, now, null), QuotaForecast(now + 1_000, 10.0, QuotaForecast.State.EXHAUSTS_FIRST))) }
+        assertEquals(1 to 10_000L, controller.advise(listOf(unknown), 0, now, observedConcurrency = 6).let { it.maxConcurrent to it.minIntervalMillis })
     }
 
     @Test fun slowDownIsBoundedAndNeverLoosensAsTheOvershootGrows() {

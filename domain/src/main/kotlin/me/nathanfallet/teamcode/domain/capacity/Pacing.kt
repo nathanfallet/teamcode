@@ -98,9 +98,10 @@ class PacingUseCase {
                 windows.all { it.quota.utilization < .5 && it.forecast.state in setOf(QuotaForecast.State.IDLE, QuotaForecast.State.RESET_FIRST) } -> Pace.CAN_INCREASE
                 else -> Pace.NORMAL
             }
-            // The most pressured window of an account bounds what that account can absorb. A SLOW_DOWN whose share
-            // cannot be computed counts as fully pressured (SEVERE), the conservative former behavior.
-            pace to (windows.mapNotNull { it.affordableShare(now) }.minOrNull() ?: 0.0)
+            // The most pressured overshooting window of an account bounds what that account can absorb. An overshooting
+            // window whose share cannot be computed counts as fully pressured (SEVERE), the conservative former behavior.
+            pace to (windows.filter { it.forecast.state == QuotaForecast.State.EXHAUSTS_FIRST }
+                .minOfOrNull { it.affordableShare(now) ?: 0.0 } ?: 0.0)
         }
         val selected = states.minWith(compareBy<Pair<Pace, Double>> { when (it.first) {
             Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.SLOW_DOWN -> 2; Pace.UNKNOWN -> 3; Pace.PAUSE -> 4
