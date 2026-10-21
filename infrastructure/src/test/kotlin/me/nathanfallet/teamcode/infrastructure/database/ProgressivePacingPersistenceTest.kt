@@ -123,7 +123,7 @@ class ProgressivePacingPersistenceTest {
 
                     // PAUSE stays the hard bound.
                     val pressured = a.query { nowMillis() }
-                    accounts.forEach { admissionB.observe(it.id, listOf(AccountQuota(it.id, "five_hour", .9, pressured, pressured + 480_000))) }
+                    accounts.forEach { admissionB.observe(it.id, listOf(AccountQuota(it.id, "five_hour", .95, pressured, pressured + 480_000))) }
                     controller.update()
                     val pause = controller.current(actor, session)!!.advice
                     assertEquals(Triple(Pace.PAUSE, 1, 30_000L), Triple(pause.pace, pause.maxConcurrent, pause.minIntervalMillis))
