@@ -88,20 +88,18 @@ class ReportSkillInstallationsUseCase(private val store: SkillStore) {
 }
 
 /**
- * Catalog operations, administrator-only except pinning: authorization and input validation happen here, before persistence. Rules that
- * depend on current shared state (retired skill, pinned version, limits) are enforced by the store inside its
- * team-locked transaction, so two replicas cannot both pass them.
+ * Catalog operations. All are administrator-only, except pinning, which skill publishers may also do. Authorization and
+ * input validation happen here, before persistence. Rules that depend on current shared state (retired skill, pinned
+ * version, limits) are enforced by the store inside its locked transaction, so two replicas cannot both pass them.
  */
 class ManageSkillCatalogUseCase(private val store: SkillStore) {
     suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return store.catalog(actor) }
     suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> = admin(actor, name) { store.versions(actor, name) }
     /** Pinning shares the publication right, so CI can approve what it publishes. Everything else is administrator-only. */
-    suspend fun pin(actor: Principal, name: String, version: String): Skill {
-        actor.requireSkillPublisher()
-        SkillArtifacts.validateName(name)
-        SkillArtifacts.validateVersion(version)
-        return store.pin(actor, name, version)
-    }
+    suspend fun pin(actor: Principal, name: String, version: String): Skill =
+        admin(actor, name, version, authorize = { requireSkillPublisher() }) { store.pin(actor, name, version) }
+    /** Lets transports refuse a caller that may not pin before reading its body. */
+    fun authorizePin(actor: Principal) = actor.requireSkillPublisher()
     suspend fun unpin(actor: Principal, name: String): Skill = admin(actor, name) { store.unpin(actor, name) }
     suspend fun retire(actor: Principal, name: String): Skill = admin(actor, name) { store.retire(actor, name) }
     suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }
@@ -115,8 +113,10 @@ class ManageSkillCatalogUseCase(private val store: SkillStore) {
         if (actor.member.id != memberId) actor.requireAdmin() else { actor.requireInteractive(); actor.requireReady() }
         return store.installations(actor, memberId)
     }
-    private inline fun <T> admin(actor: Principal, name: String, version: String? = null, block: () -> T): T {
-        actor.requireAdmin()
+    private inline fun <T> admin(
+        actor: Principal, name: String, version: String? = null, authorize: Principal.() -> Unit = { requireAdmin() }, block: () -> T,
+    ): T {
+        actor.authorize()
         SkillArtifacts.validateName(name)
         version?.let(SkillArtifacts::validateVersion)
         return block()

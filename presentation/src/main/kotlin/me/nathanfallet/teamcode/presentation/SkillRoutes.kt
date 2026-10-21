@@ -70,6 +70,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
     }
     put("/api/v1/skills/{name}/pin") {
         val name = call.skillName
+        store.authorizePin(call.principal) // Same order as publication: refuse before reading the body.
         val input = call.boundedJson<PinSkillRequest>(4_096)
         call.respond(store.pin(call.principal, name, input.version).view())
     }
