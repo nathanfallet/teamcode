@@ -168,6 +168,24 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         actor.requireAdmin(); requireCurrent(this, actor)
         (QuotaWindows innerJoin Accounts).select(QuotaWindows.columns).where { Accounts.teamId eq actor.teamId }.map(::quotaRecord)
     }
+    override suspend fun poolAccounts(actor: Principal): List<PoolAccountStatus> = database.query {
+        actor.requireScope(ServiceScope.USAGE_READ); requireCurrent(this, actor)
+        val now = nowMillis()
+        // Interactive administrators only: a service key acts as its owner's member view, like every admin read.
+        val admin = actor.serviceScopes == null && actor.member.role.isAdministrator
+        val visible = if (admin) Op.TRUE else {
+            val policy = readMemberPolicy(this, actor.member.id)
+            val overflow = if (policy.allowSharedOverflow) sharedOverflowBudgets(actor.teamId).keys else emptySet()
+            (Accounts.poolId eq policy.poolId) or (Accounts.poolId inList overflow)
+        }
+        val rows = Accounts.selectAll().where { (Accounts.teamId eq actor.teamId) and visible }
+            .orderBy(Accounts.priority to SortOrder.DESC, Accounts.id to SortOrder.ASC).limit(POOL_ACCOUNTS_LIMIT)
+            .map { accountRecord(it) to it[Accounts.cooldownUntil] }
+        val ids = rows.map { it.first.id }
+        val windows = if (ids.isEmpty()) emptyList() else QuotaWindows.selectAll().where { QuotaWindows.accountId inList ids }.map(::quotaRecord)
+        DescribePoolAccountsUseCase().describe(rows.map { (account, cooldown) -> PoolAccountObservation(account, cooldown, windows.filter { it.accountId == account.id }) }, now, admin,
+            readPacingSettings(actor.teamId).quotaPressureThreshold)
+    }
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = observe(accountId, QuotaUpdate(observations, System.currentTimeMillis()))
     override suspend fun observe(accountId: String, update: QuotaUpdate) = SqlQuotaObservations(database).observe(accountId, update)
     override suspend fun isQuotaExhausted(accountId: String, model: String): Boolean = database.query {
@@ -209,3 +227,5 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     companion object { private const val DAY = 86_400_000L }
 }
 internal fun quotaRecord(row: ResultRow) = AccountQuota(row[QuotaWindows.accountId], row[QuotaWindows.windowName], row[QuotaWindows.utilization], row[QuotaWindows.observedAt], row[QuotaWindows.resetsAt])
+
+private const val POOL_ACCOUNTS_LIMIT = 200

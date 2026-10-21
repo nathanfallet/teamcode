@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import me.nathanfallet.teamcode.api.formatUnits
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -35,11 +36,11 @@ class DashboardNavigationTest {
     }
 
     @Test fun numbersAreGroupedAndMetersAreBounded() {
-        assertEquals("1,234,567", units(1_234_567))
-        assertEquals("333k", compactUnits(333_333))
-        assertEquals("2.5M", compactUnits(2_500_000))
-        assertEquals("950", compactUnits(950))
-        assertEquals("1M", compactUnits(999_999))
+        // The dashboard uses the shared formatter of every surface; its boundaries are covered in the api module.
+        assertEquals("1.2M", formatUnits(1_234_567))
+        assertEquals("333.3K", formatUnits(333_333))
+        assertEquals("950", formatUnits(950))
+        assertEquals("1.0M", formatUnits(999_999))
         assertTrue(meter(10, 0).contains("width:100.0%"))
         assertTrue(meter(0, 0).contains("width:0.0%"))
         assertTrue(meter(200, 100).contains("width:100.0%") && meter(200, 100).contains("danger"))
@@ -79,19 +80,20 @@ class DashboardNavigationTest {
         application { configureGateway(NoInference(), team = team, publicOrigin = "http://localhost", admission = admission) }
         val html = client.get("/dashboard") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertTrue(html.contains("Who consumes what today"))
-        assertTrue(html.contains("of <strong>2,000</strong> credits allocated"), "Disabled members count neither in usage nor in allocation")
-        assertTrue(html.contains("<div class=\"big\">1k</div>"))
+        assertTrue(html.contains("of <strong>2.0K</strong> credits allocated"), "Disabled members count neither in usage nor in allocation")
+        assertTrue(html.contains("<div class=\"big\">1.0K</div>"))
         assertTrue(html.contains("<div class=\"big\">1</div><span class=\"meter-label\">of 1 observed"), "A window whose reset passed is not pressure")
         assertTrue(html.contains("<strong>92%</strong>"))
         assertTrue(html.contains("What remains per pool"))
-        assertTrue(html.contains(">1,000</td>"), "Shared pool: 2,000 budget minus 1,000 used")
+        assertTrue(html.contains(">1.0K</td>"), "Shared pool: 2,000 budget minus 1,000 used")
         val member = client.get("/dashboard") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText()
         assertTrue(member.contains("Your allowance today"))
         assertFalse(member.contains("What remains per pool"))
         assertFalse(member.contains("Accounts close to their limit"))
         val capacity = client.get("/dashboard/capacity") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertTrue(capacity.contains("name=\"weight\"") && capacity.contains("name=\"concurrent\"") && capacity.contains("name=\"overflow\""))
-        assertTrue(capacity.contains("Pool share: <strong>1k/day</strong>"))
+        assertTrue(capacity.contains("Pool share: <strong>1.0K/day</strong>"), "The capacity page uses the shared K/M/B format")
+        assertFalse(Regex(">[0-9]{1,3}(,[0-9]{3})+<").containsMatchIn(capacity), "No full-length credit counts on the capacity page")
         assertTrue(capacity.contains("Disabled members receive no allocation."))
     }
 

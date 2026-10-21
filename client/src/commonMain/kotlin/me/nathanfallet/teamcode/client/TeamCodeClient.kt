@@ -102,6 +102,8 @@ class TeamCodeClient(
         return request("/api/v1/members/$memberId/budget-overrides/$id/revoke", HttpMethod.Post, RevokeBudgetOverrideRequest(reason))
     }
     suspend fun capacity(): CapacityView = request("/api/v1/capacity", HttpMethod.Get)
+    /** Accounts the caller may be routed to; members get neutral labels and never another member's usage. */
+    suspend fun poolAccounts(): List<PoolAccountStatusView> = request("/api/v1/pools/accounts", HttpMethod.Get)
     /** Allocation and shared physical reserves require an interactive administrator. */
     suspend fun saveMemberPolicy(memberId: String, input: PolicyRequest): CapacityView {
         identifier(memberId); return request("/api/v1/members/$memberId/policy", HttpMethod.Patch, input)

@@ -1,5 +1,13 @@
 # Implementation status
 
+## Quota status in the CLI (2026-10-21)
+
+`teamcode status` now adds the caller's own allowance (allocated, used, reserved, remaining, reset, groups, pacing) and the subscription accounts they can be routed to, with 5-hour, weekly and model windows and whether each can serve now; `--json` prints the raw report. `GET /api/v1/pools/accounts` (`usage:read`) serves the accounts: interactive administrators see every account as "Name (email)", members and every service key see only their own pool and opted-in overflow reserves as neutral labels. Usability reuses admission's classification (`AccountUnavailability.of`, shared with the pool refusal of #34) and the team's quota pressure threshold of #39. Credit counts on every CLI and dashboard surface use one shared K/M/B formatter (`formatUnits`). See [capacity](capacity.md#teamcode-status).
+
+The dashboard names accounts with the email on a muted second line where a table or list has room (observed provider windows, subscription accounts) through one `accountCell` helper, and keeps the one-line "Name (email)" in banners, inline text, confirmations, selectors and the CLI.
+
+Local evidence after the rebase onto #33: api 9, client 13, domain 95, infrastructure 134 (MySQL, including the new pool-account persistence test), presentation 55, app 8 and CLI 133 JVM tests pass, as do **114 actual macOS ARM64 native CLI tests**; the native debug binary prints the new `status --help`.
+
 ## 0.1.0 published
 
 [Release 0.1.0](https://github.com/nathanfallet/teamcode/releases/tag/0.1.0) is public, stable and not a draft. Its exact unprefixed tag resolves to `b191c0475f9dcb999c8782ba882558dcfc73b211`. [Publication workflow 39344895836](https://github.com/nathanfallet/teamcode/actions/runs/39344895836) completed successfully: JVM/replica/Helm checks, actual native runtimes and signed installation/bootstrap/automatic-update acceptance on all five targets, multi-architecture image and release publication. Eleven assets include the five executables, both installers, signed metadata/checksums and `teamcode-0.1.0.tgz`. Docker image `nathanfallet/teamcode:0.1.0` has Linux amd64/arm64; ordinary CI 39344892445 also passed and published `latest`.

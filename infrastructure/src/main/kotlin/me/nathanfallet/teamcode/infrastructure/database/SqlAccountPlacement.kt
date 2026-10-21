@@ -1,7 +1,6 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import me.nathanfallet.teamcode.domain.accounts.AccountRecord
-import me.nathanfallet.teamcode.domain.accounts.AccountState
 import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.routing.*
 import me.nathanfallet.teamcode.domain.team.Principal
@@ -72,19 +71,18 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
         val next = mutableListOf<Long>()
         for ((account, cooldown) in pool) {
             val windows = blocking(account)
-            result = when {
-                account.disabled -> result.copy(disabled = result.disabled + 1)
-                account.state == AccountState.PENDING_HANDOVER -> result.copy(pendingHandover = result.pendingHandover + 1)
-                !account.state.canServe -> result.copy(reconnectRequired = result.reconnectRequired + 1)
-                cooldown > now -> { next += cooldown; result.copy(coolingDown = result.coolingDown + 1) }
-                windows.isNotEmpty() -> {
+            result = when (AccountUnavailability.of(account, cooldown, windows.isNotEmpty(), now)) {
+                AccountUnavailability.DISABLED -> result.copy(disabled = result.disabled + 1)
+                AccountUnavailability.PENDING_HANDOVER -> result.copy(pendingHandover = result.pendingHandover + 1)
+                AccountUnavailability.RECONNECT_REQUIRED -> result.copy(reconnectRequired = result.reconnectRequired + 1)
+                AccountUnavailability.COOLING_DOWN -> { next += cooldown; result.copy(coolingDown = result.coolingDown + 1) }
+                AccountUnavailability.QUOTA_EXHAUSTED -> {
                     // An unknown reset stops excluding the account once its observation is too old.
                     next += windows.maxOf { it.resetsAtMillis ?: (it.observedAtMillis + MAX_QUOTA_OBSERVATION_AGE_MILLIS) }
                     result.copy(quotaExhausted = result.quotaExhausted + 1)
                 }
                 // Already refused for this request by the provider, without a recorded cooldown.
-                account.id in input.excludedAccountIds -> result.copy(coolingDown = result.coolingDown + 1)
-                else -> result.copy(busy = result.busy + 1)
+                null -> if (account.id in input.excludedAccountIds) result.copy(coolingDown = result.coolingDown + 1) else result.copy(busy = result.busy + 1)
             }
         }
         result.copy(nextAvailableAt = next.filter { it > now }.minOrNull())
