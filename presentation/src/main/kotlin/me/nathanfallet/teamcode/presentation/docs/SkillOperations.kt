@@ -26,9 +26,12 @@ internal fun ApiCatalog.skillOperations() {
         operationId = "publishSkillVersion"; tag(ApiTags.SKILLS)
         summary = "Publish a skill version"
         description = "Uploads an immutable version (1 to 200 files, at most 5 MiB, `SKILL.md` at the root; the body is " +
-            "bounded at 8 MiB). The first publication creates the skill. Publishing never pins: an administrator " +
-            "approves the version with `PUT /api/v1/skills/{name}/pin`. Republishing the same content is safe (200, " +
-            "`created: false`). A `skills:publish` key must be owned by an administrator, and cannot pin, assign or read the catalog."
+            "bounded at 8 MiB). The first publication creates the skill. With `pin: true`, the version also becomes " +
+            "the delivered one in the same transaction (`version.pinned` confirms it; servers advertising " +
+            "`team.skills.publish-pin.v1` support it). Otherwise an administrator approves it later with " +
+            "`PUT /api/v1/skills/{name}/pin`. Republishing the same content is safe (200, `created: false`), with or " +
+            "without `pin`. A `skills:publish` key must be owned by an administrator; it can publish and pin, but " +
+            "cannot assign or read the catalog."
         parameters { skillName() }
         body<PublishSkillVersionRequest>("The version label and its files, base64-encoded (`mode` is `file` or `executable`).")
         responses {
@@ -43,7 +46,8 @@ internal fun ApiCatalog.skillOperations() {
     put("/api/v1/skills/{name}/pin") {
         operationId = "pinSkillVersion"; tag(ApiTags.SKILLS)
         summary = "Approve a skill version"
-        description = "Pins the version every allowed member receives. Updating and rolling back are both a pin. Administrators only."
+        description = "Pins the version every allowed member receives. Updating and rolling back are both a pin. An " +
+            "administrator, or a `skills:publish` key owned by one; the audit journal names the key."
         parameters { skillName() }
         body<PinSkillRequest>("The version to pin.")
         responses {

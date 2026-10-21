@@ -97,7 +97,8 @@ private fun ApiCatalog.allowanceOperations() {
         operationId = "updateMemberPolicy"; tag(ApiTags.CAPACITY)
         summary = "Set a member's capacity policy"
         description = "Sets the member's pool, weight (their share of the pool's daily budget; 0 grants nothing), hard " +
-            "cap (`dailyUnits`, 0 for none), concurrency and shared-overflow eligibility. Existing spend is kept. " +
+            "cap (`dailyUnits`, 0 for none), concurrency (`maxConcurrent`, 0 to 32; 0, the default, sets no per-member " +
+            "limit, while group and launch limits still apply) and shared-overflow eligibility. Existing spend is kept. " +
             "Administrators only."
         parameters { pathId("id", "The member's identifier.") }
         body<PolicyRequest>("The member's policy.")
@@ -397,7 +398,8 @@ private fun ApiCatalog.guidanceOperations() {
         operationId = "getCurrentDirective"; tag(ApiTags.GUIDANCE)
         summary = "The caller's current pacing directive"
         description = "Advice computed from the quota forecasts: `pace` is `NORMAL`, `SLOW_DOWN`, `CAN_INCREASE` or " +
-            "`PAUSE`, with a suggested concurrency and interval. `directive` is null when there is no advice. Advice " +
+            "`PAUSE`, with a suggested concurrency ceiling (`maxConcurrent`, 0 for no ceiling) and a minimum interval " +
+            "between admissions (`minIntervalMillis`, 0 for none). `directive` is null when there is no advice. Advice " +
             "never grants more allowance."
         responses { ok<DirectiveResponse>("The directive, or null.") }
     }

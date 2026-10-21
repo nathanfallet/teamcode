@@ -126,6 +126,9 @@ class ApiDocsTest {
         assertEquals(emptyList(), security("POST /api/v1/auth/login"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("skills:publish"))),
             security("POST /api/v1/skills/{name}/versions"))
+        assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("skills:publish"))),
+            security("PUT /api/v1/skills/{name}/pin"), "Pinning shares the publication right")
+        assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList<String>())), security("DELETE /api/v1/skills/{name}/pin"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList<String>())), security("GET /api/v1/members"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to emptyList<String>())), security("GET /api/v1/auth/me"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("cloud:write")), mapOf(SERVICE_KEY_SCHEME to listOf("admin:cloud"))),
