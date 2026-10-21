@@ -174,8 +174,9 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         lockTeam(team)
         val now = nowMillis()
         val limit = readQuotaModelLimits(team)[accountId]?.get(model.lowercase())
+        val pressureThreshold = readPacingSettings(team).quotaPressureThreshold
         QuotaWindows.selectAll().where { QuotaWindows.accountId eq accountId }.map(::quotaRecord)
-            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= .95 }
+            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= pressureThreshold }
     }
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) {
         database.query {

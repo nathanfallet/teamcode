@@ -12,7 +12,7 @@ data class ForecastSeries(val quota: AccountQuota, val forecast: QuotaForecast, 
 }
 
 /** A bounded point-in-time administrative view, never an aggregate of subscription percentages. */
-data class ForecastSnapshot(val generatedAtMillis: Long, val accounts: List<ForecastAccount>, val account: ForecastAccount?, val windows: List<ForecastSeries>, val truncated: Boolean, val pressureThreshold: Double = QUOTA_PRESSURE_THRESHOLD)
+data class ForecastSnapshot(val generatedAtMillis: Long, val accounts: List<ForecastAccount>, val account: ForecastAccount?, val windows: List<ForecastSeries>, val truncated: Boolean, val pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD)
 
 /** The implementation revalidates current interactive administrator authority and team ownership. */
 interface ForecastService {
@@ -20,11 +20,11 @@ interface ForecastService {
 }
 
 /** Join the current observation with its retained history without inventing missing samples. */
-class BuildForecastSeriesUseCase {
+class BuildForecastSeriesUseCase(private val threshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD) {
     operator fun invoke(current: AccountQuota, history: List<AccountQuota>, now: Long): ForecastSeries {
         val samples = history.filter { it.accountId == current.accountId && it.window == current.window && it.observedAtMillis < current.observedAtMillis } + current
-        val useCase = ForecastHistoryUseCase()
-        val baseline = ForecastQuotaUseCase().forecast(QuotaObservation(current.utilization, current.observedAtMillis, current.resetsAtMillis), null, now)
+        val useCase = ForecastHistoryUseCase(threshold)
+        val baseline = ForecastQuotaUseCase().forecast(QuotaObservation(current.utilization, current.observedAtMillis, current.resetsAtMillis), null, now, threshold)
         val forecast = if (baseline.state == QuotaForecast.State.STALE) baseline else useCase.evaluate(samples, now)?.forecast ?: baseline
         return ForecastSeries(current, forecast, useCase.segments(samples, now))
     }

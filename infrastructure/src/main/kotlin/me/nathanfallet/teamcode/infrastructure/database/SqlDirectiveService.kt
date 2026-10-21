@@ -14,8 +14,6 @@ import me.nathanfallet.teamcode.domain.team.*
 
 class SqlDirectiveService(private val database: Database) : DirectiveService {
     private val delivery = SqlDirectiveDelivery(database)
-    private val history = ForecastHistoryUseCase()
-    private val pacing = RoutePacingUseCase()
     private val hysteresis = PacingHysteresisUseCase()
     private val observedConcurrency = ObservedConcurrencyUseCase()
     suspend fun update() {
@@ -23,6 +21,9 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
             val c = this
             c.lockTeam("default")
             val now = c.nowMillis()
+            val pressureThreshold = readPacingSettings("default").quotaPressureThreshold
+            val history = ForecastHistoryUseCase(pressureThreshold)
+            val pacing = RoutePacingUseCase(pressureThreshold = pressureThreshold)
             val accounts = Accounts.selectAll().where {
                 (Accounts.teamId eq "default") and (Accounts.disabled eq false) and (Accounts.state inList listOf("READY", "ACCESS_ONLY")) and (Accounts.cooldownUntil lessEq now)
             }.map(::accountRecord)

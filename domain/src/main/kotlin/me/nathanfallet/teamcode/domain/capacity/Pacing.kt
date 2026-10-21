@@ -5,7 +5,7 @@ data class WindowPacing(val quota: AccountQuota, val forecast: QuotaForecast)
 data class PacingAdvice(val pace: Pace, val maxConcurrent: Int, val minIntervalMillis: Long, val message: String)
 data class AgentDirective(val id: String, val memberId: String, val advice: PacingAdvice, val createdAtMillis: Long, val expiresAtMillis: Long)
 
-class ForecastHistoryUseCase {
+class ForecastHistoryUseCase(private val threshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD) {
     /** Curves and rate learning share the same reset, gap and monotonicity boundaries. */
     fun segments(history: List<AccountQuota>, now: Long): List<List<AccountQuota>> {
         val sorted = history.filter { it.observedAtMillis in maxOf(0, now - 3_600_000)..now && it.utilization.isFinite() && it.utilization in 0.0..1.0 }
@@ -36,7 +36,7 @@ class ForecastHistoryUseCase {
             }
             if (monotonic && weight > 0) rate = weighted / weight * 3_600_000
         }
-        return WindowPacing(latest, ForecastQuotaUseCase().forecast(QuotaObservation(latest.utilization, latest.observedAtMillis, latest.resetsAtMillis), rate, now))
+        return WindowPacing(latest, ForecastQuotaUseCase().forecast(QuotaObservation(latest.utilization, latest.observedAtMillis, latest.resetsAtMillis), rate, now, threshold))
     }
 }
 

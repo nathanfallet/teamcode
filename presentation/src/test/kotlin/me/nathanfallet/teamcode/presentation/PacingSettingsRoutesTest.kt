@@ -59,7 +59,7 @@ class PacingSettingsRoutesTest {
             assertTrue(adminPage.contains("Observation only")); assertTrue(adminPage.contains("SLOW_DOWN"))
             assertTrue(adminPage.contains("name=\"observationOnly\" checked")); assertTrue(adminPage.contains("informational during observation mode"))
             val memberPage = client.get("/dashboard/agent-guidance") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText()
-            assertFalse(memberPage.contains("Save controller mode"))
+            assertFalse(memberPage.contains("Save controller settings"))
             for ((origin, csrf) in listOf("https://attacker.test" to "session", "http://localhost" to "wrong")) {
                 assertEquals(HttpStatusCode.Forbidden, client.post("/dashboard/agent-guidance/pacing") {
                     header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, origin)
@@ -82,6 +82,50 @@ class PacingSettingsRoutesTest {
                 bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"observationOnly":"yes"}""")
             }.status)
             assertFalse(sdk.pacingSettings().observationOnly)
+        } finally { sdk.close() }
+    }
+
+    @Test fun quotaPressureThresholdIsBoundedKeptWhenOmittedAndEditableFromTheDashboard() = testApplication {
+        var stored = PacingSettings()
+        val settings = object : PacingSettingsStore {
+            override suspend fun get(actor: Principal): PacingSettings { actor.requireInteractive(); actor.requireReady(); return stored }
+            override suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings { actor.requireAdmin(); stored = settings; return stored }
+        }
+        val directives = object : DirectiveService {
+            override suspend fun current(actor: Principal, sessionId: String?): AgentDirective? = null
+            override suspend fun claim(actor: Principal, sessionId: String, stage: String): DirectiveDelivery? = null
+            override suspend fun acknowledge(actor: Principal, id: String, stage: String, sessionId: String?, claimId: String?) = Unit
+        }
+        val gateway = object : GatewayService {
+            override suspend fun status() = GatewaySnapshot("test", 0, 0)
+            override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = error("No inference expected")
+        }
+        application { configureGateway(gateway, team = FakeTeam(), directives = directives, pacingSettings = settings, publicOrigin = "http://localhost") }
+        val sdk = TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            assertEquals(95, sdk.pacingSettings().quotaPressurePercent)
+            assertEquals(80, sdk.savePacingSettings(PacingSettingsView(false, 80)).quotaPressurePercent)
+            assertEquals(80, sdk.savePacingSettings(PacingSettingsView(true)).quotaPressurePercent, "Omitting the threshold keeps the stored value")
+            for (invalid in listOf(49, 101)) {
+                assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/policy/pacing") {
+                    bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"observationOnly":false,"quotaPressurePercent":$invalid}""")
+                }.status)
+                assertEquals(80, stored.quotaPressurePercent)
+            }
+            val page = client.get("/dashboard/agent-guidance") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+            assertTrue(page.contains("name=\"quotaPressurePercent\" value=\"80\" min=\"50\" max=\"100\""))
+            assertTrue(page.contains("no longer chosen for new requests"))
+            assertFalse(client.get("/dashboard/agent-guidance") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText().contains("quotaPressurePercent"))
+            suspend fun form(value: String) = client.post("/dashboard/agent-guidance/pacing") {
+                header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+                contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=session&quotaPressurePercent=$value")
+            }.status
+            assertEquals(HttpStatusCode.Found, form("70"))
+            assertEquals(70, stored.quotaPressurePercent)
+            for (invalid in listOf("49", "101", "abc", "9.5")) {
+                assertEquals(HttpStatusCode.BadRequest, form(invalid))
+                assertEquals(70, stored.quotaPressurePercent)
+            }
         } finally { sdk.close() }
     }
 }
