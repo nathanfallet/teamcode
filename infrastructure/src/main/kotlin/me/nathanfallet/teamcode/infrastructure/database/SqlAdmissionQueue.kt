@@ -18,7 +18,7 @@ internal class SqlAdmissionQueue(private val database: Database) {
         val policy = readMemberPolicy(this, actor.member.id)
         val memberCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.memberId eq actor.member.id }.count()
         val teamCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.teamId eq actor.teamId }.count()
-        if (memberCount >= 8 || teamCount >= 128) throw TeamFailure("queue_full", 503, "The bounded admission queue is full. Retry shortly.")
+        if (memberCount >= 8 || teamCount >= 128) throw TeamFailure("queue_full", 503, "The TeamCode admission queue is full. Retry shortly.", retryAfterSeconds = 15)
         val id = UUID.randomUUID().toString()
         val turnPool = accountPlacement(actor, policy, input, now).turnPool
         AdmissionWaiters.insert {
@@ -59,7 +59,7 @@ internal fun JdbcTransaction.consumeQueueTurn(actor: Principal, ticket: Admissio
         (AdmissionWaiters.id eq ticket.id) and (AdmissionWaiters.teamId eq actor.teamId) and (AdmissionWaiters.memberId eq actor.member.id) and (AdmissionWaiters.expiresAt greater now)
     }.singleOrNull() ?: throw TeamFailure("queue_expired", 503, "The pending admission lease expired. Retry the request.")
     if (waiter[AdmissionWaiters.poolId] != policy.poolId.orEmpty() || waiter[AdmissionWaiters.provider] != provider || waiter[AdmissionWaiters.runId] != runId) {
-        throw TeamFailure("queue_context_changed", 409, "Your assigned capacity changed while waiting. Submit the request again.")
+        throw TeamFailure("queue_context_changed", 409, "Your assigned capacity changed while waiting. Submit the request again.", retryable = true)
     }
     val turnScope = (AdmissionTurns.teamId eq actor.teamId) and (AdmissionTurns.poolId eq sourcePool) and (AdmissionTurns.provider eq provider)
     val waiters = AdmissionWaiters.selectAll().where {

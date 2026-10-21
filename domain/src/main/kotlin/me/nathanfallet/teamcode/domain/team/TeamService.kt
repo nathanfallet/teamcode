@@ -13,7 +13,14 @@ class LoginSession(val token: String, val principal: Principal, val expiresAt: L
 class NewMember(val member: Member, val temporaryPassword: String) {
     override fun toString() = "NewMember(member=$member, temporaryPassword=[REDACTED])"
 }
-class TeamFailure(val code: String, val status: Int, message: String) : Exception(message)
+/**
+ * A refusal with a public message. [retryAfterSeconds] is when retrying can succeed, when known. [retryable] is false
+ * for a state that waiting will not change soon (an account to hand over, a daily budget used up): clients are then
+ * told not to retry, so the message reaches the user instead of a retry loop. A conflict (409) is final unless its
+ * code says that submitting the same request again can succeed.
+ */
+class TeamFailure(val code: String, val status: Int, message: String, val retryAfterSeconds: Long? = null,
+    val retryable: Boolean = status == 408 || status == 429 || status >= 500) : Exception(message)
 
 /** All authorization and last-administrator invariants belong here or in its transactional adapter. */
 interface TeamService {

@@ -14,6 +14,8 @@ interface ProviderTransport {
     val provider: String
     val protocol: WireProtocol
     suspend fun refresh(previous: ProviderCredentials): ProviderCredentials
+    /** [refresh] plus whatever the token response says about the account, for a transport whose provider says something. */
+    suspend fun renew(previous: ProviderCredentials): RefreshedCredentials = RefreshedCredentials(refresh(previous))
     suspend fun usage(account: AccountRecord, credentials: ProviderCredentials): List<AccountQuota>
     suspend fun usageUpdate(account: AccountRecord, credentials: ProviderCredentials): QuotaUpdate =
         QuotaUpdate(usage(account, credentials), System.currentTimeMillis())

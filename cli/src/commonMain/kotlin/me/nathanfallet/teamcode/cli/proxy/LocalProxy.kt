@@ -8,6 +8,12 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -15,8 +21,11 @@ import me.nathanfallet.teamcode.client.TeamCodeClient
 /** Fixed inference and local guidance routes. No CONNECT or arbitrary destination. */
 fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int = 2 * 1024 * 1024, serviceId: String? = null, serverUrl: String? = null,
     /** False while the upstream credential is unavailable: answer a retryable `503` rather than forward a request bound to be refused. */
-    upstreamReady: (suspend () -> Boolean)? = null) {
+    upstreamReady: (suspend () -> Boolean)? = null,
+    /** Receives the cause of a TeamCode refusal, once per cause for a while (see [RefusalNotices]). */
+    report: ((String) -> Unit)? = null) {
     require(localToken.length >= 32) { "A local proxy token of at least 32 characters is required." }
+    val refusals = RefusalNotices(report)
     routing {
         guidanceHook(client, localToken)
         if (serviceId != null) get("/_teamcode/service") {
@@ -98,15 +107,19 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                             headers["x-teamcode-run-id"] = runId
                         }
                         client.forwardInference(path, body, headers) { upstream ->
-                            listOf("retry-after", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider").forEach { name -> upstream.headers[name]?.let { call.response.header(name, it) } }
+                            RELAYED_HEADERS.forEach { name -> upstream.headers[name]?.let { call.response.header(name, it) } }
                             call.response.header(HttpHeaders.CacheControl, "no-store")
                             call.response.header("X-Accel-Buffering", "no")
+                            val source = upstream.bodyAsChannel()
+                            // A TeamCode refusal is small JSON written by the server, never provider content.
+                            val head = refusals.inspect(upstream.status.value, upstream.headers["x-teamcode-error"], source)
                             // Ktor may schedule the writer after respond returns. Keep the SDK response
                             // scope open until the downstream has actually consumed/cancelled the body.
                             val consumed = CompletableDeferred<Unit>()
                             call.respondBytesWriter(upstream.contentType() ?: ContentType.Application.OctetStream, upstream.status) {
                                 try {
-                                    upstream.bodyAsChannel().copyTo(this)
+                                    if (head.isNotEmpty()) writeFully(head)
+                                    source.copyTo(this)
                                     consumed.complete(Unit)
                                 } catch (error: Throwable) {
                                     consumed.completeExceptionally(error)
@@ -119,6 +132,48 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 }
             }
         }
+    }
+}
+
+private val RELAYED_HEADERS = listOf("retry-after", "x-should-retry", "x-teamcode-error", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider")
+
+/**
+ * Prints the cause of a TeamCode refusal once: agents retry the same refusal many times and often show only a generic
+ * error meanwhile. Each status and code is reported at most once per [interval], whatever other requests sharing the
+ * proxy do meanwhile.
+ */
+internal class RefusalNotices(private val report: ((String) -> Unit)?, private val interval: Duration = 10.minutes,
+    private val clock: TimeSource = TimeSource.Monotonic) {
+    private val lock = Mutex()
+    private val reported = mutableMapOf<String, TimeMark>()
+
+    /** Returns the body bytes it read, which the caller relays before the rest of [body]. */
+    suspend fun inspect(status: Int, code: String?, body: ByteReadChannel): ByteArray {
+        if (report == null || status in 200..299) return ByteArray(0)
+        if (code == null || !CODE.matches(code)) return ByteArray(0)
+        val key = "$status $code"
+        val first = lock.withLock {
+            val last = reported[key]
+            if (last != null && last.elapsedNow() < interval) return@withLock false
+            if (reported.size >= 64) reported.clear()
+            reported[key] = clock.markNow()
+            true
+        }
+        if (!first) return ByteArray(0)
+        val head = body.readRemaining(MAXIMUM_BODY_BYTES.toLong()).readByteArray()
+        val message = if (!body.isClosedForRead) null else try {
+            val error = (Json.parseToJsonElement(head.decodeToString()) as? JsonObject)?.get("error") as? JsonObject
+            (error?.get("message") as? JsonPrimitive)?.takeIf { it.isString }?.content
+        } catch (_: IllegalArgumentException) { null }
+        report("TeamCode answered HTTP $status ($code): ${message?.let(::printable) ?: "see the agent's error."}")
+        return head
+    }
+
+    private fun printable(text: String) = text.map { if (it.isISOControl()) ' ' else it }.joinToString("").trim().take(600)
+
+    private companion object {
+        val CODE = Regex("[a-z_]{1,64}")
+        const val MAXIMUM_BODY_BYTES = 16 * 1024
     }
 }
 

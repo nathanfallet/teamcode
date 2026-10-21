@@ -18,7 +18,7 @@ class PoolAccountStatusTest {
             PoolAccountObservation(account("c", state = AccountState.PENDING_HANDOVER), 0, emptyList()),
             PoolAccountObservation(account("d", state = AccountState.RECONNECT_REQUIRED), 0, emptyList()),
             PoolAccountObservation(account("e"), now + 1_000, listOf(window("e", "seven_day", .99))),
-            PoolAccountObservation(account("f"), now - 1, listOf(window("f", "seven_day", QUOTA_EXHAUSTED_UTILIZATION))),
+            PoolAccountObservation(account("f"), now - 1, listOf(window("f", "seven_day", QUOTA_EXCLUSION))),
             PoolAccountObservation(account("g"), 0, listOf(window("g", "seven_day", .99, resets = now - 1), window("g", "five_hour", .99, resets = null, observed = now - 600_000))),
         ), now, revealIdentity = true)
         assertEquals(listOf("a", "b", "c", "d", "e", "f", "g"), result.map { it.accountId })

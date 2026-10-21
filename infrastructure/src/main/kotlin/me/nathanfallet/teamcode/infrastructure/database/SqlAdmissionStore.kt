@@ -48,17 +48,17 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                 CheckModelPolicyUseCase().check(modelPolicy, it.requestedModel, model, it.targetEffort, null)
             }
             if (ResolveRouteUseCase().resolve(readRoutes(actor.teamId), it.requestedModel, it.protocol) != it.targets) {
-                throw TeamFailure("route_changed", 409, "The configured route changed while waiting. Submit the request again.")
+                throw TeamFailure("route_changed", 409, "The configured route changed while waiting. Submit the request again.", retryable = true)
             }
         }
         val policy = readMemberPolicy(this, actor.member.id)
         val current = readMemberCapacity(this, policy, now, actor.teamId)
-        CheckGroupAdmissionUseCase().check(current.groups, units)
+        CheckGroupAdmissionUseCase().check(current.groups, units, now)
         runId?.let { requireRunAdmission(actor, it, units, now, workload) }
         val scope = affinity?.sessionKey.orEmpty()
         val table = if (scope.isEmpty()) Directives else SessionDirectives
         val directive = table.selectAll().where { (table.memberId eq actor.member.id) and (table.scopeKey eq scope) and (table.expiresAt greater now) }.singleOrNull()
-        if (current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "Your concurrent request limit has been reached.")
+        if (current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "You already have ${policy.maxConcurrent} TeamCode requests running, your concurrent limit. This one can start when one of them finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         if (directive != null && directive[table.minInterval] > 0 && !readPacingSettings(actor.teamId).observationOnly) {
             val session = directive[table.scopeKey].takeIf { it.isNotEmpty() }
             val sessionFilter = session?.let { Reservations.sessionKey eq it } ?: Op.TRUE
@@ -66,18 +66,20 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             val last = Reservations.select(latest).where {
                 (Reservations.memberId eq actor.member.id) and (Reservations.dayNumber eq now / DAY) and (Reservations.units greater 0) and sessionFilter
             }.single()[latest] ?: 0L
-            if (now - last < directive[table.minInterval]) throw TeamFailure("pacing_delay", 429, "Quota burn is high. Wait briefly before the next request.")
+            if (now - last < directive[table.minInterval]) throw TeamFailure("pacing_delay", 429, "TeamCode is spacing out your requests because the pool's subscription quota is burning fast. Retry in a few seconds.", retryAfterSeconds = RetryWindows.secondsUntil(now, last + directive[table.minInterval]))
             val active = if (session == null) current.activeRequests else Reservations.selectAll().where {
                 (Reservations.memberId eq actor.member.id) and sessionFilter and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
             }.count().toInt()
-            if (active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "This session's paced concurrent request limit has been reached.")
+            if (active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "TeamCode is limiting this session's parallel requests because the pool's subscription quota is burning fast. This one can start when another finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         }
-        if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw TeamFailure("member_allowance", 429, "Your daily allowance has insufficient remaining units for this request.")
+        if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it or grant you a temporary budget override.", now, heldByRunningRequests = current.activeRequests > 0)
         val spent = poolSpent(actor.teamId, policy.poolId.orEmpty(), now / DAY)
-        if (units > current.poolDailyUnits - spent) throw TeamFailure("pool_allowance", 429, "This pool's daily team budget has been reserved or consumed.")
+        if (units > current.poolDailyUnits - spent) throw RetryWindows.dailyBudget("pool_allowance", "The daily budget of your TeamCode pool", "An administrator can raise the pool budget.", now,
+            heldByRunningRequests = Reservations.selectAll().where { (Reservations.teamId eq actor.teamId) and (Reservations.state eq "ACTIVE") and
+                (Reservations.expiresAt greater now) and ((Reservations.poolId eq policy.poolId.orEmpty()) or (Reservations.sourcePoolId eq policy.poolId.orEmpty())) }.limit(1).any())
         val placement = accountPlacement(actor, policy, AdmissionInput(units, model, provider, excludedAccountIds, affinity), now)
-        if (ticket != null && placement.chosen == null && placement.hasAvailable) throw TeamFailure("pool_busy", 429, "Eligible accounts are currently serving other requests.")
-        val chosen = placement.chosen ?: throw TeamFailure("pool_unavailable", 429, "No eligible account has free capacity in your authorized pools.")
+        if (ticket != null && placement.chosen == null && placement.hasAvailable) throw TeamFailure("pool_busy", 429, "Every usable account of your TeamCode pool is busy with other requests. Retry in a few seconds.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
+        val chosen = placement.chosen ?: throw DescribePoolUnavailableUseCase().failure(placement.standing ?: PoolStanding(provider), now)
         ticket?.let { consumeQueueTurn(actor, it, policy, provider, now, runId, chosen.poolId.orEmpty()) }
         affinity?.let { affinities.record(this, actor, it, RouteTarget(provider, model), chosen.id, now) }
         val id = UUID.randomUUID().toString()
@@ -191,7 +193,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         val now = nowMillis()
         val limit = readQuotaModelLimits(team)[accountId]?.get(model.lowercase())
         QuotaWindows.selectAll().where { QuotaWindows.accountId eq accountId }.map(::quotaRecord)
-            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= QUOTA_EXHAUSTED_UTILIZATION }
+            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= QUOTA_EXCLUSION }
     }
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) {
         database.query {

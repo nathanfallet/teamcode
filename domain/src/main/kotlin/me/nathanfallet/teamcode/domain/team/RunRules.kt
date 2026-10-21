@@ -11,9 +11,9 @@ class CheckRunAdmissionUseCase {
         if (workload != null && run.workload != workload) throw TeamFailure("run_context_changed", 409, "This workload does not match the registered launch.")
         if (run.policy.paused) throw TeamFailure("run_paused", 403, "New admissions for this run are paused by an administrator.")
         if (run.policy.budgetUnits > 0 && units > run.policy.budgetUnits - run.chargedUnits)
-            throw TeamFailure("run_allowance", 429, "This run has insufficient remaining credits.")
+            throw TeamFailure("run_allowance", 429, "This TeamCode run has used its credit budget. Start a new launch, or ask an administrator to raise the run budget.", retryable = false)
         if (run.policy.maxConcurrent > 0 && run.activeRequests >= run.policy.maxConcurrent)
-            throw TeamFailure("run_concurrency", 429, "This run's concurrency limit has been reached.")
+            throw TeamFailure("run_concurrency", 429, "This TeamCode run already has its maximum of parallel requests. This one can start when one of them finishes.", retryAfterSeconds = 5)
     }
 }
 

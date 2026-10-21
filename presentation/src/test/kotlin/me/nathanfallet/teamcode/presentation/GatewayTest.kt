@@ -7,6 +7,8 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.domain.gateway.*
@@ -68,5 +70,62 @@ class GatewayTest {
             assertEquals(expected, client.post("/v1/messages") { bearerAuth(accessToken); contentType(ContentType.Application.Json); setBody(body) }.status)
         }
         assertEquals(0, gateway.requests)
+    }
+    private class RefusingGateway(private val failure: me.nathanfallet.teamcode.domain.team.TeamFailure) : GatewayService {
+        override suspend fun status() = GatewaySnapshot("fixture", 0, 0)
+        override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = throw failure
+    }
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.refuse(path: String, body: String) = client.post(path) {
+        bearerAuth(accessToken); contentType(ContentType.Application.Json); setBody(body)
+    }
+    @Test fun `an unusable pool reaches Claude Code as a readable Messages error it does not retry`() = testApplication {
+        val failure = me.nathanfallet.teamcode.domain.capacity.DescribePoolUnavailableUseCase()
+            .failure(me.nathanfallet.teamcode.domain.capacity.PoolStanding("anthropic", pendingHandover = 6), System.currentTimeMillis())
+        application { configureGateway(RefusingGateway(failure), accessToken) }
+        val response = refuse("/v1/messages", """{"model":"claude-test","stream":true,"messages":[]}""")
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("false", response.headers["x-should-retry"])
+        assertEquals("pool_unavailable", response.headers["x-teamcode-error"])
+        assertNull(response.headers[HttpHeaders.RetryAfter])
+        assertEquals(ContentType.Application.Json, response.contentType()?.withoutParameters())
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        assertEquals("error", body["type"]!!.jsonPrimitive.content)
+        assertEquals("api_error", body["error"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(failure.message, body["error"]!!.jsonObject["message"]!!.jsonPrimitive.content)
+        assertTrue("6 accounts are waiting for a handover" in failure.message!!)
+    }
+    @Test fun `a daily budget is a billing error with its reset and the Responses envelope for Codex`() = testApplication {
+        val failure = me.nathanfallet.teamcode.domain.capacity.RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "Ask an administrator.", System.currentTimeMillis())
+        application { configureGateway(RefusingGateway(failure), accessToken) }
+        val messages = refuse("/v1/messages", """{"model":"claude-test","stream":true,"messages":[]}""")
+        assertEquals(HttpStatusCode.TooManyRequests, messages.status)
+        assertEquals(failure.retryAfterSeconds.toString(), messages.headers[HttpHeaders.RetryAfter])
+        assertEquals("false", messages.headers["x-should-retry"])
+        val error = kotlinx.serialization.json.Json.parseToJsonElement(messages.bodyAsText()).jsonObject["error"]!!.jsonObject
+        assertEquals("billing_error", error["type"]!!.jsonPrimitive.content)
+        assertEquals(failure.message, error["message"]!!.jsonPrimitive.content)
+
+        val responses = refuse("/v1/responses", """{"model":"gpt-test","stream":true,"input":"hi"}""")
+        assertEquals(HttpStatusCode.TooManyRequests, responses.status)
+        assertEquals(failure.retryAfterSeconds.toString(), responses.headers[HttpHeaders.RetryAfter])
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(responses.bodyAsText()).jsonObject
+        assertNull(body["type"])
+        val openai = body["error"]!!.jsonObject
+        assertEquals("rate_limit_error", openai["type"]!!.jsonPrimitive.content)
+        assertEquals("member_allowance", openai["code"]!!.jsonPrimitive.content)
+        assertEquals(failure.message, openai["message"]!!.jsonPrimitive.content)
+    }
+    @Test fun `a transient refusal stays retryable with its Retry-After`() = testApplication {
+        application { configureGateway(RefusingGateway(me.nathanfallet.teamcode.domain.team.TeamFailure("pool_busy", 429, "Busy.", retryAfterSeconds = 5)), accessToken) }
+        val response = refuse("/v1/messages", """{"model":"claude-test","stream":true,"messages":[]}""")
+        assertEquals(HttpStatusCode.TooManyRequests, response.status)
+        assertEquals("5", response.headers[HttpHeaders.RetryAfter])
+        assertNull(response.headers["x-should-retry"])
+        assertEquals("rate_limit_error", kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        // Request validation on an inference route uses the same envelope and is never retried.
+        val invalid = refuse("/v1/messages", """{"model":"claude-test","messages":[]}""")
+        assertEquals(HttpStatusCode.BadRequest, invalid.status)
+        assertEquals("invalid_request_error", kotlinx.serialization.json.Json.parseToJsonElement(invalid.bodyAsText()).jsonObject["error"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("false", invalid.headers["x-should-retry"])
     }
 }
