@@ -29,7 +29,7 @@ class ServiceKeyRoutesTest {
             authorize(actor, memberId); ServiceKeyService.validate(name, scopes, validDays)
             ServiceKeyService.requireNoExpiryAllowed(validDays, actor.member.role.isAdministrator)
             lastDays = validDays
-            val key = ServiceKey("00000000-0000-0000-0000-${(++creates).toString().padStart(12, '0')}", memberId, name, scopes, 1, if (validDays == null) ServiceKeyService.NO_EXPIRY else 1_000L * validDays)
+            val key = ServiceKey("00000000-0000-0000-0000-${(++creates).toString().padStart(12, '0')}", memberId, name, scopes, 1, if (validDays == null) ServiceKeyService.NO_EXPIRY else 1_000L * validDays, actor.member.id, actor.member.username)
             records[key.id] = key
             lastSecret = "tcsk_" + "synthetic-service-secret".repeat(2) + creates
             return CreatedServiceKey(key, lastSecret)
@@ -167,6 +167,12 @@ class ServiceKeyRoutesTest {
         assertEquals(HttpStatusCode.OK, form.status); assertNull(registry.lastDays)
         val memberCreate = client.post("/api/v1/service-keys") { bearerAuth("member"); contentType(ContentType.Application.Json); setBody("""{"name":"m","scopes":["inference"],"validDays":null}""") }
         assertEquals(HttpStatusCode.BadRequest, memberCreate.status)
+        // An administrator creates a non-expiring key for another member; a member cannot, and the dashboard names the creator.
+        val forMember = client.post("/api/v1/members/member/service-keys") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"name":"support","scopes":["inference"],"validDays":null}""") }
+        assertEquals(HttpStatusCode.Created, forMember.status)
+        assertTrue(forMember.bodyAsText().let { it.contains(""""neverExpires":true""") && it.contains(""""createdBy":""") && it.contains(""""createdByName":""") })
+        val memberDashboard = client.get("/dashboard/members/member/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(memberDashboard.contains("<td>never</td>")); assertTrue(memberDashboard.contains("created by "))
         assertFalse(client.get("/dashboard/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText().contains("""name="never""""))
         val sdk = TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
         try {

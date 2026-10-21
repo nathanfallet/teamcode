@@ -14,6 +14,8 @@ private const val CLOUD_ID = "[a-zA-Z0-9-]{1,36}"
 /** Session, transcript, input and transfer reads open to `cloud:read`; clusters, settings and the access policy are not listed. */
 private val cloudReadPath = Regex("/api/v1/cloud/(profiles|sessions|sessions/$CLOUD_ID(/executions|/events|/events/stream|/messages|/messages/$CLOUD_ID)?|events/stream|transfers|transfers/$CLOUD_ID)")
 private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(pause|resume|transfer|messages|interrupt|attachments|attachments/$CLOUD_ID/renew)|transfers/$CLOUD_ID/(accept|decline|cancel))")
+private val webhookRead = Regex("/api/v1/webhooks(/$CLOUD_ID(/deliveries)?)?")
+private val webhookWrite = Regex("/api/v1/webhooks(/$CLOUD_ID(/test|/rotate-secret)?)?")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
@@ -46,6 +48,9 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && path == "/api/v1/hook-delivery" -> CredentialAction.HOOKS_READ
     method == "GET" && hookArtifactPath.matches(path) -> CredentialAction.HOOKS_READ
     method == "GET" && cloudReadPath.matches(path) -> CredentialAction.CLOUD_READ
+    // Webhooks are team-wide: the service accepts an administrator's login or `admin:cloud` key and refuses the rest.
+    method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ
+    (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE
     else -> CredentialAction.INTERACTIVE

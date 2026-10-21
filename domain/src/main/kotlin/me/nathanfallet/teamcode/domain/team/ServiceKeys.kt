@@ -110,7 +110,8 @@ class AuthorizeCredentialUseCase {
         }
     }
 }
-data class ServiceKey(val id: String, val memberId: String, val name: String, val scopes: Set<ServiceScope>, val createdAt: Long, val expiresAt: Long) {
+/** [createdBy] is the member who created the key (the owner themselves, or an administrator acting for them); null for keys that predate the record. */
+data class ServiceKey(val id: String, val memberId: String, val name: String, val scopes: Set<ServiceScope>, val createdAt: Long, val expiresAt: Long, val createdBy: String? = null, val createdByName: String? = null) {
     /** Keys without expiry store [ServiceKeyService.NO_EXPIRY], so every existing `expires_at > now` check keeps working unchanged. */
     val neverExpires get() = expiresAt == ServiceKeyService.NO_EXPIRY
 }
@@ -125,14 +126,15 @@ interface ServiceKeyService {
         const val LIMIT = 20L
         /** Stored expiry of a key that never expires. */
         const val NO_EXPIRY = Long.MAX_VALUE
-        /** [validDays] null requests a key without expiry, which only an administrator's key may have (see [requireNoExpiryAllowed]). */
+        /** [validDays] null requests a key without expiry, which only an administrator may create, for themselves or for another member (see [requireNoExpiryAllowed]). */
         fun validate(name: String, scopes: Set<ServiceScope>, validDays: Int?) {
             if (name.length !in 1..120 || name.isBlank() || name.any { it.isISOControl() } || scopes.isEmpty() || (validDays != null && validDays !in 1..90))
                 throw TeamFailure("invalid_service_key", 400, "Provide a name, at least one supported scope and a lifetime between 1 and 90 days.")
         }
-        fun requireNoExpiryAllowed(validDays: Int?, ownerIsAdministrator: Boolean) {
-            if (validDays == null && !ownerIsAdministrator)
-                throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can be created without an expiry. Choose a lifetime between 1 and 90 days.")
+        /** A key without expiry is created by an administrator (for themselves or a member), never by a member for themselves. */
+        fun requireNoExpiryAllowed(validDays: Int?, actorIsAdministrator: Boolean) {
+            if (validDays == null && !actorIsAdministrator)
+                throw TeamFailure("invalid_service_key", 400, "Only an administrator can create a key without an expiry. Choose a lifetime between 1 and 90 days.")
         }
     }
 }

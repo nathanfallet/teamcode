@@ -47,7 +47,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
             }
             Members.update({ Members.id eq member.id }) { it[failedLogins] = 0; it[lockedUntil] = 0 }
             Tokens.deleteWhere { (memberId eq member.id) and (expiresAt less now) and serviceScopes.isNull() }
-            if (Tokens.selectAll().where { (Tokens.memberId eq member.id) and Tokens.serviceScopes.isNull() }.count() >= 50) {
+            if (Tokens.select(Tokens.id).where { (Tokens.memberId eq member.id) and Tokens.serviceScopes.isNull() }.count() >= 50) {
                 val oldest = Tokens.select(Tokens.id).where { (Tokens.memberId eq member.id) and Tokens.serviceScopes.isNull() }.orderBy(Tokens.expiresAt).limit(1).single()[Tokens.id]
                 Tokens.deleteWhere { id eq oldest }
             }
@@ -64,7 +64,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
     override suspend fun authenticate(token: String): Principal? {
         if (token.length !in 32..256) return null
         return database.query {
-            (Tokens innerJoin Members).selectAll().where { (Tokens.tokenHash eq Passwords.digest(token)) and (Tokens.expiresAt greater nowMillis()) and (Members.disabled eq false) }
+            (Tokens innerJoin Members).select(principalColumns).where { (Tokens.tokenHash eq Passwords.digest(token)) and (Tokens.expiresAt greater nowMillis()) and (Members.disabled eq false) }
                 .singleOrNull()?.let(::principal)
         }
     }
@@ -132,7 +132,9 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
     } }
     private fun getMember(team: String, id: String): Member = Members.selectAll().where { (Members.teamId eq team) and (Members.id eq id) }.singleOrNull()?.let(::member)
         ?: throw TeamFailure("not_found", 404, "Member not found.")
-    private fun fresh(c: JdbcTransaction, actor: Principal): Principal = (Tokens innerJoin Members).selectAll().where {
+    /** Only the columns a principal needs, so authentication does not depend on columns added to `tokens` for other features. */
+    private val principalColumns = listOf(Members.id, Members.teamId, Members.username, Members.role, Members.isOwner, Members.disabled, Members.mustChangePassword, Tokens.id, Tokens.serviceScopes)
+    private fun fresh(c: JdbcTransaction, actor: Principal): Principal = (Tokens innerJoin Members).select(principalColumns).where {
         (Tokens.id eq actor.tokenId) and (Members.id eq actor.member.id) and (Members.teamId eq actor.teamId) and (Tokens.expiresAt greater c.nowMillis()) and (Members.disabled eq false)
     }.singleOrNull()?.let(::principal) ?: throw denied()
     private fun principal(row: ResultRow) = Principal(member(row), row[Tokens.id], row[Members.teamId], readServiceScopes(row[Tokens.serviceScopes]))

@@ -113,6 +113,29 @@ fun main() {
             }
         }
     }
+    val webhookStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlWebhookStore(it) }
+    val webhookSealer = cipher?.let { me.nathanfallet.teamcode.infrastructure.secrets.CipherSecretSealer(it) }
+    val webhooks = if (webhookStore != null && webhookSealer != null) me.nathanfallet.teamcode.domain.webhooks.WebhookService(webhookStore, webhookSealer) else null
+    val webhookHttp = HttpClient(CIO) {
+        followRedirects = false; expectSuccess = false
+        install(HttpTimeout) { connectTimeoutMillis = 5_000; requestTimeoutMillis = 10_000; socketTimeoutMillis = 10_000 }
+    }
+    if (webhookStore != null && webhookSealer != null) {
+        val work = SqlScheduledWork(database!!)
+        val delivery = me.nathanfallet.teamcode.domain.webhooks.DeliverWebhooksUseCase(webhookStore, webhookSealer, me.nathanfallet.teamcode.infrastructure.webhooks.HttpWebhookSender(webhookHttp))
+        workers.launch {
+            while (isActive) {
+                try {
+                    work.runDue("webhooks/deliver", intervalMillis = 1_000, timeoutMillis = 40_000) { delivery.run() }
+                    work.runDue("webhooks/maintain", intervalMillis = 60_000) { webhookStore.maintain(500) }
+                }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode webhook delivery deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode webhook delivery is temporarily unavailable.") }
+                delay(2_000)
+            }
+        }
+    }
     // Cloud sessions are configured on the dashboard; the former variables only seed an empty database.
     val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also {
         // The seed is a convenience: a database error here is reported and the stored runtime is reread later.
@@ -162,9 +185,9 @@ fun main() {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
-            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers,
+            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
             apiPrices = apiPrices, poolSizing = poolSizing) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); database?.close() }
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); database?.close() }
 }
 
 /**

@@ -151,7 +151,21 @@ class ServiceKeyPersistenceTest {
         assertEquals(setOf(ServiceScope.SKILLS_PUBLISH), actor.serviceScopes)
         // A regular 90-day key is still bounded, and members and keys created for members cannot be unlimited.
         failure("invalid_service_key") { keys.create(admin, admin.member.id, "Too long", setOf(ServiceScope.INFERENCE), 91) }
-        failure("invalid_service_key") { keys.create(admin, colleague.member.id, "Member unlimited", setOf(ServiceScope.INFERENCE), null) }
+        // A member cannot create a non-expiring key, and an administrator-only scope stays refused on a member's key.
+        failure("forbidden") { keys.create(colleague, admin.member.id, "Steal", setOf(ServiceScope.INFERENCE), null) }
+        for (scope in listOf(ServiceScope.ADMIN_CLOUD, ServiceScope.SKILLS_PUBLISH, ServiceScope.TEAM_READ))
+            failure("invalid_service_key") { keys.create(admin, colleague.member.id, "Reserved", setOf(scope), null) }
+        // An administrator can create one for the member; it records who created it and audits the creator and the owner.
+        val support = keys.create(admin, colleague.member.id, "Support app", setOf(ServiceScope.INFERENCE), null)
+        assertTrue(support.metadata.neverExpires)
+        assertEquals(colleague.member.id, support.metadata.memberId)
+        assertEquals(admin.member.id, support.metadata.createdBy); assertEquals("admin", support.metadata.createdByName)
+        assertEquals(support.metadata, SqlServiceKeyService(a).list(admin, colleague.member.id).single { it.id == support.metadata.id })
+        assertEquals(colleague.member.id, SqlTeamService(b).authenticate(support.accessToken)!!.member.id)
+        a.query {
+            val event = AuditEvents.selectAll().where { (AuditEvents.action eq "service_key.created_no_expiry") and (AuditEvents.subjectId eq support.metadata.id) }.single()
+            assertEquals(admin.member.id, event[AuditEvents.actorId]); assertEquals(colleague.member.id, event[AuditEvents.relatedMemberId])
+        }
         failure("invalid_service_key") { keys.create(colleague, colleague.member.id, "Self unlimited", setOf(ServiceScope.INFERENCE), null) }
         val bounded = keys.create(colleague, colleague.member.id, "Member bounded", setOf(ServiceScope.INFERENCE), 90)
         assertFalse(bounded.metadata.neverExpires)
@@ -160,6 +174,11 @@ class ServiceKeyPersistenceTest {
         assertNull(SqlTeamService(a).authenticate(forever.accessToken))
         assertTrue(keys.list(admin).none { it.id == forever.metadata.id })
         keys.revoke(colleague, bounded.metadata.id)
+        // It stops with the member's password, like any other key.
+        team.changePassword(colleague, "no expiry colleague password", "no expiry colleague replaced")
+        assertNull(SqlTeamService(b).authenticate(support.accessToken))
+        val member = team.login("no-expiry-colleague", "no expiry colleague replaced", "test").principal
+        failure("invalid_service_key") { keys.create(member, member.member.id, "Self unlimited again", setOf(ServiceScope.INFERENCE), null) }
     }
     private suspend fun verifyCreationLimit(a: Database, b: Database, password: String) = coroutineScope {
         val admin = SqlTeamService(a).login("admin", password, "Limits").principal

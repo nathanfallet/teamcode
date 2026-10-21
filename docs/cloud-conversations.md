@@ -14,7 +14,7 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Transcript retention setting (`transcriptRetentionDays`, 30 days by default) | Implemented |
 | Idle pause with attachment leases, `initialMessage` on create (`cloud.sessions.initial-message.v1`) | Implemented, see [idle pause](cloud-sessions.md#idle-pause) and [create](cloud-sessions.md#create-request-and-view) |
 | Caller-wide SSE feed: sessions and local runs, per member or team-wide, resumable (`cloud.events.v1`) | Implemented, see [the event feed](#event-feed) |
-| Webhooks (per team or key, HMAC signature, retries) | Planned |
+| Webhooks: team-wide subscriptions, HMAC signature, retries with backoff, delivery log, test button (`team.webhooks.v1`) | Implemented, see [webhooks](webhooks.md) |
 | Transfer: leases removed, unconsumed messages cancelled or kept, `transfer` event | Implemented, see [transfer](cloud-sessions.md#transfer) |
 
 The capabilities are advertised with `cloud.sessions.v1`, while cloud sessions are on in the stored [runtime](cloud-sessions.md#runtime-on-off-runner-image-and-pod-callback).
@@ -146,7 +146,7 @@ Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `clou
 ## Known limits
 
 - The agent runs in its own container under its own UID with no projected token, started by the supervisor there for the runner (see [the runner and the pod](cloud-sessions.md#the-runner-and-the-pod)). Its conversation files live under `/workspace/.agent-home`; a workspace from before this split keeps them in `.home`, so such a session starts a fresh conversation (the transcript is kept).
-- Webhooks are not implemented. The event feed is a stream you hold open; it keeps seven days of history.
+- The event feed keeps seven days of history; a service that cannot hold a stream open uses [webhooks](webhooks.md).
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.
