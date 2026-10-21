@@ -1,6 +1,6 @@
 # Session guidance and delivery
 
-TeamCode sends capacity advice at model boundaries so an agent can reduce optional work when the observed quota burn is high, or increase useful parallel work when fresh capacity supports it. Admission independently enforces budgets and concurrency. An advisory message never authorizes more quota or changes an agent's tool permissions.
+TeamCode sends capacity advice at model boundaries so an agent can reduce optional work when the observed quota burn is high, or increase useful parallel work when fresh capacity supports it. Admission independently enforces budgets and concurrency. Slow-down advice states the number of requests to keep in flight and the gateway's admission gap, from one request every ten seconds when the quota would run out well before reset to half the recent parallelism every two seconds for a slight overshoot (see [capacity](capacity.md#forecasting)). An advisory message never authorizes more quota or changes an agent's tool permissions.
 
 ## Claude integration
 

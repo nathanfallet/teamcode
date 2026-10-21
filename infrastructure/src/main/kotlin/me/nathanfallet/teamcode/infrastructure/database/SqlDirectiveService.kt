@@ -17,6 +17,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
     private val history = ForecastHistoryUseCase()
     private val pacing = RoutePacingUseCase()
     private val hysteresis = PacingHysteresisUseCase()
+    private val observedConcurrency = ObservedConcurrencyUseCase()
     suspend fun update() {
         database.query {
             val c = this
@@ -35,7 +36,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                 }.groupBy { it.accountId to it.window }.mapValues { history.evaluate(it.value, now) }
             val members = (Members leftJoin MemberPolicies).select(Members.id, MemberPolicies.maxConcurrent, MemberPolicies.poolId)
                 .where { (Members.teamId eq "default") and (Members.disabled eq false) }.map {
-                    Triple(it[Members.id], it.getOrNull(MemberPolicies.maxConcurrent) ?: 2, it[MemberPolicies.poolId])
+                    Triple(it[Members.id], it.getOrNull(MemberPolicies.maxConcurrent) ?: UNLIMITED_CONCURRENCY, it[MemberPolicies.poolId])
                 }
             val routes = readRoutes("default")
             val modelPolicy = readModelPolicy("default")
@@ -77,9 +78,20 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         }
                     }
                     val targets = if (valid) active.map { it.target }.toSet() else emptySet()
+                    val previous = table.selectAll().where { (table.memberId eq member) and (table.scopeKey eq scopeKey) }.singleOrNull()?.let { row ->
+                        val old = directiveRecord(row, table)
+                        val recovery = row[table.recoveryPace]?.let { PacingRecovery(Pace.valueOf(it), row[table.recoveryStartedAt] ?: 0L) }
+                        Stored(old, row[table.contextKey], PacingMemory(old.advice, old.expiresAtMillis, recovery), row[table.observedConcurrency])
+                    }
+                    // The peak follows the scope's demand, not its capacity context, so a changed key keeps it.
+                    val running = if (scopeKey.isEmpty()) capacity.activeRequests else Reservations.selectAll().where {
+                        (Reservations.memberId eq member) and (Reservations.sessionKey eq scopeKey) and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
+                    }.count().toInt()
+                    val current = previous?.takeIf { it.directive.expiresAtMillis > now }
+                    val observed = observedConcurrency.next(current?.observed, current?.directive?.advice?.pace, running)
                     val advice = if (runPolicies.truncated && scopedAllowanceAvailable) PacingAdvice(Pace.UNKNOWN, runLimits.maxConcurrent, 0,
                         "Recent launch/session metadata is incomplete. Do not increase parallelism from this signal; server-side limits remain authoritative.")
-                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() })
+                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() }, observed)
                     // A different route, policy, pool, priority or eligible account set must not
                     // inherit optimistic advice (or an old throttle) from another capacity context.
                     val scope = listOf(runLimits.maxConcurrent.toString(), pool.orEmpty(), policy.allowSharedOverflow.toString(), modelPolicy.toString(), valid.toString(), scopedAllowanceAvailable.toString(),
@@ -88,11 +100,6 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         active.map { it.toString() }.sorted().joinToString("\n"),
                         accessible.map { "${it.id}:${it.priority}" }.sorted().joinToString("\n")).joinToString("\n")
                     val key = MessageDigest.getInstance("SHA-256").digest(scope.toByteArray()).joinToString("") { "%02x".format(it) }
-                    val previous = table.selectAll().where { (table.memberId eq member) and (table.scopeKey eq scopeKey) }.singleOrNull()?.let { row ->
-                        val old = directiveRecord(row, table)
-                        val recovery = row[table.recoveryPace]?.let { PacingRecovery(Pace.valueOf(it), row[table.recoveryStartedAt] ?: 0L) }
-                        Stored(old, row[table.contextKey], PacingMemory(old.advice, old.expiresAtMillis, recovery))
-                    }
                     val decision = hysteresis.decide(previous?.takeIf { it.key == key }?.memory, advice, now)
                     val chosen = decision.advice
                     val old = previous?.directive
@@ -104,6 +111,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         it[memberId] = member; it[table.scopeKey] = scopeKey; it[table.id] = id; it[pace] = chosen.pace.name; it[maxConcurrent] = chosen.maxConcurrent
                         it[minInterval] = chosen.minIntervalMillis; it[message] = chosen.message; it[createdAt] = created; it[expiresAt] = now + 180_000
                         it[contextKey] = key; it[recoveryPace] = recovery?.pace?.name; it[recoveryStartedAt] = recovery?.startedAtMillis
+                        it[table.observedConcurrency] = observed
                     }
                 }
             }
@@ -120,7 +128,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
     override suspend fun current(actor: Principal, sessionId: String?): AgentDirective? = delivery.current(actor, sessionId)
     override suspend fun claim(actor: Principal, sessionId: String, stage: String): DirectiveDelivery? = delivery.claim(actor, sessionId, stage)
     override suspend fun acknowledge(actor: Principal, id: String, stage: String, sessionId: String?, claimId: String?) = delivery.acknowledge(actor, id, stage, sessionId, claimId)
-    private data class Stored(val directive: AgentDirective, val key: String?, val memory: PacingMemory)
+    private data class Stored(val directive: AgentDirective, val key: String?, val memory: PacingMemory, val observed: Int?)
     private data class Context(val sessionKey: String, val requested: String, val target: RouteTarget, val routeKey: String, val protocol: String?, val effort: String?, val thinkingTokens: Long?, val accountId: String)
 
 }

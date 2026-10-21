@@ -18,6 +18,6 @@ class CheckGroupAdmissionUseCase {
             throw TeamFailure("group_concurrency", 429, "A group concurrent request limit has been reached.")
         }
     }
-    fun maximum(groups: List<GroupAllowance>, memberMaximum: Int): Int = minOf(memberMaximum,
-        groups.map { it.group.maxConcurrent }.filter { it > 0 }.minOrNull() ?: memberMaximum)
+    /** Zero means neither the member nor any group sets a concurrency limit. */
+    fun maximum(groups: List<GroupAllowance>, memberMaximum: Int): Int = concurrencyCeiling(groups.map { it.group.maxConcurrent } + memberMaximum)
 }

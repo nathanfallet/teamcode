@@ -16,6 +16,8 @@ abstract class DirectiveTable(name: String) : Table(name) {
     val recoveryPace = varchar("recovery_pace", 20).nullable()
     val recoveryStartedAt = long("recovery_started_at").nullable()
     val scopeKey = varchar("scope_key", 64, "ascii_bin").default("")
+    // Recent peak of parallel requests in this scope, which sizes a progressive SLOW_DOWN.
+    val observedConcurrency = integer("observed_concurrency").nullable()
 }
 object Directives : DirectiveTable("directives") {
     override val primaryKey = PrimaryKey(memberId)

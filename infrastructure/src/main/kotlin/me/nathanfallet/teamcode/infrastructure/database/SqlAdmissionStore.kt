@@ -58,7 +58,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         val scope = affinity?.sessionKey.orEmpty()
         val table = if (scope.isEmpty()) Directives else SessionDirectives
         val directive = table.selectAll().where { (table.memberId eq actor.member.id) and (table.scopeKey eq scope) and (table.expiresAt greater now) }.singleOrNull()
-        if (current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "Your concurrent request limit has been reached.")
+        if (policy.maxConcurrent > 0 && current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "Your concurrent request limit has been reached.")
         if (directive != null && directive[table.minInterval] > 0 && !readPacingSettings(actor.teamId).observationOnly) {
             val session = directive[table.scopeKey].takeIf { it.isNotEmpty() }
             val sessionFilter = session?.let { Reservations.sessionKey eq it } ?: Op.TRUE
@@ -70,7 +70,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             val active = if (session == null) current.activeRequests else Reservations.selectAll().where {
                 (Reservations.memberId eq actor.member.id) and sessionFilter and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
             }.count().toInt()
-            if (active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "This session's paced concurrent request limit has been reached.")
+            if (directive[table.maxConcurrent] > 0 && active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "This session's paced concurrent request limit has been reached.")
         }
         if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw TeamFailure("member_allowance", 429, "Your daily allowance has insufficient remaining units for this request.")
         val spent = poolSpent(actor.teamId, policy.poolId.orEmpty(), now / DAY)
@@ -128,7 +128,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     }
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = database.query {
         actor.requireAdmin()
-        if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 1..32 || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")
+        if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 0..MAX_MEMBER_CONCURRENCY || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")
         lockTeam(actor.teamId); requireCurrent(this, actor); ensureMember(actor.teamId, policy.memberId)
         if (PoolBudgets.selectAll().where { (PoolBudgets.teamId eq actor.teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) and (PoolBudgets.sharedOverflow eq true) }.any())
             throw TeamFailure("overflow_primary_pool", 409, "A shared overflow reserve cannot be a member's primary pool.")

@@ -75,6 +75,7 @@ class PacingObservationPersistenceTest {
                     assertNull(controllerB.current(actor, session), "Manual hint paths cannot emit observation advice")
                     assertNull(controllerA.claim(actor, session, "EMITTED_TO_HOOK"))
                     assertNull(controllerB.claim(actor, session, "RECEIVED_BY_CLI"))
+                    admissionA.configure(actor, MemberPolicy(actor.member.id, maxConcurrent = 2))
                     val second = admissionB.reserve(actor, 100, model, affinity = affinity)
                     refusal("member_concurrency") { admissionA.reserve(actor, 1, model, affinity = affinity) }
                     admissionA.configure(actor, MemberPolicy(actor.member.id, maxConcurrent = 3))

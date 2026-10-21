@@ -40,13 +40,57 @@ class ForecastHistoryUseCase {
     }
 }
 
+/**
+ * How far a SLOW_DOWN projection overshoots, from the *affordable share*: the fraction of the current burn rate that
+ * would reach the pressure threshold exactly at reset, `(projected threshold time - now) / (reset - now)`. A window
+ * projected to cross the threshold just before its reset affords almost all of its current rate; one projected to
+ * cross it now affords none. Halving parallelism roughly halves the burn, so each level divides the recently observed
+ * parallelism by the factor that brings that burn back under the threshold, and spaces admissions more as the
+ * overshoot grows:
+ *
+ * | Level    | Affordable share | Concurrent requests            | Minimum interval |
+ * |----------|------------------|--------------------------------|------------------|
+ * | LIGHT    | at least 1/2     | observed parallelism / 2 (≥ 1) | 2 s              |
+ * | MODERATE | 1/4 to 1/2       | observed parallelism / 4 (≥ 1) | 5 s              |
+ * | SEVERE   | under 1/4        | 1                              | 10 s             |
+ *
+ * PAUSE (a window already at the threshold) stays the hard bound: one request and thirty seconds.
+ */
+enum class SlowDownLevel(val minimumAffordableShare: Double, val divisor: Int?, val intervalMillis: Long) {
+    LIGHT(.5, 2, 2_000), MODERATE(.25, 4, 5_000), SEVERE(0.0, null, 10_000);
+    /** Requests this level permits at once; never zero, since a zero limit would mean no limit at all. */
+    fun concurrency(observed: Int): Int = divisor?.let { maxOf(1, (observed.coerceAtLeast(0) + it - 1) / it) } ?: 1
+    companion object {
+        fun of(affordableShare: Double): SlowDownLevel =
+            if (!affordableShare.isFinite()) SEVERE else entries.first { affordableShare >= it.minimumAffordableShare }
+    }
+}
+
+/** The share of the current burn rate that still fits before reset, for a window projected to exhaust first. */
+fun WindowPacing.affordableShare(now: Long): Double? {
+    if (forecast.state != QuotaForecast.State.EXHAUSTS_FIRST) return null
+    val eta = forecast.reachesThresholdAtMillis ?: return null
+    val reset = quota.resetsAtMillis ?: return null
+    if (reset <= now) return null
+    return ((eta - now).coerceAtLeast(0).toDouble() / (reset - now)).coerceIn(0.0, 1.0)
+}
+
+/** Tightening first: a higher pace, then a longer interval, then fewer permitted requests (zero is unlimited). */
+val PACING_STRICTNESS: Comparator<PacingAdvice> = compareBy<PacingAdvice> { when (it.pace) {
+    Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.UNKNOWN -> 2; Pace.SLOW_DOWN -> 3; Pace.PAUSE -> 4
+} }.thenBy { it.minIntervalMillis }.thenByDescending { if (it.maxConcurrent <= 0) Int.MAX_VALUE else it.maxConcurrent }
+
 /** Chooses the least-constrained eligible account, respecting every window on that account. */
 class PacingUseCase {
-    fun advise(accounts: List<List<WindowPacing>>, maximum: Int): PacingAdvice {
-        require(maximum in 1..32)
+    /**
+     * [maximum] is the applicable concurrency limit, zero when none applies. [observedConcurrency] is the scope's
+     * recent peak of parallel requests, used only to size a SLOW_DOWN.
+     */
+    fun advise(accounts: List<List<WindowPacing>>, maximum: Int, now: Long, observedConcurrency: Int = 0): PacingAdvice {
+        require(maximum >= 0 && observedConcurrency >= 0)
         if (accounts.isEmpty()) return advice(Pace.UNKNOWN, maximum)
         val states = accounts.map { windows ->
-            when {
+            val pace = when {
                 windows.any { it.forecast.state == QuotaForecast.State.EXHAUSTED } -> Pace.PAUSE
                 !windows.map { it.quota.window }.containsAll(listOf("five_hour", "seven_day")) -> Pace.UNKNOWN
                 windows.any { it.forecast.state in setOf(QuotaForecast.State.UNKNOWN, QuotaForecast.State.STALE) } -> Pace.UNKNOWN
@@ -54,17 +98,35 @@ class PacingUseCase {
                 windows.all { it.quota.utilization < .5 && it.forecast.state in setOf(QuotaForecast.State.IDLE, QuotaForecast.State.RESET_FIRST) } -> Pace.CAN_INCREASE
                 else -> Pace.NORMAL
             }
+            // The most pressured window of an account bounds what that account can absorb.
+            pace to (windows.mapNotNull { it.affordableShare(now) }.minOrNull() ?: 0.0)
         }
-        val selected = states.minBy { when (it) { Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.SLOW_DOWN -> 2; Pace.UNKNOWN -> 3; Pace.PAUSE -> 4 } }
-        return advice(selected, maximum)
+        val selected = states.minWith(compareBy<Pair<Pace, Double>> { when (it.first) {
+            Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.SLOW_DOWN -> 2; Pace.UNKNOWN -> 3; Pace.PAUSE -> 4
+        } }.thenByDescending { it.second })
+        return advice(selected.first, maximum, SlowDownLevel.of(selected.second), observedConcurrency)
     }
-    internal fun advice(pace: Pace, maximum: Int) = when (pace) {
-        Pace.UNKNOWN -> PacingAdvice(pace, maximum, 0, "Quota observations are missing or stale. Keep current useful work; do not increase parallelism based on this signal.")
-        Pace.NORMAL -> PacingAdvice(pace, maximum, 0, "Consumption is within the observed capacity trajectory. Continue useful work within your team limits.")
-        Pace.SLOW_DOWN -> PacingAdvice(pace, 1, 10_000, "The current burn rate is projected to reach a quota before reset. Reduce optional parallel work and use one request at a time; the gateway enforces a short admission delay.")
-        Pace.CAN_INCREASE -> PacingAdvice(pace, maximum, 0, "Fresh observations show spare capacity. If useful work is already queued, you may increase parallelism up to $maximum. Do not invent work to consume quota.")
-        Pace.PAUSE -> PacingAdvice(pace, 1, 30_000, "Eligible accounts are close to their observed quota threshold. Pause optional work until capacity recovers.")
+    internal fun advice(pace: Pace, maximum: Int, level: SlowDownLevel = SlowDownLevel.SEVERE, observedConcurrency: Int = 0): PacingAdvice = when (pace) {
+        Pace.SLOW_DOWN -> {
+            val permitted = level.concurrency(observedConcurrency).let { if (maximum > 0) minOf(it, maximum) else it }
+            describe(pace, permitted, level.intervalMillis)
+        }
+        Pace.PAUSE -> describe(pace, 1, 30_000)
+        else -> describe(pace, maximum, 0)
     }
+    /** The same advice under a tighter concurrency ceiling (zero keeps the advice's own). */
+    internal fun withCeiling(advice: PacingAdvice, ceiling: Int): PacingAdvice =
+        describe(advice.pace, concurrencyCeiling(listOf(advice.maxConcurrent, ceiling)), advice.minIntervalMillis)
+    private fun describe(pace: Pace, maximum: Int, interval: Long) = PacingAdvice(pace, maximum, interval, when (pace) {
+        Pace.UNKNOWN -> "Quota observations are missing or stale. Keep current useful work; do not increase parallelism based on this signal."
+        Pace.NORMAL -> "Consumption is within the observed capacity trajectory. Continue useful work within your team limits."
+        Pace.SLOW_DOWN -> "The current burn rate is projected to reach a quota before reset. Reduce optional parallel work and " +
+            (if (maximum == 1) "use one request at a time" else "keep at most $maximum requests in flight") +
+            "; the gateway spaces admissions by ${interval / 1000} seconds."
+        Pace.CAN_INCREASE -> "Fresh observations show spare capacity. If useful work is already queued, you may increase parallelism" +
+            (if (maximum > 0) " up to $maximum" else "") + ". Do not invent work to consume quota."
+        Pace.PAUSE -> "Eligible accounts are close to their observed quota threshold. Pause optional work until capacity recovers."
+    })
 }
 
 data class DirectiveDelivery(val directive: AgentDirective, val claimId: String)

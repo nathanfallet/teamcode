@@ -6,6 +6,12 @@
 
 Post-publication acceptance passes (`/tmp/teamcode-0.1.0-public-install.log`): anonymous downloads, exact manifest/source/publisher signature, actual isolated macOS ARM64 bootstrap, native version and signature verification, public release check, no authentication created, exact chart version and bundled/external database rendering. The temporary installation was removed. No user configuration, service or Kubernetes cluster was changed. Broader workstation/load/provider validations remain the explicitly deferred [unfinished V1 brief](v2-validation-handoff.md); the [testing playbook](testing.md) describes reproduction.
 
+## Unlimited member concurrency and progressive slow-down (2026-10-21)
+
+A member's concurrent request limit now defaults to zero, meaning unlimited; administrators can still set 1 to 32 (`member_policies.max_concurrent DEFAULT 0`). Saved policies are not rewritten on upgrade. Without a limit, NORMAL, CAN_INCREASE and UNKNOWN pacing admit parallel requests immediately, bounded only by group/launch limits and two active requests per physical account. SLOW_DOWN is now progressive: the affordable share of the current burn rate before reset selects light (half the observed parallelism, 2 s gap), moderate (a quarter, 5 s) or severe (one request, 10 s). Directive rows store the scope's observed peak parallelism (`observed_concurrency`). PAUSE is unchanged.
+
+Evidence: `ProgressivePacingTest` (domain: levels, bounds, monotonicity, hysteresis between levels, observed peak, zero ceilings) and `ProgressivePacingPersistenceTest` (MySQL 8.4, two pools: upgrade keeps an explicit limit of 2, migration matches the Exposed tables, five simultaneous requests admitted on three accounts with the sixth still bounded by account slots, a light slow-down sized 3 at 2 s enforced at admission, PAUSE at 30 s).
+
 ## V1 validation pass on the post-release main (2026-10-20)
 
 A post-release pass ran on `1726630` (macOS 27.0.1 ARM64, JDK 21, Docker Desktop; Claude Code 2.1.303, Codex 0.163.0). The full local build and test suite passed (`BUILD SUCCESSFUL in 8m 43s`), as did every provider-free native smoke, the default user-service fixture, the real-client Claude and Codex guidance smokes, the agent-run registry and live forecast browser fixtures, `check-helm.py` (also against the downloaded `teamcode-0.1.0.tgz`, including `image.tag=0.1.0`) and a public `install.sh` installation of 0.1.0 on a clean home and into a custom root containing spaces and non-ASCII characters. All provider traffic was synthetic.
