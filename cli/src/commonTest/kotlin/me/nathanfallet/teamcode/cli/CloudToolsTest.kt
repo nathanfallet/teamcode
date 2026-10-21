@@ -189,6 +189,21 @@ class CloudToolsTest {
         return starts.firstOrNull()
     }
 
+    @Test fun claudeSessionsStartWithTheInstalledTeamHooksInTheirSettings() = runTest {
+        val hook = CloudHook("stop-guard", HookDefinitionView(listOf("Stop"), command = "bin/guard.sh", timeoutSeconds = 30))
+        val tools = object : AgentTools {
+            override suspend fun prepare(agent: String) = listOf("tracker")
+            override suspend fun hooks(agent: String) = if (agent == "claude") listOf(hook) else emptyList()
+        }
+        val (claude, _) = assertNotNull(started("claude", AgentInferenceEndpoint(41234, "l".repeat(64)), tools))
+        assertEquals("--settings", claude.arguments[0], "Settings go first, away from the variadic --mcp-config")
+        val stop = Json.parseToJsonElement(claude.arguments[1]).jsonObject["hooks"]!!.jsonObject["Stop"]!!.jsonArray.single().jsonObject
+        assertEquals("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'", stop["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content)
+        assertTrue("--mcp-config" in claude.arguments)
+        val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, "l".repeat(64)), tools))
+        assertTrue("--settings" !in codex.arguments)
+    }
+
     @Test fun teamMcpServersAreConnectedThroughTheProxyForBothAgents() = runTest {
         val local = "l".repeat(64)
         val calls = mutableListOf<String>()
