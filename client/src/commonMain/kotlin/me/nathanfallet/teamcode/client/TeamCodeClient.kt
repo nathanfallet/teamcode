@@ -459,6 +459,15 @@ class TeamCodeClient(
         return request("/api/v1/skill-delivery/$name/$version", HttpMethod.Get)
     }
 
+    /** The team hooks the signed-in member is currently allowed to install: name, approved version, digest and definition. */
+    suspend fun hookManifest(): HookManifestView = request("/api/v1/hook-delivery", HttpMethod.Get)
+
+    /** The files of one effective hook version; fails with `404` once it is no longer the approved version. */
+    suspend fun hookArtifact(name: String, version: String): HookArtifactView {
+        require(SKILL_NAME.matches(name) && name.length <= 64 && SKILL_VERSION.matches(version)) { "Invalid hook name or version." }
+        return request("/api/v1/hook-delivery/$name/$version", HttpMethod.Get)
+    }
+
     /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
     suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
 
