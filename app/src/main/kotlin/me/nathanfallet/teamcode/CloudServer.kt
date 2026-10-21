@@ -99,7 +99,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             // Messages sent while a session was pausing wake it once paused; inputs of ended sessions are cancelled.
             while (isActive) {
-                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                // Waking a paused session for a queued message is a resume: not while cloud sessions are off.
+                if (!managing() || !runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 try { conversationService.wakePending(); conversationStore.cancelEnded(50) }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { System.err.println("TeamCode cloud message delivery is temporarily unavailable (${describe(error)}).") }

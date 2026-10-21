@@ -172,7 +172,7 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `GET /cloud/transfers` | `direction=incoming\|outgoing\|all`, `scope=team` (administrators), `state` (repeatable), `session`, `before`, `limit` â‰¤ 50 | Both members, administrator | Implemented |
 | `GET /cloud/transfers/{id}`; `POST .../accept` (`{resume?}`), `.../decline`, `.../cancel` | Read and decide | Recipient (accept, decline), former owner (cancel an offer), administrator (all) | Implemented |
 
-While cloud sessions are off, the requests that start new work answer `404` after authentication: creating a session, resuming, sending a message, attaching, offering or accepting a transfer, and starting a GitHub link (device flow, web flow and its callback), whatever the path spelling (the gate reads the path the way routing matches it). Reading, pausing, interrupting and deleting sessions, declining or cancelling transfers, unlinking GitHub, configuration and the runner channel stay available, so existing sessions can always be stopped and running pods keep their channel. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
+While cloud sessions are off, the requests that start new work answer `404` after authentication: creating a session, resuming, sending a message, attaching, offering or accepting a transfer, and starting a GitHub link (device flow, web flow and its callback), whatever the path spelling (the gate reads the path the way routing matches it). Reading, pausing, interrupting and deleting sessions, declining or cancelling transfers, unlinking GitHub, configuration and the runner channel stay available, so existing sessions can always be stopped and running pods keep their channel. A session that was already starting when cloud sessions were turned off finishes starting; queued messages do not wake paused sessions while they are off. The runner channel answers only once a runtime is stored, so a server that never used cloud sessions exposes none of it. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
 
 ### Create request and view
 
@@ -451,7 +451,7 @@ Then save the App id, client id, client secret and private key on **Dashboard â†
 
 ### Routes under `/api/v1/github`
 
-Advertised by `github.link.v1` whenever the server has a database; while cloud sessions are off, starting a new link answers `404`, and reading or removing one's own link still works. Interactive logins only: service and CI keys are refused.
+Advertised by `github.link.v1` while cloud sessions are on. While they are off, starting a new link answers `404`; reading and removing one's own link still work (`GET`/`DELETE /github/link`, and the dashboard's GitHub page for a member who has a link). Interactive logins only: service and CI keys are refused.
 
 | Route | Purpose | Authorization |
 | --- | --- | --- |
@@ -498,7 +498,7 @@ The deployment carries no cloud, GitHub or Kubernetes setting: the [Helm chart](
 | Field | Default | Purpose |
 | --- | --- | --- |
 | On | off | Whether cloud sessions can be started. Off: members see no cloud page, `cloud.*` capabilities are not advertised, and the requests that start new work (create, resume, message, attach, transfer, new GitHub link) answer `404`; reading, pausing, interrupting and deleting existing sessions and unlinking GitHub stay available through the API. Sessions that already exist are not abandoned: the runner channel stays open and the reconciler, garbage collection and maintenance keep running (idle pause, retention, deletion), so a running agent is never killed by the switch. The workers start once a runtime is stored |
-| Runner image | (none) | Image holding the `teamcode` Linux binary and `cp`, copied into each session pod. Required to turn cloud sessions on. Pin it by digest (`image@sha256:...`); it is pulled with the profile's `imagePullSecrets`, so host it publicly or where those secrets reach |
+| Runner image | (none) | Image holding the `teamcode` Linux binary and `cp`, copied into each session pod. Required to turn cloud sessions on; once stored it can be replaced, never removed, since existing sessions need it to resume. While one is stored, the effective callback origin must be usable, on or off. Pin it by digest (`image@sha256:...`); it is pulled with the profile's `imagePullSecrets`, so host it publicly or where those secrets reach |
 | Runner binary | `/usr/local/bin/teamcode` | Path of the binary in that image |
 | Server URL for pods | the public URL | HTTPS origin the runner calls, reachable from the cluster. Turning cloud sessions on is refused while the effective origin is not HTTPS or is loopback |
 | Workspace access mode | `ReadWriteOncePod` | `ReadWriteOnce` for drivers without `ReadWriteOncePod` |

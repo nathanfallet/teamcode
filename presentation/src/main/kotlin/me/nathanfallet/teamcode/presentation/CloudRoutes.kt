@@ -68,16 +68,25 @@ private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifie
  * (empty segments skipped, each segment percent-decoded); a segment that cannot be decoded is refused.
  */
 internal fun cloudStartsWork(method: String, path: String): Boolean {
-    val segments = path.split('/').filter { it.isNotEmpty() }.map { segment ->
-        try { segment.decodeURLPart() } catch (_: Exception) { return true }
-    }
-    fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == pattern[it] }
-    if (method == "POST" && (matches("api", "v1", "cloud", "sessions") || matches("api", "v1", "cloud", "sessions", "*", "resume") ||
-            matches("api", "v1", "cloud", "sessions", "*", "messages") || matches("api", "v1", "cloud", "sessions", "*", "attachments") ||
-            matches("api", "v1", "cloud", "sessions", "*", "transfer") || matches("api", "v1", "cloud", "transfers", "*", "accept"))) return true
-    if (segments.size > 4 && segments.take(4) == listOf("api", "v1", "github", "link")) return true
-    return matches("dashboard", "github", "link") || matches("dashboard", "github", "callback")
+    // null marks a segment that cannot be decoded: it matches anything, so a malformed spelling of a gated route is
+    // refused, while malformed paths elsewhere are left to routing.
+    val segments = path.split('/').filter { it.isNotEmpty() }.map { segment -> try { segment.decodeURLPart() } catch (_: Exception) { null } }
+    fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == null || segments[it] == pattern[it] }
+    fun under(vararg prefix: String) = segments.size > prefix.size && prefix.indices.all { segments[it] == null || segments[it] == prefix[it] }
+    return (method == "POST" && WORK_ROUTES.any { matches(*it) }) || under("api", "v1", "github", "link") ||
+        matches("dashboard", "github", "link") || matches("dashboard", "github", "callback")
 }
+
+/** Every `POST` that starts or keeps up new cloud work; reads, pauses, interrupts and deletions are not listed on purpose. */
+private val WORK_ROUTES = listOf(
+    arrayOf("api", "v1", "cloud", "sessions"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "resume"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "messages"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "attachments"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "attachments", "*", "renew"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "transfer"),
+    arrayOf("api", "v1", "cloud", "transfers", "*", "accept"),
+)
 
 private fun CloudRuntime.view(runtime: CloudRuntimeService) = CloudRuntimeView(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode, runtime.serverUrl(this), updatedAt)
 private fun CloudRuntimeView.domain() = CloudRuntime(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode)

@@ -68,6 +68,9 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
         actor.requireAdmin()
         val normalized = normalize(runtime)
         validate(normalized, publicOrigin)
+        // Sessions created with an image keep needing one to resume: it can be replaced, never removed.
+        if (normalized.runnerImage == null && store.runtime(actor).runnerImage != null)
+            throw TeamFailure("invalid_cloud_runtime", 400, "The runner image can be replaced but not removed: existing sessions need it to start their pods.")
         return store.saveRuntime(actor, normalized, expectedUpdatedAt).also { saved -> synchronized(this) { cached = saved } }
     }
 
@@ -118,9 +121,9 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
             if (!binary.matches(runtime.runnerBinary) || ".." in runtime.runnerBinary) invalid("Use an absolute path for the runner binary, without spaces or dot segments.")
             if (runtime.workspaceAccessMode !in CloudRuntime.ACCESS_MODES) invalid("Use ReadWriteOncePod or ReadWriteOnce.")
             runtime.serverUrl?.let { if (!usableOrigin(it)) invalid("Use the HTTPS origin session pods reach, not a loopback address.") }
-            if (!runtime.enabled) return
-            if (runtime.runnerImage == null) invalid("Set the runner image before enabling cloud sessions.")
-            if (!usableOrigin(runtime.serverUrl ?: publicOrigin))
+            if (runtime.enabled && runtime.runnerImage == null) invalid("Set the runner image before enabling cloud sessions.")
+            // A stored image means pods may be built from it, on or off: their callback origin must work.
+            if (runtime.runnerImage != null && !usableOrigin(runtime.serverUrl ?: publicOrigin))
                 invalid("Session pods need an HTTPS callback origin: set the server URL for pods, since the public URL is not HTTPS or is loopback.")
         }
 
@@ -133,8 +136,9 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
             // Only literal addresses are parsed, so no name is ever resolved here.
             val literal = ':' in host || host.all { it.isDigit() || it == '.' }
             if (!literal) return true
-            // Short numeric spellings (2130706433, 127.1) are refused rather than decoded.
-            if (':' !in host && host.split('.').let { parts -> parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 } }) return false
+            // Short numeric spellings (2130706433, 127.1) and out-of-range octets are refused rather than handed to the
+            // resolver, which would look them up as names.
+            if (':' !in host && host.split('.').let { parts -> parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 || it.toInt() > 255 } }) return false
             val address = try { java.net.InetAddress.getByName(host) } catch (_: Exception) { return false }
             return !address.isLoopbackAddress && !address.isAnyLocalAddress
         }

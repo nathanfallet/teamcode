@@ -31,6 +31,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
     val cloudOn: () -> Boolean = { cloudRuntime?.enabled ?: true }
+    // The runner channel answers only once a runtime is stored: a server that never used cloud sessions exposes none of it.
+    val cloudManaged: () -> Boolean = { cloudRuntime == null || cloudRuntime.current.updatedAt != null }
     attributes.put(CLOUD_ENABLED, cloudOn)
     install(io.ktor.server.resources.Resources)
     install(ContentNegotiation) { json(Serialization.json) }
@@ -102,6 +104,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         // After authentication, so the state is not disclosed to anonymous callers: while cloud sessions are off, only
         // requests that start new work are refused; reading, stopping and configuring stay available.
         if (!cloudOn() && !call.response.isCommitted && cloudStartsWork(call.request.httpMethod.value, path)) throw TeamFailure("not_found", 404, "Cloud sessions are turned off on this server.")
+        if (!cloudManaged() && !call.response.isCommitted && path.startsWith(RUNNER_PATH)) throw TeamFailure("not_found", 404, "Not found.")
     }
     // The menu mirrors the route registrations below, so it never links to a page this server does not serve.
     attributes.put(DASHBOARD_FEATURES, buildSet {
@@ -180,16 +183,18 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
                     (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else emptyList()) +
+                    (if (team != null && cloudOn()) listOfNotNull<List<String>>(
+                        if (cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else null,
+                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else null,
+                        if (cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else null,
+                        if (cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1") else null,
+                        if (cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else null,
+                        if (cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else null,
+                        if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else null,
+                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else null,
+                    ).flatten() else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
-                    (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
+                    (if (team != null && cloudOn() && github != null) listOf("github.link.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()
