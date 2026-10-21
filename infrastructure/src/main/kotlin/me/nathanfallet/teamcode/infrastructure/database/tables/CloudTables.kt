@@ -63,6 +63,19 @@ object CloudSettingsTable : Table("cloud_settings") {
     val transferPendingInputs = varchar("transfer_pending_inputs", 16).default("cancel")
     override val primaryKey = PrimaryKey(teamId)
 }
+/** Whether cloud sessions run and how their pods are built; no row until an administrator or the initial seed saves it. */
+object CloudRuntimeTable : Table("cloud_runtime") {
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_runtime_team")
+    val enabled = bool("enabled")
+    val runnerImage = varchar("runner_image", 512).nullable()
+    val runnerBinary = varchar("runner_binary", 256)
+    /** Null: session pods call the server's public URL. */
+    val serverUrl = varchar("server_url", 512).nullable()
+    val workspaceAccessMode = varchar("workspace_access_mode", 32)
+    val updatedBy = varchar("updated_by", 36)
+    val updatedAt = long("updated_at")
+    override val primaryKey = PrimaryKey(teamId)
+}
 object CloudSessions : Table("cloud_sessions") {
     val id = varchar("id", 36)
     val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_team")

@@ -8,15 +8,21 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB }
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB,
+    /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
+    CLOUD_RUNNING }
 
 internal val DASHBOARD_FEATURES = AttributeKey<Set<DashboardFeature>>("teamcode.dashboard.features")
+/** Whether cloud sessions are enabled, read on every page so a dashboard change shows at once. */
+internal val CLOUD_ENABLED = AttributeKey<() -> Boolean>("teamcode.cloud.enabled")
 
 /**
  * One menu entry. [description] is the one-sentence purpose shown under the page title. Administrator-only entries mirror
  * the authorization the routes and services already enforce; hiding a link never replaces that enforcement.
  */
-internal data class DashboardLink(val path: String, val label: String, val description: String, val feature: DashboardFeature? = null, val adminOnly: Boolean = false)
+internal data class DashboardLink(val path: String, val label: String, val description: String, val feature: DashboardFeature? = null, val adminOnly: Boolean = false,
+    /** A feature members (not administrators) also need to see the link. */
+    val memberFeature: DashboardFeature? = null)
 internal data class DashboardSection(val label: String, val links: List<DashboardLink>)
 
 internal val OVERVIEW_LINK = DashboardLink("/dashboard", "Overview", "Today's consumption, remaining pool budgets, accounts close to their limits and running sessions at a glance.")
@@ -47,8 +53,8 @@ internal val DASHBOARD_MENU = listOf(
     )),
     DashboardSection("Settings", listOf(
         SETTINGS_LINK,
-        DashboardLink("/dashboard/cloud", "Cloud sessions", "Retention, per-member limits and transfers of cloud sessions.", DashboardFeature.CLOUD, adminOnly = true),
-        DashboardLink("/dashboard/github", "GitHub", "Link your GitHub account for cloud sessions.", DashboardFeature.GITHUB),
+        DashboardLink("/dashboard/cloud", "Cloud sessions", "Turn cloud sessions on, choose the runner image, connect Kubernetes clusters, and set retention, limits and transfers.", DashboardFeature.CLOUD, adminOnly = true),
+        DashboardLink("/dashboard/github", "GitHub", "The team's GitHub App, and the GitHub account your cloud sessions use.", DashboardFeature.GITHUB, memberFeature = DashboardFeature.CLOUD_RUNNING),
         DashboardLink("/dashboard/devices", "Devices", "The computers signed in to your account, and their sessions.", DashboardFeature.DEVICES),
         DashboardLink("/dashboard/service-keys", "Service keys", "Scoped keys for CI and services, sharing your quotas.", DashboardFeature.SERVICE_KEYS),
         DashboardLink("/dashboard/password", "Password", "Change your password; every device is signed out."),
@@ -56,9 +62,14 @@ internal val DASHBOARD_MENU = listOf(
 )
 
 internal fun DashboardLink.visibleTo(principal: Principal, features: Set<DashboardFeature>) =
-    (feature == null || feature in features) && (!adminOnly || principal.member.role.isAdministrator)
+    (feature == null || feature in features) && (!adminOnly || principal.member.role.isAdministrator) &&
+        (memberFeature == null || memberFeature in features || principal.member.role.isAdministrator)
 
-internal fun ApplicationCall.dashboardFeatures(): Set<DashboardFeature> = application.attributes.getOrNull(DASHBOARD_FEATURES).orEmpty()
+internal fun ApplicationCall.dashboardFeatures(): Set<DashboardFeature> {
+    val installed = application.attributes.getOrNull(DASHBOARD_FEATURES).orEmpty()
+    return if (cloudEnabled()) installed + DashboardFeature.CLOUD_RUNNING else installed
+}
+internal fun ApplicationCall.cloudEnabled(): Boolean = application.attributes.getOrNull(CLOUD_ENABLED)?.invoke() != false
 
 /** The menu entry a path belongs to: the longest matching prefix, so detail pages keep their section highlighted. */
 internal fun activeLink(path: String): DashboardLink? = (listOf(OVERVIEW_LINK) + DASHBOARD_MENU.flatMap { it.links })

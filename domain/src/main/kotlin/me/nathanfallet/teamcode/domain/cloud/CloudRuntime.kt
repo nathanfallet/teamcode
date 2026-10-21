@@ -1,0 +1,109 @@
+package me.nathanfallet.teamcode.domain.cloud
+
+import kotlinx.coroutines.CancellationException
+import me.nathanfallet.teamcode.domain.team.*
+
+/**
+ * Whether cloud sessions run on this server, and how their pods are built. Administrators edit it on the dashboard or
+ * through `PUT /api/v1/cloud/runtime`; the database is the source of truth. Deployment variables only seed it once.
+ *
+ * @param runnerImage the image holding the `teamcode` Linux binary at [runnerBinary], copied into each session pod.
+ * @param serverUrl the HTTPS origin session pods call back; null uses the server's public URL.
+ * @param workspaceAccessMode `ReadWriteOncePod`, or `ReadWriteOnce` for storage drivers without it.
+ */
+data class CloudRuntime(
+    val enabled: Boolean = false,
+    val runnerImage: String? = null,
+    val runnerBinary: String = DEFAULT_RUNNER_BINARY,
+    val serverUrl: String? = null,
+    val workspaceAccessMode: String = DEFAULT_ACCESS_MODE,
+    /** When an administrator (or the initial seed) last saved it; null while nothing is stored. */
+    val updatedAt: Long? = null,
+) {
+    companion object {
+        const val DEFAULT_RUNNER_BINARY = "/usr/local/bin/teamcode"
+        const val DEFAULT_ACCESS_MODE = "ReadWriteOncePod"
+        val ACCESS_MODES = setOf("ReadWriteOncePod", "ReadWriteOnce")
+    }
+}
+
+interface CloudRuntimeStore {
+    suspend fun runtime(actor: Principal): CloudRuntime
+    suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime): CloudRuntime
+    /** The stored runtime of the server's team, for the background workers; the defaults (disabled) without a row. */
+    suspend fun current(): CloudRuntime
+    /** Stores [initial] only when nothing was ever stored, and returns what is stored. */
+    suspend fun seed(initial: CloudRuntime): CloudRuntime
+}
+
+/**
+ * The cloud runtime, cached for request paths and workers. [refresh] rereads the database, so a change saved on one
+ * replica reaches the others within one refresh interval, without a restart.
+ */
+class CloudRuntimeService(private val store: CloudRuntimeStore, private val publicOrigin: String) {
+    @Volatile private var cached = CloudRuntime()
+
+    /** The last runtime read or saved by this replica. */
+    val current: CloudRuntime get() = cached
+    val enabled: Boolean get() = cached.enabled
+
+    /** The origin pods call back: the stored one, or the server's public URL. */
+    fun serverUrl(runtime: CloudRuntime = cached) = runtime.serverUrl ?: publicOrigin
+
+    suspend fun refresh(): CloudRuntime = store.current().also { cached = it }
+
+    suspend fun get(actor: Principal): CloudRuntime { actor.requireAdmin(); return store.runtime(actor) }
+
+    suspend fun save(actor: Principal, runtime: CloudRuntime): CloudRuntime {
+        actor.requireAdmin()
+        val normalized = normalize(runtime)
+        validate(normalized, publicOrigin)
+        return store.saveRuntime(actor, normalized).also { cached = it }
+    }
+
+    /**
+     * Seeds the runtime from the former deployment variables. An invalid seed is stored disabled, with a reason, so the
+     * server still starts and the administrator fixes it on the dashboard.
+     */
+    suspend fun seed(initial: CloudRuntime?, warn: (String) -> Unit = {}): CloudRuntime {
+        val candidate = initial?.let(::normalize)
+        val stored = if (candidate == null) store.current() else {
+            val usable = try { validate(candidate, publicOrigin); candidate }
+                catch (error: CancellationException) { throw error }
+                catch (error: TeamFailure) { warn(error.message ?: "Invalid cloud runtime."); candidate.copy(enabled = false) }
+            store.seed(usable)
+        }
+        cached = stored
+        return stored
+    }
+
+    companion object {
+        private val image = Regex("[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,511}")
+        private val binary = Regex("/[A-Za-z0-9._/+-]{1,255}")
+        private val httpsOrigin = Regex("https://[^/?#@\\s]+/?")
+        private val loopback = Regex("https://(localhost|127\\.[0-9.]+|\\[::1])(:[0-9]+)?/?")
+
+        fun normalize(runtime: CloudRuntime) = runtime.copy(
+            runnerImage = runtime.runnerImage?.trim()?.takeIf { it.isNotEmpty() },
+            runnerBinary = runtime.runnerBinary.trim().ifEmpty { CloudRuntime.DEFAULT_RUNNER_BINARY },
+            serverUrl = runtime.serverUrl?.trim()?.takeIf { it.isNotEmpty() },
+            workspaceAccessMode = runtime.workspaceAccessMode.trim().ifEmpty { CloudRuntime.DEFAULT_ACCESS_MODE },
+        )
+
+        /** A disabled runtime may stay incomplete; enabling it needs a runner image and an HTTPS origin pods can reach. */
+        fun validate(runtime: CloudRuntime, publicOrigin: String) {
+            fun invalid(message: String): Nothing = throw TeamFailure("invalid_cloud_runtime", 400, message)
+            runtime.runnerImage?.let { if (!image.matches(it) || ".." in it) invalid("Use an image reference such as registry/teamcode-runner@sha256:..., without spaces.") }
+            if (!binary.matches(runtime.runnerBinary) || ".." in runtime.runnerBinary) invalid("Use an absolute path for the runner binary, without spaces or dot segments.")
+            if (runtime.workspaceAccessMode !in CloudRuntime.ACCESS_MODES) invalid("Use ReadWriteOncePod or ReadWriteOnce.")
+            runtime.serverUrl?.let { if (!usableOrigin(it)) invalid("Use the HTTPS origin session pods reach, not a loopback address.") }
+            if (!runtime.enabled) return
+            if (runtime.runnerImage == null) invalid("Set the runner image before enabling cloud sessions.")
+            if (!usableOrigin(runtime.serverUrl ?: publicOrigin))
+                invalid("Session pods need an HTTPS callback origin: set the server URL for pods, since the public URL is not HTTPS or is loopback.")
+        }
+
+        /** The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server. */
+        fun usableOrigin(url: String) = url.length <= 512 && httpsOrigin.matches(url) && !loopback.matches(url)
+    }
+}

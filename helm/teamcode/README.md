@@ -60,6 +60,8 @@ The chart does not issue TLS certificates. Supply the TLS secret using your exis
 
 The creating pod logs the initial `admin` temporary password exactly once. Find it with the command printed by Helm, sign in at `/dashboard`, and replace it. Administrators create team members; there is no public registration.
 
+The chart carries no cloud, GitHub or Kubernetes setting, and none belongs in `extraEnv`. Cloud sessions (on or off, runner image, Kubernetes clusters) and the team's GitHub App are configured by an administrator in the dashboard's **Settings** section and stored in the database; see [cloud sessions deployment](../../docs/cloud-sessions.md#deployment). The former `TEAMCODE_CLOUD_*` variables, if still set, only seed a database that stores no cloud runtime yet.
+
 For local access without ingress, use `publicUrl: http://localhost:8080` and:
 
 ```sh

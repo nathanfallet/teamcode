@@ -156,6 +156,17 @@ class KubernetesClusterPortTest {
         assertFalse(error.message!!.contains(token), "The API body is never surfaced")
     }
 
+    @Test fun podOptionsAreReadForEveryPodSoADashboardChangeNeedsNoRestart() {
+        var options = KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0")
+        val port = KubernetesClusterPort({ null }, { options })
+        val request = PodRequest("teamcode", "tc-1-e1", "registry.example/toolchain:1", "tc-ws-1", emptyMap(), CloudResources(1000, 1024), emptyList(), emptyMap())
+        fun runnerImage() = port.podManifest(request)["spec"]!!.jsonObject["initContainers"]!!.jsonArray.single().jsonObject["image"]!!.jsonPrimitive.content
+        assertEquals("registry.example/teamcode-runner:1.0", runnerImage())
+        options = options.copy(runnerImage = "registry.example/teamcode-runner:2.0")
+        assertEquals("registry.example/teamcode-runner:2.0", runnerImage())
+        port.close()
+    }
+
     @Test fun partialListsAndRunnerOriginsAreRefused(): Unit = runBlocking {
         for (origin in listOf("http://teamcode.example.test", "https://localhost:8080", "https://127.0.0.1", "https://user@teamcode.example.test"))
             assertFailsWith<IllegalArgumentException>(origin) { KubernetesPodOptions(origin, "runner:1") }

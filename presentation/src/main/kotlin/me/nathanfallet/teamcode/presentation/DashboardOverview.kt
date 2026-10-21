@@ -100,7 +100,7 @@ internal fun settingsContent(actor: Principal, features: Set<DashboardFeature>):
         if (on(DashboardFeature.MODEL_POLICY)) add(Triple("/dashboard/models", "Model policy", "Allowed and denied models, efforts and thinking budget."))
         if (on(DashboardFeature.ROUTES)) add(Triple("/dashboard/routes", "Model routes", "Provider and model fallback order per requested model."))
         if (on(DashboardFeature.GUIDANCE)) add(Triple("/dashboard/agent-guidance", "Pacing mode", "Predictive pacing or observation only."))
-        if (on(DashboardFeature.CLOUD)) add(Triple("/dashboard/cloud", "Cloud sessions", "Retention, per-member limits and transfers."))
+        if (on(DashboardFeature.CLOUD)) add(Triple("/dashboard/cloud", "Cloud sessions", "On or off, runner image, Kubernetes clusters, retention, per-member limits and transfers."))
         if (on(DashboardFeature.VARIANTS)) add(Triple("/dashboard/variants", "Variants", "Environment variables and MCP servers given to members."))
         if (on(DashboardFeature.MCP)) add(Triple("/dashboard/mcp", "MCP tool policies", "Which tools each MCP server exposes."))
         if (on(DashboardFeature.SKILLS)) add(Triple("/dashboard/skills", "Skills", "Pinned versions and assignments."))
@@ -110,7 +110,7 @@ internal fun settingsContent(actor: Principal, features: Set<DashboardFeature>):
         add(Triple("/dashboard/password", "Password", "Change your password; every device is signed out."))
         if (on(DashboardFeature.DEVICES)) add(Triple("/dashboard/devices", "Devices", "Rename or sign out the computers using your account."))
         if (on(DashboardFeature.SERVICE_KEYS)) add(Triple("/dashboard/service-keys", "Service keys", "Scoped keys for CI that share your quotas."))
-        if (on(DashboardFeature.GITHUB)) add(Triple("/dashboard/github", "GitHub link", "The GitHub account your cloud sessions use."))
+        if (on(DashboardFeature.GITHUB) && on(DashboardFeature.CLOUD_RUNNING)) add(Triple("/dashboard/github", "GitHub link", "The GitHub account your cloud sessions use."))
         if (on(DashboardFeature.CAPACITY) && !actor.member.role.isAdministrator) add(Triple("/dashboard/capacity", "Your quota", "Your daily allowance and concurrency, set by an administrator."))
     }
     val teamSection = if (actor.member.role.isAdministrator && team.isNotEmpty()) "<h2>Team-wide</h2>" + entries(team) else ""

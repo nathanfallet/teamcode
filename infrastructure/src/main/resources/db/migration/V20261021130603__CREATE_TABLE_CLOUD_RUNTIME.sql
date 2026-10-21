@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS cloud_runtime (team_id VARCHAR(36) PRIMARY KEY, enabled BOOLEAN NOT NULL, runner_image VARCHAR(512) NULL, runner_binary VARCHAR(256) NOT NULL, server_url VARCHAR(512) NULL, workspace_access_mode VARCHAR(32) NOT NULL, updated_by VARCHAR(36) NOT NULL, updated_at BIGINT NOT NULL, CONSTRAINT cloud_runtime_team FOREIGN KEY (team_id) REFERENCES teams(id));

@@ -10,10 +10,10 @@ import me.nathanfallet.teamcode.domain.team.*
 
 internal fun escape(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
 internal fun csrf(principal: Principal) = "<input type='hidden' name='csrf' value='${escape(principal.tokenId)}'>"
-internal suspend fun ApplicationCall.form(origin: String, authenticated: Boolean = true): Parameters {
+internal suspend fun ApplicationCall.form(origin: String, authenticated: Boolean = true, limit: Int = 16_384): Parameters {
     if (request.header(HttpHeaders.Origin) != origin) throw TeamFailure("origin_rejected", 403, "This form must be submitted from the TeamCode dashboard.")
     if (request.contentType().withoutParameters() != ContentType.Application.FormUrlEncoded) throw TeamFailure("invalid_form", 400, "An encoded form is required.")
-    val fields = parseQueryString(receiveChannel().readBounded(16_384).decodeToString())
+    val fields = parseQueryString(receiveChannel().readBounded(limit).decodeToString())
     if (authenticated && !MessageDigest.isEqual((fields["csrf"] ?: "").toByteArray(), principal.tokenId.toByteArray())) throw TeamFailure("csrf_rejected", 403, "This form has expired. Reload the dashboard.")
     return fields
 }
@@ -34,7 +34,7 @@ internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, gith
     }
     get("/dashboard") {
         val member = call.principal.member
-        val setup = """<h2>Connect a computer</h2><div class="notice">Signed in as ${escape(member.role.name.lowercase())}. Manage your team and connect subscription accounts from the CLI.<p>Local setup: <code>teamcode login --server ${escape(origin)}</code></p>${if (githubLinks) """<p><a href="/dashboard/github">Link your GitHub account</a> for your cloud sessions.</p>""" else ""}</div>"""
+        val setup = """<h2>Connect a computer</h2><div class="notice">Signed in as ${escape(member.role.name.lowercase())}. Manage your team and connect subscription accounts from the CLI.<p>Local setup: <code>teamcode login --server ${escape(origin)}</code></p>${if (githubLinks && DashboardFeature.CLOUD_RUNNING in call.dashboardFeatures()) """<p><a href="/dashboard/github">Link your GitHub account</a> for your cloud sessions.</p>""" else ""}</div>"""
         call.respondText(call.page("Welcome, ${member.username}", overviewContent(call.principal, team, overview, call.dashboardFeatures()) + setup), ContentType.Text.Html)
     }
     get("/dashboard/settings") {

@@ -60,8 +60,30 @@ internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
 internal fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("not_found", 404, "Not found.") }
 
-internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String) {
+/** Configuration paths an administrator uses while cloud sessions are off; every other cloud path is gated. */
+private val CLOUD_CONFIGURATION_PATHS = listOf("/api/v1/cloud/settings", "/api/v1/cloud/runtime", "/api/v1/cloud/clusters", "/api/v1/cloud/profiles")
+private val GITHUB_LINK_PATHS = setOf("/dashboard/github/link", "/dashboard/github/unlink", GITHUB_CALLBACK_PATH)
+
+/**
+ * Paths that run or link cloud sessions, answered `404` while the stored runtime is disabled: sessions, transfers,
+ * transcripts, the runner channel and members' GitHub links. Paths with dot segments, escapes or parameters are
+ * always treated as operational, so they never pass as configuration.
+ */
+internal fun cloudOperationalPath(path: String): Boolean {
+    val plain = ".." !in path && '%' !in path && ';' !in path
+    if (path.startsWith("/api/v1/cloud/")) return !plain || CLOUD_CONFIGURATION_PATHS.none { path == it || path.startsWith("$it/") }
+    return path == "/api/v1/github/link" || path.startsWith("/api/v1/github/link/") || path in GITHUB_LINK_PATHS
+}
+
+private fun CloudRuntime.view(runtime: CloudRuntimeService) = CloudRuntimeView(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode, runtime.serverUrl(this), updatedAt)
+private fun CloudRuntimeView.domain() = CloudRuntime(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode)
+
+internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String, runtime: CloudRuntimeService? = null) {
     route("/api/v1/cloud") {
+        if (runtime != null) {
+            get("/runtime") { call.respond(runtime.get(call.principal).view(runtime)) }
+            put("/runtime") { call.respond(runtime.save(call.principal, call.jsonBody<CloudRuntimeView>().domain()).view(runtime)) }
+        }
         get("/settings") { call.respond(admin.settings(call.principal).view()) }
         put("/settings") {
             val input = call.jsonBody<CloudSettingsView>()
@@ -132,7 +154,27 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
     get("/dashboard/cloud") {
         val actor = call.principal
         val settings = admin.settings(actor)
-        call.respondText(call.page("Cloud session settings", """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
+        val clusters = admin.clusters(actor)
+        val sections = runtime?.let { runtimeForm(actor, it.get(actor), it.serverUrl(CloudRuntime())) }.orEmpty() +
+            clustersSection(actor, clusters) + profilesSection(admin.profiles(actor), clusters) +
+            """<h2>GitHub</h2><p>The team's GitHub App, which gives each member's cloud sessions their own Git access, is configured on <a href="/dashboard/github">GitHub</a>.</p><h2>Retention, limits and transfers</h2>"""
+        call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
+    }
+    if (runtime != null) post("/dashboard/cloud/runtime") {
+        val input = call.form(origin.trimEnd('/'))
+        runtime.save(call.principal, CloudRuntime(enabled = input["enabled"] == "on", runnerImage = input["runnerImage"], runnerBinary = input["runnerBinary"].orEmpty(),
+            serverUrl = input["serverUrl"], workspaceAccessMode = input["workspaceAccessMode"].orEmpty()))
+        call.respondRedirect("/dashboard/cloud")
+    }
+    post("/dashboard/cloud/clusters") {
+        val input = call.form(origin.trimEnd('/'), limit = CLUSTER_FORM_BYTES)
+        admin.saveCluster(call.principal, null, null, clusterInput(input))
+        call.respondRedirect("/dashboard/cloud")
+    }
+    post("/dashboard/cloud/clusters/{id}") {
+        val input = call.form(origin.trimEnd('/'), limit = CLUSTER_FORM_BYTES)
+        admin.saveCluster(call.principal, call.id(), input["version"]?.toIntOrNull() ?: throw TeamFailure("invalid_cluster", 400, "Send the current cluster version."), clusterInput(input))
+        call.respondRedirect("/dashboard/cloud")
     }
     post("/dashboard/cloud") {
         val input = call.form(origin.trimEnd('/'))
@@ -150,3 +192,51 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
 }
 private fun option(value: String, label: String, selected: String) = """<option value="$value"${if (value == selected) " selected" else ""}>$label</option>"""
 private fun SaveCloudClusterRequest.domain() = CloudClusterInput(name, apiUrl, caCertificate, serviceAccountToken, allowedNamespaces, maxRunningPods, defaultStorageClass)
+
+/** A CA bundle (up to 64 KiB) and a token (up to 16 KiB), form-encoded. */
+private const val CLUSTER_FORM_BYTES = 256 * 1024
+private const val KEPT = " (defined; leave empty to keep it, or paste a replacement)"
+
+private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: String): String {
+    val state = if (runtime.enabled) "<span class=\"chip\">on</span>" else "<span class=\"chip danger\">off</span>"
+    return "<h2>Cloud sessions $state</h2>" + help("What this controls", "<p>While cloud sessions are off, members see no cloud page, clients are told the server has no cloud sessions, and no pod is created or watched; existing pods and workspaces are left as they are. Every replica applies a change within a few seconds, without a restart. Turning them on needs a runner image: an image holding the <code>teamcode</code> Linux binary and <code>cp</code>, copied into each session pod. Pin it by digest (<code>image@sha256:...</code>).</p>") +
+        """<form action="/dashboard/cloud/runtime" method="post">${csrf(actor)}<label><input type="checkbox" name="enabled"${if (runtime.enabled) " checked" else ""}> Cloud sessions are on</label>""" +
+        """<label>Runner image <input name="runnerImage" maxlength="512" placeholder="registry.example.com/teamcode-runner@sha256:..." value="${escape(runtime.runnerImage ?: "")}"></label>""" +
+        """<label>Path of the binary in the runner image <input name="runnerBinary" maxlength="256" required value="${escape(runtime.runnerBinary)}"></label>""" +
+        """<label>Server URL for pods (empty uses the public URL, ${escape(publicOrigin)}) <input name="serverUrl" type="url" maxlength="512" placeholder="${escape(publicOrigin)}" value="${escape(runtime.serverUrl ?: "")}"></label>""" +
+        """<label>Workspace access mode <select name="workspaceAccessMode">${option("ReadWriteOncePod", "ReadWriteOncePod (one pod per workspace, enforced by the cluster)", runtime.workspaceAccessMode)}${option("ReadWriteOnce", "ReadWriteOnce (storage drivers without ReadWriteOncePod)", runtime.workspaceAccessMode)}</select></label><button>Save cloud sessions</button></form>"""
+}
+
+private fun clusterFields(cluster: CloudCluster?): String =
+    """<label>Name <input name="name" maxlength="120" required value="${escape(cluster?.name ?: "")}"></label>""" +
+        """<label>API URL <input name="apiUrl" type="url" maxlength="512" placeholder="https://kubernetes.example.com:6443" required value="${escape(cluster?.apiUrl ?: "")}"></label>""" +
+        """<label>CA bundle (PEM)${if (cluster != null) KEPT else ""}<br><textarea name="caCertificate" rows="4" cols="70" autocomplete="off"${if (cluster == null) " required" else ""}></textarea></label>""" +
+        """<label>Service-account token${if (cluster != null) KEPT else ""} <input type="password" name="serviceAccountToken" autocomplete="off" maxlength="16384"${if (cluster == null) " required" else ""}></label>""" +
+        """<label>Allowed namespaces (comma-separated) <input name="allowedNamespaces" maxlength="2048" required value="${escape(cluster?.allowedNamespaces?.joinToString(", ") ?: "")}"></label>""" +
+        """<label>Running pods at most <input type="number" name="maxRunningPods" min="1" max="1000" required value="${cluster?.maxRunningPods ?: 10}"></label>""" +
+        """<label>Default storage class (empty uses the cluster default) <input name="defaultStorageClass" maxlength="253" value="${escape(cluster?.defaultStorageClass ?: "")}"></label>"""
+
+private fun clustersSection(actor: Principal, clusters: List<CloudCluster>): String {
+    val rows = clusters.joinToString("") { cluster ->
+        """<tr><td><strong>${escape(cluster.name)}</strong><br><small>${escape(cluster.apiUrl)}</small></td><td>${escape(cluster.allowedNamespaces.joinToString(", "))}</td><td>${cluster.maxRunningPods}</td><td>Token and CA bundle defined</td><td><details><summary>Edit</summary><form action="/dashboard/cloud/clusters/${escape(cluster.id)}" method="post">${csrf(actor)}<input type="hidden" name="version" value="${cluster.version}">${clusterFields(cluster)}<button>Save cluster</button></form></details></td></tr>"""
+    }
+    val table = if (clusters.isEmpty()) "<div class='empty'><strong>No cluster is connected.</strong></div>"
+        else "<table><thead><tr><th>Cluster</th><th>Namespaces</th><th>Pods</th><th>Credentials</th><th></th></tr></thead><tbody>$rows</tbody></table>"
+    return "<h2>Kubernetes clusters</h2>" + help("What the service account needs", "<p>In each allowed namespace: <code>get</code>, <code>list</code>, <code>create</code> and <code>delete</code> on <code>pods</code> and <code>persistentvolumeclaims</code>; cluster-wide <code>get</code> and <code>list</code> on <code>persistentvolumes</code> and <code>storageclasses</code>; and <code>system:auth-delegator</code> for <code>TokenReview</code>. The token is stored encrypted; neither it nor the CA bundle is shown again.</p>") +
+        table + """<details><summary>Connect a cluster</summary><form action="/dashboard/cloud/clusters" method="post">${csrf(actor)}${clusterFields(null)}<button>Connect cluster</button></form></details>"""
+}
+
+private fun profilesSection(profiles: List<CloudProfile>, clusters: List<CloudCluster>): String {
+    val names = clusters.associate { it.id to it.name }
+    val rows = profiles.joinToString("") { profile ->
+        """<tr><td><strong>${escape(profile.name)}</strong> <small>v${profile.version}</small></td><td>${escape(names[profile.spec.clusterId] ?: profile.spec.clusterId)} / ${escape(profile.spec.namespace)}</td><td><code>${escape(profile.spec.image)}</code></td><td>${profile.assignedMemberIds.size}</td></tr>"""
+    }
+    return "<h2>Profiles</h2><p>A profile says where and how a session runs: cluster, namespace, image, resources and environment. Profiles are versioned and edited with <code>POST</code> and <code>PUT /api/v1/cloud/profiles</code>.</p>" +
+        (if (profiles.isEmpty()) "<div class='empty'><strong>No profile yet.</strong></div>" else "<table><thead><tr><th>Profile</th><th>Cluster / namespace</th><th>Image</th><th>Members</th></tr></thead><tbody>$rows</tbody></table>")
+}
+
+/** Empty credential fields keep the stored ones. */
+private fun clusterInput(input: Parameters) = CloudClusterInput(input["name"].orEmpty().trim(), input["apiUrl"].orEmpty().trim(),
+    input["caCertificate"]?.trim()?.takeIf { it.isNotEmpty() }, input["serviceAccountToken"]?.trim()?.takeIf { it.isNotEmpty() },
+    input["allowedNamespaces"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }, input["maxRunningPods"]?.trim()?.toIntOrNull() ?: -1,
+    input["defaultStorageClass"]?.trim()?.takeIf { it.isNotEmpty() })

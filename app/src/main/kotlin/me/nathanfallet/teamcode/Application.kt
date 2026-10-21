@@ -83,8 +83,8 @@ fun main() {
             }
         }
     }
-    val cloud = System.getenv("TEAMCODE_CLOUD_RUNNER_IMAGE")?.takeIf { it.isNotBlank() && database != null }
-        ?.let { image -> CloudServer(database!!, cipher!!, origin, image).also { it.launch(workers) } }
+    // Cloud sessions are configured on the dashboard; the former variables only seed an empty database.
+    val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also { runBlocking { it.start(initialCloudRuntime()) }; it.launch(workers) }
     val team = database?.let { SqlTeamService(it) }
     val runs = database?.let { me.nathanfallet.teamcode.infrastructure.database.AgentRunServiceImpl(it) }
     val reconciliation = database?.let { me.nathanfallet.teamcode.infrastructure.database.UsageReconciliationServiceImpl(it) }
@@ -125,8 +125,21 @@ fun main() {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, mcp = mcp, mcpAccess = mcpAccess,
-            cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers) }.start(wait = true)
+            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); database?.close() }
+}
+
+/**
+ * The runtime the former `TEAMCODE_CLOUD_*` deployment variables described, used once to seed a database that stores
+ * none; null when `TEAMCODE_CLOUD_RUNNER_IMAGE` is unset. Afterwards the dashboard is the only place to change it.
+ */
+private fun initialCloudRuntime(): me.nathanfallet.teamcode.domain.cloud.CloudRuntime? {
+    fun value(name: String) = System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() }
+    val image = value("TEAMCODE_CLOUD_RUNNER_IMAGE") ?: return null
+    return me.nathanfallet.teamcode.domain.cloud.CloudRuntime(enabled = true, runnerImage = image,
+        runnerBinary = value("TEAMCODE_CLOUD_RUNNER_BINARY") ?: me.nathanfallet.teamcode.domain.cloud.CloudRuntime.DEFAULT_RUNNER_BINARY,
+        serverUrl = value("TEAMCODE_CLOUD_SERVER_URL"),
+        workspaceAccessMode = value("TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE") ?: me.nathanfallet.teamcode.domain.cloud.CloudRuntime.DEFAULT_ACCESS_MODE)
 }
 
 /** Gateway bounds from `TEAMCODE_MCP_*` variables; unset values keep the defaults documented in docs/mcp-gateway.md. */

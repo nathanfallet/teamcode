@@ -53,14 +53,18 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
 
     get("/dashboard/github") {
         val actor = call.principal
+        val administrator = actor.member.role.isAdministrator && actor.serviceScopes == null
+        // Administrators configure the App before cloud sessions are turned on; members link once they are.
+        if (!call.cloudEnabled() && !administrator) throw TeamFailure("not_found", 404, "Cloud sessions are disabled on this server.")
         val own = github.status(actor)
         val member = when {
+            !call.cloudEnabled() -> "<p>Cloud sessions are turned off (<a href=\"/dashboard/cloud\">Cloud sessions</a>). Members can link their GitHub account once they are on.</p>"
             !own.appConfigured -> "<p>Your administrator has not configured the team's GitHub App yet.</p>"
             own.state == GitHubLinkState.LINKED && own.link != null -> """<p>Linked as <strong>${escape(own.link!!.identity.login)}</strong> since ${escape(Instant.fromEpochMilliseconds(own.link!!.linkedAt).toString())}. Your cloud sessions use this account for Git and <code>gh</code>.</p><form action="/dashboard/github/unlink" method="post">${csrf(actor)}<button>Unlink GitHub</button></form>"""
             else -> (if (own.state == GitHubLinkState.RECONNECT_REQUIRED) "<p>Your GitHub access must be renewed: link your account again.</p>" else "<p>Link your GitHub account so your cloud sessions can clone and push with your own permissions.</p>") +
                 """<form action="/dashboard/github/link" method="post">${csrf(actor)}<button>Link GitHub</button></form><p class="muted">From a terminal: <code>teamcode github link</code></p>"""
         }
-        val administration = if (actor.member.role == Role.ADMIN && actor.serviceScopes == null) {
+        val administration = if (administrator) {
             val app = github.app(actor)
             val statuses = github.links(actor).associateBy { it.memberId }
             val rows = team.members(actor).joinToString("") { member ->
@@ -70,7 +74,7 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
             }
             """<h2>Team GitHub App</h2><p>Create a GitHub App owned by your organization with user-token expiration enabled, the repository permissions your sessions need (for example Contents and Pull requests: read and write) and <code>${escape(callback)}</code> as a callback URL. Enable Device Flow for <code>teamcode github link</code>. Install it on the repositories sessions may reach. Members' tokens can never exceed both the installation and the member's own access.</p>""" +
                 (app?.let { "<p>Configured: App ${it.appId} (${escape(it.slug ?: it.clientId)}), version ${it.version}.</p>" } ?: "<div class='empty'><strong>No App is configured.</strong></div>") +
-                """<form action="/dashboard/github/app" method="post">${csrf(actor)}<input type="hidden" name="version" value="${app?.version ?: ""}"><label>App ID <input name="appId" inputmode="numeric" required value="${app?.appId ?: ""}"></label><label>Client ID <input name="clientId" required maxlength="64" value="${escape(app?.clientId ?: "")}"></label><label>Client secret${if (app != null) " (empty keeps the current one)" else ""} <input type="password" name="clientSecret" autocomplete="off" maxlength="256"${if (app == null) " required" else ""}></label><label>Private key (PEM)${if (app != null) " (empty keeps the current one)" else ""}<br><textarea name="privateKey" rows="6" cols="70" autocomplete="off"${if (app == null) " required" else ""}></textarea></label><button>Save GitHub App</button></form>""" +
+                """<form action="/dashboard/github/app" method="post">${csrf(actor)}<input type="hidden" name="version" value="${app?.version ?: ""}"><label>App ID <input name="appId" inputmode="numeric" required value="${app?.appId ?: ""}"></label><label>Client ID <input name="clientId" required maxlength="64" value="${escape(app?.clientId ?: "")}"></label><label>Client secret${if (app != null) " (defined; leave empty to keep it, or paste a replacement)" else ""} <input type="password" name="clientSecret" autocomplete="off" maxlength="256"${if (app == null) " required" else ""}></label><label>Private key (PEM)${if (app != null) " (defined; leave empty to keep it, or paste a replacement)" else ""}<br><textarea name="privateKey" rows="6" cols="70" autocomplete="off"${if (app == null) " required" else ""}></textarea></label><button>Save GitHub App</button></form>""" +
                 "<h2>Members' links</h2><table><thead><tr><th>Member</th><th>GitHub account</th><th>State</th><th></th></tr></thead><tbody>$rows</tbody></table>"
         } else ""
         call.respondText(call.page("GitHub", member + administration), ContentType.Text.Html)
