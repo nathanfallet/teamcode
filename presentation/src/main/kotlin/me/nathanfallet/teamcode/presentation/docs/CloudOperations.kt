@@ -33,13 +33,13 @@ private fun ApiCatalog.cloudAdministration() {
         operationId = "saveCloudRuntime"; tag(ApiTags.CLOUD_ADMIN)
         summary = "Turn cloud sessions on or off, or change how their pods are built"
         description = "Replaces the whole runtime: every field is required, plus the `updatedAt` it was based on (null when " +
-            "nothing was stored yet). Turning cloud sessions on needs a runner image; a stored image needs an HTTPS, " +
-            "non-loopback callback origin and can be replaced but not removed. Every replica applies it within seconds. " +
+            "nothing was stored yet). Turning cloud sessions on needs a runner image and an HTTPS, non-loopback callback " +
+            "origin; turned off, the runtime may stay incomplete. Every replica applies it within seconds. " +
             "Administrators only."
         body<CloudRuntimeView>("The runtime; `effectiveServerUrl` is ignored.")
         responses {
             ok<CloudRuntimeView>("The saved runtime.")
-            badRequest("An invalid image, binary path, origin or access mode, or a removed image (`invalid_cloud_runtime`).")
+            badRequest("An invalid image, binary path, origin or access mode, or turning on without an image or a usable origin (`invalid_cloud_runtime`).")
             conflict("Another administrator saved the runtime since `updatedAt` (`cloud_runtime_conflict`).")
         }
     }

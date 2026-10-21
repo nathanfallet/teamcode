@@ -24,6 +24,8 @@ class CloudSessionPersistenceTest {
         val admin = CloudAdministrationService(SqlCloudAdminStore(database, cipher), cluster)
         val sessions = CloudSessionService(store)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster)
+        /** The reconciler of a server whose cloud sessions are turned off. */
+        val off = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { false })
         val runner = RunnerChannelUseCase(store)
         val garbage = CollectCloudGarbageUseCase(store, cluster)
     }
@@ -163,6 +165,11 @@ class CloudSessionPersistenceTest {
     private suspend fun lifecycle(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile): CloudSession {
         val created = (ra.sessions.create(colleague, null, CloudSessionDraft("Interactive", profile.id, null, null, null, emptyMap(), 5), null) as CloudCreateOutcome.Created).session
         failure("session_preparing") { ra.sessions.pause(colleague, null, created.id, false) }
+        makeDue(ra); ra.off()
+        ra.store.find(admin.teamId, created.id)!!.let { waiting ->
+            assertEquals(CREATING, waiting.state); assertEquals(0, waiting.currentEpoch, "Off: no execution is started")
+            assertNull(cluster(ra).claims["teamcode/${waiting.workspace.claimName}"], "Off: no workspace claim is created")
+        }
         pass(ra)
         var s = ra.store.find(admin.teamId, created.id)!!
         assertEquals(1, s.currentEpoch); assertEquals(CREATING, s.state)

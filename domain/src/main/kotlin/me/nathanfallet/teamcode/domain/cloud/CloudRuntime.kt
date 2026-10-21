@@ -46,6 +46,8 @@ interface CloudRuntimeStore {
  */
 class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin: String) {
     @Volatile private var cached = CloudRuntime()
+    /** Counts this replica's saves and seeds, so a read that raced one of them never replaces its result. */
+    private var writes = 0L
 
     /** The last runtime read or saved by this replica. */
     val current: CloudRuntime get() = cached
@@ -54,11 +56,14 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
     /** The origin pods call back: the stored one, or the server's public URL. */
     fun serverUrl(runtime: CloudRuntime = cached) = runtime.serverUrl ?: publicOrigin
 
-    /** Never replaces a newer runtime this replica saved while the read was in flight. */
+    /**
+     * Takes the database as is (a missing or older row included, after a restore or a reseed), except when this
+     * replica saved while the read was in flight: that save is newer than the read.
+     */
     suspend fun refresh(): CloudRuntime {
+        val before = synchronized(this) { writes }
         val read = store.current()
-        // A missing row (deleted or restored without it) is taken as is: off.
-        synchronized(this) { if (read.updatedAt == null || read.updatedAt >= (cached.updatedAt ?: 0)) cached = read }
+        synchronized(this) { if (writes == before) cached = read }
         return cached
     }
 
@@ -69,7 +74,7 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
         actor.requireAdmin()
         val normalized = normalize(runtime)
         validate(normalized, publicOrigin)
-        return store.saveRuntime(actor, normalized, expectedUpdatedAt).also { saved -> synchronized(this) { cached = saved } }
+        return store.saveRuntime(actor, normalized, expectedUpdatedAt).also { saved -> synchronized(this) { cached = saved; writes++ } }
     }
 
     /**
@@ -78,13 +83,15 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
      */
     suspend fun seed(initial: CloudRuntime?, warn: (String) -> Unit = {}): CloudRuntime {
         val candidate = initial?.let(::normalize)
-        val stored = if (candidate == null) store.current() else {
+        val existing = store.current()
+        // Once a runtime is stored the variables are ignored: nothing to validate or report.
+        val stored = if (candidate == null || existing.updatedAt != null) existing else {
             val usable = try { validate(candidate, publicOrigin); candidate }
                 catch (error: CancellationException) { throw error }
                 catch (error: TeamFailure) { warn(error.message ?: "Invalid cloud runtime."); disabledSeed(candidate) }
             store.seed(usable)
         }
-        synchronized(this) { cached = stored }
+        synchronized(this) { cached = stored; writes++ }
         return stored
     }
 

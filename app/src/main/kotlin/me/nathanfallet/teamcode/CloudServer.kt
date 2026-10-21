@@ -62,7 +62,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val recipients = CloudRecipientPolicy(store, access, listOf(ModelPolicyRecipientCheck(SqlModelPolicyStore(database)), QuotaRecipientCheck(SqlMemberAllowance(database))))
     val transfers = CloudTransferService(store, transferStore, sessions, recipients)
 
-    private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, onError = { session, error ->
+    private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { runtime.enabled }, onError = { session, error ->
         // Class and HTTP status only: messages from the cluster or the driver may echo request content.
         System.err.println("TeamCode cloud reconciliation failed for session $session (${describe(error)}); retrying.")
     }, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients), activity = conversationStore)

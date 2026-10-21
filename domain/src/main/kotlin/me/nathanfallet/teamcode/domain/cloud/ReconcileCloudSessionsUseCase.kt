@@ -21,6 +21,8 @@ class ReconcileCloudSessionsUseCase(
     private val transfers: CompleteCloudTransferUseCase? = null,
     /** Attachment leases and waiting inputs for idle detection; null disables the idle pause. */
     private val activity: CloudActivitySource? = null,
+    /** False while cloud sessions are off: a creating or resuming session then waits, before any claim or execution. */
+    private val startAllowed: () -> Boolean = { true },
 ) {
     /**
      * Reconciles up to [limit] due sessions; returns how many were claimed. All leases are taken together, so
@@ -63,7 +65,8 @@ class ReconcileCloudSessionsUseCase(
             } else s.expiresAt
             s.state == PAUSED -> if (s.transferId != null && transfers != null) transfers.begin(s, owner, now) else paused(s, owner, now)
             s.state == TRANSFERRING -> transfers?.step(s, owner, now) ?: (now + MONITOR_MILLIS)
-            s.state == CREATING || s.state == RESUMING -> if (s.desiredState == DesiredState.PAUSED && s.state == RESUMING) abandonResume(s, owner, now) else start(s, owner, now)
+            s.state == CREATING || s.state == RESUMING -> if (s.desiredState == DesiredState.PAUSED && s.state == RESUMING) abandonResume(s, owner, now)
+                else if (!startAllowed()) now + MONITOR_MILLIS else start(s, owner, now)
             s.state == PREPARING || s.state == READY || s.state == ACTIVE -> if (s.desiredState == DesiredState.PAUSED && s.state != PREPARING) {
                 commit(s, owner, s.copy(state = PAUSING, phase = "draining", pauseRequestedAt = s.pauseRequestedAt ?: now, updatedAt = now), "cloud.session.pausing"); now
             } else monitor(s, owner, now)
