@@ -56,7 +56,10 @@ class TeamHooksTest {
     }
 
     @Test fun onlyVersionsTheMemberApprovedAreInstalledAndANewVersionAsksAgain() = runTest {
-        val root = temporary()
+        // Like teamHooksRoot(), the hooks directory does not exist yet: the first private write creates it owner-only.
+        // A directory created beforehand by another API is refused on Windows when its owner is not the user (an
+        // elevated token makes Administrators the owner of new directories).
+        val root = temporary() / "hooks"
         val approvals = HookApprovals(root / "approvals.json")
         var hooks = listOf(fixture(), fixture("audit", definition = stop.copy(events = listOf("PreToolUse"), matcher = "Bash")), fixture("noisy"))
         val downloads = mutableListOf<String>()

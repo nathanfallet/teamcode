@@ -27,12 +27,16 @@ class StatusReportTest {
     private val capacity = "/api/v1/capacity" to (HttpStatusCode.OK to """{"memberId":"m","dailyUnits":100,"maxConcurrent":2,"poolId":null,"chargedAndReservedUnits":10,"activeRequests":1,"resetsAtMillis":5,"reservedUnits":4}""")
 
     @Test fun readsOnlyTheCallersOwnRoutes() = runTest {
-        val calls = mutableListOf<String>()
+        // The MockEngine answers on its own threads: the list is shared by concurrent requests.
+        val calls = java.util.Collections.synchronizedList(mutableListOf<String>())
         val accounts = "/api/v1/pools/accounts" to (HttpStatusCode.OK to """[{"label":"Account 1","provider":"anthropic","state":"READY","disabled":false,"usable":true}]""")
         val directive = "/api/v1/directives/current" to (HttpStatusCode.OK to """{"directive":null}""")
         val report = sdk(mapOf(gateway, capacity, accounts, directive), calls).use { readStatusReport(it) }
         assertEquals(4, report.capacity?.reservedUnits); assertEquals("Account 1", report.accounts?.single()?.label); assertNull(report.pacing)
-        assertEquals(listOf("/api/v1/status", "/api/v1/capacity", "/api/v1/directives/current", "/api/v1/pools/accounts"), calls)
+        // The gateway is read first; the three sections are read concurrently, so their order is not part of the contract.
+        assertEquals("/api/v1/status", calls.first())
+        assertEquals(4, calls.size)
+        assertEquals(setOf("/api/v1/capacity", "/api/v1/directives/current", "/api/v1/pools/accounts"), calls.drop(1).toSet())
         assertFalse(calls.any { it.startsWith("/api/v1/members/") || it == "/api/v1/quotas" || it == "/api/v1/accounts" })
     }
 

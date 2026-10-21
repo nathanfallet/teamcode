@@ -155,8 +155,11 @@ internal fun releaseFailureMessage(code: String): String = when (code) {
 
 expect object SystemExit { fun fail(message: String): Nothing; fun exit(code: Int): Nothing }
 
-/** Safe operation identifiers only; never print raw platform/HTTP exception messages. */
-class CliOperationException(val code: String) : Exception() {
+/**
+ * Safe operation identifiers only; never print raw platform/HTTP exception messages. The code is also the exception
+ * message, so a test or crash report names the failing step (for example `windows_private_file_4`).
+ */
+class CliOperationException(val code: String) : Exception(code) {
     init { require(Regex("[a-zA-Z0-9_]{1,120}").matches(code)) }
 }
 
