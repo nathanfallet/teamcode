@@ -96,6 +96,10 @@ class AdmissionQueuePersistenceTest {
                 assertEquals(8, pending(), "Expired crash metadata is removed before counting the queue")
                 failure("queue_full") { first.enqueue(admin, input) }
                 bounded.forEach { first.release(admin, it) }
+                // A member without a concurrency limit is bounded by the team queue only, not by the member cap of 8.
+                val unlimited = (1..9).map { second.enqueue(colleague, input) }
+                assertEquals(9, pending())
+                unlimited.forEach { first.release(colleague, it) }
 
                 // Accounts have no parallelism limit: the colleague waits on their own member limit instead.
                 first.configure(admin, MemberPolicy(colleague.member.id, maxConcurrent = 1))

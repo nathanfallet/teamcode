@@ -89,13 +89,13 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         val recovery = row[table.recoveryPace]?.let { PacingRecovery(Pace.valueOf(it), row[table.recoveryStartedAt] ?: 0L, row[table.recoveryMinInterval] ?: 0L) }
                         Stored(old, row[table.contextKey], PacingMemory(old.advice, old.expiresAtMillis, recovery), row[table.observedConcurrency])
                     }
-                    // The peak follows the scope's demand, not its capacity context, so a changed key keeps it.
+                    // Diagnostics only: the recent peak of parallel requests, which pacing no longer turns into a ceiling.
                     val running = if (scopeKey.isEmpty()) capacity.activeRequests else activeBySession[member to scopeKey] ?: 0
                     val current = previous?.takeIf { it.directive.expiresAtMillis > now }
                     val observed = observedConcurrency.next(current?.observed, current?.directive?.advice, running)
                     val advice = if (runPolicies.truncated && scopedAllowanceAvailable) PacingAdvice(Pace.UNKNOWN, runLimits.maxConcurrent, 0,
                         "Recent launch/session metadata is incomplete. Do not increase parallelism from this signal; server-side limits remain authoritative.")
-                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() }, observed)
+                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() })
                     // A different route, policy, pool, priority or eligible account set must not
                     // inherit optimistic advice (or an old throttle) from another capacity context.
                     val scope = listOf(runLimits.maxConcurrent.toString(), pool.orEmpty(), policy.allowSharedOverflow.toString(), modelPolicy.toString(), valid.toString(), scopedAllowanceAvailable.toString(),

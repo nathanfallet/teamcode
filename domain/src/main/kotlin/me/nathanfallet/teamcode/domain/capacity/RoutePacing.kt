@@ -8,8 +8,8 @@ data class AccountPacing(val account: AccountRecord, val windows: List<WindowPac
 /** Capacity is specific to the target actually serving work, never a sum of unrelated plans. */
 class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase(), private val pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD) {
     /** [maximum] zero means no member/group/run limit; accounts have no parallelism limit of their own, only quota windows. */
-    fun advise(targets: Set<RouteTarget>, accounts: List<AccountPacing>, maximum: Int, now: Long, allowanceAvailable: Boolean = true, homePool: String? = null, preferHome: Boolean = false, pinnedAccountIds: Map<RouteTarget, Set<String>> = emptyMap(), observedConcurrency: Int = 0): PacingAdvice {
-        if (!allowanceAvailable) return PacingAdvice(Pace.PAUSE, 1, 30_000,
+    fun advise(targets: Set<RouteTarget>, accounts: List<AccountPacing>, maximum: Int, now: Long, allowanceAvailable: Boolean = true, homePool: String? = null, preferHome: Boolean = false, pinnedAccountIds: Map<RouteTarget, Set<String>> = emptyMap()): PacingAdvice {
+        if (!allowanceAvailable) return PacingAdvice(Pace.PAUSE, maximum, PacingUseCase.PAUSE_INTERVAL_MILLIS,
             "An applicable member, group, run or pool allowance is unavailable, or admission is paused. Pause new work until capacity returns or access is reviewed.")
         if (targets.isEmpty()) return pacing.advise(emptyList(), maximum, now)
         val advice = targets.map { target ->
@@ -32,7 +32,7 @@ class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase(), pr
                 val windows = group.filter { it.account.priority == priority }.map { account ->
                     account.windows.filter { target.model != null && it.quota.appliesTo(target.model, account.modelLimits[target.model.lowercase()]) }
                 }
-                pacing.advise(windows, maximum, now, observedConcurrency)
+                pacing.advise(windows, maximum, now)
             }, maximum)
         }
         // One scope may use several targets. Never advise acceleration merely because

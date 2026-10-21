@@ -35,6 +35,13 @@ class PoolGatewayTest {
             assertTrue(store.didSettle)
         }
     }
+    @Test fun everyRefusalIsLoggedWithItsCodeMemberAndReasonOnly() {
+        val full = TeamFailure("queue_full", 503, "The TeamCode admission queue is full.\nRetry \"shortly\".", retryAfterSeconds = 15)
+        assertEquals("TeamCode inference refused member=m-1 code=queue_full status=503 retryAfter=15 reason=\"The TeamCode admission queue is full. Retry 'shortly'.\"",
+            refusalLog("m-1", full))
+        assertEquals("TeamCode inference refused member=anonymous code=authentication_required status=401 reason=\"Sign in.\"",
+            refusalLog(null, TeamFailure("authentication_required", 401, "Sign in.")))
+    }
     @Test fun transportCorrelationRejectsConflictsDuplicatesUnsafeAndOversizedValues() {
         HttpClient(MockEngine { error("No network request expected") }).use { http ->
             for (transport in listOf(ClaudeTransport(http), CodexTransport(http))) {

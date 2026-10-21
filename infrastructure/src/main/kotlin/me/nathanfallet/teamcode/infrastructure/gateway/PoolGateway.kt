@@ -18,12 +18,24 @@ import me.nathanfallet.teamcode.infrastructure.protocols.StreamTranslation
 
 private const val MAXIMUM_OUTPUT_TOKENS = 1_048_576L
 private const val HELD_OUTPUT_TOKENS = 65_536L
+/** An admission that waited at least this long in the queue is logged with its wait. */
+private const val QUEUE_LOG_MILLIS = 1_000L
+
+/** Code, status and public reason only: never a prompt, body or credential. */
+internal fun refusalLog(memberId: String?, failure: TeamFailure): String =
+    "TeamCode inference refused member=${memberId ?: "anonymous"} code=${failure.code} status=${failure.status}" +
+        (failure.retryAfterSeconds?.let { " retryAfter=$it" } ?: "") + " reason=\"" + failure.message.orEmpty().replace('"', '\'').replace('\n', ' ') + "\""
 
 /** Native passthrough by default; explicit routes translate only when the destination protocol changes. */
 class PoolGateway(private val admission: AdmissionStore, private val credentials: CredentialSource, private val transports: List<ProviderTransport>, private val modelPolicies: ModelPolicyStore, private val routes: RoutingStore? = null, private val codecs: ConversationCodec = ConversationCodec(), private val queued: AwaitAdmissionUseCase? = null) : GatewayService {
     override suspend fun status(): GatewaySnapshot = admission.statistics().let { GatewaySnapshot("subscription-pool", it.active, it.completed, it.queued) }
     override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = withTimeout(10 * 60_000L) {
-        route(request, receive)
+        try { route(request, receive) }
+        catch (failure: TeamFailure) {
+            // Every refusal leaves a line: a held or refused request is otherwise invisible next to dispatch/settle logs.
+            System.out.println(refusalLog(request.principal?.member?.id, failure))
+            throw failure
+        }
     }
     private suspend fun route(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) {
         val actor = request.principal ?: throw TeamFailure("authentication_required", 401, "Sign in to TeamCode.")
@@ -101,6 +113,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             val estimate = maxOf(request.body.size, outgoing.toString().toByteArray().size).toLong() + 16_384 + minOf(maximumOutput, HELD_OUTPUT_TOKENS) * 5
             while (true) {
                 if (attempts >= 64) throw TeamFailure("routing_attempt_limit", 503, "The request reached its bounded routing limit. Retry shortly; available capacity has not been ruled out.")
+                val waitStarted = System.nanoTime()
                 val reservation = try {
                     if (queued == null) admission.reserve(actor, AdmissionInput(estimate, resolved, transport.provider, attemptedAccounts, affinity, workload, runId = runId))
                     else {
@@ -115,6 +128,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                     else poolFailure = moreHopeful(poolFailure, error)
                     break
                 }
+                val waitedMillis = (System.nanoTime() - waitStarted) / 1_000_000
+                if (waitedMillis >= QUEUE_LOG_MILLIS) System.out.println("TeamCode inference admitted request=${reservation.id} member=${actor.member.id} waitedMs=$waitedMillis")
                 attemptedAccounts += reservation.account.id
                 attempts++
                 try {

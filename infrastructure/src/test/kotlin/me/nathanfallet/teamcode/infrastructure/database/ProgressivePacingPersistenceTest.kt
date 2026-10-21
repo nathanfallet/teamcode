@@ -110,23 +110,23 @@ class ProgressivePacingPersistenceTest {
                     }
                     controller.update()
                     val light = SqlDirectiveService(b).current(actor, session)!!.advice
-                    assertEquals(Triple(Pace.SLOW_DOWN, 3, 2_000L), Triple(light.pace, light.maxConcurrent, light.minIntervalMillis),
-                        "The five requests still running in the session are halved, with a short interval")
+                    assertEquals(Triple(Pace.SLOW_DOWN, 0, 2_000L), Triple(light.pace, light.maxConcurrent, light.minIntervalMillis),
+                        "Pacing never caps parallel requests: it only spaces admissions")
                     assertFalse("one request" in light.message, light.message)
                     delay(2_100)
-                    refusal("pacing_concurrency") { admissionB.reserve(actor, 100, model, affinity = affinity) }
-                    parallel.take(3).forEach { admissionA.settle(it, 0) }
+                    // Five requests still run in the session: past the interval, another one is admitted at once.
                     val paced = admissionB.reserve(actor, 100, model, affinity = affinity)
                     refusal("pacing_delay") { admissionA.reserve(actor, 100, model, affinity = affinity) }
                     controller.update()
-                    assertEquals(light, controller.current(actor, session)!!.advice, "The throttle cannot shrink its own observed baseline")
+                    assertEquals(light, controller.current(actor, session)!!.advice, "Unchanged pressure keeps the same advice")
+                    parallel.take(3).forEach { admissionA.settle(it, 0) }
 
-                    // PAUSE stays the hard bound.
+                    // PAUSE spaces admissions further, still without a ceiling.
                     val pressured = a.query { nowMillis() }
                     accounts.forEach { admissionB.observe(it.id, listOf(AccountQuota(it.id, "five_hour", .95, pressured, pressured + 480_000))) }
                     controller.update()
                     val pause = controller.current(actor, session)!!.advice
-                    assertEquals(Triple(Pace.PAUSE, 1, 30_000L), Triple(pause.pace, pause.maxConcurrent, pause.minIntervalMillis))
+                    assertEquals(Triple(Pace.PAUSE, 0, 30_000L), Triple(pause.pace, pause.maxConcurrent, pause.minIntervalMillis))
                     (parallel.drop(3) + paced).forEach { admissionB.settle(it, 100) }  // Charged work keeps its admission time for the gap.
                     delay(2_100)
                     refusal("pacing_delay") { admissionA.reserve(actor, 100, model, affinity = affinity) }
