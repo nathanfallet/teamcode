@@ -4,6 +4,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.openapi.Operation
 import io.ktor.openapi.Parameters
+import io.ktor.openapi.ReferenceOr
 import io.ktor.openapi.Responses
 import io.ktor.openapi.jsonSchema
 import me.nathanfallet.teamcode.api.models.ApiError
@@ -151,22 +152,36 @@ internal fun ApiOperation.describeWith(access: ApiAccess): Operation.Builder.() 
 }
 
 /**
- * The errors every operation can answer, unless it describes them itself: 400 for an invalid body, 401 and 403 for a
- * protected operation, 500, and a `default` in the same envelope.
+ * The errors every operation can answer: 400 for an invalid body, 401 and 403 for a protected operation, 500, and a
+ * `default`. Where the operation describes one of these statuses itself, its text comes first and the shared case is
+ * kept after it. The inference endpoints and the MCP gateway answer in their own protocol's error format, not
+ * [ApiError].
  */
 internal fun commonResponses(operation: ApiOperation, access: ApiAccess): Operation.Builder.() -> Unit {
     val own = Operation.build(configure = operation.describe)
-    val declared = own.responses?.responses.orEmpty().keys
+    val declared = own.responses?.responses.orEmpty().mapValues { (_, response) -> (response as? ReferenceOr.Value)?.value?.description.orEmpty() }
+    val protocol = !operation.path.startsWith("/api/")
+    fun text(status: HttpStatusCode, shared: String) = declared[status.value]?.takeIf { it.isNotBlank() }?.let { "$it Also: $shared" }
+        ?: shared.replaceFirstChar { it.uppercase() }
     return {
         responses {
-            if (own.requestBody != null && 400 !in declared)
-                error(HttpStatusCode.BadRequest, "The body is not the expected JSON object (`invalid_body`), or one of its values is refused (`type` names the problem).")
+            // The authentication filter answers 401 in the envelope everywhere; StatusPages turns the other
+            // failures of an inference endpoint (not of the MCP gateway) into the provider's error format. An
+            // unexpected exception has no handler: its 500 has no body to rely on.
+            val inference = operation.path.startsWith("/v1/")
+            fun shared(status: HttpStatusCode, text: String) =
+                if (status != HttpStatusCode.Unauthorized && (inference || status == HttpStatusCode.InternalServerError))
+                    protocolError(status, text(status, text))
+                else error(status, text(status, text))
+            if (own.requestBody != null && !protocol)
+                shared(HttpStatusCode.BadRequest, "the body is not the expected JSON object (`invalid_body`), or one of its values is refused (`type` names the problem).")
             if (!access.public) {
-                if (401 !in declared) error(HttpStatusCode.Unauthorized, "No credential, or an unknown, expired or revoked one (`authentication_required`).")
-                if (403 !in declared) error(HttpStatusCode.Forbidden, forbiddenText(access))
+                shared(HttpStatusCode.Unauthorized, "no credential, or an unknown, expired or revoked one (`authentication_required`).")
+                shared(HttpStatusCode.Forbidden, forbiddenText(access))
             }
-            if (500 !in declared) error(HttpStatusCode.InternalServerError, "An unexpected server error. Retry later.")
-            default {
+            if (500 !in declared) shared(HttpStatusCode.InternalServerError, "an unexpected server error, without a body to rely on. Retry later.")
+            if (protocol) default { description = "Any other error, in the protocol's error format." }
+            else default {
                 description = "Any other error, in the same envelope."
                 schema = jsonSchema<ApiError>()
             }
@@ -175,10 +190,10 @@ internal fun commonResponses(operation: ApiOperation, access: ApiAccess): Operat
 }
 
 private fun forbiddenText(access: ApiAccess) = when (access.keyScopes) {
-    null -> "A service key was used (`credential_scope`), the member's role does not allow the operation (`forbidden`), " +
+    null -> "a service key was used (`credential_scope`), the member's role does not allow the operation (`forbidden`), " +
         "or the member must first replace a temporary password (`password_change_required`)."
-    emptyList<String>() -> "The member is disabled (`forbidden`) or must first replace a temporary password (`password_change_required`)."
-    else -> "The service key lacks the scope (`credential_scope`), the member's role does not allow the operation " +
+    emptyList<String>() -> "the member is disabled (`forbidden`) or must first replace a temporary password (`password_change_required`)."
+    else -> "the service key lacks the scope (`credential_scope`), the member's role does not allow the operation " +
         "(`forbidden`), or the member must first replace a temporary password (`password_change_required`)."
 }
 
@@ -210,6 +225,14 @@ internal fun Responses.Builder.error(status: HttpStatusCode, text: String) {
         description = text
         schema = jsonSchema<ApiError>()
     }
+}
+
+/**
+ * An error of the inference endpoints or the MCP gateway, whose body follows the protocol (Anthropic, OpenAI or
+ * JSON-RPC errors), not [ApiError].
+ */
+internal fun Responses.Builder.protocolError(status: HttpStatusCode, text: String) {
+    status { description = text }
 }
 
 internal fun Responses.Builder.badRequest(text: String) = error(HttpStatusCode.BadRequest, text)
@@ -246,6 +269,15 @@ internal fun Parameters.Builder.queryFlag(name: String, text: String) {
     query(name) {
         description = text
         schema = jsonSchema<Boolean>()
+    }
+}
+
+/** A repeatable string query parameter (`?state=a&state=b`). */
+internal fun Parameters.Builder.queryList(name: String, text: String) {
+    query(name) {
+        description = text
+        schema = jsonSchema<List<String>>()
+        explode = true
     }
 }
 

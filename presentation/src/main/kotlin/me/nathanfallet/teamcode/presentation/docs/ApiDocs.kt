@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.presentation.docs
 
 import io.ktor.http.ContentType
+import io.ktor.server.response.header
 import io.ktor.http.HttpMethod
 import io.ktor.openapi.HttpSecurityScheme
 import io.ktor.openapi.OpenApiDoc
@@ -28,7 +29,6 @@ import io.ktor.util.AttributeKey
 import io.ktor.utils.io.ExperimentalKtorApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
-import me.nathanfallet.teamcode.api.BuildInfo
 import me.nathanfallet.teamcode.presentation.MCP_PATH
 import me.nathanfallet.teamcode.presentation.RUNNER_PATH
 
@@ -55,6 +55,8 @@ private const val SWAGGER_UI_JS_SRI = "sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2Eo
 
 private val documentJson = Json { encodeDefaults = false }
 private val DocumentKey = AttributeKey<String>("TeamCodeOpenApiDocument")
+/** Building the document annotates the routing tree: one build at a time, never twice for an application. */
+private val documentLock = Any()
 
 /**
  * Serves the OpenAPI document and Swagger UI. Both are public (they contain no team data) and are generated from the
@@ -65,7 +67,10 @@ internal fun Route.apiDocsRoutes(publicOrigin: String, inferencePaths: Set<Strin
     get(API_OPENAPI_PATH) {
         call.respondText(call.application.apiOpenApiDocument(publicOrigin, inferencePaths), ContentType.Application.Json)
     }
-    get(API_DOCS_PATH) { call.respondText(swaggerUiPage(API_OPENAPI_PATH), ContentType.Text.Html) }
+    get(API_DOCS_PATH) {
+        call.response.header("Content-Security-Policy", SWAGGER_UI_CSP)
+        call.respondText(swaggerUiPage(API_OPENAPI_PATH), ContentType.Text.Html)
+    }
 }
 
 /**
@@ -74,10 +79,10 @@ internal fun Route.apiDocsRoutes(publicOrigin: String, inferencePaths: Set<Strin
  * @param publicOrigin The server's public URL, declared as the document's only server.
  * @param inferencePaths The registered inference endpoints (`/v1/messages`, `/v1/responses`).
  */
-internal fun Application.apiOpenApiDocument(publicOrigin: String, inferencePaths: Set<String>): String = synchronized(attributes) {
+internal fun Application.apiOpenApiDocument(publicOrigin: String, inferencePaths: Set<String>): String = synchronized(documentLock) {
     attributes.computeIfAbsent(DocumentKey) {
         val encoded = documentJson.encodeToJsonElement(OpenApiDoc.serializer(), apiOpenApiDoc(publicOrigin, inferencePaths))
-        encoded.jsonObject.withSingleSchemaPerType().toString()
+        encoded.jsonObject.withSingleSchemaPerType().withoutUndescribedQueryParameters().toString()
     }
 }
 
@@ -102,7 +107,8 @@ private fun Application.apiOpenApiDoc(publicOrigin: String, inferencePaths: Set<
     val base = OpenApiDoc(
         info = OpenApiInfo(
             title = "TeamCode API",
-            version = BuildInfo.VERSION,
+            // The API version, not the build: the server's version is behind authentication (`/api/v1/capabilities`).
+            version = "1",
             description = API_DESCRIPTION,
             contact = OpenApiInfo.Contact(name = "TeamCode", url = "https://github.com/nathanfallet/teamcode"),
             license = OpenApiInfo.License(name = "Apache-2.0", url = "https://www.apache.org/licenses/LICENSE-2.0"),
@@ -139,6 +145,22 @@ internal fun isApiRoute(method: HttpMethod, path: String, inferencePaths: Set<St
 internal fun Route.method(): HttpMethod? =
     lineage().mapNotNull { (it as? RoutingNode)?.selector as? HttpMethodRouteSelector }.firstOrNull()?.method
 
+/** The page's only inline script, allowed by its hash in [SWAGGER_UI_CSP]. */
+private fun swaggerUiBootstrap(specPath: String) =
+    "window.onload = () => { window.ui = SwaggerUIBundle({ url: \"$specPath\", dom_id: \"#swagger-ui\" }); };"
+
+/**
+ * The page runs third-party code on the server's origin, so it may only load the pinned files from unpkg, run its own
+ * bootstrap, call this origin, and never be framed.
+ */
+private val SWAGGER_UI_CSP: String by lazy {
+    val bootstrap = java.util.Base64.getEncoder().encodeToString(
+        java.security.MessageDigest.getInstance("SHA-256").digest(swaggerUiBootstrap(API_OPENAPI_PATH).encodeToByteArray()),
+    )
+    "default-src 'none'; script-src https://unpkg.com 'sha256-$bootstrap'; style-src https://unpkg.com 'unsafe-inline'; " +
+        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+}
+
 /** The Swagger UI page that reads [specPath]. */
 internal fun swaggerUiPage(specPath: String): String =
     """
@@ -155,11 +177,7 @@ internal fun swaggerUiPage(specPath: String): String =
       <div id="swagger-ui"></div>
       <script src="https://unpkg.com/swagger-ui-dist@$SWAGGER_UI_VERSION/swagger-ui-bundle.js"
               integrity="$SWAGGER_UI_JS_SRI" crossorigin="anonymous"></script>
-      <script>
-        window.onload = () => {
-          window.ui = SwaggerUIBundle({ url: "$specPath", dom_id: "#swagger-ui", persistAuthorization: false });
-        };
-      </script>
+      <script>${swaggerUiBootstrap(specPath)}</script>
     </body>
     </html>
     """.trimIndent()
@@ -169,8 +187,10 @@ private const val API_DESCRIPTION = "The HTTP API of a TeamCode server: team adm
     "**Authentication.** Send `Authorization: Bearer <token>`. An interactive login (`POST /api/v1/auth/login`) can " +
     "call every operation its member's role allows. A service key can only call the operations that list one of its " +
     "scopes; every other operation answers 403 `credential_scope`. Click **Authorize** to try requests from this page.\n\n" +
-    "**Errors.** Every management error answers `{\"error\": {\"type\": \"<stable code>\", \"message\": \"<text>\"}}`. " +
-    "Clients should branch on `type`, never on `message`. A 429 carries `Retry-After`.\n\n" +
+    "**Errors.** Every `/api/v1` error answers `{\"error\": {\"type\": \"<stable code>\", \"message\": \"<text>\"}}`. " +
+    "Clients should branch on `type`, never on `message`. A 429 carries `Retry-After`. The inference endpoints answer " +
+    "in the Anthropic or OpenAI error format and the MCP gateway with JSON-RPC errors, except a missing credential " +
+    "(401, in the envelope above).\n\n" +
     "**Conventions.** Times are Unix epoch milliseconds. Paginated lists return a cursor (`nextBeforeId`, `nextBefore`, " +
     "`nextAfter`): pass it back as `before` (or `after`) to read the next page; a null cursor means there is no more. " +
     "The operations available depend on the features this server enables (`GET /api/v1/capabilities`)."

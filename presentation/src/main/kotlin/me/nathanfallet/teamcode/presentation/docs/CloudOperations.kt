@@ -155,8 +155,8 @@ private fun ApiCatalog.cloudSessions() {
             "(or `all`) where the caller may. Page with `before` = `nextBefore`."
         parameters {
             queryText("owner", "A member's identifier, or `all`.")
-            queryText("state", "Only these states (repeatable): `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
-            queryText("label", "Only sessions with this label, as `key=value` (repeatable).")
+            queryList("state", "Only these states: `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
+            queryList("label", "Only sessions with these labels, each as `key=value`.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "The page size, 1 to 50.")
         }
@@ -398,7 +398,7 @@ private fun ApiCatalog.cloudTransfers() {
         parameters {
             queryText("direction", "`incoming`, `outgoing` or `all` (default).")
             queryText("scope", "`mine` (default) or `team`.")
-            queryText("state", "Only these states (repeatable): `offered`, `accepted`, `completed`, `declined`, `cancelled`, `expired`, `failed`.")
+            queryList("state", "Only these states: `offered`, `accepted`, `completed`, `declined`, `cancelled`, `expired`, `failed`.")
             queryText("session", "Only this session's transfers.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "The page size, 1 to 50.")

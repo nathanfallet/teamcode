@@ -59,3 +59,22 @@ private fun JsonElement.rewriteReferences(twins: Map<String, String>, nullable: 
     }
     else -> this
 }
+
+/**
+ * Each operation without the query parameters it does not describe. Ktor copies the query properties of a parent
+ * `@Resource` onto its nested resources (`member`, `all`, `before` of `/runs` onto `/runs/{id}/end`), which the route
+ * ignores; every query parameter a route reads has a description in the catalog.
+ */
+internal fun JsonObject.withoutUndescribedQueryParameters(): JsonObject {
+    val paths = this["paths"] as? JsonObject ?: return this
+    val cleaned = paths.mapValues { (_, item) ->
+        if (item !is JsonObject) item else JsonObject(item.mapValues { (_, operation) ->
+            val parameters = (operation as? JsonObject)?.get("parameters") as? JsonArray ?: return@mapValues operation
+            val kept = parameters.filterNot { parameter ->
+                parameter is JsonObject && (parameter["in"] as? JsonPrimitive)?.contentOrNull == "query" && parameter["description"] == null
+            }
+            JsonObject(if (kept.isEmpty()) operation - "parameters" else operation + ("parameters" to JsonArray(kept)))
+        })
+    }
+    return JsonObject(this + ("paths" to JsonObject(cleaned)))
+}

@@ -30,9 +30,9 @@ internal fun ApiCatalog.serverOperations() {
         parameters { headerText("x-teamcode-client-request-id", "An identifier of the request, used by `POST /api/v1/requests/{id}/cancel`.") }
         responses {
             HttpStatusCode.OK { description = "The streamed response (`text/event-stream`)." }
-            error(HttpStatusCode.BadRequest, "The request is not a streaming JSON Messages request (`invalid_request`).")
-            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 2 MiB (`payload_too_large`).")
-            error(HttpStatusCode.TooManyRequests, "No allowance, concurrency or account is available now (`Retry-After` says when to retry).")
+            protocolError(HttpStatusCode.BadRequest, "The request is not a streaming JSON Messages request (`invalid_request`).")
+            protocolError(HttpStatusCode.PayloadTooLarge, "The body exceeds 2 MiB (`payload_too_large`).")
+            protocolError(HttpStatusCode.TooManyRequests, "No allowance, concurrency or account is available now (`Retry-After` says when to retry).")
         }
     }
     post("/v1/responses") {
@@ -45,9 +45,9 @@ internal fun ApiCatalog.serverOperations() {
         parameters { headerText("x-teamcode-client-request-id", "An identifier of the request, used by `POST /api/v1/requests/{id}/cancel`.") }
         responses {
             HttpStatusCode.OK { description = "The streamed response (`text/event-stream`)." }
-            error(HttpStatusCode.BadRequest, "The request is not a streaming JSON Responses request (`invalid_request`).")
-            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 2 MiB (`payload_too_large`).")
-            error(HttpStatusCode.TooManyRequests, "No allowance, concurrency or account is available now (`Retry-After` says when to retry).")
+            protocolError(HttpStatusCode.BadRequest, "The request is not a streaming JSON Responses request (`invalid_request`).")
+            protocolError(HttpStatusCode.PayloadTooLarge, "The body exceeds 2 MiB (`payload_too_large`).")
+            protocolError(HttpStatusCode.TooManyRequests, "No allowance, concurrency or account is available now (`Retry-After` says when to retry).")
         }
     }
     post("/api/v1/requests/{id}/cancel") {

@@ -358,10 +358,10 @@ internal fun ApiCatalog.variantOperations() {
         responses {
             ok<JsonObject>("The JSON-RPC response.")
             empty("A notification was accepted.", HttpStatusCode.Accepted)
-            error(HttpStatusCode.BadRequest, "Invalid JSON or JSON-RPC message (JSON-RPC error `-32700` or `-32600`).")
-            error(HttpStatusCode.NotFound, "The server is not assigned to the caller (JSON-RPC error `-32600`).")
-            error(HttpStatusCode.UnsupportedMediaType, "The body is not `application/json`.")
-            error(HttpStatusCode.TooManyRequests, "A per-member or per-server rate or concurrency limit (`mcp_member_rate`, `mcp_server_rate`, …).")
+            protocolError(HttpStatusCode.BadRequest, "Invalid JSON or JSON-RPC message (JSON-RPC error `-32700` or `-32600`).")
+            protocolError(HttpStatusCode.NotFound, "The server is not assigned to the caller (JSON-RPC error `-32600`).")
+            protocolError(HttpStatusCode.UnsupportedMediaType, "The body is not `application/json`.")
+            protocolError(HttpStatusCode.TooManyRequests, "A per-member or per-server rate or concurrency limit (`mcp_member_rate`, `mcp_server_rate`, …).")
         }
     }
     get("/api/v1/mcp/usage") {

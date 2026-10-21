@@ -150,13 +150,33 @@ class ApiDocsTest {
         assertTrue(schemas.keys.none { it.last().isDigit() }, schemas.keys.toString())
         val references = Regex("\"#/components/schemas/([^\"]+)\"").findAll(document.toString()).map { it.groupValues[1] }.toSet()
         assertTrue(references.all { it in schemas.keys }, (references - schemas.keys).toString())
+        // The inference endpoints answer in their provider's error format, never in the envelope (except the 401).
+        val messages = document.operations().getValue("POST /v1/messages").getValue("responses").jsonObject
+        assertFalse("ApiError" in messages.getValue("400").toString(), messages.toString())
+        assertTrue("ApiError" in messages.getValue("401").toString(), messages.toString())
         val unauthorized = document.operations().getValue("GET /api/v1/members").getValue("responses").jsonObject.getValue("401").toString()
         assertTrue("#/components/schemas/ApiError" in unauthorized, unauthorized)
     }
 
     @Test
+    fun onlyTheQueryParametersARouteReadsAreListed() = withDocument { document, _ ->
+        val operations = document.operations()
+        fun queries(key: String) = operations.getValue(key)["parameters"]?.jsonArray.orEmpty()
+            .map { it.jsonObject }.filter { it.getValue("in").jsonPrimitive.content == "query" }.map { it.getValue("name").jsonPrimitive.content }
+        // `/runs` reads them; its nested resources inherit them from `RunsResource` but ignore them.
+        assertEquals(listOf("member", "all", "before"), queries("GET /api/v1/runs"))
+        for (key in listOf("POST /api/v1/runs", "POST /api/v1/runs/{id}/end", "GET /api/v1/runs/{id}", "POST /api/v1/members/{memberId}/budget-overrides"))
+            assertEquals(emptyList(), queries(key), key)
+        val state = operations.getValue("GET /api/v1/cloud/sessions").getValue("parameters").jsonArray.map { it.jsonObject }
+            .single { it.getValue("name").jsonPrimitive.content == "state" }
+        assertEquals("array", state.getValue("schema").jsonObject.getValue("type").jsonPrimitive.content)
+    }
+
+    @Test
     fun documentDeclaresThePublicOrigin() = withDocument { document, _ ->
         assertTrue(document.getValue("openapi").jsonPrimitive.content.startsWith("3."))
+        // The API version, not the server build: anonymous readers learn nothing more than the routes.
+        assertEquals("1", document.getValue("info").jsonObject.getValue("version").jsonPrimitive.content)
         assertEquals(listOf("https://teamcode.example.org"), document.getValue("servers").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content })
     }
 
@@ -169,5 +189,11 @@ class ApiDocsTest {
         val page = response.bodyAsText()
         assertTrue("url: \"$API_OPENAPI_PATH\"" in page, page)
         assertEquals(2, Regex("""integrity="sha384-[A-Za-z0-9+/=]+"""").findAll(page).count(), page)
+        // Third-party code on the server's origin: only the pinned CDN and the page's own bootstrap, never framed.
+        val policy = response.headers["Content-Security-Policy"].orEmpty()
+        assertTrue("script-src https://unpkg.com 'sha256-" in policy && "frame-ancestors 'none'" in policy, policy)
+        val bootstrap = Regex("<script>(.*)</script>").find(page)!!.groupValues[1]
+        val hash = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(bootstrap.encodeToByteArray()))
+        assertTrue("'sha256-$hash'" in policy, policy)
     }
 }
