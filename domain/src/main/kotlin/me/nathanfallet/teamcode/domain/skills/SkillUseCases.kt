@@ -18,16 +18,19 @@ fun Principal.requireSkillReader(memberId: String) {
     if (serviceScopes == null) requireReady() else requireScope(ServiceScope.SKILLS_READ)
 }
 
-/** Validates a CI or administrator upload and stores it as an immutable version. */
+/**
+ * Validates a CI or administrator upload and stores it as an immutable version. With `pin`, the uploaded version also
+ * becomes the delivered one, under the same publication right.
+ */
 class PublishSkillVersionUseCase(private val store: SkillStore) {
     /** Lets transports refuse an unauthorized caller before reading a multi-megabyte upload. */
     fun authorize(actor: Principal) = actor.requireSkillPublisher()
 
-    suspend operator fun invoke(actor: Principal, name: String, version: String, files: List<SkillFile>): SkillPublication {
+    suspend operator fun invoke(actor: Principal, name: String, version: String, files: List<SkillFile>, pin: Boolean = false): SkillPublication {
         actor.requireSkillPublisher()
         SkillArtifacts.validateName(name)
         SkillArtifacts.validateVersion(version)
-        return store.publish(actor, name, version, SkillArtifacts.validate(files))
+        return store.publish(actor, name, version, SkillArtifacts.validate(files), pin)
     }
 }
 
@@ -85,14 +88,20 @@ class ReportSkillInstallationsUseCase(private val store: SkillStore) {
 }
 
 /**
- * Administrator catalog operations: authorization and input validation happen here, before persistence. Rules that
+ * Catalog operations, administrator-only except pinning: authorization and input validation happen here, before persistence. Rules that
  * depend on current shared state (retired skill, pinned version, limits) are enforced by the store inside its
  * team-locked transaction, so two replicas cannot both pass them.
  */
 class ManageSkillCatalogUseCase(private val store: SkillStore) {
     suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return store.catalog(actor) }
     suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> = admin(actor, name) { store.versions(actor, name) }
-    suspend fun pin(actor: Principal, name: String, version: String): Skill = admin(actor, name, version) { store.pin(actor, name, version) }
+    /** Pinning shares the publication right, so CI can approve what it publishes. Everything else is administrator-only. */
+    suspend fun pin(actor: Principal, name: String, version: String): Skill {
+        actor.requireSkillPublisher()
+        SkillArtifacts.validateName(name)
+        SkillArtifacts.validateVersion(version)
+        return store.pin(actor, name, version)
+    }
     suspend fun unpin(actor: Principal, name: String): Skill = admin(actor, name) { store.unpin(actor, name) }
     suspend fun retire(actor: Principal, name: String): Skill = admin(actor, name) { store.retire(actor, name) }
     suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }

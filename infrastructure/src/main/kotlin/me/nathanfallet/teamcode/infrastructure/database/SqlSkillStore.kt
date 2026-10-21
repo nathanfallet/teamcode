@@ -38,7 +38,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         }
     }
 
-    override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact): SkillPublication {
+    override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
         actor.requireSkillPublisher()
         // Short team-locked step: create the catalog entry once. The team lock also serializes admission, so the
         // content insert below holds only this skill's row lock.
@@ -61,7 +61,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                 }
         }
         try {
-            return publishVersion(actor, skillId, name, version, artifact)
+            return publishVersion(actor, skillId, name, version, artifact, pin)
         } catch (failure: Throwable) {
             // A first publication that fails must not leave an empty catalog entry that counts toward the skill limit.
             if (createdHere) withContext(NonCancellable) { discardEmpty(actor, skillId) }
@@ -83,7 +83,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         // The original failure is the one to report; an empty entry left by a second failure is still harmless.
     }
 
-    private suspend fun publishVersion(actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact): SkillPublication {
+    private suspend fun publishVersion(actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
         return database.query {
             requireCurrent(this, actor)
             // A concurrent first publication of the same name may have failed and discarded the empty entry just now.
@@ -96,7 +96,10 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                     throw TeamFailure("skill_version_conflict", 409, "Version $version is already published with different content. Publish a new version.")
                 if (existing[SkillVersions.retiredAt] != null)
                     throw TeamFailure("skill_version_retired", 409, "Version $version is retired and cannot be pinned. Publish a new version.")
-                return@query SkillPublication(skill(row), version(existing), created = false)
+                // A retried publication with pin converges on the same state; only an actual change is audited.
+                if (!pin) return@query SkillPublication(skill(row), version(existing), created = false)
+                pinLocked(actor, row, existing[SkillVersions.id], nowMillis())
+                return@query SkillPublication(skill(skillRow(actor.teamId, name)), version(existing), created = false)
             }
             if (SkillVersions.select(SkillVersions.id).where { SkillVersions.skillId eq skillId }.count() >= SkillStore.VERSION_LIMIT)
                 throw TeamFailure("skill_version_limit", 409, "A skill keeps at most ${SkillStore.VERSION_LIMIT} versions.")
@@ -113,18 +116,35 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             }
             Skills.update({ Skills.id eq skillId }) { it[updatedAt] = now }
             audit(actor.teamId, actor.member.id, "skill.version.published", id)
+            // Pinned in the publication transaction: the version is never visible as published-but-unpinned to CI.
+            if (pin) pinLocked(actor, row, id, now)
             SkillPublication(skill(skillRow(actor.teamId, name)), version(versionRow(skillId, version)), created = true)
         }
     }
 
-    override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name) { row, now ->
-        if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before pinning a version.")
-        val target = versionRow(row[Skills.id], version)
-        if (target[SkillVersions.retiredAt] != null) throw TeamFailure("skill_version_retired", 409, "This version is retired and cannot be pinned.")
-        if (row[Skills.pinnedVersionId] != target[SkillVersions.id]) {
-            Skills.update({ Skills.id eq row[Skills.id] }) { it[pinnedVersionId] = target[SkillVersions.id]; it[updatedAt] = now }
-            audit(actor.teamId, actor.member.id, "skill.pinned", target[SkillVersions.id])
+    /** Open to skill publishers, so a `skills:publish` key can approve a version it published earlier. */
+    override suspend fun pin(actor: Principal, name: String, version: String): Skill {
+        actor.requireSkillPublisher()
+        return database.query {
+            lockTeam(actor.teamId); requireCurrent(this, actor)
+            val row = skillRow(actor.teamId, name)
+            if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before pinning a version.")
+            val target = versionRow(row[Skills.id], version)
+            if (target[SkillVersions.retiredAt] != null) throw TeamFailure("skill_version_retired", 409, "This version is retired and cannot be pinned.")
+            pinLocked(actor, row, target[SkillVersions.id], nowMillis())
+            skill(skillRow(actor.teamId, name))
         }
+    }
+
+    /**
+     * Points the skill at [versionId] when it is not already pinned there. The caller holds the team lock or the skill
+     * row lock and has checked that neither the skill nor the version is retired. The audit event carries the
+     * credential, so a pin made by a `skills:publish` key names that key rather than only its owner.
+     */
+    private fun JdbcTransaction.pinLocked(actor: Principal, row: ResultRow, versionId: String, now: Long) {
+        if (row[Skills.pinnedVersionId] == versionId) return
+        Skills.update({ Skills.id eq row[Skills.id] }) { it[pinnedVersionId] = versionId; it[updatedAt] = now }
+        audit(actor.teamId, actor.member.id, "skill.pinned", versionId, credential = actor.tokenId)
     }
 
     override suspend fun unpin(actor: Principal, name: String): Skill = write(actor, name) { row, now ->

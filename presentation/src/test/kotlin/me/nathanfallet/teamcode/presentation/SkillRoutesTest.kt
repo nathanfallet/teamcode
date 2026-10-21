@@ -24,18 +24,18 @@ class SkillRoutesTest {
         private fun version(name: String, label: String) = versions[name]?.find { it.first.version == label }?.first ?: throw TeamFailure("not_found", 404, "Skill version not found.")
         override suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return skills.values.toList() }
         override suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> { actor.requireAdmin(); return skill(name) to versions[name].orEmpty().map { it.first } }
-        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact): SkillPublication {
+        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
             val skill = skills.getOrPut(name) { Skill("id-$name", name, null, false, 1, 1) }
             versions[name]?.find { it.first.version == version }?.let { (existing, _) ->
                 if (existing.digest != artifact.digest) throw TeamFailure("skill_version_conflict", 409, "Conflict.")
-                return SkillPublication(skill, existing, false)
+                return SkillPublication(if (pin) pin(actor, name, version) else skill, existing, false)
             }
             val record = SkillVersion("$name@$version", skill.id, version, artifact.digest, artifact.sizeBytes, artifact.entries.size, actor.member.id, 1, false)
             versions.getOrPut(name) { mutableListOf() } += record to artifact.files
-            return SkillPublication(skill, record, true)
+            return SkillPublication(if (pin) pin(actor, name, version) else skill, record, true)
         }
         override suspend fun pin(actor: Principal, name: String, version: String): Skill {
-            actor.requireAdmin(); version(name, version)
+            actor.requireSkillPublisher(); version(name, version)
             return skill(name).copy(pinnedVersion = version).also { skills[name] = it }
         }
         override suspend fun unpin(actor: Principal, name: String): Skill { actor.requireAdmin(); return skill(name).copy(pinnedVersion = null).also { skills[name] = it } }
@@ -106,7 +106,8 @@ class SkillRoutesTest {
         assertEquals(HttpStatusCode.OK, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("1", files)).status)
         assertEquals(HttpStatusCode.Conflict, call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("1", files.take(1))).status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/skills", "service-publish").status)
-        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-publish", """{"version":"1"}""").status)
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-read", """{"version":"1"}""").status)
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Delete, "/api/v1/skills/review/pin", "service-publish").status)
 
         // Bounds and unsafe content are refused before persistence.
         for ((body, code) in listOf(
@@ -161,6 +162,43 @@ class SkillRoutesTest {
         assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/skill-delivery/review/1", "admin").status)
         assertEquals("""{"memberId":"admin-id","skills":[]}""", call(HttpMethod.Get, "/api/v1/skill-delivery", "admin").bodyAsText())
         assertTrue(call(HttpMethod.Get, "/api/v1/capabilities", "admin").bodyAsText().contains("team.skills.v1"))
+    }
+
+    @Test fun aPublishingKeyPinsWhatItPublishes() = testApplication {
+        val store = MemoryStore()
+        application { configureGateway(NoGateway(), team = team(), skills = SkillCatalog(store)) }
+        suspend fun call(method: HttpMethod, path: String, token: String, body: String) = client.request(path) {
+            this.method = method; bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
+        }
+        fun pinned(version: String, files: List<SkillFileUpload>) = Serialization.json.encodeToString(PublishSkillVersionRequest(version, files, pin = true))
+        val one = listOf(upload("SKILL.md", "One"))
+
+        // `pin` publishes and approves in one call; a retry is a 200 that keeps the pin.
+        val created = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", pinned("1", one))
+        assertEquals(HttpStatusCode.Created, created.status)
+        val first = Serialization.json.decodeFromString<PublishSkillVersionResponse>(created.bodyAsText())
+        assertTrue(first.version.pinned); assertEquals("1", first.skill.pinnedVersion)
+        val retried = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", pinned("1", one))
+        assertEquals(HttpStatusCode.OK, retried.status)
+        assertTrue(Serialization.json.decodeFromString<PublishSkillVersionResponse>(retried.bodyAsText()).version.pinned)
+
+        // Without `pin`, a new version waits; the same key pins it, or an earlier one as a rollback.
+        val waiting = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("2", listOf(upload("SKILL.md", "Two"))))
+        assertFalse(Serialization.json.decodeFromString<PublishSkillVersionResponse>(waiting.bodyAsText()).version.pinned)
+        assertEquals("1", store.skills.getValue("review").pinnedVersion)
+        val pin = call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-publish", """{"version":"2"}""")
+        assertEquals(HttpStatusCode.OK, pin.status)
+        assertEquals("2", Serialization.json.decodeFromString<SkillView>(pin.bodyAsText()).pinnedVersion)
+        assertEquals(HttpStatusCode.OK, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-publish", """{"version":"1"}""").status)
+        assertEquals("1", store.skills.getValue("review").pinnedVersion)
+
+        // Other keys and members cannot pin by either route.
+        for (token in listOf("service-read", "service-inference", "member")) {
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/pin", token, """{"version":"2"}""").status, token)
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", token, pinned("3", one)).status, token)
+        }
+        assertEquals("1", store.skills.getValue("review").pinnedVersion)
+        assertTrue(client.get("/api/v1/capabilities") { bearerAuth("service-publish") }.bodyAsText().contains("team.skills.publish-pin.v1"))
     }
 
     @Test fun dashboardIsAdministratorOnlyEscapedAndCsrfProtected() = testApplication {

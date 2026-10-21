@@ -15,11 +15,15 @@ interface SkillStore {
 
     /**
      * Creates the skill on its first publication and stores an immutable version. Republishing the same version with
-     * the same digest is an idempotent success; a different digest is a conflict. Never pins.
+     * the same digest is an idempotent success; a different digest is a conflict. Pins the version in the same
+     * transaction only when [pin] is set, which is also idempotent: republishing the pinned version changes nothing.
      */
-    suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact): SkillPublication
+    suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean = false): SkillPublication
 
-    /** Approves [version] as the delivered version. Pinning an older version is a rollback. */
+    /**
+     * Approves [version] as the delivered version. Pinning an older version is a rollback. Allowed to skill publishers
+     * (an administrator or an administrator's `skills:publish` key); the audit event names the credential.
+     */
     suspend fun pin(actor: Principal, name: String, version: String): Skill
     suspend fun unpin(actor: Principal, name: String): Skill
 

@@ -115,10 +115,36 @@ class SkillPersistenceTest {
                 catalogA.store.pin(admin, "review", "1.0.0")
                 assertEquals(listOf("1.0.0"), catalogB.effective(member).map { it.version })
 
-                // A publishing key cannot administer the catalog, and its revocation is shared by every replica.
+                // CI pins what it publishes, in the publication transaction and with the same key; a retry changes nothing.
+                val auto = catalogA.publish(publisher, "review", "5.0.0", files("five"), pin = true)
+                assertTrue(auto.created); assertEquals("5.0.0", auto.skill.pinnedVersion); assertTrue(auto.version.id.isNotEmpty())
+                assertEquals(listOf("5.0.0"), catalogB.effective(member).map { it.version })
+                val retried = catalogB.publish(publisher, "review", "5.0.0", files("five"), pin = true)
+                assertFalse(retried.created); assertEquals("5.0.0", retried.skill.pinnedVersion)
+                failure("skill_version_conflict") { catalogB.publish(publisher, "review", "5.0.0", files("changed"), pin = true) }
+                failure("skill_version_retired") { catalogA.publish(publisher, "review", "2.0.0", files("two"), pin = true) }
+                failure("skill_version_retired") { catalogA.store.pin(publisher, "review", "2.0.0") }
+                assertEquals("5.0.0", catalogA.store.versions(admin, "review").first.pinnedVersion)
+                // Republishing an existing version with pin, or the pin route, is a rollback the key may make.
+                assertEquals("1.0.0", catalogB.publish(publisher, "review", "1.0.0", files("one", large), pin = true).skill.pinnedVersion)
+                assertEquals("5.0.0", catalogA.store.pin(publisher, "review", "5.0.0").pinnedVersion)
+                assertEquals("5.0.0", catalogB.store.pin(publisher, "review", "5.0.0").pinnedVersion)
+                // Each actual change is one audit event naming the key; interactive pins name the login session.
+                val pins = a.query {
+                    AuditEvents.select(AuditEvents.subjectId, AuditEvents.credentialId).where { AuditEvents.action eq "skill.pinned" }
+                        .orderBy(AuditEvents.id to SortOrder.ASC).map { it[AuditEvents.credentialId] to it[AuditEvents.subjectId] }
+                }
+                assertEquals(listOf(publisher.tokenId to auto.version.id, publisher.tokenId to v1.version.id, publisher.tokenId to auto.version.id),
+                    pins.filter { it.first == publisher.tokenId })
+                assertTrue(pins.filter { it.first != publisher.tokenId }.all { it.first == admin.tokenId })
+
+                // A publishing key cannot otherwise administer the catalog, and its revocation is shared by every replica.
                 failure("forbidden") { catalogB.store.catalog(member) }
                 failure("credential_scope") { catalogB.store.catalog(publisher) }
-                failure("credential_scope") { catalogB.store.pin(publisher, "review", "1.0.0") }
+                failure("credential_scope") { catalogB.store.unpin(publisher, "review") }
+                failure("credential_scope") { catalogB.store.retire(publisher, "review") }
+                failure("forbidden") { catalogB.store.pin(member, "review", "1.0.0") }
+                failure("credential_scope") { catalogB.store.pin(inference, "review", "1.0.0") }
                 keys.revoke(admin, publisher.tokenId)
                 failure("authentication_required") { catalogB.publish(publisher, "review", "4.0.0", files("four")) }
 
@@ -126,7 +152,7 @@ class SkillPersistenceTest {
                 val actions = a.query { AuditEvents.select(AuditEvents.action, AuditEvents.subjectId).where { AuditEvents.action like "skill.%" }.map { it[AuditEvents.action] to it[AuditEvents.subjectId] } }
                 assertTrue(actions.map { it.first }.containsAll(listOf("skill.created", "skill.version.published", "skill.pinned", "skill.access.allowed",
                     "skill.access.denied", "skill.access.cleared", "skill.version.retired", "skill.unpinned", "skill.retired", "skill.restored")))
-                assertEquals(2, actions.count { it.first == "skill.version.published" }, "Idempotent and refused publications append nothing")
+                assertEquals(3, actions.count { it.first == "skill.version.published" }, "Idempotent and refused publications append nothing")
                 assertTrue(actions.all { (_, subject) -> subject.length == 36 })
                 // Access events name the assignment, which resolves to both the skill and the member, even once cleared.
                 val accessSubjects = actions.filter { it.first.startsWith("skill.access.") }.map { it.second }.toSet()

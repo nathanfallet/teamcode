@@ -30,8 +30,13 @@ class SkillFileUpload(val path: String, val mode: String = "file", val contentBa
     override fun toString() = "SkillFileUpload(path=$path, mode=$mode)"
 }
 
+/**
+ * With `pin`, the published version also becomes the delivered one in the same transaction. Republishing the same
+ * content with `pin` is idempotent. Servers advertise `team.skills.publish-pin.v1`; an older server ignores the field,
+ * which a client detects from `version.pinned` in the response.
+ */
 @Serializable
-data class PublishSkillVersionRequest(val version: String, val files: List<SkillFileUpload>)
+data class PublishSkillVersionRequest(val version: String, val files: List<SkillFileUpload>, val pin: Boolean = false)
 
 @Serializable
 data class PublishSkillVersionResponse(val skill: SkillView, val version: SkillVersionView, val created: Boolean)

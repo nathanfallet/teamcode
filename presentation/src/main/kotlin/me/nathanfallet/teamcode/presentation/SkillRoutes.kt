@@ -64,7 +64,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
         val name = call.skillName
         skills.publish.authorize(call.principal) // Before buffering up to 8 MiB.
         val input = call.boundedJson<PublishSkillVersionRequest>(MAX_PUBLISH_BODY_BYTES)
-        val result = skills.publish(call.principal, name, input.version, input.files())
+        val result = skills.publish(call.principal, name, input.version, input.files(), input.pin)
         call.respond(if (result.created) HttpStatusCode.Created else HttpStatusCode.OK,
             PublishSkillVersionResponse(result.skill.view(), result.version.view(result.skill.pinnedVersion), result.created))
     }
@@ -124,7 +124,7 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
         val rows = store.catalog(actor).joinToString("") { skill ->
             """<tr><td><a href="/dashboard/skills/${escape(skill.name)}">${escape(skill.name)}</a></td><td>${skill.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td>${if (skill.retired) "Retired" else "Active"}</td><td><small>${date(skill.updatedAt)}</small></td></tr>"""
         }
-        call.respondText(call.page("Skill catalog", """<details class='help'><summary>How this works</summary><p>Skills are published by CI through the API with a <code>skills:publish</code> service key owned by an administrator. A version is delivered only after an administrator pins it, and only to members with an explicit <em>allow</em> decision. Delivered files can be copied by their recipients: protect tools and data at the service that owns them.</p></details><table><thead><tr><th>Skill</th><th>Pinned version</th><th>State</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No skill has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/skills">My delivered skills</a></p>"""), ContentType.Text.Html)
+        call.respondText(call.page("Skill catalog", """<details class='help'><summary>How this works</summary><p>Skills are published by CI through the API with a <code>skills:publish</code> service key owned by an administrator. A version is delivered only once it is pinned, and only to members with an explicit <em>allow</em> decision. An administrator pins a version here; CI can also pin the version it publishes, with the same key, and the audit journal names that key. Delivered files can be copied by their recipients: protect tools and data at the service that owns them.</p></details><table><thead><tr><th>Skill</th><th>Pinned version</th><th>State</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No skill has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/skills">My delivered skills</a></p>"""), ContentType.Text.Html)
     }
     get("/dashboard/skills/{name}") {
         val actor = call.principal
