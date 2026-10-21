@@ -45,22 +45,19 @@ data class TeamEventPage(val events: List<TeamEvent>, val through: Long, val mor
  */
 data class TeamEventAudience(val memberId: String, val sessions: Boolean, val runs: Boolean, val teamSessions: Boolean, val teamRuns: Boolean)
 
-/**
- * Sessions of the whole team: an interactive administrator or an administrator's `admin:cloud` key. This is the single
- * extension point for a read-only team scope: `team:read` joins here when it exists.
- */
-val Principal.readsTeamSessions: Boolean get() = isCloudAdministrator
+/** Sessions of the whole team: what a cloud administrator or a `team:read` key reads (see [canReadTeamCloud]). */
+val Principal.readsTeamSessions: Boolean get() = canReadTeamCloud
 
-/** Runs of the whole team: an interactive administrator (what `GET /runs?all=true` requires). `team:read` joins here too. */
-val Principal.readsTeamRuns: Boolean get() = serviceScopes == null && member.role.isAdministrator
+/** Runs of the whole team: an interactive administrator or a `team:read` key (what `GET /runs?all=true` allows). */
+val Principal.readsTeamRuns: Boolean get() = canReadTeam
 
 /**
  * The audience of a stream opened by this credential. Cloud sessions need `cloud:read` (or an interactive login);
- * runs are added for an interactive login or a `usage:read` key.
+ * runs are added for an interactive login or a `usage:read` or `team:read` key.
  */
 fun Principal.teamEventAudience(): TeamEventAudience {
     requireCloudRead()
-    val runs = serviceScopes == null || ServiceScope.USAGE_READ in serviceScopes
+    val runs = serviceScopes == null || ServiceScope.USAGE_READ in serviceScopes || ServiceScope.TEAM_READ in serviceScopes
     return TeamEventAudience(member.id, sessions = true, runs = runs, teamSessions = readsTeamSessions, teamRuns = runs && readsTeamRuns)
 }
 

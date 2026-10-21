@@ -63,6 +63,8 @@ class TeamEventsTest {
         val ownerKey = principal(admin, setOf(ServiceScope.CLOUD_READ, ServiceScope.USAGE_READ)).teamEventAudience()
         assertTrue(ownerKey.sees(TeamEventType.CLOUD_TURN, "admin") && !ownerKey.sees(TeamEventType.CLOUD_TURN, "colleague"), "An administrator's plain key reads as its owner")
         assertTrue(ownerKey.sees(TeamEventType.RUN_STARTED, "admin") && !ownerKey.sees(TeamEventType.RUN_STARTED, "colleague"))
+        val monitor = principal(admin, setOf(ServiceScope.TEAM_READ)).teamEventAudience()
+        assertTrue(monitor.sees(TeamEventType.CLOUD_TURN, "colleague") && monitor.sees(TeamEventType.RUN_STALE, "colleague"), "team:read sees the team's sessions and runs")
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { principal(member, setOf(ServiceScope.USAGE_READ)).teamEventAudience() }.code)
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { principal(member, setOf(ServiceScope.INFERENCE)).teamEventAudience() }.code)
         assertEquals("password_change_required", assertFailsWith<TeamFailure> { principal(member.copy(passwordChangeRequired = true)).teamEventAudience() }.code)

@@ -105,11 +105,11 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
 
     override suspend fun usage(actor: Principal, days: Int): List<McpUsage> = database.query {
         McpAccessStore.validateDays(days)
-        actor.requireScope(ServiceScope.USAGE_READ)
+        actor.requireUsageRead()
         val now = nowMillis()
         requireCurrent(this, actor, now)
         val sinceMillis = now - days * 24L * 60 * 60 * 1000
-        val everyone = actor.serviceScopes == null && actor.member.role.isAdministrator
+        val everyone = actor.canReadTeam
         val count = McpCalls.id.count()
         val bytes = McpCalls.responseBytes.sum()
         val duration = McpCalls.durationMillis.sum()

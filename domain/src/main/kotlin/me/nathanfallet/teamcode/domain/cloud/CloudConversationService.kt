@@ -187,7 +187,8 @@ class CloudConversationService(
         if (write) principal.requireCloudWrite() else principal.requireCloudRead()
         sessions.revalidate(principal)
         val session = sessions.find(principal.teamId, id) ?: throw missing()
-        val administrator = principal.isCloudAdministrator
+        // A read also opens every session to `team:read`; a write needs the caller's own cloud rights.
+        val administrator = if (write) principal.isCloudAdministrator else principal.canReadTeamCloud
         val granted = access.permissions(principal.teamId, principal.member, session.ownerId, administrator)
         val owner = session.ownerId == principal.member.id
         if (!owner && !administrator && (granted - CloudPermission.CREATE).isEmpty()) throw missing()

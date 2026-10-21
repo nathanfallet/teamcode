@@ -48,6 +48,7 @@ class TeamEventRoutesTest {
             "colleague" -> Principal(colleague, "colleague-session", "default")
             "other" -> Principal(other, "other-session", "default")
             "admin-cloud" -> Principal(admin, "admin-cloud-key", "default", setOf(ServiceScope.ADMIN_CLOUD))
+            "monitor" -> Principal(admin, "monitor-key", "default", setOf(ServiceScope.TEAM_READ))
             "admin-plain" -> Principal(admin, "admin-plain-key", "default", setOf(ServiceScope.CLOUD_READ))
             "inference-only" -> Principal(colleague, "inference-key", "default", setOf(ServiceScope.INFERENCE))
             "usage-only" -> Principal(colleague, "usage-key", "default", setOf(ServiceScope.USAGE_READ))
@@ -109,6 +110,7 @@ class TeamEventRoutesTest {
             // An interactive administrator and an admin:cloud key (sessions only) see the team; an administrator's plain key only itself.
             assertEquals(listOf(1L, 2L, 3L, 4L, 5L), client.read("admin", 5, query = "?after=0").map { it.second.seq })
             assertEquals(listOf(1L, 2L, 4L), client.read("admin-cloud", 3, query = "?after=0").map { it.second.seq }, "admin:cloud has no usage:read, so no runs")
+            assertEquals(listOf(1L, 2L, 3L, 4L, 5L), client.read("monitor", 5, query = "?after=0").map { it.second.seq }, "team:read sees sessions and runs of the team")
             // Resume: Last-Event-ID wins over ?after, and the missed events arrive once, in order, then the new ones.
             val resumed = async { client.read("colleague", 3, query = "?after=0", lastEventId = 3) }
             delay(300)

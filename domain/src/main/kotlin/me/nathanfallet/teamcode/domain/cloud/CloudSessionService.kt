@@ -84,9 +84,9 @@ class CloudSessionService(
     suspend fun list(principal: Principal, query: CloudSessionQuery): CloudSessionPage {
         principal.requireCloudRead()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
-        if (query.labels.size > 16) throw TeamFailure("invalid_label", 400, "Filter on at most 16 labels.")
+        LabelRules.validateFilter(query.labels)
         val owner = query.owner ?: principal.member.id
-        if (owner != principal.member.id) principal.requireCloudAdministrator()
+        if (owner != principal.member.id) principal.requireCloudTeamRead()
         store.revalidate(principal)
         return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }))
     }
@@ -94,7 +94,7 @@ class CloudSessionService(
     suspend fun get(principal: Principal, id: String): CloudSession {
         principal.requireCloudRead()
         store.revalidate(principal)
-        return visible(principal, store.find(principal.teamId, id))
+        return visible(principal, store.find(principal.teamId, id), read = true)
     }
 
     suspend fun executions(principal: Principal, id: String): List<CloudExecution> {
@@ -163,20 +163,20 @@ class CloudSessionService(
         } ?: throw missing()
     }
 
-    private fun visible(principal: Principal, session: CloudSession?): CloudSession {
-        if (session == null || (session.ownerId != principal.member.id && !principal.isCloudAdministrator)) throw missing()
+    /** [read] also opens every member's session to a `team:read` key; a write needs the owner or a cloud administrator. */
+    private fun visible(principal: Principal, session: CloudSession?, read: Boolean = false): CloudSession {
+        val administrator = if (read) principal.canReadTeamCloud else principal.isCloudAdministrator
+        if (session == null || (session.ownerId != principal.member.id && !administrator)) throw missing()
         return session
     }
 
     companion object {
-        private val labelKey = Regex("[a-z0-9]([a-z0-9._/-]{0,61}[a-z0-9])?")
         fun claimName(sessionId: String) = "tc-ws-$sessionId"
         fun podName(sessionId: String, epoch: Int) = "tc-$sessionId-e$epoch"
         fun validate(draft: CloudSessionDraft) {
             if (draft.name.isBlank() || draft.name.length > 120 || draft.name.any(Char::isISOControl))
                 throw TeamFailure("invalid_session", 400, "Use a session name of 1–120 characters without control characters.")
-            if (draft.labels.size > 16 || draft.labels.any { (key, value) -> !labelKey.matches(key) || value.length > 256 || value.any(Char::isISOControl) })
-                throw TeamFailure("invalid_label", 400, "Use at most 16 labels with lowercase keys of 1–63 characters and values of at most 256 characters.")
+            LabelRules.validate(draft.labels)
             if (draft.image != null && (draft.image.length !in 1..512 || draft.image.any { it.isWhitespace() || it.isISOControl() }))
                 throw TeamFailure("invalid_image", 400, "Use a valid image reference.")
             for (value in listOfNotNull(draft.agentModel, draft.agentEffort))

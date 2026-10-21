@@ -8,12 +8,13 @@ import org.jetbrains.exposed.v1.jdbc.*
 
 /** Shared launch lifecycle and bounded registry reads; no process-local registry or credentials in views. */
 class AgentRunServiceImpl(private val database: Database) : AgentRunService {
-    override suspend fun start(actor: Principal, id: String, agent: String, workload: String): RunLease = database.query {
-        writeActor(this, actor); AgentRunService.validateStart(id, agent, workload)
+    override suspend fun start(actor: Principal, id: String, agent: String, workload: String, labels: Map<String, String>): RunLease = database.query {
+        writeActor(this, actor); AgentRunService.validateStart(id, agent, workload, labels)
         val existing = AgentRuns.selectAll().where { AgentRuns.id eq id }.singleOrNull()
         if (existing != null) {
             if (existing[AgentRuns.teamId] != actor.teamId || existing[AgentRuns.memberId] != actor.member.id || existing[AgentRuns.tokenId] != actor.tokenId ||
-                existing[AgentRuns.agent] != agent || existing[AgentRuns.workload] != workload) throw TeamFailure("run_conflict", 409, "The run identifier is already assigned.")
+                existing[AgentRuns.agent] != agent || existing[AgentRuns.workload] != workload ||
+                labelsFor(listOf(id))[id].orEmpty() != labels) throw TeamFailure("run_conflict", 409, "The run identifier is already assigned.")
             return@query lease(existing, nowMillis())
         }
         if (AgentRuns.select(AgentRuns.id).where { AgentRuns.teamId eq actor.teamId }.count() >= AgentRunService.MAX_TEAM_RUNS ||
@@ -25,6 +26,7 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
             it[AgentRuns.id] = id; it[teamId] = actor.teamId; it[memberId] = actor.member.id; it[tokenId] = actor.tokenId; it[deviceId] = device
             it[AgentRuns.agent] = agent; it[AgentRuns.workload] = workload; it[startedAt] = now; it[heartbeatAt] = now
         }
+        for ((key, value) in labels) AgentRunLabels.insert { it[runId] = id; it[AgentRunLabels.key] = key; it[AgentRunLabels.value] = value }
         audit(actor.teamId, actor.member.id, "run.started", id)
         publishTeamEvent(actor.teamId, TeamEventType.RUN_STARTED, id, actor.member.id, buildJsonObject { put("runId", id); put("agent", agent); put("workload", workload) }, now)
         RunLease(id, now, now, null, RunState.RUNNING)
@@ -51,13 +53,15 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         RunLease(id, row[AgentRuns.startedAt], row[AgentRuns.heartbeatAt], row[AgentRuns.endedAt] ?: now, RunState.ENDED)
     }
 
-    override suspend fun list(actor: Principal, memberId: String?, all: Boolean, beforeId: String?): RunPage = database.query {
-        readActor(this, actor)
+    override suspend fun list(actor: Principal, memberId: String?, all: Boolean, beforeId: String?, labels: Map<String, String>): RunPage = database.query {
+        readActor(this, actor); LabelRules.validateFilter(labels)
         if (all && memberId != null) throw TeamFailure("invalid_run_filter", 400, "Choose one member or all members.")
         val selected = memberId ?: actor.member.id
         memberId?.let(AgentRunService::identifier)
-        if (all || selected != actor.member.id) actor.requireAdmin()
-        val scope = (AgentRuns.teamId eq actor.teamId) and (if (all) Op.TRUE else AgentRuns.memberId eq selected)
+        if (all || selected != actor.member.id) actor.requireTeamRead()
+        var scope = (AgentRuns.teamId eq actor.teamId) and (if (all) Op.TRUE else AgentRuns.memberId eq selected)
+        for ((key, value) in labels) scope = scope and (AgentRuns.id inSubQuery AgentRunLabels.select(AgentRunLabels.runId)
+            .where { (AgentRunLabels.key eq key) and (AgentRunLabels.value eq value) })
         val cursor = beforeId?.let { id ->
             AgentRunService.identifier(id)
             AgentRuns.select(AgentRuns.startedAt, AgentRuns.id).where { scope and (AgentRuns.id eq id) }.singleOrNull()
@@ -102,11 +106,11 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
     }
 
     private fun writeActor(transaction: JdbcTransaction, actor: Principal) { actor.requireScope(ServiceScope.INFERENCE); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
-    private fun readActor(transaction: JdbcTransaction, actor: Principal) { actor.requireScope(ServiceScope.USAGE_READ); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
+    private fun readActor(transaction: JdbcTransaction, actor: Principal) { actor.requireUsageRead(); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
     private fun accessible(actor: Principal, id: String): ResultRow {
         AgentRunService.identifier(id)
         val row = AgentRuns.selectAll().where { (AgentRuns.id eq id) and (AgentRuns.teamId eq actor.teamId) }.singleOrNull() ?: throw missing()
-        if (row[AgentRuns.memberId] != actor.member.id) actor.requireAdmin()
+        if (row[AgentRuns.memberId] != actor.member.id) actor.requireTeamRead()
         return row
     }
     private fun creator(actor: Principal, id: String): ResultRow {
@@ -131,13 +135,17 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         val queued = AdmissionWaiters.select(AdmissionWaiters.runId, waiterCount).where {
             (AdmissionWaiters.runId inList rows.map { it[AgentRuns.id] }) and (AdmissionWaiters.expiresAt greater now)
         }.groupBy(AdmissionWaiters.runId).associate { it[AdmissionWaiters.runId] to it[waiterCount].toInt() }
+        val labels = labelsFor(rows.map { it[AgentRuns.id] })
         return rows.map { row -> with(AgentRuns) {
             val member = members.getValue(row[memberId])
             val state = RunStateUseCase().state(row[endedAt], row[heartbeatAt], now, row[tokenId] in validTokens && !member[Members.disabled] && !member[Members.mustChangePassword])
             AgentRun(row[id], row[memberId], member[Members.username], row[agent], row[workload], row[deviceId], row[startedAt], row[heartbeatAt], row[lastRequestAt], row[endedAt], row[exitCode],
-                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0)
+                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty())
         } }
     }
+    private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else
+        AgentRunLabels.selectAll().where { AgentRunLabels.runId inList ids }.groupBy({ it[AgentRunLabels.runId] }) { it[AgentRunLabels.key] to it[AgentRunLabels.value] }
+            .mapValues { it.value.toMap() }
     private fun missing() = TeamFailure("run_not_found", 404, "Run not found.")
     private fun lease(row: ResultRow, now: Long) = RunLease(row[AgentRuns.id], row[AgentRuns.startedAt], row[AgentRuns.heartbeatAt], row[AgentRuns.endedAt],
         RunStateUseCase().state(row[AgentRuns.endedAt], row[AgentRuns.heartbeatAt], now, true))

@@ -8,7 +8,7 @@ TeamCode uses administrator-created usernames/passwords, with no public signup o
 | `ADMIN` | Members, non-owner recovery, accounts, policies, groups, devices, keys and operational views; no owner account changes or ownership grants |
 | `MEMBER` | Own authorized resources and inference within assigned budgets/pools/model policy |
 | Group `MANAGER` | An additional scoped assignment, not a global role; own group roster and admission pause/resume only |
-| Service/CI key | Selected scopes on its member's resources; no interactive administration, even for an owner-owned key |
+| Service/CI key | Selected scopes on its member's resources; no interactive administration, even for an owner-owned key; an administrator's `team:read` key adds a read-only view of the team, never a write |
 
 Owners remain subject to the same member/group/pool quotas and provider policy as everyone else. Ownership does not grant a separate inference budget. Global roles, scoped group roles and credential scopes are independent.
 

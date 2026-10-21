@@ -174,7 +174,7 @@ private fun ApiCatalog.cloudSessions() {
         operationId = "listCloudSessions"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "List cloud sessions"
         description = "The caller's sessions, newest first, 50 per page by default. `owner` reads another member's " +
-            "(or `all`) where the caller may. Page with `before` = `nextBefore`."
+            "(or `all`) where the caller may: an administrator, or a `team:read` key (read-only). Page with `before` = `nextBefore`."
         parameters {
             queryText("owner", "A member's identifier, or `all`.")
             queryList("state", "Only these states: `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
