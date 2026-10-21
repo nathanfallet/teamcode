@@ -9,6 +9,13 @@ enum class ServiceScope(val wire: String) {
     SKILLS_READ("skills:read"),
     /** Publish skill versions to the catalog; only valid for a key owned by an administrator. */
     SKILLS_PUBLISH("skills:publish"),
+    /** Download the owner's effective team hooks. */
+    HOOKS_READ("hooks:read"),
+    /**
+     * Publish hook versions to the catalog; only valid for a key owned by an administrator. Unlike `skills:publish`,
+     * it never pins: a hook runs code on members' computers, so an interactive administrator approves each version.
+     */
+    HOOKS_PUBLISH("hooks:publish"),
     /** Read the owner's cloud sessions, transcripts, inputs and transfers, and the profiles the owner can use. */
     CLOUD_READ("cloud:read"),
     /** Everything in `cloud:read`, plus creating and managing the owner's cloud sessions, messages, attachments and transfers. */
@@ -20,7 +27,7 @@ enum class ServiceScope(val wire: String) {
      */
     ADMIN_CLOUD("admin:cloud"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -61,6 +68,8 @@ class AuthorizeCredentialUseCase {
             CredentialAction.GUIDANCE -> actor.requireScope(ServiceScope.GUIDANCE)
             CredentialAction.SKILLS_READ -> actor.requireScope(ServiceScope.SKILLS_READ)
             CredentialAction.SKILLS_PUBLISH -> actor.requireScope(ServiceScope.SKILLS_PUBLISH)
+            CredentialAction.HOOKS_READ -> actor.requireScope(ServiceScope.HOOKS_READ)
+            CredentialAction.HOOKS_PUBLISH -> actor.requireScope(ServiceScope.HOOKS_PUBLISH)
             CredentialAction.MCP -> actor.requireScope(ServiceScope.MCP)
             CredentialAction.CLOUD_READ -> actor.requireCloudRead()
             CredentialAction.CLOUD_WRITE -> actor.requireCloudWrite()

@@ -73,6 +73,11 @@ Designs set aside on 2026-10-19:
 - Acceptance: clean setup and subsequent launches install the assigned pinned versions, updates/rollback are reproducible, removed assignments stop being provisioned, and personal configuration is preserved.
 - Server side in progress on a V2 branch: catalog, CI publication with `skills:publish`, pins, yes/no member decisions, delivery and installation status. CLI synchronization remains planned. See [skills](skills.md).
 
+### Team hooks
+
+- Team hooks are distributed like skills: CI publication with a separate `hooks:publish` scope, interactive administrator pins (never a key), yes/no member decisions, installation by `teamcode run` after the member approves each version on their computer, and by the runner in Claude Code cloud sessions. See [team hooks](hooks.md).
+- Next: report "waiting for a human" from `Stop` and `Notification` hooks on the run or cloud session, without content; report approval status to the server; retirement; Windows; Codex cloud sessions.
+
 The dashboard, team identity, native launcher and shared persistence provide the integration points. The inference proxy alone does not configure an agent's MCP connections or install its skills; these come from the MCP gateway, `teamcode run` and an explicit CLI skill capability.
 
 

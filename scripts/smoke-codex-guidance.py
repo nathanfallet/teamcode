@@ -4,6 +4,8 @@
 No provider is called, no subscription is imported and no user Codex configuration is loaded.
 """
 import argparse
+import base64
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -37,6 +39,16 @@ with tempfile.TemporaryDirectory(prefix='teamcode-codex-guidance-') as directory
     token = secrets.token_hex(32)
     state = {'version': 1, 'turns': 0, 'emitted': set(), 'claims': 0, 'errors': [], 'first_context': False, 'tool_context': False, 'tool_result': False, 'hook_sessions':set(), 'inference_sessions':set()}
     lock = threading.Lock()
+    # A team Stop hook, delivered by the fixture and approved with the native CLI before the runs.
+    stop_input = root / 'stop-hook-input.json'
+    script = f"#!/bin/sh\ncat > '{stop_input}'\nexit 0\n".encode()
+    script_sha = hashlib.sha256(script).hexdigest()
+    definition = {'events':['Stop'], 'matcher':None, 'command':'bin/stop.sh', 'timeoutSeconds':10}
+    canonical = f"hook\0Stop\0\0bin/stop.sh\x0010\nbin/stop.sh\0executable\0{len(script)}\0{script_sha}\n"
+    hook_digest = 'sha256:' + hashlib.sha256(canonical.encode()).hexdigest()
+    hook_manifest = {'memberId':'test-member', 'hooks':[{'name':'stop-guard', 'version':'1', 'digest':hook_digest, 'definition':definition, 'sizeBytes':len(script), 'fileCount':1}]}
+    hook_artifact = {'name':'stop-guard', 'version':'1', 'digest':hook_digest, 'definition':definition, 'files':[
+        {'path':'bin/stop.sh', 'mode':'executable', 'size':len(script), 'sha256':script_sha, 'contentBase64':base64.b64encode(script).decode()}]}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
@@ -52,8 +64,12 @@ with tempfile.TemporaryDirectory(prefix='teamcode-codex-guidance-') as directory
                 self.reply({}, 401); return
             if self.path.endswith('/me'):
                 self.reply({'id':'test-member','username':'synthetic','role':'MEMBER','disabled':False,'passwordChangeRequired':False})
+            elif self.path == '/api/v1/hook-delivery':
+                self.reply(hook_manifest)
+            elif self.path == '/api/v1/hook-delivery/stop-guard/1':
+                self.reply(hook_artifact)
             else:
-                self.reply({'serverVersion':'synthetic','mode':'fixture','features':[]})
+                self.reply({'serverVersion':'synthetic','mode':'fixture','features':['team.hooks.v1']})
         def do_POST(self):
             try:
                 assert self.headers.get('Authorization') == 'Bearer ' + token
@@ -126,9 +142,12 @@ with tempfile.TemporaryDirectory(prefix='teamcode-codex-guidance-') as directory
     try:
         configured = subprocess.run([binary,'configure','--server',f'http://127.0.0.1:{server.server_port}'],input=token+'\n',env=env,cwd=root/'work',capture_output=True,text=True,timeout=20)
         assert configured.returncode == 0, configured.stderr
+        approved = subprocess.run([binary,'hooks','approve','stop-guard'],env=env,cwd=root/'work',capture_output=True,text=True,timeout=20)
+        assert approved.returncode == 0, approved.stderr
         for mode in ['trusted', 'untrusted', 'disabled', 'ignored-config', 'custom-cli']:
             state.update(version=1,turns=0,emitted=set(),claims=0,errors=[],first_context=False,tool_context=False,tool_result=False,hook_sessions=set(),inference_sessions=set(),user_hook=False)
-            # This bypass is confined to this isolated fixture with two known synthetic hooks.
+            stop_input.unlink(missing_ok=True)
+            # This bypass is confined to this isolated fixture with three known synthetic hooks.
             # TeamCode itself never adds it or changes the user's persisted hook trust.
             trust = ['--dangerously-bypass-hook-trust'] if mode != 'untrusted' else []
             options = ['--no-guidance'] if mode == 'disabled' else []
@@ -150,8 +169,11 @@ with tempfile.TemporaryDirectory(prefix='teamcode-codex-guidance-') as directory
                 assert state['emitted'] == {1,2}, 'Real hook emission receipts were not recorded'
             else:
                 assert not state['claims'] and not state['first_context'] and not state['tool_context'], 'Disabled or untrusted hooks executed'
+            # The approved team hook runs whenever Codex trusts it, guidance or not; never untrusted or under explicit CLI hooks.
+            assert stop_input.exists() == (mode in ['trusted', 'disabled', 'ignored-config']), f'Team Stop hook state is wrong in {mode} mode'
+            if stop_input.exists(): assert json.loads(stop_input.read_text())['hook_event_name'] == 'Stop'
             assert (root/'codex/config.toml').read_text() == original_config, 'User configuration was changed'
         version = subprocess.run([codex,'--version'],capture_output=True,text=True,timeout=10).stdout.strip()
-        print(f'PASS: real {version}, native launcher, UserPromptSubmit/PreToolUse context injection, actual exec tool round trip, correlated sessions, receipts, preserved user hooks, trust enforcement and opt-out. No real provider calls.')
+        print(f'PASS: real {version}, native launcher, UserPromptSubmit/PreToolUse context injection, actual exec tool round trip, correlated sessions, receipts, preserved user hooks, an approved team Stop hook, trust enforcement and opt-out. No real provider calls.')
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=5)

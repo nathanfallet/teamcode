@@ -28,7 +28,7 @@ This page is the contract and the record of what is implemented. It follows the 
 | Environment preparation: recipe on the profile version and the session, repositories, working directory, Git identity, setup commands, progress and failures in the lifecycle, `cloud.environment.v1` | Implemented (PR 3) |
 | Environment variables from environment variants | Implemented (PR 3, source wired in PR 3c) |
 | [GitHub access](#github-access): team GitHub App configuration, member linking (`teamcode github link`, dashboard), encrypted user-token store, serialized refresh, unlink, `GitHubAccessSource` on that store, `github.link.v1` | Implemented (PR 3b) |
-| Team MCP servers (through the runner's loopback relay) and pinned skills (installed under the agent's UID), resolved for the current owner at every agent start | Implemented, see [team MCP servers and skills](#team-mcp-servers-and-skills) |
+| Team MCP servers (through the runner's loopback relay), pinned skills and, for Claude Code, team hooks (installed under the agent's UID), resolved for the current owner at every agent start | Implemented, see [team MCP servers and skills](#team-mcp-servers-and-skills) |
 | Transcript, messages, attach, personal and administrator keys | Implemented (#9, #21) |
 
 The server advertises `cloud.sessions.v1` only while cloud sessions are on in the stored [runtime](#runtime-on-off-runner-image-and-pod-callback); while they are off, the routes that start new work answer `404` (see below). Clients must check that capability before using any route below.
@@ -42,7 +42,7 @@ The server advertises `cloud.sessions.v1` only while cloud sessions are on in th
 | Profile | `cloud_profiles`, `cloud_profile_versions`, `cloud_profile_assignments` | Administrator; assigned to members (yes/no) | Versioned, immutable once published: cluster, namespace, image, `allowedImageOverrides`, `imagePullSecrets` names, resources, workspace size and storage class, agent kind/version, idle timeout and bounds, [environment recipe](#environment-preparation) |
 | Session | `cloud_sessions`, `cloud_session_labels` | Effective member (`ownerId`) | Pinned profile version, image and digest, resolved environment recipe, desired state, state/phase, `generation`, `currentEpoch`, labels, activity, resume quality, expiry, workspace and its deletion proof |
 | Execution | `cloud_executions` | Session | One pod lifetime, unique on `(session_id, epoch)`: pod name, node, image digest, registration, heartbeats, exit reason, checkpoint result |
-| Inference credential | `cloud_inference_credentials` + `tokens` | Execution; the member it runs for | A `tcex_` token limited to inference, the owner's MCP gateway and skill delivery (`inference`, `mcp`, `skills:read`), stored as a SHA-256 digest in `tokens` and linked to its `(session, epoch)`; deleted when the execution ends |
+| Inference credential | `cloud_inference_credentials` + `tokens` | Execution; the member it runs for | A `tcex_` token limited to inference, the owner's MCP gateway, skill and hook delivery (`inference`, `mcp`, `skills:read`, `hooks:read`), stored as a SHA-256 digest in `tokens` and linked to its `(session, epoch)`; deleted when the execution ends |
 | Idempotency record | `cloud_idempotency` | Team + initiating member | The session created by a keyed request, kept 24 hours |
 | Transfer | `cloud_transfers` | Session; former owner and recipient | From, to, initiator and decider, state, resume and pending-input policy, the last epoch of the former owner and the transcript event of the change. Kept after completion |
 
@@ -123,7 +123,7 @@ Due times: about 2 s while a step is in progress, 5 s while waiting for capacity
 | Key with `cloud:write` | Everything in `cloud:read`, plus creating, pausing, resuming and deleting the owner's sessions, messages, interrupts, attachments and transfers |
 | Administrator's key with `admin:cloud` | Everything in `cloud:write` with an administrator's rights over every team session and transfer, including `TeamCode-On-Behalf-Of` |
 | Runner | `/api/v1/cloud/runner/*` only, for its own session and epoch, with its projected pod token |
-| Execution credential (`tcex_`) | `inference`, `mcp` and `skills:read` as the member the execution runs for (never usage, publication, cloud or interactive routes); issued to the runner, never to a person |
+| Execution credential (`tcex_`) | `inference`, `mcp`, `skills:read` and `hooks:read` as the member the execution runs for (never usage, publication, cloud or interactive routes); issued to the runner, never to a person |
 
 `TeamCode-On-Behalf-Of: <memberId>` sets the effective member. It is accepted only from an interactive administrator or an administrator's `admin:cloud` key. On any other credential the header must be absent or equal to the caller's own id; otherwise `403 on_behalf_forbidden`. The target must be an enabled team member who completed password setup (`422 invalid_effective_member`), and for creation it must hold the profile assignment. The header never grants rights: the call is authorized with the caller's own rights.
 
@@ -487,7 +487,8 @@ A cloud session gets exactly what its owner gets from `teamcode run`: the team M
   3. A `.teamcode-skill` marker names a delivered directory. A directory of the same name **without** the marker belongs to the member and is never touched (reported as a conflict, counted in the pod log). A marked directory no longer in the manifest (unassigned, unpinned, retired, or a former owner's) is removed.
   - Paths follow the catalog's rules and the installer refuses anything else. Bounds: at most 100 skills and 64 MiB per start (the rest is skipped and logged), 120 s overall; on failure the previous installation stays and the agent still starts. The pod log carries counts only, never skill names or contents.
   - Skill files can be copied by whoever receives them; they are not an access boundary (see [skills](skills.md)). Installation status is not reported to the server: the report route is for registered CLI devices.
-- **Not covered.** MCP servers and skills are read when the agent process starts: one added or pinned during a long turn applies at the next start (a pause and resume, or a restart). A skill directory inside a repository of the workspace is the agent's own business.
+- **Team hooks.** For Claude Code, the runner also downloads the owner's delivered [team hooks](hooks.md), verifies each digest (definition and files), installs the files under `~/.teamcode/hooks/<name>/` with `teamcode cloud install-hooks` (same protocol, marker `.teamcode-hook`, hooks no longer delivered removed) and starts Claude Code with `--settings` naming them. No per-member approval applies in a pod: the administrator's pin and the owner's *yes* are the approval. Codex sessions get no team hook, because Codex runs only hooks a person trusted and TeamCode does not bypass that trust.
+- **Not covered.** MCP servers, skills and team hooks are read when the agent process starts: one added or pinned during a long turn applies at the next start (a pause and resume, or a restart). A skill directory inside a repository of the workspace is the agent's own business.
 
 ## Deployment
 

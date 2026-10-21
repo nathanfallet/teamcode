@@ -34,14 +34,17 @@ object SkillArtifacts {
         if (!digestPattern.matches(digest)) throw skillFailure("invalid_skill_digest", "Use a sha256:<64 lowercase hex> digest.")
     }
 
-    fun validatePath(path: String) {
+    fun validatePath(path: String) = validatePath(path, "skill")
+
+    /** Path rule shared by skill and hook artifacts; [kind] names the error code (`invalid_<kind>_path`). */
+    fun validatePath(path: String, kind: String) {
         val segments = path.split('/')
         val valid = path.length in 1..MAX_PATH_LENGTH && segments.size <= MAX_PATH_DEPTH && segments.all { segment ->
             segmentPattern.matches(segment) && !segment.endsWith('.') &&
                 segment.substringBefore('.').uppercase() !in windowsReserved
         }
         if (!valid) throw skillFailure(
-            "invalid_skill_path",
+            "invalid_${kind}_path",
             "File paths must be relative, use '/' separators, at most $MAX_PATH_DEPTH segments and $MAX_PATH_LENGTH characters, " +
                 "and contain only letters, digits, '.', '_', '+' or '-' without hidden, parent or reserved segments.",
         )
@@ -49,27 +52,35 @@ object SkillArtifacts {
 
     /** Validates bounds and paths, then returns the files sorted by path with their canonical digest. */
     fun validate(files: List<SkillFile>): SkillArtifact {
-        if (files.isEmpty() || files.size > MAX_FILES)
-            throw skillFailure("invalid_skill_artifact", "An artifact contains 1–$MAX_FILES files.")
+        val entries = validateTree(files, MAX_FILES, MAX_ARTIFACT_BYTES.toLong(), "skill")
+        if (files.none { it.path == ENTRY_FILE })
+            throw skillFailure("invalid_skill_artifact", "An artifact must contain $ENTRY_FILE at its root.")
+        return SkillArtifact(digest(entries), files.sortedBy { it.path }, entries)
+    }
+
+    /**
+     * The file-tree rules shared by skill and hook artifacts: 1–[maxFiles] files, at most [maxBytes] of content, valid
+     * portable paths, unique ignoring case, and no path that is both a file and a directory. Returns the entries sorted
+     * by path. [kind] names the error codes (`invalid_<kind>_artifact`, `<kind>_artifact_too_large`).
+     */
+    fun validateTree(files: List<SkillFile>, maxFiles: Int, maxBytes: Long, kind: String): List<SkillFileEntry> {
+        if (files.isEmpty() || files.size > maxFiles)
+            throw skillFailure("invalid_${kind}_artifact", "An artifact contains 1–$maxFiles files.")
         var total = 0L
         for (file in files) {
-            validatePath(file.path)
+            validatePath(file.path, kind)
             total += file.content.size
-            if (total > MAX_ARTIFACT_BYTES)
-                throw skillFailure("skill_artifact_too_large", "An artifact is limited to $MAX_ARTIFACT_BYTES bytes of file content.", 413)
+            if (total > maxBytes)
+                throw skillFailure("${kind}_artifact_too_large", "An artifact is limited to $maxBytes bytes of file content.", 413)
         }
         // Case-insensitive file systems would merge these paths; a file cannot also be a directory.
         val folded = files.map { it.path.lowercase() }
         if (folded.toSet().size != folded.size)
-            throw skillFailure("invalid_skill_artifact", "File paths must be unique, ignoring case.")
+            throw skillFailure("invalid_${kind}_artifact", "File paths must be unique, ignoring case.")
         val directories = folded.flatMap { path -> path.split('/').dropLast(1).runningReduce { a, b -> "$a/$b" } }.toSet()
         if (folded.any { it in directories })
-            throw skillFailure("invalid_skill_artifact", "A path cannot be both a file and a directory.")
-        if (files.none { it.path == ENTRY_FILE })
-            throw skillFailure("invalid_skill_artifact", "An artifact must contain $ENTRY_FILE at its root.")
-        val sorted = files.sortedBy { it.path }
-        val entries = sorted.map { SkillFileEntry(it.path, it.mode, it.content.size, sha256(it.content)) }
-        return SkillArtifact(digest(entries), sorted, entries)
+            throw skillFailure("invalid_${kind}_artifact", "A path cannot be both a file and a directory.")
+        return files.sortedBy { it.path }.map { SkillFileEntry(it.path, it.mode, it.content.size, sha256(it.content)) }
     }
 
     /**

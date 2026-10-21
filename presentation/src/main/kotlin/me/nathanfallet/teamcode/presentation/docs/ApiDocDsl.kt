@@ -38,6 +38,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         teamOperations()
         capacityOperations()
         skillOperations()
+        hookOperations()
         variantOperations()
         cloudOperations()
     }.operations
@@ -63,6 +64,8 @@ internal object ApiTags {
     const val INFERENCE = "Inference"
     const val SKILLS = "Skills"
     const val SKILL_DELIVERY = "Skill delivery"
+    const val HOOKS = "Team hooks"
+    const val HOOK_DELIVERY = "Hook delivery"
     const val VARIANTS = "Variants"
     const val MCP = "MCP gateway"
     const val CLOUD_ADMIN = "Cloud administration"
@@ -90,6 +93,8 @@ internal object ApiTags {
         INFERENCE to "Model requests relayed to the team's subscriptions.",
         SKILLS to "The team's skill catalog: versions, pins and per-member assignments.",
         SKILL_DELIVERY to "Skills a member may install, their files and installation reports.",
+        HOOKS to "The team's hook catalog: versions, pins and per-member assignments.",
+        HOOK_DELIVERY to "Team hooks a member may install and their files.",
         VARIANTS to "Environment and MCP variants and their assignment to members.",
         MCP to "The MCP gateway, its tool policies, usage and call journal.",
         CLOUD_ADMIN to "Cloud clusters, profiles, settings and the cloud access policy (administrators).",
@@ -123,6 +128,8 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.GUIDANCE -> listOf("guidance")
                 CredentialAction.SKILLS_READ -> listOf("skills:read")
                 CredentialAction.SKILLS_PUBLISH -> listOf("skills:publish")
+                CredentialAction.HOOKS_READ -> listOf("hooks:read")
+                CredentialAction.HOOKS_PUBLISH -> listOf("hooks:publish")
                 CredentialAction.MCP -> listOf("mcp")
                 CredentialAction.CLOUD_READ -> listOf("cloud:read", "cloud:write", "admin:cloud")
                 CredentialAction.CLOUD_WRITE -> listOf("cloud:write", "admin:cloud")

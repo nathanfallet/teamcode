@@ -105,6 +105,7 @@ internal fun settingsContent(actor: Principal, features: Set<DashboardFeature>):
         if (on(DashboardFeature.VARIANTS)) add(Triple("/dashboard/variants", "Variants", "Environment variables and MCP servers given to members."))
         if (on(DashboardFeature.MCP)) add(Triple("/dashboard/mcp", "MCP tool policies", "Which tools each MCP server exposes."))
         if (on(DashboardFeature.SKILLS)) add(Triple("/dashboard/skills", "Skills", "Pinned versions and assignments."))
+        if (on(DashboardFeature.HOOKS)) add(Triple("/dashboard/hooks", "Team hooks", "Pinned versions and assignments."))
         if (on(DashboardFeature.GITHUB)) add(Triple("/dashboard/github", "GitHub App", "The team's GitHub App used by cloud sessions."))
     }
     val own = buildList {
