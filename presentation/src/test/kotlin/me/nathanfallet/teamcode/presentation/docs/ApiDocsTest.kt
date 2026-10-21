@@ -61,7 +61,7 @@ class ApiDocsTest {
                 RunnerInferenceUseCase(sessionStore, stub()), RunnerGitHubUseCase(sessionStore, stub())),
             github = GitHubLinkService(stub(), stub(), stub()),
             cloudConversation = CloudConversation(CloudConversationService(conversationStore, sessionStore, access), access,
-                RunnerConversationUseCase(sessionStore, conversationStore)),
+                RunnerConversationUseCase(sessionStore, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(stub<me.nathanfallet.teamcode.domain.team.TeamEventStore>())),
             cloudTransfers = CloudTransferService(sessionStore, stub(), sessions, CloudRecipientPolicy(sessionStore)),
         )
     }

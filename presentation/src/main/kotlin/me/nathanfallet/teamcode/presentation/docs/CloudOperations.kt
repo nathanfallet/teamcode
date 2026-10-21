@@ -289,6 +289,29 @@ private fun ApiCatalog.cloudConversation() {
             notFound("No such session (`not_found`).")
         }
     }
+    get("/api/v1/cloud/events/stream") {
+        operationId = "streamTeamEvents"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Follow the caller-wide event feed live"
+        description = "A server-sent event stream (`text/event-stream`) of what happens to the caller's cloud sessions " +
+            "and agent runs: `cloud.session.created`, `.paused`, `.woken`, `.resumed`, `.ended`, `cloud.turn` " +
+            "(`phase`: `started`, `completed`, `interrupted`, `failed`), `run.started`, `run.stale` and `run.ended`. " +
+            "Each event has `id` = `seq` (the team's own gap-free sequence), `event` = its type and `data` = a " +
+            "`TeamEventView`. Without `Last-Event-ID` or `after` the stream starts at the newest event; `after=0` " +
+            "starts at the oldest retained one (7 days). A reconnecting `EventSource` resumes after the last `id`; if " +
+            "events after that cursor were purged, `event: gap` with `{oldestSeq}` comes first. Sessions and runs are " +
+            "the caller's own; an administrator, or an administrator's `admin:cloud` key for sessions, sees the whole " +
+            "team. Runs need an interactive login or a `usage:read` key. The stream ends with `event: denied` if " +
+            "access is lost, and otherwise only when the client leaves. Transcript text never appears in it."
+        parameters {
+            queryNumber("after", "Start after this sequence number; 0 for the oldest retained event.")
+            headerText("Last-Event-ID", "Resume after this sequence number; wins over `after`.")
+            queryText("types", "Comma-separated event types to keep, for example `cloud.turn,run.stale`.")
+        }
+        responses {
+            HttpStatusCode.OK { description = "The event stream." }
+            badRequest("A negative cursor, a cursor ahead of the team's events (`invalid_cursor`) or an unknown type (`invalid_event_type`).")
+        }
+    }
     post("/api/v1/cloud/sessions/{id}/messages") {
         operationId = "sendCloudMessage"; tag(ApiTags.CLOUD_CONVERSATION)
         summary = "Send a message to the agent"

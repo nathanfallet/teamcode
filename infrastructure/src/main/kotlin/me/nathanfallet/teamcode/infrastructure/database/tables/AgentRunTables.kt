@@ -24,6 +24,8 @@ object AgentRuns : Table("agent_runs") {
     val attempts = long("attempts").default(0)
     val completed = long("completed").default(0)
     val contextsTruncated = bool("contexts_truncated").default(false)
+    /** When the feed last reported this run stale; older than [heartbeatAt] once a heartbeat followed, so a new silence is reported again. */
+    val staleNotifiedAt = long("stale_notified_at").nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("run_member_page", false, teamId, memberId, startedAt, id)

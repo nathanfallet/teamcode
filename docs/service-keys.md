@@ -16,7 +16,7 @@ Select only the required scopes:
 | `skills:publish` | Publish skill versions to the catalog and pin them (V2). Only an administrator's key can receive it; it cannot unpin, assign, retire or read the catalog |
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
-| `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it |
+| `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it. It also sees every member's sessions in the [event feed](cloud-conversations.md#event-feed) |
 
 Inference also permits registering, heartbeating and ending the key's own [agent launches](agent-sessions.md); narrow lifecycle replies contain no usage totals. Another login cannot renew or dispatch under that launch ID. Cross-member/all-team registry reads and run policy changes remain interactive administration.
 

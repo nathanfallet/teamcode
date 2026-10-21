@@ -2,6 +2,9 @@ package me.nathanfallet.teamcode.infrastructure.database
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.domain.cloud.*
@@ -300,6 +303,14 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             it[CloudSessionEvents.epoch] = epoch; it[CloudSessionEvents.runnerSeq] = runnerSeq; it[CloudSessionEvents.type] = type.wire
             it[CloudSessionEvents.at] = at; it[CloudSessionEvents.data] = data
         }
+        if (type == CloudEventType.TURN) publishTurn(sessionId, teamId, seq, data, at)
+    }
+
+    /** `cloud.turn` in the team feed: the phase and where to read the transcript, never its text. Called under the session row lock. */
+    private fun publishTurn(sessionId: String, teamId: String, seq: Long, data: String, at: Long) {
+        val phase = try { (Json.parseToJsonElement(data) as? JsonObject)?.get("phase")?.jsonPrimitive?.contentOrNull } catch (_: Exception) { null } ?: return
+        val owner = CloudSessions.select(CloudSessions.ownerId).where { CloudSessions.id eq sessionId }.single()[CloudSessions.ownerId]
+        publishTeamEvent(teamId, TeamEventType.CLOUD_TURN, sessionId, owner, buildJsonObject { put("sessionId", sessionId); put("phase", phase.take(32)); put("eventSeq", seq) }, at)
     }
 
     private fun saveCursor(sessionId: String, exists: Boolean, last: Long, epoch: Int, through: Long) {

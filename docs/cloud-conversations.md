@@ -13,7 +13,8 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Access policy for members and groups (create, attach, message, transcript) | Implemented (`cloud.access.v1`); groups need a group directory, see [access](#access) |
 | Transcript retention setting (`transcriptRetentionDays`, 30 days by default) | Implemented |
 | Idle pause with attachment leases, `initialMessage` on create (`cloud.sessions.initial-message.v1`) | Implemented, see [idle pause](cloud-sessions.md#idle-pause) and [create](cloud-sessions.md#create-request-and-view) |
-| Caller-wide SSE feed, webhooks | Planned |
+| Caller-wide SSE feed: sessions and local runs, per member or team-wide, resumable (`cloud.events.v1`) | Implemented, see [the event feed](#event-feed) |
+| Webhooks (per team or key, HMAC signature, retries) | Planned |
 | Transfer: leases removed, unconsumed messages cancelled or kept, `transfer` event | Implemented, see [transfer](cloud-sessions.md#transfer) |
 
 The capabilities are advertised with `cloud.sessions.v1`, while cloud sessions are on in the stored [runtime](cloud-sessions.md#runtime-on-off-runner-image-and-pod-callback).
@@ -115,6 +116,29 @@ teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]
 
 `send` retries network failures with the same idempotency key, so a retry never sends twice; `--wait` waits until the message was consumed or rejected. `logs --follow` reconnects like `attach`.
 
+## Event feed
+
+`GET /api/v1/cloud/events/stream` is one SSE stream for everything a credential may see happen, instead of one connection per session. It is advertised as `cloud.events.v1`, and needs an interactive login or a key with `cloud:read` (or `cloud:write`, `admin:cloud`).
+
+| Event (`event:` field) | When | `data` (besides `sessionId` or `runId`) |
+| --- | --- | --- |
+| `cloud.session.created` | A session was created | `name`, `state` |
+| `cloud.session.paused` | It reached `paused` | `state`, `previousState`, `reason` (`paused`, `idle_paused`, ...) |
+| `cloud.session.woken` | A message asked a paused session to wake up | `state`, `reason` |
+| `cloud.session.resumed` | A resuming session is `ready` again | `state`, `previousState` |
+| `cloud.session.ended` | It reached `terminated` or `failed` | `state`, `reason` (`terminated`, `failed`, `expired`, ...) |
+| `cloud.turn` | The agent started, completed, interrupted or failed a turn | `phase`, `eventSeq` (the sequence in the session's transcript) |
+| `run.started`, `run.ended` | A local launch (`teamcode launch`) started or ended | `agent`, `workload`; `exitCode` when ended |
+| `run.stale` | No heartbeat for 90 s | `agent`, `workload`, `lastHeartbeatAt` |
+
+Each frame is `id: <seq>`, `event: <type>`, `data: <TeamEventView>` (`seq`, `type`, `subject` = `session` or `run`, `subjectId`, `memberId`, `at`, `data`). Transcript text never appears in it: follow `eventSeq` into `GET /cloud/sessions/{id}/events`. A run that beats again and goes silent again produces another `run.stale`. The state of a session after `cloud.session.*` is in `data.state`; the types are an open list, so a client ignores types it does not know (a session waiting for a human is one more entry in `TeamEventType` and one publish call where it happens).
+
+**Who sees what.** The caller's own sessions and runs, as `memberId`. The whole team for an interactive administrator; for sessions also an administrator's `admin:cloud` key. A key acts as its owner otherwise, even an administrator's. Run events additionally need an interactive login or a `usage:read` key (a `cloud:read` key sees sessions only), and the whole team's runs only an interactive administrator, as for `GET /runs?all=true`. A session keeps the owner it had when the event happened, so after a transfer the former owner keeps the earlier events and the new owner gets the later ones. Access granted by the [access policy](#access) to other members is not part of the feed: it is the owner's and the administrators' view.
+
+**Resuming.** `seq` is the team's own sequence, gap-free and allocated in the transaction that changes the state, so an event exists exactly when its change committed and a reader never skips one. Send `Last-Event-ID` (an `EventSource` does it by itself) or `?after=`; the header wins. Without either the stream starts at the newest event; `after=0` starts at the oldest retained one. A cursor ahead of the team's events is `400 invalid_cursor` (a cursor from another server). Events are kept seven days: when the cursor is older than the oldest kept event, `event: gap` with `{"oldestSeq": n}` comes first, then the stream continues from there. `?types=cloud.turn,run.stale` keeps only those types (`400 invalid_event_type` for an unknown one). Keep-alive comments every 15 s; the credential is rechecked every 15 s and the stream ends with `event: denied` when it stopped being valid. The stream never ends otherwise: reconnect from the last `id`.
+
+**Storage.** Migrations `V20261021190000*`: `team_events` (primary key `(team_id, seq)`), `team_event_cursors` (the last sequence per team; its row lock serializes publishers of a team) and `agent_runs.stale_notified_at`. Session and run writes publish in their own transaction (session store, transfer store, transcript turn events, run start and end); a scheduled job (`team-events`, every 30 s under a database lease) reports silent runs, only those whose last heartbeat is less than a day old, and deletes events older than seven days. The stream reads the journal once a second per open stream (a primary-key read on the team's cursor while nothing changes).
+
 ## Storage
 
 Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `cloud_access_policies`, `cloud_session_inputs` (text as `MEDIUMTEXT`, unique `(session, author, client key)`), `cloud_session_events` (primary key `(session_id, seq)`, unique `(session_id, epoch, runner_seq)` for deduplication) and `cloud_session_attachments`, and `cloud_session_transcripts`, the per-session cursors (last sequence, runner sequence of the latest execution) that the retention purge never deletes, so numbering never restarts. Writes take the session row lock, so sequences stay dense across replicas.
@@ -122,7 +146,7 @@ Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `clou
 ## Known limits
 
 - The agent runs in its own container under its own UID with no projected token, started by the supervisor there for the runner (see [the runner and the pod](cloud-sessions.md#the-runner-and-the-pod)). Its conversation files live under `/workspace/.agent-home`; a workspace from before this split keeps them in `.home`, so such a session starts a fresh conversation (the transcript is kept).
-- The caller-wide feed and webhooks are not implemented.
+- Webhooks are not implemented. The event feed is a stream you hold open; it keeps seven days of history.
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.

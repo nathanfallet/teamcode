@@ -11,10 +11,10 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.cloud.*
-import me.nathanfallet.teamcode.domain.team.TeamFailure
+import me.nathanfallet.teamcode.domain.team.*
 
 /** Transcript, messages, attachments and access policy; mounted with the cloud routes. */
-class CloudConversation(val service: CloudConversationService, val access: CloudAccessService, val runner: RunnerConversationUseCase)
+class CloudConversation(val service: CloudConversationService, val access: CloudAccessService, val runner: RunnerConversationUseCase, val events: TeamEventService? = null)
 
 private const val MESSAGE_BODY_BYTES = 256 * 1024
 private const val RUNNER_BODY_BYTES = 2 * 1024 * 1024
@@ -77,8 +77,44 @@ private suspend fun ApplicationCall.respondInput(outcome: InputOutcome) {
     respond(HttpStatusCode.Accepted, input.view())
 }
 
+private fun TeamEvent.view() = TeamEventView(seq, type.wire, type.subject.wire, subjectId, ownerId, at, Serialization.json.parseToJsonElement(data).jsonObject)
+
+/** `?types=a,b`: known event types only, so a typo is an error rather than a silent empty stream. */
+private fun ApplicationCall.eventTypes(): Set<TeamEventType>? = request.queryParameters.getAll("types")?.let { values ->
+    val names = values.singleOrNull()?.split(',')?.map(String::trim)?.filter(String::isNotEmpty)?.takeIf { it.isNotEmpty() && it.size <= TeamEventType.entries.size }
+        ?: throw TeamFailure("invalid_query", 400, "Send types once, as a comma-separated list.")
+    names.map { TeamEventType.parse(it) ?: throw TeamFailure("invalid_event_type", 400, "Unknown event type '${it.take(64)}'.") }.toSet()
+}
+
+/** The caller-wide feed; a plain function so a server without the journal does not mount it. */
+internal fun Route.teamEventRoutes(events: TeamEventService) {
+    get("/api/v1/cloud/events/stream") {
+        // Last-Event-ID wins over ?after, as for a session's stream. Neither: only what happens from now on.
+        val resume = call.request.headers.getAll("Last-Event-ID")?.let { it.singleOrNull()?.toLongOrNull() ?: throw TeamFailure("invalid_cursor", 400, "Use a non-negative event sequence.") }
+        val after = resume ?: call.longQuery("after")
+        // Authorize and check the cursor before committing the response, so a refusal is still a JSON error.
+        val feed = events.open(call.principal, after, call.eventTypes())
+        call.response.header("X-Accel-Buffering", "no")
+        call.respondBytesWriter(ContentType.Text.EventStream) {
+            writeStringUtf8("retry: 2000\n\n"); flush()
+            try {
+                feed.oldestRetained?.let { writeStringUtf8("event: gap\ndata: {\"oldestSeq\":$it}\n\n"); flush() }
+                feed.follow(emit = { batch ->
+                    for (event in batch) writeStringUtf8("id: ${event.seq}\nevent: ${event.type.wire}\ndata: ${Serialization.json.encodeToString(event.view())}\n\n")
+                    flush()
+                }, idle = { writeStringUtf8(": keep-alive\n\n"); flush() })
+            } catch (error: TeamFailure) {
+                // The stream is committed: report the refusal as a final event, never as a replacement response.
+                writeStringUtf8("event: denied\ndata: ${Serialization.json.encodeToString(ErrorDetail(error.code, error.message ?: "Denied."))}\n\n")
+            }
+            flush()
+        }
+    }
+}
+
 internal fun Route.cloudConversationRoutes(conversation: CloudConversation) {
     val service = conversation.service
+    conversation.events?.let { teamEventRoutes(it) }
     route("/api/v1/cloud") {
         get("/access") { call.respond(conversation.access.policy(call.principal).view()) }
         put("/access") {

@@ -74,6 +74,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[requestDigest] = idempotency.requestDigest; it[sessionId] = created.id; it[createdAt] = now; it[expiresAt] = now + IDEMPOTENCY_MILLIS
         }
         audit(principal.teamId, principal.member.id, "cloud.session.created", created.id, actor.effectiveMemberId, principal.tokenId)
+        publishTeamEvent(created.teamId, TeamEventType.SESSION_CREATED, created.id, created.ownerId, sessionData(created, null, null), now)
         CloudCreateOutcome.Created(created)
     }
 
@@ -127,6 +128,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             if (actor != null) audit(expected.teamId, actor.principal.member.id, action, expected.id, actor.effectiveMemberId, actor.principal.tokenId)
             else audit(expected.teamId, "system", action, expected.id, expected.ownerId, null)
         }
+        publishSessionChange(expected, next, write.auditAction, now)
         next.copy(generation = expected.generation + 1)
     }
 
@@ -154,6 +156,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             writeExecution(it, execution.copy(createdAt = now))
         }
         revokeInferenceCredentialsBefore(expected.id, execution.epoch)
+        publishSessionChange(expected, next, null, now)
         StartOutcome.Started(next.copy(generation = expected.generation + 1))
     }
 

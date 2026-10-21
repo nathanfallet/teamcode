@@ -78,7 +78,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),
         AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess))
 
-    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore))
+    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)))
 
     /**
      * Seeds the runtime from the former deployment variables, only if nothing is stored yet; the database stays the

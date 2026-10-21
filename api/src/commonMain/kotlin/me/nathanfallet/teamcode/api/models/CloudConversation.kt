@@ -142,3 +142,12 @@ data class RunnerInputsView(val inputs: List<RunnerInputView>)
 data class RunnerInputAckView(val id: String, val status: String, val reason: String? = null)
 @Serializable
 data class RunnerInputAckRequest(val teamId: String, val sessionId: String, val epoch: Int, val acks: List<RunnerInputAckView>)
+
+/**
+ * One event of the caller-wide feed (`GET /api/v1/cloud/events/stream`). [seq] is the team's own sequence, gap-free and
+ * the SSE `id`; [type] names the event (`cloud.turn`, `cloud.session.paused`, `run.stale`, ...); [subject] is `session`
+ * or `run` and [subjectId] its identifier; [memberId] is the member the subject belonged to when it happened.
+ * [data] is a small object of identifiers and labels, never transcript text.
+ */
+@Serializable
+data class TeamEventView(val seq: Long, val type: String, val subject: String, val subjectId: String, val memberId: String, val at: Long, val data: JsonObject)

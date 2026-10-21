@@ -83,6 +83,21 @@ fun main() {
             }
         }
     }
+    if (database != null) {
+        // Runs go silent without any write: report them (once per silence) and trim the feed past its retention.
+        val work = SqlScheduledWork(database)
+        val stale = me.nathanfallet.teamcode.infrastructure.database.SqlRunStaleSweep(database)
+        val feed = me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)
+        workers.launch {
+            while (isActive) {
+                try { work.runDue("team-events", intervalMillis = 30_000) { stale.sweep(); feed.purge(1_000) } }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode event feed maintenance deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode event feed maintenance is temporarily unavailable.") }
+                delay(10_000)
+            }
+        }
+    }
     // Cloud sessions are configured on the dashboard; the former variables only seed an empty database.
     val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also {
         // The seed is a convenience: a database error here is reported and the stored runtime is reread later.

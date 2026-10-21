@@ -174,7 +174,7 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
             // A route's write asks for a pass now; a reconciler's own write is scheduled by its lease release.
             if (change.leaseOwner == null) { it[reconcileAfter] = now; it[reconcileRequested] = true }
         }
-        if (updated == 1) revokeInferenceCredentialsOnWrite(change.expected, change.next, null)
+        if (updated == 1) { revokeInferenceCredentialsOnWrite(change.expected, change.next, null); publishSessionChange(change.expected, change.next, null, now) }
         return updated == 1
     }
 

@@ -1,0 +1,1 @@
+ALTER TABLE agent_runs ADD stale_notified_at BIGINT NULL;
