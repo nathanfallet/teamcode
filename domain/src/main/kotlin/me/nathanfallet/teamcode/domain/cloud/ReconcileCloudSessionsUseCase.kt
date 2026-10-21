@@ -21,7 +21,10 @@ class ReconcileCloudSessionsUseCase(
     private val transfers: CompleteCloudTransferUseCase? = null,
     /** Attachment leases and waiting inputs for idle detection; null disables the idle pause. */
     private val activity: CloudActivitySource? = null,
-    /** False while cloud sessions are off: a creating or resuming session then waits, before any claim or execution. */
+    /**
+     * False while cloud sessions are off: no workspace claim, execution or pod is created then (the session waits), while
+     * pods that already exist keep being monitored.
+     */
     private val startAllowed: () -> Boolean = { true },
 ) {
     /**
@@ -66,7 +69,7 @@ class ReconcileCloudSessionsUseCase(
             s.state == PAUSED -> if (s.transferId != null && transfers != null) transfers.begin(s, owner, now) else paused(s, owner, now)
             s.state == TRANSFERRING -> transfers?.step(s, owner, now) ?: (now + MONITOR_MILLIS)
             s.state == CREATING || s.state == RESUMING -> if (s.desiredState == DesiredState.PAUSED && s.state == RESUMING) abandonResume(s, owner, now)
-                else if (!startAllowed()) now + MONITOR_MILLIS else start(s, owner, now)
+                else start(s, owner, now)
             s.state == PREPARING || s.state == READY || s.state == ACTIVE -> if (s.desiredState == DesiredState.PAUSED && s.state != PREPARING) {
                 commit(s, owner, s.copy(state = PAUSING, phase = "draining", pauseRequestedAt = s.pauseRequestedAt ?: now, updatedAt = now), "cloud.session.pausing"); now
             } else monitor(s, owner, now)
@@ -105,6 +108,7 @@ class ReconcileCloudSessionsUseCase(
                 ?: return fail(s, owner, now, CloudProblem("storage_class_missing", "The workspace storage class does not exist on the cluster."))
             if (storageClass.reclaimPolicy != "Delete")
                 return fail(s, owner, now, CloudProblem("storage_class_retains_volumes", "The workspace storage class does not delete provider volumes (reclaimPolicy ${storageClass.reclaimPolicy}). Use a class with reclaimPolicy Delete."))
+            if (!startAllowed()) return now + MONITOR_MILLIS
             cluster.ensureClaim(s.clusterId, WorkspaceRequest(s.namespace, s.workspace.claimName, storageClass.name, s.workspace.sizeGibibytes, labels(s)))
             claim = cluster.claim(s.clusterId, s.namespace, s.workspace.claimName)
         }
@@ -122,6 +126,7 @@ class ReconcileCloudSessionsUseCase(
                 stale.forEach { cluster.deletePod(current.clusterId, current.namespace, it.name, force = true) }
                 return now + STEP_MILLIS
             }
+            if (!startAllowed()) return now + MONITOR_MILLIS
             val epoch = current.currentEpoch + 1
             val pod = CloudSessionService.podName(current.id, epoch)
             val limit = store.settings(current.teamId).maxRunningSessionsPerMember
@@ -137,6 +142,7 @@ class ReconcileCloudSessionsUseCase(
         val pod = cluster.pod(current.clusterId, current.namespace, execution.podName)
         if (pod == null) {
             if (execution.state == ExecutionState.PENDING) {
+                if (!startAllowed()) return now + MONITOR_MILLIS
                 val profile = store.profileVersion(current.teamId, current.profileId, current.profileVersion)
                     ?: return fail(current, owner, now, CloudProblem("profile_unavailable", "The pinned profile version no longer exists."))
                 val image = current.imageDigest?.let { digest -> current.imageReference.substringBefore('@') + "@" + digest } ?: current.imageReference

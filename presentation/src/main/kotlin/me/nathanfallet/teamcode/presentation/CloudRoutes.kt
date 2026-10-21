@@ -86,7 +86,6 @@ private val WORK_ROUTES = listOf(
     arrayOf("api", "v1", "cloud", "sessions", "*", "resume"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "messages"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "attachments"),
-    arrayOf("api", "v1", "cloud", "sessions", "*", "attachments", "*", "renew"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "transfer"),
     arrayOf("api", "v1", "cloud", "transfers", "*", "accept"),
 )

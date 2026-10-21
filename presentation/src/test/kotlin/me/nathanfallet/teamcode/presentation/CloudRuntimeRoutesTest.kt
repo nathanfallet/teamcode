@@ -169,7 +169,7 @@ class CloudRuntimeRoutesTest {
 
     @Test fun onlyNewWorkIsRefusedWhileOff() {
         for ((method, path) in listOf("POST" to "/api/v1/cloud/sessions", "POST" to "/api/v1/cloud/sessions/s1/resume", "POST" to "/api/v1/cloud/sessions/s1/messages",
-            "POST" to "/api/v1/cloud/sessions/s1/attachments", "POST" to "/api/v1/cloud/sessions/s1/attachments/a1/renew", "POST" to "/api/v1/cloud/sessions/s1/transfer", "POST" to "/api/v1/cloud/transfers/t1/accept",
+            "POST" to "/api/v1/cloud/sessions/s1/attachments", "POST" to "/api/v1/cloud/sessions/s1/transfer", "POST" to "/api/v1/cloud/transfers/t1/accept",
             "POST" to "//api/v1/cloud/sessions", "POST" to "/api/v1//cloud/sessions", "POST" to "/api/v1/cl%6Fud/sessions", "POST" to "/api/v1/cloud/%ZZ",
             "POST" to "/api/v1/github/link/device", "POST" to "/api/v1/github//link/device/abc", "POST" to "/dashboard/github/link", "POST" to "/%61pi/v1/cloud/sessions"))
             assertTrue(cloudStartsWork(method, path), "$method $path")
@@ -177,7 +177,7 @@ class CloudRuntimeRoutesTest {
             "POST" to "/api/v1/cloud/sessions/s1/interrupt", "DELETE" to "/api/v1/cloud/sessions/s1", "GET" to "/api/v1/cloud/sessions/s1/events",
             "POST" to "/api/v1/cloud/transfers/t1/decline", "PUT" to "/api/v1/cloud/runtime", "POST" to "/api/v1/cloud/clusters", "GET" to "/api/v1/cloud/profiles",
             "POST" to "/api/v1/cloud/runner/register", "POST" to "/api/v1/cloud/runner/heartbeat", "POST" to "/api/v1/cloud/runner/inputs",
-            "GET" to "/api/v1/github/link", "DELETE" to "/api/v1/github/link", "POST" to "/dashboard/github/unlink", "GET" to "/dashboard/github", "GET" to "/api/v1/capabilities", "GET" to GITHUB_CALLBACK_PATH, "POST" to "/v1/messages",
+            "GET" to "/api/v1/github/link", "DELETE" to "/api/v1/github/link", "POST" to "/dashboard/github/unlink", "GET" to "/dashboard/github", "GET" to "/api/v1/capabilities", "POST" to "/api/v1/cloud/sessions/s1/attachments/a1/renew", "GET" to GITHUB_CALLBACK_PATH, "POST" to "/v1/messages",
             // A malformed path outside cloud routes is left to routing.
             "GET" to "/dashboard/%ZZ", "POST" to "/v1/messages%zz", "GET" to "/health/%"))
             assertFalse(cloudStartsWork(method, path), "$method $path")

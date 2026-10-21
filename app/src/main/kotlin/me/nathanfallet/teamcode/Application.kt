@@ -88,7 +88,7 @@ fun main() {
         // The seed is a convenience: a database error here is reported and the stored runtime is reread later.
         try { runBlocking { it.start(initialCloudRuntime()) } }
         catch (error: CancellationException) { throw error }
-        catch (error: Exception) { System.err.println("TeamCode could not seed the cloud runtime from the environment: ${error.message}") }
+        catch (error: Exception) { System.err.println("TeamCode could not seed the cloud runtime from the environment (${error::class.simpleName}).") }
         it.launch(workers)
     }
     val team = database?.let { SqlTeamService(it) }
