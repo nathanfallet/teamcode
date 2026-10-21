@@ -117,6 +117,25 @@ class AutomaticPoolSizeTest {
         assertEquals(PoolSizeEstimate.NO_ESTIMATE, none.reason)
     }
 
+    @Test fun aZeroSumWithAnAccountLeftOutIsNoEstimate() {
+        // The only counted account is at its weekly threshold (0 until its reset), the other one is still learning:
+        // a stored 0 would refuse everyone while the new account can serve.
+        val weeklyFull = observed(account("weekly-full"), quota("weekly-full", "five_hour", .1, hour), quota("weekly-full", "seven_day", .96, 3 * day))
+        val learning = observed(account("new"), quota("new", "five_hour", .1, hour), quota("new", "seven_day", .1, 3 * day))
+        val estimate = size(listOf(weeklyFull, learning), mapOf("weekly-full" to capacity(10_000_000, 200_000_000)))
+        assertNull(estimate.dailyUnits, "The manual budget applies")
+        assertEquals(PoolSizeEstimate.NO_ESTIMATE, estimate.reason)
+        assertEquals(0, size(listOf(weeklyFull), mapOf("weekly-full" to capacity(10_000_000, 200_000_000))).dailyUnits,
+            "Without an account left out, zero is a real value")
+    }
+
+    @Test fun aLearnedWindowWithoutAFreshReadingLeavesTheAccountOut() {
+        // The weekly reading went stale at its reset: sizing on the five-hour rate alone would inflate the account.
+        val reset = observed(account("reset"), quota("reset", "five_hour", .1, hour), quota("reset", "seven_day", .5, -60_000))
+        val share = size(listOf(reset, plusAccount), mapOf("reset" to capacity(10_000_000, 200_000_000), plusCapacity)).accounts.first()
+        assertEquals(PoolContribution.NO_FRESH_OBSERVATION, share.status)
+    }
+
     @Test fun noEstimateAtAllOrNoPricedUsageGiveNoAutomaticValue() {
         val unestimated = observed(account("new"), quota("new", "five_hour", .1, hour))
         assertEquals(PoolSizeEstimate.NO_ESTIMATE, size(listOf(unestimated), emptyMap()).reason)

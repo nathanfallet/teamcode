@@ -90,7 +90,7 @@ private fun poolSizeContent(actor: Principal, report: PoolSizeReport, prices: Li
     }
     val status = """<div class="notice"><strong>Today's home pool budget: ${formatUnits(report.effectiveDailyUnits)} credits (${if (automatic) "automatic" else "manual"})</strong>
         <p>Manual budget: ${formatUnits(report.manualDailyUnits)} credits. Automatic value: ${report.automaticDailyUnits?.let { "${formatUnits(it)} credits, computed ${java.time.Instant.ofEpochMilli(report.automaticComputedAtMillis!!)}" } ?: "none yet"}.
-        Current estimate: ${report.estimate.dailyUnits?.let { formatUnits(it) + " credits" } ?: "none"} (${money(report.estimate.dailyMicros)} a day in API-equivalent${report.creditsPerMicro?.let { ", %.4f credits per micro-dollar".format(it) }.orEmpty()}).</p>
+        Current estimate: ${report.estimate.dailyUnits?.let { formatUnits(it) + " credits" } ?: "none"} (${money(report.estimate.dailyMicros)} a day in API-equivalent${report.creditsPerMicro?.let { ", " + BigDecimal(it).round(java.math.MathContext(4)).toPlainString() + " credits per micro-dollar" }.orEmpty()}).</p>
         ${reasonText?.let { "<p>${escape(it)} The manual budget applies.</p>" }.orEmpty()}
         ${if (report.enabled && !automatic && reasonText == null) "<p>The automatic value is missing or older than an hour; the manual budget applies until the next computation.</p>" else ""}</div>"""
     val toggle = """<form method="post" action="/dashboard/capacity/pool-size">${csrf(actor)}<label><input type="checkbox" name="autoPoolSize" ${if (report.enabled) "checked" else ""}> Automatic shared pool size</label>

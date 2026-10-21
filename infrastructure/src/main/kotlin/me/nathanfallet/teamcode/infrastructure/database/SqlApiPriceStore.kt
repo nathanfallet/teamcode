@@ -28,7 +28,7 @@ class SqlApiPriceStore(private val database: Database) : ApiPriceStore {
     private suspend fun edit(actor: Principal, action: String = "capacity.api_price_changed", change: (List<ApiPrice>) -> List<ApiPrice>): List<ApiPrice> = database.query {
         actor.requireAdmin()
         lockTeam(actor.teamId); requireCurrent(this, actor)
-        val previous = readApiPrices(actor.teamId)
+        val previous = readApiPrices(actor.teamId).sortedWith(ORDER) // SQL collation order may differ from ORDER
         val next = ApiPrices.validate(change(previous)).sortedWith(ORDER)
         if (previous == next) return@query next
         ApiPricesTable.deleteWhere { teamId eq actor.teamId }

@@ -105,8 +105,9 @@ data class PoolSizeEstimate(val dailyMicros: Long, val dailyUnits: Long?, val ac
  * - seven-day term: the remaining points × C7 spread over the days left before the reset (seven when it is unknown); when the reset
  *   comes within the day, plus the share of a fresh window (threshold × C7 / 7 per day) for the hours after it.
  * The account counts the smaller term. A window the provider does not report does not bind; a window observed without an
- * estimate, or no fresh observation at all, leaves the account without a figure, and it is left out of the sum. Only when
- * no account has a figure is there no automatic value ([PoolSizeEstimate.NO_ESTIMATE]). Credits = micro-dollars × [creditsPerMicro].
+ * estimate, a learned window without a fresh reading, or no fresh observation at all, leaves the account without a figure,
+ * and it is left out of the sum. When no account has a figure, or the sum is zero while an account is left out, there is
+ * no automatic value ([PoolSizeEstimate.NO_ESTIMATE]). Credits = micro-dollars × [creditsPerMicro].
  */
 class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = AccountHeadroomUseCase()) {
     fun size(
@@ -122,8 +123,10 @@ class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = Accou
         }
         val counted = shares.filter { it.status == PoolContribution.COUNTED }
         val micros = counted.sumOf { it.dailyMicros }
+        val leftOut = shares.any { it.status == PoolContribution.NO_ESTIMATE || it.status == PoolContribution.NO_FRESH_OBSERVATION }
         val reason = when {
-            counted.isEmpty() -> PoolSizeEstimate.NO_ESTIMATE
+            // A zero sum while an account that can serve is left out would refuse everyone: no automatic value then.
+            counted.isEmpty() || (micros == 0L && leftOut) -> PoolSizeEstimate.NO_ESTIMATE
             creditsPerMicro == null -> PoolSizeEstimate.NO_PRICED_USAGE
             else -> null
         }
@@ -133,6 +136,9 @@ class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = Accou
     private fun share(id: String, current: AccountHeadroom, capacities: Map<String, WindowCapacity>, now: Long, threshold: Double): AccountPoolShare {
         val observed = SHARED.mapNotNull { current.window(it) }
         if (observed.isEmpty()) return AccountPoolShare(id, PoolContribution.NO_FRESH_OBSERVATION, 0)
+        // A window learned before but without a fresh reading (its reset just passed) could bind: no figure until it is read again.
+        if (SHARED.any { window -> current.window(window) == null && capacities[window]?.fullWindowMicros != null })
+            return AccountPoolShare(id, PoolContribution.NO_FRESH_OBSERVATION, 0)
         val terms = observed.map { window ->
             val full = capacities[window.window]?.fullWindowMicros ?: return AccountPoolShare(id, PoolContribution.NO_ESTIMATE, 0)
             window.window to when (window.window) {

@@ -78,8 +78,8 @@ internal fun readPoolSizingInputs(teamId: String, now: Long): PoolSizingInputs {
         SHARED_POOL_WINDOWS.map { window ->
             val history = QuotaHistory.select(QuotaHistory.utilization, QuotaHistory.observedAt, QuotaHistory.resetsAt)
                 .where { (QuotaHistory.accountId eq id) and (QuotaHistory.windowName eq window) and (QuotaHistory.observedAt greaterEq since) }
-                .orderBy(QuotaHistory.observedAt to SortOrder.ASC).limit(HISTORY_ROWS)
-                .map { QuotaSample(it[QuotaHistory.utilization], it[QuotaHistory.observedAt], it[QuotaHistory.resetsAt]) }
+                .orderBy(QuotaHistory.observedAt to SortOrder.DESC).limit(HISTORY_ROWS) // past the bound, keep the newest readings
+                .map { QuotaSample(it[QuotaHistory.utilization], it[QuotaHistory.observedAt], it[QuotaHistory.resetsAt]) }.asReversed()
             estimator.estimate(window, history, costs, now)
         }
     }
@@ -98,7 +98,8 @@ internal fun readPoolSizingInputs(teamId: String, now: Long): PoolSizingInputs {
 /** One account's hours since [fromHour], each priced at its own day's prices; an hour with an unpriced model is marked. */
 private fun hourCosts(prices: ApiPriceTable, accountId: String, fromHour: Long): List<HourCost> {
     val a = AccountTokenUsageTable
-    return a.selectAll().where { (a.accountId eq accountId) and (a.hourNumber greaterEq fromHour) }.limit(HOUR_ROWS).toList()
+    return a.selectAll().where { (a.accountId eq accountId) and (a.hourNumber greaterEq fromHour) }
+        .orderBy(a.hourNumber to SortOrder.DESC).limit(HOUR_ROWS).toList() // past the bound, whole recent hours rather than an arbitrary subset
         .groupBy { it[a.hourNumber] }.map { (hour, models) ->
             var micros = 0L
             var unpriced = false
