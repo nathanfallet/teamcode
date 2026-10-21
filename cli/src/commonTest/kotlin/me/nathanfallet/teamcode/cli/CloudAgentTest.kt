@@ -105,7 +105,7 @@ class CloudAgentTest {
         val acks = mutableListOf<RunnerInputAckView>()
         val uploaded = mutableListOf<RunnerEventView>()
         var refuseEvents: TeamCodeException? = null
-        /** Refuses, like a 413, any batch that holds a sequence listed here. */
+        /** Refuses, like a 413, any batch that holds the original event at a sequence listed here; its marker passes. */
         val poisoned = mutableSetOf<Long>()
         var attempts = 0
         override suspend fun agent() = RunnerAgentView("claude", "2.1", "opus", null, "none")
@@ -113,7 +113,7 @@ class CloudAgentTest {
             // An Error, not an Exception: the host cannot swallow it, so a retry loop without pause fails the test.
             if (++attempts > 10_000) throw AssertionError("The host retries the upload without pause")
             refuseEvents?.let { throw it }
-            if (events.any { it.sequence in poisoned }) throw TeamCodeException(413, "too large", "invalid_events")
+            if (events.any { it.sequence in poisoned && it.type != CloudEventTypes.ERROR }) throw TeamCodeException(413, "too large", "invalid_events")
             events.filter { event -> uploaded.none { it.sequence == event.sequence } }.forEach { uploaded += it }
             return RunnerEventsAckView(events.last().sequence, uploaded.size.toLong())
         }
