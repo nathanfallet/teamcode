@@ -13,8 +13,9 @@ enum class AccountUnavailability { DISABLED, PENDING_HANDOVER, RECONNECT_REQUIRE
 data class PoolAccountObservation(val account: AccountRecord, val cooldownUntilMillis: Long, val windows: List<AccountQuota>)
 
 /**
- * One subscription account as the caller may see it. [accountId], [name] and [email] are null unless identities are
- * revealed; [label] then is a neutral, stable "Account N". [windows] holds only current observations.
+ * One subscription account as the caller may see it. [accountId], [name], [email] and [poolId] are null unless identities
+ * are revealed; [label] then is a neutral "Account N", numbered in this listing's priority order (it can change when
+ * accounts or priorities change, so it names a row, not an account). [windows] holds only current observations.
  */
 data class PoolAccountStatus(
     val accountId: String?, val name: String?, val label: String, val provider: String, val poolId: String?,
@@ -37,7 +38,7 @@ class DescribePoolAccountsUseCase {
                 val unavailable = when {
                     account.disabled -> AccountUnavailability.DISABLED
                     account.state == AccountState.PENDING_HANDOVER -> AccountUnavailability.PENDING_HANDOVER
-                    !account.state.canServe -> AccountUnavailability.RECONNECT_REQUIRED
+                    account.state == AccountState.RECONNECT_REQUIRED || !account.state.canServe -> AccountUnavailability.RECONNECT_REQUIRED
                     cooling != null -> AccountUnavailability.COOLING_DOWN
                     windows.any { !it.window.startsWith("model:") && it.utilization >= QUOTA_EXHAUSTED_UTILIZATION } -> AccountUnavailability.QUOTA_EXHAUSTED
                     else -> null
@@ -45,7 +46,7 @@ class DescribePoolAccountsUseCase {
                 PoolAccountStatus(
                     accountId = account.id.takeIf { revealIdentity }, name = account.displayName.takeIf { revealIdentity },
                     label = if (revealIdentity) account.displayName else "Account ${index + 1}",
-                    provider = account.identity.provider, poolId = account.poolId, state = account.state.name,
+                    provider = account.identity.provider, poolId = account.poolId.takeIf { revealIdentity }, state = account.state.name,
                     disabled = account.disabled, unavailable = unavailable, cooldownUntilMillis = cooling, windows = windows,
                     email = account.email.takeIf { revealIdentity },
                 )

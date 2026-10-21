@@ -28,7 +28,9 @@ class PoolAccountRoutesTest {
             override suspend fun status() = GatewaySnapshot("test", 0, 0)
             override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = error("No inference")
         }
-        application { configureGateway(gateway, team = team, admission = PoolAdmission(), publicOrigin = "http://localhost") }
+        val admission = PoolAdmission()
+        val verifier = object : AccountVerifier { override suspend fun verify(teamId: String, credentials: ProviderCredentials) = error("unused") }
+        application { configureGateway(gateway, team = team, admission = admission, accounts = AccountManagement(NamedAccounts(admission.records), verifier), publicOrigin = "http://localhost") }
         fun sdk(token: String) = TeamCodeClient("http://localhost", { token }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
 
         sdk("admin").use { admin ->
@@ -43,10 +45,10 @@ class PoolAccountRoutesTest {
         for (token in listOf("member", "usage-key")) sdk(token).use { member ->
             val accounts = member.poolAccounts()
             assertEquals(listOf("Account 1", "Account 2"), accounts.map { it.label }, token)
-            assertTrue(accounts.all { it.id == null && it.name == null && it.email == null }, token)
+            assertTrue(accounts.all { it.id == null && it.name == null && it.email == null && it.poolId == null }, token)
             // The raw body carries no account name or identifier either.
             val raw = client.get("/api/v1/pools/accounts") { bearerAuth(token) }.bodyAsText()
-            assertFalse(raw.contains("Work") || raw.contains("work-id") || raw.contains("@"), raw)
+            assertFalse(raw.contains("Work") || raw.contains("work-id") || raw.contains("@") || raw.contains("home"), raw)
             val own = member.capacity()
             assertEquals(30, own.reservedUnits); assertEquals(80, own.chargedAndReservedUnits)
         }
@@ -57,12 +59,28 @@ class PoolAccountRoutesTest {
         }
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/pools/accounts") { bearerAuth("inference-key") }.status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/api/v1/pools/accounts").status)
+        // The capacity page names observed windows' accounts with the email on a muted second line; a deleted account falls back to its id.
+        val page = client.get("/dashboard/capacity") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        val windows = page.substringAfter("Observed provider windows")
+        assertTrue(windows.contains("""<td>Work<br><small class="muted">work@example.com</small></td>"""), windows)
+        assertTrue(windows.contains("<td>Spare</td>"), windows)
+        assertFalse(windows.contains("work-id") || windows.contains("spare-id"), windows)
+        assertTrue(windows.contains("<code>deleted-id</code>"), windows)
         val serialized = Serialization.json.decodeFromString<List<PoolAccountStatusView>>(client.get("/api/v1/pools/accounts") { bearerAuth("member") }.bodyAsText())
         assertEquals(2, serialized.size)
     }
 }
 
+private class NamedAccounts(private val records: List<AccountRecord>) : AccountStore {
+    override suspend fun list(teamId: String) = records
+    override suspend fun configure(author: AccountMutationActor, teamId: String, id: String, displayName: String, disabled: Boolean, priority: Int, poolId: String?) = error("unused")
+    override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean, requirePending: Boolean) = error("unused")
+    override suspend fun credentials(teamId: String, id: String) = error("unused")
+    override suspend fun find(identity: AccountIdentity): AccountRecord? = null
+    override suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String, origin: EnrollmentOrigin): EnrollmentResult = error("unused")
+}
 private class PoolAdmission : AdmissionStore {
+    val records get() = observed.map { it.account }
     private val now = System.currentTimeMillis()
     private fun account(id: String, name: String, priority: Int, email: String? = null) =
         AccountRecord(id, AccountIdentity("default", "anthropic", id, "org"), name, 1, false, "home", priority, AccountState.READY, email)
@@ -79,13 +97,13 @@ private class PoolAdmission : AdmissionStore {
         actor.requireScope(ServiceScope.USAGE_READ); if (memberId != actor.member.id) actor.requireAdmin()
         return MemberCapacity(MemberPolicy(memberId, 0, 2, "home"), 80, 1, now + 3_600_000, 500, reservedUnits = 30)
     }
-    override suspend fun quotas(actor: Principal): List<AccountQuota> { actor.requireAdmin(); return emptyList() }
+    override suspend fun quotas(actor: Principal): List<AccountQuota> { actor.requireAdmin(); return observed.flatMap { it.windows } + AccountQuota("deleted-id", "five_hour", .1, now, now + 3_600_000) }
     override suspend fun preferredTarget(actor: Principal, affinity: RequestAffinity): RouteTarget? = error("unused")
     override suspend fun statistics(): AdmissionStatistics = AdmissionStatistics(0, 0)
     override suspend fun reserve(actor: Principal, units: Long, model: String, provider: String, excludedAccountIds: Set<String>, affinity: RequestAffinity?): Reservation = error("unused")
     override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) = error("unused")
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = error("unused")
-    override suspend fun poolBudgets(actor: Principal): List<PoolBudget> = error("unused")
+    override suspend fun poolBudgets(actor: Principal): List<PoolBudget> { actor.requireAdmin(); return listOf(PoolBudget("home", 1_000_000)) }
     override suspend fun configurePool(actor: Principal, budget: PoolBudget): PoolBudget = error("unused")
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = error("unused")
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) = error("unused")

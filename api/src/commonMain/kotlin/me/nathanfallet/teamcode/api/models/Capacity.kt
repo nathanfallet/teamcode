@@ -15,7 +15,8 @@ data class PoolBudgetView(val poolId: String, val dailyUnits: Long, val sharedOv
 
 /**
  * A subscription account as the caller may see it. For an interactive administrator [label] is "Name (email)" (see
- * [accountLabel]) and [id], [name] and [email] are set; for anyone else they are null and [label] is a neutral "Account N". [unavailableReason] is
+ * [accountLabel]) and [id], [name], [email] and [poolId] are set; for anyone else they are null and [label] is a neutral
+ * "Account N" numbered in this listing's priority order, which names a row rather than a lasting account identity. [unavailableReason] is
  * `disabled`, `pending_handover`, `reconnect_required`, `cooling_down` or `quota_exhausted` when [usable] is false.
  */
 @Serializable

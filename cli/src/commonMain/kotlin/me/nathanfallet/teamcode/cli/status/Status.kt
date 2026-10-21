@@ -38,13 +38,14 @@ internal suspend fun readStatusReport(client: TeamCodeClient): StatusReport {
     // Optional parts: a server without capacity routes, a key without guidance scope or a server older than the account
     // route still gets the rest, as `status` did before it showed quotas.
     val capacity = optional { client.capacity() }
-    val pacing = optional { client.directive().directive }
-    val accounts = optional { client.poolAccounts() }
+    // Pacing and accounts are extras: any server refusal or failure leaves them out rather than hiding the allowance.
+    val pacing = optional(everyStatus = true) { client.directive().directive }
+    val accounts = optional(everyStatus = true) { client.poolAccounts() }
     return StatusReport(gateway, capacity, pacing, accounts)
 }
 
-private suspend fun <T> optional(read: suspend () -> T): T? =
-    try { read() } catch (error: TeamCodeException) { if (error.statusCode == 403 || error.statusCode == 404) null else throw error }
+private suspend fun <T> optional(everyStatus: Boolean = false, read: suspend () -> T): T? =
+    try { read() } catch (error: TeamCodeException) { if (everyStatus || error.statusCode == 403 || error.statusCode == 404) null else throw error }
 
 /** Plain text, no color: the gateway line, one block for the caller's own allowance, one table for the accounts. */
 internal fun renderStatus(report: StatusReport, now: Long): String = buildString {
@@ -52,11 +53,11 @@ internal fun renderStatus(report: StatusReport, now: Long): String = buildString
     appendLine("Mode: ${g.mode} | Active: ${g.activeRequests} | Waiting: ${g.queuedRequests} | Completed: ${g.completedRequests}")
     appendLine()
     val c = report.capacity
-    if (c == null) appendLine("Your quota: not available from this server.") else quota(c, report.pacing, now)
+    if (c == null) appendLine("Your quota: not available to this credential or server.") else quota(c, report.pacing, now)
     appendLine()
     val accounts = report.accounts
     when {
-        accounts == null -> append("Pool accounts: not available from this server.")
+        accounts == null -> append("Pool accounts: not available to this credential or server.")
         accounts.isEmpty() -> append("Pool accounts: none in your pools.")
         else -> {
             appendLine("Pool accounts")

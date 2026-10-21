@@ -5,6 +5,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import me.nathanfallet.teamcode.api.formatUnits
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.domain.accounts.AccountManagement
 import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.team.*
 
@@ -12,7 +13,7 @@ private fun MemberCapacity.view() = CapacityView(policy.memberId, dailyAllowance
 private fun PoolAccountStatus.view() = PoolAccountStatusView(name?.let { accountLabel(it, email) } ?: label, provider, state, disabled, usable,
     unavailable?.name?.lowercase(), cooldownUntilMillis, windows.map { AccountWindowView(it.window, it.utilization, it.observedAtMillis, it.resetsAtMillis) },
     poolId, accountId, name, email)
-internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, origin: String, budgetOverrides: Boolean = false, groups: GroupService? = null) {
+internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, origin: String, budgetOverrides: Boolean = false, groups: GroupService? = null, accounts: AccountManagement? = null) {
     get("/api/v1/capacity") { call.respond(admission.capacity(call.principal).view()) }
     get("/api/v1/members/{id}/capacity") { call.respond(admission.capacity(call.principal, call.parameters["id"]!!).view()) }
     patch("/api/v1/members/{id}/policy") {
@@ -58,9 +59,11 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
             } + if (admin) "<p><a href=\"/dashboard/groups\">Manage groups</a></p>" else "")
         val quotas = if (admin) {
             val windows = admission.quotas(actor)
+            // Accounts are named with their email on a second line; the id only stands in for a deleted account.
+            val names = if (windows.isEmpty()) emptyMap() else accounts?.list(actor)?.associate { it.id to accountCell(it.displayName, it.email) }.orEmpty()
             "<h2 id=\"windows\">Observed provider windows</h2>" + if (windows.isEmpty()) empty("No provider window observed yet") else
                 windows.sortedByDescending { it.utilization }.joinToString("", "<table><thead><tr><th>Account</th><th>Window</th><th>Utilization</th><th>Resets (UTC)</th></tr></thead><tbody>", "</tbody></table>") { q ->
-                    "<tr><td><code>${escape(q.accountId)}</code></td><td>${escape(q.window)}</td><td>${ratioMeter(q.utilization, "<strong>${"%.1f".format(q.utilization * 100)}%</strong>")}</td><td><small>${q.resetsAtMillis?.let(java.time.Instant::ofEpochMilli) ?: "unknown"}</small></td></tr>"
+                    "<tr><td>${names[q.accountId] ?: "<code>${escape(q.accountId)}</code>"}</td><td>${escape(q.window)}</td><td>${ratioMeter(q.utilization, "<strong>${"%.1f".format(q.utilization * 100)}%</strong>")}</td><td><small>${q.resetsAtMillis?.let(java.time.Instant::ofEpochMilli) ?: "unknown"}</small></td></tr>"
                 }
         } else ""
         val explanation = help("How allowances are computed", """<p>Daily credits reset at midnight UTC. Each active member receives pool budget × their weight / the total active weight in their pool, optionally capped individually. Two developers weighted 5 and one support member weighted 1 receive 5/11, 5/11 and 1/11. Weight changes never erase existing spend; the total pool budget is also enforced. Credits count input, cache reads and cache creation at 1 each, and output at 5 each. They are an internal fairness budget, not Claude quota percentages.</p><p>Requests reserve a conservative upper estimate before dispatch. Missing usage keeps that reservation. Assign the same named pool to a member and dedicated accounts to protect their subscription capacity; other pools cannot use those accounts unless their pool is explicitly marked as shared overflow. Overflow requires member opt-in, has no primary members, and consumes both the home and source budgets. It never increases a member, group or launch allowance.</p>""")

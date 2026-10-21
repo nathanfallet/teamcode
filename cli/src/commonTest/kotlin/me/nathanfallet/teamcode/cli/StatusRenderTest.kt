@@ -49,8 +49,8 @@ class StatusRenderTest {
         assertTrue(text.endsWith("Pool accounts: none in your pools."), text)
         val capped = renderStatus(StatusReport(GatewayStatus("pool", 0, 0), capacity.copy(hardCapUnits = 41_666, baseDailyUnits = 41_666)), now)
         assertTrue(capped.contains("(personal cap)"), capped)
-        assertTrue(capped.endsWith("Pool accounts: not available from this server."), capped)
-        assertTrue(renderStatus(StatusReport(GatewayStatus("pool", 0, 0)), now).contains("Your quota: not available from this server."))
+        assertTrue(capped.endsWith("Pool accounts: not available to this credential or server."), capped)
+        assertTrue(renderStatus(StatusReport(GatewayStatus("pool", 0, 0)), now).contains("Your quota: not available to this credential or server."))
     }
 
     @Test fun serverTextCannotInjectTerminalControlsAndJsonRoundTrips() {

@@ -224,6 +224,16 @@ internal fun empty(title: String, text: String = "") = """<div class="empty"><st
 /** A field explanation rendered inside its label; [html] may carry an escaped effective value. */
 internal fun hint(html: String) = """<span class="hint">$html</span>"""
 
+/**
+ * A pool account where a table or list has room: the name on the first line ([afterName] follows it, e.g. state chips),
+ * the email on a second line in the theme's secondary text color. No email, or a name that already is the email: the
+ * name alone. Inline text, banners, confirmations and selectors keep the one-line "Name (email)" of `accountLabel`.
+ */
+internal fun accountCell(name: String, email: String?, strong: Boolean = false, afterName: String = ""): String {
+    val title = if (strong) "<strong>${escape(name)}</strong>" else escape(name)
+    val second = email?.takeIf { it.isNotBlank() && !it.equals(name, ignoreCase = true) }
+    return title + afterName + (second?.let { "<br><small class=\"muted\">${escape(it)}</small>" } ?: "")
+}
 
 /** Consumed / allocated bar; it turns amber from 75 % and red from 90 %. A zero allocation renders as full when anything is used. */
 internal fun meter(used: Long, total: Long, label: String = "<strong>${formatUnits(used)}</strong> / ${formatUnits(total)}"): String {

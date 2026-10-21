@@ -4,7 +4,9 @@
 
 `teamcode status` now adds the caller's own allowance (allocated, used, reserved, remaining, reset, groups, pacing) and the subscription accounts they can be routed to, with 5-hour, weekly and model windows and whether each can serve now; `--json` prints the raw report. `GET /api/v1/pools/accounts` (`usage:read`) serves the accounts: interactive administrators see every account as "Name (email)", members and every service key see only their own pool and opted-in overflow reserves as neutral labels. Usability reuses admission's eligibility (disabled, handover, reconnect, cool-down, 95% shared window). Credit counts on every CLI and dashboard surface use one shared K/M/B formatter (`formatUnits`). See [capacity](capacity.md#teamcode-status).
 
-Local evidence: API, domain, presentation, client, app and CLI JVM suites pass, the full infrastructure MySQL suite passed before the rebase onto #33 and the new pool-account persistence test after it, and **114 actual macOS ARM64 native CLI tests** pass, including the status rendering tests; the native debug binary prints the new `status --help`.
+The dashboard names accounts with the email on a muted second line where a table or list has room (observed provider windows, subscription accounts) through one `accountCell` helper, and keeps the one-line "Name (email)" in banners, inline text, confirmations, selectors and the CLI.
+
+Local evidence after the rebase onto #33: api 9, client 13, domain 95, infrastructure 134 (MySQL, including the new pool-account persistence test), presentation 55, app 8 and CLI 133 JVM tests pass, as do **114 actual macOS ARM64 native CLI tests**; the native debug binary prints the new `status --help`.
 
 ## 0.1.0 published
 

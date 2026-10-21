@@ -34,6 +34,9 @@ class StatusReportTest {
         val forbidden = HttpStatusCode.Forbidden to """{"error":{"type":"credential_scope","message":"No."}}"""
         val report = sdk(mapOf(gateway, "/api/v1/directives/current" to forbidden), mutableListOf()).use { readStatusReport(it) }
         assertNull(report.capacity); assertNull(report.accounts); assertNull(report.pacing)
+        val broken = HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}"""
+        val partial = sdk(mapOf(gateway, capacity, "/api/v1/pools/accounts" to broken, "/api/v1/directives/current" to broken), mutableListOf()).use { readStatusReport(it) }
+        assertEquals(4, partial.capacity?.reservedUnits, "A failing extra never hides the allowance"); assertNull(partial.accounts); assertNull(partial.pacing)
         val failing = "/api/v1/capacity" to (HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}""")
         assertEquals(500, assertFailsWith<TeamCodeException> { sdk(mapOf(gateway, failing), mutableListOf()).use { readStatusReport(it) } }.statusCode)
     }

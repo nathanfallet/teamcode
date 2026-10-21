@@ -38,14 +38,15 @@ class PoolAccountStatusPersistenceTest {
                 // The member's view: home pool only, neutral labels, no identifiers, no other pool and no reserve without opt-in.
                 val seen = admission.poolAccounts(member)
                 assertEquals(listOf("Account 1", "Account 2"), seen.map { it.label })
-                assertTrue(seen.all { it.accountId == null && it.name == null && it.poolId == "home" })
+                assertTrue(seen.all { it.accountId == null && it.name == null && it.email == null && it.poolId == null }, "Members see no identifiers, not even pool names")
                 val homeView = seen.single { it.windows.any { w -> w.window == "five_hour" } }
                 assertTrue(homeView.usable, "A spent model window bars only that model")
                 assertEquals(AccountUnavailability.QUOTA_EXHAUSTED, seen.single { it !== homeView }.unavailable)
                 assertFalse(seen.flatMap { it.windows }.any { it.accountId == other || it.accountId == reserve })
 
                 admission.configure(admin, MemberPolicy(member.member.id, 1000, 4, "home", allowSharedOverflow = true))
-                assertEquals(setOf("home", "reserve"), admission.poolAccounts(member).mapNotNull { it.poolId }.toSet())
+                assertEquals(3, admission.poolAccounts(member).size, "Opting in adds the shared reserve, never the other pool")
+                assertEquals(setOf("home", "reserve", "other"), admission.poolAccounts(admin).mapNotNull { it.poolId }.toSet())
 
                 // A key the administrator created for themselves acts as a member view: their own pool, no names.
                 val key = SqlServiceKeyService(db).create(admin, admin.member.id, "Usage reader", setOf(ServiceScope.USAGE_READ), 1)
