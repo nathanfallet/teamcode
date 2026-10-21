@@ -46,7 +46,7 @@ class AuditRoutesTest {
         } finally { sdk.close() }
         val response = client.get("/dashboard/audit") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
         assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
         val html = response.bodyAsText()
         assertTrue(html.contains("&lt;actor&gt;")); assertFalse(html.contains("<actor>"))
         assertTrue(html.contains("account.&lt;changed&gt;")); assertTrue(html.contains("&lt;subject&gt;"))

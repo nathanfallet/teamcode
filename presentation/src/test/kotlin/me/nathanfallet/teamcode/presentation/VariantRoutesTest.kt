@@ -119,7 +119,7 @@ class VariantRoutesTest {
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/assign", "member=admin-id&variant=$id").status)
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/exclude", "member=admin-id&kind=MCP&target=tracker").status)
         val html = client.get("/dashboard/variants") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
-        assertEquals("no-store", html.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", html.headers[HttpHeaders.CacheControl])
         val body = html.bodyAsText()
         assertFalse(body.contains("synthetic-dashboard-secret"))
         assertTrue(body.contains("&lt;script&gt;org&lt;/script&gt;")); assertFalse(body.contains("<script>org</script>"))

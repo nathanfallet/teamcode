@@ -124,7 +124,7 @@ class ServiceKeyRoutesTest {
         assertEquals(HttpStatusCode.OK, once.status)
         assertTrue(once.bodyAsText().contains(registry.lastSecret))
         assertFalse(once.bodyAsText().contains(created.accessToken))
-        assertEquals("no-store", once.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", once.headers[HttpHeaders.CacheControl])
         val after = client.get("/dashboard/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertFalse(after.contains(created.accessToken)); assertFalse(after.contains(registry.lastSecret))
         assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/service-keys") {

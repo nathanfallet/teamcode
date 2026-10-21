@@ -405,7 +405,7 @@ class CloudRoutesTest {
             runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
             val response = call("projected-pod-token-1")
             assertEquals(HttpStatusCode.OK, response.status)
-            assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
             val credential = runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
             assertTrue(credential.token.startsWith("tcex_")); assertFalse(credential.token in credential.toString())
             assertEquals(listOf(Triple("s1", 1, RunnerInferenceUseCase.TTL_MILLIS), Triple("s1", 1, RunnerInferenceUseCase.TTL_MILLIS)), issued)
@@ -448,7 +448,7 @@ class CloudRoutesTest {
         try {
             val response = call("projected-pod-token-1")
             assertEquals(HttpStatusCode.OK, response.status)
-            assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
             val view = runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))
             assertEquals("linked", view.status); assertEquals("ghu_colleague_token", view.token); assertEquals(99, view.expiresAt)
             assertFalse("ghu_colleague_token" in view.toString())
@@ -501,7 +501,7 @@ class CloudRoutesTest {
             val raw = client.post("/api/v1/cloud/runner/environment") {
                 bearerAuth("projected-pod-token-1"); contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":1}""")
             }
-            assertEquals("no-store", raw.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store, no-transform", raw.headers[HttpHeaders.CacheControl])
             val prepared = runner.runnerEnvironment(RunnerEnvironmentRequest("default", "s1", 1))
             assertEquals(mapOf("NPM_TOKEN" to "npm_synthetic_value"), prepared.variables, "The owner's variables, resolved for the owner")
             assertEquals("ghu_synthetic_user_token", prepared.github.token, "The owner's token, not the caller's or anyone else's"); assertEquals("linked", prepared.github.status)
