@@ -11,17 +11,13 @@ internal fun Route.pacingSettingsRoutes(settings: PacingSettingsStore, origin: S
     get("/api/v1/policy/pacing") { call.respond(settings.get(call.principal).view()) }
     put("/api/v1/policy/pacing") {
         val input = call.jsonBody<PacingSettingsView>()
-        val actor = call.principal
-        val percent = input.quotaPressurePercent ?: settings.get(actor).quotaPressurePercent
-        call.respond(settings.save(actor, PacingSettings(input.observationOnly, percent)).view())
+        call.respond(settings.update(call.principal, input.observationOnly, input.quotaPressurePercent).view())
     }
     post("/dashboard/agent-guidance/pacing") {
         val input = call.form(origin.trimEnd('/'))
-        val actor = call.principal
         val percent = input["quotaPressurePercent"]?.trim()?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_quota_pressure", 400,
             "The quota pressure threshold must be a whole percentage from $MIN_QUOTA_PRESSURE_PERCENT to $MAX_QUOTA_PRESSURE_PERCENT.") }
-            ?: settings.get(actor).quotaPressurePercent
-        settings.save(actor, PacingSettings(input["observationOnly"] == "on", percent))
+        settings.update(call.principal, input["observationOnly"] == "on", percent)
         call.respondRedirect("/dashboard/agent-guidance")
     }
 }

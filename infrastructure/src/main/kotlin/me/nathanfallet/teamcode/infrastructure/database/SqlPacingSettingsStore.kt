@@ -1,6 +1,6 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
-import me.nathanfallet.teamcode.domain.capacity.PacingSettings
+import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.PacingSettingsTable
@@ -14,7 +14,15 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
         readPacingSettings(actor.teamId)
     }
 
-    override suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings = database.query {
+    override suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings = database.query { write(actor, settings) }
+
+    /** The omitted threshold is read under the team lock, so concurrent administrators cannot overwrite each other. */
+    override suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings = database.query {
+        actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
+        write(actor, PacingSettings(observationOnly, quotaPressurePercent ?: readPacingSettings(actor.teamId).quotaPressurePercent))
+    }
+
+    private fun JdbcTransaction.write(actor: Principal, settings: PacingSettings): PacingSettings {
         actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
         val previous = readPacingSettings(actor.teamId)
         PacingSettingsTable.upsert {
@@ -26,11 +34,13 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
             if (settings.observationOnly) "pacing.observation_enabled" else "pacing.enforcement_enabled", actor.teamId)
         if (settings.quotaPressurePercent != previous.quotaPressurePercent) audit(actor.teamId, actor.member.id,
             "pacing.quota_pressure_changed", "${actor.teamId}:${previous.quotaPressurePercent}->${settings.quotaPressurePercent}")
-        settings
+        return settings
     }
 }
 
 /** Call inside the caller's transaction so mode and policy decisions share the same team lock. */
 internal fun readPacingSettings(teamId: String): PacingSettings = PacingSettingsTable.selectAll()
     .where { PacingSettingsTable.teamId eq teamId }.singleOrNull()
-    ?.let { PacingSettings(it[PacingSettingsTable.observationOnly], it[PacingSettingsTable.quotaPressurePercent]) } ?: PacingSettings()
+    ?.let { PacingSettings(it[PacingSettingsTable.observationOnly],
+        // A stored value outside the allowed range (manual edit) must not fail admission; clamp it.
+        it[PacingSettingsTable.quotaPressurePercent].coerceIn(MIN_QUOTA_PRESSURE_PERCENT, MAX_QUOTA_PRESSURE_PERCENT)) } ?: PacingSettings()

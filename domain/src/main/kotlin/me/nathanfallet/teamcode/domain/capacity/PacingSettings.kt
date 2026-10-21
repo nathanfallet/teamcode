@@ -27,4 +27,7 @@ data class PacingSettings(val observationOnly: Boolean = false, val quotaPressur
 interface PacingSettingsStore {
     suspend fun get(actor: Principal): PacingSettings
     suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings
+    /** Merge under the same authority as [save]; a null [quotaPressurePercent] keeps the stored value. Implementations should do it atomically. */
+    suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings =
+        save(actor, PacingSettings(observationOnly, quotaPressurePercent ?: get(actor).quotaPressurePercent))
 }
