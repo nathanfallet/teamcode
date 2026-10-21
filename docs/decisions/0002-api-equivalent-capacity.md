@@ -33,7 +33,7 @@ Estimate per account. For each account of the home pool that can serve (`READY` 
 2. Sum the API-equivalent of that account's tokens settled between the two observations (`account_token_usage` hours × the price table).
 3. One sample = API-equivalent ÷ utilization delta = the window's full capacity in API-equivalent. Keep the median of the samples of the last 7 days (the retention of `quota_history` today; longer needs a retention change first), with at least 3 samples; otherwise the account has no estimate. Usage is bucketed by settlement hour, so a sample is only accurate to the hour: pairs should span several hours.
 
-Daily capacity of an account = min(weekly capacity × (threshold − current weekly utilization) ÷ days left before the weekly reset (at least one), five-hour capacity × threshold × 24 ÷ 5), where threshold is the team's quota pressure threshold. An account whose relevant window is already at the threshold contributes nothing until its reset. Pool capacity = sum over the usable accounts.
+One computation of headroom. The pacing rewrite (aggregated projection over every usable account: each account's remaining quota until its own reset, compared with the team's burn rate) owns the notion of **remaining capacity of the usable accounts**, in utilization points per window. The automatic pool does not compute it a second time: it reads that same function (same account eligibility, same threshold, same resets) and only multiplies each account's remaining points by its estimated window capacity in API-equivalent. Daily capacity of an account = min(weekly remaining points × weekly capacity ÷ days left before the weekly reset (at least one), five-hour capacity × threshold × 24 ÷ 5), where threshold is the team's quota pressure threshold. An account whose relevant window is already at the threshold has no remaining points and contributes nothing until its reset. Pool capacity = sum over the usable accounts.
 
 Unit. Admission still counts credits in this step, so the API-equivalent capacity converts to credits with the team's observed ratio over the last 7 days of the ledger (credits charged ÷ API-equivalent of the same requests, priced models only). The capacity is estimated in API-equivalent rather than directly in credits because the API-equivalent tracks what the provider meters: a shift in the cache mix moves credits but barely moves the cost, so samples taken in API-equivalent stay consistent from one day to the next.
 
@@ -45,7 +45,7 @@ Optional switch "Charge in API-equivalent" so that every allowance (member, pool
 
 ## Pacing
 
-Pacing stays in observation-only mode until step 2 is on. Then its projection uses what admission uses:
+Pacing stays in observation-only mode until step 2 is on. Its projection (being rewritten separately as an aggregate over the usable accounts) and the automatic pool share one remaining-capacity computation, so they cannot disagree about which accounts have headroom. Then the projection uses what admission uses:
 
 - the accounts that can actually serve: exclude accounts at or above the pressure threshold on a relevant window and `RECONNECT_REQUIRED` accounts, instead of falling back to every candidate when none is available (today `available.ifEmpty { candidates }` in `RoutePacingUseCase`);
 - the automatic pool: a scope is projected to exhaust when its burn rate in credits, extended to the end of the UTC day, exceeds what remains of the member's share of the automatic pool, or when an account window is projected to reach the threshold before its reset;
