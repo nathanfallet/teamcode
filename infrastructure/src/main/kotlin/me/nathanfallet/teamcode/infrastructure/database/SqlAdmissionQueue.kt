@@ -16,9 +16,10 @@ internal class SqlAdmissionQueue(private val database: Database) {
         input.runId?.let { requireRunAdmission(actor, it, input.units, now, input.workload, checkConcurrency = false) }
         AdmissionWaiters.deleteWhere { (teamId eq actor.teamId) and (expiresAt lessEq now) }
         val policy = readMemberPolicy(this, actor.member.id)
-        val memberCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.memberId eq actor.member.id }.count()
-        val teamCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.teamId eq actor.teamId }.count()
-        if (memberCount >= 8 || teamCount >= 128) throw TeamFailure("queue_full", 503, "The TeamCode admission queue is full. Retry shortly.", retryAfterSeconds = 15)
+        // A member without a concurrency limit is bounded by the team queue only: a per-member cap would be a hidden one.
+        val memberFull = policy.maxConcurrent > 0 && AdmissionWaiters.selectAll().where { AdmissionWaiters.memberId eq actor.member.id }.count() >= MEMBER_QUEUE_LIMIT
+        val teamFull = AdmissionWaiters.selectAll().where { AdmissionWaiters.teamId eq actor.teamId }.count() >= TEAM_QUEUE_LIMIT
+        if (memberFull || teamFull) throw TeamFailure("queue_full", 503, "The TeamCode admission queue is full. Retry shortly.", retryAfterSeconds = 15)
         val id = UUID.randomUUID().toString()
         val turnPool = accountPlacement(actor, policy, input, now).turnPool
         AdmissionWaiters.insert {
@@ -28,6 +29,10 @@ internal class SqlAdmissionQueue(private val database: Database) {
             it[runId] = input.runId; it[turnPoolId] = turnPool
         }
         AdmissionTicket(id)
+    }
+    companion object {
+        const val MEMBER_QUEUE_LIMIT = 8L
+        const val TEAM_QUEUE_LIMIT = 128L
     }
     suspend fun renew(actor: Principal, ticket: AdmissionTicket, blocked: Boolean, input: AdmissionInput? = null) = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)

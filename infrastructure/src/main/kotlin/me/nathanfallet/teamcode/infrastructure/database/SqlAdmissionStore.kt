@@ -67,10 +67,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                 (Reservations.memberId eq actor.member.id) and (Reservations.dayNumber eq now / DAY) and (Reservations.units greater 0) and sessionFilter
             }.single()[latest] ?: 0L
             if (now - last < directive[table.minInterval]) throw TeamFailure("pacing_delay", 429, "TeamCode is spacing out your requests because the pool's subscription quota is burning fast. Retry in a few seconds.", retryAfterSeconds = RetryWindows.secondsUntil(now, last + directive[table.minInterval]))
-            val active = if (session == null) current.activeRequests else Reservations.selectAll().where {
-                (Reservations.memberId eq actor.member.id) and sessionFilter and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
-            }.count().toInt()
-            if (directive[table.maxConcurrent] > 0 && active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "TeamCode is limiting this session's parallel requests because the pool's subscription quota is burning fast. This one can start when another finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
+            // Pacing only spaces admissions: a directive's concurrency (stored by older replicas) is never a ceiling.
         }
         if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it or grant you a temporary budget override.", now, heldByRunningRequests = current.activeRequests > 0)
         val spent = poolSpent(actor.teamId, policy.poolId.orEmpty(), now / DAY)

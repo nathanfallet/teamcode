@@ -46,6 +46,8 @@ class StatusRenderTest {
         val text = renderStatus(StatusReport(GatewayStatus("pool", 0, 0), override, paced, emptyList()), now)
         assertTrue(text.contains("temporary override until 2026-10-21 06:00 UTC, in 6h 0m, normal 41.7K"), text)
         assertTrue(text.contains("Pacing      slow_down: at most 1 concurrent, 10000 ms between requests"), text)
+        val spaced = renderStatus(StatusReport(GatewayStatus("pool", 0, 0), override, paced.copy(maxConcurrent = 0), emptyList()), now)
+        assertTrue(spaced.contains("Pacing      slow_down: no concurrency cap, 10000 ms between requests"), spaced)
         assertTrue(text.endsWith("Pool accounts: none in your pools."), text)
         val capped = renderStatus(StatusReport(GatewayStatus("pool", 0, 0), capacity.copy(hardCapUnits = 41_666, baseDailyUnits = 41_666)), now)
         assertTrue(capped.contains("(personal cap)"), capped)

@@ -45,7 +45,7 @@ class ConfigStore(private val path: String = configPath()) {
             "The configuration must be a small regular file, not a symbolic link."
         }
         return try { Serialization.json.decodeFromString<CliConfig>(FileSystem.SYSTEM.read(file) { readUtf8() }) }
-        catch (_: IllegalArgumentException) { error("Cannot read TeamCode configuration. Run configure to replace it.") }
+        catch (_: IllegalArgumentException) { throw me.nathanfallet.teamcode.cli.CliUserException("Cannot read TeamCode configuration. Run configure to replace it.") }
     }
     fun delete() { FileSystem.SYSTEM.delete(path.toPath(), mustExist = false) }
     fun save(config: CliConfig) {

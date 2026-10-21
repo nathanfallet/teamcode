@@ -101,9 +101,9 @@ private class ProxyStart : SuspendingCliktCommand(name = "start") {
     private val port by option("--port").int().default(8789)
     override fun help(context: Context) = "Start the authenticated loopback Messages proxy in the foreground. TEAMCODE_LOCAL_TOKEN is required."
     override suspend fun run() {
-        require(port in 1..65535) { "Port must be between 1 and 65535." }
-        val localToken = requireNotNull(environment("TEAMCODE_LOCAL_TOKEN")) { "Set TEAMCODE_LOCAL_TOKEN (at least 32 characters)." }
-        require(localToken.length >= 32) { "The local token must contain at least 32 characters." }
+        if (port !in 1..65535) throw CliUserException("Port must be between 1 and 65535.")
+        val localToken = environment("TEAMCODE_LOCAL_TOKEN") ?: throw CliUserException("Set TEAMCODE_LOCAL_TOKEN (at least 32 characters).")
+        if (localToken.length < 32) throw CliUserException("The local token must contain at least 32 characters.")
         val client = sdk(loadConfig())
         val server = proxyServer(client, localToken, port) { echo(it, err = true) }
         try {
@@ -117,7 +117,7 @@ private class ProxyStart : SuspendingCliktCommand(name = "start") {
     }
 }
 
-internal fun loadConfig() = ConfigStore().load() ?: error("No configuration found. Run teamcode login first.")
+internal fun loadConfig() = ConfigStore().load() ?: throw CliUserException("No configuration found. Run teamcode login first.")
 internal fun sdk(config: CliConfig) = TeamCodeClient(config.serverUrl, { config.accessToken }) { configure ->
     HttpClient() { configure(this) }
 }
@@ -132,6 +132,7 @@ fun main(args: Array<String>): Unit = runBlocking {
         Cli().main(arguments)
     }
     catch (error: CancellationException) { throw error }
+    catch (error: CliUserException) { SystemExit.fail(error.message) }
     catch (error: CliOperationException) {
         if (error.code.startsWith("release_")) SystemExit.fail(releaseFailureMessage(error.code))
         SystemExit.fail("TeamCode command failed (${error.code}). Check server connectivity, authentication and private file permissions.")
@@ -158,3 +159,6 @@ expect object SystemExit { fun fail(message: String): Nothing; fun exit(code: In
 class CliOperationException(val code: String) : Exception() {
     init { require(Regex("[a-zA-Z0-9_]{1,120}").matches(code)) }
 }
+
+/** A failure whose message is written by TeamCode itself (never derived from a remote or platform error), so it is safe and useful to print. */
+class CliUserException(override val message: String) : Exception(message)

@@ -1,4 +1,4 @@
-@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)
 package me.nathanfallet.teamcode.cli.platform
 
 import kotlinx.cinterop.*
@@ -19,27 +19,28 @@ private fun executable(command: String): String? {
 /** Recognize the standard npm wrappers without evaluating .cmd files or invoking a shell. */
 private fun resolve(command: String, arguments: List<String>): Pair<String, List<String>> {
     executable(command)?.let { return it to arguments }
-    val script = when (command) {
-        "codex" -> "node_modules/@openai/codex/bin/codex.js"
-        "claude" -> "node_modules/@anthropic-ai/claude-code/cli.js"
-        else -> error("Install the requested executable and make it available on PATH.")
-    }
+    val architecture = if (kotlin.native.Platform.cpuArchitecture == kotlin.native.CpuArchitecture.ARM64) "arm64" else "x64"
+    val candidates = npmLaunchCandidates(command, architecture)
+    var nodeMissing = false
     for (directory in environment("PATH").orEmpty().split(';').filter { it.isNotBlank() }) {
         val root = directory.trim('"').toPath()
-        val file = root.resolve(script)
-        if (FileSystem.SYSTEM.metadataOrNull(root.resolve("$command.cmd"))?.isRegularFile == true &&
-            FileSystem.SYSTEM.metadataOrNull(file)?.isRegularFile == true) {
-            val node = executable(root.resolve("node.exe").toString()) ?: executable("node") ?: error("Node.js is required for this npm installation.")
+        if (FileSystem.SYSTEM.metadataOrNull(root.resolve("$command.cmd"))?.isRegularFile != true) continue
+        for (candidate in candidates) {
+            val file = root.resolve(candidate.relativePath)
+            if (FileSystem.SYSTEM.metadataOrNull(file)?.isRegularFile != true) continue
+            if (!candidate.needsNode) return file.toString() to arguments
+            val node = executable(root.resolve("node.exe").toString()) ?: executable("node")
+            if (node == null) { nodeMissing = true; continue }
             return node to (listOf(file.toString()) + arguments)
         }
     }
-    error("Install the native agent or its standard npm package and make it available on PATH.")
+    throw ProcessStartException(if (nodeMissing) ProcessStartException.Reason.NodeMissing else ProcessStartException.Reason.NotFound, command)
 }
 
 actual suspend fun runInteractiveProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, quiet: Boolean): Int {
     val (application, actualArguments) = resolve(command, arguments)
     val line = (listOf(application) + actualArguments).joinToString(" ", transform = ::quoteWindowsArgument)
-    require(line.length < 32_767)
+    if (line.length >= 32_767) throw ProcessStartException(ProcessStartException.Reason.TooLong, command)
     val child = memScoped {
         val values = mutableMapOf<String, Pair<String, String>>()
         val inherited = checkNotNull(GetEnvironmentStringsW())
@@ -60,9 +61,7 @@ actual suspend fun runInteractiveProcess(command: String, arguments: List<String
             if (value == null) values.remove(name.uppercase()) else values[name.uppercase()] = name to value
         }
         val block = values.entries.sortedBy { it.key }.joinToString("\u0000", postfix = "\u0000\u0000") { "${it.value.first}=${it.value.second}" }
-        checkNotNull(teamcode_windows_spawn(application.wcstr.ptr, line.wcstr.ptr, block.wcstr.ptr, if (quiet) 1 else 0)) {
-            "Cannot launch the requested executable."
-        }
+        teamcode_windows_spawn(application.wcstr.ptr, line.wcstr.ptr, block.wcstr.ptr, if (quiet) 1 else 0) ?: throw ProcessStartException(ProcessStartException.Reason.CannotLaunch, command)
     }
     var completed = false
     try {

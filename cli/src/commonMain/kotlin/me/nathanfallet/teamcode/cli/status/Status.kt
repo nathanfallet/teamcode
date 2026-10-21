@@ -115,7 +115,7 @@ private fun StringBuilder.quota(c: CapacityView, pacing: DirectiveView?, pacingU
         appendLine("  Group       ${clean(group.name)}: $budget, $slots${if (group.paused) ", admission paused" else ""}")
     }
     appendLine("  Pacing      " + if (pacingUnavailable != null) unavailable(pacingUnavailable).removeSuffix(".") else if (pacing == null) "none" else
-        "${pacing.pace.lowercase()}: at most ${pacing.maxConcurrent} concurrent, ${pacing.minIntervalMillis} ms between requests, until ${at(pacing.expiresAtMillis, now)}")
+        "${pacing.pace.lowercase()}: ${if (pacing.maxConcurrent == 0) "no concurrency cap" else "at most ${pacing.maxConcurrent} concurrent"}, ${pacing.minIntervalMillis} ms between requests, until ${at(pacing.expiresAtMillis, now)}")
 }
 
 private fun usable(account: PoolAccountStatusView, now: Long): String {
