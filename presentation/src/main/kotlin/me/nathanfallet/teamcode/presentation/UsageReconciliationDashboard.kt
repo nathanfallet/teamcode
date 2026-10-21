@@ -17,7 +17,7 @@ internal fun Route.usageReconciliationDashboardRoutes(service: UsageReconciliati
             """<tr><td><a href="/dashboard/usage/${escape(item.id)}">${escape(item.id)}</a><br>${Instant.ofEpochMilli(item.createdAtMillis)}<br>${if (item.state == "ACTIVE") "Expired lease · usage unknown" else "Usage unknown"}</td><td>${escape(item.username)}<br><a href="/dashboard/usage?member=${escape(item.memberId)}">This member</a><br>${escape(item.accountName)} · ${escape(item.provider)}</td><td>${item.units} credits<br>Billing day ${billingDay(item.dayNumber)}<br>Provider request ${escape(item.providerRequestId ?: "not captured")}</td></tr>"""
         }
         val older = result.nextBeforeId?.let { olderUsage("/dashboard/usage", it, member) }.orEmpty()
-        call.respondText(page("Pending usage review", """<p><a href='/dashboard/usage'>All pending requests</a> · <a href='/dashboard/usage/history'>Reconciliation history</a></p><p>$REVIEW_HELP</p><p>$older</p><table><thead><tr><th>Request</th><th>Member / account</th><th>Conservative charge</th></tr></thead><tbody>$rows</tbody></table>${if (result.requests.isEmpty()) "<p>No requests need review on this page.</p>" else ""}"""), ContentType.Text.Html)
+        call.respondText(call.page("Pending usage review", """<p><a href='/dashboard/usage'>All pending requests</a> · <a href='/dashboard/usage/history'>Reconciliation history</a></p><p>$REVIEW_HELP</p><p>$older</p><table><thead><tr><th>Request</th><th>Member / account</th><th>Conservative charge</th></tr></thead><tbody>$rows</tbody></table>${if (result.requests.isEmpty()) "<div class='empty'><strong>No requests need review on this page.</strong></div>" else ""}"""), ContentType.Text.Html)
     }
     get("/dashboard/usage/history") {
         val member = call.request.queryParameters["member"]
@@ -26,7 +26,7 @@ internal fun Route.usageReconciliationDashboardRoutes(service: UsageReconciliati
             """<tr><td><a href="/dashboard/usage/${escape(item.id)}">${escape(item.id)}</a><br>${Instant.ofEpochMilli(item.reconciledAtMillis)}</td><td>${item.previousUnits} → ${item.actualUnits} credits<br>Billing day ${billingDay(item.dayNumber)}</td><td>${escape(item.actorId)}<br>${escape(item.reference)}<br>${escape(item.reason)}</td></tr>"""
         }
         val older = result.nextBeforeId?.let { olderUsage("/dashboard/usage/history", it, member) }.orEmpty()
-        call.respondText(page("Usage reconciliation history", """<p><a href='/dashboard/usage'>Pending requests</a> · <a href='/dashboard/usage/history'>Latest corrections</a></p><p>$older</p><table><thead><tr><th>Correction</th><th>Original / verified charge</th><th>Actor and evidence</th></tr></thead><tbody>$rows</tbody></table>"""), ContentType.Text.Html)
+        call.respondText(call.page("Usage reconciliation history", """<p><a href='/dashboard/usage'>Pending requests</a> · <a href='/dashboard/usage/history'>Latest corrections</a></p><p>$older</p><table><thead><tr><th>Correction</th><th>Original / verified charge</th><th>Actor and evidence</th></tr></thead><tbody>$rows</tbody></table>"""), ContentType.Text.Html)
     }
     get("/dashboard/usage/{id}") {
         val actor = call.principal
@@ -36,7 +36,7 @@ internal fun Route.usageReconciliationDashboardRoutes(service: UsageReconciliati
         } ?: result.reconciliation?.let { item ->
             """<p>Usage reconciled on ${Instant.ofEpochMilli(item.reconciledAtMillis)} by ${escape(item.actorId)}.</p><p>Request <code>${escape(item.id)}</code> · member ${escape(item.memberId)} · account ${escape(item.accountId)}<br>Original billing day ${billingDay(item.dayNumber)} · home pool ${escape(item.poolId.ifEmpty { "shared" })} · physical source ${escape(item.sourcePoolId.ifEmpty { "shared" })}<br>Provider correlation ${escape(item.providerRequestId ?: "not captured")} · run ${escape(item.runId ?: "not registered")}</p><p>Original groups: ${if (item.groupIds.isEmpty()) "none" else item.groupIds.joinToString(", ") { escape(it) }}</p><p>${item.previousUnits} → ${item.actualUnits} credits · prior state ${if (item.previousState == "ACTIVE") "Expired lease" else "Unknown usage"}</p><p>Evidence: ${evidenceLabel(item.source)} · ${escape(item.reference)}<br>Reason: ${escape(item.reason)}</p><p>Completion counters remain unchanged. The original attribution and this correction are retained.</p>"""
         } ?: throw TeamFailure("not_found", 404, "Usage review not found.")
-        call.respondText(page("Usage review", "<p><a href='/dashboard/usage'>Pending requests</a> · <a href='/dashboard/usage/history'>History</a></p>" + content), ContentType.Text.Html)
+        call.respondText(call.page("Usage review", "<p><a href='/dashboard/usage'>Pending requests</a> · <a href='/dashboard/usage/history'>History</a></p>" + content), ContentType.Text.Html)
     }
     post("/dashboard/usage/{id}") {
         val input = call.form(origin.trimEnd('/'))

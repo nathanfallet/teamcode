@@ -149,7 +149,7 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
         val servers = variants?.list(actor).orEmpty().filter { it.kind == VariantKind.MCP }
         val policies = servers.associate { it.id to access.toolPolicy(actor, it.id) }
         val usageRows = usage.joinToString("") {
-            """<tr><td>${escape(it.username)}</td><td><code>${escape(it.server.ifEmpty { "(unknown)" })}</code></td><td>${it.calls}</td><td>${it.lists}</td><td>${it.errors}</td><td>${it.denied}</td><td>${it.responseBytes}</td><td>${if (it.calls + it.lists > 0) it.totalDurationMillis / (it.calls + it.lists) else 0} ms</td></tr>"""
+            """<tr><td>${escape(it.username)}</td><td><code>${escape(it.server.ifEmpty { "(unknown)" })}</code></td><td>${it.calls}</td><td>${it.lists}</td><td>${it.errors}</td><td>${it.denied}</td><td class="num">${units(it.responseBytes)}</td><td>${if (it.calls + it.lists > 0) it.totalDurationMillis / (it.calls + it.lists) else 0} ms</td></tr>"""
         }
         val callRows = page.calls.joinToString("") {
             """<tr><td>${it.id}<br><small>${Instant.ofEpochMilli(it.startedAt)}</small></td><td>${escape(it.memberId)}</td><td><code>${escape(it.server)}</code></td><td>${it.operation}${it.tool?.let { tool -> " <code>${escape(tool)}</code>" } ?: ""}</td><td>${it.outcome}</td><td>${it.durationMillis ?: ""}</td></tr>"""
@@ -159,10 +159,10 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
             """<tr><td><code>${escape(variant.target)}</code> · ${escape(variant.name)}</td><td>${if (policy.mode == McpToolMode.ALL) "All tools" else escape(policy.tools.sorted().joinToString(", "))}</td><td><form method="post" action="/dashboard/mcp/${escape(variant.id)}/tools">${csrf(actor)}<label>Allowed tools (one per line, empty for all) <textarea name="tools" rows="3">${escape(policy.tools.sorted().joinToString("\n"))}</textarea></label><button>Save</button></form></td></tr>"""
         }
         val older = page.nextBeforeId?.let { """<a href="/dashboard/mcp?before=$it">Older calls</a>""" } ?: ""
-        call.respondText(page("MCP gateway", """<p>Agents reach each assigned MCP server on its own endpoint, <code>$MCP_PATH/&lt;server&gt;</code>. Discovery and every call are checked against current assignments and tool policies; credentials stay on the server. The journal keeps metadata only: never arguments or results.</p>
-<h2>Tool policies</h2><table><thead><tr><th>MCP variant</th><th>Exposed tools</th><th>Change</th></tr></thead><tbody>$policyRows</tbody></table>${if (servers.isEmpty()) "<p>No MCP variants yet. Create them on the variants page.</p>" else ""}
-<h2>Usage, last ${call.days()} days</h2><table><thead><tr><th>Member</th><th>Server</th><th>Calls</th><th>Lists</th><th>Errors</th><th>Denied</th><th>Bytes</th><th>Average</th></tr></thead><tbody>$usageRows</tbody></table>
-<h2>Recent operations</h2><p><a href="/dashboard/mcp">Latest</a> $older</p><table><thead><tr><th>Call / UTC</th><th>Member ID</th><th>Server</th><th>Operation</th><th>Outcome</th><th>ms</th></tr></thead><tbody>$callRows</tbody></table>"""), ContentType.Text.Html)
+        call.respondText(call.page("MCP gateway", """<details class='help'><summary>How this works</summary><p>Agents reach each assigned MCP server on its own endpoint, <code>$MCP_PATH/&lt;server&gt;</code>. Discovery and every call are checked against current assignments and tool policies; credentials stay on the server. The journal keeps metadata only: never arguments or results.</p></details>
+<h2>Tool policies</h2><table><thead><tr><th>MCP variant</th><th>Exposed tools</th><th>Change</th></tr></thead><tbody>$policyRows</tbody></table>${if (servers.isEmpty()) "<div class='empty'><strong>No MCP variants yet. Create them on the variants page.</strong></div>" else ""}
+<h2>Usage, last ${call.days()} days</h2><table><thead><tr><th>Member</th><th>Server</th><th>Calls</th><th>Lists</th><th>Errors</th><th>Denied</th><th>Bytes</th><th>Average</th></tr></thead><tbody>$usageRows</tbody></table>${if (usage.isEmpty()) "<div class='empty'><strong>No MCP traffic in this period.</strong></div>" else ""}
+<h2>Recent operations</h2><p><a href="/dashboard/mcp">Latest</a> $older</p><table><thead><tr><th>Call / UTC</th><th>Member ID</th><th>Server</th><th>Operation</th><th>Outcome</th><th>ms</th></tr></thead><tbody>$callRows</tbody></table>${if (page.calls.isEmpty()) "<div class='empty'><strong>No MCP operation recorded yet.</strong></div>" else ""}"""), ContentType.Text.Html)
     }
     post("/dashboard/mcp/{id}/tools") {
         val input = call.form(origin)

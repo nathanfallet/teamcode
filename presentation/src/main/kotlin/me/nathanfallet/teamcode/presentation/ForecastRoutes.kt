@@ -19,7 +19,7 @@ internal fun Route.forecastRoutes(forecasts: ForecastService) {
     }
     get("/dashboard/forecasts") {
         val snapshot = forecasts.load(call.principal, call.singleForecastAccount())
-        call.respondText(page("Quota forecasts", forecastDashboard(snapshot, live = true)), ContentType.Text.Html)
+        call.respondText(call.page("Quota forecasts", forecastDashboard(snapshot, live = true)), ContentType.Text.Html)
     }
 }
 

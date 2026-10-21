@@ -1,6 +1,6 @@
 # Temporary daily quota overrides
 
-An interactive owner or administrator can temporarily replace a member's normal daily credit allocation from **Dashboard → Capacity → Temporary quota overrides** or the typed API/client. Every grant requires a single-line reason, an explicit total daily allocation and a duration of 1–1440 minutes. The deadline is the earlier of that duration and the next midnight UTC. Zero stops new admissions; it does not mean unlimited credits.
+An interactive owner or administrator can temporarily replace a member's normal daily credit allocation from **Dashboard → Quotas and capacity → Quotas and pools → Temporary quota overrides** or the typed API/client. Every grant requires a single-line reason, an explicit total daily allocation and a duration of 1–1440 minutes. The deadline is the earlier of that duration and the next midnight UTC. Zero stops new admissions; it does not mean unlimited credits.
 
 The permanent weight, individual hard cap and concurrency settings are retained. While active, the override replaces the weighted/capped daily allocation, bounded by the pool's total budget. Capacity responses expose both `dailyUnits` (effective) and `baseDailyUnits` (normal), plus the active override's ID, requested daily units and deadline. A `usage:read` key can read its own capacity without administrative grant/revocation reasons. Ordinary members, group managers and all service/CI keys cannot grant, revoke or inspect override history, even when the key belongs to an administrator.
 

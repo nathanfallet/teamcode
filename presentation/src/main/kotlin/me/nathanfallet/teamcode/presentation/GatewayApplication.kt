@@ -35,7 +35,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         exception<TeamFailure> { call, error ->
             if (call.response.isCommitted) throw error // A revoked/failed stream cannot become a replacement JSON response.
             if (error.status == 429) call.response.header(HttpHeaders.RetryAfter, "60")
-            if (call.request.path().startsWith("/dashboard")) call.respondText(page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>"), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
+            if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>"), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }
         exception<CancellationException> { _, error -> throw error }
@@ -85,12 +85,33 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             }
         }
     }
+    // The menu mirrors the route registrations below, so it never links to a page this server does not serve.
+    attributes.put(DASHBOARD_FEATURES, buildSet {
+        if (team == null) return@buildSet
+        if (groups != null) add(DashboardFeature.GROUPS)
+        if (runs != null) add(DashboardFeature.RUNS)
+        if (accounts != null) add(DashboardFeature.ACCOUNTS)
+        if (admission != null) add(DashboardFeature.CAPACITY)
+        if (reconciliation != null) add(DashboardFeature.USAGE_REVIEW)
+        if (directives != null) add(DashboardFeature.GUIDANCE)
+        if (forecasts != null) add(DashboardFeature.FORECASTS)
+        if (modelPolicies != null) add(DashboardFeature.MODEL_POLICY)
+        if (routes != null) add(DashboardFeature.ROUTES)
+        if (devices != null) add(DashboardFeature.DEVICES)
+        if (serviceKeys != null) add(DashboardFeature.SERVICE_KEYS)
+        if (audit != null) add(DashboardFeature.AUDIT)
+        if (skills != null) add(DashboardFeature.SKILLS)
+        if (variants != null) add(DashboardFeature.VARIANTS)
+        if (mcpAccess != null) add(DashboardFeature.MCP)
+        if (cloudSessions != null && cloudAdmin != null) add(DashboardFeature.CLOUD)
+        if (github != null) add(DashboardFeature.GITHUB)
+    })
     routing {
-        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null) }
+        if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null, OverviewSources(admission, runs, accounts)) }
         if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
         if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
-        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null)
+        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null, groups)
         if (team != null && admission != null && budgetOverrides != null) { budgetOverrideRoutes(budgetOverrides); budgetOverrideDashboardRoutes(budgetOverrides, admission, publicOrigin) }
         if (team != null && reconciliation != null) { usageReconciliationRoutes(reconciliation); usageReconciliationDashboardRoutes(reconciliation, publicOrigin) }
         if (directives != null) directiveRoutes(directives, pacingSettings)

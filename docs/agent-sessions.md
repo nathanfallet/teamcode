@@ -1,6 +1,6 @@
 # Agent launches and native sessions
 
-Current `teamcode run claude -- ...` and `teamcode run codex -- ...` register a durable launch when the server advertises `team.runs.v1`. Inspect it in **Dashboard → Sessions**, through the API, or with:
+Current `teamcode run claude -- ...` and `teamcode run codex -- ...` register a durable launch when the server advertises `team.runs.v1`. Inspect it in **Dashboard → Agents and MCP → Agent sessions**, through the API, or with:
 
 ```sh
 teamcode sessions list

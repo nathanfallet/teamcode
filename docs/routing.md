@@ -1,6 +1,6 @@
 # Model routing and protocol translation
 
-Routes are administrator-owned team configuration, stored in MySQL and shared by every server replica. Manage them in **Dashboard → Routes**, or through `/api/v1/routes`. A rule has a stable ID, a requested-model glob, priority, ordered targets, enabled state and a version. Saving or deleting an outdated version returns HTTP 409. There are at most 64 rules and four targets per rule.
+Routes are administrator-owned team configuration, stored in MySQL and shared by every server replica. Manage them in **Dashboard → Accounts and models → Model routes**, or through `/api/v1/routes`. A rule has a stable ID, a requested-model glob, priority, ordered targets, enabled state and a version. Saving or deleting an outdated version returns HTTP 409. There are at most 64 rules and four targets per rule.
 
 The first enabled rule, sorted by descending priority and then ID, wins. Targets are explicit and are not recursively resolved through other rules. With no matching rule, Messages uses Anthropic and Responses uses Codex. No fallback is installed automatically.
 
@@ -17,7 +17,7 @@ Omitting a target model retains the requested model. Custom aliases need a match
 
 ## Experimental conversion setting
 
-Cross-provider translation is **experimental and disabled by default**. An administrator can enable **Experimental cross-provider translation** in **Dashboard → Models**, or set `experimentalCrossProviderTranslation: true` using `PUT /api/v1/policy/models` while retaining the other policy fields. `GET /api/v1/policy/models` exposes the effective value. Missing/older policy values default to false. The setting is stored in MySQL and shared across replicas; changes use the existing administrator authorization, CSRF protection and model-policy audit.
+Cross-provider translation is **experimental and disabled by default**. An administrator can enable **Experimental cross-provider translation** in **Dashboard → Accounts and models → Model policy**, or set `experimentalCrossProviderTranslation: true` using `PUT /api/v1/policy/models` while retaining the other policy fields. `GET /api/v1/policy/models` exposes the effective value. Missing/older policy values default to false. The setting is stored in MySQL and shared across replicas; changes use the existing administrator authorization, CSRF protection and model-policy audit.
 
 While disabled, targets requiring protocol conversion are skipped, including a remembered affinity to an experimental target. Compatible native targets in the same configured route remain eligible, and native account/model fallback continues. A route containing only disabled targets fails before reservation/provider dispatch with HTTP 422 `translation_disabled`; native targets that exhaust eligible capacity still return their normal capacity error. A newly disabled experiment is rechecked before queued admission and is excluded from capacity guidance. Already dispatched work is allowed to finish; changing this setting does not replay or terminate committed streams. Upgrade every replica before relying on the setting, since older binaries do not enforce it.
 
