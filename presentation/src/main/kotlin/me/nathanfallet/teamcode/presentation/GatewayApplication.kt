@@ -34,7 +34,6 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
     val cloudOn: () -> Boolean = { cloudRuntime?.enabled ?: true }
-    // The runner channel answers only once a runtime is stored: a server that never used cloud sessions exposes none of it.
     attributes.put(CLOUD_ENABLED, cloudOn)
     install(io.ktor.server.resources.Resources)
     install(ContentNegotiation) { json(Serialization.json) }
@@ -198,7 +197,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else null,
                     ).flatten() else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && github != null) listOf("github.link.v1") else emptyList())))
+                    (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()

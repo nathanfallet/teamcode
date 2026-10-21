@@ -76,7 +76,7 @@ internal fun cloudStartsWork(method: String, path: String): Boolean {
     val segments = path.split('/').filter { it.isNotEmpty() }.map { segment -> try { segment.decodeURLPart() } catch (_: Exception) { null } }
     fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == null || segments[it] == pattern[it] }
     fun under(vararg prefix: String) = segments.size > prefix.size && prefix.indices.all { segments[it] == null || segments[it] == prefix[it] }
-    return (method == "POST" && WORK_ROUTES.any { matches(*it) }) || under("api", "v1", "github", "link") ||
+    return (method == "POST" && WORK_ROUTES.any { matches(*it) }) || (method == "POST" && matches("api", "v1", "github", "link", "device")) ||
         matches(*GITHUB_LINK_PATH.split('/').filter { it.isNotEmpty() }.toTypedArray())
 }
 

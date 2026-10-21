@@ -38,7 +38,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val adminStore = SqlCloudAdminStore(database, cipher)
     private val cluster = KubernetesClusterPort({ adminStore.connection(it) }, {
         val current = runtime.current
-        // Off: no new pod starts. A session already queued waits (and can be paused or deleted) until cloud sessions are on.
+        // Off: no new pod starts. A session already queued waits (and can be deleted) until cloud sessions are on.
         if (!current.enabled) throw CloudConfigurationException("cloud sessions are turned off; queued sessions start once they are on again")
         val image = current.runnerImage ?: throw CloudConfigurationException("no runner image is set; set it on Dashboard → Cloud sessions")
         if (!CloudRuntimeService.usableOrigin(runtime.serverUrl(current))) throw CloudConfigurationException("the callback origin for pods is not HTTPS or is loopback; set the server URL for pods on Dashboard → Cloud sessions")
@@ -83,7 +83,12 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
      * Seeds the runtime from the former deployment variables, only if nothing is stored yet; the database stays the
      * source of truth afterwards.
      */
-    suspend fun start(initial: CloudRuntime?) = runtime.seed(initial) { reason -> System.err.println("TeamCode cloud runtime from the environment was stored disabled: $reason") }
+    /** The former variables, kept until a runtime is stored so a seed that failed at startup is retried. */
+    @Volatile private var seedCandidate: CloudRuntime? = null
+
+    suspend fun start(initial: CloudRuntime?): CloudRuntime { seedCandidate = initial; return seed() }
+
+    private suspend fun seed() = runtime.seed(seedCandidate) { reason -> System.err.println("TeamCode cloud runtime from the environment was stored disabled: $reason") }
 
     /** Workers run once a runtime is stored, on or off: sessions created while it was on keep being reconciled. */
     private fun managing() = runtime.current.updatedAt != null
@@ -93,7 +98,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
             // Another replica's dashboard save reaches this one within one interval.
             while (isActive) {
                 delay(RUNTIME_REFRESH_MILLIS)
-                try { runtime.refresh() }
+                try { if (runtime.current.updatedAt == null && seedCandidate != null) seed() else runtime.refresh() }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { System.err.println("TeamCode cloud runtime could not be reread (${describe(error)}); keeping the last one.") }
             }
