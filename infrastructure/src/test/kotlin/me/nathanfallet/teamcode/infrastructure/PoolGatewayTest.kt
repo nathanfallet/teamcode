@@ -472,6 +472,7 @@ class PoolGatewayTest {
             gateway.forward(request()) { head, chunks -> assertEquals(502, head.status); chunks.collect { assertFalse(it.decodeToString().contains("secret diagnostic")) } }
             assertEquals(1, calls)
             assertEquals<List<Long?>>(listOf(null), store.charges)
+            assertEquals(listOf<MeteredUsage?>(null), store.usages, "An error status consumed no tokens: credits stay unknown, the token ledger records nothing")
         }
     }
     @Test fun forbiddenResolvedModelCannotBypassPolicyAndNativeFieldsStayOpaque() = runBlocking {

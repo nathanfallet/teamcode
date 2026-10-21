@@ -31,7 +31,7 @@ Estimate per account. For each account of the home pool that can serve (`READY` 
 
 1. Pair two observations of the same shared window (`five_hour`, `seven_day`) in the same window period (same reset), at least 5 utilization points apart, from `quota_history`.
 2. Sum the API-equivalent of that account's tokens settled between the two observations (`account_token_usage` hours × the price table).
-3. One sample = API-equivalent ÷ utilization delta = the window's full capacity in API-equivalent. Keep the median of the samples of the last 14 days, with at least 3 samples; otherwise the account has no estimate.
+3. One sample = API-equivalent ÷ utilization delta = the window's full capacity in API-equivalent. Keep the median of the samples of the last 7 days (the retention of `quota_history` today; longer needs a retention change first), with at least 3 samples; otherwise the account has no estimate. Usage is bucketed by settlement hour, so a sample is only accurate to the hour: pairs should span several hours.
 
 Daily capacity of an account = min(weekly capacity × (threshold − current weekly utilization) ÷ days left before the weekly reset (at least one), five-hour capacity × threshold × 24 ÷ 5), where threshold is the team's quota pressure threshold. An account whose relevant window is already at the threshold contributes nothing until its reset. Pool capacity = sum over the usable accounts.
 
@@ -62,7 +62,7 @@ The concurrency ceiling that SLOW_DOWN imposes today, and the queue it produced,
 
 ## Risks
 
-- **Estimation noise.** Utilization is reported in whole points and windows reset; few samples on a new or idle account. Mitigated by the 5-point minimum delta, the 14-day median, the 3-sample minimum and the fallback to the manual budget. An account without an estimate contributes nothing; with every account unestimated, the manual budget applies.
+- **Estimation noise.** Utilization is reported in whole points and windows reset; few samples on a new or idle account. Mitigated by the 5-point minimum delta, the 7-day median, the 3-sample minimum and the fallback to the manual budget. An account without an estimate contributes nothing; with every account unestimated, the manual budget applies.
 - **Over-sizing.** If the estimate is too high, members are admitted until the quota windows exclude accounts at the threshold, which is today's protection anyway. The ±20%/hour step and the threshold keep the overshoot bounded.
 - **Under-sizing** refuses work that accounts could serve, the failure that put pacing in observation mode. Mitigated by computing only from usable accounts and showing the estimate on the dashboard; an administrator can uncheck the setting at once.
 - **Prices.** Missing or wrong prices skew the ratio. Unpriced models are excluded from the ratio and listed; a day with no priced traffic keeps the last ratio.

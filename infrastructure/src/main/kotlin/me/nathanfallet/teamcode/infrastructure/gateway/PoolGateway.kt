@@ -140,6 +140,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         transport: ProviderTransport, body: JsonObject, model: String, requestedModel: String, reservation: Reservation, translated: Boolean, reauthenticatedAccounts: MutableSet<String>, replyTools: List<ToolDefinition>?) {
         val meter = SseUsageMeter()
         var knownCharge: Long? = null
+        var upstreamStatus: Int? = null
         var dispatched = false
         var committed = false
         try {
@@ -164,6 +165,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                         val observations = observation.windows
                         admission.observe(reservation.account.id, observation)
                         val status = response.status.value
+                        upstreamStatus = status
                         val encoding = response.headers["content-encoding"]?.takeIf { it in setOf("gzip", "br", "deflate", "zstd", "identity") } ?: "none"
                         System.out.println("TeamCode inference upstream request=${reservation.id} status=$status encoding=$encoding")
                         if (status !in 200..299) {
@@ -231,9 +233,10 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 // provider terminal usage, independently of downstream delivery.
                 val terminalUsage = meter.settledUnits
                 val charge = if (!dispatched) 0 else knownCharge ?: terminalUsage
-                // A request never sent or refused by the provider consumed no tokens; anything else enters the raw
-                // ledger, as unmetered when the stream gave no terminal usage.
-                val usage = if (!dispatched || knownCharge != null) null else MeteredUsage(transport.provider, model, meter.tokens)
+                // A request never sent or answered with an error status consumed no tokens; anything else enters the
+                // raw ledger, as unmetered when the stream gave no terminal usage. Credits keep their own rule above.
+                val refused = upstreamStatus?.let { it !in 200..299 } ?: false
+                val usage = if (!dispatched || knownCharge != null || refused) null else MeteredUsage(transport.provider, model, meter.tokens)
                 try {
                     withTimeout(5_000) { admission.settle(reservation, charge, terminalUsage != null, usage) }
                     System.out.println("TeamCode inference settled request=${reservation.id} units=${charge ?: "unknown"} terminal=${meter.lastEvent} failure=${meter.failureCategory}")
