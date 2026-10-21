@@ -51,12 +51,11 @@ data class PoolStanding(
     val disabled: Int = 0,
     val coolingDown: Int = 0,
     val quotaExhausted: Int = 0,
-    val busy: Int = 0,
     val nextAvailableAt: Long? = null,
 ) {
-    val accounts: Int get() = pendingHandover + reconnectRequired + disabled + coolingDown + quotaExhausted + busy
+    val accounts: Int get() = pendingHandover + reconnectRequired + disabled + coolingDown + quotaExhausted
     /** Only accounts that become usable without anyone acting. */
-    val waiting: Int get() = coolingDown + quotaExhausted + busy
+    val waiting: Int get() = coolingDown + quotaExhausted
 }
 
 /** Turns a [PoolStanding] into the refusal the agent shows: the cause, what to do, and when to retry. */
@@ -74,11 +73,10 @@ class DescribePoolUnavailableUseCase {
             if (standing.disabled > 0) add("${accounts(standing.disabled)} disabled by an administrator.")
             if (standing.quotaExhausted > 0) add("${accounts(standing.quotaExhausted)} at ${if (standing.quotaExhausted == 1) "its" else "their"} subscription limit.")
             if (standing.coolingDown > 0) add("${accounts(standing.coolingDown)} paused after a provider rate limit or refusal.")
-            if (standing.busy > 0) add("${accounts(standing.busy)} busy with other requests.")
         }
         val summary = "No $provider account in your TeamCode pool is usable. ${causes.joinToString(" ")}"
         if (standing.waiting == 0) return TeamFailure(CODE, 503, "$summary Retrying will not help until this is fixed.", retryable = false)
-        val retryAfter = standing.nextAvailableAt?.takeIf { it > now && standing.busy == 0 }?.let { RetryWindows.secondsUntil(now, it) }
+        val retryAfter = standing.nextAvailableAt?.takeIf { it > now }?.let { RetryWindows.secondsUntil(now, it) }
             ?: RetryWindows.SHORT_RETRY_SECONDS
         val retry = if (retryAfter <= RetryWindows.SHORT_RETRY_SECONDS) "Retry in a few seconds."
             else "The next account should be usable ${RetryWindows.at(now, now + retryAfter * 1000)}."

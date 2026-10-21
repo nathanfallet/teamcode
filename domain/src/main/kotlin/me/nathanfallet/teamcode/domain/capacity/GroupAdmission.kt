@@ -20,6 +20,6 @@ class CheckGroupAdmissionUseCase {
             throw TeamFailure("group_concurrency", 429, "One of your TeamCode groups has reached its concurrent request limit. This request can start when one of the group's requests finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         }
     }
-    fun maximum(groups: List<GroupAllowance>, memberMaximum: Int): Int = minOf(memberMaximum,
-        groups.map { it.group.maxConcurrent }.filter { it > 0 }.minOrNull() ?: memberMaximum)
+    /** Zero means neither the member nor any group sets a concurrency limit. */
+    fun maximum(groups: List<GroupAllowance>, memberMaximum: Int): Int = concurrencyCeiling(groups.map { it.group.maxConcurrent } + memberMaximum)
 }

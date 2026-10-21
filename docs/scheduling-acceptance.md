@@ -4,19 +4,19 @@
 
 ## Scenario
 
-Three members have daily weights **5:5:1**, sharing a 1,100,000-unit pool. Their computed allowances must be 500,000 / 500,000 / 100,000 units. All have the same two-request concurrency limit: weights allocate daily credits, not scheduling turns. One physical account provides two slots.
+Three members have daily weights **5:5:1**, sharing a 1,100,000-unit pool. Their computed allowances must be 500,000 / 500,000 / 100,000 units. Only the heavy member has a concurrency limit (two requests); the others keep the unlimited default. One physical account serves everyone, and accounts have no parallelism limit of their own.
 
-The heavy member occupies both slots with actual held SSE responses, then submits eight background requests across the two replicas. A ninth pending request from that member is refused with HTTP 503, without provider dispatch; the other members can still enqueue three interactive requests each. While the 14 requests wait, they receive no quota rejection and reserve no support credits. An additional support request is submitted through a raw HTTP socket and reset before response headers; its queue entry disappears, it consumes no credits and it never reaches the upstream.
+The heavy member fills its limit with two actual held SSE responses, then submits background requests across the two replicas. A raw-socket request from the same member is queued and reset before response headers: its queue entry disappears, it consumes no credits and it never reaches the upstream. With eight background requests waiting, a ninth is refused with HTTP 503 and is not dispatched. None of the waiting requests receives a quota rejection.
 
-Releasing one original stream exposes exactly one slot at a time. The six interactive requests must dispatch in member rotation, preserving each member's FIFO order, before the unaged background requests. Each response must contain the complete expected SSE bytes. The last held original stream is then released. Assertions require:
+The other members then submit three interactive requests each. All six reach the busy account at once, while the heavy member's eight requests stay queued: a busy account never makes other members wait. Releasing one original stream then frees exactly one slot of the heavy member's limit at a time, and its eight requests dispatch one by one (a member blocked by its own limit polls for the freed slot; its requests are not ordered among themselves). Each response must contain the complete expected SSE bytes. The last held original stream is then released. Assertions require:
 
 - 16 complete streams, one refused overflow and one cancelled pending request;
-- a measured peak of 15 queued requests and at most two simultaneous upstream streams;
+- a measured peak of eight queued requests and eight simultaneous upstream streams on one account;
 - exactly one upstream call per successful request, with no call for the refused/cancelled requests;
 - an empty queue, zero active reservations and 16 completed requests after settlement;
 - exact final charges of 60 / 18 / 18 units, read through the other replica's pool.
 
-The test uses normal polling and real database/HTTP timing. Its output records time from client launch to synthetic upstream dispatch. Held streams and the 500 ms queue polling interval intentionally contribute to those values. They are fixture diagnostics, not gateway-added latency, provider latency, production throughput or an SLO. The six interactive admissions are controlled to occur before the 30-second background-aging threshold; long-running/background-aging behavior has separate domain and MySQL fixtures.
+The test uses normal polling and real database/HTTP timing. Its output records time from client launch to synthetic upstream dispatch. Held streams and the 500 ms queue polling interval intentionally contribute to those values. They are fixture diagnostics, not gateway-added latency, provider latency, production throughput or an SLO. Cross-member turn rotation and interactive priority have domain (`AdmissionQueueTest`) and MySQL (`AdmissionQueuePersistenceTest`, `SharedOverflowPersistenceTest`) fixtures; since accounts no longer have a parallelism limit, this HTTP fixture has no shared slot for members to take turns on.
 
 ## Reproduction and negative controls
 
@@ -26,7 +26,7 @@ With Docker and JDK 21 available:
 ./gradlew :app:test --tests '*FairSchedulingHttpTest'
 ```
 
-Local negative controls independently removed member-turn ordering and interactive priority from `SelectQueueTurnUseCase`, while retaining the actual HTTP/database path. Each mutation failed the final interactive-order assertion; compilation failures were not accepted as negative evidence. The original source was restored before the final regression run. These controls show that the HTTP fixture detects both scheduling regressions rather than merely checking success responses.
+Earlier negative controls, which removed member-turn ordering and interactive priority from `SelectQueueTurnUseCase`, applied to the previous shared two-slot account scenario; that scenario no longer exists.
 
 See [current implementation evidence](status.md) for the observed result and timings. The app integration suite runs on ordinary Linux CI; this test does not enable native or paid macOS/Windows jobs.
 

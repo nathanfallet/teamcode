@@ -35,12 +35,12 @@ class AdmissionQueueTest {
         assertEquals("a", choose.select(listOf(heavy.copy(id = "c", createdAt = 2_000), heavy), 3_000))
         assertNull(choose.select(emptyList(), 0))
     }
-    @Test fun waitsWithoutLosingPlaceForBusyAccountsAndRechecksBeforeAdmission() = runTest {
-        val queue = Queue("pool_busy")
+    @Test fun waitsWithoutLosingPlaceForAnotherTurnAndRechecksBeforeAdmission() = runTest {
+        val queue = Queue("queue_turn")
         var checked = 0
         val pending = async { AwaitAdmissionUseCase(queue).reserve(actor, input) { checked++ } }
         runCurrent()
-        assertEquals(listOf(false), queue.deferred, "Shared physical contention must not yield an older member's place to new arrivals")
+        assertEquals(listOf(false), queue.deferred, "Waiting for a turn must not yield an older member's place to new arrivals")
         queue.failure = null
         advanceTimeBy(AwaitAdmissionUseCase.POLL_MILLIS); runCurrent()
         assertEquals("reservation", pending.await().id)

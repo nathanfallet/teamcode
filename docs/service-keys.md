@@ -13,7 +13,7 @@ Select only the required scopes:
 | `guidance` | The owner's current/session pacing directives, delivery claims and receipts |
 | `mcp` | The [MCP gateway](mcp-gateway.md) endpoints `/mcp/<server>` and `GET /api/v1/mcp/servers`, with the owner's MCP assignments (V2 branch) |
 | `skills:read` | The owner's effective skill manifest and artifacts (V2, see [skills](skills.md)) |
-| `skills:publish` | Publish skill versions to the catalog (V2). Only an administrator's key can receive it; it cannot pin, assign or read the catalog |
+| `skills:publish` | Publish skill versions to the catalog and pin them (V2). Only an administrator's key can receive it; it cannot unpin, assign, retire or read the catalog |
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
 | `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it |

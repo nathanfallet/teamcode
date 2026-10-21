@@ -97,14 +97,17 @@ class AdmissionQueuePersistenceTest {
                 failure("queue_full") { first.enqueue(admin, input) }
                 bounded.forEach { first.release(admin, it) }
 
-                val held = (1..2).map { first.reserve(admin, 100, "claude-test") }
+                // Accounts have no parallelism limit: the colleague waits on their own member limit instead.
+                first.configure(admin, MemberPolicy(colleague.member.id, maxConcurrent = 1))
+                val held = first.reserve(colleague, 100, "claude-test")
                 val waiting = async { AwaitAdmissionUseCase(second).reserve(colleague, input) }
                 waitForPending()
                 assertFalse(waiting.isCompleted)
-                first.settle(held.first(), 0)
+                first.settle(held, 0)
                 val resumed = withTimeout(5_000) { waiting.await() }
                 assertEquals(colleague.member.id, a.query { Reservations.select(Reservations.memberId).where { Reservations.id eq resumed.id }.single()[Reservations.memberId] })
-                first.settle(resumed, 0); second.settle(held.last(), 0)
+                first.settle(resumed, 0)
+                first.configure(admin, MemberPolicy(colleague.member.id))
 
                 first.configure(admin, MemberPolicy(admin.member.id, maxConcurrent = 1))
                 val busy = first.reserve(admin, 100, "claude-test")
