@@ -18,7 +18,7 @@ internal class SqlAdmissionQueue(private val database: Database) {
         val policy = readMemberPolicy(this, actor.member.id)
         val memberCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.memberId eq actor.member.id }.count()
         val teamCount = AdmissionWaiters.selectAll().where { AdmissionWaiters.teamId eq actor.teamId }.count()
-        if (memberCount >= 8 || teamCount >= 128) throw TeamFailure("queue_full", 503, "The bounded admission queue is full. Retry shortly.")
+        if (memberCount >= 8 || teamCount >= 128) throw TeamFailure("queue_full", 503, "The TeamCode admission queue is full. Retry shortly.", retryAfterSeconds = 15)
         val id = UUID.randomUUID().toString()
         val turnPool = accountPlacement(actor, policy, input, now).turnPool
         AdmissionWaiters.insert {

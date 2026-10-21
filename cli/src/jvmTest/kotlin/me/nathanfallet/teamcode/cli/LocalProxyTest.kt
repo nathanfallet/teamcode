@@ -86,6 +86,35 @@ class LocalProxyTest {
         } finally { sdk.close() }
     }
 
+    @Test fun `a TeamCode refusal keeps its body and retry headers and its cause is reported once`() = testApplication {
+        val refusal = """{"type":"error","error":{"type":"api_error","message":"No Claude account in your TeamCode pool is usable.\u001b[31m 6 accounts are waiting for a handover."}}"""
+        var refusing = true
+        val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine {
+            if (refusing) respond(refusal, HttpStatusCode.ServiceUnavailable, headersOf(HttpHeaders.ContentType to listOf("application/json"),
+                "x-should-retry" to listOf("false"), "x-teamcode-error" to listOf("pool_unavailable"), HttpHeaders.RetryAfter to listOf("30")))
+            else respond("event: done\ndata: {}\n\n", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { config(this) } }
+        val reports = mutableListOf<String>()
+        application { localProxy(sdk, localToken, report = { reports += it }) }
+        try {
+            suspend fun post() = client.post("/v1/messages") { header("x-api-key", localToken); contentType(ContentType.Application.Json); setBody(payload()) }
+            repeat(3) {
+                val response = post()
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertEquals("false", response.headers["x-should-retry"])
+                assertEquals("pool_unavailable", response.headers["x-teamcode-error"])
+                assertEquals("30", response.headers[HttpHeaders.RetryAfter])
+                assertEquals(refusal, response.bodyAsText())
+            }
+            assertEquals(listOf("TeamCode refused the request (HTTP 503, pool_unavailable): No Claude account in your TeamCode pool is usable. [31m 6 accounts are waiting for a handover."), reports)
+            refusing = false
+            assertEquals(HttpStatusCode.OK, post().status)
+            refusing = true
+            post()
+            assertEquals(2, reports.size, "A refusal after a success is reported again")
+        } finally { sdk.close() }
+    }
+
     @Test fun `unkeyed browser and oversized requests never reach upstream`() = testApplication {
         var calls = 0
         val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine {
