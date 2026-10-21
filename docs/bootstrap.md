@@ -13,7 +13,7 @@ curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/ins
 Windows x64, in Windows PowerShell 5.1 or PowerShell 7:
 
 ```powershell
-$f = Join-Path $env:TEMP 'teamcode-install.ps1'; Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/latest/download/install.ps1' -OutFile $f; & ([scriptblock]::Create([IO.File]::ReadAllText($f))); Remove-Item $f
+& { $f = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + '.ps1'); try { Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/latest/download/install.ps1' -OutFile $f; & ([scriptblock]::Create([IO.File]::ReadAllText($f))) } finally { Remove-Item $f -ErrorAction SilentlyContinue } }
 ```
 
 These URLs install the latest stable release. The script itself is version-pinned: subsequent asset downloads use its exact version, never a moving latest-version alias. To install a specific version, or an explicit prerelease, use its version-specific URL instead, for example:
@@ -23,7 +23,7 @@ curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.3.0/inst
 ```
 
 ```powershell
-$f = Join-Path $env:TEMP 'teamcode-install.ps1'; Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.3.0/install.ps1' -OutFile $f; & ([scriptblock]::Create([IO.File]::ReadAllText($f))); Remove-Item $f
+& { $f = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + '.ps1'); try { Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.3.0/install.ps1' -OutFile $f; & ([scriptblock]::Create([IO.File]::ReadAllText($f))) } finally { Remove-Item $f -ErrorAction SilentlyContinue } }
 ```
 
 The installer makes `teamcode` available by name, without administrator rights (see [Command on PATH](#command-on-path)). Shell profiles, personal Claude/Codex configuration and saved TeamCode authentication are not rewritten. Then connect to your own deployment:

@@ -223,6 +223,8 @@ class DocumentedOneLinerTest(unittest.TestCase):
                     self.assertNotIn('.Content', line, file.name)
                     self.assertIn('-OutFile', line, file.name)
                     self.assertIn('ReadAllText', line, file.name)
+                    self.assertIn('finally', line, file.name)
+                    self.assertIn('GetRandomFileName', line, file.name)
         self.assertGreater(found, 0)
 
 
