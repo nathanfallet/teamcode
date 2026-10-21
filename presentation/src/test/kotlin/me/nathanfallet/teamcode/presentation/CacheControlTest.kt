@@ -21,12 +21,15 @@ class CacheControlTest {
             client.get("/dashboard") { cookie(this) },
             client.get("/dashboard/members") { cookie(this) },
             client.get("/dashboard/login"),
-            client.get("/api/v1/variants") { bearerAuth("admin") },
-            client.get("/api/v1/variants"),
+            client.get("/api/v1/members") { bearerAuth("admin") },
+            client.get("/api/v1/members"),
+            client.get("/health"),
+            client.get("/api/v1/auth/me") { bearerAuth("admin") },
         )
         for (response in responses) {
             assertEquals(listOf("no-store, no-transform"), response.headers.getAll(HttpHeaders.CacheControl), response.call.request.url.toString())
         }
+        assertEquals(HttpStatusCode.OK, responses[3].status); assertEquals(HttpStatusCode.Unauthorized, responses[4].status)
         assertTrue(responses[0].contentType()?.match(ContentType.Text.Html) == true)
     }
 }
