@@ -74,10 +74,10 @@ class ServiceKeyAuthorizationTest {
         assertEquals("forbidden", assertFailsWith<TeamFailure> { AuthorizeCredentialUseCase().check(member.copy(serviceScopes = setOf(ServiceScope.TEAM_READ)), CredentialAction.TEAM_READ) }.code)
         admin.requireTeamRead()
     }
-    @Test fun aKeyWithoutExpiryIsReservedToAdministratorsAndIsRecognisedBySentinel() {
-        ServiceKeyService.requireNoExpiryAllowed(null, ownerIsAdministrator = true)
-        ServiceKeyService.requireNoExpiryAllowed(30, ownerIsAdministrator = false)
-        assertEquals("invalid_service_key", assertFailsWith<TeamFailure> { ServiceKeyService.requireNoExpiryAllowed(null, ownerIsAdministrator = false) }.code)
+    @Test fun aKeyWithoutExpiryIsCreatedByAdministratorsOnlyAndIsRecognisedBySentinel() {
+        ServiceKeyService.requireNoExpiryAllowed(null, actorIsAdministrator = true)
+        ServiceKeyService.requireNoExpiryAllowed(30, actorIsAdministrator = false)
+        assertEquals("invalid_service_key", assertFailsWith<TeamFailure> { ServiceKeyService.requireNoExpiryAllowed(null, actorIsAdministrator = false) }.code)
         assertTrue(ServiceKey("id", "owner", "CI", setOf(ServiceScope.INFERENCE), 1, ServiceKeyService.NO_EXPIRY).neverExpires)
         assertFalse(ServiceKey("id", "owner", "CI", setOf(ServiceScope.INFERENCE), 1, 2).neverExpires)
     }

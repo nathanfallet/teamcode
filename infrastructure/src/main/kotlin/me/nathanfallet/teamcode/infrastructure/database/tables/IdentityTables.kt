@@ -35,6 +35,8 @@ object Tokens : Table("tokens") {
     val deviceId = reference("device_id", Devices.id, onDelete = ReferenceOption.CASCADE).nullable().index("token_device")
     val createdAt = long("created_at").nullable()
     val expiresAt = long("expires_at")
+    /** Service keys only: the member who created the key (an administrator, when it was created for another member). */
+    val createdBy = varchar("created_by", 36).nullable()
     override val primaryKey = PrimaryKey(id)
 }
 object AuditEvents : Table("audit_events") {
