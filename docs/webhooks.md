@@ -51,4 +51,4 @@ Each delivery shows its state (`pending`, `delivered`, `failed`), attempts, the 
 
 ## Storage
 
-Migrations `V20261021210000*`: `webhook_subscriptions` (the secret sealed in the `webhook:<id>` context, the cursor into the journal) and `webhook_deliveries` (unique `(subscription, event sequence)`, so a replica or a restart never queues an event twice). Workers on every replica take deliveries under a lease in the database; a crashed worker's lease expires in a minute.
+Migrations `V20261021220000*`: `webhook_subscriptions` (the secret sealed in the `webhook:<id>` context, the cursor into the journal) and `webhook_deliveries` (unique `(subscription, event sequence)`, so a replica or a restart never queues an event twice). Workers on every replica take deliveries under a lease in the database; a crashed worker's lease expires in a minute.

@@ -8,7 +8,7 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS,
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS,
     /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
     CLOUD_RUNNING }
 
@@ -49,6 +49,7 @@ internal val DASHBOARD_MENU = listOf(
         DashboardLink("/dashboard/sessions", "Agent sessions", "Agent launches, their activity and their optional per-launch limits.", DashboardFeature.RUNS),
         DashboardLink("/dashboard/agent-guidance", "Agent guidance", "The pacing advice the server currently gives agents, and the controller mode.", DashboardFeature.GUIDANCE),
         DashboardLink("/dashboard/skills", "Skills", "Published skills, pinned versions and who receives them.", DashboardFeature.SKILLS),
+        DashboardLink("/dashboard/hooks", "Team hooks", "Scripts agents run on events, the approved version and who receives them.", DashboardFeature.HOOKS),
         DashboardLink("/dashboard/variants", "Variants", "Environment variables and MCP servers, and which members receive them.", DashboardFeature.VARIANTS, adminOnly = true),
         DashboardLink("/dashboard/mcp", "MCP gateway", "Tool policies, usage and the call journal of the MCP servers agents reach through TeamCode.", DashboardFeature.MCP, adminOnly = true),
     )),

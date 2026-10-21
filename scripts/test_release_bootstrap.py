@@ -209,4 +209,23 @@ class PowerShellBootstrapTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, (result.stdout + result.stderr).decode(errors='replace'))
 
 
+class DocumentedOneLinerTest(unittest.TestCase):
+    def test_windows_one_liner_does_not_stringify_response_bytes(self):
+        # GitHub serves release assets as application/octet-stream, so Invoke-WebRequest
+        # returns Content as byte[]; passing it to ScriptBlock.Create yields "239 187 191 ...".
+        root = Path(__file__).resolve().parent.parent
+        files = [root / 'README.md', root / 'docs/bootstrap.md', *sorted((root / 'docs/releases').glob('*.md'))]
+        found = 0
+        for file in files:
+            for line in file.read_text(encoding='utf-8').splitlines():
+                if 'install.ps1' in line and 'Invoke-WebRequest' in line:
+                    found += 1
+                    self.assertNotIn('.Content', line, file.name)
+                    self.assertIn('-OutFile', line, file.name)
+                    self.assertIn('ReadAllText', line, file.name)
+                    self.assertIn('finally', line, file.name)
+                    self.assertIn('GetRandomFileName', line, file.name)
+        self.assertGreater(found, 0)
+
+
 if __name__ == '__main__': unittest.main()

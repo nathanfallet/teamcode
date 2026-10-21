@@ -15,7 +15,9 @@ The hooks run at `UserPromptSubmit` and `PreToolUse`, using Claude's supported [
 
 Only the session ID and delivery stage reach the TeamCode management API. The local proxy discards prompts, tool inputs, working directories and transcript paths from hook payloads. The server hashes the session ID using the same identity as inference affinity, scopes lookup to the authenticated member and requires recent admitted activity. The first request of a new session may precede any advice; the controller must first collect a valid context and quota history.
 
-Explicit `--bare` skips automatic guidance. Claude's managed hook restrictions, HTTP allowlists and disabled hooks remain authoritative and can prevent delivery. The launcher does not override those choices. Failure to prepare the optional plugin reports a short notice and continues with server-side limits.
+The same session-only plugin carries the [team hooks](hooks.md) the member approved, as command hooks on their events; `--no-guidance` removes only the guidance hooks, `--no-team-hooks` only the team hooks.
+
+Explicit `--bare` skips automatic guidance and team hooks. Claude's managed hook restrictions, HTTP allowlists and disabled hooks remain authoritative and can prevent delivery. The launcher does not override those choices. Failure to prepare the optional plugin reports a short notice and continues with server-side limits.
 
 ## Codex integration
 
@@ -29,6 +31,8 @@ The launcher adds invocation-only command hooks for `UserPromptSubmit` and `PreT
 Each hook invokes the native `teamcode agents hook --config /absolute/path/to/config.json` command. It reads at most 64 KiB of redirected stdin, requires EOF within one second, validates the event/session and discards all other fields. Lookup has a 2.5-second deadline and acknowledgment a separate 750-millisecond deadline; the Codex hook timeout is five seconds. Malformed input, missing configuration, expired advice and outages emit `{}` without diagnostics. A terminal is never read. The command uses the same SDK and durable delivery contract as Claude's local HTTP hook.
 
 Only the executable/configuration paths appear in the hook definition. No credentials, transient port or token appear in the command. The definition therefore stays stable across launches and token rotation. POSIX paths are shell-quoted; Windows invokes an encoded PowerShell script to preserve literal Unicode paths. The launcher adds the Windows PowerShell directory under `SystemRoot` to the child process PATH, so hooks also work when a terminal supplies only a minimal PATH; no machine or user environment setting is changed. The hook reads the private configuration itself, so a Codex daemon does not need to inherit an ephemeral proxy credential.
+
+Approved [team hooks](hooks.md) are added the same way, in the same per-event arrays (Codex has no `Notification` event, so a hook listening only to it is left out for Codex), and need the same `/hooks` trust.
 
 Existing hooks from active configuration files are merged by Codex; TeamCode does not edit those files. Overrides are inserted in the leaf command scope so `exec --ignore-user-config` retains TeamCode's invocation configuration. If the caller explicitly supplies `-c hooks...`/`--config hooks...`, the launcher preserves those overrides and reports that automatic guidance was skipped: Codex replaces arrays within one CLI layer. Add `teamcode agents hook` to that custom configuration to opt in without losing existing hooks. `--no-guidance` always disables TeamCode's automatic additions.
 
@@ -70,7 +74,7 @@ python3 scripts/smoke-claude-guidance.py \
   --claude /absolute/path/to/the/actual/claude/executable
 ```
 
-This isolated fixture supplies deterministic inference and directive responses. It proves real hook loading, correlation between hook/inference session IDs, UserPromptSubmit/PreToolUse context injection, a harmless Bash tool round trip, receipts and plugin cleanup. It does not establish forecast accuracy under real quota consumption or prove model compliance with pacing. See [status](status.md) for completed runs and pending platform CI.
+This isolated fixture supplies deterministic inference and directive responses, and a team `Stop` hook approved with `teamcode hooks approve`. It proves real hook loading, the team hook running from the session plugin, correlation between hook/inference session IDs, UserPromptSubmit/PreToolUse context injection, a harmless Bash tool round trip, receipts and plugin cleanup. It does not establish forecast accuracy under real quota consumption or prove model compliance with pacing. See [status](status.md) for completed runs and pending platform CI.
 
 For the real Codex client, without consuming a subscription:
 

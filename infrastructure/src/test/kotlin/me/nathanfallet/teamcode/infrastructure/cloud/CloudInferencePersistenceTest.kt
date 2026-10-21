@@ -62,9 +62,9 @@ class CloudInferencePersistenceTest {
                 assertTrue(first.token.startsWith("tcex_")); assertFalse(first.toString().contains(first.token))
                 val principal = assertNotNull(ra.team.authenticate(first.token))
                 assertEquals(member.member.id, principal.member.id)
-                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ), principal.serviceScopes)
+                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ), principal.serviceScopes)
                 // The owner's inference, MCP gateway and skills; nothing that publishes, manages or reads usage or cloud sessions.
-                for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ)) AuthorizeCredentialUseCase().check(principal, action)
+                for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ)) AuthorizeCredentialUseCase().check(principal, action)
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.SKILLS_PUBLISH) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.INTERACTIVE) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.USAGE_READ) }
