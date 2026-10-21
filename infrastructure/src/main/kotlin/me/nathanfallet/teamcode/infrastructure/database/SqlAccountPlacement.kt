@@ -23,7 +23,8 @@ internal fun poolSpends(team: String, pools: Set<String>, day: Long): Map<String
 }
 
 /** A shared reserve is never promised to a primary member, including one currently disabled. */
-internal fun sharedOverflowBudgets(team: String): Map<String, Long> = PoolBudgets.selectAll().where {
+// Named columns: the automatic size columns are not needed here, and older schemas lack them.
+internal fun sharedOverflowBudgets(team: String): Map<String, Long> = PoolBudgets.select(PoolBudgets.poolId, PoolBudgets.dailyUnits).where {
     (PoolBudgets.teamId eq team) and (PoolBudgets.sharedOverflow eq true) and (PoolBudgets.poolId neq "") and
         notExists((MemberPolicies innerJoin Members).select(MemberPolicies.memberId).where {
             (Members.teamId eq team) and (MemberPolicies.poolId eq PoolBudgets.poolId)

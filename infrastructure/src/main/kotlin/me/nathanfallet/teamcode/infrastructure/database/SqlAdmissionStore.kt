@@ -143,7 +143,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         actor.requireAdmin()
         if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 0..MAX_MEMBER_CONCURRENCY || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")
         lockTeam(actor.teamId); requireCurrent(this, actor); ensureMember(actor.teamId, policy.memberId)
-        if (PoolBudgets.selectAll().where { (PoolBudgets.teamId eq actor.teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) and (PoolBudgets.sharedOverflow eq true) }.any())
+        if (PoolBudgets.select(PoolBudgets.poolId).where { (PoolBudgets.teamId eq actor.teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) and (PoolBudgets.sharedOverflow eq true) }.any())
             throw TeamFailure("overflow_primary_pool", 409, "A shared overflow reserve cannot be a member's primary pool.")
         val previous = readMemberPolicy(this, policy.memberId)
         if (previous.poolId != policy.poolId) readActiveBudgetOverride(actor.teamId, previous, nowMillis())?.let {
@@ -157,7 +157,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     }
     override suspend fun poolBudgets(actor: Principal): List<PoolBudget> = database.query {
         actor.requireTeamRead(); requireCurrent(this, actor)
-        PoolBudgets.selectAll().where { PoolBudgets.teamId eq actor.teamId }.orderBy(PoolBudgets.poolId).map { PoolBudget(it[PoolBudgets.poolId], it[PoolBudgets.dailyUnits], it[PoolBudgets.sharedOverflow]) }
+        PoolBudgets.select(PoolBudgets.poolId, PoolBudgets.dailyUnits, PoolBudgets.sharedOverflow).where { PoolBudgets.teamId eq actor.teamId }.orderBy(PoolBudgets.poolId).map { PoolBudget(it[PoolBudgets.poolId], it[PoolBudgets.dailyUnits], it[PoolBudgets.sharedOverflow]) }
     }
     override suspend fun configurePool(actor: Principal, budget: PoolBudget): PoolBudget = database.query {
         actor.requireAdmin()
