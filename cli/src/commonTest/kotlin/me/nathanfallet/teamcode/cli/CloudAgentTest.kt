@@ -105,13 +105,14 @@ class CloudAgentTest {
         val acks = mutableListOf<RunnerInputAckView>()
         val uploaded = mutableListOf<RunnerEventView>()
         var refuseEvents: TeamCodeException? = null
-    /** Refuses, like a 413, any batch that holds a sequence listed here. */
-    val poisoned = mutableSetOf<Long>()
-    var attempts = 0
+        /** Refuses, like a 413, any batch that holds a sequence listed here. */
+        val poisoned = mutableSetOf<Long>()
+        var attempts = 0
         override suspend fun agent() = RunnerAgentView("claude", "2.1", "opus", null, "none")
         override suspend fun events(events: List<RunnerEventView>): RunnerEventsAckView {
+            // An Error, not an Exception: the host cannot swallow it, so a retry loop without pause fails the test.
+            if (++attempts > 10_000) throw AssertionError("The host retries the upload without pause")
             refuseEvents?.let { throw it }
-            attempts++
             if (events.any { it.sequence in poisoned }) throw TeamCodeException(413, "too large", "invalid_events")
             events.filter { event -> uploaded.none { it.sequence == event.sequence } }.forEach { uploaded += it }
             return RunnerEventsAckView(events.last().sequence, uploaded.size.toLong())
@@ -207,7 +208,8 @@ class CloudAgentTest {
     }
 
     @Test fun aPermanentlyRefusedEventIsReplacedByAMarkerInsteadOfRetriedForever() = runTest {
-        val channel = FakeChannel().apply { poisoned += 3L }
+        // The server is briefly unavailable, so the four events wait in one batch; the third is too large for it.
+        val channel = FakeChannel().apply { poisoned += 3L; refuseEvents = TeamCodeException(503, "unavailable", null) }
         val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
         val host = host(channel, MemoryState(), started)
         val job = launch { host.run() }
@@ -217,11 +219,34 @@ class CloudAgentTest {
         process.output.send("""{"type":"system","subtype":"init","session_id":"c1"}""")
         process.output.send("""{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}""")
         process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        delay(5_000)
+        channel.refuseEvents = null
         until { channel.uploaded.size == 4 }
         assertEquals(listOf(1L, 2L, 3L, 4L), channel.uploaded.map { it.sequence }, "Sequence numbers stay consecutive")
         assertEquals(CloudEventTypes.ERROR, channel.uploaded[2].type)
         assertEquals("transcript_event_rejected", channel.uploaded[2].data["code"]!!.jsonPrimitive.content)
         assertEquals(CloudEventTypes.TURN, channel.uploaded[3].type, "The events after the refused one are still uploaded")
+        assertFalse(host.fenced)
+        job.cancel()
+    }
+
+    @Test fun aRefusalThatIsNotAboutTheContentBacksOffInsteadOfReplacingTheTranscript() = runTest {
+        // Every batch is refused, the marker too: the refusal is not caused by one event.
+        val channel = FakeChannel().apply { refuseEvents = TeamCodeException(400, "refused", "invalid_events") }
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Fix it", 1)))
+        until { started.isNotEmpty() }
+        val process = started.single().second
+        process.output.send("""{"type":"system","subtype":"init","session_id":"c1"}""")
+        process.output.send("""{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}""")
+        delay(60_000)
+        assertTrue(channel.attempts < 100, "The host backs off, ${channel.attempts} attempts in a minute")
+        channel.refuseEvents = null
+        until { channel.uploaded.size == 3 }
+        assertEquals(listOf(1L, 2L, 3L), channel.uploaded.map { it.sequence })
+        assertEquals(1, channel.uploaded.count { it.data["code"]?.jsonPrimitive?.content == "transcript_event_rejected" }, "Only the first event was given up")
         assertFalse(host.fenced)
         job.cancel()
     }

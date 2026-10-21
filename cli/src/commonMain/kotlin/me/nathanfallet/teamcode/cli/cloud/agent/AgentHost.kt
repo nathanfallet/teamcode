@@ -6,7 +6,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
@@ -287,17 +289,22 @@ internal class AgentHost(
     /**
      * Narrows a permanently rejected batch: halves the next batches until one event is left, then replaces that
      * event, in place so sequence numbers stay consecutive, with a small marker. One bad event never blocks the transcript.
+     * A refused marker means the refusal is not about the content: the host backs off like any other error instead of
+     * replacing event after event or retrying without pause.
      */
     private suspend fun isolateRejected(batch: List<RunnerEventView>): Boolean {
         if (batch.size > 1) { batchLimit = batch.size / 2; return true }
         val rejected = batch.single()
+        if (rejected.isRejectionMarker()) { sleep(UPLOAD_MILLIS * 4); return false }
         log("The server refused one transcript event; replacing it with a marker.")
         lock.withLock {
             val index = buffer.indexOfFirst { it.sequence == rejected.sequence }
-            if (index >= 0) buffer[index] = RunnerEventView(rejected.sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", "transcript_event_rejected"); put("type", rejected.type) })
+            if (index >= 0) buffer[index] = RunnerEventView(rejected.sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", REJECTED_CODE); put("type", rejected.type) })
         }
         return true
     }
+
+    private fun RunnerEventView.isRejectionMarker() = type == CloudEventTypes.ERROR && (data["code"] as? JsonPrimitive)?.contentOrNull == REJECTED_CODE
 
     private suspend fun flush(deadline: Long): Boolean {
         while (now() < deadline && !fenced) {
@@ -334,6 +341,7 @@ internal class AgentHost(
         const val UPLOAD_MILLIS = 500L
         const val MAX_BATCH = 200
         const val MAX_BATCH_BYTES = 1_000_000
+        private const val REJECTED_CODE = "transcript_event_rejected"
         const val MAX_BUFFERED = 5_000
         const val MAX_HANDLED = 1_000
         const val DEFAULT_DRAIN_MILLIS = 10 * 60_000L
