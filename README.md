@@ -6,17 +6,17 @@ An open-source, self-hosted model gateway for teams: pooled provider accounts, f
 
 ## Install the native CLI
 
-The release pipeline includes [one-command installers for macOS, Linux and Windows](docs/bootstrap.md). Install **0.2.0** from its published release assets:
+The release pipeline includes [one-command installers for macOS, Linux and Windows](docs/bootstrap.md). Install the latest stable release from its published release assets:
 
 ```sh
-curl -fsSL https://github.com/nathanfallet/teamcode/releases/download/0.2.0/install.sh | sh
+curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
-& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/download/0.2.0/install.ps1').Content))
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing 'https://github.com/nathanfallet/teamcode/releases/latest/download/install.ps1').Content))
 ```
 
-No JVM is required. The installer makes `teamcode` available by name (a `~/.local/bin` link on macOS/Linux, your user PATH on Windows) and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
+The script is pinned to the release it comes from, so every file it downloads matches that exact version. To install a specific version, replace `releases/latest/download/` with `releases/download/<version>/`. No JVM is required. The installer makes `teamcode` available by name (a `~/.local/bin` link on macOS/Linux, your user PATH on Windows) and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
 
 ## Run the team server
 
