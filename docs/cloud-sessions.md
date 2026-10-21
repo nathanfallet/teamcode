@@ -172,7 +172,7 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `GET /cloud/transfers` | `direction=incoming\|outgoing\|all`, `scope=team` (administrators), `state` (repeatable), `session`, `before`, `limit` ≤ 50 | Both members, administrator | Implemented |
 | `GET /cloud/transfers/{id}`; `POST .../accept` (`{resume?}`), `.../decline`, `.../cancel` | Read and decide | Recipient (accept, decline), former owner (cancel an offer), administrator (all) | Implemented |
 
-While cloud sessions are off, every route above except `/cloud/runtime`, `/cloud/settings`, `/cloud/clusters`, `/cloud/profiles` and the runner channel (`/cloud/runner/...`) answers `404`, as do the members' GitHub link routes, whatever their spelling (the gate reads the path the way routing matches it). Administrators keep configuring the team meanwhile, and pods that already run keep their channel. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
+While cloud sessions are off, every route above except `/cloud/runtime`, `/cloud/settings`, `/cloud/clusters`, `/cloud/profiles` and the runner channel (`/cloud/runner/...`) answers `404`, as do the routes that start a new GitHub link (device flow, web flow and its callback), whatever their spelling (the gate reads the path the way routing matches it). Administrators keep configuring the team meanwhile, and pods that already run keep their channel. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
 
 ### Create request and view
 
@@ -497,7 +497,7 @@ The deployment carries no cloud, GitHub or Kubernetes setting: the [Helm chart](
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| On | off | Whether members can use cloud sessions. Off: members see no cloud page, `cloud.*` and `github.link.v1` capabilities are not advertised, and the session, transfer, transcript and GitHub link routes answer `404`, so no session is created, resumed or messaged. Sessions that already exist are not abandoned: the runner channel stays open and the reconciler, garbage collection and maintenance keep running (idle pause, retention, deletion), so a running agent is never killed by the switch. The workers start once a runtime is stored |
+| On | off | Whether members can use cloud sessions. Off: members see no cloud page, `cloud.*` and `github.link.v1` capabilities are not advertised, and the session, transfer, transcript and new GitHub link routes answer `404` (a member can still read and remove their own link), so no session is created, resumed or messaged. Sessions that already exist are not abandoned: the runner channel stays open and the reconciler, garbage collection and maintenance keep running (idle pause, retention, deletion), so a running agent is never killed by the switch. The workers start once a runtime is stored |
 | Runner image | (none) | Image holding the `teamcode` Linux binary and `cp`, copied into each session pod. Required to turn cloud sessions on. Pin it by digest (`image@sha256:...`); it is pulled with the profile's `imagePullSecrets`, so host it publicly or where those secrets reach |
 | Runner binary | `/usr/local/bin/teamcode` | Path of the binary in that image |
 | Server URL for pods | the public URL | HTTPS origin the runner calls, reachable from the cluster. Turning cloud sessions on is refused while the effective origin is not HTTPS or is loopback |

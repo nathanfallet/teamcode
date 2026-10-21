@@ -164,12 +164,14 @@ class CloudRuntimeRoutesTest {
 
     @Test fun onlyRunningAndLinkingPathsAreGated() {
         for (path in listOf("/api/v1/cloud/sessions", "/api/v1/cloud/sessions/s1/pause", "/api/v1/cloud/transfers", "/api/v1/cloud/access", "//api/v1/cloud/sessions",
-            "/api/v1//cloud/sessions", "/api/v1/cl%6Fud/sessions", "/api/v1/cloud/%ZZ", "/api/v1/github/link", "/api/v1/github//link/device", GITHUB_CALLBACK_PATH, "/dashboard/github/link"))
+            "/api/v1//cloud/sessions", "/api/v1/cl%6Fud/sessions", "/api/v1/cloud/%ZZ", "/api/v1/github/link/device", "/api/v1/github//link/device", GITHUB_CALLBACK_PATH, "/dashboard/github/link"))
             assertTrue(cloudOperationalPath(path), path)
         for (path in listOf("/api/v1/cloud/settings", "/api/v1/cloud/runtime", "/api/v1/cloud/clusters", "/api/v1/cloud/clusters/c1", "/api/v1/cloud/profiles",
             "/api/v1/github/app", "/api/v1/github/links", "/dashboard/cloud", "/dashboard/github", "/api/v1/capabilities",
             // Pods that already run keep their channel, so turning cloud sessions off never kills an agent.
-            "/api/v1/cloud/runner/register", "/api/v1/cloud/runner/heartbeat", "/api/v1/cloud/runner/inputs"))
+            "/api/v1/cloud/runner/register", "/api/v1/cloud/runner/heartbeat", "/api/v1/cloud/runner/inputs",
+            // A member can always see and remove their own GitHub link.
+            "/api/v1/github/link", "/dashboard/github/unlink"))
             assertFalse(cloudOperationalPath(path), path)
     }
 

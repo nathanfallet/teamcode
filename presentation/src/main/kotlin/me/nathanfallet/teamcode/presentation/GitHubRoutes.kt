@@ -54,10 +54,12 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
     get("/dashboard/github") {
         val actor = call.principal
         val administrator = actor.member.role.isAdministrator && actor.serviceScopes == null
-        // Administrators configure the App before cloud sessions are turned on; members link once they are.
-        if (!call.cloudEnabled() && !administrator) throw TeamFailure("not_found", 404, "Cloud sessions are disabled on this server.")
+        // Administrators configure the App before cloud sessions are turned on; members link once they are, and can
+        // always remove a link they made.
         val own = github.status(actor)
         val member = when {
+            !call.cloudEnabled() && own.link != null -> """<p>Cloud sessions are turned off. Your GitHub account <strong>${escape(own.link!!.identity.login)}</strong> is still linked.</p><form action="/dashboard/github/unlink" method="post">${csrf(actor)}<button>Unlink GitHub</button></form>"""
+            !call.cloudEnabled() && !administrator -> throw TeamFailure("not_found", 404, "Cloud sessions are disabled on this server.")
             !call.cloudEnabled() -> "<p>Cloud sessions are turned off (<a href=\"/dashboard/cloud\">Cloud sessions</a>). Members can link their GitHub account once they are on.</p>"
             !own.appConfigured -> "<p>Your administrator has not configured the team's GitHub App yet.</p>"
             own.state == GitHubLinkState.LINKED && own.link != null -> """<p>Linked as <strong>${escape(own.link!!.identity.login)}</strong> since ${escape(Instant.fromEpochMilliseconds(own.link!!.linkedAt).toString())}. Your cloud sessions use this account for Git and <code>gh</code>.</p><form action="/dashboard/github/unlink" method="post">${csrf(actor)}<button>Unlink GitHub</button></form>"""

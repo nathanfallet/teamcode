@@ -65,7 +65,7 @@ private val CLOUD_UNGATED = setOf("settings", "runtime", "clusters", "profiles",
 
 /**
  * Paths members use to run or link cloud sessions, answered `404` while the stored runtime is off: sessions, transfers,
- * transcripts, access and members' GitHub links. The path is read the way routing matches it (empty segments skipped,
+ * transcripts, access and new GitHub links. The path is read the way routing matches it (empty segments skipped,
  * each segment percent-decoded), so no other spelling of a gated route passes; a segment that cannot be decoded is gated.
  */
 internal fun cloudOperationalPath(path: String): Boolean {
@@ -75,8 +75,9 @@ internal fun cloudOperationalPath(path: String): Boolean {
     fun under(vararg prefix: String) = segments.size >= prefix.size && prefix.indices.all { segments[it] == prefix[it] }
     return when {
         under("api", "v1", "cloud") -> segments.getOrNull(3) !in CLOUD_UNGATED
-        under("api", "v1", "github", "link") -> true
-        under("dashboard", "github") -> segments.getOrNull(2) in setOf("link", "unlink", "callback")
+        // Reading and removing one's own link stay available, so a member can always revoke it; only new links are gated.
+        under("api", "v1", "github", "link") -> segments.size > 4
+        under("dashboard", "github") -> segments.getOrNull(2) in setOf("link", "callback")
         else -> false
     }
 }
