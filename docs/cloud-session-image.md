@@ -40,7 +40,7 @@ RUN apt-get update \
 # <<< End of your tools setup >>>
 ```
 
-- The block runs as root, with `/bin/sh -eu -c`. Install system-wide (`/usr`, `/usr/local`, `/opt`) and keep files readable and executable by UIDs 1000 and 1001. In the pod, `HOME` is on the workspace volume, so anything installed under a home directory at build time (`~/.local`, `~/.sdkman`, `~/.nvm`) is not there.
+- The block runs as root, with the default `/bin/sh -c` (set `SHELL` inside the block for another shell). Install system-wide (`/usr`, `/usr/local`, `/opt`) and keep files readable and executable by UIDs 1000 and 1001. In the pod, `HOME` is on the workspace volume, so anything installed under a home directory at build time (`~/.local`, `~/.sdkman`, `~/.nvm`) is not there.
 - Do not add credentials, registry logins or tokens: the image is pulled by the cluster and readable by anyone who can pull it. Per-member values reach the runner at run time, as the owner's variables.
 - Repository-specific setup (dependency installs, generated files) belongs in the profile's environment recipe (`setup.create`, `setup.start`), which runs in the workspace for each session, not in the image.
 - The contract check after the block fails the build if your setup broke something TeamCode needs, for example by removing `git` or replacing a library.

@@ -97,14 +97,20 @@ RUN for uid in 1000 1001; do \
 # executable by UIDs 1000 and 1001: in the pod, HOME is on the workspace volume, so anything installed
 # under a home directory here is not visible there. Do not add credentials.
 
+# The tools block runs with the default shell (/bin/sh -c); set SHELL inside it if you need another.
+SHELL ["/bin/sh", "-c"]
+
 # >>> Insert your tools setup here <<<
 
 # <<< End of your tools setup >>>
 
+SHELL ["/bin/sh", "-eu", "-c"]
+
 # --- TeamCode contract check (do not edit) -------------------------------------------------------
 
 # Fails the build when the image no longer gives TeamCode what it needs, for example when a tools
-# setup removed git or replaced a library the binary loads.
+# setup removed git or a library the binary loads (linked or opened at run time), and runs the binary
+# as both pod UIDs.
 RUN as_agent() { setpriv --reuid=1001 --regid=1000 --clear-groups env HOME=/tmp "$@" >/dev/null; }; \
     for command in sh mkdir rm mv rmdir dirname touch test git; do \
         command -v "${command}" >/dev/null || { echo "Missing ${command}" >&2; exit 1; }; \
@@ -112,6 +118,11 @@ RUN as_agent() { setpriv --reuid=1001 --regid=1000 --clear-groups env HOME=/tmp 
     && git_version="$(git --version | sed 's/^git version //')" \
     && if ! printf '2.31.0\n%s\n' "${git_version}" | sort -C -V; then echo "git ${git_version} is older than 2.31" >&2; exit 1; fi \
     && [ "$(id -u runner):$(id -g runner):$(id -u agent):$(id -g agent)" = "1000:1000:1001:1000" ] \
+    && if ldd /usr/local/bin/teamcode | grep 'not found'; then echo "teamcode is missing a library" >&2; exit 1; fi \
+    && for library in libcrypto.so.3 libcurl.so.4 libcrypt.so.1 libz.so.1; do \
+        ldconfig -p | grep -q "${library}" || { echo "Missing ${library}" >&2; exit 1; }; \
+    done \
+    && setpriv --reuid=1000 --regid=1000 --clear-groups env HOME=/tmp /usr/local/bin/teamcode version >/dev/null \
     && as_agent /usr/local/bin/teamcode version \
     && if [ -n "${CLAUDE_CODE_VERSION}" ]; then as_agent claude --version; fi \
     && if [ -n "${CODEX_VERSION}" ]; then as_agent codex --version; fi \
