@@ -29,7 +29,7 @@ class PacingHysteresisUseCase(private val recoveryMillis: Long = 120_000) {
  */
 class ObservedConcurrencyUseCase {
     fun next(previous: Int?, previousAdvice: PacingAdvice?, active: Int): Int {
-        val binding = previousAdvice != null && previousAdvice.pace in setOf(Pace.SLOW_DOWN, Pace.PAUSE) && active >= previousAdvice.maxConcurrent
+        val binding = previousAdvice != null && previousAdvice.pace in setOf(Pace.SLOW_DOWN, Pace.PAUSE) && previousAdvice.maxConcurrent > 0 && active >= previousAdvice.maxConcurrent
         val carried = (previous ?: 0).let { if (binding) it else it - 1 }
         return maxOf(active, carried, 0).coerceAtMost(MAX_OBSERVED_CONCURRENCY)
     }

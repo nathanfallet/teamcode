@@ -53,6 +53,9 @@ class ProgressivePacingTest {
             WindowPacing(AccountQuota("b", "seven_day", .13, now, now + 86_400_000), QuotaForecast(null, null, QuotaForecast.State.UNKNOWN)))
         val advice = controller.advise(listOf(windows(.1), unlearned), 0, now)
         assertEquals(Triple(Pace.UNKNOWN, 0, 0L), Triple(advice.pace, advice.maxConcurrent, advice.minIntervalMillis))
+        // An unknown account without clear headroom (stale data at 90%) cannot switch a real slowdown off.
+        val stale = unlearned.map { it.copy(quota = it.quota.copy(utilization = .9)) }
+        assertEquals(Pace.SLOW_DOWN, controller.advise(listOf(windows(.1), stale), 0, now).pace)
     }
 
     /**
@@ -131,6 +134,7 @@ class ProgressivePacingTest {
         assertEquals(6, observed.next(6, slow, 3), "A binding throttle cannot shrink its own baseline")
         assertEquals(5, observed.next(6, slow, 1), "Demand below the throttle's cap decays the peak")
         assertEquals(5, observed.next(5, PacingAdvice(Pace.PAUSE, 1, 30_000, ""), 1))
+        assertEquals(5, observed.next(6, PacingAdvice(Pace.SLOW_DOWN, 0, 2_000, ""), 2), "Without a cap nothing is binding: the peak decays")
         assertEquals(0, observed.next(null, null, -3))
         assertEquals(ObservedConcurrencyUseCase.MAX_OBSERVED_CONCURRENCY, observed.next(null, null, 10_000))
     }

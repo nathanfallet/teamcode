@@ -108,11 +108,13 @@ class PacingUseCase {
             // window whose share cannot be computed counts as fully pressured (SEVERE), the conservative former behavior.
             pace to (windows.filter { it.overshoots(now) }.minOfOrNull { it.affordableShare(now) ?: 0.0 } ?: 0.0)
         }
-        // An account without a usable forecast is not under pressure: it must not make another one's throttle win
-        // (same order as PACING_STRICTNESS).
-        val selected = states.minWith(compareBy<Pair<Pace, Double>> { when (it.first) {
-            Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.UNKNOWN -> 2; Pace.SLOW_DOWN -> 3; Pace.PAUSE -> 4
-        } }.thenByDescending { it.second })
+        // An account whose forecast is unknown but whose every window still has clear headroom (under half used) is not
+        // under pressure: it must not let another account's throttle win. Any other unknown account stays conservative.
+        val selected = states.withIndex().minWith(compareBy<IndexedValue<Pair<Pace, Double>>> { (index, state) -> when (state.first) {
+            Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1
+            Pace.UNKNOWN -> if (accounts[index].isNotEmpty() && accounts[index].all { it.quota.utilization < .5 }) 2 else 4
+            Pace.SLOW_DOWN -> 3; Pace.PAUSE -> 5
+        } }.thenByDescending { it.value.second }).value
         return advice(selected.first, maximum, SlowDownLevel.of(selected.second))
     }
     /** Pacing only spaces admissions; the concurrency stays the member, group or run limit (zero is unlimited). */

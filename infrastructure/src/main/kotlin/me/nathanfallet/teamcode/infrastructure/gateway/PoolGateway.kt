@@ -24,7 +24,7 @@ private const val QUEUE_LOG_MILLIS = 1_000L
 /** Code, status and public reason only: never a prompt, body or credential. */
 internal fun refusalLog(memberId: String?, failure: TeamFailure): String =
     "TeamCode inference refused member=${memberId ?: "anonymous"} code=${failure.code} status=${failure.status}" +
-        (failure.retryAfterSeconds?.let { " retryAfter=$it" } ?: "") + " reason=\"" + failure.message.orEmpty().replace('"', '\'').replace('\n', ' ') + "\""
+        (failure.retryAfterSeconds?.let { " retryAfter=$it" } ?: "") + " reason=\"" + failure.message.orEmpty().map { if (it == '"') '\'' else if (it.isISOControl()) ' ' else it }.joinToString("") + "\""
 
 /** Native passthrough by default; explicit routes translate only when the destination protocol changes. */
 class PoolGateway(private val admission: AdmissionStore, private val credentials: CredentialSource, private val transports: List<ProviderTransport>, private val modelPolicies: ModelPolicyStore, private val routes: RoutingStore? = null, private val codecs: ConversationCodec = ConversationCodec(), private val queued: AwaitAdmissionUseCase? = null) : GatewayService {

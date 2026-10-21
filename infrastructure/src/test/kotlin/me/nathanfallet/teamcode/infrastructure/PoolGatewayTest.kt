@@ -41,6 +41,8 @@ class PoolGatewayTest {
             refusalLog("m-1", full))
         assertEquals("TeamCode inference refused member=anonymous code=authentication_required status=401 reason=\"Sign in.\"",
             refusalLog(null, TeamFailure("authentication_required", 401, "Sign in.")))
+        assertEquals("TeamCode inference refused member=m-1 code=unsupported_model status=400 reason=\"bad  code=forged\"",
+            refusalLog("m-1", TeamFailure("unsupported_model", 400, "bad\r\u001bcode=forged")))
     }
     @Test fun transportCorrelationRejectsConflictsDuplicatesUnsafeAndOversizedValues() {
         HttpClient(MockEngine { error("No network request expected") }).use { http ->
