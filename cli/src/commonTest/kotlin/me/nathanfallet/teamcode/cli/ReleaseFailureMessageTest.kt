@@ -10,6 +10,7 @@ class ReleaseFailureMessageTest {
         val message = releaseFailureMessage("release_installation_busy")
         assertContains(message, "agent session started by TeamCode is still running")
         assertContains(message, "Close all agent sessions")
+        assertContains(message, "or the installation is being modified")
         assertContains(message, "release_installation_busy")
         assertFalse(message.contains("connectivity"))
     }
@@ -18,6 +19,7 @@ class ReleaseFailureMessageTest {
     fun writerBusyTellsUserAnotherUpdateIsRunning() {
         val message = releaseFailureMessage("release_writer_busy")
         assertContains(message, "another TeamCode update")
+        assertContains(message, "run the command again")
         assertContains(message, "release_writer_busy")
         assertFalse(message.contains("connectivity"))
     }

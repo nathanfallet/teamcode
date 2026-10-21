@@ -145,9 +145,9 @@ fun main(args: Array<String>): Unit = runBlocking {
 /** Actionable text for release failures; the code stays in the output for diagnostics and scripts. */
 internal fun releaseFailureMessage(code: String): String = when (code) {
     "release_installation_busy" ->
-        "TeamCode update blocked ($code): an agent session started by TeamCode is still running. Close all agent sessions, then run `teamcode update` again."
+        "TeamCode installation is busy ($code): an agent session started by TeamCode is still running, or the installation is being modified. Close all agent sessions, then run the command again (for example `teamcode update`)."
     "release_writer_busy" ->
-        "TeamCode update blocked ($code): another TeamCode update or installation change is in progress. Wait for it to finish, then run `teamcode update` again."
+        "TeamCode installation is busy ($code): another TeamCode update or installation change is in progress. Wait for it to finish, then run the command again."
     else ->
         "TeamCode release operation failed ($code). Check connectivity, release files, private permissions and platform crypto libraries."
 }
