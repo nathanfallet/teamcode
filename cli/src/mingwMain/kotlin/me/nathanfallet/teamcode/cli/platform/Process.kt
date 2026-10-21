@@ -4,7 +4,6 @@ package me.nathanfallet.teamcode.cli.platform
 import kotlinx.cinterop.*
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.cli.interop.windows.*
-import me.nathanfallet.teamcode.cli.CliUserException
 import okio.FileSystem
 import okio.Path.Companion.toPath
 import platform.windows.*
@@ -35,13 +34,13 @@ private fun resolve(command: String, arguments: List<String>): Pair<String, List
             return node to (listOf(file.toString()) + arguments)
         }
     }
-    throw CliUserException(if (nodeMissing) nodeMissingMessage(command) else agentNotFoundMessage(command))
+    throw ProcessStartException(if (nodeMissing) ProcessStartException.Reason.NodeMissing else ProcessStartException.Reason.NotFound, command)
 }
 
 actual suspend fun runInteractiveProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, quiet: Boolean): Int {
     val (application, actualArguments) = resolve(command, arguments)
     val line = (listOf(application) + actualArguments).joinToString(" ", transform = ::quoteWindowsArgument)
-    if (line.length >= 32_767) throw CliUserException("The command line for $command is too long for Windows (32767 characters maximum).")
+    if (line.length >= 32_767) throw ProcessStartException(ProcessStartException.Reason.TooLong, command)
     val child = memScoped {
         val values = mutableMapOf<String, Pair<String, String>>()
         val inherited = checkNotNull(GetEnvironmentStringsW())
@@ -62,7 +61,7 @@ actual suspend fun runInteractiveProcess(command: String, arguments: List<String
             if (value == null) values.remove(name.uppercase()) else values[name.uppercase()] = name to value
         }
         val block = values.entries.sortedBy { it.key }.joinToString("\u0000", postfix = "\u0000\u0000") { "${it.value.first}=${it.value.second}" }
-        teamcode_windows_spawn(application.wcstr.ptr, line.wcstr.ptr, block.wcstr.ptr, if (quiet) 1 else 0) ?: throw cannotLaunchError(command)
+        teamcode_windows_spawn(application.wcstr.ptr, line.wcstr.ptr, block.wcstr.ptr, if (quiet) 1 else 0) ?: throw ProcessStartException(ProcessStartException.Reason.CannotLaunch, command)
     }
     var completed = false
     try {

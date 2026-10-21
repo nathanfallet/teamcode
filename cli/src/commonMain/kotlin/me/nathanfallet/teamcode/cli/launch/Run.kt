@@ -154,7 +154,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided)
-            return runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment)
+            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment) }
+            catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
         }

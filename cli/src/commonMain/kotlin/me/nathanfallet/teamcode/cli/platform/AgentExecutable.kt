@@ -13,7 +13,8 @@ internal data class NpmLaunchCandidate(val relativePath: String, val needsNode: 
 internal fun npmLaunchCandidates(command: String, architecture: String): List<NpmLaunchCandidate> = when (command) {
     "claude" -> {
         val package_ = "node_modules/@anthropic-ai/claude-code"
-        val platforms = if (architecture == "arm64") listOf("win32-arm64", "win32-x64") else listOf("win32-x64")
+        // Both packages are tried: the only Windows build is x64 even when it runs emulated on an ARM machine.
+        val platforms = if (architecture == "arm64") listOf("win32-arm64", "win32-x64") else listOf("win32-x64", "win32-arm64")
         platforms.map { NpmLaunchCandidate("$package_/node_modules/@anthropic-ai/claude-code-$it/claude.exe", false) } +
             platforms.map { NpmLaunchCandidate("node_modules/@anthropic-ai/claude-code-$it/claude.exe", false) } +
             NpmLaunchCandidate("$package_/bin/claude.exe", false) +
@@ -35,4 +36,13 @@ internal fun nodeMissingMessage(command: String) =
 internal fun cannotLaunchMessage(command: String) =
     "Cannot start $command. Check that the executable exists, can be run by this user, and is not blocked by antivirus or file permissions."
 
-internal fun cannotLaunchError(command: String) = CliUserException(cannotLaunchMessage(command))
+/** Why an executable could not be started; mapped to a user-facing message only by the agent launch. */
+internal class ProcessStartException(val reason: Reason, val command: String) : IllegalStateException("Cannot start process") {
+    enum class Reason { NotFound, NodeMissing, CannotLaunch, TooLong }
+    fun toUserError() = CliUserException(when (reason) {
+        Reason.NotFound -> agentNotFoundMessage(command)
+        Reason.NodeMissing -> nodeMissingMessage(command)
+        Reason.CannotLaunch -> cannotLaunchMessage(command)
+        Reason.TooLong -> "The command line for $command is too long for Windows (32767 characters maximum)."
+    })
+}

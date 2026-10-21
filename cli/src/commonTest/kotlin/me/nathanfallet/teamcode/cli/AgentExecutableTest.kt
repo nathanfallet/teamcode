@@ -11,7 +11,7 @@ class AgentExecutableTest {
         assertTrue(paths.filter { !it.needsNode }.all { it.relativePath.endsWith("claude.exe") })
         assertEquals(NpmLaunchCandidate("node_modules/@anthropic-ai/claude-code/cli.js", true), paths.last())
         assertTrue(paths.any { it.relativePath.contains("claude-code-win32-x64") })
-        assertFalse(paths.any { it.relativePath.contains("win32-arm64") })
+        assertEquals("x64", paths.first().relativePath.substringAfter("claude-code-win32-").substringBefore("/"))
     }
 
     @Test
@@ -31,7 +31,7 @@ class AgentExecutableTest {
         assertContains(agentNotFoundMessage("claude"), "PATH")
         assertContains(agentNotFoundMessage("codex"), "@openai/codex")
         assertContains(nodeMissingMessage("codex"), "Node.js")
-        assertContains(cannotLaunchError("claude").message, "claude")
+        assertContains(ProcessStartException(ProcessStartException.Reason.CannotLaunch, "claude").toUserError().message, "claude")
     }
 
     @Test

@@ -88,8 +88,7 @@ private class Configure : SuspendingCliktCommand(name = "configure") {
         catch (error: Exception) { throw CliOperationException("server_verification_${error::class.simpleName.orEmpty().filter { it.isLetterOrDigit() }}") }
         try { ConfigStore().save(config) }
         catch (error: CancellationException) { throw error }
-        catch (error: CliUserException) { SystemExit.fail(error.message) }
-    catch (error: CliOperationException) { throw error }
+        catch (error: CliOperationException) { throw error }
         catch (error: Exception) { throw CliOperationException("configuration_write_${error::class.simpleName.orEmpty().filter { it.isLetterOrDigit() }}") }
         echo("Configuration saved to ${configPath()}.")
     }
