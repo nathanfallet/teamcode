@@ -66,7 +66,7 @@ teamcode keys create --name skills-ci --scopes skills:publish --no-expiry --json
 
 Creation writes the one-time credential to stdout (JSON with `--json`); save it directly in an appropriate secret store. The accompanying notice goes to stderr. Subsequent list operations return only metadata. The dashboard/API likewise reveal the secret only in the successful creation response, with no-store headers; TeamCode does not log it or retain recoverable plaintext.
 
-The default CLI scope is `inference`, with a 30-day lifetime. Lifetimes are 1–90 days (or no expiry for an administrator's key, above) and each member can retain at most 20 service-key records, including expired ones until removed. Permissions are immutable: create a replacement and revoke the old key to change scopes. Administrators can add `--member MEMBER_ID` to list/create commands.
+The default CLI scope is `inference`, with a 30-day lifetime. Lifetimes are 1–90 days (or no expiry when an administrator creates the key, above) and each member can retain at most 20 service-key records, including expired ones until removed. Permissions are immutable: create a replacement and revoke the old key to change scopes. Administrators can add `--member MEMBER_ID` to list/create commands.
 
 On a GitHub Actions runner, use an isolated configuration directory and pass the service key through stdin:
 
@@ -80,7 +80,7 @@ Use the actual arguments appropriate for the installed agent. `teamcode run code
 
 ## Revocation and persistence
 
-Service keys use the shared token table, storing only a digest of a random `tcsk_` credential, expiry (`Long.MAX_VALUE` for a key without expiry, so every `expires_at > now` check applies unchanged and no migration is needed), name, owner and scopes. Authentication and admission validate current SQL state across replicas. Interactive session rotation has a separate 50-session limit and cannot evict unrelated CI keys. The device/session views exclude service keys; revoking a registered device does not remove independent CI keys.
+Service keys use the shared token table, storing only a digest of a random `tcsk_` credential, expiry (`Long.MAX_VALUE` for a key without expiry, so every `expires_at > now` check applies unchanged and the expiry column needs no migration), name, owner, scopes and the creating member (`created_by`, nullable, added by an additive migration). Authentication and admission validate current SQL state across replicas. Interactive session rotation has a separate 50-session limit and cannot evict unrelated CI keys. The device/session views exclude service keys; revoking a registered device does not remove independent CI keys.
 
 An expired or explicitly revoked key cannot authenticate. The existing request monitor stops authenticated work on its next check when the original key is revoked or expires, without refunding uncertain provider work or replaying a stream. Password changes/resets, role changes and member disabling invalidate the member's keys together with other sessions. Logging out an interactive session alone does not revoke independent CI keys; logging out while using a service key revokes that key.
 

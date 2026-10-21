@@ -20,7 +20,7 @@ private class KeyList : SuspendingCliktCommand(name = "list") {
     private val member by option("--member", help = "Another member ID; requires administrator access.")
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
-            for (key in client.serviceKeys(member)) echo("${key.id}\t${key.name}\t${key.scopes.joinToString(",")}\texpires ${if (key.neverExpires) "never" else Instant.fromEpochMilliseconds(key.expiresAt).toString()}${key.createdByName?.let { by -> "\tcreated by $by" }.orEmpty()}")
+            for (key in client.serviceKeys(member)) echo("${key.id}\t${key.name}\t${key.scopes.joinToString(",")}\texpires ${if (key.neverExpires) "never" else Instant.fromEpochMilliseconds(key.expiresAt).toString()}\tcreated by ${key.createdByName ?: "-"}")
         }
     }
 }
