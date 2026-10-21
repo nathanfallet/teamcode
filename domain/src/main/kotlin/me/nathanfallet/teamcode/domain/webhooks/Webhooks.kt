@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.domain.webhooks
 
 import java.security.SecureRandom
+import kotlinx.coroutines.*
 import java.util.Base64
 import java.util.UUID
 import javax.crypto.Mac
@@ -54,8 +55,8 @@ interface WebhookStore {
     suspend fun find(teamId: String, id: String): WebhookSubscription?
     /** Fails with `webhook_limit` past [WebhookService.MAX_PER_TEAM]; the subscription starts at the journal's head, so it sees only what happens next. */
     suspend fun create(actor: Principal, subscription: WebhookSubscription, sealedSecret: String): WebhookSubscription
-    /** `409 stale_version` unless [expectedVersion] is current; re-enabling restarts at the journal's head and clears the failure count. */
-    suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean): WebhookSubscription
+    /** `409 stale_version` unless [expectedVersion] is current; a null [enabled] keeps the current state; re-enabling restarts at the journal's head and clears the failure count. */
+    suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription
     suspend fun rotateSecret(actor: Principal, id: String, sealedSecret: String): WebhookSubscription
     suspend fun delete(actor: Principal, id: String)
     suspend fun deliveries(teamId: String, id: String, limit: Int): List<WebhookDelivery>
@@ -100,7 +101,7 @@ class WebhookService(private val store: WebhookStore, private val sealer: Secret
         return CreatedWebhook(store.create(actor, draft, sealer.seal(secret.encodeToByteArray(), context(id))), secret)
     }
 
-    suspend fun update(actor: Principal, id: String, version: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean): WebhookSubscription {
+    suspend fun update(actor: Principal, id: String, version: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription {
         write(actor); validate(url, types, description)
         return store.update(actor, id, version, url, types, description, enabled)
     }
@@ -162,31 +163,38 @@ class WebhookService(private val store: WebhookStore, private val sealer: Secret
 class DeliverWebhooksUseCase(private val store: WebhookStore, private val sealer: SecretSealer, private val sender: WebhookSender, private val clock: () -> Long = System::currentTimeMillis) {
     suspend fun run(): Int {
         store.fanOut(subscriptions = 50, eventsPerSubscription = 100)
-        var attempted = 0
-        for (due in store.claimDue(limit = 25, leaseMillis = LEASE_MILLIS)) {
-            val delivery = due.delivery
-            val secret = sealer.open(due.sealedSecret, WebhookService.context(delivery.subscriptionId))?.decodeToString()
-            val now = clock()
-            val result = if (secret == null) SendResult(null, "secret_unreadable") else {
-                val seconds = now / 1000
-                sender.send(due.url, mapOf(
-                    "Content-Type" to "application/json", "User-Agent" to "TeamCode-Webhooks/1",
-                    "TeamCode-Delivery" to delivery.id, "TeamCode-Event" to delivery.eventType, "TeamCode-Timestamp" to seconds.toString(),
-                    "TeamCode-Signature" to WebhookService.signature(secret, seconds, delivery.payload),
-                ), delivery.payload)
-            }
-            attempted++
-            val attempts = delivery.attempts + 1
-            when {
-                result.delivered -> store.record(delivery.id, DeliveryState.DELIVERED, attempts, delivery.nextAttemptAt, result, clock())
-                // A test is sent once; a refused or exhausted delivery is final.
-                delivery.test || !result.retryable || attempts >= WebhookService.MAX_ATTEMPTS ->
-                    store.record(delivery.id, DeliveryState.FAILED, attempts, delivery.nextAttemptAt, result, clock())
-                else -> store.record(delivery.id, DeliveryState.PENDING, attempts, clock() + WebhookService.BACKOFF_MILLIS[attempts - 1], result, clock())
-            }
-        }
+        val due = store.claimDue(limit = BATCH, leaseMillis = LEASE_MILLIS)
+        // Sent together, each with its own deadline and its own record: one black-holed receiver delays neither the others nor its own backoff.
+        coroutineScope { due.map { async { attempt(it) } }.awaitAll() }
         store.disableFailing(20)
-        return attempted
+        return due.size
     }
-    companion object { const val LEASE_MILLIS = 60_000L }
+
+    private suspend fun attempt(due: DueDelivery) {
+        val delivery = due.delivery
+        val secret = sealer.open(due.sealedSecret, WebhookService.context(delivery.subscriptionId))?.decodeToString()
+        val now = clock()
+        val result = if (secret == null) SendResult(null, "secret_unreadable") else {
+            val seconds = now / 1000
+            try {
+                withTimeout(SEND_DEADLINE_MILLIS) {
+                    sender.send(due.url, mapOf(
+                        "Content-Type" to "application/json", "User-Agent" to "TeamCode-Webhooks/1",
+                        "TeamCode-Delivery" to delivery.id, "TeamCode-Event" to delivery.eventType, "TeamCode-Timestamp" to seconds.toString(),
+                        "TeamCode-Signature" to WebhookService.signature(secret, seconds, delivery.payload),
+                    ), delivery.payload)
+                }
+            } catch (_: TimeoutCancellationException) { SendResult(null, "timeout") }
+        }
+        val attempts = delivery.attempts + 1
+        when {
+            result.delivered -> store.record(delivery.id, DeliveryState.DELIVERED, attempts, delivery.nextAttemptAt, result, clock())
+            // A test is sent once; a refused or exhausted delivery is final.
+            delivery.test || !result.retryable || attempts >= WebhookService.MAX_ATTEMPTS ->
+                store.record(delivery.id, DeliveryState.FAILED, attempts, delivery.nextAttemptAt, result, clock())
+            else -> store.record(delivery.id, DeliveryState.PENDING, attempts, clock() + WebhookService.BACKOFF_MILLIS[attempts - 1], result, clock())
+        }
+    }
+
+    companion object { const val LEASE_MILLIS = 60_000L; const val SEND_DEADLINE_MILLIS = 15_000L; const val BATCH = 25 }
 }

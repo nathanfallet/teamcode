@@ -16,11 +16,11 @@ data class CreatedWebhookView(val webhook: WebhookView, val secret: String)
 @Serializable
 data class CreateWebhookRequest(val url: String, val types: List<String>, val description: String = "")
 
-/** [version] is the one being replaced. */
+/** [version] is the one being replaced; an omitted [enabled] keeps the current state, so editing a paused or auto-disabled webhook never re-enables it. */
 @Serializable
-data class UpdateWebhookRequest(val version: Int, val url: String, val types: List<String>, val description: String = "", val enabled: Boolean = true)
+data class UpdateWebhookRequest(val version: Int, val url: String, val types: List<String>, val description: String = "", val enabled: Boolean? = null)
 
-/** One attempt series for one event; [state] is `pending`, `delivered` or `failed`. [lastError] is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `expired`), never a response body. */
+/** One attempt series for one event; [state] is `pending`, `delivered` or `failed`. [lastError] is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `invalid_url`, `secret_unreadable`, `expired`), never a response body. */
 @Serializable
 data class WebhookDeliveryView(
     val id: String, val eventSeq: Long?, val eventType: String, val state: String, val attempts: Int, val nextAttemptAt: Long?,

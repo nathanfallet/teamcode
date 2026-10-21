@@ -21,10 +21,10 @@ class WebhookRoutesTest {
         override suspend fun list(teamId: String) = subscriptions.values.toList()
         override suspend fun find(teamId: String, id: String) = subscriptions[id]
         override suspend fun create(actor: Principal, subscription: WebhookSubscription, sealedSecret: String): WebhookSubscription = subscription.also { subscriptions[it.id] = it }
-        override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean): WebhookSubscription {
+        override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription {
             val current = subscriptions[id] ?: throw TeamFailure("not_found", 404, "Webhook not found.")
             if (current.version != expectedVersion) throw TeamFailure("stale_version", 409, "Changed.")
-            return current.copy(url = url, types = types, description = description, enabled = enabled, version = expectedVersion + 1).also { subscriptions[id] = it }
+            return current.copy(url = url, types = types, description = description, enabled = enabled ?: current.enabled, version = expectedVersion + 1).also { subscriptions[id] = it }
         }
         override suspend fun rotateSecret(actor: Principal, id: String, sealedSecret: String) = subscriptions[id] ?: throw TeamFailure("not_found", 404, "Webhook not found.")
         override suspend fun delete(actor: Principal, id: String) { subscriptions.remove(id) ?: throw TeamFailure("not_found", 404, "Webhook not found.") }
@@ -94,6 +94,8 @@ class WebhookRoutesTest {
         val update = """{"version":1,"url":"https://hooks.example.test/y","types":["run.stale"],"enabled":false}"""
         val updated = Serialization.json.decodeFromString<WebhookView>(call(HttpMethod.Put, "/api/v1/webhooks/$id", "admin", update).bodyAsText())
         assertEquals(listOf("run.stale"), updated.types); assertFalse(updated.enabled); assertEquals(2, updated.version)
+        val renamed = Serialization.json.decodeFromString<WebhookView>(call(HttpMethod.Put, "/api/v1/webhooks/$id", "admin", """{"version":2,"url":"https://hooks.example.test/y","types":["run.stale"]}""").bodyAsText())
+        assertFalse(renamed.enabled, "An update that omits enabled keeps a paused webhook paused"); assertEquals(3, renamed.version)
         assertEquals(HttpStatusCode.Conflict, call(HttpMethod.Put, "/api/v1/webhooks/$id", "admin", update).status, "The version being replaced is checked")
 
         val test = call(HttpMethod.Post, "/api/v1/webhooks/$id/test", "admin")

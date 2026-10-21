@@ -47,7 +47,7 @@ A `2xx` within 10 seconds is a delivery. A network error, a timeout, a `5xx`, `4
 
 ## Delivery log
 
-Each delivery shows its state (`pending`, `delivered`, `failed`), attempts, the next attempt, the last HTTP status and a short error code: `timeout`, `connect`, `tls`, `dns`, `host_not_allowed`, `secret_unreadable`, `expired`. The receiver's answer is never read or stored. The log is kept 14 days.
+Each delivery shows its state (`pending`, `delivered`, `failed`), attempts, the next attempt, the last HTTP status and a short error code: `timeout`, `connect`, `tls`, `dns`, `host_not_allowed`, `invalid_url`, `secret_unreadable`, `expired`. The receiver's answer is never read or stored. The log is kept 14 days.
 
 ## Storage
 

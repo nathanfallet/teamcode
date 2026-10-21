@@ -6,9 +6,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import java.net.InetAddress
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService
 import me.nathanfallet.teamcode.domain.webhooks.SendResult
 import me.nathanfallet.teamcode.domain.webhooks.WebhookSender
@@ -26,7 +24,9 @@ class HttpWebhookSender(
     override suspend fun send(url: String, headers: Map<String, String>, body: String): SendResult {
         if (!CloudAdministrationService.allowedApiHost(url)) return SendResult(null, "host_not_allowed")
         val host = try { Url(url).host.removePrefix("[").removeSuffix("]") } catch (_: Exception) { return SendResult(null, "invalid_url") }
-        val addresses = try { withContext(Dispatchers.IO) { resolver(host) } } catch (error: CancellationException) { throw error } catch (_: Exception) { return SendResult(null, "dns") }
+        // Resolution cannot be interrupted, so it runs apart and is abandoned after a deadline.
+        val addresses = try { withTimeout(5_000) { async(Dispatchers.IO) { resolver(host) }.await() } }
+            catch (error: TimeoutCancellationException) { return SendResult(null, "dns") } catch (error: CancellationException) { throw error } catch (_: Exception) { return SendResult(null, "dns") }
         if (addresses.isEmpty() || addresses.any { !CloudAdministrationService.allowedResolvedAddress(it.address) }) return SendResult(null, "host_not_allowed")
         return try {
             val response = http.post(url) {

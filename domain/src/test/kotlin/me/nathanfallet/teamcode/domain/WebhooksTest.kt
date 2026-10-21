@@ -18,10 +18,10 @@ class MemoryWebhookStore : WebhookStore {
     override suspend fun create(actor: Principal, subscription: WebhookSubscription, sealedSecret: String): WebhookSubscription {
         subscriptions[subscription.id] = subscription; secrets[subscription.id] = sealedSecret; return subscription
     }
-    override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean): WebhookSubscription {
+    override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription {
         val current = subscriptions.getValue(id)
         if (current.version != expectedVersion) throw TeamFailure("stale_version", 409, "Changed.")
-        return current.copy(url = url, types = types, description = description, enabled = enabled, version = current.version + 1).also { subscriptions[id] = it }
+        return current.copy(url = url, types = types, description = description, enabled = enabled ?: current.enabled, version = current.version + 1).also { subscriptions[id] = it }
     }
     override suspend fun rotateSecret(actor: Principal, id: String, sealedSecret: String) = subscriptions.getValue(id).also { secrets[id] = sealedSecret }
     override suspend fun delete(actor: Principal, id: String) { subscriptions.remove(id) }

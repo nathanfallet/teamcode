@@ -36,16 +36,17 @@ class SqlWebhookStore(private val database: Database) : WebhookStore {
         subscription(row(actor.teamId, subscription.id)!!)
     }
 
-    override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean): WebhookSubscription = database.query {
+    override suspend fun update(actor: Principal, id: String, expectedVersion: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription = database.query {
         requireCurrent(this, actor)
         val current = lockedRow(actor.teamId, id) ?: throw missing()
+        val enable = enabled ?: current[WebhookSubscriptions.enabled]
         if (current[WebhookSubscriptions.version] != expectedVersion) throw TeamFailure("stale_version", 409, "The webhook changed. Reload it and try again.")
         val now = nowMillis()
-        val reenabled = enabled && !current[WebhookSubscriptions.enabled]
+        val reenabled = enable && !current[WebhookSubscriptions.enabled]
         WebhookSubscriptions.update({ WebhookSubscriptions.id eq id }) {
             it[WebhookSubscriptions.url] = url; it[WebhookSubscriptions.types] = encode(types); it[WebhookSubscriptions.description] = description
-            it[WebhookSubscriptions.enabled] = enabled
-            it[disabledReason] = if (enabled) null else (current[WebhookSubscriptions.disabledReason] ?: "disabled")
+            it[WebhookSubscriptions.enabled] = enable
+            it[disabledReason] = if (enable) null else (current[WebhookSubscriptions.disabledReason] ?: "disabled")
             it[updatedAt] = now; it[version] = expectedVersion + 1
             // Events of the time it was off are not replayed.
             if (reenabled) { it[fanoutSeq] = headOf(actor.teamId); it[failures] = 0 }
@@ -95,38 +96,49 @@ class SqlWebhookStore(private val database: Database) : WebhookStore {
     }
 
     override suspend fun fanOut(subscriptions: Int, eventsPerSubscription: Int): Int {
-        val candidates = database.query {
-            WebhookSubscriptions.select(WebhookSubscriptions.id).where { WebhookSubscriptions.enabled eq true }.orderBy(WebhookSubscriptions.id to SortOrder.ASC).limit(subscriptions).map { it[WebhookSubscriptions.id] }
-        }
         var created = 0
-        for (id in candidates) created += database.query {
-            val sub = WebhookSubscriptions.selectAll().where { (WebhookSubscriptions.id eq id) and (WebhookSubscriptions.enabled eq true) }.forUpdate().singleOrNull() ?: return@query 0
-            val team = sub[WebhookSubscriptions.teamId]; val from = sub[WebhookSubscriptions.fanoutSeq]; val head = headOf(team)
-            if (head <= from) return@query 0
-            val wanted = decode(sub[WebhookSubscriptions.types]).map { it.wire }
-            val rows = TeamEvents.selectAll().where { (TeamEvents.teamId eq team) and (TeamEvents.seq greater from) and (TeamEvents.seq lessEq head) and (TeamEvents.type inList wanted) }
-                .orderBy(TeamEvents.seq to SortOrder.ASC).limit(eventsPerSubscription + 1).toList()
-            val page = rows.take(eventsPerSubscription)
-            val now = nowMillis()
-            for (event in page) {
-                val deliveryId = UUID.randomUUID().toString()
-                val data = buildJsonObject {
-                    put("seq", event[TeamEvents.seq]); put("type", event[TeamEvents.type])
-                    put("subject", TeamEventType.parse(event[TeamEvents.type])?.subject?.wire ?: "unknown"); put("subjectId", event[TeamEvents.subjectId])
-                    put("memberId", event[TeamEvents.ownerId]); put("at", event[TeamEvents.at])
-                    put("data", runCatching { Json.parseToJsonElement(event[TeamEvents.data]) }.getOrDefault(JsonObject(emptyMap())))
-                }
-                WebhookDeliveries.insertIgnore {
-                    it[WebhookDeliveries.id] = deliveryId; it[subscriptionId] = id; it[teamId] = team; it[eventSeq] = event[TeamEvents.seq]; it[eventType] = event[TeamEvents.type]
-                    it[payload] = WebhookService.payload(deliveryId, event[TeamEvents.type], now, data.toString()); it[state] = DeliveryState.PENDING.wire; it[attempts] = 0
-                    it[nextAttemptAt] = now; it[leaseUntil] = 0; it[createdAt] = now; it[test] = false
-                }
+        var after = ""
+        while (true) {
+            // Every enabled subscription, a page at a time in id order: none is starved by the ones before it.
+            val page = database.query {
+                WebhookSubscriptions.select(WebhookSubscriptions.id, WebhookSubscriptions.teamId, WebhookSubscriptions.fanoutSeq).where { (WebhookSubscriptions.enabled eq true) and (WebhookSubscriptions.id greater after) }
+                    .orderBy(WebhookSubscriptions.id to SortOrder.ASC).limit(subscriptions).map { Triple(it[WebhookSubscriptions.id], it[WebhookSubscriptions.teamId], it[WebhookSubscriptions.fanoutSeq]) }
             }
-            val through = if (rows.size > eventsPerSubscription) page.last()[TeamEvents.seq] else head
-            WebhookSubscriptions.update({ WebhookSubscriptions.id eq id }) { it[fanoutSeq] = through }
-            page.size
+            if (page.isEmpty()) return created
+            val heads = database.query { page.map { it.second }.distinct().associateWith { headOf(it) } }
+            // Idle subscriptions cost no lock: only those behind the journal's head are locked and worked.
+            for ((id, team, seen) in page) if (heads.getValue(team) > seen) created += fanOutOne(id, eventsPerSubscription)
+            after = page.last().first
         }
-        return created
+    }
+
+    private suspend fun fanOutOne(id: String, eventsPerSubscription: Int): Int = database.query {
+        val sub = WebhookSubscriptions.selectAll().where { (WebhookSubscriptions.id eq id) and (WebhookSubscriptions.enabled eq true) }.forUpdate().singleOrNull() ?: return@query 0
+        val team = sub[WebhookSubscriptions.teamId]; val from = sub[WebhookSubscriptions.fanoutSeq]; val head = headOf(team)
+        if (head <= from) return@query 0
+        val wanted = decode(sub[WebhookSubscriptions.types]).map { it.wire }
+        val rows = TeamEvents.selectAll().where { (TeamEvents.teamId eq team) and (TeamEvents.seq greater from) and (TeamEvents.seq lessEq head) and (TeamEvents.type inList wanted) }
+            .orderBy(TeamEvents.seq to SortOrder.ASC).limit(eventsPerSubscription + 1).toList()
+        val page = rows.take(eventsPerSubscription)
+        val now = nowMillis()
+        for (event in page) {
+            val deliveryId = UUID.randomUUID().toString()
+            val data = buildJsonObject {
+                put("seq", event[TeamEvents.seq]); put("type", event[TeamEvents.type])
+                put("subject", TeamEventType.parse(event[TeamEvents.type])?.subject?.wire ?: "unknown"); put("subjectId", event[TeamEvents.subjectId])
+                put("memberId", event[TeamEvents.ownerId]); put("at", event[TeamEvents.at])
+                put("data", runCatching { Json.parseToJsonElement(event[TeamEvents.data]) }.getOrDefault(JsonObject(emptyMap())))
+            }
+            WebhookDeliveries.insertIgnore {
+                it[WebhookDeliveries.id] = deliveryId; it[subscriptionId] = id; it[teamId] = team; it[eventSeq] = event[TeamEvents.seq]; it[eventType] = event[TeamEvents.type]
+                it[payload] = WebhookService.payload(deliveryId, event[TeamEvents.type], now, data.toString()); it[state] = DeliveryState.PENDING.wire; it[attempts] = 0
+                it[nextAttemptAt] = now; it[leaseUntil] = 0; it[createdAt] = now; it[test] = false
+            }
+        }
+        // When the page is full, resume after its last event; otherwise everything up to the head was looked at.
+        val through = if (rows.size > eventsPerSubscription) page.last()[TeamEvents.seq] else head
+        WebhookSubscriptions.update({ WebhookSubscriptions.id eq id }) { it[fanoutSeq] = through }
+        page.size
     }
 
     override suspend fun claimDue(limit: Int, leaseMillis: Long): List<DueDelivery> = database.query {
@@ -144,6 +156,9 @@ class SqlWebhookStore(private val database: Database) : WebhookStore {
     }
 
     override suspend fun record(id: String, state: DeliveryState, attempts: Int, nextAttemptAt: Long, result: SendResult, now: Long) = database.query {
+        // The subscription row first, as in delete (which cascades to the deliveries): one lock order everywhere.
+        val owner = WebhookDeliveries.select(WebhookDeliveries.subscriptionId).where { WebhookDeliveries.id eq id }.singleOrNull()?.get(WebhookDeliveries.subscriptionId) ?: return@query
+        val sub = WebhookSubscriptions.selectAll().where { WebhookSubscriptions.id eq owner }.forUpdate().singleOrNull() ?: return@query
         val row = WebhookDeliveries.selectAll().where { WebhookDeliveries.id eq id }.forUpdate().singleOrNull() ?: return@query
         WebhookDeliveries.update({ WebhookDeliveries.id eq id }) {
             it[WebhookDeliveries.state] = state.wire; it[WebhookDeliveries.attempts] = attempts; it[WebhookDeliveries.nextAttemptAt] = nextAttemptAt
@@ -152,8 +167,7 @@ class SqlWebhookStore(private val database: Database) : WebhookStore {
         }
         // Tests say nothing about the health of the subscription's real traffic.
         if (!row[WebhookDeliveries.test] && state != DeliveryState.PENDING) {
-            val sub = WebhookSubscriptions.selectAll().where { WebhookSubscriptions.id eq row[WebhookDeliveries.subscriptionId] }.forUpdate().singleOrNull() ?: return@query
-            WebhookSubscriptions.update({ WebhookSubscriptions.id eq sub[WebhookSubscriptions.id] }) {
+            WebhookSubscriptions.update({ WebhookSubscriptions.id eq owner }) {
                 it[failures] = if (state == DeliveryState.DELIVERED) 0 else sub[failures] + 1
             }
         }
