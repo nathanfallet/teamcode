@@ -30,6 +30,8 @@ class EnrollmentOriginPersistenceTest {
 
                 val signedIn = (store.upsert(AccountMutationActor.System, verified("signed-in", "ada@example.com"), credentials, null, "sign-in-operation-01", EnrollmentOrigin.SIGN_IN) as EnrollmentResult.Created).account
                 assertEquals(AccountState.READY, signedIn.state)
+                assertEquals("handover_not_pending", assertFailsWith<TeamFailure> { store.handover(AccountMutationActor.System, "default", signedIn.id, requirePending = true) }.code,
+                    "The dashboard button never changes an account that is not pending")
                 assertEquals("ada@example.com", store.find(signedIn.identity)!!.email)
                 val reservation = reserve()
                 assertEquals(signedIn.id, reservation.account.id, "A fresh sign-in is usable by the pool immediately")

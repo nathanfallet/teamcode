@@ -54,9 +54,10 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
         audit(teamId, actorId, "account.configured", id)
         account
     }
-    override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean): AccountRecord = database.query {
+    override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean, requirePending: Boolean): AccountRecord = database.query {
         val actorId = authorizeMutation(this, author, teamId)
         val row = Accounts.selectAll().where { (Accounts.teamId eq teamId) and (Accounts.id eq id) }.forUpdate().singleOrNull() ?: throw missing()
+        if (requirePending && row[Accounts.state] != AccountState.PENDING_HANDOVER.name) throw TeamFailure("handover_not_pending", 409, "This account no longer waits for a handover. Reload the dashboard.")
         if (row[Accounts.refreshPending]) throw TeamFailure("provider_reconnect", 409, "Import verified current credentials before changing refresh ownership.")
         val state = if (accessOnly) AccountState.ACCESS_ONLY else AccountState.READY
         Accounts.update({ (Accounts.teamId eq teamId) and (Accounts.id eq id) }) { it[Accounts.state] = state.name }

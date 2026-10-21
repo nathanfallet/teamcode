@@ -20,7 +20,8 @@ class AccountDashboardTest {
         var lastOrigin: EnrollmentOrigin? = null
         override suspend fun list(teamId: String) = accounts.values.sortedBy { it.displayName }
         override suspend fun configure(author: AccountMutationActor, teamId: String, id: String, displayName: String, disabled: Boolean, priority: Int, poolId: String?) = error("unused")
-        override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean): AccountRecord {
+        override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean, requirePending: Boolean): AccountRecord {
+            if (requirePending && accounts.getValue(id).state != AccountState.PENDING_HANDOVER) throw TeamFailure("handover_not_pending", 409, "stale")
             handovers += id
             return accounts.getValue(id).copy(state = if (accessOnly) AccountState.ACCESS_ONLY else AccountState.READY).also { accounts[id] = it }
         }
@@ -89,6 +90,7 @@ class AccountDashboardTest {
         assertEquals("/dashboard/accounts#account-a1", done.headers[HttpHeaders.Location])
         assertEquals(listOf("a1"), store.handovers)
         assertEquals(AccountState.READY, store.accounts.getValue("a1").state)
+        assertEquals(HttpStatusCode.Conflict, submit("a1", "csrf=session&confirm=on").status, "A stale page cannot hand over an account twice")
     }
 
     @Test fun aFreshSignInIsEnrolledActiveWhileAnImportStaysPending() = testApplication {

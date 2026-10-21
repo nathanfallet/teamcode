@@ -38,11 +38,12 @@ internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: Stri
         accounts.configure(call.principal, call.parameters["id"]!!, input["name"].orEmpty(), input["disabled"] == "on", input["priority"]?.toIntOrNull() ?: 0, input["pool"]?.takeIf { it.isNotBlank() })
         call.respondRedirect("/dashboard/accounts")
     }
-    // Same transition as `teamcode accounts handover <id> --confirm`; the checkbox plays the role of --confirm.
+    // Same transition as `teamcode accounts handover <id> --confirm`; the checkbox plays the role of --confirm. Only a
+    // pending account is accepted, so a stale page cannot turn an access-only or reconnect-required account into READY.
     post("/dashboard/accounts/{id}/handover") {
         val input = call.form(publicOrigin.trimEnd('/'))
         if (input["confirm"] != "on") throw TeamFailure("handover_unconfirmed", 400, "Confirm that no other tool uses this account before the handover.")
-        val account = accounts.handover(call.principal, call.parameters["id"]!!)
+        val account = accounts.handover(call.principal, call.parameters["id"]!!, requirePending = true)
         call.respondRedirect("/dashboard/accounts#account-${account.id.encodeURLPathPart()}")
     }
 }
