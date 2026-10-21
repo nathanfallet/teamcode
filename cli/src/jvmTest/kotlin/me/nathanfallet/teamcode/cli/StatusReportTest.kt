@@ -5,6 +5,7 @@ import io.ktor.client.engine.mock.*
 import io.ktor.http.*
 import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.cli.status.readStatusReport
+import me.nathanfallet.teamcode.cli.status.renderStatus
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import kotlin.test.*
@@ -38,6 +39,32 @@ class StatusReportTest {
         val partial = sdk(mapOf(gateway, capacity, "/api/v1/pools/accounts" to broken, "/api/v1/directives/current" to broken), mutableListOf()).use { readStatusReport(it) }
         assertEquals(4, partial.capacity?.reservedUnits, "A failing extra never hides the allowance"); assertNull(partial.accounts); assertNull(partial.pacing)
         val failing = "/api/v1/capacity" to (HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}""")
-        assertEquals(500, assertFailsWith<TeamCodeException> { sdk(mapOf(gateway, failing), mutableListOf()).use { readStatusReport(it) } }.statusCode)
+        val noCapacity = sdk(mapOf(gateway, failing), mutableListOf()).use { readStatusReport(it) }
+        assertNull(noCapacity.capacity, "A failing quota read never fails status"); assertEquals("pool", noCapacity.gateway.mode)
+    }
+
+    @Test fun anOlderServerWithoutTheQuotaRoutesStillShowsTheGateway() = runTest {
+        val report = sdk(mapOf(gateway), mutableListOf()).use { readStatusReport(it) }
+        assertNull(report.capacity); assertNull(report.accounts); assertNull(report.pacing)
+        val text = renderStatus(report, 0)
+        assertTrue(text.startsWith("Mode: pool | Active: 1 | Waiting: 0 | Completed: 2"), text)
+        assertTrue(text.contains("Your quota: unavailable from this server or credential."), text)
+        assertTrue(text.endsWith("Pool accounts: unavailable from this server or credential."), text)
+    }
+
+    @Test fun anUnexpectedBodyLeavesTheSectionOutInsteadOfFailingStatus() = runTest {
+        // The shape a fixture or an older server answers every unknown GET with: valid JSON, not these models.
+        val other = HttpStatusCode.OK to """{"serverVersion":"test","mode":"fixture","features":[]}"""
+        val routes = listOf("/api/v1/capacity", "/api/v1/directives/current", "/api/v1/pools/accounts")
+        val unexpected = sdk(mapOf(gateway) + routes.associateWith { other }, mutableListOf()).use { readStatusReport(it) }
+        assertNull(unexpected.capacity); assertNull(unexpected.accounts); assertNull(unexpected.pacing)
+        val broken = sdk(mapOf(gateway) + routes.associateWith { HttpStatusCode.OK to "not-json{" }, mutableListOf()).use { readStatusReport(it) }
+        assertNull(broken.capacity); assertNull(broken.accounts); assertNull(broken.pacing)
+        assertTrue(renderStatus(broken, 0).contains("Your quota: unavailable from this server or credential."))
+    }
+
+    @Test fun theGatewayReadStillFailsStatus() = runTest {
+        val down = "/api/v1/status" to (HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}""")
+        assertEquals(500, assertFailsWith<TeamCodeException> { sdk(mapOf(down, capacity), mutableListOf()).use { readStatusReport(it) } }.statusCode)
     }
 }

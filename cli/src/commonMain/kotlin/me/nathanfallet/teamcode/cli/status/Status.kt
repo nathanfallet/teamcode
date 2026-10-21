@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.cli.status
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.formatUnits
@@ -10,13 +11,13 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.client.TeamCodeClient
-import me.nathanfallet.teamcode.client.TeamCodeException
 import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
  * Everything `teamcode status` shows, read from the routes the dashboard uses. [capacity] and [accounts] are null when this
- * server does not serve them (capacity disabled, older server); [pacing] is null when no pacing advice applies.
+ * server or credential does not serve them (capacity disabled, older server, unexpected body, failed read); [pacing] is
+ * null when no pacing advice applies or it cannot be read.
  */
 @Serializable
 data class StatusReport(val gateway: GatewayStatus, val capacity: CapacityView? = null, val pacing: DirectiveView? = null, val accounts: List<PoolAccountStatusView>? = null)
@@ -35,17 +36,17 @@ class Status : SuspendingCliktCommand(name = "status") {
 
 internal suspend fun readStatusReport(client: TeamCodeClient): StatusReport {
     val gateway = client.status()
-    // Optional parts: a server without capacity routes, a key without guidance scope or a server older than the account
-    // route still gets the rest, as `status` did before it showed quotas.
+    // Everything after the gateway line is optional: a server older than these routes (404, or a body of another shape),
+    // a key without the scope or a failing read leaves its section out instead of failing `status`, which worked before it
+    // showed quotas.
     val capacity = optional { client.capacity() }
-    // Pacing and accounts are extras: any server refusal or failure leaves them out rather than hiding the allowance.
-    val pacing = optional(everyStatus = true) { client.directive().directive }
-    val accounts = optional(everyStatus = true) { client.poolAccounts() }
+    val pacing = optional { client.directive().directive }
+    val accounts = optional { client.poolAccounts() }
     return StatusReport(gateway, capacity, pacing, accounts)
 }
 
-private suspend fun <T> optional(everyStatus: Boolean = false, read: suspend () -> T): T? =
-    try { read() } catch (error: TeamCodeException) { if (everyStatus || error.statusCode == 403 || error.statusCode == 404) null else throw error }
+private suspend fun <T> optional(read: suspend () -> T): T? =
+    try { read() } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
 
 /** Plain text, no color: the gateway line, one block for the caller's own allowance, one table for the accounts. */
 internal fun renderStatus(report: StatusReport, now: Long): String = buildString {
@@ -53,11 +54,11 @@ internal fun renderStatus(report: StatusReport, now: Long): String = buildString
     appendLine("Mode: ${g.mode} | Active: ${g.activeRequests} | Waiting: ${g.queuedRequests} | Completed: ${g.completedRequests}")
     appendLine()
     val c = report.capacity
-    if (c == null) appendLine("Your quota: not available to this credential or server.") else quota(c, report.pacing, now)
+    if (c == null) appendLine("Your quota: unavailable from this server or credential.") else quota(c, report.pacing, now)
     appendLine()
     val accounts = report.accounts
     when {
-        accounts == null -> append("Pool accounts: not available to this credential or server.")
+        accounts == null -> append("Pool accounts: unavailable from this server or credential.")
         accounts.isEmpty() -> append("Pool accounts: none in your pools.")
         else -> {
             appendLine("Pool accounts")
