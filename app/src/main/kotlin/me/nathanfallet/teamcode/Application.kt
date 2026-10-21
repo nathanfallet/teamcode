@@ -61,7 +61,7 @@ fun main() {
     val forecasts = database?.let { me.nathanfallet.teamcode.infrastructure.database.ForecastServiceImpl(it) }
     val transports = listOf(ClaudeTransport(providerHttp), CodexTransport(providerHttp))
     val emailBackfill = accountStore?.let { AccountEmailBackfill(transports, mapOf("anthropic" to ClaudeAccountVerifier(providerHttp), "codex" to CodexAccountVerifier(providerHttp)), it) }
-    val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> emailBackfill!!.renew(account, token) } }
+    val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> emailBackfill?.renew(account, token) ?: transports.single { it.provider == account.identity.provider }.refresh(token) } }
     val cancellationStore = database?.let { SqlRequestCancellationStore(it) }
     val cancellation = cancellationStore?.let { RequestCancellationService(it) }
     val mcpAccess = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlMcpAccessStore(it) }

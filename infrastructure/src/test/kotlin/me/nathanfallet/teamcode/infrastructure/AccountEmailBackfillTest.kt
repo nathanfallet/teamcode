@@ -78,6 +78,18 @@ class AccountEmailBackfillTest {
         assertEquals(1, h.logs.size)
     }
 
+    @Test fun aFailedSampleLookupDoesNotBlockTheFreeAnswerOfALaterRefresh() = runBlocking {
+        val h = Harness { request ->
+            if (request.url.encodedPath == "/api/oauth/profile") respond("down", HttpStatusCode.InternalServerError)
+            else respond("""{"access_token":"a","refresh_token":"r","expires_in":3600,"account":{"uuid":"claude-account","email_address":"ada@example.com"},"organization":{"uuid":"claude-org"}}""", headers = json)
+        }
+        h.backfill.schedule(claude(), previous); h.settle()
+        assertTrue(h.written.isEmpty())
+        assertTrue(h.logs.single().contains("account-1") && h.logs.none { "@" in it || "secret" in it })
+        h.backfill.renew(claude(), previous); h.settle()
+        assertEquals(listOf("account-1" to "ada@example.com"), h.written)
+    }
+
     @Test fun anotherIdentityIsRefusedWithoutLoggingSecretsOrAddresses() = runBlocking {
         val codexH = Harness { respond("""{"access_token":"new-access-secret","refresh_token":"r","expires_in":3600,"id_token":"${idToken(user = "someone-else")}"}""", headers = json) }
         codexH.backfill.renew(codex(), previous); codexH.settle()
