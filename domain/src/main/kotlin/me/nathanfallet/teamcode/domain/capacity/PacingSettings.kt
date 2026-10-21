@@ -32,6 +32,10 @@ interface PacingSettingsStore {
     /** Merge under the same authority as [save]; a null [quotaPressurePercent] keeps the stored value. Implementations should do it atomically. */
     suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings =
         get(actor).let { save(actor, it.copy(observationOnly = observationOnly, quotaPressurePercent = quotaPressurePercent ?: it.quotaPressurePercent)) }
+    /** Like [update], also merging [autoPoolSize] when not null; implementations do all three under one lock. */
+    suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?, autoPoolSize: Boolean?): PacingSettings =
+        get(actor).let { save(actor, it.copy(observationOnly = observationOnly, quotaPressurePercent = quotaPressurePercent ?: it.quotaPressurePercent,
+            autoPoolSize = autoPoolSize ?: it.autoPoolSize)) }
     /** Turns the automatic home pool size on or off, keeping every other setting and the manual budget. */
     suspend fun setAutoPoolSize(actor: Principal, enabled: Boolean): PacingSettings = save(actor, get(actor).copy(autoPoolSize = enabled))
 }

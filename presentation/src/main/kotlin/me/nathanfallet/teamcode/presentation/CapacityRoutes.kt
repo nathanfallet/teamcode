@@ -127,5 +127,5 @@ internal fun ApplicationCall.tokenUsageQuery(today: java.time.LocalDate = java.t
 }
 internal fun TokenUsagePage.view() = TokenUsagePageView(rows.map {
     TokenUsageRowView(java.time.LocalDate.ofEpochDay(it.dayNumber).toString(), it.memberId, it.username, it.runId, it.provider, it.model,
-        it.requests, it.unmeteredRequests, it.input, it.cacheCreation, it.cacheRead, it.output)
+        it.requests, it.unmeteredRequests, it.input, it.cacheCreation, it.cacheRead, it.output, it.apiEquivalentMicros)
 }, nextAfter)

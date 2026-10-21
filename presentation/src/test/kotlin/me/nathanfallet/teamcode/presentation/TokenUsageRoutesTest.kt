@@ -38,6 +38,7 @@ class TokenUsageRoutesTest {
             val row = page.rows.single()
             assertEquals("2024-10-21", row.day)
             assertEquals(listOf(5L, 1L, 10L, 20L, 30L, 40L), listOf(row.requests, row.unmeteredRequests, row.inputTokens, row.cacheCreationTokens, row.cacheReadTokens, row.outputTokens))
+            assertEquals(1_234, row.apiEquivalentMicros, "The priced amount reaches the API")
             assertEquals("next", page.nextAfter)
             val query = admission.queries.last()
             assertEquals(LocalDate.of(2024, 10, 1).toEpochDay(), query.fromDay); assertEquals(LocalDate.of(2024, 10, 31).toEpochDay(), query.toDay)
@@ -69,7 +70,7 @@ private class LedgerAdmission : AdmissionStore {
         if (query.all || query.memberId != null) actor.requireTeamRead()
         queries += TokenUsageLedger.validate(query)
         return TokenUsagePage(listOf(TokenUsageRow(LocalDate.of(2024, 10, 21).toEpochDay(), actor.member.id, actor.member.username, null, "anthropic", "claude-opus-test",
-            5, 1, 10, 20, 30, 40)), "next")
+            5, 1, 10, 20, 30, 40, apiEquivalentMicros = 1_234)), "next")
     }
     override suspend fun preferredTarget(actor: Principal, affinity: RequestAffinity): RouteTarget? = error("unused")
     override suspend fun statistics(): AdmissionStatistics = AdmissionStatistics(0, 0)

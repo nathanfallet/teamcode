@@ -39,23 +39,20 @@ internal fun Route.poolSizeRoutes(sizing: PoolSizingService, prices: ApiPriceSto
     post("/dashboard/capacity/api-prices") {
         val input = call.form(origin.trimEnd('/'))
         val actor = call.principal
-        val current = prices.list(actor)
         val row = ApiPriceView(input["provider"].orEmpty().trim(), input["model"].orEmpty().trim().lowercase(), input["effectiveFrom"].orEmpty().trim(),
             dollars(input["input"]), dollars(input["cacheWrite"]), dollars(input["cacheRead"]), dollars(input["output"])).price()
-        val next = if (input["remove"] == "on") current.filterNot { it.sameKey(row) } else current.filterNot { it.sameKey(row) } + row
-        prices.replace(actor, next)
+        if (input["remove"] == "on") prices.remove(actor, row.provider, row.model, row.effectiveFromDay) else prices.put(actor, row)
         call.respondRedirect("/dashboard/capacity/pool-size#prices")
     }
 }
-
-private fun ApiPrice.sameKey(other: ApiPrice) = provider == other.provider && model == other.model && effectiveFromDay == other.effectiveFromDay
 
 /** Dollars per million tokens typed in the dashboard, stored as micro-dollars per million tokens. */
 private fun dollars(value: String?): Long {
     val text = value?.trim().orEmpty().ifEmpty { "0" }
     val amount = text.toBigDecimalOrNull()?.takeIf { it.signum() >= 0 && it.scale() <= 6 }
         ?: throw TeamFailure("invalid_api_price", 400, "Type prices in dollars per million tokens, such as 3 or 0.30.")
-    return amount.multiply(BigDecimal(1_000_000)).toLong()
+    return try { amount.multiply(BigDecimal(1_000_000)).longValueExact() }
+    catch (_: ArithmeticException) { throw TeamFailure("invalid_api_price", 400, "That price is too large.") }
 }
 
 private val PRICE_DAY = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -70,7 +67,7 @@ internal fun PoolSizeReport.view() = PoolSizeView(enabled, manualDailyUnits, aut
     if (usesAutomatic) "automatic" else "manual",
     estimate.dailyMicros, estimate.dailyUnits, estimate.reason, creditsPerMicro, unpricedModels,
     estimate.accounts.map { share ->
-        PoolSizeAccountView(share.accountId, null, share.status.name.lowercase(), share.dailyMicros, share.binding,
+        PoolSizeAccountView(share.accountId, share.status.name.lowercase(), share.dailyMicros, share.binding,
             capacities[share.accountId].orEmpty().map { WindowCapacityView(it.window, it.fullWindowMicros, it.samples) })
     })
 
@@ -82,6 +79,7 @@ private fun poolSizeContent(actor: Principal, report: PoolSizeReport, prices: Li
     val reasonText = when (report.estimate.reason) {
         PoolSizeEstimate.NO_ACCOUNTS -> "No subscription account in the home pool."
         PoolSizeEstimate.NO_ESTIMATE -> "No account has an estimate yet: each needs three samples of a five-point rise on its windows, with priced traffic between them."
+        PoolSizeEstimate.INCOMPLETE -> "An account that can serve has no estimate yet (see below); counting it as zero would undersize the pool."
         PoolSizeEstimate.NO_PRICED_USAGE -> "No priced traffic in the last seven days, so capacity cannot be converted to credits. Add prices for the models in use."
         else -> null
     }

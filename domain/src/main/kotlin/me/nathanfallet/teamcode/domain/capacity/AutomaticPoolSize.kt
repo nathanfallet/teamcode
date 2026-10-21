@@ -18,13 +18,17 @@ data class WindowCapacity(val window: String, val fullWindowMicros: Long?, val s
 const val MIN_CAPACITY_SAMPLES = 3
 /** A utilization rise smaller than this is mostly rounding (providers report whole points). */
 const val MIN_CAPACITY_DELTA = .05
+/** Hourly usage buckets make shorter pairs noisy: a pair also spans at least this long. */
+const val MIN_CAPACITY_PAIR_MILLIS = 3_600_000L
+/** Reported resets may jitter between readings; readings whose resets round to the same minute share a period. */
+private const val RESET_GRANULARITY_MILLIS = 60_000L
 /** The retention of `quota_history`: a longer look-back needs a retention change first. */
 const val CAPACITY_HISTORY_MILLIS = 7 * 86_400_000L
 private const val HOUR_MILLIS = 3_600_000L
 
 /**
  * One sample = the API-equivalent settled between two readings of the same window period (same known reset), at least
- * [MIN_CAPACITY_DELTA] apart, ÷ their utilization rise. Readings are walked in time order: a rise of five points closes
+ * [MIN_CAPACITY_DELTA] and [MIN_CAPACITY_PAIR_MILLIS] apart, ÷ their utilization rise (resets equal to the minute). Readings are walked in time order: a rise of five points closes
  * a pair and becomes the next anchor, a decrease restarts the anchor. Hours are priced in proportion to the part of the
  * hour the pair covers (usage is bucketed by settlement hour, so a sample is only accurate to the hour). A pair that
  * covers an unpriced model, or no traffic at all (the subscription was used outside TeamCode), is no sample. The
@@ -35,13 +39,13 @@ class EstimateWindowCapacityUseCase {
         val costs = hours.associateBy { it.hourNumber }
         val samples = mutableListOf<Double>()
         history.filter { it.resetsAtMillis != null && it.observedAtMillis in (now - CAPACITY_HISTORY_MILLIS)..now && it.utilization.isFinite() && it.utilization in 0.0..1.0 }
-            .groupBy { it.resetsAtMillis }.values.forEach { period ->
+            .groupBy { (it.resetsAtMillis!! + RESET_GRANULARITY_MILLIS / 2) / RESET_GRANULARITY_MILLIS }.values.forEach { period ->
                 var anchor: QuotaSample? = null
                 for (reading in period.sortedBy { it.observedAtMillis }) {
                     val start = anchor
                     if (start == null || reading.utilization < start.utilization) { anchor = reading; continue }
                     val rise = reading.utilization - start.utilization
-                    if (rise + 1e-9 < MIN_CAPACITY_DELTA) continue
+                    if (rise + 1e-9 < MIN_CAPACITY_DELTA || reading.observedAtMillis - start.observedAtMillis < MIN_CAPACITY_PAIR_MILLIS) continue
                     cost(costs, start.observedAtMillis, reading.observedAtMillis)?.takeIf { it > 0 }?.let { samples += it / rise }
                     anchor = reading
                 }
@@ -88,6 +92,8 @@ data class PoolSizeEstimate(val dailyMicros: Long, val dailyUnits: Long?, val ac
         const val NO_ACCOUNTS = "no_accounts"
         const val NO_ESTIMATE = "no_estimate"
         const val NO_PRICED_USAGE = "no_priced_usage"
+        /** An account that can serve has no figure yet: counting it as zero would undersize the pool. */
+        const val INCOMPLETE = "incomplete_estimate"
     }
 }
 
@@ -101,7 +107,8 @@ data class PoolSizeEstimate(val dailyMicros: Long, val dailyUnits: Long?, val ac
  * - seven-day term: the remaining points × C7 spread over the days left before the reset (seven when it is unknown); when the reset
  *   comes within the day, plus the share of a fresh window (threshold × C7 / 7 per day) for the hours after it.
  * The account counts the smaller term. A window the provider does not report does not bind; a window observed without an
- * estimate leaves the account without a figure. Credits = micro-dollars × [creditsPerMicro].
+ * estimate leaves the account without a figure, and then the whole pool has no automatic value ([PoolSizeEstimate.INCOMPLETE]):
+ * counting it as zero would undersize the pool. Credits = micro-dollars × [creditsPerMicro].
  */
 class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = AccountHeadroomUseCase()) {
     fun size(
@@ -119,6 +126,7 @@ class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = Accou
         val micros = counted.sumOf { it.dailyMicros }
         val reason = when {
             counted.isEmpty() -> PoolSizeEstimate.NO_ESTIMATE
+            shares.any { it.status == PoolContribution.NO_ESTIMATE || it.status == PoolContribution.NO_FRESH_OBSERVATION } -> PoolSizeEstimate.INCOMPLETE
             creditsPerMicro == null -> PoolSizeEstimate.NO_PRICED_USAGE
             else -> null
         }

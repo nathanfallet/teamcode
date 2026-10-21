@@ -55,6 +55,8 @@ object ApiPrices {
             if (price.effectiveFromDay !in 0..2_932_896) refuse("Use an effective date written YYYY-MM-DD.")
             if (listOf(price.inputMicros, price.cacheWriteMicros, price.cacheReadMicros, price.outputMicros).any { it !in 0..MAX_PRICE_MICROS })
                 refuse("Prices are micro-dollars per million tokens, from 0 to $MAX_PRICE_MICROS.")
+            // A free model would count credits with no cost and inflate the credit ratio: input and output need a price.
+            if (price.inputMicros == 0L || price.outputMicros == 0L) refuse("Input and output prices must be above zero.")
         }
         if (prices.groupBy { Triple(it.provider, it.model, it.effectiveFromDay) }.any { it.value.size > 1 })
             refuse("Each provider, model and effective date has one row.")
@@ -91,4 +93,11 @@ interface ApiPriceStore {
     suspend fun list(actor: Principal): List<ApiPrice>
     /** Replaces the whole table after [ApiPrices.validate]. */
     suspend fun replace(actor: Principal, prices: List<ApiPrice>): List<ApiPrice>
+    /** Adds [price], replacing the row with the same provider, model and day; implementations do it under the team lock. */
+    suspend fun put(actor: Principal, price: ApiPrice): List<ApiPrice> = replace(actor, list(actor).filterNot { it.sameKey(price) } + price)
+    /** Removes the row of [provider], [model] and [effectiveFromDay], if any; implementations do it under the team lock. */
+    suspend fun remove(actor: Principal, provider: String, model: String, effectiveFromDay: Long): List<ApiPrice> =
+        replace(actor, list(actor).filterNot { it.provider == provider && it.model == model && it.effectiveFromDay == effectiveFromDay })
 }
+
+fun ApiPrice.sameKey(other: ApiPrice) = provider == other.provider && model == other.model && effectiveFromDay == other.effectiveFromDay

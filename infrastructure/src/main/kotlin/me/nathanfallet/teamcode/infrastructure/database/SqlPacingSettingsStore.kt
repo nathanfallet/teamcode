@@ -17,10 +17,14 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
     override suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings = database.query { write(actor, settings) }
 
     /** The omitted threshold is read under the team lock, so concurrent administrators cannot overwrite each other. */
-    override suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings = database.query {
+    override suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings =
+        update(actor, observationOnly, quotaPressurePercent, null)
+
+    override suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?, autoPoolSize: Boolean?): PacingSettings = database.query {
         actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
         val current = readPacingSettings(actor.teamId)
-        write(actor, current.copy(observationOnly = observationOnly, quotaPressurePercent = quotaPressurePercent ?: current.quotaPressurePercent))
+        write(actor, current.copy(observationOnly = observationOnly, quotaPressurePercent = quotaPressurePercent ?: current.quotaPressurePercent,
+            autoPoolSize = autoPoolSize ?: current.autoPoolSize))
     }
 
     override suspend fun setAutoPoolSize(actor: Principal, enabled: Boolean): PacingSettings = database.query {

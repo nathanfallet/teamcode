@@ -13,11 +13,20 @@ class SqlApiPriceStore(private val database: Database) : ApiPriceStore {
         readApiPrices(actor.teamId)
     }
 
-    override suspend fun replace(actor: Principal, prices: List<ApiPrice>): List<ApiPrice> = database.query {
+    override suspend fun replace(actor: Principal, prices: List<ApiPrice>): List<ApiPrice> = edit(actor) { prices }
+
+    override suspend fun put(actor: Principal, price: ApiPrice): List<ApiPrice> = edit(actor) { current -> current.filterNot { it.sameKey(price) } + price }
+
+    override suspend fun remove(actor: Principal, provider: String, model: String, effectiveFromDay: Long): List<ApiPrice> = edit(actor) { current ->
+        current.filterNot { it.provider == provider && it.model == model && it.effectiveFromDay == effectiveFromDay }
+    }
+
+    /** The current table is read under the team lock, so concurrent administrators cannot drop each other's rows. */
+    private suspend fun edit(actor: Principal, change: (List<ApiPrice>) -> List<ApiPrice>): List<ApiPrice> = database.query {
         actor.requireAdmin()
-        val next = ApiPrices.validate(prices).sortedWith(ORDER)
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val previous = readApiPrices(actor.teamId)
+        val next = ApiPrices.validate(change(previous)).sortedWith(ORDER)
         if (previous == next) return@query next
         ApiPricesTable.deleteWhere { teamId eq actor.teamId }
         ApiPricesTable.batchInsert(next) { price ->

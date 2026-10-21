@@ -47,6 +47,8 @@ class ApiPriceTableTest {
         refused(price("claude sonnet"))
         refused(price(""))
         refused(price("claude-opus-4").copy(outputMicros = -1))
+        refused(price("claude-opus-4").copy(outputMicros = 0))
+        refused(price("claude-opus-4", input = 0))
         refused(price("claude-opus-4").copy(effectiveFromDay = -1))
         refused(price("claude-opus-4"), price("claude-opus-4", input = 1))
         refused(price("claude-opus-4").copy(provider = "Anthropic!"))

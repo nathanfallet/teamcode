@@ -107,7 +107,9 @@ class AutomaticPoolSizeTest {
         assertEquals(PoolContribution.NO_ESTIMATE, byId.getValue("half").status, "An observed window without an estimate could bind: no figure")
         assertEquals(PoolContribution.COUNTED, byId.getValue("codex").status)
         assertEquals(45_600_000, byId.getValue("codex").dailyMicros)
-        assertEquals(91_200_000, estimate.dailyUnits)
+        assertNull(estimate.dailyUnits, "Counting accounts without a figure as zero would undersize the pool: the manual budget applies")
+        assertEquals(PoolSizeEstimate.INCOMPLETE, estimate.reason)
+        assertEquals(91_200_000, size(listOf(fiveHourOnly), mapOf("codex" to capacity(10_000_000, null))).dailyUnits)
     }
 
     @Test fun noEstimateAtAllOrNoPricedUsageGiveNoAutomaticValue() {

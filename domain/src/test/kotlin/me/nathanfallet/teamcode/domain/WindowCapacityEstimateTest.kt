@@ -58,6 +58,19 @@ class WindowCapacityEstimateTest {
         assertEquals(2, estimate(history, costs).samples)
     }
 
+    @Test fun resetsThatJitterWithinAMinuteShareAPeriod() {
+        val history = (0..3).map { sample(it, .10 + .06 * it, reset + it * 7_000L) }
+        assertEquals(3, estimate(history, hours(3)).samples)
+    }
+
+    @Test fun aPairSpansAtLeastAnHour() {
+        // +6 points every 20 minutes: a pair closes only once an hour has passed (18 points for $0.60: a $3.33 window).
+        val history = (0..9).map { QuotaSample(.10 + .06 * it, start + it * hour / 3, reset) }
+        val result = estimate(history, hours(3))
+        assertEquals(3, result.samples)
+        assertEquals(3_333_333, result.fullWindowMicros)
+    }
+
     @Test fun partialHoursArePricedInProportion() {
         // Readings at :30: each pair covers half of two hours, so $0.60 again per six points.
         val history = (0..3).map { QuotaSample(.10 + .06 * it, start + it * hour + hour / 2, reset) }

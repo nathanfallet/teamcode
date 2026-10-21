@@ -56,6 +56,9 @@ class AutomaticPoolSizePersistenceTest {
                 assertEquals(listOf(sonnet), prices.replace(admin, listOf(sonnet)))
                 assertEquals(listOf(sonnet), prices.list(member), "Members read the table")
                 assertEquals("invalid_api_price", assertFailsWith<TeamFailure> { prices.replace(admin, listOf(sonnet, sonnet)) }.code)
+                val opus = ApiPrice("anthropic", "claude-opus", today, 15_000_000, 18_750_000, 1_500_000, 75_000_000)
+                assertEquals(listOf(opus, sonnet), prices.put(admin, opus), "One row added under the team lock, the rest kept")
+                assertEquals(listOf(sonnet), prices.remove(admin, "anthropic", "claude-opus", today))
 
                 // Three hours of history at hour boundaries: each hour settles 200,000 priced input tokens ($0.60) and moves
                 // the weekly window by 6 points (full window $10) and the five-hour window by 12 points (full window $5).
@@ -120,7 +123,7 @@ class AutomaticPoolSizePersistenceTest {
                 assertEquals("forbidden", assertFailsWith<TeamFailure> { sizing.report(member) }.code)
                 assertEquals("forbidden", assertFailsWith<TeamFailure> { settings.setAutoPoolSize(member, false) }.code)
                 val actions = db.query { AuditEvents.select(AuditEvents.action).where { AuditEvents.teamId eq "default" }.map { it[AuditEvents.action] } }
-                assertEquals(1, actions.count { it == "capacity.api_price_changed" }, "One audited change; the refused ones wrote nothing")
+                assertEquals(3, actions.count { it == "capacity.api_price_changed" }, "One audited event per change; the refused ones wrote nothing")
                 assertEquals(2, actions.count { it == "pool_size.automatic_enabled" })
                 assertEquals(1, actions.count { it == "pool_size.manual_enabled" })
             }

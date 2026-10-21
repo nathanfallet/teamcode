@@ -92,6 +92,8 @@ class PoolSizeRoutesTest {
                 "Dollars per million tokens become micro-dollars per million; the model is lowercased")
             assertEquals(HttpStatusCode.BadRequest, form("/dashboard/capacity/api-prices",
                 "provider=anthropic&model=claude-haiku-4&effectiveFrom=2026-10-02&input=-1&cacheWrite=0&cacheRead=0&output=0"))
+            assertEquals(HttpStatusCode.BadRequest, form("/dashboard/capacity/api-prices",
+                "provider=anthropic&model=claude-haiku-4&effectiveFrom=2026-10-02&input=18446744073710&cacheWrite=0&cacheRead=0&output=1"), "No silent overflow")
             assertEquals(HttpStatusCode.Found, form("/dashboard/capacity/api-prices", "remove=on&provider=anthropic&model=claude-opus-4&effectiveFrom=2026-10-02"))
             assertEquals(listOf("claude-sonnet-4"), table.map { it.model })
         } finally { sdk.close() }
