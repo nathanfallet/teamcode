@@ -8,7 +8,7 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB,
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS,
     /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
     CLOUD_RUNNING }
 
@@ -32,6 +32,7 @@ internal val DASHBOARD_MENU = listOf(
     DashboardSection("Team", listOf(
         DashboardLink("/dashboard/members", "Members", "Create accounts, change roles, disable access and reset passwords.", adminOnly = true),
         DashboardLink("/dashboard/groups", "Groups", "Shared caps for a set of members, on top of their individual allowances.", DashboardFeature.GROUPS),
+        DashboardLink("/dashboard/webhooks", "Webhooks", "Send the team's session and run events to your own services, signed and retried.", DashboardFeature.WEBHOOKS, adminOnly = true),
         DashboardLink("/dashboard/audit", "Audit log", "Administrative and sign-in events, newest first.", DashboardFeature.AUDIT, adminOnly = true),
     )),
     DashboardSection("Quotas and capacity", listOf(

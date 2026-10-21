@@ -29,7 +29,7 @@ import me.nathanfallet.teamcode.presentation.docs.apiDocsRoutes
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null, webhooks: me.nathanfallet.teamcode.domain.webhooks.WebhookService? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
@@ -132,6 +132,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (mcpAccess != null) add(DashboardFeature.MCP)
         if (cloudSessions != null && cloudAdmin != null) add(DashboardFeature.CLOUD)
         if (github != null) add(DashboardFeature.GITHUB)
+        if (webhooks != null) add(DashboardFeature.WEBHOOKS)
     })
     routing {
         if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null, OverviewSources(admission, runs, accounts)) }
@@ -161,6 +162,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             if (cloudRunner != null) cloudRunnerConversationRoutes(cloudRunner, cloudConversation)
         }
         if (cloudTransfers != null && cloudSessions != null && team != null) cloudTransferRoutes(cloudTransfers)
+        if (webhooks != null && team != null) { webhookRoutes(webhooks); webhookDashboardRoutes(webhooks, publicOrigin) }
         if (cancellation != null && team != null) {
             post("/api/v1/requests/{id}/cancel") {
                 cancellation.cancel(call.principal, call.parameters["id"].orEmpty())
@@ -202,6 +204,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else null,
                         if (cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else null,
                     ).flatten() else emptyList()) +
+                    (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
                     (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
         }

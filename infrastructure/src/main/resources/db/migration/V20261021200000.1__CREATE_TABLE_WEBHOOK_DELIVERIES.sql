@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS webhook_deliveries (id VARCHAR(36), subscription_id VARCHAR(36) NOT NULL, team_id VARCHAR(36) NOT NULL, event_seq BIGINT NULL, event_type VARCHAR(40) NOT NULL, payload text NOT NULL, state VARCHAR(16) NOT NULL, attempts INT NOT NULL, next_attempt_at BIGINT NOT NULL, lease_until BIGINT NOT NULL, last_status INT NULL, last_error VARCHAR(40) NULL, created_at BIGINT NOT NULL, delivered_at BIGINT NULL, test BOOLEAN NOT NULL, CONSTRAINT pk_webhook_deliveries PRIMARY KEY (id), CONSTRAINT webhook_deliveries_subscription FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id) ON DELETE CASCADE);
+ALTER TABLE webhook_deliveries ADD CONSTRAINT webhook_delivery_event UNIQUE (subscription_id, event_seq);
+CREATE INDEX webhook_delivery_due ON webhook_deliveries (state, next_attempt_at);
+CREATE INDEX webhook_delivery_log ON webhook_deliveries (subscription_id, created_at);
+CREATE INDEX webhook_delivery_retention ON webhook_deliveries (created_at);
