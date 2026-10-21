@@ -68,7 +68,11 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         val path = call.request.path()
         if (team != null) {
             if (path.startsWith("/dashboard")) {
-                val live = if (path == "/dashboard/forecasts") " script-src 'self'; connect-src 'self';" else ""
+                val live = when (path) {
+                    "/dashboard/forecasts" -> " script-src 'self'; connect-src 'self';"
+                    "/dashboard/cloud" -> " script-src 'self';" // The kubeconfig drop zone only reads a chosen file in the page.
+                    else -> ""
+                }
                 call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none';" + live)
             }
             // Runner calls carry the pod's projected token, which the runner routes verify themselves.

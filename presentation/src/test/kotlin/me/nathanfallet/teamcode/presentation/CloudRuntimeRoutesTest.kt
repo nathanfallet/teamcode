@@ -167,6 +167,103 @@ class CloudRuntimeRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=colleague") }.status)
     }
 
+    /** Opaque and bound to its context, like the real cipher; not encryption, which the infrastructure tests cover. */
+    private class PlainSealer : SecretSealer {
+        private val base64 = java.util.Base64.getUrlEncoder().withoutPadding()
+        override fun seal(plaintext: ByteArray, context: String) = base64.encodeToString("$context|${base64.encodeToString(plaintext)}".toByteArray())
+        override fun open(envelope: String, context: String): ByteArray? = runCatching { String(java.util.Base64.getUrlDecoder().decode(envelope)) }.getOrNull()
+            ?.takeIf { it.startsWith("$context|") }?.let { java.util.Base64.getUrlDecoder().decode(it.removePrefix("$context|")) }
+    }
+
+    @Test fun aKubeconfigPrefillsTheClusterFormAndItsSecretsNeverReachTheBrowser() = testApplication {
+        val clusters = Admin()
+        application {
+            configureGateway(gateway, team = team(), cloudRuntime = CloudRuntimeService(Runtime(), "https://teamcode.example.test"), cloudSessions = CloudSessionService(Sessions),
+                cloudAdmin = CloudAdministrationService(clusters, FakeCluster, KubeconfigImportService(PlainSealer())), publicOrigin = "https://teamcode.example.test")
+        }
+        val pem = "-----BEGIN CERTIFICATE-----\nMIIBimportedca\n-----END CERTIFICATE-----"
+        val ca = java.util.Base64.getEncoder().encodeToString(pem.toByteArray())
+        val token = "imported-service-account-token"
+        fun config(vararg contexts: Triple<String, String, String>) = "current-context: ${contexts.last().first}\nclusters:\n- name: c\n  cluster: {server: 'https://k8s.example.test:6443', certificate-authority-data: $ca}\nusers:\n" +
+            contexts.joinToString("") { (name, user, _) -> "- name: $name\n  user: $user\n" } + "contexts:\n" + contexts.joinToString("") { (name, _, namespace) -> "- name: $name\n  context: {cluster: c, user: $name, namespace: $namespace}\n" }
+        suspend fun post(path: String, vararg fields: Pair<String, String>) = client.post(path) {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "https://teamcode.example.test")
+            contentType(ContentType.Application.FormUrlEncoded); setBody((listOf("csrf" to "admin-session") + fields).formUrlEncode())
+        }
+        fun sealedOf(page: String) = Regex("name=\"kubeconfigSealed\" value=\"([^\"]+)\"").find(page)!!.groupValues[1]
+
+        // The cluster page offers the import, with the script allowed by its CSP; the script is served to administrators only.
+        val cloud = client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
+        assertContains(cloud.bodyAsText(), "Import a kubeconfig"); assertContains(cloud.headers["Content-Security-Policy"]!!, "script-src 'self'")
+        assertEquals(HttpStatusCode.OK, client.get("/dashboard/assets/kubeconfig-import.js") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/assets/kubeconfig-import.js") { header(HttpHeaders.Cookie, "teamcode_session=colleague") }.status)
+
+        // One context: the form is prefilled at once; neither the CA nor the token is in the page.
+        val single = post("/dashboard/cloud/clusters/import", "kubeconfig" to config(Triple("lab", "{token: $token}", "teamcode"))).bodyAsText()
+        assertContains(single, "value=\"https://k8s.example.test:6443\""); assertContains(single, "value=\"teamcode\""); assertContains(single, "value=\"lab\"")
+        assertContains(single, "from the kubeconfig")
+        assertFalse(token in single || "MIIBimportedca" in single || ca in single, "Secrets stay on the server")
+        assertFalse(Regex("<(input|textarea)[^>]*required").containsMatchIn(single.substringAfter("Service-account token").substringBefore("Allowed namespaces")), "Imported credentials are not asked again")
+
+        // Saving through the same path stores the imported CA and token, like a manual entry.
+        assertEquals(HttpStatusCode.Found, post("/dashboard/cloud/clusters", "kubeconfigSealed" to sealedOf(single), "kubeconfigContext" to "lab", "name" to "lab", "apiUrl" to "https://k8s.example.test:6443",
+            "caCertificate" to "", "serviceAccountToken" to "", "allowedNamespaces" to "teamcode", "maxRunningPods" to "4").status)
+        assertEquals(CloudClusterInput("lab", "https://k8s.example.test:6443", pem, token, listOf("teamcode"), 4, null), clusters.clusters.single().second)
+
+        // A value typed in the form wins over the kubeconfig's.
+        post("/dashboard/cloud/clusters", "kubeconfigSealed" to sealedOf(single), "kubeconfigContext" to "lab", "name" to "lab", "apiUrl" to "https://k8s.example.test:6443",
+            "caCertificate" to "", "serviceAccountToken" to "typed-replacement-token", "allowedNamespaces" to "teamcode", "maxRunningPods" to "4")
+        assertEquals("typed-replacement-token", clusters.clusters.last().second.serviceAccountToken); assertEquals(pem, clusters.clusters.last().second.caCertificate)
+
+        // Several contexts: a picker with the current context selected and the unusable one disabled with its reason.
+        val picker = post("/dashboard/cloud/clusters/import", "kubeconfig" to config(Triple("dev", "{token: $token-dev}", "dev-ns"), Triple("sso", "{exec: {command: aws}}", "x"), Triple("prod", "{token: $token-prod}", "prod-ns"))).bodyAsText()
+        assertContains(picker, "several contexts"); assertContains(picker, "current context")
+        assertTrue(Regex("value=\"prod\" checked").containsMatchIn(picker), "current-context is selected by default")
+        assertTrue(Regex("value=\"sso\" disabled").containsMatchIn(picker)); assertContains(picker, "exec plugin")
+        assertFalse("$token-prod" in picker || "$token-dev" in picker)
+        val chosen = post("/dashboard/cloud/clusters/import/context", "kubeconfigSealed" to sealedOf(picker), "context" to "dev").bodyAsText()
+        assertContains(chosen, "value=\"dev-ns\""); assertFalse("$token-dev" in chosen)
+        post("/dashboard/cloud/clusters", "kubeconfigSealed" to sealedOf(chosen), "kubeconfigContext" to "dev", "name" to "dev", "apiUrl" to "https://k8s.example.test:6443", "allowedNamespaces" to "dev-ns", "maxRunningPods" to "2")
+        assertEquals("$token-dev", clusters.clusters.last().second.serviceAccountToken)
+        assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters/import/context", "kubeconfigSealed" to sealedOf(picker), "context" to "sso").status, "An unusable context cannot be chosen")
+
+        // exec and auth-provider kubeconfigs are refused with a message that says why and what to do.
+        for (user in listOf("{exec: {command: aws}}", "{auth-provider: {name: gcp}}")) {
+            val refused = post("/dashboard/cloud/clusters/import", "kubeconfig" to config(Triple("only", user, "ns")))
+            assertEquals(HttpStatusCode.UnprocessableEntity, refused.status)
+            assertContains(refused.bodyAsText(), "service-account token")
+        }
+        val count = clusters.clusters.size
+        assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters/import", "kubeconfig" to "not: [a kubeconfig").status)
+        assertEquals(HttpStatusCode.UnprocessableEntity, post("/dashboard/cloud/clusters", "kubeconfigSealed" to "forged", "kubeconfigContext" to "lab", "name" to "x", "apiUrl" to "https://k8s.example.test",
+            "allowedNamespaces" to "teamcode", "maxRunningPods" to "4").status)
+        assertEquals(count, clusters.clusters.size, "A refused import creates nothing")
+
+        // Administrators only, and the origin check applies like any dashboard form.
+        assertEquals(HttpStatusCode.Forbidden, client.post("/dashboard/cloud/clusters/import") {
+            header(HttpHeaders.Cookie, "teamcode_session=colleague"); header(HttpHeaders.Origin, "https://teamcode.example.test")
+            contentType(ContentType.Application.FormUrlEncoded); setBody(listOf("csrf" to "colleague-session", "kubeconfig" to config(Triple("lab", "{token: $token}", "x"))).formUrlEncode())
+        }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/dashboard/cloud/clusters/import") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "https://evil.example.test")
+            contentType(ContentType.Application.FormUrlEncoded); setBody(listOf("csrf" to "admin-session", "kubeconfig" to config(Triple("lab", "{token: $token}", "x"))).formUrlEncode())
+        }.status)
+    }
+
+    @Test fun manualEntryStaysTheOnlyWayWithoutAKubeconfigImportService() = testApplication {
+        application {
+            configureGateway(gateway, team = team(), cloudRuntime = CloudRuntimeService(Runtime(), "https://teamcode.example.test"), cloudSessions = CloudSessionService(Sessions),
+                cloudAdmin = CloudAdministrationService(Admin(), FakeCluster), publicOrigin = "https://teamcode.example.test")
+        }
+        val page = client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertContains(page, "Connect a cluster"); assertFalse("Import a kubeconfig" in page)
+        // Without the service the import route does not exist: the path falls to the cluster edit route, which refuses it.
+        assertEquals(HttpStatusCode.BadRequest, client.post("/dashboard/cloud/clusters/import") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "https://teamcode.example.test")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=admin-session&kubeconfig=x")
+        }.status)
+    }
+
     @Test fun onlyNewWorkIsRefusedWhileOff() {
         for ((method, path) in listOf("POST" to "/api/v1/cloud/sessions", "POST" to "/api/v1/cloud/sessions/s1/resume", "POST" to "/api/v1/cloud/sessions/s1/messages",
             "POST" to "/api/v1/cloud/sessions/s1/attachments", "POST" to "/api/v1/cloud/sessions/s1/transfer", "POST" to "/api/v1/cloud/transfers/t1/accept",
