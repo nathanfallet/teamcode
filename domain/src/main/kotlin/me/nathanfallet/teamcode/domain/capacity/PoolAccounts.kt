@@ -3,15 +3,12 @@ package me.nathanfallet.teamcode.domain.capacity
 import me.nathanfallet.teamcode.domain.accounts.AccountRecord
 import me.nathanfallet.teamcode.domain.accounts.AccountState
 
-/** Utilization from which an account is excluded for a model; placement, its refusal explanation, pacing and status share it. */
-const val QUOTA_EXCLUSION = .95
-
 /** Why an account cannot take a new request right now; the first one that applies, in this order. */
 enum class AccountUnavailability { DISABLED, PENDING_HANDOVER, RECONNECT_REQUIRED, COOLING_DOWN, QUOTA_EXHAUSTED;
     companion object {
         /**
          * The one classification of an account that cannot serve: placement counts it in a [PoolStanding] refusal and
-         * `teamcode status` shows it. [quotaExhausted] says whether a current window that applies is at [QUOTA_EXCLUSION].
+         * `teamcode status` shows it. [quotaExhausted] says whether a current window that applies is at the team's quota pressure threshold ([PacingSettings.quotaPressureThreshold]).
          */
         fun of(account: AccountRecord, cooldownUntilMillis: Long, quotaExhausted: Boolean, now: Long): AccountUnavailability? = when {
             account.disabled -> DISABLED
@@ -40,11 +37,11 @@ data class PoolAccountStatus(
 
 /**
  * Reads the same eligibility as admission: enabled, serving state, no cool-down and no current shared window at
- * [QUOTA_EXCLUSION]. A model-scoped window (`model:…`) only bars that model, so it is shown without making
+ * the team's quota pressure threshold ([PacingSettings.quotaPressureThreshold]). A model-scoped window (`model:…`) only bars that model, so it is shown without making
  * the account unusable. Identities are revealed to interactive administrators only; members get neutral labels.
  */
 class DescribePoolAccountsUseCase {
-    fun describe(accounts: List<PoolAccountObservation>, now: Long, revealIdentity: Boolean): List<PoolAccountStatus> =
+    fun describe(accounts: List<PoolAccountObservation>, now: Long, revealIdentity: Boolean, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD): List<PoolAccountStatus> =
         accounts.sortedWith(compareByDescending<PoolAccountObservation> { it.account.priority }.thenBy { it.account.id })
             .mapIndexed { index, observed ->
                 val account = observed.account
@@ -52,7 +49,7 @@ class DescribePoolAccountsUseCase {
                 val cooling = observed.cooldownUntilMillis.takeIf { it > now }
                 // Without a request there is no model: only shared windows bar every model.
                 val unavailable = AccountUnavailability.of(account, observed.cooldownUntilMillis,
-                    windows.any { !it.window.startsWith("model:") && it.utilization >= QUOTA_EXCLUSION }, now)
+                    windows.any { !it.window.startsWith("model:") && it.utilization >= pressureThreshold }, now)
                 PoolAccountStatus(
                     accountId = account.id.takeIf { revealIdentity }, name = account.displayName.takeIf { revealIdentity },
                     label = if (revealIdentity) account.displayName else "Account ${index + 1}",

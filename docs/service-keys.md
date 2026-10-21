@@ -32,9 +32,17 @@ teamcode keys list
 teamcode keys revoke KEY_ID
 ```
 
+An administrator can create a key that never expires, for a long-lived CI job that would otherwise need rotation:
+
+```sh
+teamcode keys create --name skills-ci --scopes skills:publish --no-expiry --json
+```
+
+`--no-expiry` cannot be combined with `--days`. Only a key owned by an administrator may have no expiry: a member's keys, and keys an administrator creates for a member with `--member`, stay limited to 1–90 days and are refused otherwise. A key without expiry is otherwise an ordinary key: it can be revoked or replaced at any time, `teamcode keys list` and the dashboard show `never` as its expiry, it counts toward the 20-key limit, and it still stops working when its owner's password changes or is reset, the owner is disabled, or the owner's role changes (an owner demoted from administrator loses it). Revoke it as soon as the job no longer needs it.
+
 Creation writes the one-time credential to stdout (JSON with `--json`); save it directly in an appropriate secret store. The accompanying notice goes to stderr. Subsequent list operations return only metadata. The dashboard/API likewise reveal the secret only in the successful creation response, with no-store headers; TeamCode does not log it or retain recoverable plaintext.
 
-The default CLI scope is `inference`, with a 30-day lifetime. Lifetimes are 1–90 days and each member can retain at most 20 service-key records, including expired ones until removed. Permissions are immutable: create a replacement and revoke the old key to change scopes. Administrators can add `--member MEMBER_ID` to list/create commands.
+The default CLI scope is `inference`, with a 30-day lifetime. Lifetimes are 1–90 days (or no expiry for an administrator's key, above) and each member can retain at most 20 service-key records, including expired ones until removed. Permissions are immutable: create a replacement and revoke the old key to change scopes. Administrators can add `--member MEMBER_ID` to list/create commands.
 
 On a GitHub Actions runner, use an isolated configuration directory and pass the service key through stdin:
 
@@ -48,7 +56,7 @@ Use the actual arguments appropriate for the installed agent. `teamcode run code
 
 ## Revocation and persistence
 
-Service keys use the shared token table, storing only a digest of a random `tcsk_` credential, expiry, name, owner and scopes. Authentication and admission validate current SQL state across replicas. Interactive session rotation has a separate 50-session limit and cannot evict unrelated CI keys. The device/session views exclude service keys; revoking a registered device does not remove independent CI keys.
+Service keys use the shared token table, storing only a digest of a random `tcsk_` credential, expiry (`Long.MAX_VALUE` for a key without expiry, so every `expires_at > now` check applies unchanged and no migration is needed), name, owner and scopes. Authentication and admission validate current SQL state across replicas. Interactive session rotation has a separate 50-session limit and cannot evict unrelated CI keys. The device/session views exclude service keys; revoking a registered device does not remove independent CI keys.
 
 An expired or explicitly revoked key cannot authenticate. The existing request monitor stops authenticated work on its next check when the original key is revoked or expires, without refunding uncertain provider work or replaying a stream. Password changes/resets, role changes and member disabling invalidate the member's keys together with other sessions. Logging out an interactive session alone does not revoke independent CI keys; logging out while using a service key revokes that key.
 
@@ -59,7 +67,7 @@ The additive Exposed migration makes `service_scopes` nullable. Existing session
 - `GET/POST /api/v1/service-keys`: list/create the current member's keys.
 - `GET/POST /api/v1/members/{memberId}/service-keys`: another member requires administrator access.
 - `DELETE /api/v1/service-keys/{id}`: revoke an owned key or, as an administrator, a same-team key.
-- Creation accepts `name`, a nonempty list of the supported `scopes`, and `validDays`. It returns `metadata` and the one-time `accessToken`; list responses never include the token or digest.
+- Creation accepts `name`, a nonempty list of the supported `scopes`, and `validDays` (1–90; omitted means 30; an explicit `null` creates a key without expiry, administrators' keys only, otherwise `400 invalid_service_key`). It returns `metadata` and the one-time `accessToken`; list responses never include the token or digest. `metadata.neverExpires` is true for a key without expiry; its `expiresAt` is then `9223372036854775807` so clients written before this option still decode the list. Creating such a key records `service_key.created_no_expiry` in the [audit journal](audit.md) instead of `service_key.created`. A client that sends `validDays: null` to a server without this option gets a `400` (it never receives a 30-day key by mistake).
 
 Skill publication uses the dedicated `skills:publish` scope described in [skills](skills.md). Cloud orchestration uses the `cloud:*` scopes: an external orchestrator holding an `admin:cloud` key creates one session per task on behalf of a member and relays messages through its own backend, so no administrator credential reaches a device. A `cloud:read` or `cloud:write` key acts as its owner alone, even when the owner is an administrator. Cluster, profile, settings and access-policy administration, GitHub linking and every other administration stay interactive. Servers that accept these scopes advertise `cloud.keys.v1`.
 

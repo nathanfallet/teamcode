@@ -20,7 +20,8 @@ class ForecastServiceImpl(private val database: Database) : ForecastService {
             val selected = if (accountId == null) accounts.firstOrNull() else Accounts.select(columns)
                 .where { (Accounts.teamId eq actor.teamId) and (Accounts.id eq accountId) }.singleOrNull()?.let(::forecastAccount)
                 ?: throw TeamFailure("not_found", 404, "Account not found.")
-            if (selected == null) return@query ForecastSnapshot(now, accounts, null, emptyList(), false)
+            val threshold = readPacingSettings(actor.teamId).quotaPressureThreshold
+            if (selected == null) return@query ForecastSnapshot(now, accounts, null, emptyList(), false, threshold)
             val currentRows = QuotaWindows.selectAll().where { QuotaWindows.accountId eq selected.id }.orderBy(QuotaWindows.windowName).limit(129).toList()
             val current = currentRows.take(128).map(::quotaRecord)
             val starts = currentRows.take(128).associate { it[QuotaWindows.windowName] to it[QuotaWindows.windowStartedAt] }
@@ -30,8 +31,8 @@ class ForecastServiceImpl(private val database: Database) : ForecastService {
             }.groupBy { it.window }
             val visibleAccounts = if (selected in accounts) accounts else accounts + selected
             ForecastSnapshot(now, visibleAccounts, selected,
-                current.map { BuildForecastSeriesUseCase()(it, history[it.window].orEmpty(), now) },
-                listed.size > 64 || currentRows.size > 128 || rows.size > 8192)
+                current.map { BuildForecastSeriesUseCase(threshold)(it, history[it.window].orEmpty(), now) },
+                listed.size > 64 || currentRows.size > 128 || rows.size > 8192, threshold)
         }
     }
 }

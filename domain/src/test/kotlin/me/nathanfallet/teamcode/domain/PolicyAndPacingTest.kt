@@ -29,6 +29,6 @@ class PolicyAndPacingTest {
         assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .1, .1)).take(1)), 5).pace)
         assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .1, .1), 600_000)), 5).pace)
         assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .2, .05))), 5).pace)
-        assertEquals(Pace.PAUSE, controller.advise(listOf(windows(listOf(.9, .9, .9))), 5).pace)
+        assertEquals(Pace.PAUSE, controller.advise(listOf(windows(listOf(.95, .95, .95))), 5).pace)
     }
 }

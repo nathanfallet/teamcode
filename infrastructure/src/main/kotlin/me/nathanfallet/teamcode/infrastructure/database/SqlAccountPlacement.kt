@@ -53,13 +53,15 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
     val affinities = SqlSessionAffinity()
     val pins = input.affinity?.let { affinities.accounts(this, actor, it, input.provider, input.model, now) }.orEmpty()
     val loads = if (input.affinity != null) affinities.loads(this, actor.teamId, now) else emptyMap()
+    // Utilization from which an account is excluded: the team setting, shared with the refusal explanation below.
+    val pressureThreshold = readPacingSettings(actor.teamId).quotaPressureThreshold
     fun blocking(account: AccountRecord) = usage.filter {
-        it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) && it.utilization >= QUOTA_EXCLUSION
+        it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) && it.utilization >= pressureThreshold
     }
     val available = candidates.filter { it.id !in input.excludedAccountIds }.mapNotNull { account ->
         val utilization = usage.filter { it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) }
             .maxOfOrNull { it.utilization } ?: 0.0
-        if (utilization >= QUOTA_EXCLUSION) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
+        if (utilization >= pressureThreshold) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
     }
     val selector = SelectPoolAccountUseCase()
     val chosen = selector.select(available.filter { it.activeRequests < 2 }, pins, policy.poolId)

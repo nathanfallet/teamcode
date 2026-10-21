@@ -48,7 +48,7 @@ Publication goes through the API. It needs either an interactive administrator l
 
 ```sh
 # Once, from an administrator login: a key that can only publish skills.
-teamcode keys create --name skills-ci --scopes skills:publish --days 30 --json
+teamcode keys create --name skills-ci --scopes skills:publish --no-expiry --json
 ```
 
 ```http
@@ -122,7 +122,7 @@ jobs:
             "$TEAMCODE_URL/api/v1/skills/review/versions"
 ```
 
-A re-run of the same tag succeeds without creating anything (`200`, `created: false`). Changed content under an existing label fails the job (`409`). The published version is only delivered after an administrator pins it. Rotate the key like any other service key; it expires after at most 90 days.
+A re-run of the same tag succeeds without creating anything (`200`, `created: false`). Changed content under an existing label fails the job (`409`). The published version is only delivered after an administrator pins it. The example key has no expiry (administrators only); to prefer rotation, use `--days 90` instead and replace the key before it lapses. Revoke it like any other service key when the pipeline is retired.
 
 ## Administration
 

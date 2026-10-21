@@ -30,12 +30,12 @@ The API returns at most 50 events, newest identifier first. Response shape (even
 - Ownership grants/removal and one-time legacy ownership migration (`member.owner_granted`, `member.owner_removed`, `member.owner_migrated`); [recovery and role rules](team-roles.md).
 - First administrator creation (`member.bootstrap`), successful login/logout, password replacement/reset, member creation and access changes.
 - Device registration/rename/revocation and explicit authentication-session revocation.
-- Service/CI credential creation and revocation, including self-revocation through logout.
+- Service/CI credential creation (`service_key.created`, or `service_key.created_no_expiry` for an administrator's key without expiry) and revocation, including self-revocation through logout.
 - Account enrollment and credential replacement, operator metadata configuration, access-only activation and refresh-ownership handover.
 - Member allowance/concurrency/weight policy, pool budgets, model/effort/experimental settings and routing rule changes.
 - Group creation/policy/archive changes and assignments/removal/pause/resume. Assignment event subjects use `groupId/memberId`; the metadata field supports 100 characters. Group writes and their audit event commit together under the team lock. See [groups](groups.md).
 - Local agent-launch start/end and run policy changes (`run.started`, `run.ended`, `run.policy_updated`); no per-heartbeat journal entry.
-- Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`).
+- Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`) and quota pressure threshold changes (`pacing.quota_pressure_changed`).
 
 Account writes and their audit event commit in the same team-locked transaction. The write names either an authenticated principal or an explicit trusted system operation. Current interactive administrator permissions are checked again after provider identity verification and before any write or idempotency replay is returned. Revocation during a remote verification therefore prevents the later mutation. Repeating the same enrollment operation does not append a duplicate event; conflicting or denied writes append none. Repeating an unchanged handover state also appends none.
 

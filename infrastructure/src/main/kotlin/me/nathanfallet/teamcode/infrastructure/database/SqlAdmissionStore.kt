@@ -183,7 +183,8 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             .map { accountRecord(it) to it[Accounts.cooldownUntil] }
         val ids = rows.map { it.first.id }
         val windows = if (ids.isEmpty()) emptyList() else QuotaWindows.selectAll().where { QuotaWindows.accountId inList ids }.map(::quotaRecord)
-        DescribePoolAccountsUseCase().describe(rows.map { (account, cooldown) -> PoolAccountObservation(account, cooldown, windows.filter { it.accountId == account.id }) }, now, admin)
+        DescribePoolAccountsUseCase().describe(rows.map { (account, cooldown) -> PoolAccountObservation(account, cooldown, windows.filter { it.accountId == account.id }) }, now, admin,
+            readPacingSettings(actor.teamId).quotaPressureThreshold)
     }
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = observe(accountId, QuotaUpdate(observations, System.currentTimeMillis()))
     override suspend fun observe(accountId: String, update: QuotaUpdate) = SqlQuotaObservations(database).observe(accountId, update)
@@ -192,8 +193,9 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         lockTeam(team)
         val now = nowMillis()
         val limit = readQuotaModelLimits(team)[accountId]?.get(model.lowercase())
+        val pressureThreshold = readPacingSettings(team).quotaPressureThreshold
         QuotaWindows.selectAll().where { QuotaWindows.accountId eq accountId }.map(::quotaRecord)
-            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= QUOTA_EXCLUSION }
+            .any { it.isCurrent(now) && it.appliesTo(model, limit) && it.utilization >= pressureThreshold }
     }
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) {
         database.query {
