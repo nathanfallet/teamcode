@@ -78,7 +78,7 @@ class TeamHooksTest {
         val installed = plan.installed.single()
         assertEquals("stop-guard", installed.name); assertEquals(1, plan.refused); assertEquals(listOf("audit"), plan.awaiting.map { it.name })
         assertEquals("#!/bin/sh\nexit 0\n", fs.read(with(okio.Path.Companion) { installed.command.toPath() }) { readUtf8() })
-        assertEquals(listOf("bin/guard.sh"), executables.map { it.toString().substringAfterLast("stop-guard-").substringAfter('/') }, "Only the executable files, before the move")
+        assertEquals(listOf("bin/guard.sh"), executables.map { it.relativeTo(root / "installed" / ".staging").segments.drop(1).joinToString("/") }, "Only the executable files, before the move")
         // Installed once: the next launch reuses it without downloading.
         sync.plan()
         assertEquals(listOf("stop-guard"), downloads)
