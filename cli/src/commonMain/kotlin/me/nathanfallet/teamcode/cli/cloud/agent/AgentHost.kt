@@ -6,7 +6,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
@@ -75,6 +77,8 @@ internal class AgentHost(
     private val handled = LinkedHashMap<String, RunnerInputAckView>()
     private val buffer = ArrayDeque<RunnerEventView>()
     private var sequence = 0L
+    /** Events per upload; narrowed while the server refuses a batch for its content. */
+    private var batchLimit = MAX_BATCH
     private var settings: AgentSettings? = null
     private var adapter: AgentAdapter? = null
     private var process: AgentProcess? = null
@@ -265,16 +269,46 @@ internal class AgentHost(
                 buffer.addLast(RunnerEventView(++sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", "transcript_overflow"); put("dropped", lost) }))
             }
             var bytes = 0
-            buffer.takeWhile { event -> bytes += event.data.toString().length; bytes <= MAX_BATCH_BYTES }.take(MAX_BATCH).ifEmpty { buffer.take(1) }
+            // The server limit counts UTF-8 bytes, not characters.
+            buffer.asSequence().take(batchLimit).takeWhile { event -> bytes += event.data.toString().encodeToByteArray().size; bytes <= MAX_BATCH_BYTES }.toList().ifEmpty { buffer.take(1) }
         }
         if (batch.isEmpty()) return false
         val ack = try { channel.events(batch) } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            if (error is TeamCodeException && error.code != "execution_fenced" && refusesContent(error.statusCode)) return isolateRejected(batch)
             if (handle(error)) return false
             sleep(UPLOAD_MILLIS * 4); return false
         }
+        batchLimit = MAX_BATCH
         lock.withLock { while (buffer.isNotEmpty() && buffer.first().sequence <= ack.acceptedThrough) buffer.removeFirst() }
         return lock.withLock { buffer.isNotEmpty() }
     }
+
+    /**
+     * The statuses the runner events route answers when the events themselves are refused: an invalid event (400), a
+     * body over the size limit (413) or an unprocessable body (422). Retrying the same batch unchanged cannot succeed.
+     * Any other status is retried with a pause, so an unrelated refusal never consumes transcript events.
+     */
+    private fun refusesContent(status: Int) = status == 400 || status == 413 || status == 422
+
+    /**
+     * Narrows a permanently rejected batch: halves the next batches until one event is left, then replaces that
+     * event, in place so sequence numbers stay consecutive, with a small marker. One bad event never blocks the transcript.
+     * A refused marker means the refusal is not about the content: the host backs off like any other error instead of
+     * replacing event after event or retrying without pause.
+     */
+    private suspend fun isolateRejected(batch: List<RunnerEventView>): Boolean {
+        if (batch.size > 1) { batchLimit = batch.size / 2; return true }
+        val rejected = batch.single()
+        if (rejected.isRejectionMarker()) { sleep(UPLOAD_MILLIS * 4); return false }
+        log("The server refused one transcript event; replacing it with a marker.")
+        lock.withLock {
+            val index = buffer.indexOfFirst { it.sequence == rejected.sequence }
+            if (index >= 0) buffer[index] = RunnerEventView(rejected.sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", REJECTED_CODE); put("type", rejected.type) })
+        }
+        return true
+    }
+
+    private fun RunnerEventView.isRejectionMarker() = type == CloudEventTypes.ERROR && (data["code"] as? JsonPrimitive)?.contentOrNull == REJECTED_CODE
 
     private suspend fun flush(deadline: Long): Boolean {
         while (now() < deadline && !fenced) {
@@ -311,6 +345,7 @@ internal class AgentHost(
         const val UPLOAD_MILLIS = 500L
         const val MAX_BATCH = 200
         const val MAX_BATCH_BYTES = 1_000_000
+        private const val REJECTED_CODE = "transcript_event_rejected"
         const val MAX_BUFFERED = 5_000
         const val MAX_HANDLED = 1_000
         const val DEFAULT_DRAIN_MILLIS = 10 * 60_000L

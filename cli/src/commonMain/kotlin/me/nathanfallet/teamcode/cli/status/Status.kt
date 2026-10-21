@@ -3,6 +3,10 @@ package me.nathanfallet.teamcode.cli.status
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.io.IOException
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.formatUnits
@@ -15,11 +19,17 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
- * Everything `teamcode status` shows, read from the routes the dashboard uses. [capacity] and [accounts] are null when this
- * server does not serve them (capacity disabled, older server); [pacing] is null when no pacing advice applies.
+ * Everything `teamcode status` shows, read from the routes the dashboard uses. [capacity] and [accounts] are null when they
+ * could not be shown, and [unavailable] then says why for that section (`capacity`, `pacing`, `accounts`): `not_served`
+ * (`404` or `403`: an older server, capacity disabled or a key without the scope), `unexpected_response` (a body of another
+ * shape) or `read_failed` (any other HTTP error, a timeout or a network failure). [pacing] is also null when no pacing
+ * advice applies, without an [unavailable] entry.
  */
 @Serializable
-data class StatusReport(val gateway: GatewayStatus, val capacity: CapacityView? = null, val pacing: DirectiveView? = null, val accounts: List<PoolAccountStatusView>? = null)
+data class StatusReport(
+    val gateway: GatewayStatus, val capacity: CapacityView? = null, val pacing: DirectiveView? = null,
+    val accounts: List<PoolAccountStatusView>? = null, val unavailable: Map<String, String> = emptyMap(),
+)
 
 class Status : SuspendingCliktCommand(name = "status") {
     private val json by option("--json", help = "Print the report as JSON.").flag()
@@ -33,19 +43,31 @@ class Status : SuspendingCliktCommand(name = "status") {
     }
 }
 
-internal suspend fun readStatusReport(client: TeamCodeClient): StatusReport {
+internal suspend fun readStatusReport(client: TeamCodeClient): StatusReport = coroutineScope {
     val gateway = client.status()
-    // Optional parts: a server without capacity routes, a key without guidance scope or a server older than the account
-    // route still gets the rest, as `status` did before it showed quotas.
-    val capacity = optional { client.capacity() }
-    // Pacing and accounts are extras: any server refusal or failure leaves them out rather than hiding the allowance.
-    val pacing = optional(everyStatus = true) { client.directive().directive }
-    val accounts = optional(everyStatus = true) { client.poolAccounts() }
-    return StatusReport(gateway, capacity, pacing, accounts)
+    // Only the gateway line is required, as before `status` showed quotas. The other sections are read together and any
+    // failure leaves its section out with a reason, so an older server, a narrow key or a failing route never fails `status`.
+    val capacity = async { section { client.capacity() } }
+    val pacing = async { section { client.directive().directive } }
+    val accounts = async { section { client.poolAccounts() } }
+    val unavailable = listOf("capacity" to capacity.await(), "pacing" to pacing.await(), "accounts" to accounts.await())
+        .mapNotNull { (name, read) -> read.reason?.let { name to it } }.toMap()
+    StatusReport(gateway, capacity.await().value, pacing.await().value, accounts.await().value, unavailable)
 }
 
-private suspend fun <T> optional(everyStatus: Boolean = false, read: suspend () -> T): T? =
-    try { read() } catch (error: TeamCodeException) { if (everyStatus || error.statusCode == 403 || error.statusCode == 404) null else throw error }
+private class Section<T>(val value: T?, val reason: String?)
+
+private suspend fun <T> section(read: suspend () -> T): Section<T> = try { Section(read(), null) }
+    catch (error: CancellationException) { throw error }
+    catch (error: TeamCodeException) { Section(null, if (error.statusCode == 403 || error.statusCode == 404) "not_served" else "read_failed") }
+    catch (_: IOException) { Section(null, "read_failed") }
+    catch (_: Exception) { Section(null, "unexpected_response") }
+
+private fun unavailable(reason: String?) = when (reason) {
+    "unexpected_response" -> "unavailable (unexpected response from the server)."
+    "read_failed" -> "unavailable (the read failed; try again)."
+    else -> "unavailable from this server or credential."
+}
 
 /** Plain text, no color: the gateway line, one block for the caller's own allowance, one table for the accounts. */
 internal fun renderStatus(report: StatusReport, now: Long): String = buildString {
@@ -53,11 +75,11 @@ internal fun renderStatus(report: StatusReport, now: Long): String = buildString
     appendLine("Mode: ${g.mode} | Active: ${g.activeRequests} | Waiting: ${g.queuedRequests} | Completed: ${g.completedRequests}")
     appendLine()
     val c = report.capacity
-    if (c == null) appendLine("Your quota: not available to this credential or server.") else quota(c, report.pacing, now)
+    if (c == null) appendLine("Your quota: ${unavailable(report.unavailable["capacity"])}") else quota(c, report.pacing, report.unavailable["pacing"], now)
     appendLine()
     val accounts = report.accounts
     when {
-        accounts == null -> append("Pool accounts: not available to this credential or server.")
+        accounts == null -> append("Pool accounts: ${unavailable(report.unavailable["accounts"])}")
         accounts.isEmpty() -> append("Pool accounts: none in your pools.")
         else -> {
             appendLine("Pool accounts")
@@ -72,7 +94,7 @@ internal fun renderStatus(report: StatusReport, now: Long): String = buildString
     }
 }.trimEnd()
 
-private fun StringBuilder.quota(c: CapacityView, pacing: DirectiveView?, now: Long) {
+private fun StringBuilder.quota(c: CapacityView, pacing: DirectiveView?, pacingUnavailable: String?, now: Long) {
     val reserved = c.reservedUnits.coerceIn(0, c.chargedAndReservedUnits)
     val used = c.chargedAndReservedUnits - reserved
     val remaining = (c.dailyUnits - c.chargedAndReservedUnits).coerceAtLeast(0)
@@ -92,7 +114,7 @@ private fun StringBuilder.quota(c: CapacityView, pacing: DirectiveView?, now: Lo
         val slots = if (group.maxConcurrent == 0) "no concurrency cap" else "${group.activeRequests} / ${group.maxConcurrent} active"
         appendLine("  Group       ${clean(group.name)}: $budget, $slots${if (group.paused) ", admission paused" else ""}")
     }
-    appendLine("  Pacing      " + if (pacing == null) "none" else
+    appendLine("  Pacing      " + if (pacingUnavailable != null) unavailable(pacingUnavailable).removeSuffix(".") else if (pacing == null) "none" else
         "${pacing.pace.lowercase()}: at most ${pacing.maxConcurrent} concurrent, ${pacing.minIntervalMillis} ms between requests, until ${at(pacing.expiresAtMillis, now)}")
 }
 

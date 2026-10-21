@@ -166,7 +166,9 @@ try:
         assert json.loads(original_config)['accessToken'] == team_token
         command('configure', '--server', origin, stdin=team_token + '\n')
         assert config.read_bytes() == original_config, 'Atomic replacement changed the saved values'
-        assert 'Mode: fixture' in command('status').stdout
+        # The fixture answers the quota and account routes with an unrelated body: status must still succeed without them.
+        status = command('status').stdout
+        assert 'Mode: fixture' in status and 'Your quota: unavailable' in status and 'Pool accounts: unavailable' in status, status
         acl_script = r'''
         $ErrorActionPreference = 'Stop'
         $acl = Get-Acl -LiteralPath $env:TEAMCODE_ACL_PATH

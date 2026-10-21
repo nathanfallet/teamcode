@@ -37,15 +37,25 @@ object CloudConversationRules {
         Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
         Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     )
-    private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+[A-Za-z0-9._~+/=-]{12,}")
+    private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+([A-Za-z0-9._~+/=-]{12,})")
     /** A name ending in a secret word (`GITHUB_TOKEN`, `"api_key"`, not `max_tokens`) assigned a value of 8 characters or more. */
     private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIALS?))(\"?\\s*[=:]\\s*)(\"[^\"]{8,}\"|'[^']{8,}'|[^\\s\"',;]{8,})")
     private val urlCredentials = Regex("(?i)(\\b[a-z][a-z0-9+.-]*://)[^\\s/@:]+:[^\\s/@]+@")
 
+    /**
+     * A plain word (`configuration`, `Authentication.`) after `token`, `basic` or `bearer` is prose. Anything else is
+     * treated as a credential: a digit, a symbol, inner capitals, or letters too long for a word (a passphrase).
+     */
+    private fun looksLikeCredential(value: String): Boolean {
+        val word = value.trimEnd('.')
+        return word.length > MAX_WORD || word.any { !it.isLetter() } || word.drop(1).any { it.isUpperCase() }
+    }
+    private const val MAX_WORD = 16
+
     fun mask(text: String): String {
         var masked = text
         for (pattern in secrets) masked = pattern.replace(masked, MASK)
-        masked = authorization.replace(masked) { "${it.groupValues[1]} $MASK" }
+        masked = authorization.replace(masked) { if (looksLikeCredential(it.groupValues[2])) "${it.groupValues[1]} $MASK" else it.value }
         masked = assignment.replace(masked) { "${it.groupValues[1]}${it.groupValues[2]}$MASK" }
         masked = urlCredentials.replace(masked) { "${it.groupValues[1]}$MASK@" }
         return masked
