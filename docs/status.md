@@ -1,5 +1,9 @@
 # Implementation status
 
+## Status fallback for 0.3.1 (2026-10-21)
+
+The 0.3.1 release run failed on the Windows smoke: `teamcode status` aborted because its fixture answers every unknown GET, including the new `GET /api/v1/capacity`, with a generic 200 body, and only `404`/`403` were tolerated, not a decoding failure. Only the gateway line is now required: the quota, pacing and account reads run together, and each failure leaves its section out with a reason (`not_served`, `unexpected_response`, `read_failed`) shown as an `unavailable` line and in the JSON `unavailable` map; cancellation still propagates. Evidence: the macOS ARM64 release binary from `main` exits 1 against a fixture with a generic body or invalid JSON (404 was already handled) and succeeds with the fix; the CLI JVM tests and the native `smoke-native`, `smoke-team`, `smoke-run` and `smoke-service` scripts pass; `smoke-windows` now asserts the fallback lines.
+
 ## Quota status in the CLI (2026-10-21)
 
 `teamcode status` now adds the caller's own allowance (allocated, used, reserved, remaining, reset, groups, pacing) and the subscription accounts they can be routed to, with 5-hour, weekly and model windows and whether each can serve now; `--json` prints the raw report. `GET /api/v1/pools/accounts` (`usage:read`) serves the accounts: interactive administrators see every account as "Name (email)", members and every service key see only their own pool and opted-in overflow reserves as neutral labels. Usability reuses admission's classification (`AccountUnavailability.of`, shared with the pool refusal of #34) and the team's quota pressure threshold of #39. Credit counts on every CLI and dashboard surface use one shared K/M/B formatter (`formatUnits`). See [capacity](capacity.md#teamcode-status).
@@ -8,7 +12,6 @@ The dashboard names accounts with the email on a muted second line where a table
 
 Local evidence after the rebase onto #33: api 9, client 13, domain 95, infrastructure 134 (MySQL, including the new pool-account persistence test), presentation 55, app 8 and CLI 133 JVM tests pass, as do **114 actual macOS ARM64 native CLI tests**; the native debug binary prints the new `status --help`.
 
-Release fix: the 0.3.1 Windows smoke failed because `teamcode status` aborted when the quota route answered with another body (its fixture serves a generic payload on unknown routes, as an older server could): only `404`/`403` were tolerated, a decoding failure was not. Every section after the gateway line is now optional for any failure; the command prints `Your quota: unavailable…` and `Pool accounts: unavailable…` instead. Evidence: the macOS ARM64 release binary from `main` exits 1 against a fixture with a generic body or invalid JSON and succeeds with the fix; CLI JVM tests (138) and the native `smoke-native`, `smoke-team`, `smoke-run` and `smoke-service` scripts pass; `smoke-windows` now asserts the fallback lines.
 
 ## 0.1.0 published
 
