@@ -83,6 +83,21 @@ fun main() {
             }
         }
     }
+    val apiPrices = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlApiPriceStore(it) }
+    val poolSizing = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlPoolSizing(it) }
+    if (poolSizing != null) {
+        // The automatic home pool size (ADR 0002): one owner across replicas, every ten minutes.
+        val work = SqlScheduledWork(database!!)
+        workers.launch {
+            while (isActive) {
+                try { work.runDue("pool-size", intervalMillis = me.nathanfallet.teamcode.domain.capacity.AutomaticPoolSize.REFRESH_MILLIS, timeoutMillis = 120_000) { poolSizing.refresh() } }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode pool sizing deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode pool sizing is temporarily unavailable.") }
+                delay(30_000)
+            }
+        }
+    }
     if (database != null) {
         // Runs go silent without any write: report them (once per silence) and trim the feed past its retention.
         val work = SqlScheduledWork(database)
@@ -147,7 +162,8 @@ fun main() {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
-            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers) }.start(wait = true)
+            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers,
+            apiPrices = apiPrices, poolSizing = poolSizing) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); database?.close() }
 }
 

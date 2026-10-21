@@ -18,6 +18,9 @@ object PoolBudgets : Table("pool_budgets") {
     val poolId = varchar("pool_id", 36)
     val dailyUnits = long("daily_units")
     val sharedOverflow = bool("shared_overflow").default(false)
+    /** The automatic home pool size (ADR 0002), written by the scheduled job; [dailyUnits] stays the administrator's manual value. */
+    val autoDailyUnits = long("auto_daily_units").nullable()
+    val autoComputedAt = long("auto_computed_at").nullable()
     override val primaryKey = PrimaryKey(teamId, poolId)
 }
 object Reservations : Table("reservations") {
@@ -126,4 +129,17 @@ object AccountTokenUsageTable : Table("account_token_usage") {
     val cacheReadTokens = long("cache_read_tokens").default(0)
     val outputTokens = long("output_tokens").default(0)
     override val primaryKey = PrimaryKey(accountId, hourNumber, provider, model)
+}
+
+/** A team's dated API price table, in micro-dollars per million tokens (ADR 0002). */
+object ApiPricesTable : Table("api_prices") {
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
+    val provider = varchar("provider", 32)
+    val model = varchar("model", 128)
+    val effectiveFromDay = long("effective_from_day")
+    val inputMicros = long("input_micros")
+    val cacheWriteMicros = long("cache_write_micros")
+    val cacheReadMicros = long("cache_read_micros")
+    val outputMicros = long("output_micros")
+    override val primaryKey = PrimaryKey(teamId, provider, model, effectiveFromDay)
 }

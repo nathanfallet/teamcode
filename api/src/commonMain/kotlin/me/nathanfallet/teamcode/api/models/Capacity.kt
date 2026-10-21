@@ -38,7 +38,51 @@ data class AccountWindowView(val window: String, val utilization: Double, val ob
 data class TokenUsageRowView(
     val day: String, val memberId: String, val username: String, val runId: String? = null, val provider: String, val model: String,
     val requests: Long, val unmeteredRequests: Long, val inputTokens: Long, val cacheCreationTokens: Long, val cacheReadTokens: Long, val outputTokens: Long,
+    /** The four sums priced with the team's API price table for that day, in micro-dollars; null when no price covers the model. */
+    val apiEquivalentMicros: Long? = null,
 )
 
 @Serializable
 data class TokenUsagePageView(val rows: List<TokenUsageRowView>, val nextAfter: String? = null)
+
+/**
+ * One row of the team's API price table (ADR 0002). Prices are **micro-dollars per million tokens**: `3000000` is $3 per
+ * million tokens. [model] is an exact lowercase model identifier or a family prefix; [effectiveFrom] is a UTC date
+ * (`YYYY-MM-DD`) from which the row applies, until a later row for the same model.
+ */
+@Serializable
+data class ApiPriceView(
+    val provider: String, val model: String, val effectiveFrom: String,
+    val inputMicros: Long, val cacheWriteMicros: Long, val cacheReadMicros: Long, val outputMicros: Long,
+)
+
+/** The whole table: `PUT /api/v1/policy/api-prices` replaces it. */
+@Serializable
+data class ApiPriceTableView(val prices: List<ApiPriceView>)
+
+/** A window's learned full capacity in API-equivalent micro-dollars; null below three samples. */
+@Serializable
+data class WindowCapacityView(val window: String, val fullWindowApiMicros: Long? = null, val samples: Int)
+
+/**
+ * One home pool account in the estimate. [status]: `counted`, `unavailable` (disabled, pending, reconnect required or
+ * cooling down), `no_fresh_observation` or `no_estimate`. [binding] is the window that gives the smaller daily figure.
+ */
+@Serializable
+data class PoolSizeAccountView(
+    val accountId: String, val name: String? = null, val status: String, val dailyApiMicros: Long, val binding: String? = null,
+    val windows: List<WindowCapacityView> = emptyList(),
+)
+
+/**
+ * The automatic home pool size. [effectiveDailyUnits] is what admission uses now ([source] `automatic` or `manual`).
+ * [estimatedDailyUnits] is the current estimate before smoothing, null with [reason] (`no_accounts`, `no_estimate`,
+ * `no_priced_usage`); [automaticDailyUnits] the stored, smoothed value written every ten minutes.
+ */
+@Serializable
+data class PoolSizeView(
+    val enabled: Boolean, val manualDailyUnits: Long, val automaticDailyUnits: Long? = null, val automaticComputedAtMillis: Long? = null,
+    val effectiveDailyUnits: Long, val source: String, val estimatedDailyApiMicros: Long, val estimatedDailyUnits: Long? = null,
+    val reason: String? = null, val creditsPerApiMicro: Double? = null, val unpricedModels: List<String> = emptyList(),
+    val accounts: List<PoolSizeAccountView> = emptyList(),
+)

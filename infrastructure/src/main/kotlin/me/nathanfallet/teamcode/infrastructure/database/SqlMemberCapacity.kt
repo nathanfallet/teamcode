@@ -20,8 +20,11 @@ internal fun readMemberCapacity(c: JdbcTransaction, policy: MemberPolicy, now: L
     val totalWeight = (Members leftJoin MemberPolicies).select(weight).where {
         (Members.teamId eq teamId) and (Members.disabled eq false) and (MemberPolicies.poolId eq policy.poolId)
     }.single()[weight]?.toLong() ?: 0L
-    val budget = PoolBudgets.select(PoolBudgets.dailyUnits).where { (PoolBudgets.teamId eq teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) }
-        .singleOrNull()?.get(PoolBudgets.dailyUnits) ?: 1_000_000L
+    val pool = PoolBudgets.select(PoolBudgets.dailyUnits, PoolBudgets.autoDailyUnits, PoolBudgets.autoComputedAt)
+        .where { (PoolBudgets.teamId eq teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) }.singleOrNull()
+    // The automatic home pool size moves the pool total only; the weighted split below is the same either way.
+    val budget = AutomaticPoolSize.effectiveBudget(policy.poolId.orEmpty(), pool?.get(PoolBudgets.dailyUnits) ?: DEFAULT_POOL_DAILY_UNITS,
+        pool?.get(PoolBudgets.autoDailyUnits), pool?.get(PoolBudgets.autoComputedAt), readPacingSettings(teamId).autoPoolSize, now)
     val share = if (totalWeight == 0L) 0 else budget * policy.weight / totalWeight
     val allowance = if (policy.dailyUnits == 0L) share else minOf(share, policy.dailyUnits)
     val temporary = readActiveBudgetOverride(teamId, policy, now)

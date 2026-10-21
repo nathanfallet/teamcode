@@ -156,6 +156,31 @@ private fun ApiCatalog.allowanceOperations() {
             conflict("A reserve with primary members cannot be shared, or 16 overflow pools exist (`overflow_primary_pool`, `overflow_pool_limit`).")
         }
     }
+    get("/api/v1/pools/size") {
+        operationId = "getPoolSize"; tag(ApiTags.CAPACITY)
+        summary = "The automatic home pool size"
+        description = "Whether the home pool is sized from the subscriptions (`autoPoolSize` on `PUT /api/v1/policy/pacing`), " +
+            "the manual and automatic budgets, the one admission uses now, and the estimate behind it: each home pool account's " +
+            "daily capacity in API-equivalent micro-dollars and its learned windows. Administrators and `team:read` keys only."
+        responses { ok<PoolSizeView>("The sizing.") }
+    }
+    get("/api/v1/policy/api-prices") {
+        operationId = "getApiPrices"; tag(ApiTags.CAPACITY)
+        summary = "The team's API price table"
+        description = "Dated prices per provider and model (or family prefix), in micro-dollars per million tokens, used for the " +
+            "API-equivalent of the token ledger and the automatic pool size. Members and `usage:read` keys may read it."
+        responses { ok<ApiPriceTableView>("The table.") }
+    }
+    put("/api/v1/policy/api-prices") {
+        operationId = "saveApiPrices"; tag(ApiTags.CAPACITY)
+        summary = "Replace the API price table"
+        description = "Replaces every row. Keep earlier rows so past days keep their price. Interactive administrators only; audited."
+        body<ApiPriceTableView>("The whole table.")
+        responses {
+            ok<ApiPriceTableView>("The saved table.")
+            badRequest("An invalid provider, model, date or price, a duplicate row or more than 200 rows (`invalid_api_price`).")
+        }
+    }
     get("/api/v1/quotas") {
         operationId = "listQuotas"; tag(ApiTags.CAPACITY)
         summary = "Provider quota windows"
@@ -471,7 +496,7 @@ private fun ApiCatalog.guidanceOperations() {
     put("/api/v1/policy/pacing") {
         operationId = "savePacingSettings"; tag(ApiTags.GUIDANCE)
         summary = "Change the pacing settings"
-        description = "An omitted `quotaPressurePercent` keeps the stored value. Hard quotas and limits stay enforced in " +
+        description = "An omitted `quotaPressurePercent` or `autoPoolSize` keeps the stored value. Hard quotas and limits stay enforced in " +
             "observation mode. Administrators only."
         body<PacingSettingsView>("The settings.")
         responses {

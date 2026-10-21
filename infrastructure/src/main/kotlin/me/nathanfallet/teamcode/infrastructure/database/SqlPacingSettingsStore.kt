@@ -19,7 +19,13 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
     /** The omitted threshold is read under the team lock, so concurrent administrators cannot overwrite each other. */
     override suspend fun update(actor: Principal, observationOnly: Boolean, quotaPressurePercent: Int?): PacingSettings = database.query {
         actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
-        write(actor, PacingSettings(observationOnly, quotaPressurePercent ?: readPacingSettings(actor.teamId).quotaPressurePercent))
+        val current = readPacingSettings(actor.teamId)
+        write(actor, current.copy(observationOnly = observationOnly, quotaPressurePercent = quotaPressurePercent ?: current.quotaPressurePercent))
+    }
+
+    override suspend fun setAutoPoolSize(actor: Principal, enabled: Boolean): PacingSettings = database.query {
+        actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
+        write(actor, readPacingSettings(actor.teamId).copy(autoPoolSize = enabled))
     }
 
     private fun JdbcTransaction.write(actor: Principal, settings: PacingSettings): PacingSettings {
@@ -29,11 +35,14 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
             it[teamId] = actor.teamId
             it[observationOnly] = settings.observationOnly
             it[quotaPressurePercent] = settings.quotaPressurePercent
+            it[autoPoolSize] = settings.autoPoolSize
         }
         if (settings.observationOnly != previous.observationOnly) audit(actor.teamId, actor.member.id,
             if (settings.observationOnly) "pacing.observation_enabled" else "pacing.enforcement_enabled", actor.teamId)
         if (settings.quotaPressurePercent != previous.quotaPressurePercent) audit(actor.teamId, actor.member.id,
             "pacing.quota_pressure_changed", "${actor.teamId}:${previous.quotaPressurePercent}->${settings.quotaPressurePercent}")
+        if (settings.autoPoolSize != previous.autoPoolSize) audit(actor.teamId, actor.member.id,
+            if (settings.autoPoolSize) "pool_size.automatic_enabled" else "pool_size.manual_enabled", actor.teamId)
         return settings
     }
 }
@@ -43,4 +52,5 @@ internal fun readPacingSettings(teamId: String): PacingSettings = PacingSettings
     .where { PacingSettingsTable.teamId eq teamId }.singleOrNull()
     ?.let { PacingSettings(it[PacingSettingsTable.observationOnly],
         // A stored value outside the allowed range (manual edit) must not fail admission; clamp it.
-        it[PacingSettingsTable.quotaPressurePercent].coerceIn(MIN_QUOTA_PRESSURE_PERCENT, MAX_QUOTA_PRESSURE_PERCENT)) } ?: PacingSettings()
+        it[PacingSettingsTable.quotaPressurePercent].coerceIn(MIN_QUOTA_PRESSURE_PERCENT, MAX_QUOTA_PRESSURE_PERCENT),
+        it[PacingSettingsTable.autoPoolSize]) } ?: PacingSettings()

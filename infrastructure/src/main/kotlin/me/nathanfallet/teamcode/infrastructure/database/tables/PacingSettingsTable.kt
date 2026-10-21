@@ -8,5 +8,7 @@ object PacingSettingsTable : Table("pacing_settings") {
     val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
     val observationOnly = bool("observation_only").default(false)
     val quotaPressurePercent = integer("quota_pressure_percent").default(95)
+    /** Off by default: the hand-typed home pool budget applies. */
+    val autoPoolSize = bool("auto_pool_size").default(false)
     override val primaryKey = PrimaryKey(teamId)
 }

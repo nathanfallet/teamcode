@@ -169,7 +169,10 @@ object AutomaticPoolSize {
      * otherwise. Named pools and shared overflow reserves stay manual. The member split is unchanged (pool × weight / total).
      */
     fun effectiveBudget(poolId: String, manual: Long, automatic: Long?, computedAtMillis: Long?, enabled: Boolean, now: Long): Long =
-        if (enabled && poolId.isEmpty() && automatic != null && computedAtMillis != null && now - computedAtMillis in 0..MAX_AGE_MILLIS) automatic else manual
+        if (usesAutomatic(poolId, automatic, computedAtMillis, enabled, now)) automatic!! else manual
+
+    fun usesAutomatic(poolId: String, automatic: Long?, computedAtMillis: Long?, enabled: Boolean, now: Long): Boolean =
+        enabled && poolId.isEmpty() && automatic != null && computedAtMillis != null && now - computedAtMillis in 0..MAX_AGE_MILLIS
 
     /** At most ±[MAX_STEP_PER_HOUR] of [previous] per elapsed hour; nothing scales from zero, so a pool emptied by resets grows back. */
     fun smooth(previous: Long?, previousAtMillis: Long?, target: Long, now: Long): Long {
@@ -184,7 +187,7 @@ object AutomaticPoolSize {
 /** What the dashboard and `GET /api/v1/pools/size` show: the setting, both values and the estimate behind the automatic one. */
 data class PoolSizeReport(
     val enabled: Boolean, val manualDailyUnits: Long, val automaticDailyUnits: Long?, val automaticComputedAtMillis: Long?,
-    val effectiveDailyUnits: Long, val estimate: PoolSizeEstimate, val creditsPerMicro: Double?, val unpricedModels: List<String>,
+    val effectiveDailyUnits: Long, val usesAutomatic: Boolean, val estimate: PoolSizeEstimate, val creditsPerMicro: Double?, val unpricedModels: List<String>,
     val capacities: Map<String, List<WindowCapacity>>,
 )
 

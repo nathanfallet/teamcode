@@ -13,10 +13,12 @@ data class MeteredUsage(val provider: String, val model: String, val tokens: Tok
  * Raw provider tokens of one member, run, provider and model on one UTC day. Token counts are the provider's own,
  * never converted: [input] excludes cached input, [cacheCreation] and [cacheRead] are the cache write and read
  * input, [output] includes reasoning. [unmeteredRequests] settled without usage and are absent from the token sums.
+ * [apiEquivalentMicros] prices the four sums with the team's [ApiPriceTable] for that day, null when no row covers the model.
  */
 data class TokenUsageRow(
     val dayNumber: Long, val memberId: String, val username: String, val runId: String?, val provider: String, val model: String,
     val requests: Long, val unmeteredRequests: Long, val input: Long, val cacheCreation: Long, val cacheRead: Long, val output: Long,
+    val apiEquivalentMicros: Long? = null,
 )
 data class TokenUsagePage(val rows: List<TokenUsageRow>, val nextAfter: String?)
 

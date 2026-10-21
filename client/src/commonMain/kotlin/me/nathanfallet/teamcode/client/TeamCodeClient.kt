@@ -110,6 +110,11 @@ class TeamCodeClient(
     }
     suspend fun poolBudgets(): List<PoolBudgetView> = request("/api/v1/pools/budgets", HttpMethod.Get)
     suspend fun savePoolBudget(input: PoolBudgetView): PoolBudgetView = request("/api/v1/pools/budgets", HttpMethod.Put, input)
+    /** The automatic home pool size and the estimate behind it (`team:read`); turn it on with [savePacingSettings]. */
+    suspend fun poolSize(): PoolSizeView = request("/api/v1/pools/size", HttpMethod.Get)
+    /** The team's dated API price table (`usage:read`); saving replaces the whole table and needs an interactive administrator. */
+    suspend fun apiPrices(): ApiPriceTableView = request("/api/v1/policy/api-prices", HttpMethod.Get)
+    suspend fun saveApiPrices(table: ApiPriceTableView): ApiPriceTableView = request("/api/v1/policy/api-prices", HttpMethod.Put, table)
     /** Controller configuration is managed with an interactive administrator login. */
     suspend fun pacingSettings(): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Get)
     suspend fun savePacingSettings(settings: PacingSettingsView): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Put, settings)

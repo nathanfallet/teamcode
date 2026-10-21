@@ -14,7 +14,7 @@ private fun MemberCapacity.view() = CapacityView(policy.memberId, dailyAllowance
 private fun PoolAccountStatus.view() = PoolAccountStatusView(name?.let { accountLabel(it, email) } ?: label, provider, state, disabled, usable,
     unavailable?.name?.lowercase(), cooldownUntilMillis, windows.map { AccountWindowView(it.window, it.utilization, it.observedAtMillis, it.resetsAtMillis) },
     poolId, accountId, name, email)
-internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, origin: String, budgetOverrides: Boolean = false, groups: GroupService? = null, accounts: AccountManagement? = null) {
+internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, origin: String, budgetOverrides: Boolean = false, groups: GroupService? = null, accounts: AccountManagement? = null, poolSizePage: Boolean = false) {
     get("/api/v1/capacity") { call.respond(admission.capacity(call.principal).view()) }
     get("/api/v1/members/{id}/capacity") { call.respond(admission.capacity(call.principal, call.parameters["id"]!!).view()) }
     patch("/api/v1/members/{id}/policy") {
@@ -44,14 +44,18 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
             val forms = (budgets.map { it to true } + (PoolBudget("", 1_000_000) to false)).joinToString("") { (budget, saved) ->
                 val inPool = byPool[budget.poolId].orEmpty()
                 val weight = inPool.firstOrNull()?.second?.poolTotalWeight ?: 0
+                // Admission's figure: the automatic home pool size when it applies, the manual budget otherwise.
+                val effective = inPool.firstOrNull()?.second?.poolDailyUnits ?: budget.dailyUnits
+                val automatic = if (saved && effective != budget.dailyUnits) " · today ${formatUnits(effective)} credits from the automatic pool size" else ""
                 val effect = when {
                     !saved -> "New pool: name it and give it a daily budget"
                     inPool.isEmpty() -> "No primary members"
-                    else -> "${inPool.size} member${if (inPool.size == 1) "" else "s"}, total weight $weight: <strong>${formatUnits(if (weight == 0L) 0 else budget.dailyUnits / weight)}</strong> credits / day per weight point"
+                    else -> "${inPool.size} member${if (inPool.size == 1) "" else "s"}, total weight $weight: <strong>${formatUnits(if (weight == 0L) 0 else effective / weight)}</strong> credits / day per weight point$automatic"
                 }
                 """<form method="post" action="/dashboard/capacity/pool">${csrf(actor)}<p class="card-title">${if (saved) escape(poolName(budget.poolId.ifEmpty { null })) else "Add or update a pool"}</p><label>Pool (empty = shared home pool) <input name="pool" maxlength="36" value="${escape(budget.poolId)}">${hint("Members and accounts with this pool name share its budget and accounts.")}</label><label>Total daily credits <input type="number" name="daily" min="1" max="100000000000" value="${budget.dailyUnits}" required>${hint("${formatUnits(budget.dailyUnits)} credits / day · $effect")}</label><label><input type="checkbox" name="overflow" ${if (budget.sharedOverflow) "checked" else ""}>Shared overflow reserve (named pool with no primary members)</label><button>Save pool budget</button></form>"""
             }
-            "<h2>Pool budgets</h2><div class=\"pool-forms\">$forms</div>"
+            val sizing = if (poolSizePage) "<p><a href=\"/dashboard/capacity/pool-size\">Automatic shared pool size and API prices</a></p>" else ""
+            "<h2>Pool budgets</h2>$sizing<div class=\"pool-forms\">$forms</div>"
         } else ""
         val groupList = groups?.list(actor)
         val groupSection = if (groupList == null) "" else "<h2>Groups</h2>" + (if (groupList.isEmpty()) empty("No group yet", if (admin) "<p><a href=\"/dashboard/groups\">Create a group</a> to cap a set of members together.</p>" else "") else

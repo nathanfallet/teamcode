@@ -11,7 +11,8 @@ internal fun Route.pacingSettingsRoutes(settings: PacingSettingsStore, origin: S
     get("/api/v1/policy/pacing") { call.respond(settings.get(call.principal).view()) }
     put("/api/v1/policy/pacing") {
         val input = call.jsonBody<PacingSettingsView>()
-        call.respond(settings.update(call.principal, input.observationOnly, input.quotaPressurePercent).view())
+        val updated = settings.update(call.principal, input.observationOnly, input.quotaPressurePercent)
+        call.respond((input.autoPoolSize?.takeIf { it != updated.autoPoolSize }?.let { settings.setAutoPoolSize(call.principal, it) } ?: updated).view())
     }
     post("/dashboard/agent-guidance/pacing") {
         val input = call.form(origin.trimEnd('/'))
@@ -22,4 +23,4 @@ internal fun Route.pacingSettingsRoutes(settings: PacingSettingsStore, origin: S
     }
 }
 
-internal fun PacingSettings.view() = PacingSettingsView(observationOnly, quotaPressurePercent)
+internal fun PacingSettings.view() = PacingSettingsView(observationOnly, quotaPressurePercent, autoPoolSize)

@@ -9,7 +9,7 @@ import kotlin.math.roundToLong
  * One row of a team's API price table (ADR 0002): what the provider's pay-as-you-go API would charge for [model] from
  * [effectiveFromDay] (a UTC day number), in **micro-dollars per million tokens** for each token type. `3_000_000` is
  * $3 per million tokens, so a token at that price is worth 3 micro-dollars. [model] is an exact model identifier or a
- * family prefix (`claude-sonnet-4`); a new price is a new row, so past days keep the price that applied to them.
+ * lowercase family prefix (`claude-sonnet-4`); a new price is a new row, so past days keep the price that applied to them.
  */
 data class ApiPrice(
     val provider: String, val model: String, val effectiveFromDay: Long,
@@ -24,9 +24,10 @@ class ApiPriceTable(private val prices: List<ApiPrice>) {
      * The row that prices [model] on [day]: among the rows of [provider] effective on or before [day] whose model is
      * [model] or a prefix of it, an exact model wins over the longest prefix, and then the most recent row wins.
      */
-    fun priceFor(provider: String, model: String, day: Long): ApiPrice? = prices
-        .filter { it.provider == provider && it.effectiveFromDay <= day && model.startsWith(it.model) }
-        .maxWithOrNull(compareBy<ApiPrice>({ it.model == model }, { it.model.length }, { it.effectiveFromDay }))
+    fun priceFor(provider: String, model: String, day: Long): ApiPrice? = model.lowercase().let { served ->
+        prices.filter { it.provider == provider && it.effectiveFromDay <= day && served.startsWith(it.model) }
+            .maxWithOrNull(compareBy<ApiPrice>({ it.model == served }, { it.model.length }, { it.effectiveFromDay }))
+    }
 
     /** The API-equivalent of [tokens] in micro-dollars, null when no row prices the model on that day. */
     fun microsOf(provider: String, model: String, day: Long, tokens: TokenUsage): Long? = priceFor(provider, model, day)?.let { price ->
@@ -43,14 +44,14 @@ object ApiPrices {
     /** $1,000,000 per million tokens: far above any list price, low enough that a day of tokens cannot overflow. */
     const val MAX_PRICE_MICROS = 1_000_000_000_000L
     private val PROVIDER = Regex("[a-z0-9_-]{1,32}")
-    private val MODEL = Regex("[a-zA-Z0-9_.:/-]{1,128}")
+    private val MODEL = Regex("[a-z0-9_.:/-]{1,128}")
 
     fun validate(prices: List<ApiPrice>): List<ApiPrice> {
         fun refuse(message: String): Nothing = throw TeamFailure("invalid_api_price", 400, message)
         if (prices.size > MAX_ROWS) refuse("At most $MAX_ROWS price rows.")
         for (price in prices) {
             if (!PROVIDER.matches(price.provider)) refuse("Use a provider identifier such as anthropic or codex.")
-            if (!MODEL.matches(price.model)) refuse("Use a model identifier or family prefix of letters, digits, '.', '-', '_', ':' or '/'.")
+            if (!MODEL.matches(price.model)) refuse("Use a lowercase model identifier or family prefix of letters, digits, '.', '-', '_', ':' or '/'.")
             if (price.effectiveFromDay !in 0..2_932_896) refuse("Use an effective date written YYYY-MM-DD.")
             if (listOf(price.inputMicros, price.cacheWriteMicros, price.cacheReadMicros, price.outputMicros).any { it !in 0..MAX_PRICE_MICROS })
                 refuse("Prices are micro-dollars per million tokens, from 0 to $MAX_PRICE_MICROS.")

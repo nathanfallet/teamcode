@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import me.nathanfallet.teamcode.domain.capacity.*
+import me.nathanfallet.teamcode.domain.routing.TokenUsage
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
@@ -62,6 +63,7 @@ internal fun JdbcTransaction.readTokenUsage(actor: Principal, query: TokenUsageQ
         }
         else -> actor.member.id
     }
+    val prices = ApiPriceTable(readApiPrices(actor.teamId))
     val t = TokenUsageTable
     val after = query.after?.let { c ->
         val model = (t.provider eq c.provider) and (t.model greater c.model)
@@ -76,7 +78,9 @@ internal fun JdbcTransaction.readTokenUsage(actor: Principal, query: TokenUsageQ
     }.orderBy(t.dayNumber to SortOrder.ASC, t.memberId to SortOrder.ASC, t.runKey to SortOrder.ASC, t.provider to SortOrder.ASC, t.model to SortOrder.ASC)
         .limit(TokenUsageLedger.PAGE_SIZE + 1).map {
             TokenUsageRow(it[t.dayNumber], it[t.memberId], it[Members.username], it[t.runKey].ifEmpty { null }, it[t.provider], it[t.model],
-                it[t.requests], it[t.unmeteredRequests], it[t.inputTokens], it[t.cacheCreationTokens], it[t.cacheReadTokens], it[t.outputTokens])
+                it[t.requests], it[t.unmeteredRequests], it[t.inputTokens], it[t.cacheCreationTokens], it[t.cacheReadTokens], it[t.outputTokens],
+                prices.microsOf(it[t.provider], it[t.model], it[t.dayNumber],
+                    TokenUsage(it[t.inputTokens], it[t.outputTokens], it[t.cacheReadTokens], it[t.cacheCreationTokens])))
         }
     val page = rows.take(TokenUsageLedger.PAGE_SIZE)
     val next = if (rows.size > TokenUsageLedger.PAGE_SIZE) page.last().let { TokenUsageCursor(it.dayNumber, it.memberId, it.runId.orEmpty(), it.provider, it.model).encode() } else null
