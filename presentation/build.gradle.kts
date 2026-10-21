@@ -7,6 +7,7 @@ dependencies {
     implementation(libs.ktor.server.resources)
     implementation(libs.ktor.server.json)
     implementation(libs.ktor.server.errors)
+    implementation(libs.ktor.server.openapi)
     implementation(libs.ktor.json)
     testImplementation(projects.client)
     testImplementation(libs.ktor.server.tests)
