@@ -31,6 +31,9 @@ internal fun sharedOverflowBudgets(team: String): Map<String, Long> = PoolBudget
         })
 }.limit(16).associate { it[PoolBudgets.poolId] to it[PoolBudgets.dailyUnits] }
 
+/** Utilization from which an account is excluded for a model; placement and the refusal explanation share it. */
+private const val QUOTA_EXCLUSION = .95
+
 /** Selection and queue hints read the same SQL eligibility under the team's admission lock. */
 internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPolicy, input: AdmissionInput, now: Long): Placement {
     val budgets = if (policy.allowSharedOverflow) sharedOverflowBudgets(actor.teamId) else emptyMap()
@@ -55,12 +58,12 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
     val pins = input.affinity?.let { affinities.accounts(this, actor, it, input.provider, input.model, now) }.orEmpty()
     val loads = if (input.affinity != null) affinities.loads(this, actor.teamId, now) else emptyMap()
     fun blocking(account: AccountRecord) = usage.filter {
-        it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) && it.utilization >= .95
+        it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) && it.utilization >= QUOTA_EXCLUSION
     }
     val available = candidates.filter { it.id !in input.excludedAccountIds }.mapNotNull { account ->
         val utilization = usage.filter { it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) }
             .maxOfOrNull { it.utilization } ?: 0.0
-        if (utilization >= .95) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
+        if (utilization >= QUOTA_EXCLUSION) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
     }
     val selector = SelectPoolAccountUseCase()
     val chosen = selector.select(available.filter { it.activeRequests < 2 }, pins, policy.poolId)

@@ -59,7 +59,7 @@ internal fun JdbcTransaction.consumeQueueTurn(actor: Principal, ticket: Admissio
         (AdmissionWaiters.id eq ticket.id) and (AdmissionWaiters.teamId eq actor.teamId) and (AdmissionWaiters.memberId eq actor.member.id) and (AdmissionWaiters.expiresAt greater now)
     }.singleOrNull() ?: throw TeamFailure("queue_expired", 503, "The pending admission lease expired. Retry the request.")
     if (waiter[AdmissionWaiters.poolId] != policy.poolId.orEmpty() || waiter[AdmissionWaiters.provider] != provider || waiter[AdmissionWaiters.runId] != runId) {
-        throw TeamFailure("queue_context_changed", 409, "Your assigned capacity changed while waiting. Submit the request again.")
+        throw TeamFailure("queue_context_changed", 409, "Your assigned capacity changed while waiting. Submit the request again.", retryable = true)
     }
     val turnScope = (AdmissionTurns.teamId eq actor.teamId) and (AdmissionTurns.poolId eq sourcePool) and (AdmissionTurns.provider eq provider)
     val waiters = AdmissionWaiters.selectAll().where {

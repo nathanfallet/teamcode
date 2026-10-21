@@ -48,7 +48,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                 CheckModelPolicyUseCase().check(modelPolicy, it.requestedModel, model, it.targetEffort, null)
             }
             if (ResolveRouteUseCase().resolve(readRoutes(actor.teamId), it.requestedModel, it.protocol) != it.targets) {
-                throw TeamFailure("route_changed", 409, "The configured route changed while waiting. Submit the request again.")
+                throw TeamFailure("route_changed", 409, "The configured route changed while waiting. Submit the request again.", retryable = true)
             }
         }
         val policy = readMemberPolicy(this, actor.member.id)
@@ -72,9 +72,11 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             }.count().toInt()
             if (active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "TeamCode is limiting this session's parallel requests because the pool's subscription quota is burning fast. This one can start when another finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         }
-        if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it or grant you a temporary budget override.", now)
+        if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it or grant you a temporary budget override.", now, heldByRunningRequests = current.activeRequests > 0)
         val spent = poolSpent(actor.teamId, policy.poolId.orEmpty(), now / DAY)
-        if (units > current.poolDailyUnits - spent) throw RetryWindows.dailyBudget("pool_allowance", "The daily budget of your TeamCode pool", "An administrator can raise the pool budget.", now)
+        if (units > current.poolDailyUnits - spent) throw RetryWindows.dailyBudget("pool_allowance", "The daily budget of your TeamCode pool", "An administrator can raise the pool budget.", now,
+            heldByRunningRequests = Reservations.selectAll().where { (Reservations.teamId eq actor.teamId) and (Reservations.state eq "ACTIVE") and
+                (Reservations.expiresAt greater now) and ((Reservations.poolId eq policy.poolId.orEmpty()) or (Reservations.sourcePoolId eq policy.poolId.orEmpty())) }.limit(1).any())
         val placement = accountPlacement(actor, policy, AdmissionInput(units, model, provider, excludedAccountIds, affinity), now)
         if (ticket != null && placement.chosen == null && placement.hasAvailable) throw TeamFailure("pool_busy", 429, "Every usable account of your TeamCode pool is busy with other requests. Retry in a few seconds.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         val chosen = placement.chosen ?: throw DescribePoolUnavailableUseCase().failure(placement.standing ?: PoolStanding(provider), now)

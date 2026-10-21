@@ -106,13 +106,27 @@ class LocalProxyTest {
                 assertEquals("30", response.headers[HttpHeaders.RetryAfter])
                 assertEquals(refusal, response.bodyAsText())
             }
-            assertEquals(listOf("TeamCode refused the request (HTTP 503, pool_unavailable): No Claude account in your TeamCode pool is usable. [31m 6 accounts are waiting for a handover."), reports)
+            assertEquals(listOf("TeamCode answered HTTP 503 (pool_unavailable): No Claude account in your TeamCode pool is usable. [31m 6 accounts are waiting for a handover."), reports)
             refusing = false
             assertEquals(HttpStatusCode.OK, post().status)
             refusing = true
             post()
-            assertEquals(2, reports.size, "A refusal after a success is reported again")
+            assertEquals(1, reports.size, "A success of another request does not repeat the notice")
         } finally { sdk.close() }
+    }
+
+    @Test fun `each refusal cause is reported again only after its interval`() = kotlinx.coroutines.runBlocking {
+        val clock = kotlin.time.TestTimeSource()
+        val reports = mutableListOf<String>()
+        val notices = me.nathanfallet.teamcode.cli.proxy.RefusalNotices({ reports += it }, kotlin.time.Duration.parse("10m"), clock)
+        fun body() = io.ktor.utils.io.ByteReadChannel("""{"error":{"type":"rate_limit_error","message":"Busy."}}""")
+        notices.inspect(429, "pool_busy", body()); notices.inspect(429, "pool_busy", body())
+        notices.inspect(429, "member_allowance", body()); notices.inspect(200, null, body()); notices.inspect(429, "pool_busy", body())
+        assertEquals(2, reports.size)
+        clock += kotlin.time.Duration.parse("11m")
+        notices.inspect(429, "pool_busy", body())
+        assertEquals(3, reports.size)
+        assertEquals(0, notices.inspect(502, null, body()).size, "Responses not written by TeamCode are never read")
     }
 
     @Test fun `unkeyed browser and oversized requests never reach upstream`() = testApplication {

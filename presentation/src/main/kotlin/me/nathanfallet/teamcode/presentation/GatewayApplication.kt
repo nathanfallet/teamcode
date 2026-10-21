@@ -38,7 +38,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             val protocol = inference(call)
             if (protocol != null) return@exception call.respondInferenceError(protocol, error.status, error.code,
                 error.message ?: "Request failed.", error.retryAfterSeconds, error.retryable)
-            if (error.status == 429) call.response.header(HttpHeaders.RetryAfter, "60")
+            (error.retryAfterSeconds ?: if (error.status == 429) 60L else null)?.let { call.response.header(HttpHeaders.RetryAfter, it.toString()) }
             if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>", lede = ""), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }

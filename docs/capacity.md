@@ -80,13 +80,13 @@ An inference refusal uses the envelope of the agent's own protocol, so the agent
 |---|---|---|
 | No usable account, and none will become usable by itself (accounts awaiting a handover, to reconnect, disabled, or none connected) | 503 | `x-should-retry: false` |
 | No usable account, but some are cooling down, at a quota, or busy | 429 | `Retry-After` until the earliest known return; `x-should-retry: false` beyond 120 s |
-| Daily member, group or pool budget used up | 429 | `Retry-After` until 00:00 UTC, `x-should-retry: false` |
+| Daily member, group or pool budget used up | 429 | `Retry-After` until 00:00 UTC, `x-should-retry: false`; `Retry-After: 30` and retried while that budget is held by running requests, which settle at their real cost |
 | Run budget used up | 429 | `x-should-retry: false` |
 | Concurrency, pacing, busy pool | 429 | `Retry-After` of a few seconds |
 | Queue wait expired or queue full | 503 | `Retry-After: 15` |
-| Invalid request, model, effort or pause policy | 4xx | `x-should-retry: false` |
+| Invalid request, model, effort or pause policy, ended run | 4xx | `x-should-retry: false` (except `route_changed` and `queue_context_changed`, which a resubmission resolves) |
 
-Claude Code (and the Anthropic SDKs) skip their retries on `x-should-retry: false`, so a state only an administrator can fix is shown at once instead of looping on "API Error"; a 429 without that header is retried after `Retry-After`. Codex retries 5xx on its own and ignores the header. The local proxy of `teamcode run` relays these headers and prints the cause of a refusal once on stderr, again only after a success or for another cause.
+Claude Code (and the Anthropic SDKs) skip their retries on `x-should-retry: false`, so a state only an administrator can fix is shown at once instead of looping on "API Error"; a 429 without that header is retried after `Retry-After`. Codex retries 5xx on its own and ignores the header. The local proxy of `teamcode run` relays these headers and prints the cause of a TeamCode refusal on stderr once per status and code every 10 minutes.
 
 ## Models and effort
 

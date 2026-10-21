@@ -77,6 +77,24 @@ class PoolAvailabilityTest {
         }.also { assertFalse(it.retryable); assertEquals(12 * 3600L, it.retryAfterSeconds) }.code)
     }
 
+    @Test fun aBudgetHeldByRunningRequestsStaysRetryable() {
+        val failure = RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it.", now, heldByRunningRequests = true)
+        assertEquals(429, failure.status)
+        assertTrue(failure.retryable)
+        assertEquals(RetryWindows.HELD_BUDGET_RETRY_SECONDS, failure.retryAfterSeconds)
+        assertEquals("Your daily TeamCode allowance is fully reserved by requests still running. Retry when they finish: they usually " +
+            "cost less than reserved. Otherwise it resets at 00:00 UTC (in 12 h). An administrator can raise it.", failure.message)
+        val group = me.nathanfallet.teamcode.domain.team.TeamGroup("g", "G", 10)
+        assertTrue(assertFailsWith<me.nathanfallet.teamcode.domain.team.TeamFailure> {
+            CheckGroupAdmissionUseCase().check(listOf(GroupAllowance(group, false, me.nathanfallet.teamcode.domain.team.GroupUsage(10, 1))), 1, now)
+        }.retryable)
+    }
+
+    @Test fun conflictsAreFinalUnlessMarkedRetryable() {
+        assertFalse(me.nathanfallet.teamcode.domain.team.TeamFailure("run_ended", 409, "Ended.").retryable)
+        assertTrue(me.nathanfallet.teamcode.domain.team.TeamFailure("pool_busy", 429, "Busy.").retryable)
+    }
+
     @Test fun envelopeTypesAreDocumentedValues() {
         assertEquals("billing_error", InferenceErrors.type(WireProtocol.MESSAGES, 429, "member_allowance"))
         assertEquals("rate_limit_error", InferenceErrors.type(WireProtocol.MESSAGES, 429, "pool_unavailable"))

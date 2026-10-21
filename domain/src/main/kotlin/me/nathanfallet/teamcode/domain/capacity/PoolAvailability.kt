@@ -24,12 +24,20 @@ object RetryWindows {
     /** "at 14:05 UTC (in 2 h 10 min)" */
     fun at(now: Long, at: Long): String = "at ${clock(at)} (in ${duration(secondsUntil(now, at))})"
 
-    /** A daily budget used up: blocked until the next UTC day, so clients must not retry into it. */
-    fun dailyBudget(code: String, budget: String, remedy: String, now: Long): TeamFailure {
+    /**
+     * A daily budget that cannot cover the request. Budgets count in-flight reservations at their estimate: while
+     * requests are running ([heldByRunningRequests]), settling them can free units, so the refusal stays retryable.
+     * Otherwise it is blocked until the next UTC day and clients must not retry into it.
+     */
+    fun dailyBudget(code: String, budget: String, remedy: String, now: Long, heldByRunningRequests: Boolean = false): TeamFailure {
         val reset = nextUtcDay(now)
+        if (heldByRunningRequests) return TeamFailure(code, 429, "$budget is fully reserved by requests still running. " +
+            "Retry when they finish: they usually cost less than reserved. Otherwise it resets ${at(now, reset)}. $remedy",
+            retryAfterSeconds = HELD_BUDGET_RETRY_SECONDS)
         return TeamFailure(code, 429, "$budget is used up for today. It resets ${at(now, reset)}. $remedy",
             retryAfterSeconds = secondsUntil(now, reset), retryable = false)
     }
+    const val HELD_BUDGET_RETRY_SECONDS = 30L
 }
 
 /**

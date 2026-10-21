@@ -11,8 +11,10 @@ data class GroupAllowance(val group: TeamGroup, val paused: Boolean, val usage: 
 class CheckGroupAdmissionUseCase {
     fun check(groups: List<GroupAllowance>, units: Long, now: Long = System.currentTimeMillis()) {
         if (groups.any { it.paused }) throw TeamFailure("group_paused", 403, "Admission is paused by one of your groups. Contact a group manager or administrator.")
-        if (groups.any { it.group.dailyUnits > 0 && units > it.group.dailyUnits - it.usage.chargedAndReservedUnits }) {
-            throw RetryWindows.dailyBudget("group_allowance", "The daily budget of one of your TeamCode groups", "A group manager or administrator can raise it.", now)
+        val exhausted = groups.filter { it.group.dailyUnits > 0 && units > it.group.dailyUnits - it.usage.chargedAndReservedUnits }
+        if (exhausted.isNotEmpty()) {
+            throw RetryWindows.dailyBudget("group_allowance", "The daily budget of one of your TeamCode groups", "A group manager or administrator can raise it.", now,
+                heldByRunningRequests = exhausted.all { it.usage.activeRequests > 0 })
         }
         if (groups.any { it.group.maxConcurrent > 0 && it.usage.activeRequests >= it.group.maxConcurrent }) {
             throw TeamFailure("group_concurrency", 429, "One of your TeamCode groups has reached its concurrent request limit. This request can start when one of the group's requests finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)

@@ -168,7 +168,8 @@ with tempfile.TemporaryDirectory(prefix='teamcode-replicas-') as directory:
         group_capacity = json.loads(body)['groups'][0]
         assert status == 200 and group_capacity['paused'] and group_capacity['dailyUnits'] == 2000
         status, body = request(origins[0], '/v1/messages', {'model': 'claude-test', 'stream': True, 'max_tokens': 1, 'messages': [{'role': 'user', 'content': 'synthetic'}]}, member_token)
-        assert status == 403 and json.loads(body)['error']['type'] == 'group_paused'
+        refusal = json.loads(body)  # Inference refusals use the Anthropic Messages envelope.
+        assert status == 403 and refusal['type'] == 'error' and refusal['error']['type'] == 'permission_error' and 'paused' in refusal['error']['message']
         assert request(origins[1], assignment_path, {'role': 'MEMBER', 'paused': True}, token, method='PUT')[0] == 200
         assert request(origins[0], assignment_path + '/pause', {'paused': False}, member_token, method='PATCH')[0] == 403
         assert request(origins[1], assignment_path, {'role': 'MANAGER', 'paused': True}, token, method='PUT')[0] == 200
