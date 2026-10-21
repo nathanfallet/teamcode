@@ -33,7 +33,7 @@ class ProgressivePacingPersistenceTest {
             container.start()
             // Upgrade path: an explicit limit saved before this release must survive the new default.
             Flyway.configure().dataSource(container.jdbcUrl, container.username, container.password)
-                .locations("classpath:db/migration").target("20261021103630").load().migrate()
+                .locations("classpath:db/migration").target("20261021150000").load().migrate()
             Database(container.jdbcUrl, container.username, container.password).use { a ->
                 Database(container.jdbcUrl, container.username, container.password).use { b ->
                     val team = SqlTeamService(a)
