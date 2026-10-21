@@ -55,6 +55,7 @@ class CloudRuntimePersistenceTest {
 
                 // An invalid seed is stored disabled so the server still starts.
                 a.query { CloudRuntimeTable.deleteAll() }
+                assertEquals(null, rb.refresh().updatedAt, "A removed row is taken as is, never kept from the cache")
                 val warnings = mutableListOf<String>()
                 val invalid = ra.seed(fromEnvironment.copy(serverUrl = "http://teamcode.internal", workspaceAccessMode = "x".repeat(64)), warnings::add)
                 assertEquals(CloudRuntime(enabled = false, runnerImage = fromEnvironment.runnerImage), invalid.copy(updatedAt = null), "Off, keeping only the valid fields, never failing on column sizes")

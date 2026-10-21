@@ -122,8 +122,8 @@ class CloudRuntimeRoutesTest {
         assertEquals(HttpStatusCode.Found, form("/dashboard/cloud/runtime", "csrf=admin-session&enabled=on&runnerImage=registry.example.test%2Frunner%40sha256%3Aabc&runnerBinary=%2Fusr%2Flocal%2Fbin%2Fteamcode&serverUrl=&workspaceAccessMode=ReadWriteOnce").status)
         assertEquals(CloudRuntime(true, "registry.example.test/runner@sha256:abc", "/usr/local/bin/teamcode", null, "ReadWriteOnce", 1), store.stored)
         assertTrue("cloud.sessions.v1" in features())
-        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":null,"runnerBinary":"/usr/local/bin/teamcode","serverUrl":null,"workspaceAccessMode":"ReadWriteOnce","updatedAt":1}""") }.status,
-            "The runner image can be replaced, never removed")
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":true,"runnerImage":null,"runnerBinary":"/usr/local/bin/teamcode","serverUrl":null,"workspaceAccessMode":"ReadWriteOnce","updatedAt":1}""") }.status,
+            "Cloud sessions cannot stay on without a runner image")
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions") { bearerAuth("admin") }.status)
         val view = Serialization.json.decodeFromString<CloudRuntimeView>(client.get("/api/v1/cloud/runtime") { bearerAuth("admin") }.bodyAsText())
         assertEquals("https://teamcode.example.test", view.effectiveServerUrl, "An empty server URL uses the public URL")
@@ -190,7 +190,8 @@ class CloudRuntimeRoutesTest {
         fun refused(runtime: CloudRuntime, public: String = origin) = assertFailsWith<TeamFailure> { CloudRuntimeService.validate(runtime, public) }
         refused(CloudRuntime(enabled = true))
         refused(CloudRuntime(enabled = true, runnerImage = "runner:1"), "http://localhost:8080")
-        refused(CloudRuntime(enabled = false, runnerImage = "runner:1"), "http://localhost:8080")
+        // Off, an administrator can always save, even while the public URL is plain HTTP.
+        CloudRuntimeService.validate(CloudRuntime(enabled = false, runnerImage = "runner:1"), "http://localhost:8080")
         refused(CloudRuntime(runnerImage = "runner 1"))
         refused(CloudRuntime(runnerBinary = "teamcode"))
         refused(CloudRuntime(runnerBinary = "/opt/../teamcode"))

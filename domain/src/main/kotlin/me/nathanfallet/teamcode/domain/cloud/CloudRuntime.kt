@@ -57,7 +57,8 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
     /** Never replaces a newer runtime this replica saved while the read was in flight. */
     suspend fun refresh(): CloudRuntime {
         val read = store.current()
-        synchronized(this) { if ((read.updatedAt ?: 0) >= (cached.updatedAt ?: 0)) cached = read }
+        // A missing row (deleted or restored without it) is taken as is: off.
+        synchronized(this) { if (read.updatedAt == null || read.updatedAt >= (cached.updatedAt ?: 0)) cached = read }
         return cached
     }
 
@@ -68,9 +69,6 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
         actor.requireAdmin()
         val normalized = normalize(runtime)
         validate(normalized, publicOrigin)
-        // Sessions created with an image keep needing one to resume: it can be replaced, never removed.
-        if (normalized.runnerImage == null && store.runtime(actor).runnerImage != null)
-            throw TeamFailure("invalid_cloud_runtime", 400, "The runner image can be replaced but not removed: existing sessions need it to start their pods.")
         return store.saveRuntime(actor, normalized, expectedUpdatedAt).also { saved -> synchronized(this) { cached = saved } }
     }
 
@@ -122,8 +120,8 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
             if (runtime.workspaceAccessMode !in CloudRuntime.ACCESS_MODES) invalid("Use ReadWriteOncePod or ReadWriteOnce.")
             runtime.serverUrl?.let { if (!usableOrigin(it)) invalid("Use the HTTPS origin session pods reach, not a loopback address.") }
             if (runtime.enabled && runtime.runnerImage == null) invalid("Set the runner image before enabling cloud sessions.")
-            // A stored image means pods may be built from it, on or off: their callback origin must work.
-            if (runtime.runnerImage != null && !usableOrigin(runtime.serverUrl ?: publicOrigin))
+            // Off, the runtime may stay incomplete, so an administrator can always save it; pods are built only while on.
+            if (runtime.enabled && !usableOrigin(runtime.serverUrl ?: publicOrigin))
                 invalid("Session pods need an HTTPS callback origin: set the server URL for pods, since the public URL is not HTTPS or is loopback.")
         }
 

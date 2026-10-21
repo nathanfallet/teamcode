@@ -38,6 +38,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val adminStore = SqlCloudAdminStore(database, cipher)
     private val cluster = KubernetesClusterPort({ adminStore.connection(it) }, {
         val current = runtime.current
+        // Off: no new pod starts. A session already queued waits (and can be paused or deleted) until cloud sessions are on.
+        if (!current.enabled) throw CloudConfigurationException("cloud sessions are turned off; queued sessions start once they are on again")
         val image = current.runnerImage ?: throw CloudConfigurationException("no runner image is set; set it on Dashboard → Cloud sessions")
         if (!CloudRuntimeService.usableOrigin(runtime.serverUrl(current))) throw CloudConfigurationException("the callback origin for pods is not HTTPS or is loopback; set the server URL for pods on Dashboard → Cloud sessions")
         KubernetesPodOptions(serverUrl = runtime.serverUrl(current), runnerImage = image, runnerBinary = current.runnerBinary, workspaceAccessMode = current.workspaceAccessMode)
@@ -99,9 +101,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             // Messages sent while a session was pausing wake it once paused; inputs of ended sessions are cancelled.
             while (isActive) {
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 // Waking a paused session for a queued message is a resume: not while cloud sessions are off.
-                if (!managing() || !runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
-                try { conversationService.wakePending(); conversationStore.cancelEnded(50) }
+                try { if (runtime.enabled) conversationService.wakePending(); conversationStore.cancelEnded(50) }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { System.err.println("TeamCode cloud message delivery is temporarily unavailable (${describe(error)}).") }
                 delay(5_000)
