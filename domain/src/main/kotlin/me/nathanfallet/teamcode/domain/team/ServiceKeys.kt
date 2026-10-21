@@ -68,19 +68,29 @@ class AuthorizeCredentialUseCase {
         }
     }
 }
-data class ServiceKey(val id: String, val memberId: String, val name: String, val scopes: Set<ServiceScope>, val createdAt: Long, val expiresAt: Long)
+data class ServiceKey(val id: String, val memberId: String, val name: String, val scopes: Set<ServiceScope>, val createdAt: Long, val expiresAt: Long) {
+    /** Keys without expiry store [ServiceKeyService.NO_EXPIRY], so every existing `expires_at > now` check keeps working unchanged. */
+    val neverExpires get() = expiresAt == ServiceKeyService.NO_EXPIRY
+}
 class CreatedServiceKey(val metadata: ServiceKey, val accessToken: String) {
     override fun toString() = "CreatedServiceKey(metadata=$metadata, accessToken=[REDACTED])"
 }
 interface ServiceKeyService {
     suspend fun list(actor: Principal, memberId: String = actor.member.id): List<ServiceKey>
-    suspend fun create(actor: Principal, memberId: String, name: String, scopes: Set<ServiceScope>, validDays: Int): CreatedServiceKey
+    suspend fun create(actor: Principal, memberId: String, name: String, scopes: Set<ServiceScope>, validDays: Int?): CreatedServiceKey
     suspend fun revoke(actor: Principal, id: String): String
     companion object {
         const val LIMIT = 20L
-        fun validate(name: String, scopes: Set<ServiceScope>, validDays: Int) {
-            if (name.length !in 1..120 || name.isBlank() || name.any { it.isISOControl() } || scopes.isEmpty() || validDays !in 1..90)
+        /** Stored expiry of a key that never expires. */
+        const val NO_EXPIRY = Long.MAX_VALUE
+        /** [validDays] null requests a key without expiry, which only an administrator's key may have (see [requireNoExpiryAllowed]). */
+        fun validate(name: String, scopes: Set<ServiceScope>, validDays: Int?) {
+            if (name.length !in 1..120 || name.isBlank() || name.any { it.isISOControl() } || scopes.isEmpty() || (validDays != null && validDays !in 1..90))
                 throw TeamFailure("invalid_service_key", 400, "Provide a name, at least one supported scope and a lifetime between 1 and 90 days.")
+        }
+        fun requireNoExpiryAllowed(validDays: Int?, ownerIsAdministrator: Boolean) {
+            if (validDays == null && !ownerIsAdministrator)
+                throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can be created without an expiry. Choose a lifetime between 1 and 90 days.")
         }
     }
 }

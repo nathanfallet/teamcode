@@ -43,6 +43,13 @@ class ServiceKeyAuthorizationTest {
         val temporary = admin.copy(member = admin.member.copy(passwordChangeRequired = true), serviceScopes = setOf(ServiceScope.ADMIN_CLOUD))
         assertEquals("password_change_required", assertFailsWith<TeamFailure> { temporary.requireCloudRead() }.code)
     }
+    @Test fun aKeyWithoutExpiryIsReservedToAdministratorsAndIsRecognisedBySentinel() {
+        ServiceKeyService.requireNoExpiryAllowed(null, ownerIsAdministrator = true)
+        ServiceKeyService.requireNoExpiryAllowed(30, ownerIsAdministrator = false)
+        assertEquals("invalid_service_key", assertFailsWith<TeamFailure> { ServiceKeyService.requireNoExpiryAllowed(null, ownerIsAdministrator = false) }.code)
+        assertTrue(ServiceKey("id", "owner", "CI", setOf(ServiceScope.INFERENCE), 1, ServiceKeyService.NO_EXPIRY).neverExpires)
+        assertFalse(ServiceKey("id", "owner", "CI", setOf(ServiceScope.INFERENCE), 1, 2).neverExpires)
+    }
     @Test fun interactiveTemporaryLoginCanReplacePasswordButCannotAdministerBeforeReplacement() {
         val temporary = admin.copy(member = admin.member.copy(passwordChangeRequired = true))
         temporary.requireInteractive() // Credential kind and readiness are separate checks.
@@ -54,6 +61,7 @@ class ServiceKeyAuthorizationTest {
         for (name in listOf("", "a\nb", "x".repeat(121))) assertFailsWith<TeamFailure> { ServiceKeyService.validate(name, setOf(ServiceScope.INFERENCE), 1) }
         assertFailsWith<TeamFailure> { ServiceKeyService.validate("CI", emptySet(), 1) }
         ServiceKeyService.validate("CI's runner", setOf(ServiceScope.INFERENCE), 90)
+        ServiceKeyService.validate("CI", setOf(ServiceScope.INFERENCE), null)
         val token = "synthetic-service-secret"
         assertFalse(CreatedServiceKey(ServiceKey("id", "owner", "CI", setOf(ServiceScope.INFERENCE), 1, 2), token).toString().contains(token))
     }

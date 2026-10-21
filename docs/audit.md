@@ -30,7 +30,7 @@ The API returns at most 50 events, newest identifier first. Response shape (even
 - Ownership grants/removal and one-time legacy ownership migration (`member.owner_granted`, `member.owner_removed`, `member.owner_migrated`); [recovery and role rules](team-roles.md).
 - First administrator creation (`member.bootstrap`), successful login/logout, password replacement/reset, member creation and access changes.
 - Device registration/rename/revocation and explicit authentication-session revocation.
-- Service/CI credential creation and revocation, including self-revocation through logout.
+- Service/CI credential creation (`service_key.created`, or `service_key.created_no_expiry` for an administrator's key without expiry) and revocation, including self-revocation through logout.
 - Account enrollment and credential replacement, operator metadata configuration, access-only activation and refresh-ownership handover.
 - Member allowance/concurrency/weight policy, pool budgets, model/effort/experimental settings and routing rule changes.
 - Group creation/policy/archive changes and assignments/removal/pause/resume. Assignment event subjects use `groupId/memberId`; the metadata field supports 100 characters. Group writes and their audit event commit together under the team lock. See [groups](groups.md).
