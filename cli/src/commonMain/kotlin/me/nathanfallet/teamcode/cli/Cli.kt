@@ -17,6 +17,7 @@ import me.nathanfallet.teamcode.cli.accounts.Accounts
 import me.nathanfallet.teamcode.cli.agents.Agents
 import me.nathanfallet.teamcode.cli.launch.Run
 import me.nathanfallet.teamcode.cli.sessions.Sessions
+import me.nathanfallet.teamcode.cli.status.Status
 import me.nathanfallet.teamcode.cli.service.Service
 import me.nathanfallet.teamcode.cli.identity.*
 import me.nathanfallet.teamcode.cli.update.VerifyRelease
@@ -90,15 +91,6 @@ private class Configure : SuspendingCliktCommand(name = "configure") {
         catch (error: CliOperationException) { throw error }
         catch (error: Exception) { throw CliOperationException("configuration_write_${error::class.simpleName.orEmpty().filter { it.isLetterOrDigit() }}") }
         echo("Configuration saved to ${configPath()}.")
-    }
-}
-
-private class Status : SuspendingCliktCommand(name = "status") {
-    override suspend fun run() {
-        sdk(loadConfig()).use { client ->
-            val status = client.status()
-            echo("Mode: ${status.mode} | Active: ${status.activeRequests} | Waiting: ${status.queuedRequests} | Completed: ${status.completedRequests}")
-        }
     }
 }
 

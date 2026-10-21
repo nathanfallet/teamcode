@@ -5,6 +5,7 @@ import com.github.ajalt.clikt.core.*
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.*
 import me.nathanfallet.teamcode.api.Serialization
+import me.nathanfallet.teamcode.api.formatUnits
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 
@@ -22,7 +23,7 @@ private class ListRuns : SuspendingCliktCommand(name = "list") {
         sdk(loadConfig()).use { client ->
             val page = client.runs(member, all, before)
             if (json) echo(Serialization.json.encodeToString(page)) else {
-                for (run in page.runs) echo("${run.id}\t${run.username}\t${run.agent}\t${run.workload}\t${run.state}\t${run.activeRequests} active / ${run.queuedRequests} waiting\t${run.chargedAndReservedUnits} credits")
+                for (run in page.runs) echo("${run.id}\t${run.username}\t${run.agent}\t${run.workload}\t${run.state}\t${run.activeRequests} active / ${run.queuedRequests} waiting\t${formatUnits(run.chargedAndReservedUnits)} credits")
                 page.nextBeforeId?.let { echo("Older launches: teamcode sessions list --before $it" + if (all) " --all" else member?.let { " --member $it" }.orEmpty(), err = true) }
             }
         }

@@ -1,9 +1,9 @@
 package me.nathanfallet.teamcode.presentation
 
+import me.nathanfallet.teamcode.api.formatUnits
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.util.*
-import java.text.NumberFormat
 import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
@@ -224,21 +224,9 @@ internal fun empty(title: String, text: String = "") = """<div class="empty"><st
 /** A field explanation rendered inside its label; [html] may carry an escaped effective value. */
 internal fun hint(html: String) = """<span class="hint">$html</span>"""
 
-private val grouping = ThreadLocal.withInitial { NumberFormat.getIntegerInstance(Locale.US) }
-
-/** Credits with thousands separators: 1234567 → "1,234,567". */
-internal fun units(value: Long): String = grouping.get().format(value)
-
-/** Short form for tight spaces: 333333 → "333k", 2500000 → "2.5M". */
-internal fun compactUnits(value: Long): String = when {
-    value >= 999_500 -> trimDecimal(value / 1_000_000.0) + "M"
-    value >= 1_000 -> trimDecimal(value / 1_000.0) + "k"
-    else -> value.toString()
-}
-private fun trimDecimal(value: Double) = String.format(Locale.ROOT, if (value >= 100) "%.0f" else "%.1f", value).removeSuffix(".0")
 
 /** Consumed / allocated bar; it turns amber from 75 % and red from 90 %. A zero allocation renders as full when anything is used. */
-internal fun meter(used: Long, total: Long, label: String = "<strong>${units(used)}</strong> / ${units(total)}"): String {
+internal fun meter(used: Long, total: Long, label: String = "<strong>${formatUnits(used)}</strong> / ${formatUnits(total)}"): String {
     val ratio = when { total > 0 -> used.toDouble() / total; used > 0 -> 1.0; else -> 0.0 }
     return ratioMeter(ratio, label)
 }

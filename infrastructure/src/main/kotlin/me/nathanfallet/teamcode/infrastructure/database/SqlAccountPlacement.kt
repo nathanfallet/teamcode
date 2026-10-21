@@ -55,7 +55,7 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
     val available = candidates.filter { it.id !in input.excludedAccountIds }.mapNotNull { account ->
         val utilization = usage.filter { it.accountId == account.id && it.appliesTo(input.model, modelLimits[account.id]?.get(input.model.lowercase())) }
             .maxOfOrNull { it.utilization } ?: 0.0
-        if (utilization >= .95) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
+        if (utilization >= QUOTA_EXHAUSTED_UTILIZATION) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
     }
     val selector = SelectPoolAccountUseCase()
     val chosen = selector.select(available.filter { it.activeRequests < 2 }, pins, policy.poolId)
