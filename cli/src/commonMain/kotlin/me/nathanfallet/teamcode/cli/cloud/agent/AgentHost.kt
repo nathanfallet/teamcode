@@ -270,12 +270,12 @@ internal class AgentHost(
             }
             var bytes = 0
             // The server limit counts UTF-8 bytes, not characters.
-            buffer.takeWhile { event -> bytes += event.data.toString().encodeToByteArray().size; bytes <= MAX_BATCH_BYTES }.take(batchLimit).ifEmpty { buffer.take(1) }
+            buffer.asSequence().take(batchLimit).takeWhile { event -> bytes += event.data.toString().encodeToByteArray().size; bytes <= MAX_BATCH_BYTES }.toList().ifEmpty { buffer.take(1) }
         }
         if (batch.isEmpty()) return false
         val ack = try { channel.events(batch) } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            if (error is TeamCodeException && error.code != "execution_fenced" && refusesContent(error.statusCode)) return isolateRejected(batch)
             if (handle(error)) return false
-            if (error is TeamCodeException && permanentlyRejected(error.statusCode)) return isolateRejected(batch)
             sleep(UPLOAD_MILLIS * 4); return false
         }
         batchLimit = MAX_BATCH
@@ -283,8 +283,12 @@ internal class AgentHost(
         return lock.withLock { buffer.isNotEmpty() }
     }
 
-    /** A request the server will never accept as sent (not an auth, timing or conflict status); retrying it unchanged cannot succeed. */
-    private fun permanentlyRejected(status: Int) = status in 400..499 && status !in setOf(401, 403, 404, 408, 409, 423, 425, 429)
+    /**
+     * The statuses the runner events route answers when the events themselves are refused: an invalid event (400), a
+     * body over the size limit (413) or an unprocessable body (422). Retrying the same batch unchanged cannot succeed.
+     * Any other status is retried with a pause, so an unrelated refusal never consumes transcript events.
+     */
+    private fun refusesContent(status: Int) = status == 400 || status == 413 || status == 422
 
     /**
      * Narrows a permanently rejected batch: halves the next batches until one event is left, then replaces that

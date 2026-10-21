@@ -17,6 +17,7 @@ class CloudConversationRulesTest {
         assertEquals("Authorization: Bearer $MASK", masked("Authorization: Bearer abcdefghijklmnop.qrs"))
         assertEquals("token $MASK", masked("token Ab3dEf9hIjKlMn"))
         assertEquals("basic $MASK", masked("basic dXNlcjpwYXNzd29yZA=="))
+        assertEquals("Authorization: Bearer $MASK", masked("Authorization: Bearer correcthorsebatterystaple"))
         assertEquals("GITHUB_TOKEN=$MASK", masked("GITHUB_TOKEN=abcdefgh1234"))
         assertEquals("{\"api_key\": $MASK}", masked("{\"api_key\": \"abcdefgh1234\"}"))
         assertEquals("https://$MASK@example.com/repo.git", masked("https://user:pa55word@example.com/repo.git"))
@@ -28,6 +29,7 @@ class CloudConversationRulesTest {
             "task-management-feature-branch", "disk-usage-statistics-report", "etc_something_long_name_x", "max_tokens=4096",
             "token: refresh", "password: hidden", "Use a token budget of 100", "ask-for-review-before-merging-0",
             "the token management screen", "basic configuration options", "Bearer Authentication", "a token validation step",
+            "Use the token configuration.", "Set up Basic Authentication.",
         )
         for (text in texts) assertEquals(text, masked(text))
     }

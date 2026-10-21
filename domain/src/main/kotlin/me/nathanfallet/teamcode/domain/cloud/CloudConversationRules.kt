@@ -42,8 +42,15 @@ object CloudConversationRules {
     private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIALS?))(\"?\\s*[=:]\\s*)(\"[^\"]{8,}\"|'[^']{8,}'|[^\\s\"',;]{8,})")
     private val urlCredentials = Regex("(?i)(\\b[a-z][a-z0-9+.-]*://)[^\\s/@:]+:[^\\s/@]+@")
 
-    /** A plain word (`configuration`, `Management`) after `token` or `basic` is prose; a credential has a digit, a symbol or inner capitals. */
-    private fun looksLikeCredential(value: String) = value.any { !it.isLetter() } || value.drop(1).any { it.isUpperCase() }
+    /**
+     * A plain word (`configuration`, `Authentication.`) after `token`, `basic` or `bearer` is prose. Anything else is
+     * treated as a credential: a digit, a symbol, inner capitals, or letters too long for a word (a passphrase).
+     */
+    private fun looksLikeCredential(value: String): Boolean {
+        val word = value.trimEnd('.')
+        return word.length > MAX_WORD || word.any { !it.isLetter() } || word.drop(1).any { it.isUpperCase() }
+    }
+    private const val MAX_WORD = 16
 
     fun mask(text: String): String {
         var masked = text

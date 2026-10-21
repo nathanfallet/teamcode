@@ -251,6 +251,22 @@ class CloudAgentTest {
         job.cancel()
     }
 
+    @Test fun aRefusalOfAnotherKindIsRetriedWithoutGivingUpAnyEvent() = runTest {
+        val channel = FakeChannel().apply { refuseEvents = TeamCodeException(410, "gone", null) }
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Fix it", 1)))
+        until { started.isNotEmpty() }
+        started.single().second.output.send("""{"type":"system","subtype":"init","session_id":"c1"}""")
+        delay(60_000)
+        assertTrue(channel.attempts < 100, "The host backs off, ${channel.attempts} attempts in a minute")
+        channel.refuseEvents = null
+        until { channel.uploaded.size == 2 }
+        assertTrue(channel.uploaded.none { it.type == CloudEventTypes.ERROR }, "No event was replaced by a marker")
+        job.cancel()
+    }
+
     @Test fun runnerKeepsHeartbeatingWhileTheAgentDrains() = runTest {
         val calls = mutableListOf<String>()
         val agent = object : RunnerAgent {
