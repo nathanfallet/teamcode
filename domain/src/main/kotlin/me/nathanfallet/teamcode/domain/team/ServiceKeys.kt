@@ -19,8 +19,15 @@ enum class ServiceScope(val wire: String) {
      * and the access policy stay interactive.
      */
     ADMIN_CLOUD("admin:cloud"),
+    /**
+     * Read-only operational view of the whole team, as an interactive administrator sees it: every member's agent
+     * launches, capacity and usage, pool accounts and quota windows, MCP usage, and every member's cloud sessions,
+     * transcripts and transfers. Includes `usage:read` and `cloud:read` but no write of any kind and no
+     * `TeamCode-On-Behalf-Of`. Only valid for a key owned by an administrator.
+     */
+    TEAM_READ("team:read"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, TEAM_READ, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -29,10 +36,30 @@ fun Principal.requireScope(scope: ServiceScope) {
     requireReady()
     if (serviceScopes != null && scope !in serviceScopes) throw TeamFailure("credential_scope", 403, "This service key does not grant ${scope.wire} access.")
 }
-/** Cloud reads: an interactive login, or a key with `cloud:read`, `cloud:write` or `admin:cloud`. */
+/** Usage reads: an interactive login, or a key with `usage:read` or `team:read` (which reads the owner's own figures too). */
+fun Principal.requireUsageRead() {
+    requireReady()
+    if (serviceScopes != null && serviceScopes.none { it == ServiceScope.USAGE_READ || it == ServiceScope.TEAM_READ })
+        throw TeamFailure("credential_scope", 403, "This service key does not grant usage:read access.")
+}
+/**
+ * Read access to the whole team's operational data: an interactive administrator, or an administrator's key with
+ * `team:read`. A `usage:read` key acts as its owner alone, even when the owner is an administrator. This never grants a
+ * write: administration (`requireAdmin`) stays interactive.
+ */
+val Principal.canReadTeam: Boolean
+    get() = member.role.isAdministrator && (serviceScopes == null || ServiceScope.TEAM_READ in serviceScopes)
+fun Principal.requireTeamRead() {
+    requireReady()
+    if (!canReadTeam) {
+        if (serviceScopes != null && member.role.isAdministrator) throw TeamFailure("credential_scope", 403, "This service key does not grant team:read access.")
+        throw TeamFailure("forbidden", 403, "Administrator access is required.")
+    }
+}
+/** Cloud reads: an interactive login, or a key with `cloud:read`, `cloud:write`, `admin:cloud` or `team:read`. */
 fun Principal.requireCloudRead() {
     requireReady()
-    if (serviceScopes != null && serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD })
+    if (serviceScopes != null && serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ })
         throw TeamFailure("credential_scope", 403, "This service key does not grant cloud:read access.")
 }
 /** Cloud writes: an interactive login, or a key with `cloud:write` or `admin:cloud`. */
@@ -47,6 +74,12 @@ fun Principal.requireCloudWrite() {
  */
 val Principal.isCloudAdministrator: Boolean
     get() = member.role.isAdministrator && (serviceScopes == null || ServiceScope.ADMIN_CLOUD in serviceScopes)
+/** Reading every member's cloud sessions: a cloud administrator, or `team:read`. Writes use [isCloudAdministrator] only. */
+val Principal.canReadTeamCloud: Boolean get() = isCloudAdministrator || canReadTeam
+fun Principal.requireCloudTeamRead() {
+    requireReady()
+    if (!canReadTeamCloud) throw TeamFailure("forbidden", 403, "Administrator access to cloud sessions is required.")
+}
 fun Principal.requireCloudAdministrator() {
     requireReady()
     if (!isCloudAdministrator) throw TeamFailure("forbidden", 403, "Administrator access to cloud sessions is required.")
@@ -57,7 +90,8 @@ class AuthorizeCredentialUseCase {
         when (action) {
             CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT -> actor.requireReady()
             CredentialAction.INFERENCE -> actor.requireScope(ServiceScope.INFERENCE)
-            CredentialAction.USAGE_READ -> actor.requireScope(ServiceScope.USAGE_READ)
+            CredentialAction.USAGE_READ -> actor.requireUsageRead()
+            CredentialAction.TEAM_READ -> actor.requireScope(ServiceScope.TEAM_READ)
             CredentialAction.GUIDANCE -> actor.requireScope(ServiceScope.GUIDANCE)
             CredentialAction.SKILLS_READ -> actor.requireScope(ServiceScope.SKILLS_READ)
             CredentialAction.SKILLS_PUBLISH -> actor.requireScope(ServiceScope.SKILLS_PUBLISH)

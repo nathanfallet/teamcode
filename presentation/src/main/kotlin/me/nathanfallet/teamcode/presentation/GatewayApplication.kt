@@ -183,6 +183,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && devices != null) listOf("team.devices") else emptyList()) +
                     (if (team != null && serviceKeys != null) listOf("team.service-keys.v1") else emptyList()) +
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
+                    (if (team != null) listOf("team.read-key.v1") else emptyList()) +
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
                     (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +

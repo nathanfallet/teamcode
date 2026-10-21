@@ -122,8 +122,8 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         }
     }
     override suspend fun capacity(actor: Principal, memberId: String): MemberCapacity = database.query {
-        actor.requireScope(ServiceScope.USAGE_READ); requireCurrent(this, actor)
-        if (memberId != actor.member.id) actor.requireAdmin()
+        actor.requireUsageRead(); requireCurrent(this, actor)
+        if (memberId != actor.member.id) actor.requireTeamRead()
         ensureMember(actor.teamId, memberId)
         readMemberCapacity(this, readMemberPolicy(this, memberId), nowMillis(), actor.teamId)
     }
@@ -144,7 +144,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         policy
     }
     override suspend fun poolBudgets(actor: Principal): List<PoolBudget> = database.query {
-        actor.requireAdmin(); requireCurrent(this, actor)
+        actor.requireTeamRead(); requireCurrent(this, actor)
         PoolBudgets.selectAll().where { PoolBudgets.teamId eq actor.teamId }.orderBy(PoolBudgets.poolId).map { PoolBudget(it[PoolBudgets.poolId], it[PoolBudgets.dailyUnits], it[PoolBudgets.sharedOverflow]) }
     }
     override suspend fun configurePool(actor: Principal, budget: PoolBudget): PoolBudget = database.query {
@@ -164,14 +164,14 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         budget
     }
     override suspend fun quotas(actor: Principal): List<AccountQuota> = database.query {
-        actor.requireAdmin(); requireCurrent(this, actor)
+        actor.requireTeamRead(); requireCurrent(this, actor)
         (QuotaWindows innerJoin Accounts).select(QuotaWindows.columns).where { Accounts.teamId eq actor.teamId }.map(::quotaRecord)
     }
     override suspend fun poolAccounts(actor: Principal): List<PoolAccountStatus> = database.query {
-        actor.requireScope(ServiceScope.USAGE_READ); requireCurrent(this, actor)
+        actor.requireUsageRead(); requireCurrent(this, actor)
         val now = nowMillis()
-        // Interactive administrators only: a service key acts as its owner's member view, like every admin read.
-        val admin = actor.serviceScopes == null && actor.member.role.isAdministrator
+        // Interactive administrators and `team:read` keys; any other key acts as its owner's member view, like every admin read.
+        val admin = actor.canReadTeam
         val visible = if (admin) Op.TRUE else {
             val policy = readMemberPolicy(this, actor.member.id)
             val overflow = if (policy.allowSharedOverflow) sharedOverflowBudgets(actor.teamId).keys else emptySet()

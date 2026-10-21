@@ -126,9 +126,12 @@ class CloudConversationRoutesTest {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
             "other" -> Principal(other, "other-session", "default")
-            "service-colleague" -> Principal(colleague, "colleague-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD))
+            "service-colleague" -> Principal(colleague, "colleague-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ))
             "colleague-read" -> Principal(colleague, "colleague-read-key", "default", setOf(ServiceScope.CLOUD_READ))
             "admin-write" -> Principal(admin, "admin-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
+            "admin-read" -> Principal(admin, "admin-read-key", "default", setOf(ServiceScope.TEAM_READ))
+            "admin-usage" -> Principal(admin, "admin-usage-key", "default", setOf(ServiceScope.USAGE_READ, ServiceScope.CLOUD_READ))
+            "admin-read-write" -> Principal(admin, "admin-read-write-key", "default", setOf(ServiceScope.TEAM_READ, ServiceScope.CLOUD_WRITE))
             else -> null
         }
     }
@@ -260,6 +263,22 @@ class CloudConversationRoutesTest {
                 assertEquals(listOf(3L, 4L, 5L), seen)
                 assertEquals(CloudSessionState.TERMINATED, store.sessions.getValue("s1").state)
                 assertEquals(409, assertFailsWith<TeamCodeException> { member.attachCloudSession("s1") }.statusCode, "An ended session cannot be attached")
+
+                // team:read reads another member's session, transcript, inputs and stream, and cannot write or delegate.
+                val auditor = sdk("admin-read")
+                try {
+                    assertEquals("s1", auditor.cloudSession("s1").id)
+                    assertEquals(5, auditor.cloudEvents("s1", after = 0).lastSeq)
+                    assertEquals(ack.id, auditor.cloudInput("s1", ack.id).id)
+                    val replayed = mutableListOf<Long>()
+                    assertEquals(CloudStreamEnd.ENDED, withTimeout(20_000) { auditor.followCloudEvents("s1", 0) { replayed += it.seq } })
+                    assertEquals(listOf(1L, 2L, 3L, 4L, 5L), replayed)
+                } finally { auditor.close() }
+                for (path in listOf("messages", "interrupt", "attachments", "pause", "resume"))
+                    assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/sessions/s1/$path") { bearerAuth("admin-read"); contentType(ContentType.Application.Json); setBody("""{"text":"hi"}""") }.status, path)
+                assertEquals(HttpStatusCode.Forbidden, send("admin-read", """{"text":"hi"}""", onBehalf = "colleague-id").status)
+                assertEquals(HttpStatusCode.NotFound, send("admin-read-write", """{"text":"hi"}""").status, "team:read adds no write right to cloud:write")
+                assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions/s1/events") { bearerAuth("admin-usage") }.status, "usage:read and cloud:read stay the owner's own view")
             } finally { runner.close(); member.close() }
         } finally { client.close(); server.stop(0, 1_000) }
     }

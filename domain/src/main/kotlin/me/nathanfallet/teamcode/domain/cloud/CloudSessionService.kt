@@ -86,7 +86,7 @@ class CloudSessionService(
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
         if (query.labels.size > 16) throw TeamFailure("invalid_label", 400, "Filter on at most 16 labels.")
         val owner = query.owner ?: principal.member.id
-        if (owner != principal.member.id) principal.requireCloudAdministrator()
+        if (owner != principal.member.id) principal.requireCloudTeamRead()
         store.revalidate(principal)
         return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }))
     }
@@ -94,7 +94,7 @@ class CloudSessionService(
     suspend fun get(principal: Principal, id: String): CloudSession {
         principal.requireCloudRead()
         store.revalidate(principal)
-        return visible(principal, store.find(principal.teamId, id))
+        return visible(principal, store.find(principal.teamId, id), read = true)
     }
 
     suspend fun executions(principal: Principal, id: String): List<CloudExecution> {
@@ -163,8 +163,10 @@ class CloudSessionService(
         } ?: throw missing()
     }
 
-    private fun visible(principal: Principal, session: CloudSession?): CloudSession {
-        if (session == null || (session.ownerId != principal.member.id && !principal.isCloudAdministrator)) throw missing()
+    /** [read] also opens every member's session to a `team:read` key; a write needs the owner or a cloud administrator. */
+    private fun visible(principal: Principal, session: CloudSession?, read: Boolean = false): CloudSession {
+        val administrator = if (read) principal.canReadTeamCloud else principal.isCloudAdministrator
+        if (session == null || (session.ownerId != principal.member.id && !administrator)) throw missing()
         return session
     }
 

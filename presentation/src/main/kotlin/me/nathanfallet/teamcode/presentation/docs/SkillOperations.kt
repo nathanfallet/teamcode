@@ -372,7 +372,7 @@ internal fun ApiCatalog.variantOperations() {
         operationId = "getMcpUsage"; tag(ApiTags.MCP)
         summary = "MCP gateway usage"
         description = "Calls, lists, errors, refusals, bytes and time per member and server over the last `days`. " +
-            "Metadata only: never arguments or results. A member sees their own usage; administrators see the team's."
+            "Metadata only: never arguments or results. A member sees their own usage; administrators and `team:read` keys see the team's."
         parameters { queryNumber("days", "The window, 1 to 30 days (7 by default).") }
         responses {
             ok<List<McpUsageView>>("The usage.")

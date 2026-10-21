@@ -51,7 +51,7 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         if (all && memberId != null) throw TeamFailure("invalid_run_filter", 400, "Choose one member or all members.")
         val selected = memberId ?: actor.member.id
         memberId?.let(AgentRunService::identifier)
-        if (all || selected != actor.member.id) actor.requireAdmin()
+        if (all || selected != actor.member.id) actor.requireTeamRead()
         val scope = (AgentRuns.teamId eq actor.teamId) and (if (all) Op.TRUE else AgentRuns.memberId eq selected)
         val cursor = beforeId?.let { id ->
             AgentRunService.identifier(id)
@@ -97,11 +97,11 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
     }
 
     private fun writeActor(transaction: JdbcTransaction, actor: Principal) { actor.requireScope(ServiceScope.INFERENCE); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
-    private fun readActor(transaction: JdbcTransaction, actor: Principal) { actor.requireScope(ServiceScope.USAGE_READ); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
+    private fun readActor(transaction: JdbcTransaction, actor: Principal) { actor.requireUsageRead(); transaction.lockTeam(actor.teamId); requireCurrent(transaction, actor) }
     private fun accessible(actor: Principal, id: String): ResultRow {
         AgentRunService.identifier(id)
         val row = AgentRuns.selectAll().where { (AgentRuns.id eq id) and (AgentRuns.teamId eq actor.teamId) }.singleOrNull() ?: throw missing()
-        if (row[AgentRuns.memberId] != actor.member.id) actor.requireAdmin()
+        if (row[AgentRuns.memberId] != actor.member.id) actor.requireTeamRead()
         return row
     }
     private fun creator(actor: Principal, id: String): ResultRow {

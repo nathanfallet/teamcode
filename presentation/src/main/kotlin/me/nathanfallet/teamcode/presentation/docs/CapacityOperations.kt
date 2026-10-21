@@ -19,7 +19,7 @@ private fun ApiCatalog.accountOperations() {
         summary = "List the subscription accounts"
         description = "The team's provider accounts with their state: `READY` and `ACCESS_ONLY` serve requests, " +
             "`PENDING_HANDOVER` waits for `POST /api/v1/accounts/{id}/handover`, `RECONNECT_REQUIRED` must be added " +
-            "again. No credential is ever returned. Administrators only."
+            "again. No credential is ever returned. Administrators and `team:read` keys only."
         responses { ok<List<AccountView>>("The accounts.") }
     }
     post("/api/v1/accounts") {
@@ -86,7 +86,7 @@ private fun ApiCatalog.allowanceOperations() {
     get("/api/v1/members/{id}/capacity") {
         operationId = "getMemberCapacity"; tag(ApiTags.CAPACITY)
         summary = "A member's allowance today"
-        description = "The same view as `GET /api/v1/capacity`, for any member. Administrators only."
+        description = "The same view as `GET /api/v1/capacity`, for any member. Administrators and `team:read` keys only."
         parameters { pathId("id", "The member's identifier.") }
         responses {
             ok<CapacityView>("The member's capacity.")
@@ -114,14 +114,14 @@ private fun ApiCatalog.allowanceOperations() {
         summary = "List the pool accounts the caller can use"
         description = "The subscription accounts of the caller's pool and of the shared overflow pools it opted into, " +
             "with their current provider windows and whether they can serve now. `unavailableReason` is one of `disabled`, " +
-            "`pending_handover`, `reconnect_required`, `cooling_down` or `quota_exhausted`. Interactive administrators see " +
-            "every account with its name and email; members and service keys see neutral labels."
+            "`pending_handover`, `reconnect_required`, `cooling_down` or `quota_exhausted`. Interactive administrators and " +
+            "`team:read` keys see every account with its name and email; members and other service keys see neutral labels."
         responses { ok<List<PoolAccountStatusView>>("The accounts, by priority.") }
     }
     get("/api/v1/pools/budgets") {
         operationId = "listPoolBudgets"; tag(ApiTags.CAPACITY)
         summary = "List the pool budgets"
-        description = "The daily budget of each pool and whether it lends its unused credit (shared overflow). Administrators only."
+        description = "The daily budget of each pool and whether it lends its unused credit (shared overflow). Administrators and `team:read` keys only."
         responses { ok<List<PoolBudgetView>>("The pools.") }
     }
     put("/api/v1/pools/budgets") {
@@ -139,7 +139,7 @@ private fun ApiCatalog.allowanceOperations() {
         operationId = "listQuotas"; tag(ApiTags.CAPACITY)
         summary = "Provider quota windows"
         description = "The latest observed utilization (0 to 1) of each account's provider windows (five-hour, weekly, " +
-            "per model), with their reset times. Administrators only."
+            "per model), with their reset times. Administrators and `team:read` keys only."
         responses { ok<List<QuotaView>>("The windows.") }
     }
     get("/api/v1/members/{memberId}/budget-overrides") {
@@ -337,11 +337,11 @@ private fun ApiCatalog.runOperations() {
     get("/api/v1/runs") {
         operationId = "listRuns"; tag(ApiTags.RUNS)
         summary = "List agent launches"
-        description = "The caller's launches, newest first. Administrators can read one member's (`member`) or every " +
-            "member's (`all=true`). Page with `before` = `nextBeforeId`."
+        description = "The caller's launches, newest first. Administrators, and `team:read` keys, can read one member's (`member`) or every " +
+            "member's (`all=true`); a `usage:read` key stays limited to its owner's. Page with `before` = `nextBeforeId`."
         parameters {
-            queryText("member", "A member's identifier (administrators).")
-            queryFlag("all", "Every member's launches (administrators).")
+            queryText("member", "A member's identifier (administrators, `team:read`).")
+            queryFlag("all", "Every member's launches (administrators, `team:read`).")
             queryText("before", "The `nextBeforeId` of the previous page.")
         }
         responses { ok<RunPageView>("A page of launches.") }
