@@ -38,12 +38,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val adminStore = SqlCloudAdminStore(database, cipher)
     private val cluster = KubernetesClusterPort({ adminStore.connection(it) }, {
         val current = runtime.current
-        KubernetesPodOptions(
-            serverUrl = runtime.serverUrl(current),
-            runnerImage = checkNotNull(current.runnerImage) { "Set the runner image on Dashboard → Cloud sessions." },
-            runnerBinary = current.runnerBinary,
-            workspaceAccessMode = current.workspaceAccessMode,
-        )
+        val image = current.runnerImage ?: throw CloudConfigurationException("no runner image is set; set it on Dashboard → Cloud sessions")
+        if (!CloudRuntimeService.usableOrigin(runtime.serverUrl(current))) throw CloudConfigurationException("the callback origin for pods is not HTTPS or is loopback; set the server URL for pods on Dashboard → Cloud sessions")
+        KubernetesPodOptions(serverUrl = runtime.serverUrl(current), runnerImage = image, runnerBinary = current.runnerBinary, workspaceAccessMode = current.workspaceAccessMode)
     }, workspaceAccessMode = { runtime.current.workspaceAccessMode })
     private val work = SqlScheduledWork(database)
     private val replica = UUID.randomUUID().toString()
@@ -162,6 +159,14 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
 
     private companion object {
         const val RUNTIME_REFRESH_MILLIS = 5_000L
-        fun describe(error: Exception) = if (error is ClusterApiException) "Kubernetes HTTP ${error.status}" else error::class.simpleName ?: "error"
+        /** Our own configuration refusals (missing runner image, unusable origin) carry their fix; other messages are never logged. */
+        fun describe(error: Exception) = when (error) {
+            is ClusterApiException -> "Kubernetes HTTP ${error.status}"
+            is CloudConfigurationException -> error.message ?: "cloud runtime incomplete"
+            else -> error::class.simpleName ?: "error"
+        }
     }
 }
+
+/** The stored runtime cannot build a pod yet; the message says what an administrator must set. */
+private class CloudConfigurationException(message: String) : Exception(message)

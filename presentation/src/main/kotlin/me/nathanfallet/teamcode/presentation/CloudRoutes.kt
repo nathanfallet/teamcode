@@ -60,26 +60,23 @@ internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
 internal fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("not_found", 404, "Not found.") }
 
-/** Cloud sub-trees that stay reachable while cloud sessions are off: configuration, and the runner channel of pods that already run. */
-private val CLOUD_UNGATED = setOf("settings", "runtime", "clusters", "profiles", "runner")
-
 /**
- * Paths members use to run or link cloud sessions, answered `404` while the stored runtime is off: sessions, transfers,
- * transcripts, access and new GitHub links. The path is read the way routing matches it (empty segments skipped,
- * each segment percent-decoded), so no other spelling of a gated route passes; a segment that cannot be decoded is gated.
+ * Requests that start new cloud work, refused with `404` while the stored runtime is off: creating, resuming, messaging,
+ * attaching to and transferring sessions, and starting a GitHub link. Everything that reads, stops or removes stays
+ * available (pause, interrupt, delete, transcripts, unlinking), as do configuration and the runner channel of pods that
+ * already run, so turning cloud sessions off never strands a running agent. The path is read the way routing matches it
+ * (empty segments skipped, each segment percent-decoded); a segment that cannot be decoded is refused.
  */
-internal fun cloudOperationalPath(path: String): Boolean {
+internal fun cloudStartsWork(method: String, path: String): Boolean {
     val segments = path.split('/').filter { it.isNotEmpty() }.map { segment ->
         try { segment.decodeURLPart() } catch (_: Exception) { return true }
     }
-    fun under(vararg prefix: String) = segments.size >= prefix.size && prefix.indices.all { segments[it] == prefix[it] }
-    return when {
-        under("api", "v1", "cloud") -> segments.getOrNull(3) !in CLOUD_UNGATED
-        // Reading and removing one's own link stay available, so a member can always revoke it; only new links are gated.
-        under("api", "v1", "github", "link") -> segments.size > 4
-        under("dashboard", "github") -> segments.getOrNull(2) in setOf("link", "callback")
-        else -> false
-    }
+    fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == pattern[it] }
+    if (method == "POST" && (matches("api", "v1", "cloud", "sessions") || matches("api", "v1", "cloud", "sessions", "*", "resume") ||
+            matches("api", "v1", "cloud", "sessions", "*", "messages") || matches("api", "v1", "cloud", "sessions", "*", "attachments") ||
+            matches("api", "v1", "cloud", "sessions", "*", "transfer") || matches("api", "v1", "cloud", "transfers", "*", "accept"))) return true
+    if (segments.size > 4 && segments.take(4) == listOf("api", "v1", "github", "link")) return true
+    return matches("dashboard", "github", "link") || matches("dashboard", "github", "callback")
 }
 
 private fun CloudRuntime.view(runtime: CloudRuntimeService) = CloudRuntimeView(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode, runtime.serverUrl(this), updatedAt)
@@ -165,7 +162,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         val actor = call.principal
         val settings = admin.settings(actor)
         val clusters = admin.clusters(actor)
-        val sections = runtime?.let { runtimeForm(actor, it.get(actor), it.serverUrl(CloudRuntime())) }.orEmpty() +
+        val sections = runtime?.let { runtimeForm(actor, it.get(actor), it.publicOrigin) }.orEmpty() +
             clustersSection(actor, clusters) + profilesSection(admin.profiles(actor), clusters) +
             """<h2>GitHub</h2><p>The team's GitHub App, which gives each member's cloud sessions their own Git access, is configured on <a href="/dashboard/github">GitHub</a>.</p><h2>Retention, limits and transfers</h2>"""
         call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
@@ -210,7 +207,7 @@ private const val KEPT = " (defined; leave empty to keep it, or paste a replacem
 
 private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: String): String {
     val state = if (runtime.enabled) "<span class=\"chip\">on</span>" else "<span class=\"chip danger\">off</span>"
-    return "<h2>Cloud sessions $state</h2>" + help("What this controls", "<p>While cloud sessions are off, members see no cloud page and clients are told the server has no cloud sessions, so none is created, resumed or messaged. Sessions that already exist keep being managed (idle pause, retention), and a running agent is never stopped by this switch. Every replica applies a change within a few seconds, without a restart. Turning them on needs a runner image: an image holding the <code>teamcode</code> Linux binary and <code>cp</code>, copied into each session pod. Pin it by digest (<code>image@sha256:...</code>).</p>") +
+    return "<h2>Cloud sessions $state</h2>" + help("What this controls", "<p>While cloud sessions are off, members see no cloud page and clients are told the server has no cloud sessions, so none is created, resumed or messaged. Sessions that already exist keep being managed (idle pause, retention) and can still be paused, interrupted or deleted through the API; a running agent is never stopped by this switch itself. Every replica applies a change within a few seconds, without a restart. Turning them on needs a runner image: an image holding the <code>teamcode</code> Linux binary and <code>cp</code>, copied into each session pod. Pin it by digest (<code>image@sha256:...</code>).</p>") +
         """<form action="/dashboard/cloud/runtime" method="post">${csrf(actor)}<input type="hidden" name="updatedAt" value="${runtime.updatedAt ?: ""}"><label><input type="checkbox" name="enabled"${if (runtime.enabled) " checked" else ""}> Cloud sessions are on</label>""" +
         """<label>Runner image <input name="runnerImage" maxlength="512" placeholder="registry.example.com/teamcode-runner@sha256:..." value="${escape(runtime.runnerImage ?: "")}"></label>""" +
         """<label>Path of the binary in the runner image <input name="runnerBinary" maxlength="256" required value="${escape(runtime.runnerBinary)}"></label>""" +

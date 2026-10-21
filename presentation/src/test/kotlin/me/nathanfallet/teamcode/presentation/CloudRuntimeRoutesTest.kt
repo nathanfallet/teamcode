@@ -104,7 +104,9 @@ class CloudRuntimeRoutesTest {
 
         // Off: no capability, sessions answer 404, configuration stays available to administrators.
         assertTrue(features().none { it.startsWith("cloud.") })
-        assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions") { bearerAuth("admin") }.status)
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions") { bearerAuth("admin"); header("Idempotency-Key", "k1"); contentType(ContentType.Application.Json); setBody("{}") }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions") { bearerAuth("admin") }.status, "Existing sessions stay readable and stoppable")
+        assertEquals(HttpStatusCode.Unauthorized, client.post("/api/v1/cloud/sessions").status, "The state is not disclosed before authentication")
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/settings") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/clusters") { bearerAuth("admin") }.status)
         val page = client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
@@ -123,15 +125,14 @@ class CloudRuntimeRoutesTest {
         assertEquals("https://teamcode.example.test", view.effectiveServerUrl, "An empty server URL uses the public URL")
 
         // A loopback callback origin cannot be stored; turning off through the API hides everything again.
-        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":true,"runnerImage":"r:1","serverUrl":"https://127.0.0.1:8443","updatedAt":1}""") }.status)
-        assertEquals(HttpStatusCode.Conflict, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1"}""") }.status,
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":true,"runnerImage":"r:1","runnerBinary":"/usr/local/bin/teamcode","serverUrl":"https://127.0.0.1:8443","workspaceAccessMode":"ReadWriteOnce","updatedAt":1}""") }.status)
+        assertEquals(HttpStatusCode.Conflict, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1","runnerBinary":"/usr/local/bin/teamcode","serverUrl":null,"workspaceAccessMode":"ReadWriteOnce"}""") }.status,
             "A save based on an older read never overwrites another administrator's change")
         assertTrue(store.stored.enabled)
-        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1","updatedAt":1}""") }.status)
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1","runnerBinary":"/usr/local/bin/teamcode","serverUrl":null,"workspaceAccessMode":"ReadWriteOnce","updatedAt":1}""") }.status)
         assertTrue(features().none { it.startsWith("cloud.") })
-        assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions") { bearerAuth("colleague") }.status)
-        for (spelling in listOf("/api/v1//cloud/sessions", "/api/v1/cloud//sessions", "/api/v1/cl%6Fud/sessions"))
-            assertEquals(HttpStatusCode.NotFound, client.get(spelling) { bearerAuth("admin") }.status, spelling)
+        for (spelling in listOf("/api/v1/cloud/sessions", "/api/v1//cloud/sessions", "/api/v1/cloud//sessions", "/api/v1/cl%6Fud/sessions"))
+            assertEquals(HttpStatusCode.NotFound, client.post(spelling) { bearerAuth("colleague"); header("Idempotency-Key", "k2"); contentType(ContentType.Application.Json); setBody("{}") }.status, spelling)
     }
 
     @Test fun clustersAreEditedOnTheDashboardWithoutShowingTheirCredentials() = testApplication {
@@ -162,17 +163,18 @@ class CloudRuntimeRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/cloud") { header(HttpHeaders.Cookie, "teamcode_session=colleague") }.status)
     }
 
-    @Test fun onlyRunningAndLinkingPathsAreGated() {
-        for (path in listOf("/api/v1/cloud/sessions", "/api/v1/cloud/sessions/s1/pause", "/api/v1/cloud/transfers", "/api/v1/cloud/access", "//api/v1/cloud/sessions",
-            "/api/v1//cloud/sessions", "/api/v1/cl%6Fud/sessions", "/api/v1/cloud/%ZZ", "/api/v1/github/link/device", "/api/v1/github//link/device", GITHUB_CALLBACK_PATH, "/dashboard/github/link"))
-            assertTrue(cloudOperationalPath(path), path)
-        for (path in listOf("/api/v1/cloud/settings", "/api/v1/cloud/runtime", "/api/v1/cloud/clusters", "/api/v1/cloud/clusters/c1", "/api/v1/cloud/profiles",
-            "/api/v1/github/app", "/api/v1/github/links", "/dashboard/cloud", "/dashboard/github", "/api/v1/capabilities",
-            // Pods that already run keep their channel, so turning cloud sessions off never kills an agent.
-            "/api/v1/cloud/runner/register", "/api/v1/cloud/runner/heartbeat", "/api/v1/cloud/runner/inputs",
-            // A member can always see and remove their own GitHub link.
-            "/api/v1/github/link", "/dashboard/github/unlink"))
-            assertFalse(cloudOperationalPath(path), path)
+    @Test fun onlyNewWorkIsRefusedWhileOff() {
+        for ((method, path) in listOf("POST" to "/api/v1/cloud/sessions", "POST" to "/api/v1/cloud/sessions/s1/resume", "POST" to "/api/v1/cloud/sessions/s1/messages",
+            "POST" to "/api/v1/cloud/sessions/s1/attachments", "POST" to "/api/v1/cloud/sessions/s1/transfer", "POST" to "/api/v1/cloud/transfers/t1/accept",
+            "POST" to "//api/v1/cloud/sessions", "POST" to "/api/v1//cloud/sessions", "POST" to "/api/v1/cl%6Fud/sessions", "POST" to "/api/v1/cloud/%ZZ",
+            "POST" to "/api/v1/github/link/device", "POST" to "/api/v1/github//link/device/abc", "GET" to GITHUB_CALLBACK_PATH, "POST" to "/dashboard/github/link"))
+            assertTrue(cloudStartsWork(method, path), "$method $path")
+        for ((method, path) in listOf("GET" to "/api/v1/cloud/sessions", "GET" to "/api/v1/cloud/sessions/s1", "POST" to "/api/v1/cloud/sessions/s1/pause",
+            "POST" to "/api/v1/cloud/sessions/s1/interrupt", "DELETE" to "/api/v1/cloud/sessions/s1", "GET" to "/api/v1/cloud/sessions/s1/events",
+            "POST" to "/api/v1/cloud/transfers/t1/decline", "PUT" to "/api/v1/cloud/runtime", "POST" to "/api/v1/cloud/clusters", "GET" to "/api/v1/cloud/profiles",
+            "POST" to "/api/v1/cloud/runner/register", "POST" to "/api/v1/cloud/runner/heartbeat", "POST" to "/api/v1/cloud/runner/inputs",
+            "GET" to "/api/v1/github/link", "DELETE" to "/api/v1/github/link", "POST" to "/dashboard/github/unlink", "GET" to "/dashboard/github", "GET" to "/api/v1/capabilities"))
+            assertFalse(cloudStartsWork(method, path), "$method $path")
     }
 
     @Test fun runtimeValidation() {
@@ -187,6 +189,8 @@ class CloudRuntimeRoutesTest {
         refused(CloudRuntime(runnerBinary = "/opt/../teamcode"))
         refused(CloudRuntime(workspaceAccessMode = "ReadWriteMany"))
         refused(CloudRuntime(serverUrl = "http://teamcode.internal"))
+        for (loopback in listOf("https://LocalHost:8443", "https://0.0.0.0", "https://[0:0:0:0:0:0:0:1]", "https://[::]", "https://127.1", "https://2130706433", "https://api.localhost"))
+            refused(CloudRuntime(serverUrl = loopback))
         CloudRuntimeService.validate(CloudRuntime(enabled = true, runnerImage = "runner:1", serverUrl = "https://teamcode.internal"), "http://localhost:8080")
     }
 }

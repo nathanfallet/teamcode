@@ -44,7 +44,7 @@ interface CloudRuntimeStore {
  * The cloud runtime, cached for request paths and workers. [refresh] rereads the database, so a change saved on one
  * replica reaches the others within one refresh interval, without a restart.
  */
-class CloudRuntimeService(private val store: CloudRuntimeStore, private val publicOrigin: String) {
+class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin: String) {
     @Volatile private var cached = CloudRuntime()
 
     /** The last runtime read or saved by this replica. */
@@ -103,7 +103,6 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, private val publ
         private val image = Regex("[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,511}")
         private val binary = Regex("/[A-Za-z0-9._/+-]{1,255}")
         private val httpsOrigin = Regex("https://[^/?#@\\s]+/?")
-        private val loopback = Regex("https://(localhost|127\\.[0-9.]+|\\[::1])(:[0-9]+)?/?")
 
         fun normalize(runtime: CloudRuntime) = runtime.copy(
             runnerImage = runtime.runnerImage?.trim()?.takeIf { it.isNotEmpty() },
@@ -125,7 +124,19 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, private val publ
                 invalid("Session pods need an HTTPS callback origin: set the server URL for pods, since the public URL is not HTTPS or is loopback.")
         }
 
-        /** The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server. */
-        fun usableOrigin(url: String) = url.length <= 512 && httpsOrigin.matches(url) && !loopback.matches(url)
+        /** The runner refuses plain HTTP except on loopback, and a pod's loopback (or an unspecified address) is not the server. */
+        fun usableOrigin(url: String): Boolean {
+            if (url.length > 512 || !httpsOrigin.matches(url)) return false
+            val authority = url.removePrefix("https://").trimEnd('/').substringAfterLast('@')
+            val host = (if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']') else authority.substringBefore(':')).lowercase().trimEnd('.')
+            if (host.isEmpty() || host == "localhost" || host.endsWith(".localhost")) return false
+            // Only literal addresses are parsed, so no name is ever resolved here.
+            val literal = ':' in host || host.all { it.isDigit() || it == '.' }
+            if (!literal) return true
+            // Short numeric spellings (2130706433, 127.1) are refused rather than decoded.
+            if (':' !in host && host.split('.').let { parts -> parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 } }) return false
+            val address = try { java.net.InetAddress.getByName(host) } catch (_: Exception) { return false }
+            return !address.isLoopbackAddress && !address.isAnyLocalAddress
+        }
     }
 }

@@ -53,7 +53,7 @@ data class KubernetesPodOptions(
             "Set the server URL for pods (Dashboard → Cloud sessions) to the HTTPS origin session pods reach."
         }
         require(runAsUser > 0 && agentRunAsUser > 0 && runAsUser != agentRunAsUser) { "The runner and the agent run as different non-root UIDs." }
-        require(workspaceAccessMode in setOf("ReadWriteOncePod", "ReadWriteOnce")) { "Use ReadWriteOncePod or ReadWriteOnce." }
+        require(workspaceAccessMode in CloudRuntime.ACCESS_MODES) { "Use ReadWriteOncePod or ReadWriteOnce." }
     }
 }
 

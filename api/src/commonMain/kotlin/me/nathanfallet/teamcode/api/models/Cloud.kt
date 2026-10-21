@@ -205,11 +205,12 @@ data class CloudSettingsView(
 @Serializable
 data class CloudRuntimeView(
     val enabled: Boolean,
-    val runnerImage: String? = null,
-    val runnerBinary: String = "/usr/local/bin/teamcode",
-    val serverUrl: String? = null,
+    val runnerImage: String?,
+    /** Required in a `PUT`, like every field but the two below: a `PUT` replaces the whole runtime. */
+    val runnerBinary: String,
+    val serverUrl: String?,
     /** `ReadWriteOncePod`, or `ReadWriteOnce` for storage drivers without it. */
-    val workspaceAccessMode: String = "ReadWriteOncePod",
+    val workspaceAccessMode: String,
     val effectiveServerUrl: String? = null,
     val updatedAt: Long? = null,
 )

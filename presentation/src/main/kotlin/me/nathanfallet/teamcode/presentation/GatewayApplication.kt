@@ -63,8 +63,6 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
         call.response.header("Referrer-Policy", "same-origin")
         val path = call.request.path()
-        // Configuration stays reachable while cloud sessions are off; everything that runs or links answers 404.
-        if (!cloudOn() && cloudOperationalPath(path)) throw TeamFailure("not_found", 404, "Cloud sessions are disabled on this server.")
         if (team != null) {
             if (path.startsWith("/dashboard")) {
                 val live = if (path == "/dashboard/forecasts") " script-src 'self'; connect-src 'self';" else ""
@@ -101,6 +99,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 finish()
             }
         }
+        // After authentication, so the state is not disclosed to anonymous callers: while cloud sessions are off, only
+        // requests that start new work are refused; reading, stopping and configuring stay available.
+        if (!cloudOn() && !call.response.isCommitted && cloudStartsWork(call.request.httpMethod.value, path)) throw TeamFailure("not_found", 404, "Cloud sessions are turned off on this server.")
     }
     // The menu mirrors the route registrations below, so it never links to a page this server does not serve.
     attributes.put(DASHBOARD_FEATURES, buildSet {
@@ -188,7 +189,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && cloudOn() && cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else emptyList()) +
                     (if (team != null && cloudOn() && cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
-                    (if (team != null && cloudOn() && github != null) listOf("github.link.v1") else emptyList())))
+                    (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()
