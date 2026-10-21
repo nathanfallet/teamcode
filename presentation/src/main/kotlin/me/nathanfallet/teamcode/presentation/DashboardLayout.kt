@@ -215,6 +215,7 @@ main{padding:22px 16px 48px}
 .grid-2{grid-template-columns:minmax(0,1fr)}
 .cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.big{font-size:22px}
 table{display:block;overflow-x:auto}
+.window-line+.window-line{margin-top:10px}.window-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;margin-bottom:4px}
 table.stack{overflow:hidden}table.stack thead{display:none}table.stack tbody,table.stack tr,table.stack td{display:block;width:100%}table.stack td{border-bottom:0;padding:10px 16px}table.stack tr{border-bottom:1px solid var(--line);padding:6px 0}table.stack tr:last-child{border-bottom:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -261,6 +262,18 @@ internal fun ratioMeter(ratio: Double, label: String): String {
     val bounded = ratio.coerceIn(0.0, 1.0)
     val tone = when { ratio >= .9 -> " danger"; ratio >= .75 -> " warn"; else -> "" }
     return """<div class="meter$tone" role="presentation"><span style="width:${String.format(Locale.ROOT, "%.1f", bounded * 100)}%"></span></div><span class="meter-label">$label</span>"""
+}
+
+/** Time left until [resetsAtMillis] as `2d 4h 12m`: leading zero units are dropped, minutes always show, a past instant reads `0m`. */
+internal fun remainingLabel(resetsAtMillis: Long, nowMillis: Long): String {
+    val minutes = ((resetsAtMillis - nowMillis).coerceAtLeast(0)) / 60_000
+    val days = minutes / 1_440
+    val hours = minutes % 1_440 / 60
+    return buildList {
+        if (days > 0) add("${days}d")
+        if (days > 0 || hours > 0) add("${hours}h")
+        add("${minutes % 60}m")
+    }.joinToString(" ")
 }
 
 internal fun percent(ratio: Double) = String.format(Locale.ROOT, "%.0f%%", ratio * 100)
