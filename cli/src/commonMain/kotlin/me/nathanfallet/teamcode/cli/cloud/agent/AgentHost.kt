@@ -75,6 +75,8 @@ internal class AgentHost(
     private val handled = LinkedHashMap<String, RunnerInputAckView>()
     private val buffer = ArrayDeque<RunnerEventView>()
     private var sequence = 0L
+    /** Events per upload; narrowed while the server refuses a batch for its content. */
+    private var batchLimit = MAX_BATCH
     private var settings: AgentSettings? = null
     private var adapter: AgentAdapter? = null
     private var process: AgentProcess? = null
@@ -265,15 +267,36 @@ internal class AgentHost(
                 buffer.addLast(RunnerEventView(++sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", "transcript_overflow"); put("dropped", lost) }))
             }
             var bytes = 0
-            buffer.takeWhile { event -> bytes += event.data.toString().length; bytes <= MAX_BATCH_BYTES }.take(MAX_BATCH).ifEmpty { buffer.take(1) }
+            // The server limit counts UTF-8 bytes, not characters.
+            buffer.takeWhile { event -> bytes += event.data.toString().encodeToByteArray().size; bytes <= MAX_BATCH_BYTES }.take(batchLimit).ifEmpty { buffer.take(1) }
         }
         if (batch.isEmpty()) return false
         val ack = try { channel.events(batch) } catch (error: CancellationException) { throw error } catch (error: Exception) {
             if (handle(error)) return false
+            if (error is TeamCodeException && permanentlyRejected(error.statusCode)) return isolateRejected(batch)
             sleep(UPLOAD_MILLIS * 4); return false
         }
+        batchLimit = MAX_BATCH
         lock.withLock { while (buffer.isNotEmpty() && buffer.first().sequence <= ack.acceptedThrough) buffer.removeFirst() }
         return lock.withLock { buffer.isNotEmpty() }
+    }
+
+    /** A request the server will never accept as sent (not an auth, timing or conflict status); retrying it unchanged cannot succeed. */
+    private fun permanentlyRejected(status: Int) = status in 400..499 && status !in setOf(401, 403, 404, 408, 409, 423, 425, 429)
+
+    /**
+     * Narrows a permanently rejected batch: halves the next batches until one event is left, then replaces that
+     * event, in place so sequence numbers stay consecutive, with a small marker. One bad event never blocks the transcript.
+     */
+    private suspend fun isolateRejected(batch: List<RunnerEventView>): Boolean {
+        if (batch.size > 1) { batchLimit = batch.size / 2; return true }
+        val rejected = batch.single()
+        log("The server refused one transcript event; replacing it with a marker.")
+        lock.withLock {
+            val index = buffer.indexOfFirst { it.sequence == rejected.sequence }
+            if (index >= 0) buffer[index] = RunnerEventView(rejected.sequence, CloudEventTypes.ERROR, buildJsonObject { put("code", "transcript_event_rejected"); put("type", rejected.type) })
+        }
+        return true
     }
 
     private suspend fun flush(deadline: Long): Boolean {
