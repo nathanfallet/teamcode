@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.domain.capacity
 
+import me.nathanfallet.teamcode.domain.accounts.AccountRecord
+
 enum class Pace { UNKNOWN, NORMAL, SLOW_DOWN, CAN_INCREASE, PAUSE }
 data class WindowPacing(val quota: AccountQuota, val forecast: QuotaForecast)
 data class PacingAdvice(val pace: Pace, val maxConcurrent: Int, val minIntervalMillis: Long, val message: String)
@@ -41,11 +43,9 @@ class ForecastHistoryUseCase(private val threshold: Double = DEFAULT_QUOTA_PRESS
 }
 
 /**
- * How far a SLOW_DOWN projection overshoots, from the *affordable share*: the fraction of the current burn rate that
- * would reach the pressure threshold exactly at the end of the pacing horizon, `(projected threshold time - now) /
- * (min(reset, now + horizon) - now)`. A window projected to cross the threshold just before that end affords almost all
- * of its current rate; one projected to cross it now affords none. Pacing never caps parallelism: each level only spaces
- * admissions, more as the overshoot grows:
+ * How hard a SLOW_DOWN spaces admissions, from the [CapacityGap]'s *affordable share*: the share of the current burn
+ * rate that would last until capacity comes back, `(gap start - now) / (gap end - now)`. A longer gap, or a closer
+ * one, affords less. Pacing never caps parallelism: each level only spaces admissions, more as the share shrinks:
  *
  * | Level    | Affordable share | Minimum interval |
  * |----------|------------------|------------------|
@@ -53,7 +53,7 @@ class ForecastHistoryUseCase(private val threshold: Double = DEFAULT_QUOTA_PRESS
  * | MODERATE | 1/4 to 1/2       | 5 s              |
  * | SEVERE   | under 1/4        | 10 s             |
  *
- * PAUSE (a window already at the threshold) spaces admissions by thirty seconds.
+ * PAUSE (no usable account left) spaces admissions by thirty seconds.
  */
 enum class SlowDownLevel(val minimumAffordableShare: Double, val intervalMillis: Long) {
     LIGHT(.5, 2_000), MODERATE(.25, 5_000), SEVERE(0.0, 10_000);
@@ -63,59 +63,52 @@ enum class SlowDownLevel(val minimumAffordableShare: Double, val intervalMillis:
     }
 }
 
-/**
- * How far ahead a projection can pressure an account. The burn rate is learned over the latest hour; extrapolating it
- * across a seven-day window would assume that hour repeats around the clock for days, which flags every account in
- * active use. Five hours matches the shortest subscription window.
- */
-const val PACING_HORIZON_MILLIS = 5 * 3_600_000L
-
-/** A window projected to reach the threshold before its reset and within [PACING_HORIZON_MILLIS]; an unknown ETA counts. */
-fun WindowPacing.overshoots(now: Long): Boolean = forecast.state == QuotaForecast.State.EXHAUSTS_FIRST &&
-    (forecast.reachesThresholdAtMillis ?: now) < now + PACING_HORIZON_MILLIS
-
-/** The share of the current burn rate that still fits before the horizon ends, for a window that [overshoots]. */
-fun WindowPacing.affordableShare(now: Long): Double? {
-    if (!overshoots(now)) return null
-    val eta = forecast.reachesThresholdAtMillis ?: return null
-    val reset = quota.resetsAtMillis ?: return null
-    if (reset <= now) return null
-    val end = minOf(reset, now + PACING_HORIZON_MILLIS)
-    return ((eta - now).coerceAtLeast(0).toDouble() / (end - now)).coerceIn(0.0, 1.0)
-}
-
 /** Tightening first: a higher pace, then a longer interval, then fewer permitted requests (zero is unlimited). */
 val PACING_STRICTNESS: Comparator<PacingAdvice> = compareBy<PacingAdvice> { when (it.pace) {
     Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1; Pace.UNKNOWN -> 2; Pace.SLOW_DOWN -> 3; Pace.PAUSE -> 4
 } }.thenBy { it.minIntervalMillis }.thenByDescending { if (it.maxConcurrent <= 0) Int.MAX_VALUE else it.maxConcurrent }
 
-/** Chooses the least-constrained eligible account, respecting every window on that account. */
-class PacingUseCase {
+/**
+ * Paces one route target from the capacity of every account it can use, taken together. The goal is to never run
+ * out of quota entirely: as long as some account has quota, work goes on at full speed. The gateway slows down only
+ * when, at the team's current burn rate, every usable account is projected to be empty before a reset gives some
+ * capacity back (a [CapacityGap]), and only spaces admissions, more as the gap gets longer or closer ([SlowDownLevel]).
+ *
+ * - No usable account at all (every one exhausted, disconnected, disabled or cooling): PAUSE.
+ * - A gap ahead: SLOW_DOWN, graded by the gap's affordable share.
+ * - No gap, but an account without a known five-hour or seven-day window, or no known team rate for one of them:
+ *   UNKNOWN (no spacing, no encouragement either).
+ * - No gap even at twice the current rate: CAN_INCREASE. Otherwise NORMAL.
+ *
+ * The team rate for a window is the sum of the learned rates of that window over [accounts] (see
+ * [ForecastHistoryUseCase]), as a share of one account's window per hour: accounts of one provider are taken as
+ * comparable. The capacity is [AccountHeadroomUseCase]'s, for [model] when given.
+ */
+class PacingUseCase(
+    private val headroom: AccountHeadroomUseCase = AccountHeadroomUseCase(),
+    private val projection: ProjectCapacityUseCase = ProjectCapacityUseCase(),
+) {
     /** [maximum] is the applicable member, group or run concurrency limit, zero when none applies; pacing never lowers it. */
-    fun advise(accounts: List<List<WindowPacing>>, maximum: Int, now: Long): PacingAdvice {
+    fun advise(
+        accounts: List<AccountPacing>, maximum: Int, now: Long, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD,
+        model: String? = null,
+    ): PacingAdvice {
         require(maximum >= 0)
         if (accounts.isEmpty()) return advice(Pace.UNKNOWN, maximum)
-        val states = accounts.map { windows ->
-            val pace = when {
-                windows.any { it.forecast.state == QuotaForecast.State.EXHAUSTED } -> Pace.PAUSE
-                !windows.map { it.quota.window }.containsAll(listOf("five_hour", "seven_day")) -> Pace.UNKNOWN
-                windows.any { it.forecast.state in setOf(QuotaForecast.State.UNKNOWN, QuotaForecast.State.STALE) } -> Pace.UNKNOWN
-                windows.any { it.overshoots(now) } -> Pace.SLOW_DOWN
-                windows.all { it.quota.utilization < .5 && it.forecast.state in setOf(QuotaForecast.State.IDLE, QuotaForecast.State.RESET_FIRST) } -> Pace.CAN_INCREASE
-                else -> Pace.NORMAL
-            }
-            // The most pressured overshooting window of an account bounds what that account can absorb. An overshooting
-            // window whose share cannot be computed counts as fully pressured (SEVERE), the conservative former behavior.
-            pace to (windows.filter { it.overshoots(now) }.minOfOrNull { it.affordableShare(now) ?: 0.0 } ?: 0.0)
-        }
-        // An account whose forecast is unknown but whose every window still has clear headroom (under half used) is not
-        // under pressure: it must not let another account's throttle win. Any other unknown account stays conservative.
-        val selected = states.withIndex().minWith(compareBy<IndexedValue<Pair<Pace, Double>>> { (index, state) -> when (state.first) {
-            Pace.CAN_INCREASE -> 0; Pace.NORMAL -> 1
-            Pace.UNKNOWN -> if (accounts[index].isNotEmpty() && accounts[index].all { it.quota.utilization < .5 }) 2 else 4
-            Pace.SLOW_DOWN -> 3; Pace.PAUSE -> 5
-        } }.thenByDescending { it.value.second }).value
-        return advice(selected.first, maximum, SlowDownLevel.of(selected.second))
+        val observations = accounts.map { account -> PoolAccountObservation(account.account, 0, account.windows.map { it.quota }) }
+        val limits = accounts.associate { it.account.id to it.modelLimits }
+        val meteredLimit: (AccountRecord) -> String? = { record -> model?.let { limits[record.id]?.get(it.lowercase()) } }
+        val usable = headroom.usable(observations, now, pressureThreshold, model, meteredLimit)
+        if (usable.isEmpty()) return advice(Pace.PAUSE, maximum)
+        val exhausted = headroom.exhausted(observations, now, pressureThreshold, model, meteredLimit)
+        val rates = accounts.flatMap { it.windows }.filter { it.forecast.pointsPerHour != null }
+            .groupBy { it.quota.window }.mapValues { (_, windows) -> windows.sumOf { it.forecast.pointsPerHour!! / 100 } }
+        val gap = projection.firstGap(usable, exhausted, rates, now, pressureThreshold)
+        if (gap != null) return advice(Pace.SLOW_DOWN, maximum, SlowDownLevel.of(gap.affordableShare(now)))
+        val known = SHARED_WINDOWS.all { it in rates } && usable.all { account -> SHARED_WINDOWS.all { account.window(it) != null } }
+        if (!known) return advice(Pace.UNKNOWN, maximum)
+        val doubled = projection.firstGap(usable, exhausted, rates.mapValues { it.value * 2 }, now, pressureThreshold)
+        return advice(if (doubled == null) Pace.CAN_INCREASE else Pace.NORMAL, maximum)
     }
     /** Pacing only spaces admissions; the concurrency stays the member, group or run limit (zero is unlimited). */
     internal fun advice(pace: Pace, maximum: Int, level: SlowDownLevel = SlowDownLevel.SEVERE): PacingAdvice = when (pace) {
@@ -126,11 +119,14 @@ class PacingUseCase {
     /** The same advice under a tighter concurrency ceiling (zero keeps the advice's own). */
     internal fun withCeiling(advice: PacingAdvice, ceiling: Int): PacingAdvice =
         describe(advice.pace, concurrencyCeiling(listOf(advice.maxConcurrent, ceiling)), advice.minIntervalMillis)
-    companion object { const val PAUSE_INTERVAL_MILLIS = 30_000L }
+    companion object {
+        const val PAUSE_INTERVAL_MILLIS = 30_000L
+        private val SHARED_WINDOWS = listOf("five_hour", "seven_day")
+    }
     private fun describe(pace: Pace, maximum: Int, interval: Long) = PacingAdvice(pace, maximum, interval, when (pace) {
         Pace.UNKNOWN -> "Quota observations are missing or stale. Keep current useful work; do not increase parallelism based on this signal."
         Pace.NORMAL -> "Consumption is within the observed capacity trajectory. Continue useful work within your team limits."
-        Pace.SLOW_DOWN -> "The current burn rate is projected to reach a quota within a few hours. Reduce optional work; " +
+        Pace.SLOW_DOWN -> "At the current burn rate, every usable account is projected to run out of quota before one resets. Reduce optional work; " +
             "the gateway spaces admissions by ${interval / 1000} seconds."
         Pace.CAN_INCREASE -> "Fresh observations show spare capacity. If useful work is already queued, you may increase parallelism" +
             (if (maximum > 0) " up to $maximum" else "") + ". Do not invent work to consume quota."

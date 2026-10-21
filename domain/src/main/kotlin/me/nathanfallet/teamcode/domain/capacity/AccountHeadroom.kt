@@ -31,19 +31,33 @@ class AccountHeadroomUseCase {
     fun usable(
         accounts: List<PoolAccountObservation>, now: Long, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD,
         model: String? = null, meteredLimit: (AccountRecord) -> String? = { null },
-    ): List<AccountHeadroom> {
+    ): List<AccountHeadroom> = classify(accounts, now, pressureThreshold, model, meteredLimit).filter { it.second == null }.map { it.first }
+
+    /**
+     * The accounts that only lack quota ([AccountUnavailability.QUOTA_EXHAUSTED]): they come back when their windows at
+     * the threshold reset. Each lists every current window that applies, those at the threshold with no remaining share.
+     * Disabled, disconnected, pending and cooling accounts are in neither list.
+     */
+    fun exhausted(
+        accounts: List<PoolAccountObservation>, now: Long, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD,
+        model: String? = null, meteredLimit: (AccountRecord) -> String? = { null },
+    ): List<AccountHeadroom> = classify(accounts, now, pressureThreshold, model, meteredLimit)
+        .filter { it.second == AccountUnavailability.QUOTA_EXHAUSTED }.map { it.first }
+
+    private fun classify(
+        accounts: List<PoolAccountObservation>, now: Long, pressureThreshold: Double, model: String?, meteredLimit: (AccountRecord) -> String?,
+    ): List<Pair<AccountHeadroom, AccountUnavailability?>> {
         require(pressureThreshold in 0.0..1.0)
-        return accounts.mapNotNull { observed ->
+        return accounts.map { observed ->
             val account = observed.account
             val applicable = observed.windows.filter { quota ->
                 quota.accountId == account.id && quota.isCurrent(now) &&
                     (!quota.window.startsWith("model:") || (model != null && quota.appliesTo(model, meteredLimit(account))))
             }
             val exhausted = applicable.any { it.utilization >= pressureThreshold }
-            if (AccountUnavailability.of(account, observed.cooldownUntilMillis, exhausted, now) != null) return@mapNotNull null
             AccountHeadroom(account, applicable.sortedBy { it.window }.map {
                 WindowHeadroom(it.window, it.utilization, (pressureThreshold - it.utilization).coerceIn(0.0, 1.0), it.observedAtMillis, it.resetsAtMillis)
-            })
+            }) to AccountUnavailability.of(account, observed.cooldownUntilMillis, exhausted, now)
         }
     }
 }

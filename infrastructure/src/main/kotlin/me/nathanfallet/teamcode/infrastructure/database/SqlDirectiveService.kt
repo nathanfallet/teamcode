@@ -95,7 +95,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                     val observed = observedConcurrency.next(current?.observed, current?.directive?.advice, running)
                     val advice = if (runPolicies.truncated && scopedAllowanceAvailable) PacingAdvice(Pace.UNKNOWN, runLimits.maxConcurrent, 0,
                         "Recent launch/session metadata is incomplete. Do not increase parallelism from this signal; server-side limits remain authoritative.")
-                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() })
+                        else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable)
                     // A different route, policy, pool, priority or eligible account set must not
                     // inherit optimistic advice (or an old throttle) from another capacity context.
                     val scope = listOf(runLimits.maxConcurrent.toString(), pool.orEmpty(), policy.allowSharedOverflow.toString(), modelPolicy.toString(), valid.toString(), scopedAllowanceAvailable.toString(),

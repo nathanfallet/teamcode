@@ -35,6 +35,21 @@ class AccountHeadroomTest {
         assertEquals(listOf("usable", "access"), AccountHeadroomUseCase().usable(accounts, now).map { it.account.id })
     }
 
+    @Test fun exhaustedAccountsAreListedApartWithTheirResets() {
+        val accounts = listOf(
+            observed(account("usable"), quota("usable", "five_hour", .3)),
+            observed(account("exhausted"), quota("exhausted", "five_hour", .3), quota("exhausted", "seven_day", .97, resetsIn = 86_400_000)),
+            observed(account("reconnect", AccountState.RECONNECT_REQUIRED), quota("reconnect", "five_hour", .99)),
+            observed(account("cooling"), quota("cooling", "five_hour", .99), cooldownUntil = now + 1),
+            observed(account("disabled", disabled = true), quota("disabled", "five_hour", .99)),
+        )
+        val exhausted = AccountHeadroomUseCase().exhausted(accounts, now).single()
+        assertEquals("exhausted", exhausted.account.id)
+        assertEquals(0.0, exhausted.window("seven_day")!!.remainingShare)
+        assertEquals(now + 86_400_000, exhausted.window("seven_day")!!.resetsAtMillis)
+        assertEquals(.65, exhausted.window("five_hour")!!.remainingShare, 1e-9)
+    }
+
     @Test fun staleOrUnknownWindowsAreAbsentNotFull() {
         val result = AccountHeadroomUseCase().usable(listOf(observed(account("a"),
             quota("a", "five_hour", .99, resetsIn = -1), quota("a", "seven_day", .99, resetsIn = null, observedAgo = MAX_QUOTA_OBSERVATION_AGE_MILLIS + 1))), now).single()

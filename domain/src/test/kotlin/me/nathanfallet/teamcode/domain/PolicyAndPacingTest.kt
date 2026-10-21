@@ -22,13 +22,16 @@ class PolicyAndPacingTest {
             history.evaluate(values.mapIndexed { i, used -> AccountQuota("account", window, used, i * 60_000L, 3_600_000) }, now)!!
         }
         val controller = PacingUseCase()
-        assertEquals(Pace.SLOW_DOWN, controller.advise(listOf(windows(listOf(.1, .2, .3))), 5, 120_000).pace)
-        val spare = controller.advise(listOf(windows(listOf(.1, .1, .1))), 5, 120_000)
+        val record = me.nathanfallet.teamcode.domain.accounts.AccountRecord("account", me.nathanfallet.teamcode.domain.accounts.AccountIdentity("team", "anthropic", "account", "org"),
+            "account", 1, false, null, 0, me.nathanfallet.teamcode.domain.accounts.AccountState.READY)
+        fun account(windows: List<WindowPacing>) = listOf(AccountPacing(record, windows))
+        assertEquals(Pace.SLOW_DOWN, controller.advise(account(windows(listOf(.1, .2, .3))), 5, 120_000).pace)
+        val spare = controller.advise(account(windows(listOf(.1, .1, .1))), 5, 120_000)
         assertEquals(Pace.CAN_INCREASE, spare.pace)
         assertEquals(5, spare.maxConcurrent)
-        assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .1, .1)).take(1)), 5, 120_000).pace)
-        assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .1, .1), 600_000)), 5, 600_000).pace)
-        assertEquals(Pace.UNKNOWN, controller.advise(listOf(windows(listOf(.1, .2, .05))), 5, 120_000).pace)
-        assertEquals(Pace.PAUSE, controller.advise(listOf(windows(listOf(.95, .95, .95))), 5, 120_000).pace)
+        assertEquals(Pace.UNKNOWN, controller.advise(account(windows(listOf(.1, .1, .1)).take(1)), 5, 120_000).pace)
+        assertEquals(Pace.UNKNOWN, controller.advise(account(windows(listOf(.1, .1, .1), 600_000)), 5, 600_000).pace)
+        assertEquals(Pace.UNKNOWN, controller.advise(account(windows(listOf(.1, .2, .05))), 5, 120_000).pace)
+        assertEquals(Pace.PAUSE, controller.advise(account(windows(listOf(.95, .95, .95))), 5, 120_000).pace)
     }
 }

@@ -18,7 +18,7 @@ class RoutePacingTest {
         }
         return AccountPacing(record, windows)
     }
-    @Test fun forecastsOnlyTheActiveProviderModelAndSelectablePriority() {
+    @Test fun forecastsOnlyTheActiveProviderAndModel() {
         val controller = RoutePacingUseCase()
         val busy = account("anthropic", listOf(.1, .2, .3), 5)
         val idle = account("codex", listOf(.1, .1, .1))
@@ -38,17 +38,21 @@ class RoutePacingTest {
         assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus, astra), listOf(busy, idle), 4, now).pace)
         assertEquals(Pace.UNKNOWN, controller.advise(setOf(opus, astra), listOf(lowerPriority), 4, now).pace)
     }
-    @Test fun idleOverflowCannotHidePressureOnTheHomeAccountButAnEligiblePinCanUseIt() {
+    @Test fun everyAccountTheScopeCanUseCountsWhateverItsPoolOrPriority() {
         val controller = RoutePacingUseCase()
-        val busy = account("anthropic", listOf(.1, .2, .3), 0).let { it.copy(account = it.account.copy(poolId = "home")) }
-        val idle = account("anthropic", listOf(.1, .1, .1), 10).let { it.copy(account = it.account.copy(poolId = "reserve")) }
-        assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true).pace)
-        assertEquals(Pace.CAN_INCREASE, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true,
-            pinnedAccountIds = mapOf(opus to setOf(idle.account.id))).pace)
-        assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(busy, idle), 4, now, homePool = "home", preferHome = true,
-            pinnedAccountIds = mapOf(opus to setOf(busy.account.id, idle.account.id))).pace)
-        val exhausted = busy.copy(windows = account("anthropic", listOf(1.0, 1.0, 1.0)).windows)
-        assertEquals(Pace.CAN_INCREASE, controller.advise(setOf(opus), listOf(exhausted, idle), 4, now, homePool = "home", preferHome = true).pace)
+        fun window(id: String, name: String, used: Double, rate: Double, resetIn: Long) =
+            WindowPacing(AccountQuota(id, name, used, now, now + resetIn), QuotaForecast(null, rate * 100, if (rate == 0.0) QuotaForecast.State.IDLE else QuotaForecast.State.RESET_FIRST))
+        fun account(id: String, pool: String, priority: Int, fiveHour: Double, rate: Double, resetIn: Long) = AccountPacing(
+            AccountRecord(id, AccountIdentity("team", "anthropic", id, "org"), id, 1, false, pool, priority, AccountState.READY),
+            listOf(window(id, "five_hour", fiveHour, rate, resetIn), window(id, "seven_day", .1, 0.0, 6 * 86_400_000L)))
+        // The home account empties in 30 minutes and resets in an hour: alone, a gap.
+        val home = account("home", "home", 0, .9, .1, 3_600_000)
+        assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(home), 0, now).pace)
+        // An idle overflow account of lower priority bridges it: no slowdown.
+        val reserve = account("reserve", "reserve", 10, .1, 0.0, 4 * 3_600_000L)
+        val advice = controller.advise(setOf(opus), listOf(home, reserve), 0, now)
+        assertNotEquals(Pace.SLOW_DOWN, advice.pace)
+        assertEquals(0L, advice.minIntervalMillis)
     }
     @Test fun recoveryMustStayStableAndPressureOrMissingDataTakesEffectImmediately() {
         val useCase = PacingHysteresisUseCase()

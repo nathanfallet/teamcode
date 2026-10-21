@@ -4,6 +4,9 @@ import me.nathanfallet.teamcode.domain.capacity.*
 import kotlin.test.*
 
 class UnknownResetTest {
+    private val record = me.nathanfallet.teamcode.domain.accounts.AccountRecord("account", me.nathanfallet.teamcode.domain.accounts.AccountIdentity("team", "anthropic", "account", "org"),
+        "account", 1, false, null, 0, me.nathanfallet.teamcode.domain.accounts.AccountState.READY)
+
     @Test fun unknownResetNeverPromisesHeadroomButFreshExhaustionRemainsActionable() {
         val now = 1_000_000L
         val history = ForecastHistoryUseCase()
@@ -14,15 +17,15 @@ class UnknownResetTest {
         assertEquals(QuotaForecast.State.UNKNOWN, spare.forecast.state)
         assertNull(spare.forecast.reachesThresholdAtMillis)
         assertNull(spare.forecast.pointsPerHour)
-        assertEquals(Pace.UNKNOWN, PacingUseCase().advise(listOf(listOf(spare)), 2, now).pace)
+        assertEquals(Pace.UNKNOWN, PacingUseCase().advise(listOf(AccountPacing(record, listOf(spare))), 2, now).pace)
         val full = window(.99)
         assertEquals(QuotaForecast.State.EXHAUSTED, full.forecast.state)
         assertNull(full.forecast.pointsPerHour)
         // A missing weekly window cannot negate a fresh, exhausted session window.
-        assertEquals(Pace.PAUSE, PacingUseCase().advise(listOf(listOf(full)), 2, now).pace)
+        assertEquals(Pace.PAUSE, PacingUseCase().advise(listOf(AccountPacing(record, listOf(full))), 2, now).pace)
         val stale = history.evaluate(listOf(full.quota), now + MAX_QUOTA_OBSERVATION_AGE_MILLIS + 1)!!
         assertEquals(QuotaForecast.State.STALE, stale.forecast.state)
-        assertEquals(Pace.UNKNOWN, PacingUseCase().advise(listOf(listOf(stale)), 2, now + MAX_QUOTA_OBSERVATION_AGE_MILLIS + 1).pace)
+        assertEquals(Pace.UNKNOWN, PacingUseCase().advise(listOf(AccountPacing(record, listOf(stale))), 2, now + MAX_QUOTA_OBSERVATION_AGE_MILLIS + 1).pace)
     }
 
     @Test fun currentWindowsUseKnownResetOrBoundedUnknownFreshness() {
