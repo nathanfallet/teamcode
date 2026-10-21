@@ -36,7 +36,7 @@ class ProgressivePacingTest {
     @Test fun routesWithoutAMemberLimitHaveNoConcurrencyCeiling() {
         val route = RoutePacingUseCase()
         val opus = RouteTarget("anthropic", "claude-opus-test")
-        val wide = listOf("a", "b", "c").map { account(it, utilization = .7) }
+        val wide = listOf("a", "b", "c").map { account(it, utilization = .3) }
         val idle = route.advise(setOf(opus), wide, 0, now)
         assertEquals(Triple(Pace.CAN_INCREASE, 0, 0L), Triple(idle.pace, idle.maxConcurrent, idle.minIntervalMillis))
         assertEquals(0, route.advise(setOf(opus), wide.take(1), 0, now).maxConcurrent, "A single account sets no ceiling either")

@@ -44,8 +44,8 @@ class ForecastHistoryUseCase(private val threshold: Double = DEFAULT_QUOTA_PRESS
 
 /**
  * How hard a SLOW_DOWN spaces admissions, from the [CapacityGap]'s *affordable share*: the share of the current burn
- * rate that would last until capacity comes back, `(gap start - now) / (gap end - now)`. A longer gap, or a closer
- * one, affords less. Pacing never caps parallelism: each level only spaces admissions, more as the share shrinks:
+ * rate that would last until capacity comes back, `(gap start - now) / (min(gap end, now + 24 h) - now)`. A longer gap,
+ * or a closer one, affords less; a gap a day or more away is light at most. Pacing never caps parallelism: each level only spaces admissions, more as the share shrinks:
  *
  * | Level    | Affordable share | Minimum interval |
  * |----------|------------------|------------------|
@@ -78,9 +78,9 @@ val PACING_STRICTNESS: Comparator<PacingAdvice> = compareBy<PacingAdvice> { when
  * - A gap ahead: SLOW_DOWN, graded by the gap's affordable share.
  * - No gap, but an account without a known five-hour or seven-day window, or no known team rate for one of them:
  *   UNKNOWN (no spacing, no encouragement either).
- * - No gap even at twice the current rate: CAN_INCREASE. Otherwise NORMAL.
+ * - No gap even at twice the current rate, and every usable window under half used: CAN_INCREASE. Otherwise NORMAL.
  *
- * The team rate for a window is the sum of the learned rates of that window over [accounts] (see
+ * The team rate for a window is the sum of the learned rates of that window over the usable accounts (see
  * [ForecastHistoryUseCase]), as a share of one account's window per hour: accounts of one provider are taken as
  * comparable. The capacity is [AccountHeadroomUseCase]'s, for [model] when given.
  */
@@ -101,14 +101,17 @@ class PacingUseCase(
         val usable = headroom.usable(observations, now, pressureThreshold, model, meteredLimit)
         if (usable.isEmpty()) return advice(Pace.PAUSE, maximum)
         val exhausted = headroom.exhausted(observations, now, pressureThreshold, model, meteredLimit)
-        val rates = accounts.flatMap { it.windows }.filter { it.forecast.pointsPerHour != null }
+        // The load runs on the usable accounts: an exhausted account's past rate has already moved to them.
+        val serving = usable.map { it.account.id }.toSet()
+        val rates = accounts.filter { it.account.id in serving }.flatMap { it.windows }.filter { it.forecast.pointsPerHour != null }
             .groupBy { it.quota.window }.mapValues { (_, windows) -> windows.sumOf { it.forecast.pointsPerHour!! / 100 } }
         val gap = projection.firstGap(usable, exhausted, rates, now, pressureThreshold)
         if (gap != null) return advice(Pace.SLOW_DOWN, maximum, SlowDownLevel.of(gap.affordableShare(now)))
         val known = SHARED_WINDOWS.all { it in rates } && usable.all { account -> SHARED_WINDOWS.all { account.window(it) != null } }
         if (!known) return advice(Pace.UNKNOWN, maximum)
-        val doubled = projection.firstGap(usable, exhausted, rates.mapValues { it.value * 2 }, now, pressureThreshold)
-        return advice(if (doubled == null) Pace.CAN_INCREASE else Pace.NORMAL, maximum)
+        val spare = usable.all { account -> account.windows.all { it.utilization < CAN_INCREASE_UTILIZATION } } &&
+            projection.firstGap(usable, exhausted, rates.mapValues { it.value * 2 }, now, pressureThreshold) == null
+        return advice(if (spare) Pace.CAN_INCREASE else Pace.NORMAL, maximum)
     }
     /** Pacing only spaces admissions; the concurrency stays the member, group or run limit (zero is unlimited). */
     internal fun advice(pace: Pace, maximum: Int, level: SlowDownLevel = SlowDownLevel.SEVERE): PacingAdvice = when (pace) {
@@ -122,6 +125,8 @@ class PacingUseCase(
     companion object {
         const val PAUSE_INTERVAL_MILLIS = 30_000L
         private val SHARED_WINDOWS = listOf("five_hour", "seven_day")
+        /** CAN_INCREASE also needs every usable window under half used: a zero rate near the threshold is no spare capacity. */
+        private const val CAN_INCREASE_UTILIZATION = .5
     }
     private fun describe(pace: Pace, maximum: Int, interval: Long) = PacingAdvice(pace, maximum, interval, when (pace) {
         Pace.UNKNOWN -> "Quota observations are missing or stale. Keep current useful work; do not increase parallelism based on this signal."

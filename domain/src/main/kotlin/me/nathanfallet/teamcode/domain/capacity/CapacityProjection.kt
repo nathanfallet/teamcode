@@ -8,12 +8,19 @@ import kotlin.math.roundToLong
  */
 data class CapacityGap(val startsAtMillis: Long, val endsAtMillis: Long) {
     /**
-     * The share of the current burn rate that would just last until capacity comes back: the time capacity lasts over
-     * the time until it returns, `(start - now) / (end - now)`. It shrinks as the gap gets longer or closer.
+     * The share of the current burn rate that would just last until capacity comes back, within the pacing lookahead:
+     * `(start - now) / (min(end, now + lookahead) - now)`. It shrinks as the gap gets longer or closer. The burn rate is
+     * learned over the latest hour, so a gap a day or more away is graded as if it ended at the lookahead: it slows down
+     * lightly at most, however long it lasts.
      */
-    fun affordableShare(now: Long): Double =
-        if (endsAtMillis <= now) 1.0 else ((startsAtMillis - now).coerceAtLeast(0).toDouble() / (endsAtMillis - now)).coerceIn(0.0, 1.0)
+    fun affordableShare(now: Long, lookaheadMillis: Long = PACING_LOOKAHEAD_MILLIS): Double {
+        val end = minOf(endsAtMillis, now + lookaheadMillis)
+        return if (end <= now) 1.0 else ((startsAtMillis - now).coerceAtLeast(0).toDouble() / (end - now)).coerceIn(0.0, 1.0)
+    }
 }
+
+/** How far the latest-hour burn rate is trusted to grade a gap ([CapacityGap.affordableShare]): one day. */
+const val PACING_LOOKAHEAD_MILLIS = 24 * 3_600_000L
 
 /** How far ahead the projection looks: one seven-day window, the longest a subscription resets over. */
 const val PROJECTION_HORIZON_MILLIS = 7 * 86_400_000L
@@ -29,7 +36,7 @@ fun windowPeriodMillis(window: String): Long? = when {
  * Projects the team's current burn rate over the remaining capacity of every account it can use, to find the first
  * [CapacityGap]. The capacity is [AccountHeadroomUseCase]'s: [usable] accounts serve now, [exhausted] ones count for
  * nothing until their windows at the threshold reset. Disconnected, disabled, pending and cooling accounts are in
- * neither list, so they never count.
+ * neither list, so they never count (the directive controller does not pass cooling accounts at all).
  *
  * The whole team load goes to one account at a time, the one whose next reset comes first (its quota is lost at that
  * reset if unused), and burns each of its windows at the team rate for that window ([ratesPerHour], a share of one

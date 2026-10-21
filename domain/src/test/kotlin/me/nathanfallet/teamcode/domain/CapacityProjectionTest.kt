@@ -33,9 +33,11 @@ class CapacityProjectionTest {
 
     private fun gap(accounts: List<AccountPacing>, threshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD): CapacityGap? {
         val observations = accounts.map { PoolAccountObservation(it.account, 0, it.windows.map { w -> w.quota }) }
-        val rates = accounts.flatMap { it.windows }.filter { it.forecast.pointsPerHour != null }.groupBy { it.quota.window }
+        val usable = headroom.usable(observations, now, threshold)
+        val serving = usable.map { it.account.id }.toSet()
+        val rates = accounts.filter { it.account.id in serving }.flatMap { it.windows }.filter { it.forecast.pointsPerHour != null }.groupBy { it.quota.window }
             .mapValues { (_, windows) -> windows.sumOf { it.forecast.pointsPerHour!! / 100 } }
-        return projection.firstGap(headroom.usable(observations, now, threshold), headroom.exhausted(observations, now, threshold), rates, now, threshold)
+        return projection.firstGap(usable, headroom.exhausted(observations, now, threshold), rates, now, threshold)
     }
 
     private fun interval(vararg accounts: AccountPacing) = controller.advise(accounts.toList(), 0, now).minIntervalMillis
@@ -136,11 +138,36 @@ class CapacityProjectionTest {
     }
 
     @Test fun aZeroBurnRateNeverSlowsDown() {
-        val idle = account("a", .9, hour, .9, 6 * day)
-        assertNull(gap(listOf(idle)))
+        // Near the threshold, a zero rate is no reason to speed up either.
+        val nearlyFull = account("a", .9, hour, .9, 6 * day)
+        assertNull(gap(listOf(nearlyFull)))
+        val held = controller.advise(listOf(nearlyFull), 0, now)
+        assertEquals(Pace.NORMAL to 0L, held.pace to held.minIntervalMillis)
+        val idle = account("a", .1, hour, .1, 6 * day)
         val advice = controller.advise(listOf(idle), 0, now)
         assertEquals(Pace.CAN_INCREASE to 0L, advice.pace to advice.minIntervalMillis)
         assertFalse("up to 0" in advice.message, advice.message)
+    }
+
+    @Test fun aDistantGapIsLightAtMostHoweverLong() {
+        // Three accounts at 13 % weekly and a busy hour of 13 % per hour in total: empty in about 19 hours, six days
+        // before the reset. The latest-hour rate is trusted over one day only: light, not severe.
+        val accounts = listOf("a", "b", "c").map { account(it, .1, 2 * hour, .13, 6 * day, weeklyRate = .13 / 3) }
+        val found = gap(accounts)!!
+        assertEquals(now + 6 * day, found.endsAtMillis)
+        assertTrue(found.startsAtMillis - now in 18 * hour..20 * hour)
+        assertEquals(SlowDownLevel.LIGHT.intervalMillis, interval(*accounts.toTypedArray()))
+        assertEquals(1.0, CapacityGap(now + 30 * hour, now + 6 * day).affordableShare(now))
+        // Within the day, a long gap still grades on its distance: five hours away is severe.
+        assertEquals(5.0 / 24, CapacityGap(now + 5 * hour, now + 3 * day).affordableShare(now), 1e-9)
+    }
+
+    @Test fun anExhaustedAccountsPastRateIsNotCountedTwice() {
+        // "full" burned 30 % per hour until it hit the threshold; that load now runs on "spare", which shows it.
+        val full = account("full", 1.0, hour, .1, 6 * day, fiveHourRate = .3)
+        val spare = account("spare", .4, 4 * hour, .1, 6 * day, fiveHourRate = .3, weeklyRate = .01)
+        assertNull(gap(listOf(full, spare)))
+        assertEquals(0L, interval(full, spare))
     }
 
     @Test fun aBriefPeakIsAveragedOverTheLastHour() {
