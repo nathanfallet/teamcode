@@ -53,7 +53,7 @@ class ForecastRoutesTest {
             assertTrue("capacity.forecasts.v1" in sdk.capabilities().features)
             val html = client.get("/dashboard/forecasts?account=${account.id}") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
             assertEquals(HttpStatusCode.OK, html.status)
-            assertEquals("no-store", html.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store, no-transform", html.headers[HttpHeaders.CacheControl])
             assertTrue(html.headers["Content-Security-Policy"]!!.contains("default-src 'none'"))
             val text = html.bodyAsText()
             assertTrue(text.contains("&lt;img")); assertFalse(text.contains("<img"))

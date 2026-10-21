@@ -56,7 +56,6 @@ private suspend fun ApplicationCall.respondJson(value: JsonElement, status: Http
 internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
     get(MCP_SERVERS_PATH) {
-        call.response.header(HttpHeaders.CacheControl, "no-store")
         call.respond(gateway.servers(call.principal).map { McpServerView(it, "$MCP_PATH/$it") })
     }
     route("$MCP_PATH/{server}") {

@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.infrastructure.gateway
 
 import java.io.ByteArrayOutputStream
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.domain.routing.TokenUsage
 
 /** Reads usage metadata only; no prompt or generated content is retained after a bounded event line. */
 class SseUsageMeter {
@@ -16,6 +17,7 @@ class SseUsageMeter {
     private var cacheRead = 0L
     private var cacheCreate = 0L
     private var output: Long? = null
+    private var responsesCached: Long? = null
     private var complete = false
     fun accept(bytes: ByteArray) {
         for (byte in bytes) {
@@ -32,6 +34,16 @@ class SseUsageMeter {
         if (!complete || invalid || input == null || output == null) return null
         return input!! + cacheRead + cacheCreate + output!! * 5
     }
+    /**
+     * The provider's raw tokens, available exactly when [settledUnits] is. Messages reports uncached input and the two
+     * cache figures separately; Responses includes cached input in `input_tokens`, so its cached detail is split out
+     * here (it has no cache write figure). Credits above are unchanged by this split.
+     */
+    val tokens: TokenUsage? get() {
+        if (settledUnits == null) return null
+        val cached = responsesCached ?: return TokenUsage(input!!, output!!, cacheRead, cacheCreate)
+        return TokenUsage((input!! - cached).coerceAtLeast(0), output!!, minOf(cached, input!!), 0)
+    }
     private fun consume(text: String) {
         if (!text.startsWith("data:")) return
         val data = text.removePrefix("data:").trim()
@@ -47,7 +59,10 @@ class SseUsageMeter {
         }
         when (type) {
             "response.completed", "response.incomplete" -> {
-                record((json["response"] as? JsonObject)?.get("usage") as? JsonObject)
+                val usage = (json["response"] as? JsonObject)?.get("usage") as? JsonObject
+                record(usage)
+                responsesCached = ((usage?.get("input_tokens_details") as? JsonObject)?.get("cached_tokens") as? JsonPrimitive)?.longOrNull
+                    ?.takeIf { it in 0..10_000_000 } ?: 0
                 complete = true // Responses input_tokens already includes cached tokens; do not add its detail again.
             }
             "error", "response.failed" -> invalid = true

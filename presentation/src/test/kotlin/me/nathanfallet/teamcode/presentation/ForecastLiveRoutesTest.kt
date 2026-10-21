@@ -37,7 +37,7 @@ class ForecastLiveRoutesTest {
         val response = client.get("/dashboard/forecasts/stream?account=fixture-id") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
         assertEquals(HttpStatusCode.OK, response.status)
         assertTrue(response.headers[HttpHeaders.ContentType]!!.startsWith("text/event-stream"))
-        assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
         assertEquals("no", response.headers["X-Accel-Buffering"])
         val body = response.bodyAsText()
         assertTrue(body.startsWith("retry: 5000\n\n"))

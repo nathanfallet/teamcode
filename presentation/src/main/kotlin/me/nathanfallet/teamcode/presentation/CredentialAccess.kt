@@ -30,6 +30,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     // Team-wide reads that an interactive administrator has: only a `team:read` key (an administrator's) passes the service layer.
     method == "GET" && teamReadPath.matches(path) -> CredentialAction.TEAM_READ
     method == "GET" && path == "/api/v1/pools/accounts" -> CredentialAction.USAGE_READ
+    method == "GET" && path == "/api/v1/usage/tokens" -> CredentialAction.USAGE_READ
     method == "GET" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}").matches(path)) -> CredentialAction.USAGE_READ
     method == "POST" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}/(heartbeat|end)").matches(path)) -> CredentialAction.INFERENCE
     method == "GET" && path == "/api/v1/directives/current" -> CredentialAction.GUIDANCE

@@ -153,6 +153,18 @@ class TeamCodeClient(
         }.joinToString("&")
         return request("/api/v1/runs" + if (query.isEmpty()) "" else "?$query", HttpMethod.Get)
     }
+    /** Raw provider tokens by UTC day (`YYYY-MM-DD`, inclusive), member, launch, provider and model; page with `nextAfter`. */
+    suspend fun tokenUsage(from: String? = null, to: String? = null, memberId: String? = null, all: Boolean = false, after: String? = null): TokenUsagePageView {
+        require(!all || memberId == null) { "Choose one member or all members." }
+        val day = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+        require(from?.let(day::matches) ?: true && to?.let(day::matches) ?: true) { "Use dates written YYYY-MM-DD." }
+        require(after?.let { Regex("[a-zA-Z0-9_.:-]{1,400}").matches(it) } ?: true) { "Use the nextAfter value of the previous page." }
+        memberId?.let(::identifier)
+        val query = buildList {
+            from?.let { add("from=$it") }; to?.let { add("to=$it") }; memberId?.let { add("member=$it") }; if (all) add("all=true"); after?.let { add("after=$it") }
+        }.joinToString("&")
+        return request("/api/v1/usage/tokens" + if (query.isEmpty()) "" else "?$query", HttpMethod.Get)
+    }
     suspend fun run(id: String): RunDetailView { identifier(id); return request("/api/v1/runs/$id", HttpMethod.Get) }
     suspend fun saveRunPolicy(id: String, policy: RunPolicyView): AgentRunView {
         identifier(id); return request("/api/v1/runs/$id/policy", HttpMethod.Put, policy)
