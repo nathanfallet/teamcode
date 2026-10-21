@@ -77,11 +77,14 @@ class CloudRoutesTest {
         override suspend fun authenticate(token: String): Principal? = when (token) {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
-            "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD))
+            "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ))
             "colleague-read" -> Principal(colleague, "colleague-read-key", "default", setOf(ServiceScope.CLOUD_READ))
             "colleague-write" -> Principal(colleague, "colleague-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
             "admin-write" -> Principal(admin, "admin-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
             "admin-cloud" -> Principal(admin, "admin-cloud-key", "default", setOf(ServiceScope.ADMIN_CLOUD))
+            "admin-read" -> Principal(admin, "admin-read-key", "default", setOf(ServiceScope.TEAM_READ))
+            "admin-usage" -> Principal(admin, "admin-usage-key", "default", setOf(ServiceScope.USAGE_READ, ServiceScope.CLOUD_READ))
+            "admin-read-write" -> Principal(admin, "admin-read-write-key", "default", setOf(ServiceScope.TEAM_READ, ServiceScope.CLOUD_WRITE))
             else -> null
         }
     }
@@ -186,6 +189,27 @@ class CloudRoutesTest {
         assertEquals("colleague-id", delegated.ownerId)
         assertEquals(CloudAttributionView("admin-id", "admin-cloud-key", "colleague-id"), delegated.createdBy)
         assertEquals(HttpStatusCode.OK, get("admin-cloud", "/api/v1/cloud/transfers?scope=team").status)
+        // team:read: an administrator's key that reads every member's sessions and transfers and writes nothing.
+        val readable = Serialization.json.decodeFromString<CloudSessionPageView>(get("admin-read", "/api/v1/cloud/sessions?owner=all").bodyAsText())
+        assertEquals(setOf(own.id, delegated.id), readable.sessions.map { it.id }.toSet())
+        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/sessions/${own.id}").status)
+        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/sessions/${own.id}/executions").status)
+        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/transfers?scope=team").status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-read", "/api/v1/cloud/settings").status)
+        val refused = create("admin-read", "t1", onBehalf = "colleague-id")
+        assertEquals(HttpStatusCode.Forbidden, refused.status); assertTrue("credential_scope" in refused.bodyAsText())
+        assertEquals(HttpStatusCode.Forbidden, create("admin-read", "t2").status)
+        for (action in listOf("pause", "resume", "transfer")) assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/sessions/${own.id}/$action") { bearerAuth("admin-read"); contentType(ContentType.Application.Json); setBody("{}") }.status, action)
+        assertEquals(HttpStatusCode.Forbidden, client.delete("/api/v1/cloud/sessions/${own.id}") { bearerAuth("admin-read") }.status)
+        // team:read does not widen a write: combined with cloud:write the key is still only its owner for writes.
+        assertEquals(HttpStatusCode.OK, get("admin-read-write", "/api/v1/cloud/sessions/${own.id}").status)
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions/${own.id}/pause") { bearerAuth("admin-read-write") }.status)
+        assertEquals(HttpStatusCode.NotFound, client.delete("/api/v1/cloud/sessions/${own.id}") { bearerAuth("admin-read-write") }.status)
+        assertTrue("on_behalf_forbidden" in create("admin-read-write", "t3", onBehalf = "colleague-id").bodyAsText())
+        // usage:read and cloud:read on an administrator's key stay the owner's own view.
+        assertEquals(HttpStatusCode.Forbidden, get("admin-usage", "/api/v1/cloud/sessions?owner=all").status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-usage", "/api/v1/cloud/transfers?scope=team").status)
+        assertEquals(HttpStatusCode.NotFound, get("admin-usage", "/api/v1/cloud/sessions/${own.id}").status)
         val orchestrator = TeamCodeClient("http://localhost", { "admin-cloud" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
         try {
             assertEquals(setOf(own.id, delegated.id), orchestrator.cloudSessions(owner = "all").sessions.map { it.id }.toSet())

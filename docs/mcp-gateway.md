@@ -89,7 +89,7 @@ At most 32 servers per member and 256 tools per server are listed. Listings coun
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /api/v1/mcp/usage?days=7` | Totals per member and server (calls, lists, errors, denied, bytes, duration) over 1–30 days. Interactive administrators see every member; other members and `usage:read` service keys see only their own |
+| `GET /api/v1/mcp/usage?days=7` | Totals per member and server (calls, lists, errors, denied, bytes, duration) over 1–30 days. Interactive administrators and `team:read` keys see every member; other members and `usage:read` service keys, even an administrator's, see only their own |
 | `GET /api/v1/mcp/calls?before=<id>` | Newest operations first, 50 per page, interactive administrators only |
 
 `/dashboard/mcp` shows tool policies, usage and recent operations. It is not yet linked from the navigation bar, like the variants page.

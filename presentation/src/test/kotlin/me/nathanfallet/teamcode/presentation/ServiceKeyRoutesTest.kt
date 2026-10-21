@@ -46,6 +46,7 @@ class ServiceKeyRoutesTest {
                     "service-inference" -> setOf(ServiceScope.INFERENCE)
                     "service-usage" -> setOf(ServiceScope.USAGE_READ)
                     "service-guidance" -> setOf(ServiceScope.GUIDANCE)
+                    "service-team" -> setOf(ServiceScope.TEAM_READ)
                     "service-all" -> ServiceScope.entries.toSet()
                     else -> return interactive.authenticate(token)
                 }
@@ -60,12 +61,14 @@ class ServiceKeyRoutesTest {
             receive(GenerationHead(200, "text/event-stream"), flowOf("data: {}\n\n".encodeToByteArray()))
         }
     }
+    private val teamPaths = listOf("/api/v1/quotas", "/api/v1/accounts", "/api/v1/pools/budgets", "/api/v1/members/other/capacity")
     @Test fun serviceCredentialsHaveAClosedTransportAllowlistEvenWhenOwnedByAnAdmin() = testApplication {
         var inferences = 0
         application {
             configureGateway(gateway { inferences++ }, team = team(), serviceKeys = Registry())
             routing {
                 get("/api/v1/capacity") { call.respondText("owner capacity") }
+                for (path in teamPaths) { get(path) { call.respondText("team") }; post(path) { fail("A write is never open to a team:read key") } }
                 post("/api/v1/directives/current") { call.respondText("owner guidance") }
                 get("/api/v1/future-admin") { fail("New endpoints cannot automatically grant service-key access") }
             }
@@ -74,10 +77,20 @@ class ServiceKeyRoutesTest {
         assertEquals(HttpStatusCode.OK, get("/api/v1/capabilities", "service-inference").status)
         assertEquals(HttpStatusCode.OK, get("/api/v1/auth/me", "service-inference").status)
         assertEquals(HttpStatusCode.OK, get("/api/v1/capacity", "service-usage").status)
-        for (path in listOf("/api/v1/capacity", "/api/v1/service-keys", "/api/v1/members", "/api/v1/status", "/api/v1/policy/models", "/api/v1/future-admin", "/api/v1/members/other/capacity")) {
+        for (path in listOf("/api/v1/capacity", "/api/v1/service-keys", "/api/v1/members", "/api/v1/status", "/api/v1/policy/models", "/api/v1/future-admin")) {
             val token = if (path == "/api/v1/capacity") "service-inference" else "service-all"
             assertEquals(HttpStatusCode.Forbidden, get(path, token).status, path)
         }
+        // team:read opens only the team-wide reads an interactive administrator has; every other key is refused there.
+        for (path in teamPaths) {
+            assertEquals(HttpStatusCode.OK, get(path, "service-team").status, path)
+            for (token in listOf("service-usage", "service-inference", "service-guidance")) assertEquals(HttpStatusCode.Forbidden, get(path, token).status, "$token $path")
+            assertEquals(HttpStatusCode.Forbidden, client.post(path) { bearerAuth("service-team"); contentType(ContentType.Application.Json); setBody("{}") }.status, path)
+        }
+        assertEquals(HttpStatusCode.OK, get("/api/v1/capacity", "service-team").status)
+        for (path in listOf("/api/v1/service-keys", "/api/v1/members", "/api/v1/status", "/api/v1/policy/models", "/api/v1/future-admin", "/api/v1/audit"))
+            assertEquals(HttpStatusCode.Forbidden, get(path, "service-team").status, path)
+        assertEquals(HttpStatusCode.Forbidden, client.post("/v1/messages") { bearerAuth("service-team"); contentType(ContentType.Application.Json); setBody("{}") }.status)
         for (path in listOf("/api/v1/auth/password", "/api/v1/service-keys", "/api/v1/accounts")) {
             assertEquals(HttpStatusCode.Forbidden, client.post(path) { bearerAuth("service-all"); contentType(ContentType.Application.Json); setBody("{}") }.status)
         }
