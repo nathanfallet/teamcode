@@ -117,6 +117,11 @@ internal class SkillInstaller(
     /** The file every delivered directory must contain; null for team hooks, whose runner checked the command file. */
     private val entryFile: String? = "SKILL.md",
     private val markerName: String = MARKER,
+    /**
+     * Reinstall every listed item instead of trusting a matching marker. Team hooks set it: their files sit in a
+     * directory the agent can write, so each start puts back the verified version rather than reusing what is there.
+     */
+    private val alwaysReplace: Boolean = false,
 ) {
     private val staging = (root.parent ?: root).div(if (markerName == MARKER) ".teamcode-skills-staging" else ".teamcode-hooks-staging")
     private class Staged(val files: MutableMap<String, ByteArray> = LinkedHashMap(), val modes: MutableMap<String, String> = HashMap(), var current: Pair<String, MutableList<ByteArray>>? = null)
@@ -150,7 +155,7 @@ internal class SkillInstaller(
             when {
                 !fileSystem.exists(dest) -> needs += SkillMessage(SkillMessage.NEED, name = skill.name)
                 !fileSystem.exists(marker(dest)) -> results += SkillMessage(SkillMessage.RESULT, name = skill.name, status = SkillMessage.CONFLICT)
-                markerDigest(dest) == skill.digest -> results += SkillMessage(SkillMessage.RESULT, name = skill.name, status = SkillMessage.UNCHANGED)
+                !alwaysReplace && markerDigest(dest) == skill.digest -> results += SkillMessage(SkillMessage.RESULT, name = skill.name, status = SkillMessage.UNCHANGED)
                 else -> needs += SkillMessage(SkillMessage.NEED, name = skill.name)
             }
         }
@@ -250,7 +255,7 @@ internal class CloudInstallSkills(private val hooks: Boolean = false) : Suspendi
     override fun help(context: Context) = "Install the owner's delivered ${if (hooks) "team hooks" else "skills"} for the session runner (started by it, not by hand)."
     override suspend fun run() {
         val home = requireNotNull(environment("HOME")?.takeIf { it.isNotBlank() }) { "Set HOME." }
-        val installer = if (hooks) SkillInstaller("$home/$CLOUD_HOOKS_DIR".toPath(), entryFile = null, markerName = SkillInstaller.HOOK_MARKER)
+        val installer = if (hooks) SkillInstaller("$home/$CLOUD_HOOKS_DIR".toPath(), entryFile = null, markerName = SkillInstaller.HOOK_MARKER, alwaysReplace = true)
             else SkillInstaller(SkillPaths.root(agent, home, environment("CODEX_HOME")))
         while (true) {
             val line = readlnOrNull() ?: break
@@ -295,9 +300,9 @@ internal class SkillSync(
             }
             for (name in needed) {
                 val entry = chosen.find { it.name == name } ?: continue
-                val files = try { artifact(entry) } catch (error: CancellationException) { throw error } catch (_: Exception) { log("An item could not be downloaded."); continue }
+                val files = try { artifact(entry) } catch (error: CancellationException) { throw error } catch (_: Exception) { log(if (label == "Skills") "The skill $name could not be downloaded." else "An item could not be downloaded."); continue }
                 val problem = SkillDigest.problem(entry, files)
-                if (problem != null) { log("An item was refused ($problem)."); continue }
+                if (problem != null) { log(if (label == "Skills") "The skill $name was refused ($problem)." else "An item was refused ($problem)."); continue }
                 child.writeLine(SkillMessage(SkillMessage.BEGIN, name = name).encode())
                 for (file in files.files) {
                     val bytes = checkNotNull(file.contentBase64.decodeBase64()).toByteArray()

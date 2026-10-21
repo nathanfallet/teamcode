@@ -14,6 +14,7 @@ import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import okio.FileSystem
 import okio.Path
+import kotlin.random.Random
 
 /** The events of the hook catalog, and those Codex supports (it has no `Notification` hook). */
 internal object HookEvents {
@@ -94,13 +95,29 @@ internal class LocalHookInstaller(
 ) {
     fun directory(name: String, digest: String): Path = root / name / digest.removePrefix("sha256:")
 
-    /** The installed executable of this version, when a complete installation exists. */
+    /**
+     * The installed executable of this version, when a complete and intact installation exists. The marker lists every
+     * file's path, mode, size and hash; that list must give back the approved digest with [definition], and each file
+     * on disk must match its line. A file changed after installation (by the agent itself, for example) is not reused:
+     * the version is downloaded and verified again.
+     */
     fun installed(name: String, digest: String, definition: HookDefinitionView): Path? {
         val dir = directory(name, digest)
         val marker = dir / MARKER
-        val command = dir / definition.command
         return try {
-            if (fileSystem.exists(marker) && fileSystem.read(marker) { readUtf8() }.lineSequence().firstOrNull() == digest && fileSystem.exists(command)) command else null
+            val lines = fileSystem.read(marker) { readUtf8() }.lines().filter { it.isNotEmpty() }
+            if (lines.firstOrNull() != digest) return null
+            val entries = lines.drop(2).map { line ->
+                val (path, mode, size, sha) = line.split('\u0000').takeIf { it.size == 4 } ?: return null
+                SkillDigest.Entry(path, mode, size.toIntOrNull() ?: return null, sha)
+            }
+            if (entries.isEmpty() || HookDigest.of(definition, entries) != digest || entries.none { it.path == definition.command }) return null
+            for (entry in entries) {
+                if (!SkillPaths.validPath(entry.path)) return null
+                val bytes = fileSystem.read(dir / entry.path) { readByteString() }
+                if (bytes.size != entry.size || bytes.sha256().hex() != entry.sha256) return null
+            }
+            dir / definition.command
         } catch (_: Exception) { null }
     }
 
@@ -108,11 +125,12 @@ internal class LocalHookInstaller(
     suspend fun install(artifact: HookArtifactView): Path {
         installed(artifact.name, artifact.digest, artifact.definition)?.let { return it }
         val dir = directory(artifact.name, artifact.digest)
-        val staging = root / ".staging" / (artifact.name + "-" + artifact.digest.removePrefix("sha256:").take(16))
-        fileSystem.deleteRecursively(staging, mustExist = false)
+        // A staging directory of this process only: two launches installing the same version never share one.
+        val staging = root / ".staging" / (artifact.name + "-" + artifact.digest.removePrefix("sha256:").take(16) + "-" + Random.nextLong().toULong().toString(16))
         try {
             // The first private write creates the staging directory owner-only before any hook file lands in it.
-            writePrivateFile((staging / MARKER).toString(), artifact.digest + "\n" + artifact.version + "\n")
+            val lines = artifact.files.joinToString("") { "${it.path}\u0000${it.mode}\u0000${it.size}\u0000${it.sha256}\n" }
+            writePrivateFile((staging / MARKER).toString(), artifact.digest + "\n" + artifact.version + "\n" + lines)
             for (file in artifact.files) {
                 val target = staging / file.path
                 target.parent?.let { fileSystem.createDirectories(it) }
@@ -121,8 +139,14 @@ internal class LocalHookInstaller(
             val executables = artifact.files.filter { it.mode == "executable" }.map { staging / it.path }
             if (executables.isNotEmpty()) makeExecutable(executables)
             dir.parent?.let { fileSystem.createDirectories(it) }
-            fileSystem.deleteRecursively(dir, mustExist = false)
-            fileSystem.atomicMove(staging, dir)
+            if (installed(artifact.name, artifact.digest, artifact.definition) != null) {
+                // Another launch installed it meanwhile: keep that directory, which an agent may already be running from.
+                fileSystem.deleteRecursively(staging, mustExist = false)
+            } else {
+                // Only an incomplete or altered directory is replaced.
+                fileSystem.deleteRecursively(dir, mustExist = false)
+                fileSystem.atomicMove(staging, dir)
+            }
         } catch (error: Throwable) {
             fileSystem.deleteRecursively(staging, mustExist = false)
             throw error

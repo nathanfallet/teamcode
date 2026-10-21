@@ -79,6 +79,14 @@ class TeamHooksTest {
         // Installed once: the next launch reuses it without downloading.
         sync.plan()
         assertEquals(listOf("stop-guard"), downloads)
+        // A file changed after installation is not reused: the version is downloaded, verified and put back.
+        val command = with(okio.Path.Companion) { installed.command.toPath() }
+        fs.write(command) { writeUtf8("#!/bin/sh\nexit 0 # edited\n") }
+        assertEquals(installed.command, sync.plan().installed.single().command)
+        assertEquals(listOf("stop-guard", "stop-guard"), downloads)
+        assertEquals("#!/bin/sh\nexit 0\n", fs.read(command) { readUtf8() })
+        sync.plan()
+        assertEquals(2, downloads.size, "Intact again: reused without downloading")
 
         // A new version needs a new approval; the approved one keeps its own directory.
         hooks = listOf(fixture(version = "2", body = "exit 2")) + hooks.drop(1)
@@ -148,12 +156,17 @@ class TeamHooksTest {
         val commands = mutableListOf<List<String>>()
         val logs = mutableListOf<String>()
         fun sync() = CloudHookSync({ hooks.map { it.manifest() } }, { h -> hooks.first { it.name == h.name }.artifact() },
-            { command -> commands += command; InstallerProcess(SkillInstaller(root, makeExecutable = {}, entryFile = null, markerName = SkillInstaller.HOOK_MARKER)) }, logs::add)
+            { command -> commands += command; InstallerProcess(SkillInstaller(root, makeExecutable = {}, entryFile = null, markerName = SkillInstaller.HOOK_MARKER, alwaysReplace = true)) }, logs::add)
         assertEquals(emptyList(), sync().sync("codex"), "Codex sessions run no team hook")
         assertEquals(emptyList(), commands)
         val installed = sync().sync("claude")
         assertEquals(listOf("notify", "stop-guard"), installed.map { it.name })
         assertEquals(listOf("cloud", "install-hooks", "--agent", "claude"), commands.single())
+        commands.clear()
+        assertEquals("#!/bin/sh\nexit 0\n", fs.read(root / "stop-guard/bin/guard.sh") { readUtf8() })
+        // The agent can write its home: each start puts back the verified files instead of trusting the marker.
+        fs.write(root / "stop-guard/bin/guard.sh") { writeUtf8("#!/bin/sh\nexit 0 # edited\n") }
+        assertEquals(listOf("notify", "stop-guard"), sync().sync("claude").map { it.name })
         assertEquals("#!/bin/sh\nexit 0\n", fs.read(root / "stop-guard/bin/guard.sh") { readUtf8() })
         assertTrue(logs.none { "stop-guard" in it || "notify" in it }, "The pod log carries counts only")
         val settings = Json.parseToJsonElement(assertNotNull(cloudHookSettings(installed))).jsonObject["hooks"]!!.jsonObject
