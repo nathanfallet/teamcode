@@ -9,7 +9,7 @@ A skill is instructions and files loaded by an agent. It is not executed by the 
 | Concept | Rule |
 | --- | --- |
 | Skill | Team-scoped, named `[a-z0-9]+(-[a-z0-9]+)*`, at most 64 characters. Created by its first publication. |
-| Version | Immutable, case-sensitive label of 1–64 characters `[0-9A-Za-z][0-9A-Za-z.+_-]*` (binary collation, so `v1` and `V1` are distinct). Its files and digest never change. A retired version cannot be republished. Labels carry no ordering: "update" and "rollback" are both explicit pins. |
+| Version | Immutable, case-sensitive label of 1–64 characters `[0-9A-Za-z][0-9A-Za-z.+_-]*` (binary collation, so `v1` and `V1` are distinct). Its files and digest never change. A retired version cannot be republished. Labels carry no ordering: "update" and "rollback" are both explicit pins, by an administrator or by a publisher with `pin`. |
 | Artifact | 1–200 files, at most 5 MiB of content in total, with `SKILL.md` at the root. Stored in MySQL (`MEDIUMBLOB` per file). |
 | Pinned version | The single approved version. An administrator pins it, or the publisher does with `pin: true` (see [Pinning from CI](#pinning-from-ci)). Publication without `pin` never pins. A skill without a pin delivers nothing. |
 | Access decision | Per member: **yes** (`allow`), **no** (`deny`) or not assigned. Only *yes* delivers. There are no variants. |
@@ -81,10 +81,11 @@ Limits: 500 skills per team, 200 versions per skill.
 A pipeline that should deliver what it publishes, without an administrator pinning each version by hand, adds `"pin": true` to the publication request. It needs no other permission: the same `skills:publish` key, owned by an administrator, publishes and pins.
 
 - The version is stored and pinned in one transaction, so delivery switches to it exactly when the publication commits.
-- It is idempotent. Republishing the same version with the same digest and `pin: true` returns `200 OK` with `created: false`, pins the version if another one is pinned (a rollback by re-running an older pipeline) and changes nothing otherwise. Different content under the label is still `409 skill_version_conflict`, and nothing is pinned.
+- It is idempotent. Republishing the same version with the same digest and `pin: true` returns `200 OK` with `created: false` and pins the version unless it is already the pinned one: when another version is pinned (a rollback by re-running an older pipeline) and also when the skill is unpinned. A pipeline that pins therefore undoes an administrator's unpin on its next run, and a stale re-run of an older pipeline rolls delivery back to its version. To stop delivery for good against such a pipeline, retire the version (a retired version is never pinned again), remove the skill from the catalog, or set the members' decisions to *No*. Different content under the label is still `409 skill_version_conflict`, and nothing is pinned.
 - A retired version or a retired skill is refused as for publication (`409 skill_version_retired`, `409 skill_retired`).
 - The same key may call `PUT /api/v1/skills/{name}/pin` to pin any published, non-retired version, for example a rollback without republishing. Unpinning stays with administrators.
-- Each actual pin appends `skill.pinned` with `credentialId` set to the key's id, so the journal shows that the key, not an administrator in the dashboard, changed the delivered version.
+- Each actual pin appends `skill.pinned` with `credentialId` set to the key's id, so the journal shows that the key, not an administrator in the dashboard, changed the delivered version. Interactive pins leave `credentialId` empty, as before.
+- This gives the key the power to choose the delivered version: a leaked `skills:publish` key can pin any published, non-retired version for every member with *Yes*. Keep it in the CI secret store, prefer an expiring key where rotation is practical, and revoke it at once if it leaks.
 - Access decisions still apply: a pinned version reaches only members with an explicit *yes*.
 
 Servers that support the field advertise `team.skills.publish-pin.v1` in `GET /api/v1/capabilities` (readable with any key). An older server ignores the unknown field and publishes without pinning; a client detects this from `version.pinned: false` in the response and should report it instead of assuming delivery.
@@ -181,7 +182,7 @@ Installation reports upsert the status of up to 500 named catalog skills for the
 
 ## Audit
 
-Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID; `credentialId`: the login session or `skills:publish` key that pinned), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the assignment ID, a stable row of `skill_assignments` naming both the skill and the member; clearing a decision keeps the row). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
+Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID; `credentialId`: the `skills:publish` key that pinned, empty for an administrator's pin), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the assignment ID, a stable row of `skill_assignments` naming both the skill and the member; clearing a decision keeps the row). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
 
 ## Persistence and upgrade
 
