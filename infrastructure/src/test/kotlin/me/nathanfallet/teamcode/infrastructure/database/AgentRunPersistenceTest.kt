@@ -39,6 +39,26 @@ class AgentRunPersistenceTest {
             assertEquals(setOf(id, serviceId), b.list(reader).runs.map { it.id }.toSet())
             val ownerReader = assertNotNull(f.team.authenticate(keys.create(f.admin.principal, f.admin.principal.member.id, "Owner reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
             failure("credential_scope") { b.list(ownerReader, all = true) }
+            failure("credential_scope") { b.list(ownerReader, memberId = f.member.principal.member.id) }
+            failure("credential_scope") { b.get(ownerReader, id) }
+            failure("credential_scope") { f.admission.capacity(ownerReader, f.member.principal.member.id) }
+            failure("credential_scope") { f.admission.quotas(ownerReader) }
+            failure("credential_scope") { f.admission.poolBudgets(ownerReader) }
+            // team:read: an administrator's key reads every member's launches and writes nothing; only an administrator may hold it.
+            failure("invalid_service_key") { keys.create(f.member.principal, f.member.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1) }
+            failure("invalid_service_key") { keys.create(f.admin.principal, f.member.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1) }
+            val teamReader = assertNotNull(f.team.authenticate(keys.create(f.admin.principal, f.admin.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1).accessToken))
+            assertEquals(setOf(id, serviceId), b.list(teamReader, all = true).runs.map { it.id }.toSet())
+            assertEquals(setOf(id, serviceId), b.list(teamReader, memberId = f.member.principal.member.id).runs.map { it.id }.toSet())
+            assertEquals(id, b.get(teamReader, id).run.id)
+            assertEquals(f.member.principal.member.id, f.admission.capacity(teamReader, f.member.principal.member.id).policy.memberId)
+            f.admission.quotas(teamReader); f.admission.poolBudgets(teamReader)
+            failure("credential_scope") { b.start(teamReader, id(), "claude", "interactive") }
+            failure("credential_scope") { b.heartbeat(teamReader, id) }
+            failure("credential_scope") { b.end(teamReader, id, 0) }
+            failure("credential_scope") { b.configure(teamReader, id, RunPolicy(1)) }
+            failure("credential_scope") { f.admission.configure(teamReader, MemberPolicy(f.member.principal.member.id, 1, 1, null, 1, false)) }
+            failure("credential_scope") { f.admission.configurePool(teamReader, PoolBudget("home", 1)) }
             failure("forbidden") { b.list(f.member.principal, all = true) }
             failure("forbidden") { b.configure(f.member.principal, id, RunPolicy(1)) }
             f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - 90_001 } }

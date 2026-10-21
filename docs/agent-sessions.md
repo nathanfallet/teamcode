@@ -73,11 +73,11 @@ Detail views show current native-session guidance and matching bridge/hook emiss
 | POST | `/api/v1/runs` | Interactive login or `inference` key; body `{"id":"UUID","agent":"claude","workload":"background","labels":{"task":"1234"}}` (`labels` optional) |
 | POST | `/api/v1/runs/{id}/heartbeat` | Creating credential with inference authority |
 | POST | `/api/v1/runs/{id}/end` | Creating credential; body `{"exitCode":0}` or `{"exitCode":null}` |
-| GET | `/api/v1/runs` | Own records with interactive login or `usage:read` |
-| GET | `/api/v1/runs/{id}` | Own detail with `usage:read`; another member requires interactive administration |
+| GET | `/api/v1/runs` | Own records with interactive login or `usage:read`; `?all=true` and `?member=` require an interactive administrator or a `team:read` key |
+| GET | `/api/v1/runs/{id}` | Own detail with `usage:read`; another member requires an interactive administrator or a `team:read` key |
 | PUT | `/api/v1/runs/{id}/policy` | Interactive owner/admin; `{"budgetUnits":100000,"maxConcurrent":2,"paused":false}` |
 
-Lifecycle replies contain only UUID, timestamps and state. Inference-only keys do not gain usage-read access through heartbeat/end responses. List filters are `member=UUID`, `all=true`, `before=UUID` and repeatable `label=key=value`; cross-member/all-team reads require interactive administration, including for administrator-owned keys. Group management authority grants no access to another member's launch registry. Pages contain at most 50 records ordered by immutable start time/UUID, with `nextBeforeId`; concurrent appends do not shift older pages. A deleted/inaccessible cursor requires refreshing the list.
+Lifecycle replies contain only UUID, timestamps and state. Inference-only keys do not gain usage-read access through heartbeat/end responses. List filters are `member=UUID`, `all=true`, `before=UUID` and repeatable `label=key=value`; cross-member/all-team reads require an interactive administrator or an administrator's `team:read` key; a `usage:read` key stays limited to its owner, including an administrator's. Group management authority grants no access to another member's launch registry. Pages contain at most 50 records ordered by immutable start time/UUID, with `nextBeforeId`; concurrent appends do not shift older pages. A deleted/inaccessible cursor requires refreshing the list.
 
 The typed client exposes `startRun`, `heartbeatRun`, `endRun`, `runs`, `run` and `saveRunPolicy`. Its narrow `RunLifecycleClient` interface lets a wrapper own heartbeat/cancellation behavior without depending on server modules. Browser forms validate the exact origin and CSRF token; all metadata is escaped and responses are private/no-store. Successful lifecycle/policy events are audited as `run.started`, `run.ended` and `run.policy_updated`; heartbeats do not flood the journal.
 
