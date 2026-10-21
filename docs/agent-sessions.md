@@ -10,6 +10,11 @@ teamcode sessions list --member MEMBER_UUID --before RUN_UUID --json
 teamcode sessions show RUN_UUID
 ```
 
+```sh
+teamcode run claude --label task=1234 --label team=payments -- -p "Review the test coverage"
+teamcode sessions list --label task=1234 --json
+```
+
 These are local agent-launch records. `teamcode auth sessions` manages login credentials. Kubernetes cloud sessions, attachment, transcripts and transfers remain V2. This registry neither starts remote processes nor exposes a process-kill API.
 
 ## Lifecycle and identity
@@ -28,6 +33,14 @@ The wrapper renews its heartbeat every 30 seconds. Successful child exit reports
 Active and queued gateway requests are separate observations. A stale wrapper can still have an unexpired reservation; lease expiry releases concurrency without refunding uncertain credits. Heartbeat staleness itself is informational and does not stop otherwise authorized inference. Ended records retain that confirmed state after later credential revocation. Ending or pausing a run prevents **new** admissions; active streams finish normally. TeamCode does not infer that every descendant process has stopped.
 
 Lifecycle writes require the creating credential. Another login by the same member can read the launch but cannot heartbeat, end or dispatch requests under that old launch ID. Password, role, device or key revocation does not refund its spend. A shared local service that reloads another credential cannot silently attach it to an existing launch; restart the wrapper using the current login.
+
+## Labels and the run identifier
+
+`teamcode run claude|codex --label key=value` (repeatable, before `--`) attaches labels to the launch, with the model of [cloud session labels](cloud-sessions.md): at most 16 non-secret pairs, lowercase keys of 1–63 characters (`[a-z0-9]`, then `[a-z0-9._/-]`), values up to 256 characters without control characters. The CLI parses `--label` exactly like `teamcode cloud create --label` (the key is everything before the first `=`; the value may contain `=`; the last value of a repeated key wins) and the server validates with the same rules (`invalid_label`). Labels are sent with the start request, stored in `agent_run_labels` (additive migration, removed with the launch) and returned as `labels` by `GET /api/v1/runs` and `GET /api/v1/runs/{id}`. They are fixed at start: an identical retry is idempotent, a retry with other labels is `run_conflict`.
+
+Filter with `GET /api/v1/runs?label=key=value` (repeatable, every filter must match, at most 16) or `teamcode sessions list --label key=value`, which shows each launch's labels as trailing columns. The filter composes with `member`, `all` and `before`, and never widens what the caller may read. Do not put secrets in labels. The server advertises `team.runs.labels.v1`; against an older server, `teamcode run --label` and `teamcode sessions list --label` stop with an error instead of dropping the labels or returning an unfiltered list.
+
+Both `teamcode run claude` and `teamcode run codex` export `TEAMCODE_RUN_ID`, the launch UUID, in the agent's environment, so a hook, tool or script run by the agent can correlate its work with `teamcode sessions show "$TEAMCODE_RUN_ID"` or the API. It is metadata, not a credential. Without a registered launch (an older server) the variable is removed, so an outer launch's identifier is never inherited by mistake. The name contains none of `KEY`, `SECRET` or `TOKEN`, so Codex's default shell environment policy does not filter it from the commands it runs. Cloud sessions keep their session identifier out of the agent container by design, so it is not exported there.
 
 ## Proxy association and compatibility
 
@@ -57,14 +70,14 @@ Detail views show current native-session guidance and matching bridge/hook emiss
 
 | Method | Path | Permission |
 | --- | --- | --- |
-| POST | `/api/v1/runs` | Interactive login or `inference` key; body `{"id":"UUID","agent":"claude","workload":"background"}` |
+| POST | `/api/v1/runs` | Interactive login or `inference` key; body `{"id":"UUID","agent":"claude","workload":"background","labels":{"task":"1234"}}` (`labels` optional) |
 | POST | `/api/v1/runs/{id}/heartbeat` | Creating credential with inference authority |
 | POST | `/api/v1/runs/{id}/end` | Creating credential; body `{"exitCode":0}` or `{"exitCode":null}` |
 | GET | `/api/v1/runs` | Own records with interactive login or `usage:read`; `?all=true` and `?member=` require an interactive administrator or a `team:read` key |
 | GET | `/api/v1/runs/{id}` | Own detail with `usage:read`; another member requires an interactive administrator or a `team:read` key |
 | PUT | `/api/v1/runs/{id}/policy` | Interactive owner/admin; `{"budgetUnits":100000,"maxConcurrent":2,"paused":false}` |
 
-Lifecycle replies contain only UUID, timestamps and state. Inference-only keys do not gain usage-read access through heartbeat/end responses. List filters are `member=UUID`, `all=true` and `before=UUID`; cross-member/all-team reads require an interactive administrator or an administrator's `team:read` key; a `usage:read` key stays limited to its owner, including an administrator's. Group management authority grants no access to another member's launch registry. Pages contain at most 50 records ordered by immutable start time/UUID, with `nextBeforeId`; concurrent appends do not shift older pages. A deleted/inaccessible cursor requires refreshing the list.
+Lifecycle replies contain only UUID, timestamps and state. Inference-only keys do not gain usage-read access through heartbeat/end responses. List filters are `member=UUID`, `all=true`, `before=UUID` and repeatable `label=key=value`; cross-member/all-team reads require an interactive administrator or an administrator's `team:read` key; a `usage:read` key stays limited to its owner, including an administrator's. Group management authority grants no access to another member's launch registry. Pages contain at most 50 records ordered by immutable start time/UUID, with `nextBeforeId`; concurrent appends do not shift older pages. A deleted/inaccessible cursor requires refreshing the list.
 
 The typed client exposes `startRun`, `heartbeatRun`, `endRun`, `runs`, `run` and `saveRunPolicy`. Its narrow `RunLifecycleClient` interface lets a wrapper own heartbeat/cancellation behavior without depending on server modules. Browser forms validate the exact origin and CSRF token; all metadata is escaped and responses are private/no-store. Successful lifecycle/policy events are audited as `run.started`, `run.ended` and `run.policy_updated`; heartbeats do not flood the journal.
 

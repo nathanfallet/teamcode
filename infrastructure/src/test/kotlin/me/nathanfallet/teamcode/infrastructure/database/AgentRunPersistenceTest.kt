@@ -188,6 +188,34 @@ class AgentRunPersistenceTest {
         }
     }
 
+    @Test @Timeout(120)
+    fun labelsArePersistedReturnedFilteredAndBoundToTheLaunch() = runBlocking {
+        fixture { f ->
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b)
+            val labelled = id(); val plain = id(); val other = id()
+            val labels = mapOf("orchestrator.task" to "1234", "team" to "a=b")
+            a.start(f.member.principal, labelled, "claude", "interactive", labels)
+            a.start(f.member.principal, plain, "claude", "interactive")
+            a.start(f.member.principal, other, "codex", "background", mapOf("team" to "a=b"))
+            // A repeated start is idempotent for the same labels and a conflict for other ones.
+            assertEquals(a.start(f.member.principal, labelled, "claude", "interactive", labels), b.start(f.member.principal, labelled, "claude", "interactive", labels))
+            failure("run_conflict") { b.start(f.member.principal, labelled, "claude", "interactive", labels + ("extra" to "1")) }
+            failure("run_conflict") { b.start(f.member.principal, plain, "claude", "interactive", mapOf("late" to "1")) }
+            failure("invalid_label") { a.start(f.member.principal, id(), "claude", "interactive", mapOf("Upper" to "x")) }
+            assertEquals(labels, b.get(f.member.principal, labelled).run.labels)
+            assertEquals(emptyMap(), b.get(f.member.principal, plain).run.labels)
+            assertEquals(setOf(labelled), b.list(f.member.principal, labels = mapOf("orchestrator.task" to "1234")).runs.map { it.id }.toSet())
+            assertEquals(setOf(labelled, other), b.list(f.member.principal, labels = mapOf("team" to "a=b")).runs.map { it.id }.toSet())
+            assertEquals(setOf(labelled), b.list(f.member.principal, labels = labels).runs.map { it.id }.toSet(), "Every filter must match")
+            assertTrue(b.list(f.member.principal, labels = mapOf("team" to "other")).runs.isEmpty())
+            assertEquals(3, b.list(f.member.principal).runs.size)
+            assertEquals(labels, b.list(f.member.principal).runs.single { it.id == labelled }.labels)
+            // Another member's runs never match through the filter.
+            assertTrue(b.list(f.admin.principal, labels = labels).runs.isEmpty())
+            failure("invalid_label") { b.list(f.member.principal, labels = (1..17).associate { "k$it" to "v" }) }
+        }
+    }
+
     private fun input(id: String, units: Long) = AdmissionInput(units, "claude-test", "anthropic", runId = id)
     private fun id() = UUID.randomUUID().toString()
     private suspend fun failure(code: String, block: suspend () -> Any?) { assertEquals(code, assertFailsWith<TeamFailure> { block() }.code) }

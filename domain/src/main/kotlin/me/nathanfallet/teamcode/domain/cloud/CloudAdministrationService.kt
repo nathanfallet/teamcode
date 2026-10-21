@@ -4,7 +4,7 @@ import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.domain.team.*
 
 /** Validation for clusters, profiles and settings. Persistence revalidates the administrator in its transaction. */
-class CloudAdministrationService(private val store: CloudAdminStore, private val cluster: ClusterPort) {
+class CloudAdministrationService(private val store: CloudAdminStore, private val cluster: ClusterPort, val kubeconfigImports: KubeconfigImportService? = null) {
     suspend fun clusters(actor: Principal) = admin(actor).let { store.clusters(actor) }
     suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput): CloudCluster {
         admin(actor)

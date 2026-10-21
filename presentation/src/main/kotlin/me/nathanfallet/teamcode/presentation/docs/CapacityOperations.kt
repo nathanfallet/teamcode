@@ -326,11 +326,12 @@ private fun ApiCatalog.runOperations() {
         operationId = "startRun"; tag(ApiTags.RUNS)
         summary = "Register an agent launch"
         description = "Called by `teamcode run` when it starts Claude or Codex: the launch's requests are then " +
-            "attributed to it and its policy applies. The launcher generates the identifier and heartbeats it."
-        body<StartRunRequest>("The launch's UUID, the agent (`claude` or `codex`) and the workload (`interactive` or `background`).")
+            "attributed to it and its policy applies. The launcher generates the identifier and heartbeats it. " +
+            "`labels` (`team.runs.labels.v1`) are the cloud sessions' model: at most 16 non-secret pairs, lowercase keys of up to 63 characters, values up to 256."
+        body<StartRunRequest>("The launch's UUID, the agent (`claude` or `codex`), the workload (`interactive` or `background`) and optional labels.")
         responses {
             ok<RunLeaseView>("Registered.", HttpStatusCode.Created)
-            badRequest("Invalid identifier, agent or workload (`invalid_run`).")
+            badRequest("Invalid identifier, agent, workload (`invalid_run`) or label (`invalid_label`).")
             conflict("The identifier is already used (`run_conflict`), or the registry limit is reached (`run_limit`).")
         }
     }
@@ -338,13 +339,17 @@ private fun ApiCatalog.runOperations() {
         operationId = "listRuns"; tag(ApiTags.RUNS)
         summary = "List agent launches"
         description = "The caller's launches, newest first. Administrators, and `team:read` keys, can read one member's (`member`) or every " +
-            "member's (`all=true`); a `usage:read` key stays limited to its owner's. Page with `before` = `nextBeforeId`."
+            "member's (`all=true`); a `usage:read` key stays limited to its owner's. Page with `before` = `nextBeforeId`. Every launch carries its `labels`."
         parameters {
             queryText("member", "A member's identifier (administrators, `team:read`).")
             queryFlag("all", "Every member's launches (administrators, `team:read`).")
             queryText("before", "The `nextBeforeId` of the previous page.")
+            queryList("label", "Only launches with these labels, each as `key=value` (`team.runs.labels.v1`).")
         }
-        responses { ok<RunPageView>("A page of launches.") }
+        responses {
+            ok<RunPageView>("A page of launches.")
+            badRequest("An invalid label filter (`invalid_label`).")
+        }
     }
     get("/api/v1/runs/{id}") {
         operationId = "getRun"; tag(ApiTags.RUNS)

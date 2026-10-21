@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.*
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.client.RunLifecycleClient
 import me.nathanfallet.teamcode.client.TeamCodeException
+import me.nathanfallet.teamcode.cli.cloud.parseLabels
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import me.nathanfallet.teamcode.cli.launch.trackedRun
 import kotlin.test.*
@@ -27,6 +28,28 @@ class RunLifecycleTest {
         assertEquals("claude", client.input!!.agent); assertEquals("background", client.input!!.workload)
         assertEquals(3, client.heartbeats); assertEquals(listOf<Pair<String, Int?>>(client.input!!.id to 7), client.ended)
         advanceTimeBy(100000); assertEquals(3, client.heartbeats); assertTrue(reports.isEmpty())
+    }
+    @Test fun labelsAreSentWithTheStartRequest() = runTest {
+        val client = Fake()
+        trackedRun(client, "claude", "interactive", true, report = {}, labels = parseLabels(listOf("task=1234", "note=a=b", "empty="))) { 0 }
+        assertEquals(mapOf("task" to "1234", "note" to "a=b", "empty" to ""), client.input!!.labels)
+        val unlabeled = Fake()
+        trackedRun(unlabeled, "codex", "interactive", true, report = {}) { 0 }
+        assertEquals(emptyMap(), unlabeled.input!!.labels)
+    }
+    @Test fun labelOptionsUseTheCloudSyntax() {
+        assertEquals(emptyMap(), parseLabels(emptyList()))
+        assertEquals(mapOf("a" to "b=c"), parseLabels(listOf("a=b=c")))
+        assertEquals(mapOf("a" to "2"), parseLabels(listOf("a=1", "a=2")), "The last value of a repeated key wins, as for cloud sessions")
+        for (bad in listOf("=value", "")) assertFailsWith<IllegalArgumentException> { parseLabels(listOf(bad)) }
+    }
+    @Test fun theRunIdentifierIsExportedToBothAgentsAndAnInheritedOneIsRemovedWithoutARun() {
+        val id = "11111111-1111-1111-1111-111111111111"; val token = "synthetic-local-token-long-enough"
+        for (agent in listOf("claude", "codex")) {
+            assertEquals(id, agentLaunch(agent, emptyList(), 1234, token, runId = id).environment["TEAMCODE_RUN_ID"], agent)
+            val legacy = agentLaunch(agent, emptyList(), 1234, token).environment
+            assertTrue(legacy.containsKey("TEAMCODE_RUN_ID") && legacy["TEAMCODE_RUN_ID"] == null, "A stale identifier from an outer launch is not inherited ($agent)")
+        }
     }
     @Test fun cancelledWrapperClosesItsOwnMetadataAndPreservesCancellation() = runTest {
         val client = Fake()

@@ -148,10 +148,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val q = call.request.queryParameters
             fun single(name: String) = q.getAll(name)?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send $name at most once.") }
             val states = q.getAll("state").orEmpty().map { value -> CloudSessionState.entries.find { it.wire == value } ?: throw TeamFailure("invalid_state", 400, "Unknown session state.") }.toSet()
-            val labels = q.getAll("label").orEmpty().associate { value ->
-                val (key, label) = value.split('=', limit = 2).takeIf { it.size == 2 } ?: throw TeamFailure("invalid_label", 400, "Filter labels as key=value.")
-                key to label
-            }
+            val labels = LabelRules.parseFilter(q.getAll("label").orEmpty())
             val owner = single("owner")?.let { if (it == "all") "*" else it }
             val limit = single("limit")?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.") } ?: 50
             val page = sessions.list(call.principal, CloudSessionQuery(owner, states, labels, single("before"), limit))
@@ -174,7 +171,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         val settings = admin.settings(actor)
         val clusters = admin.clusters(actor)
         val sections = runtime?.let { runtimeForm(actor, it.get(actor), it.publicOrigin) }.orEmpty() +
-            clustersSection(actor, clusters) + profilesSection(admin.profiles(actor), clusters) +
+            clustersSection(actor, clusters, admin.kubeconfigImports != null) + profilesSection(admin.profiles(actor), clusters) +
             """<h2>GitHub</h2><p>The team's GitHub App, which gives each member's cloud sessions their own Git access, is configured on <a href="/dashboard/github">GitHub</a>.</p><h2>Retention, limits and transfers</h2>"""
         call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
     }
@@ -185,9 +182,31 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             input["updatedAt"]?.takeIf { it.isNotBlank() }?.let { it.toLongOrNull() ?: -1 })
         call.respondRedirect("/dashboard/cloud")
     }
+    admin.kubeconfigImports?.let { imports ->
+        get("/dashboard/assets/kubeconfig-import.js") {
+            call.principal.requireAdmin()
+            call.respondText(KUBECONFIG_SCRIPT, ContentType.parse("application/javascript"))
+        }
+        // The server reads the kubeconfig: its CA and token go back to the browser only sealed, never in the page.
+        post("/dashboard/cloud/clusters/import") {
+            val actor = call.principal
+            val offer = imports.offer(actor, call.form(origin.trimEnd('/'), limit = KUBECONFIG_FORM_BYTES)["kubeconfig"].orEmpty())
+            val only = offer.contexts.singleOrNull()
+            call.respondText(call.page("Import a kubeconfig", if (only != null) importedClusterForm(actor, offer.sealed, only) else contextPicker(actor, offer)), ContentType.Text.Html)
+        }
+        post("/dashboard/cloud/clusters/import/context") {
+            val actor = call.principal
+            val input = call.form(origin.trimEnd('/'), limit = KUBECONFIG_FORM_BYTES)
+            val choice = imports.choose(actor, input["kubeconfigSealed"].orEmpty(), input["context"].orEmpty())
+            call.respondText(call.page("Import a kubeconfig", importedClusterForm(actor, choice.sealed, choice.summary)), ContentType.Text.Html)
+        }
+    }
     post("/dashboard/cloud/clusters") {
         val input = call.form(origin.trimEnd('/'), limit = CLUSTER_FORM_BYTES)
-        admin.saveCluster(call.principal, null, null, clusterInput(input))
+        val imported = input["kubeconfigSealed"]?.let { sealed ->
+            (admin.kubeconfigImports ?: throw TeamFailure("invalid_cluster", 400, "Kubeconfig import is not available.")).open(call.principal, sealed, input["kubeconfigContext"].orEmpty())
+        }
+        admin.saveCluster(call.principal, null, null, clusterInput(input, imported))
         call.respondRedirect("/dashboard/cloud")
     }
     post("/dashboard/cloud/clusters/{id}") {
@@ -214,6 +233,8 @@ private fun SaveCloudClusterRequest.domain() = CloudClusterInput(name, apiUrl, c
 
 /** A CA bundle (up to 64 KiB) and a token (up to 16 KiB), form-encoded. */
 private const val CLUSTER_FORM_BYTES = 256 * 1024
+/** A kubeconfig of 128 K characters, percent-encoded (up to three bytes per character), or its sealed copy. */
+private const val KUBECONFIG_FORM_BYTES = 512 * 1024
 private const val KEPT = " (defined; leave empty to keep it, or paste a replacement)"
 
 private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: String): String {
@@ -226,23 +247,46 @@ private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: S
         """<label>Workspace access mode <select name="workspaceAccessMode">${option("ReadWriteOncePod", "ReadWriteOncePod (one pod per workspace, enforced by the cluster)", runtime.workspaceAccessMode)}${option("ReadWriteOnce", "ReadWriteOnce (storage drivers without ReadWriteOncePod)", runtime.workspaceAccessMode)}</select></label><button>Save cloud sessions</button></form>"""
 }
 
-private fun clusterFields(cluster: CloudCluster?): String =
-    """<label>Name <input name="name" maxlength="120" required value="${escape(cluster?.name ?: "")}"></label>""" +
-        """<label>API URL <input name="apiUrl" type="url" maxlength="512" placeholder="https://kubernetes.example.com:6443" required value="${escape(cluster?.apiUrl ?: "")}"></label>""" +
-        """<label>CA bundle (PEM)${if (cluster != null) KEPT else ""}<br><textarea name="caCertificate" rows="4" cols="70" autocomplete="off"${if (cluster == null) " required" else ""}></textarea></label>""" +
-        """<label>Service-account token${if (cluster != null) KEPT else ""} <input type="password" name="serviceAccountToken" autocomplete="off" maxlength="16384"${if (cluster == null) " required" else ""}></label>""" +
-        """<label>Allowed namespaces (comma-separated) <input name="allowedNamespaces" maxlength="2048" required value="${escape(cluster?.allowedNamespaces?.joinToString(", ") ?: "")}"></label>""" +
+private fun clusterFields(cluster: CloudCluster?, imported: KubeconfigContextSummary? = null): String {
+    val fromKubeconfig = " (from the kubeconfig; leave empty to use it, or paste a replacement)"
+    fun hint(hasValue: Boolean) = if (cluster != null) KEPT else if (hasValue) fromKubeconfig else ""
+    val caRequired = cluster == null && imported?.hasCaCertificate != true
+    val tokenRequired = cluster == null && imported?.hasToken != true
+    return """<label>Name <input name="name" maxlength="120" required value="${escape(cluster?.name ?: imported?.name ?: "")}"></label>""" +
+        """<label>API URL <input name="apiUrl" type="url" maxlength="512" placeholder="https://kubernetes.example.com:6443" required value="${escape(cluster?.apiUrl ?: imported?.apiUrl ?: "")}"></label>""" +
+        """<label>CA bundle (PEM)${hint(imported?.hasCaCertificate == true)}<br><textarea name="caCertificate" rows="4" cols="70" autocomplete="off"${if (caRequired) " required" else ""}></textarea></label>""" +
+        """<label>Service-account token${hint(imported?.hasToken == true)} <input type="password" name="serviceAccountToken" autocomplete="off" maxlength="16384"${if (tokenRequired) " required" else ""}></label>""" +
+        """<label>Allowed namespaces (comma-separated) <input name="allowedNamespaces" maxlength="2048" required value="${escape(cluster?.allowedNamespaces?.joinToString(", ") ?: imported?.namespace ?: "")}"></label>""" +
         """<label>Running pods at most <input type="number" name="maxRunningPods" min="1" max="1000" required value="${cluster?.maxRunningPods ?: 10}"></label>""" +
         """<label>Default storage class (empty uses the cluster default) <input name="defaultStorageClass" maxlength="253" value="${escape(cluster?.defaultStorageClass ?: "")}"></label>"""
+}
 
-private fun clustersSection(actor: Principal, clusters: List<CloudCluster>): String {
+private fun importedClusterForm(actor: Principal, sealed: String, context: KubeconfigContextSummary) =
+    """<p>Context <code>${escape(context.name)}</code> of your kubeconfig. Review the fields, then connect the cluster. The CA bundle and the token stay on the server, encrypted, and are not shown here.</p>""" +
+        """<form action="/dashboard/cloud/clusters" method="post">${csrf(actor)}<input type="hidden" name="kubeconfigSealed" value="${escape(sealed)}"><input type="hidden" name="kubeconfigContext" value="${escape(context.name)}">${clusterFields(null, context)}<button>Connect cluster</button></form>"""
+
+private fun contextPicker(actor: Principal, offer: KubeconfigOffer): String {
+    val choices = offer.contexts.joinToString("") { context ->
+        val usable = context.unsupported == null
+        val detail = if (usable) escape(context.apiUrl.orEmpty()) + (context.namespace?.let { " · namespace ${escape(it)}" } ?: "") else "<span class=\"hint\">Cannot be imported: ${escape(context.unsupported.orEmpty())}</span>"
+        """<label class="choice"><input type="radio" name="context" value="${escape(context.name)}"${if (context.name == offer.defaultContext) " checked" else ""}${if (usable) "" else " disabled"}><span><strong>${escape(context.name)}</strong>${if (context.name == offer.defaultContext) " <span class=\"chip\">current context</span>" else ""}<br><small>$detail</small></span></label>"""
+    }
+    return """<p>This kubeconfig has several contexts. Choose the one to connect; the current context of the file is selected.</p><form action="/dashboard/cloud/clusters/import/context" method="post">${csrf(actor)}<input type="hidden" name="kubeconfigSealed" value="${escape(offer.sealed)}">$choices<button>Continue</button></form>"""
+}
+
+private fun importSection(actor: Principal): String =
+    """<details><summary>Import a kubeconfig</summary><p>Drop a kubeconfig file, choose one, or paste its contents. TeamCode reads it on the server and prefills the cluster form from the chosen context: API URL, CA bundle, token and namespace. The CA bundle and the token are encrypted like a manual entry and are never sent back to the browser. Kubeconfigs that use an <code>exec</code> or <code>auth-provider</code> plugin, a client certificate, or files referenced by path are refused with the reason; embed the data with <code>kubectl config view --raw --flatten --minify</code>, or connect the cluster by hand.</p>""" +
+        """<form action="/dashboard/cloud/clusters/import" method="post" id="kubeconfig-import">${csrf(actor)}<div id="kubeconfig-drop" class="drop" hidden><strong>Drop a kubeconfig here</strong> <label class="pick">or choose a file <input type="file" id="kubeconfig-file" hidden></label><br><small id="kubeconfig-status" role="status"></small></div>""" +
+        """<label>Kubeconfig contents <textarea name="kubeconfig" id="kubeconfig-text" rows="6" cols="70" maxlength="${Kubeconfig.MAX_CHARACTERS}" autocomplete="off" spellcheck="false" required></textarea></label><button>Read kubeconfig</button></form><script src="/dashboard/assets/kubeconfig-import.js"></script></details>"""
+
+private fun clustersSection(actor: Principal, clusters: List<CloudCluster>, canImport: Boolean): String {
     val rows = clusters.joinToString("") { cluster ->
         """<tr><td><strong>${escape(cluster.name)}</strong><br><small>${escape(cluster.apiUrl)}</small></td><td>${escape(cluster.allowedNamespaces.joinToString(", "))}</td><td>${cluster.maxRunningPods}</td><td>Token and CA bundle defined</td><td><details><summary>Edit</summary><form action="/dashboard/cloud/clusters/${escape(cluster.id)}" method="post">${csrf(actor)}<input type="hidden" name="version" value="${cluster.version}">${clusterFields(cluster)}<button>Save cluster</button></form></details></td></tr>"""
     }
     val table = if (clusters.isEmpty()) "<div class='empty'><strong>No cluster is connected.</strong></div>"
         else "<table><thead><tr><th>Cluster</th><th>Namespaces</th><th>Pods</th><th>Credentials</th><th></th></tr></thead><tbody>$rows</tbody></table>"
     return "<h2>Kubernetes clusters</h2>" + help("What the service account needs", "<p>In each allowed namespace: <code>get</code>, <code>list</code>, <code>create</code> and <code>delete</code> on <code>pods</code> and <code>persistentvolumeclaims</code>; cluster-wide <code>get</code> and <code>list</code> on <code>persistentvolumes</code> and <code>storageclasses</code>; and <code>system:auth-delegator</code> for <code>TokenReview</code>. The token is stored encrypted; neither it nor the CA bundle is shown again.</p>") +
-        table + """<details><summary>Connect a cluster</summary><form action="/dashboard/cloud/clusters" method="post">${csrf(actor)}${clusterFields(null)}<button>Connect cluster</button></form></details>"""
+        table + """<details><summary>Connect a cluster</summary><form action="/dashboard/cloud/clusters" method="post">${csrf(actor)}${clusterFields(null)}<button>Connect cluster</button></form></details>""" + (if (canImport) importSection(actor) else "")
 }
 
 private fun profilesSection(profiles: List<CloudProfile>, clusters: List<CloudCluster>): String {
@@ -254,8 +298,11 @@ private fun profilesSection(profiles: List<CloudProfile>, clusters: List<CloudCl
         (if (profiles.isEmpty()) "<div class='empty'><strong>No profile yet.</strong></div>" else "<table><thead><tr><th>Profile</th><th>Cluster / namespace</th><th>Image</th><th>Members</th></tr></thead><tbody>$rows</tbody></table>")
 }
 
-/** Empty credential fields keep the stored ones. */
-private fun clusterInput(input: Parameters) = CloudClusterInput(input["name"].orEmpty().trim(), input["apiUrl"].orEmpty().trim(),
-    input["caCertificate"]?.trim()?.takeIf { it.isNotEmpty() }, input["serviceAccountToken"]?.trim()?.takeIf { it.isNotEmpty() },
+/** Empty credential fields keep the stored ones; on an import they take the kubeconfig context's. */
+private fun clusterInput(input: Parameters, imported: KubeconfigContext? = null) = CloudClusterInput(input["name"].orEmpty().trim(), input["apiUrl"].orEmpty().trim(),
+    input["caCertificate"]?.trim()?.takeIf { it.isNotEmpty() } ?: imported?.caCertificate, input["serviceAccountToken"]?.trim()?.takeIf { it.isNotEmpty() } ?: imported?.token,
     input["allowedNamespaces"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }, input["maxRunningPods"]?.trim()?.toIntOrNull() ?: -1,
     input["defaultStorageClass"]?.trim()?.takeIf { it.isNotEmpty() })
+
+private val KUBECONFIG_SCRIPT = requireNotNull(object {}.javaClass.getResourceAsStream("/me/nathanfallet/teamcode/presentation/kubeconfig-import.js")) { "Missing kubeconfig import resource" }
+    .bufferedReader().use { it.readText() }

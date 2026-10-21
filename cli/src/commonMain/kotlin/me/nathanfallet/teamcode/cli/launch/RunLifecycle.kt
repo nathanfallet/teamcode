@@ -8,7 +8,7 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 
 /** Observe only this wrapper. A missing heartbeat never authorizes killing any process. */
 internal suspend fun trackedRun(client: RunLifecycleClient, agent: String, workload: String, supported: Boolean,
-    heartbeatMillis: Long = 30_000, report: (String) -> Unit, execute: suspend (String?) -> Int): Int = coroutineScope {
+    heartbeatMillis: Long = 30_000, report: (String) -> Unit, labels: Map<String, String> = emptyMap(), execute: suspend (String?) -> Int): Int = coroutineScope {
     if (!supported) return@coroutineScope execute(null)
     require(heartbeatMillis in 1..60_000)
     val id = Uuid.random().toString()
@@ -16,7 +16,7 @@ internal suspend fun trackedRun(client: RunLifecycleClient, agent: String, workl
     var exitCode: Int? = null
     var registered = false
     try {
-        val lease = client.startRun(StartRunRequest(id, agent, workload))
+        val lease = client.startRun(StartRunRequest(id, agent, workload, labels))
         check(lease.id == id && lease.state == "RUNNING") { "The server did not establish this launch." }
         registered = true
         heartbeat = launch {
