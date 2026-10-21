@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.cli.launch
 
 import kotlinx.serialization.json.JsonPrimitive
+import me.nathanfallet.teamcode.cli.hooks.HookEvents
+import me.nathanfallet.teamcode.cli.hooks.InstalledHook
 import me.nathanfallet.teamcode.cli.platform.ServicePlatform
 import me.nathanfallet.teamcode.cli.platform.environment
 import okio.Path.Companion.toPath
@@ -22,8 +24,15 @@ internal fun hasCodexHookOverrides(arguments: List<String>): Boolean {
     }
 }
 
-/** A stable hook definition avoids re-review on every ephemeral proxy port or token rotation. */
-internal fun codexGuidance(platform: ServicePlatform, config: String): AgentLaunch {
+/**
+ * Codex hook overrides: TeamCode's guidance command on `UserPromptSubmit` and `PreToolUse` when [guidance] is set,
+ * and each approved team hook on the events Codex supports. One `-c hooks.<event>=[...]` per event, because Codex
+ * replaces arrays within one CLI layer. A stable definition avoids re-review on every proxy port or token rotation;
+ * a new team hook version has a new path, which Codex asks the member to trust again.
+ */
+internal fun codexGuidance(platform: ServicePlatform, config: String, teamHooks: List<InstalledHook> = emptyList(), guidance: Boolean = true): AgentLaunch {
+    val team = teamHooks.flatMap { hook -> HookEvents.forAgent("codex", hook.definition).map { it to hook } }
+    if (!guidance) return AgentLaunch(codexHookOverrides(null, team), emptyMap())
     require(platform.executable.toPath().isAbsolute && config.toPath().isAbsolute)
     val arguments = listOf(platform.executable, "agents", "hook", "--config", config)
     require(arguments.none { '\u0000' in it })
@@ -38,7 +47,7 @@ internal fun codexGuidance(platform: ServicePlatform, config: String): AgentLaun
         }
         "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Base64.encode(utf16)}"
     } else arguments.joinToString(" ") { "'${it.replace("'", "'\"'\"'")}'" }
-    val handler = "[{hooks=[{type=\"command\",command=${JsonPrimitive(command)},timeout=5,additionalContextLimit=1000}]}]"
+    val handler = "{hooks=[{type=\"command\",command=${JsonPrimitive(command)},timeout=5,additionalContextLimit=1000}]}"
     val overrides = if (platform.os == "windows") {
         val systemRoot = requireNotNull(environment("SystemRoot")).toPath()
         require(systemRoot.isAbsolute)
@@ -47,5 +56,16 @@ internal fun codexGuidance(platform: ServicePlatform, config: String): AgentLaun
         // but lives below System32; make it discoverable without changing any persistent user setting.
         mapOf("PATH" to listOfNotNull(environment("PATH")?.takeIf { it.isNotBlank() }, powershell.toString()).joinToString(";"))
     } else emptyMap()
-    return AgentLaunch(listOf("-c", "hooks.UserPromptSubmit=$handler", "-c", "hooks.PreToolUse=$handler"), overrides)
+    return AgentLaunch(codexHookOverrides(handler, team), overrides)
+}
+
+private fun codexHookOverrides(guidance: String?, team: List<Pair<String, InstalledHook>>): List<String> {
+    val guided = if (guidance == null) emptyList() else listOf("UserPromptSubmit", "PreToolUse")
+    return (guided + team.map { it.first }.sorted()).distinct().flatMap { event ->
+        val groups = listOfNotNull(guidance?.takeIf { event in guided }) + team.filter { it.first == event }.map { (_, hook) ->
+            val matcher = hook.definition.matcher?.let { "matcher=${JsonPrimitive(it)}," }.orEmpty()
+            "{${matcher}hooks=[{type=\"command\",command=${JsonPrimitive(shellQuote(hook.command))},timeout=${hook.definition.timeoutSeconds}}]}"
+        }
+        listOf("-c", "hooks.$event=[${groups.joinToString(",")}]")
+    }
 }

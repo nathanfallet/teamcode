@@ -24,6 +24,7 @@ import me.nathanfallet.teamcode.domain.gateway.GatewayService
 import me.nathanfallet.teamcode.domain.gateway.RequestCancellationService
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.mcp.McpGateway
+import me.nathanfallet.teamcode.domain.hooks.HookCatalog
 import me.nathanfallet.teamcode.domain.skills.SkillCatalog
 import me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase
 import me.nathanfallet.teamcode.presentation.CloudConversation
@@ -54,7 +55,7 @@ class ApiDocsTest {
             accounts = AccountManagement(stub(), stub()), admission = stub(), directives = stub(), modelPolicies = stub(),
             routes = stub(), cancellation = RequestCancellationService(stub()), devices = stub(), serviceKeys = stub(),
             audit = stub(), pacingSettings = stub(), forecasts = stub(), groups = stub(), runs = stub(), budgetOverrides = stub(),
-            reconciliation = stub(), variants = stub(), skills = SkillCatalog(stub()),
+            reconciliation = stub(), variants = stub(), skills = SkillCatalog(stub()), hooks = HookCatalog(stub()),
             mcp = McpGateway(ResolveEffectiveVariantsUseCase(stub()), stub(), stub()), mcpAccess = stub(),
             cloudRuntime = CloudRuntimeService(stub(), "https://teamcode.example.org"), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(stub(), cluster),
             cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(sessionStore), AuthenticateRunnerUseCase(sessionStore, cluster),

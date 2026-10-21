@@ -93,7 +93,7 @@ class TeamRoutesTest {
         assertEquals(HttpStatusCode.OK, created.status)
         assertEquals(1, team.created)
         assertTrue(created.bodyAsText().contains("synthetic-temporary-password"))
-        assertEquals("no-store", created.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", created.headers[HttpHeaders.CacheControl])
         assertEquals(HttpStatusCode.Forbidden, client.post("/dashboard/login") {
             header(HttpHeaders.Origin, "https://attacker.test")
             contentType(ContentType.Application.FormUrlEncoded)

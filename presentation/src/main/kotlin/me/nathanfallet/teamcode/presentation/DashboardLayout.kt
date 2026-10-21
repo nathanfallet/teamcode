@@ -8,7 +8,7 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, VARIANTS, MCP, CLOUD, GITHUB,
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB,
     /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
     CLOUD_RUNNING }
 
@@ -48,6 +48,7 @@ internal val DASHBOARD_MENU = listOf(
         DashboardLink("/dashboard/sessions", "Agent sessions", "Agent launches, their activity and their optional per-launch limits.", DashboardFeature.RUNS),
         DashboardLink("/dashboard/agent-guidance", "Agent guidance", "The pacing advice the server currently gives agents, and the controller mode.", DashboardFeature.GUIDANCE),
         DashboardLink("/dashboard/skills", "Skills", "Published skills, pinned versions and who receives them.", DashboardFeature.SKILLS),
+        DashboardLink("/dashboard/hooks", "Team hooks", "Scripts agents run on events, the approved version and who receives them.", DashboardFeature.HOOKS),
         DashboardLink("/dashboard/variants", "Variants", "Environment variables and MCP servers, and which members receive them.", DashboardFeature.VARIANTS, adminOnly = true),
         DashboardLink("/dashboard/mcp", "MCP gateway", "Tool policies, usage and the call journal of the MCP servers agents reach through TeamCode.", DashboardFeature.MCP, adminOnly = true),
     )),
@@ -197,6 +198,7 @@ details.help p{margin:0 0 10px}
 .meter>span{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--accent-dim),var(--accent));border-radius:999px}
 .meter.warn>span{background:var(--warn)}.meter.danger>span{background:var(--danger)}
 .meter-label{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.window-line+.window-line{margin-top:10px}.window-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;margin-bottom:4px}
 .meter-label strong{color:var(--text);font-weight:600}
 .empty{padding:36px 24px;text-align:center;background:var(--panel);border:1px dashed var(--line);border-radius:var(--radius);color:var(--muted);margin:0 0 18px}
 .empty strong{display:block;color:var(--text);margin-bottom:4px}
@@ -261,6 +263,18 @@ internal fun ratioMeter(ratio: Double, label: String): String {
     val bounded = ratio.coerceIn(0.0, 1.0)
     val tone = when { ratio >= .9 -> " danger"; ratio >= .75 -> " warn"; else -> "" }
     return """<div class="meter$tone" role="presentation"><span style="width:${String.format(Locale.ROOT, "%.1f", bounded * 100)}%"></span></div><span class="meter-label">$label</span>"""
+}
+
+/** Time left until [resetsAtMillis] as `2d 4h 12m`: leading zero units are dropped, minutes always show, a past instant reads `0m`. */
+internal fun remainingLabel(resetsAtMillis: Long, nowMillis: Long): String {
+    val minutes = ((resetsAtMillis - nowMillis).coerceAtLeast(0)) / 60_000
+    val days = minutes / 1_440
+    val hours = minutes % 1_440 / 60
+    return buildList {
+        if (days > 0) add("${days}d")
+        if (days > 0 || hours > 0) add("${hours}h")
+        add("${minutes % 60}m")
+    }.joinToString(" ")
 }
 
 internal fun percent(ratio: Double) = String.format(Locale.ROOT, "%.0f%%", ratio * 100)

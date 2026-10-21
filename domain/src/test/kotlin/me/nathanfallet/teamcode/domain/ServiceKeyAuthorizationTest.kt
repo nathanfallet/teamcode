@@ -14,7 +14,8 @@ class ServiceKeyAuthorizationTest {
             for (action in listOf(CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT)) authorize.check(key, action)
             for ((action, needed) in listOf(CredentialAction.INFERENCE to ServiceScope.INFERENCE,
                 CredentialAction.USAGE_READ to ServiceScope.USAGE_READ, CredentialAction.GUIDANCE to ServiceScope.GUIDANCE,
-                CredentialAction.SKILLS_READ to ServiceScope.SKILLS_READ, CredentialAction.SKILLS_PUBLISH to ServiceScope.SKILLS_PUBLISH, CredentialAction.TEAM_READ to ServiceScope.TEAM_READ)) {
+                CredentialAction.SKILLS_READ to ServiceScope.SKILLS_READ, CredentialAction.SKILLS_PUBLISH to ServiceScope.SKILLS_PUBLISH,
+                CredentialAction.HOOKS_READ to ServiceScope.HOOKS_READ, CredentialAction.HOOKS_PUBLISH to ServiceScope.HOOKS_PUBLISH, CredentialAction.TEAM_READ to ServiceScope.TEAM_READ)) {
                 // team:read includes the owner's own usage:read reads.
                 if (scope == needed || (action == CredentialAction.USAGE_READ && scope == ServiceScope.TEAM_READ)) authorize.check(key, action)
                 else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, action) }.code)

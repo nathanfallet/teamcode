@@ -9,11 +9,13 @@ Select only the required scopes:
 | Scope | Access |
 | --- | --- |
 | `inference` | Registered inference endpoints and authenticated request cancellation |
-| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs`, the owner's pool accounts under neutral labels at `GET /api/v1/pools/accounts`, and MCP gateway usage at `GET /api/v1/mcp/usage` |
+| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs`, the owner's pool accounts under neutral labels at `GET /api/v1/pools/accounts`, the owner's raw token usage at `GET /api/v1/usage/tokens`, and MCP gateway usage at `GET /api/v1/mcp/usage` |
 | `guidance` | The owner's current/session pacing directives, delivery claims and receipts |
 | `mcp` | The [MCP gateway](mcp-gateway.md) endpoints `/mcp/<server>` and `GET /api/v1/mcp/servers`, with the owner's MCP assignments (V2 branch) |
 | `skills:read` | The owner's effective skill manifest and artifacts (V2, see [skills](skills.md)) |
 | `skills:publish` | Publish skill versions to the catalog and pin them (V2). Only an administrator's key can receive it; it cannot unpin, assign, retire or read the catalog |
+| `hooks:read` | The owner's effective [team hook](hooks.md) manifest and artifacts (V2) |
+| `hooks:publish` | Publish team hook versions (V2). Only an administrator's key can receive it. Unlike `skills:publish`, it never pins: a hook runs code on members' computers, so an interactive administrator approves each version |
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
 | `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it. It also sees every member's sessions in the [event feed](cloud-conversations.md#event-feed) |
@@ -32,7 +34,7 @@ Keys share the member's existing daily ledger, weight, assigned pool, concurrenc
 | Area | Reads |
 | --- | --- |
 | Agent launches | `GET /api/v1/runs` with `?all=true` or `?member=`, and `GET /api/v1/runs/{id}` of any member ([agent sessions](agent-sessions.md)) |
-| Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` for every member |
+| Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` and `GET /api/v1/usage/tokens?all=true` (or `member=`) for every member |
 | Accounts and quotas | `GET /api/v1/accounts`, `GET /api/v1/quotas`, and every account by name and email at `GET /api/v1/pools/accounts` (the data behind `teamcode status` for an administrator). No provider credential is ever returned |
 | Cloud sessions | `GET /api/v1/cloud/sessions?owner=all` or `owner=<member>`, a session's detail and executions, its transcript, inputs and live stream (`events`, `messages`, `events/stream`), and `GET /api/v1/cloud/transfers?scope=team` ([cloud sessions](cloud-sessions.md)) |
 
@@ -93,7 +95,7 @@ The additive Exposed migration makes `service_scopes` nullable. Existing session
 - `DELETE /api/v1/service-keys/{id}`: revoke an owned key or, as an administrator, a same-team key.
 - Creation accepts `name`, a nonempty list of the supported `scopes` (`skills:publish`, `admin:cloud` and `team:read` only for an administrator's key), and `validDays` (1–90; omitted means 30; an explicit `null` creates a key without expiry, administrators' keys only, otherwise `400 invalid_service_key`). It returns `metadata` and the one-time `accessToken`; list responses never include the token or digest. `metadata.neverExpires` is true for a key without expiry; its `expiresAt` is then `9223372036854775807` so clients written before this option still decode the list. Creating such a key records `service_key.created_no_expiry` in the [audit journal](audit.md) instead of `service_key.created`. A client that sends `validDays: null` to a server without this option gets a `400` (it never receives a 30-day key by mistake).
 
-Skill publication uses the dedicated `skills:publish` scope described in [skills](skills.md). Cloud orchestration uses the `cloud:*` scopes: an external orchestrator holding an `admin:cloud` key creates one session per task on behalf of a member and relays messages through its own backend, so no administrator credential reaches a device. A `cloud:read` or `cloud:write` key acts as its owner alone, even when the owner is an administrator. Cluster, profile, settings and access-policy administration, GitHub linking and every other administration stay interactive. Servers that accept these scopes advertise `cloud.keys.v1`.
+Skill publication uses the dedicated `skills:publish` scope described in [skills](skills.md), and team hook publication the separate `hooks:publish` scope described in [team hooks](hooks.md). Cloud orchestration uses the `cloud:*` scopes: an external orchestrator holding an `admin:cloud` key creates one session per task on behalf of a member and relays messages through its own backend, so no administrator credential reaches a device. A `cloud:read` or `cloud:write` key acts as its owner alone, even when the owner is an administrator. Cluster, profile, settings and access-policy administration, GitHub linking and every other administration stay interactive. Servers that accept these scopes advertise `cloud.keys.v1`.
 
 ## TeamClaude reference
 

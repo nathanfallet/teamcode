@@ -11,6 +11,7 @@ import java.util.Base64
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.accounts.*
 import me.nathanfallet.teamcode.domain.team.TeamFailure
+import me.nathanfallet.teamcode.domain.routing.TokenUsage
 import me.nathanfallet.teamcode.infrastructure.gateway.SseUsageMeter
 import me.nathanfallet.teamcode.infrastructure.providers.*
 import kotlin.test.*
@@ -60,11 +61,14 @@ class CodexProviderTest {
         val terminal = """data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":80},"output_tokens":10,"output_tokens_details":{"reasoning_tokens":8}}}}""" + "\n\ndata: [DONE]\n\n"
         terminal.toByteArray().forEach { meter.accept(byteArrayOf(it)) }
         assertEquals(150, meter.settledUnits)
+        assertEquals(TokenUsage(input = 20, output = 10, cacheRead = 80, cacheCreation = 0), meter.tokens, "Cached input is split out of Responses input once")
         meter.accept(terminal.toByteArray())
         assertEquals(150, meter.settledUnits)
+        assertEquals(TokenUsage(input = 20, output = 10, cacheRead = 80), meter.tokens)
         val missing = SseUsageMeter()
         missing.accept("data: {\"type\":\"response.completed\",\"response\":{}}\n\n".toByteArray())
         assertNull(missing.settledUnits)
+        assertNull(missing.tokens)
     }
     @Test fun subscriptionWindowsKeepDurationsAndModelScopesDistinct() {
         val value = Json.parseToJsonElement("""{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000,"reset_at":2000},"secondary_window":{"used_percent":40,"limit_window_seconds":604800,"reset_at":3000}},"additional_rate_limits":[{"limit_name":"gpt-6-luna","rate_limit":{"primary_window":{"used_percent":99,"limit_window_seconds":18000,"reset_at":2000}}}]}""").jsonObject

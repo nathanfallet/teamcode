@@ -64,7 +64,7 @@ class UsageReconciliationRoutesTest {
             assertFalse(html.contains("<img")); assertFalse(html.contains("<verified>"))
             if (path != "/dashboard/usage/history") assertTrue(html.contains("&lt;img src=x onerror=alert(1)&gt;"))
             else assertTrue(html.contains("&lt;verified&gt;"))
-            assertEquals("no-store", page.headers[HttpHeaders.CacheControl])
+            assertEquals("no-store, no-transform", page.headers[HttpHeaders.CacheControl])
             assertTrue(page.headers["Content-Security-Policy"]!!.contains("default-src 'none'"))
         }
         val form = "expectedUnits=100&actualUnits=40&source=PROVIDER_RECORD&reference=<record>&reason=<verified>&expectedProviderRequestId=req_fixture"

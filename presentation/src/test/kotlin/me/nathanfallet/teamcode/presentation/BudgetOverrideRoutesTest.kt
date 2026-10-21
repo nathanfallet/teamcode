@@ -101,7 +101,7 @@ class BudgetOverrideRoutesTest {
         val html = page.bodyAsText()
         assertTrue(html.contains("&lt;img src=x onerror=alert(1)&gt;")); assertFalse(html.contains("<img"))
         assertTrue(html.contains("Revoke override")); assertTrue(html.contains("Replace temporary override")); assertTrue(html.contains("?before=cursor-id"))
-        assertEquals("no-store", page.headers[HttpHeaders.CacheControl])
+        assertEquals("no-store, no-transform", page.headers[HttpHeaders.CacheControl])
         assertTrue(page.headers["Content-Security-Policy"]!!.contains("default-src 'none'"))
         val capacityPage = client.get("/dashboard/capacity") { header(HttpHeaders.Cookie, "teamcode_session=admin") }
         assertTrue(capacityPage.bodyAsText().contains("Temporary quota overrides"))

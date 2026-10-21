@@ -88,3 +88,42 @@ object GatewayTotals : Table("gateway_totals") {
     val completed = long("completed").default(0)
     override val primaryKey = PrimaryKey(teamId)
 }
+/**
+ * Raw provider tokens per UTC day, member, run, provider and model, added once per settled reservation. Independent of
+ * the credit ledger and of reservation retention; an empty [runKey] means no registered run.
+ */
+object TokenUsageTable : Table("token_usage") {
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
+    val dayNumber = long("day_number")
+    val memberId = reference("member_id", Members.id, onDelete = ReferenceOption.CASCADE)
+    val runKey = varchar("run_key", 36).default("")
+    val provider = varchar("provider", 32)
+    val model = varchar("model", 128)
+    val requests = long("requests").default(0)
+    val unmeteredRequests = long("unmetered_requests").default(0)
+    val inputTokens = long("input_tokens").default(0)
+    val cacheCreationTokens = long("cache_creation_tokens").default(0)
+    val cacheReadTokens = long("cache_read_tokens").default(0)
+    val outputTokens = long("output_tokens").default(0)
+    override val primaryKey = PrimaryKey(teamId, dayNumber, memberId, runKey, provider, model)
+    init {
+        index("token_usage_member", false, teamId, memberId, dayNumber)
+    }
+}
+/**
+ * The same raw tokens per subscription account, UTC hour, provider and model: the history a capacity estimate pairs
+ * with the account's quota observations. Internal; no route reads it yet.
+ */
+object AccountTokenUsageTable : Table("account_token_usage") {
+    val accountId = reference("account_id", Accounts.id, onDelete = ReferenceOption.CASCADE)
+    val hourNumber = long("hour_number")
+    val provider = varchar("provider", 32)
+    val model = varchar("model", 128)
+    val requests = long("requests").default(0)
+    val unmeteredRequests = long("unmetered_requests").default(0)
+    val inputTokens = long("input_tokens").default(0)
+    val cacheCreationTokens = long("cache_creation_tokens").default(0)
+    val cacheReadTokens = long("cache_read_tokens").default(0)
+    val outputTokens = long("output_tokens").default(0)
+    override val primaryKey = PrimaryKey(accountId, hourNumber, provider, model)
+}

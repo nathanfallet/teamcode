@@ -64,6 +64,12 @@ class PoolAccountRoutesTest {
         val windows = page.substringAfter("Observed provider windows")
         assertTrue(windows.contains("""<td>Work<br><small class="muted">work@example.com</small></td>"""), windows)
         assertTrue(windows.contains("<td>Spare</td>"), windows)
+        // One row per account, at its first appearance (Spare .99, Work .5 then .2, deleted .1); Work's windows stack in the same cell.
+        assertEquals(3, Regex("<tr><td>").findAll(windows).count(), windows)
+        assertEquals(listOf("Spare", "Work", "deleted-id"), Regex("<tr><td>(?:<code>)?(Spare|Work|deleted-id)").findAll(windows).map { it.groupValues[1] }.toList(), windows)
+        val work = windows.substringAfter("<td>Work<br>").substringBefore("</tr>")
+        assertEquals(listOf("seven_day", "five_hour"), Regex("""<strong>(seven_day|five_hour)</strong>""").findAll(work).map { it.groupValues[1] }.toList(), work)
+        assertEquals(2, Regex("""<small title="\d{4}-\d\d-\d\dT[^"]+Z">resets in (?:\d+d \d+h \d+m|\d+h \d+m|\d+m)</small>""").findAll(work).count(), work)
         assertFalse(windows.contains("work-id") || windows.contains("spare-id"), windows)
         assertTrue(windows.contains("<code>deleted-id</code>"), windows)
         val serialized = Serialization.json.decodeFromString<List<PoolAccountStatusView>>(client.get("/api/v1/pools/accounts") { bearerAuth("member") }.bodyAsText())
@@ -107,4 +113,17 @@ private class PoolAdmission : AdmissionStore {
     override suspend fun configurePool(actor: Principal, budget: PoolBudget): PoolBudget = error("unused")
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = error("unused")
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) = error("unused")
+}
+
+class RemainingLabelTest {
+    @kotlin.test.Test
+    fun formatsTimeLeftWithoutLeadingZeroUnits() {
+        val minute = 60_000L
+        assertEquals("2d 4h 12m", remainingLabel(((2 * 24 + 4) * 60 + 12) * minute, 0))
+        assertEquals("4h 12m", remainingLabel((4 * 60 + 12) * minute, 0))
+        assertEquals("12m", remainingLabel(12 * minute + 59_000, 0))
+        assertEquals("1d 0h 5m", remainingLabel((24 * 60 + 5) * minute, 0))
+        assertEquals("2h 0m", remainingLabel(120 * minute, 0))
+        assertEquals("0m", remainingLabel(-5, 0))
+    }
 }

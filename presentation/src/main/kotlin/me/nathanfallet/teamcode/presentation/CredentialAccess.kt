@@ -7,6 +7,8 @@ private val cancelPath = Regex("/api/v1/requests/[0-9a-f-]{36}/cancel")
 private val skillPublishPath = Regex("/api/v1/skills/[a-z0-9-]{1,64}/versions")
 private val skillPinPath = Regex("/api/v1/skills/[a-z0-9-]{1,64}/pin")
 private val skillArtifactPath = Regex("/api/v1/skill-delivery/[a-z0-9-]{1,64}/[^/]{1,64}")
+private val hookPublishPath = Regex("/api/v1/hooks/[a-z0-9-]{1,64}/versions")
+private val hookArtifactPath = Regex("/api/v1/hook-delivery/[a-z0-9-]{1,64}/[^/]{1,64}")
 private val teamReadPath = Regex("/api/v1/(quotas|accounts|pools/budgets|members/[a-zA-Z0-9-]{1,36}/capacity)")
 private const val CLOUD_ID = "[a-zA-Z0-9-]{1,36}"
 /** Session, transcript, input and transfer reads open to `cloud:read`; clusters, settings and the access policy are not listed. */
@@ -28,6 +30,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     // Team-wide reads that an interactive administrator has: only a `team:read` key (an administrator's) passes the service layer.
     method == "GET" && teamReadPath.matches(path) -> CredentialAction.TEAM_READ
     method == "GET" && path == "/api/v1/pools/accounts" -> CredentialAction.USAGE_READ
+    method == "GET" && path == "/api/v1/usage/tokens" -> CredentialAction.USAGE_READ
     method == "GET" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}").matches(path)) -> CredentialAction.USAGE_READ
     method == "POST" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}/(heartbeat|end)").matches(path)) -> CredentialAction.INFERENCE
     method == "GET" && path == "/api/v1/directives/current" -> CredentialAction.GUIDANCE
@@ -37,6 +40,10 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "PUT" && skillPinPath.matches(path) -> CredentialAction.SKILLS_PUBLISH
     method == "GET" && path == "/api/v1/skill-delivery" -> CredentialAction.SKILLS_READ
     method == "GET" && skillArtifactPath.matches(path) -> CredentialAction.SKILLS_READ
+    // A hook key publishes only: pinning a hook stays with interactive administrators, since it runs code on members' computers.
+    method == "POST" && hookPublishPath.matches(path) -> CredentialAction.HOOKS_PUBLISH
+    method == "GET" && path == "/api/v1/hook-delivery" -> CredentialAction.HOOKS_READ
+    method == "GET" && hookArtifactPath.matches(path) -> CredentialAction.HOOKS_READ
     method == "GET" && cloudReadPath.matches(path) -> CredentialAction.CLOUD_READ
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE

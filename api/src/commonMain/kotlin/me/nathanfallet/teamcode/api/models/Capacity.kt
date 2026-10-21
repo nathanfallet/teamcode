@@ -28,3 +28,17 @@ data class PoolAccountStatusView(
 /** One current provider window: `five_hour`, `seven_day`, or a model-scoped `model:<family>` that only bars that model. */
 @Serializable
 data class AccountWindowView(val window: String, val utilization: Double, val observedAtMillis: Long, val resetsAtMillis: Long? = null)
+
+/**
+ * Raw provider tokens of one member, run, provider and model on one UTC day (`YYYY-MM-DD`). `inputTokens` excludes
+ * cached input; `cacheCreationTokens` and `cacheReadTokens` are the cache write and read input; `outputTokens`
+ * includes reasoning. `unmeteredRequests` ended without provider usage and are not in the token sums.
+ */
+@Serializable
+data class TokenUsageRowView(
+    val day: String, val memberId: String, val username: String, val runId: String? = null, val provider: String, val model: String,
+    val requests: Long, val unmeteredRequests: Long, val inputTokens: Long, val cacheCreationTokens: Long, val cacheReadTokens: Long, val outputTokens: Long,
+)
+
+@Serializable
+data class TokenUsagePageView(val rows: List<TokenUsageRowView>, val nextAfter: String? = null)

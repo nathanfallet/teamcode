@@ -27,9 +27,10 @@ import me.nathanfallet.teamcode.presentation.docs.API_DOCS_PATH
 import me.nathanfallet.teamcode.presentation.docs.API_OPENAPI_PATH
 import me.nathanfallet.teamcode.presentation.docs.apiDocsRoutes
 
+internal const val CACHE_CONTROL = "no-store, no-transform"
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, hooks: me.nathanfallet.teamcode.domain.hooks.HookCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
@@ -61,7 +62,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         }
     }
     intercept(ApplicationCallPipeline.Plugins) {
-        call.response.header(HttpHeaders.CacheControl, "no-store")
+        // Set once for every response (dashboard HTML, JSON API, streams) so no handler re-adds or weakens it.
+        // no-transform stops proxies such as Cloudflare from rewriting content (e-mail obfuscation, minification).
+        call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL)
         call.response.header("X-Content-Type-Options", "nosniff")
         // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
         call.response.header("Referrer-Policy", "same-origin")
@@ -128,6 +131,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (serviceKeys != null) add(DashboardFeature.SERVICE_KEYS)
         if (audit != null) add(DashboardFeature.AUDIT)
         if (skills != null) add(DashboardFeature.SKILLS)
+        if (hooks != null) add(DashboardFeature.HOOKS)
         if (variants != null) add(DashboardFeature.VARIANTS)
         if (mcpAccess != null) add(DashboardFeature.MCP)
         if (cloudSessions != null && cloudAdmin != null) add(DashboardFeature.CLOUD)
@@ -150,6 +154,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (serviceKeys != null && team != null) serviceKeyRoutes(serviceKeys, publicOrigin)
         if (audit != null && team != null) auditRoutes(audit)
         if (skills != null && team != null) skillRoutes(skills, team, publicOrigin)
+        if (hooks != null && team != null) hookRoutes(hooks, team, publicOrigin)
         if (variants != null && team != null) variantRoutes(variants, publicOrigin)
         if (mcp != null && team != null) mcpGatewayRoutes(mcp, publicOrigin)
         if (mcpAccess != null && team != null) mcpAdminRoutes(mcpAccess, variants, publicOrigin)
@@ -178,7 +183,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             call.respond(Capabilities(serverVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION, mode = mode,
                 features = listOf("status", if (mode == "fixture") "messages.fixture.streaming" else "subscriptions.streaming") +
                     (if (team != null) listOf("team.auth", "team.members", "dashboard") else emptyList()) +
-                    (if (team != null && admission != null) listOf("capacity.shared-overflow.v1") else emptyList()) +
+                    (if (team != null && admission != null) listOf("capacity.shared-overflow.v1", "usage.tokens.v1") else emptyList()) +
                     (if (team != null && cancellation != null) listOf("requests.cancel.v1") else emptyList()) +
                     (if (team != null && runs != null) listOf("team.runs.v1", "team.runs.labels.v1") else emptyList()) +
                     (if (team != null && reconciliation != null) listOf("capacity.usage-reconciliation.v1") else emptyList()) +
@@ -190,6 +195,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && serviceKeys != null) listOf("team.read-key.v1") else emptyList()) +
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
                     (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1") else emptyList()) +
+                    (if (team != null && hooks != null) listOf("team.hooks.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
                     (if (team != null && cloudOn()) listOfNotNull<List<String>>(
                         if (cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else null,
@@ -225,7 +231,6 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             val clientRequestId = call.request.headers.getAll("x-teamcode-client-request-id")?.let { it.singleOrNull() ?: "" }
             gateway.forward(GenerationRequest(bytes, headers, if (team != null) call.principal else null, inbound.protocol, clientRequestId)) { head, chunks ->
                 head.headers.filterKeys { it.lowercase() in setOf("retry-after", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider", "x-teamcode-error") }.forEach { (name, value) -> call.response.header(name, value) }
-                call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.response.header("X-Accel-Buffering", "no")
                 val consumed = CompletableDeferred<Unit>()
                 call.respondBytesWriter(ContentType.parse(head.contentType), HttpStatusCode.fromValue(head.status)) {

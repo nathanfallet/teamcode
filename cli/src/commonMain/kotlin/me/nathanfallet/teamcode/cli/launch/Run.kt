@@ -22,6 +22,10 @@ import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.cli.service.serviceResponds
 import me.nathanfallet.teamcode.api.models.Capabilities
 import me.nathanfallet.teamcode.client.TeamCodeClient
+import me.nathanfallet.teamcode.cli.hooks.HookEvents
+import me.nathanfallet.teamcode.cli.hooks.InstalledHook
+import me.nathanfallet.teamcode.cli.hooks.teamHookSync
+import me.nathanfallet.teamcode.cli.hooks.teamHooksSupported
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -35,6 +39,7 @@ class Run : SuspendingNoOpCliktCommand(name = "run") {
 private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(name = agent) {
     private val noGuidance by option("--no-guidance", help = "Disable automatic session guidance for this launch.").flag()
     private val noMcp by option("--no-mcp", help = "Do not connect the team MCP servers assigned to you for this launch.").flag()
+    private val noTeamHooks by option("--no-team-hooks", help = "Do not install the team hooks you approved for this launch.").flag()
     private val workload by option("--workload", help = "Scheduling class for this launch; quotas and permissions still apply.").choice("interactive", "background").default("interactive")
     private val labels by option("--label", help = "key=value; repeatable. Attached to this launch; filter with teamcode sessions list --label.").multiple()
     private val arguments by argument("AGENT_ARGS").multiple()
@@ -59,12 +64,13 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                 throw CliktError("This server does not record run labels; run without --label.")
             // Fails before launching the agent when the saved session is invalid; names only, never an address or credential.
             val servers = assignedMcpServers(client, capabilities)
+            val hooks = approvedTeamHooks(client, capabilities)
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin)) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(service.port, service.localToken, runId, servers, claudeLogin)
+                    launch(service.port, service.localToken, runId, servers, claudeLogin, hooks)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
@@ -73,7 +79,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(port, token, runId, servers, claudeLogin)
+                        launch(port, token, runId, servers, claudeLogin, hooks)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -94,29 +100,60 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             emptyList()
         }
     }
-    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean): Int {
+    /**
+     * The team hooks this member approved on this computer, verified and installed. Never blocks the launch: an
+     * unavailable manifest or download leaves hooks out with a notice. Hooks awaiting approval are named, not run.
+     */
+    private suspend fun approvedTeamHooks(client: TeamCodeClient, capabilities: Capabilities): List<InstalledHook> {
+        if (noTeamHooks || "team.hooks.v1" !in capabilities.features) return emptyList()
         val options = arguments.takeWhile { it != "--" }
-        val plugin = if (agent == "claude" && !noGuidance && "--bare" !in options) try {
-            GuidancePlugin.create(configPath(), port)
+        if (agent == "claude" && "--bare" in options) return emptyList()
+        if (agent == "codex" && hasCodexHookOverrides(arguments)) {
+            echo("Custom Codex CLI hook overrides detected; team hooks were not added for this launch.", err = true)
+            return emptyList()
+        }
+        val plan = try { teamHookSync(client).plan() } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            echo("Team hooks could not be read; continuing without them.", err = true)
+            return emptyList()
+        }
+        if (plan.awaiting.isNotEmpty()) echo("Team hooks awaiting your approval: ${plan.awaiting.joinToString(", ") { it.name }}. " +
+            "They do not run until you approve them; review them with teamcode hooks list.", err = true)
+        if (plan.failed.isNotEmpty()) echo("Team hooks not installed for this launch (download or verification failed): ${plan.failed.joinToString(", ")}.", err = true)
+        if (!teamHooksSupported()) {
+            if (plan.installed.isNotEmpty()) echo("Team hooks are not installed on Windows yet.", err = true)
+            return emptyList()
+        }
+        val active = plan.installed.filter { HookEvents.forAgent(agent, it.definition).isNotEmpty() }
+        val unsupported = plan.installed - active.toSet()
+        if (unsupported.isNotEmpty()) echo("Team hooks with no $agent event: ${unsupported.joinToString(", ") { it.name }}.", err = true)
+        if (active.isNotEmpty()) echo("Team hooks: ${active.joinToString(", ") { "${it.name} ${it.version}" }}.", err = true)
+        return active
+    }
+    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>): Int {
+        val options = arguments.takeWhile { it != "--" }
+        val guided = agent == "claude" && !noGuidance && "--bare" !in options
+        val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
+            GuidancePlugin.create(configPath(), if (guided) port else null, teamHooks)
         } catch (_: Exception) {
-            echo("Automatic guidance could not be prepared; continuing with server-side limits.", err = true)
+            echo("Automatic guidance and team hooks could not be prepared; continuing with server-side limits.", err = true)
             null
         } else null
         val customCodexHooks = agent == "codex" && hasCodexHookOverrides(arguments)
         if (customCodexHooks && !noGuidance) {
             echo("Custom Codex CLI hook overrides detected; add teamcode agents hook to those hooks for guidance.", err = true)
         }
-        val guidance = if (agent == "codex" && !noGuidance && !customCodexHooks) try {
-            codexGuidance(servicePlatform(), configPath()).also {
-                echo("TeamCode guidance hooks are available. Review and trust them in Codex /hooks before first use.", err = true)
+        val codexGuided = agent == "codex" && !noGuidance && !customCodexHooks
+        val guidance = if (agent == "codex" && (codexGuided || teamHooks.isNotEmpty())) try {
+            codexGuidance(servicePlatform(), configPath(), teamHooks, guidance = codexGuided).also {
+                echo("TeamCode ${if (codexGuided) "guidance hooks are" else "team hooks are"} available. Review and trust them in Codex /hooks before first use.", err = true)
             }
         } catch (_: Exception) {
-            echo("Automatic guidance could not be prepared; continuing with server-side limits.", err = true)
+            echo("Automatic guidance and team hooks could not be prepared; continuing with server-side limits.", err = true)
             AgentLaunch(emptyList(), emptyMap())
         } else AgentLaunch(emptyList(), emptyMap())
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
-                claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"))
+                claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided)
             return runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment)
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
@@ -148,7 +185,7 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -184,7 +221,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
             it.isNotBlank() && !it.substringBefore(':').trim().equals(LOCAL_TOKEN_HEADER, ignoreCase = true)
         } + "$LOCAL_TOKEN_HEADER: $token").joinToString("\n") else inheritedHeaders
         AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
-        "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null) token else null,
+        "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
         "TEAMCODE_RUN_ID" to runId,
         "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty()) token else null,
         "ANTHROPIC_BASE_URL" to origin,

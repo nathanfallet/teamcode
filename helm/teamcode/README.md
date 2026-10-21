@@ -58,6 +58,8 @@ Users supply their own namespace, Secret, ingress and database settings; no oper
 
 The chart does not issue TLS certificates. Supply the TLS secret using your existing certificate management. For ingress controllers other than NGINX, configure equivalent streaming settings: no response buffering, 2 MiB request bodies, and at least 660-second read/send timeouts. Keep the public origin identical on every replica, without a trailing slash.
 
+Behind a proxy or CDN such as Cloudflare, every TeamCode response (dashboard HTML and API JSON) carries `Cache-Control: no-store, no-transform`, so the proxy does not cache or rewrite it; the server sets this itself and no proxy rule is needed. Leave it unchanged: without `no-transform`, Cloudflare's Email Address Obfuscation replaces e-mail addresses in the dashboard with `[email protected]`.
+
 The creating pod logs the initial `admin` temporary password exactly once. Find it with the command printed by Helm, sign in at `/dashboard`, and replace it. Administrators create team members; there is no public registration.
 
 The chart carries no cloud, GitHub or Kubernetes setting, and none belongs in `extraEnv`. Cloud sessions (on or off, runner image, Kubernetes clusters) and the team's GitHub App are configured by an administrator in the dashboard's **Settings** section and stored in the database; see [cloud sessions deployment](../../docs/cloud-sessions.md#deployment). The former `TEAMCODE_CLOUD_*` variables, if still set, only seed a database that stores no cloud runtime yet.
