@@ -197,6 +197,7 @@ details.help p{margin:0 0 10px}
 .meter>span{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--accent-dim),var(--accent));border-radius:999px}
 .meter.warn>span{background:var(--warn)}.meter.danger>span{background:var(--danger)}
 .meter-label{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.window-line+.window-line{margin-top:10px}.window-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;margin-bottom:4px}
 .meter-label strong{color:var(--text);font-weight:600}
 .empty{padding:36px 24px;text-align:center;background:var(--panel);border:1px dashed var(--line);border-radius:var(--radius);color:var(--muted);margin:0 0 18px}
 .empty strong{display:block;color:var(--text);margin-bottom:4px}
@@ -215,7 +216,6 @@ main{padding:22px 16px 48px}
 .grid-2{grid-template-columns:minmax(0,1fr)}
 .cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.big{font-size:22px}
 table{display:block;overflow-x:auto}
-.window-line+.window-line{margin-top:10px}.window-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;margin-bottom:4px}
 table.stack{overflow:hidden}table.stack thead{display:none}table.stack tbody,table.stack tr,table.stack td{display:block;width:100%}table.stack td{border-bottom:0;padding:10px 16px}table.stack tr{border-bottom:1px solid var(--line);padding:6px 0}table.stack tr:last-child{border-bottom:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
