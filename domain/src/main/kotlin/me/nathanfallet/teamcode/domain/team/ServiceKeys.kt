@@ -51,10 +51,9 @@ val Principal.canReadTeam: Boolean
     get() = member.role.isAdministrator && (serviceScopes == null || ServiceScope.TEAM_READ in serviceScopes)
 fun Principal.requireTeamRead() {
     requireReady()
-    if (!canReadTeam) {
-        if (serviceScopes != null && member.role.isAdministrator) throw TeamFailure("credential_scope", 403, "This service key does not grant team:read access.")
-        throw TeamFailure("forbidden", 403, "Administrator access is required.")
-    }
+    // A key without the scope is a scope problem whoever owns it, as it was under requireAdmin.
+    if (serviceScopes != null && ServiceScope.TEAM_READ !in serviceScopes) throw TeamFailure("credential_scope", 403, "This service key does not grant team:read access.")
+    if (!canReadTeam) throw TeamFailure("forbidden", 403, "Administrator access is required.")
 }
 /** Cloud reads: an interactive login, or a key with `cloud:read`, `cloud:write`, `admin:cloud` or `team:read`. */
 fun Principal.requireCloudRead() {
@@ -91,7 +90,7 @@ class AuthorizeCredentialUseCase {
             CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT -> actor.requireReady()
             CredentialAction.INFERENCE -> actor.requireScope(ServiceScope.INFERENCE)
             CredentialAction.USAGE_READ -> actor.requireUsageRead()
-            CredentialAction.TEAM_READ -> actor.requireScope(ServiceScope.TEAM_READ)
+            CredentialAction.TEAM_READ -> actor.requireTeamRead()
             CredentialAction.GUIDANCE -> actor.requireScope(ServiceScope.GUIDANCE)
             CredentialAction.SKILLS_READ -> actor.requireScope(ServiceScope.SKILLS_READ)
             CredentialAction.SKILLS_PUBLISH -> actor.requireScope(ServiceScope.SKILLS_PUBLISH)

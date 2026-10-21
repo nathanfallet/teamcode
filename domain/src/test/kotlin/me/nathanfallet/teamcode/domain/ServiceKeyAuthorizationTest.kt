@@ -68,6 +68,10 @@ class ServiceKeyAuthorizationTest {
         // A usage:read key of an administrator does not read the team.
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { admin.copy(serviceScopes = setOf(ServiceScope.USAGE_READ)).requireTeamRead() }.code)
         assertEquals("forbidden", assertFailsWith<TeamFailure> { member.requireTeamRead() }.code)
+        // A member's key without the scope is a scope problem, as under requireAdmin; an owner demoted since keeps no read.
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { member.copy(serviceScopes = setOf(ServiceScope.USAGE_READ)).requireTeamRead() }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { member.copy(serviceScopes = setOf(ServiceScope.TEAM_READ)).requireTeamRead() }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { AuthorizeCredentialUseCase().check(member.copy(serviceScopes = setOf(ServiceScope.TEAM_READ)), CredentialAction.TEAM_READ) }.code)
         admin.requireTeamRead()
     }
     @Test fun aKeyWithoutExpiryIsReservedToAdministratorsAndIsRecognisedBySentinel() {
