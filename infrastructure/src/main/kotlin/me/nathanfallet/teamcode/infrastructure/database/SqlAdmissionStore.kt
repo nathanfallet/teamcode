@@ -101,11 +101,13 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             }
         }
     }
-    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) {
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) = settle(reservation, actualUnits, completed, null)
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean, usage: MeteredUsage?) {
         require(actualUnits == null || actualUnits in 0..100_000_000)
-        database.query {
+        val winner = database.query {
             lockTeam(reservation.account.identity.teamId)
-            val before = Reservations.select(Reservations.units, Reservations.runId).where { Reservations.id eq reservation.id }.singleOrNull()
+            val before = Reservations.select(Reservations.units, Reservations.runId, Reservations.teamId, Reservations.memberId, Reservations.accountId, Reservations.dayNumber)
+                .where { Reservations.id eq reservation.id }.singleOrNull()
             val changed = Reservations.update({ (Reservations.id eq reservation.id) and (Reservations.state eq "ACTIVE") }) {
                 it[state] = if (actualUnits == null) "UNCERTAIN" else "SETTLED"; it[units] = actualUnits ?: reservation.units
             }
@@ -116,8 +118,21 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                 }
             }
             if (changed == 1 && completed) GatewayTotals.update({ GatewayTotals.teamId eq reservation.account.identity.teamId }) { it[GatewayTotals.completed] = GatewayTotals.completed + 1 }
+            before.takeIf { changed == 1 }
         }
+        // Only the settlement that won records tokens, so they are never counted twice. A separate transaction keeps a
+        // ledger failure from rolling back the credits; a crash in between loses the tokens, never the charge.
+        if (winner != null && usage != null) try {
+            database.query {
+                lockTeam(winner[Reservations.teamId])
+                // The provider meters the account when the request ends.
+                recordTokenUsage(winner[Reservations.teamId], winner[Reservations.memberId], winner[Reservations.accountId], winner[Reservations.dayNumber],
+                    nowMillis() / 3_600_000, winner[Reservations.runId], usage)
+            }
+        } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        catch (_: Exception) { System.err.println("TeamCode token ledger write failed request=${reservation.id}") }
     }
+    override suspend fun tokenUsage(actor: Principal, query: TokenUsageQuery): TokenUsagePage = database.query { readTokenUsage(actor, query) }
     override suspend fun capacity(actor: Principal, memberId: String): MemberCapacity = database.query {
         actor.requireUsageRead(); requireCurrent(this, actor)
         if (memberId != actor.member.id) actor.requireTeamRead()

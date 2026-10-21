@@ -45,8 +45,6 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
             GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
         }
-        // The body holds the owner's variable values and GitHub token: no intermediary may keep it.
-        call.response.header(HttpHeaders.CacheControl, "no-store")
         call.respond(RunnerEnvironmentView(prepared.spec.view(), RunnerGitIdentityView(prepared.git.name, prepared.git.email),
             prepared.variables.values, prepared.variables.unavailable, github))
     }
@@ -73,7 +71,6 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
                 GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
                 GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
             }
-            call.response.header(HttpHeaders.CacheControl, "no-store")
             call.respond(view)
         }
     }
@@ -83,7 +80,6 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val body = call.jsonBody<RunnerInferenceRequest>()
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
             val credential = inference.issue(pod.teamId, pod.sessionId, pod.epoch)
-            call.response.header(HttpHeaders.CacheControl, "no-store")
             call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt, credential.lifetimeMillis))
         }
     }

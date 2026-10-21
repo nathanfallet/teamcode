@@ -45,6 +45,13 @@ interface AdmissionStore {
     }
     /** Missing usage conservatively retains the full reservation, including on disconnect/restart. */
     suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean = false)
+    /**
+     * Settles and, in the same transaction, adds [usage] to the raw token ledger, once: a repeated or late settlement
+     * of the same reservation records nothing. Stores without a ledger only settle.
+     */
+    suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean, usage: MeteredUsage?) = settle(reservation, actualUnits, completed)
+    /** Raw provider tokens per day, member, run, provider and model: the caller's own, or the team's for an administrator. */
+    suspend fun tokenUsage(actor: Principal, query: TokenUsageQuery): TokenUsagePage = throw TeamFailure("not_found", 404, "Token usage is not available.")
     /** Best available provider correlation, recorded before streaming; never a usage estimate. */
     suspend fun recordProviderRequest(reservation: Reservation, requestId: String) = Unit
     suspend fun capacity(actor: Principal, memberId: String = actor.member.id): MemberCapacity

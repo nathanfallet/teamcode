@@ -118,6 +118,27 @@ private fun ApiCatalog.allowanceOperations() {
             "`team:read` keys see every account with its name and email; members and other service keys see neutral labels."
         responses { ok<List<PoolAccountStatusView>>("The accounts, by priority.") }
     }
+    get("/api/v1/usage/tokens") {
+        operationId = "listTokenUsage"; tag(ApiTags.CAPACITY)
+        summary = "Raw token usage"
+        description = "The provider's own token counts per UTC day, member, agent launch (`runId`, null outside a " +
+            "registered launch), provider and model: uncached input, cache writes, cache reads and output (reasoning " +
+            "included), never converted into credits or money. Requests that ended without provider usage are counted in " +
+            "`unmeteredRequests` and not in the token sums. A member reads their own rows; an interactive administrator " +
+            "or a `team:read` key reads one member's (`member`) or the team's (`all=true`). Page with `after` = `nextAfter`."
+        parameters {
+            queryText("from", "First UTC day, `YYYY-MM-DD` (six days before `to` by default).")
+            queryText("to", "Last UTC day, `YYYY-MM-DD`, included (today by default). At most 366 days in all.")
+            queryText("member", "A member's identifier (administrators, `team:read`).")
+            queryFlag("all", "Every member's rows (administrators, `team:read`).")
+            queryText("after", "The `nextAfter` of the previous page.")
+        }
+        responses {
+            ok<TokenUsagePageView>("Up to 500 rows ordered by day, member, launch, provider and model.")
+            badRequest("An invalid date range (`invalid_window`), `all` with `member` (`invalid_usage_query`) or cursor (`invalid_cursor`).")
+            notFound("The member is not in the team (`not_found`).")
+        }
+    }
     get("/api/v1/pools/budgets") {
         operationId = "listPoolBudgets"; tag(ApiTags.CAPACITY)
         summary = "List the pool budgets"

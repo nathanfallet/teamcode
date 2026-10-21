@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.presentation
 
 import io.ktor.http.*
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import me.nathanfallet.teamcode.api.formatUnits
@@ -28,6 +29,7 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
         call.respond(PoolBudgetView(saved.poolId, saved.dailyUnits, saved.sharedOverflow))
     }
     get("/api/v1/pools/accounts") { call.respond(admission.poolAccounts(call.principal).map { it.view() }) }
+    get("/api/v1/usage/tokens") { call.respond(admission.tokenUsage(call.principal, call.tokenUsageQuery()).view()) }
     get("/api/v1/quotas") { call.respond(admission.quotas(call.principal).map { QuotaView(it.accountId, it.window, it.utilization, it.observedAtMillis, it.resetsAtMillis) }) }
     get("/dashboard/capacity") {
         val actor = call.principal
@@ -62,8 +64,12 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
             // Accounts are named with their email on a second line; the id only stands in for a deleted account.
             val names = if (windows.isEmpty()) emptyMap() else accounts?.list(actor)?.associate { it.id to accountCell(it.displayName, it.email) }.orEmpty()
             "<h2 id=\"windows\">Observed provider windows</h2>" + if (windows.isEmpty()) empty("No provider window observed yet") else
-                windows.sortedByDescending { it.utilization }.joinToString("", "<table><thead><tr><th>Account</th><th>Window</th><th>Utilization</th><th>Resets (UTC)</th></tr></thead><tbody>", "</tbody></table>") { q ->
-                    "<tr><td>${names[q.accountId] ?: "<code>${escape(q.accountId)}</code>"}</td><td>${escape(q.window)}</td><td>${ratioMeter(q.utilization, "<strong>${"%.1f".format(q.utilization * 100)}%</strong>")}</td><td><small>${q.resetsAtMillis?.let(java.time.Instant::ofEpochMilli) ?: "unknown"}</small></td></tr>"
+                // One row per account, placed where its first window appears in the utilization order; its windows keep that order.
+                windows.sortedByDescending { it.utilization }.groupBy { it.accountId }.entries.joinToString("", "<table><thead><tr><th>Account</th><th>Windows</th></tr></thead><tbody>", "</tbody></table>") { (accountId, accountWindows) ->
+                    val lines = accountWindows.joinToString("") { q ->
+                        """<div class="window-line"><div class="window-head"><strong>${escape(q.window)}</strong> ${q.resetsAtMillis?.let { "<small title=\"${java.time.Instant.ofEpochMilli(it)}\">resets in ${remainingLabel(it, System.currentTimeMillis())}</small>" } ?: "<small>reset unknown</small>"}</div>${ratioMeter(q.utilization, "<strong>${"%.1f".format(q.utilization * 100)}%</strong>")}</div>"""
+                    }
+                    "<tr><td>${names[accountId] ?: "<code>${escape(accountId)}</code>"}</td><td>$lines</td></tr>"
                 }
         } else ""
         val explanation = help("How allowances are computed", """<p>Daily credits reset at midnight UTC. Each active member receives pool budget × their weight / the total active weight in their pool, optionally capped individually. Two developers weighted 5 and one support member weighted 1 receive 5/11, 5/11 and 1/11. Weight changes never erase existing spend; the total pool budget is also enforced. Credits count input, cache reads and cache creation at 1 each, and output at 5 each. They are an internal fairness budget, not Claude quota percentages.</p><p>Requests reserve a conservative upper estimate before dispatch. Missing usage keeps that reservation. Assign the same named pool to a member and dedicated accounts to protect their subscription capacity; other pools cannot use those accounts unless their pool is explicitly marked as shared overflow. Overflow requires member opt-in, has no primary members, and consumes both the home and source budgets. It never increases a member, group or launch allowance.</p>""")
@@ -101,3 +107,21 @@ private fun memberRow(actor: Principal, member: Member, current: MemberCapacity,
 
 /** A disabled (zero) concurrency limit reads as unlimited. */
 internal fun concurrencyLabel(limit: Int) = if (limit <= 0) "unlimited" else limit.toString()
+
+private val USAGE_DAY = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+/** `from`/`to` are inclusive UTC dates; the default is the last seven days, today included. */
+internal fun ApplicationCall.tokenUsageQuery(today: java.time.LocalDate = java.time.LocalDate.now(java.time.ZoneOffset.UTC)): TokenUsageQuery {
+    val parameters = request.queryParameters
+    fun day(name: String): Long? = parameters[name]?.let { value ->
+        val date = if (USAGE_DAY.matches(value)) runCatching { java.time.LocalDate.parse(value) }.getOrNull() else null
+        date?.toEpochDay() ?: throw TeamFailure("invalid_window", 400, "Use dates written YYYY-MM-DD.")
+    }
+    val to = day("to") ?: today.toEpochDay()
+    val from = day("from") ?: (to - 6)
+    val all = when (parameters["all"]) { null, "false" -> false; "true" -> true; else -> throw TeamFailure("invalid_usage_query", 400, "all must be true or false.") }
+    return TokenUsageQuery(from, to, parameters["member"], all, parameters["after"]?.let(TokenUsageCursor::decode))
+}
+internal fun TokenUsagePage.view() = TokenUsagePageView(rows.map {
+    TokenUsageRowView(java.time.LocalDate.ofEpochDay(it.dayNumber).toString(), it.memberId, it.username, it.runId, it.provider, it.model,
+        it.requests, it.unmeteredRequests, it.input, it.cacheCreation, it.cacheRead, it.output)
+}, nextAfter)
