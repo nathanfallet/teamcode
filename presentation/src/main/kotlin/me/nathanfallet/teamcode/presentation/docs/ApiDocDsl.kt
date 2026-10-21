@@ -124,14 +124,15 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
             val scopes = when (credentialAction(method.value, sample, inferencePaths)) {
                 CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT -> emptyList()
                 CredentialAction.INFERENCE -> listOf("inference")
-                CredentialAction.USAGE_READ -> listOf("usage:read")
+                CredentialAction.USAGE_READ -> listOf("usage:read", "team:read")
+                CredentialAction.TEAM_READ -> listOf("team:read")
                 CredentialAction.GUIDANCE -> listOf("guidance")
                 CredentialAction.SKILLS_READ -> listOf("skills:read")
                 CredentialAction.SKILLS_PUBLISH -> listOf("skills:publish")
                 CredentialAction.HOOKS_READ -> listOf("hooks:read")
                 CredentialAction.HOOKS_PUBLISH -> listOf("hooks:publish")
                 CredentialAction.MCP -> listOf("mcp")
-                CredentialAction.CLOUD_READ -> listOf("cloud:read", "cloud:write", "admin:cloud")
+                CredentialAction.CLOUD_READ -> listOf("cloud:read", "cloud:write", "admin:cloud", "team:read")
                 CredentialAction.CLOUD_WRITE -> listOf("cloud:write", "admin:cloud")
                 CredentialAction.INTERACTIVE -> null
             }

@@ -39,6 +39,26 @@ class AgentRunPersistenceTest {
             assertEquals(setOf(id, serviceId), b.list(reader).runs.map { it.id }.toSet())
             val ownerReader = assertNotNull(f.team.authenticate(keys.create(f.admin.principal, f.admin.principal.member.id, "Owner reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
             failure("credential_scope") { b.list(ownerReader, all = true) }
+            failure("credential_scope") { b.list(ownerReader, memberId = f.member.principal.member.id) }
+            failure("credential_scope") { b.get(ownerReader, id) }
+            failure("credential_scope") { f.admission.capacity(ownerReader, f.member.principal.member.id) }
+            failure("credential_scope") { f.admission.quotas(ownerReader) }
+            failure("credential_scope") { f.admission.poolBudgets(ownerReader) }
+            // team:read: an administrator's key reads every member's launches and writes nothing; only an administrator may hold it.
+            failure("invalid_service_key") { keys.create(f.member.principal, f.member.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1) }
+            failure("invalid_service_key") { keys.create(f.admin.principal, f.member.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1) }
+            val teamReader = assertNotNull(f.team.authenticate(keys.create(f.admin.principal, f.admin.principal.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1).accessToken))
+            assertEquals(setOf(id, serviceId), b.list(teamReader, all = true).runs.map { it.id }.toSet())
+            assertEquals(setOf(id, serviceId), b.list(teamReader, memberId = f.member.principal.member.id).runs.map { it.id }.toSet())
+            assertEquals(id, b.get(teamReader, id).run.id)
+            assertEquals(f.member.principal.member.id, f.admission.capacity(teamReader, f.member.principal.member.id).policy.memberId)
+            f.admission.quotas(teamReader); f.admission.poolBudgets(teamReader)
+            failure("credential_scope") { b.start(teamReader, id(), "claude", "interactive") }
+            failure("credential_scope") { b.heartbeat(teamReader, id) }
+            failure("credential_scope") { b.end(teamReader, id, 0) }
+            failure("credential_scope") { b.configure(teamReader, id, RunPolicy(1)) }
+            failure("credential_scope") { f.admission.configure(teamReader, MemberPolicy(f.member.principal.member.id, 1, 1, null, 1, false)) }
+            failure("credential_scope") { f.admission.configurePool(teamReader, PoolBudget("home", 1)) }
             failure("forbidden") { b.list(f.member.principal, all = true) }
             failure("forbidden") { b.configure(f.member.principal, id, RunPolicy(1)) }
             f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - 90_001 } }
@@ -165,6 +185,34 @@ class AgentRunPersistenceTest {
             assertTrue(SqlDirectiveService(f.a).preview(f.member.principal)!!.advice.message.contains("metadata is incomplete"))
             a.end(f.member.principal, newest, 0)
             assertTrue(b.get(f.member.principal, newest).conversations.all { it.pace == null && it.receivedByCliAtMillis == null }, "An ended wrapper must not inherit a later native-session directive")
+        }
+    }
+
+    @Test @Timeout(120)
+    fun labelsArePersistedReturnedFilteredAndBoundToTheLaunch() = runBlocking {
+        fixture { f ->
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b)
+            val labelled = id(); val plain = id(); val other = id()
+            val labels = mapOf("orchestrator.task" to "1234", "team" to "a=b")
+            a.start(f.member.principal, labelled, "claude", "interactive", labels)
+            a.start(f.member.principal, plain, "claude", "interactive")
+            a.start(f.member.principal, other, "codex", "background", mapOf("team" to "a=b"))
+            // A repeated start is idempotent for the same labels and a conflict for other ones.
+            assertEquals(a.start(f.member.principal, labelled, "claude", "interactive", labels), b.start(f.member.principal, labelled, "claude", "interactive", labels))
+            failure("run_conflict") { b.start(f.member.principal, labelled, "claude", "interactive", labels + ("extra" to "1")) }
+            failure("run_conflict") { b.start(f.member.principal, plain, "claude", "interactive", mapOf("late" to "1")) }
+            failure("invalid_label") { a.start(f.member.principal, id(), "claude", "interactive", mapOf("Upper" to "x")) }
+            assertEquals(labels, b.get(f.member.principal, labelled).run.labels)
+            assertEquals(emptyMap(), b.get(f.member.principal, plain).run.labels)
+            assertEquals(setOf(labelled), b.list(f.member.principal, labels = mapOf("orchestrator.task" to "1234")).runs.map { it.id }.toSet())
+            assertEquals(setOf(labelled, other), b.list(f.member.principal, labels = mapOf("team" to "a=b")).runs.map { it.id }.toSet())
+            assertEquals(setOf(labelled), b.list(f.member.principal, labels = labels).runs.map { it.id }.toSet(), "Every filter must match")
+            assertTrue(b.list(f.member.principal, labels = mapOf("team" to "other")).runs.isEmpty())
+            assertEquals(3, b.list(f.member.principal).runs.size)
+            assertEquals(labels, b.list(f.member.principal).runs.single { it.id == labelled }.labels)
+            // Another member's runs never match through the filter.
+            assertTrue(b.list(f.admin.principal, labels = labels).runs.isEmpty())
+            failure("invalid_label") { b.list(f.member.principal, labels = (1..17).associate { "k$it" to "v" }) }
         }
     }
 

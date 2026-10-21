@@ -1,0 +1,37 @@
+name: Cloud session image
+# Builds the session image template, whose last step checks the TeamCode contract
+# (docs/cloud-session-image.md). Linux only, and only when the template changes.
+on:
+  push:
+    branches: [main]
+    paths: ['docs/cloud-session-image/**', '.github/workflows/cloud-session-image.yml']
+  pull_request:
+    paths: ['docs/cloud-session-image/**', '.github/workflows/cloud-session-image.yml']
+permissions:
+  contents: read
+concurrency:
+  group: cloud-session-image-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  template:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    timeout-minutes: 20
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tools block is present exactly once
+        run: |
+          test "$(grep -c '^# >>> Insert your tools setup here <<<$' docs/cloud-session-image/Dockerfile)" = 1
+          test "$(grep -c '^# <<< End of your tools setup >>>$' docs/cloud-session-image/Dockerfile)" = 1
+      - name: Build the template
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: docker build -t teamcode-session-template docs/cloud-session-image
+      - name: The runner binary can be copied out as the init container does
+        run: |
+          mkdir -m 0777 runner
+          docker run --rm --user 1000:1000 -v "$PWD/runner:/opt/teamcode" teamcode-session-template cp /usr/local/bin/teamcode /opt/teamcode/teamcode
+          docker run --rm --user 1001:1000 -v "$PWD/runner:/opt/teamcode:ro" teamcode-session-template /opt/teamcode/teamcode version

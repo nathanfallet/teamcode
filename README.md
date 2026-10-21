@@ -171,6 +171,7 @@ After signing in to TeamCode and importing/activating an eligible Claude Max acc
 teamcode run claude -- --dangerously-skip-permissions
 teamcode run claude -- --model claude-haiku-4-5-20251001 -p "Hello"
 teamcode run claude --workload background -- -p "Review the test coverage"
+teamcode run claude --label task=1234 -- -p "Review the test coverage"   # list with: teamcode sessions list --label task=1234
 ```
 
 `run` reuses a matching authenticated TeamCode service when available; otherwise it starts a dedicated proxy on a free loopback port. It launches the installed agent from your PATH, forwards the arguments after `--` literally and preserves your working directory and terminal. The dedicated proxy closes when the agent exits; a shared service stays running. The agent's exit status is returned. URL/session settings come from your saved TeamCode configuration; personal agent configuration files are not edited. Each dedicated proxy gets its own local capability. Native launcher and user-service acceptance has passed on macOS/Linux/Windows; see [status](docs/status.md) for feature-specific evidence.

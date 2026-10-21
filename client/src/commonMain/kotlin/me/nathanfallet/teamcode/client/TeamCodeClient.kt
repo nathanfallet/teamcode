@@ -144,11 +144,12 @@ class TeamCodeClient(
     override suspend fun startRun(input: StartRunRequest): RunLeaseView { identifier(input.id); return request("/api/v1/runs", HttpMethod.Post, input) }
     override suspend fun heartbeatRun(id: String): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/heartbeat", HttpMethod.Post) }
     override suspend fun endRun(id: String, exitCode: Int?): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/end", HttpMethod.Post, EndRunRequest(exitCode)) }
-    suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null): RunPageView {
+    suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null, labels: Map<String, String> = emptyMap()): RunPageView {
         require(!all || memberId == null) { "Choose one member or all members." }
         memberId?.let(::identifier); beforeId?.let(::identifier)
         val query = buildList {
             memberId?.let { add("member=$it") }; if (all) add("all=true"); beforeId?.let { add("before=$it") }
+            labels.forEach { (key, value) -> add("label=" + "$key=$value".encodeURLParameter()) }
         }.joinToString("&")
         return request("/api/v1/runs" + if (query.isEmpty()) "" else "?$query", HttpMethod.Get)
     }

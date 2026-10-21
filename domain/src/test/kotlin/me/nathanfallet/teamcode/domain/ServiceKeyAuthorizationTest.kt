@@ -15,8 +15,9 @@ class ServiceKeyAuthorizationTest {
             for ((action, needed) in listOf(CredentialAction.INFERENCE to ServiceScope.INFERENCE,
                 CredentialAction.USAGE_READ to ServiceScope.USAGE_READ, CredentialAction.GUIDANCE to ServiceScope.GUIDANCE,
                 CredentialAction.SKILLS_READ to ServiceScope.SKILLS_READ, CredentialAction.SKILLS_PUBLISH to ServiceScope.SKILLS_PUBLISH,
-                CredentialAction.HOOKS_READ to ServiceScope.HOOKS_READ, CredentialAction.HOOKS_PUBLISH to ServiceScope.HOOKS_PUBLISH)) {
-                if (scope == needed) authorize.check(key, action)
+                CredentialAction.HOOKS_READ to ServiceScope.HOOKS_READ, CredentialAction.HOOKS_PUBLISH to ServiceScope.HOOKS_PUBLISH, CredentialAction.TEAM_READ to ServiceScope.TEAM_READ)) {
+                // team:read includes the owner's own usage:read reads.
+                if (scope == needed || (action == CredentialAction.USAGE_READ && scope == ServiceScope.TEAM_READ)) authorize.check(key, action)
                 else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, action) }.code)
             }
         }
@@ -27,7 +28,7 @@ class ServiceKeyAuthorizationTest {
         val member = admin.copy(member = admin.member.copy(id = "member", role = Role.MEMBER))
         for (scope in ServiceScope.entries) {
             val key = admin.copy(serviceScopes = setOf(scope))
-            val reads = scope in setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD)
+            val reads = scope in setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)
             val writes = scope in setOf(ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD)
             if (reads) authorize.check(key, CredentialAction.CLOUD_READ)
             else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.CLOUD_READ) }.code)
@@ -43,6 +44,36 @@ class ServiceKeyAuthorizationTest {
         assertEquals("forbidden", assertFailsWith<TeamFailure> { admin.copy(serviceScopes = setOf(ServiceScope.CLOUD_WRITE)).requireCloudAdministrator() }.code)
         val temporary = admin.copy(member = admin.member.copy(passwordChangeRequired = true), serviceScopes = setOf(ServiceScope.ADMIN_CLOUD))
         assertEquals("password_change_required", assertFailsWith<TeamFailure> { temporary.requireCloudRead() }.code)
+    }
+    @Test fun teamReadReadsTheWholeTeamForAnAdministratorKeyOnlyAndNeverCarriesWriteRights() {
+        val member = admin.copy(member = admin.member.copy(id = "member", role = Role.MEMBER))
+        for (scope in ServiceScope.entries) {
+            val key = admin.copy(serviceScopes = setOf(scope))
+            assertEquals(scope == ServiceScope.TEAM_READ, key.canReadTeam, scope.wire)
+            if (scope == ServiceScope.TEAM_READ) key.requireTeamRead()
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { key.requireTeamRead() }.code, scope.wire)
+            // usage:read and the cloud scopes stay the owner's alone, even for an administrator.
+            assertFalse(member.copy(serviceScopes = setOf(scope)).canReadTeam)
+            assertFalse(member.copy(serviceScopes = setOf(scope)).canReadTeamCloud)
+        }
+        val reader = admin.copy(serviceScopes = setOf(ServiceScope.TEAM_READ))
+        assertTrue(reader.canReadTeamCloud)
+        reader.requireCloudTeamRead()
+        // Cloud administration (writes, on-behalf-of) and interactive administration stay out of reach.
+        assertFalse(reader.isCloudAdministrator)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { reader.requireCloudAdministrator() }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { reader.requireAdmin() }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { reader.requireCloudWrite() }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { AuthorizeCredentialUseCase().check(reader, CredentialAction.CLOUD_WRITE) }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { AuthorizeCredentialUseCase().check(reader, CredentialAction.INFERENCE) }.code)
+        // A usage:read key of an administrator does not read the team.
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { admin.copy(serviceScopes = setOf(ServiceScope.USAGE_READ)).requireTeamRead() }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { member.requireTeamRead() }.code)
+        // A member's key without the scope is a scope problem, as under requireAdmin; an owner demoted since keeps no read.
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { member.copy(serviceScopes = setOf(ServiceScope.USAGE_READ)).requireTeamRead() }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { member.copy(serviceScopes = setOf(ServiceScope.TEAM_READ)).requireTeamRead() }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { AuthorizeCredentialUseCase().check(member.copy(serviceScopes = setOf(ServiceScope.TEAM_READ)), CredentialAction.TEAM_READ) }.code)
+        admin.requireTeamRead()
     }
     @Test fun aKeyWithoutExpiryIsReservedToAdministratorsAndIsRecognisedBySentinel() {
         ServiceKeyService.requireNoExpiryAllowed(null, ownerIsAdministrator = true)

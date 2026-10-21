@@ -10,7 +10,7 @@ interface AccountStore : AccountsRepository {
     suspend fun credentials(teamId: String, id: String): ProviderCredentials
 }
 class AccountManagement(private val store: AccountStore, private val verifier: AccountVerifier, private val additionalVerifiers: Map<String, AccountVerifier> = emptyMap()) {
-    suspend fun list(actor: Principal): List<AccountRecord> { actor.requireAdmin(); return store.list(actor.teamId) }
+    suspend fun list(actor: Principal): List<AccountRecord> { actor.requireTeamRead(); return store.list(actor.teamId) }
     suspend fun enroll(actor: Principal, credentials: ProviderCredentials, operationId: String, provider: String = "anthropic", origin: EnrollmentOrigin = EnrollmentOrigin.IMPORT): EnrollmentResult {
         actor.requireAdmin()
         if (!Regex("[a-zA-Z0-9_-]{16,64}").matches(operationId)) throw TeamFailure("invalid_operation", 400, "A unique enrollment operation identifier is required.")

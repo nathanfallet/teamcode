@@ -20,15 +20,15 @@ class AgentRunRoutesTest {
         fun run() = AgentRun(id, "admin-id", "<member>", "claude", "background", null, 1000, 2000, null, null, null,
             RunState.STALE, policy, 40, 1, 1, 0, false)
         val service = object : AgentRunService {
-            override suspend fun start(actor: Principal, id: String, agent: String, workload: String): RunLease {
-                actor.requireScope(ServiceScope.INFERENCE); AgentRunService.validateStart(id, agent, workload)
-                assertEquals("claude", agent); assertEquals("background", workload); calls += "start"; return RunLease(id, 1000, 2000, null, RunState.RUNNING)
+            override suspend fun start(actor: Principal, id: String, agent: String, workload: String, labels: Map<String, String>): RunLease {
+                actor.requireScope(ServiceScope.INFERENCE); AgentRunService.validateStart(id, agent, workload, labels)
+                assertEquals("claude", agent); assertEquals("background", workload); calls += "start:" + labels.toSortedMap(); return RunLease(id, 1000, 2000, null, RunState.RUNNING)
             }
             override suspend fun heartbeat(actor: Principal, id: String): RunLease { actor.requireScope(ServiceScope.INFERENCE); calls += "heartbeat"; return RunLease(id, 1000, 3000, null, RunState.RUNNING) }
             override suspend fun end(actor: Principal, id: String, exitCode: Int?): RunLease { actor.requireScope(ServiceScope.INFERENCE); assertEquals(7, exitCode); calls += "end"; return RunLease(id, 1000, 3000, 4000, RunState.ENDED) }
-            override suspend fun list(actor: Principal, memberId: String?, all: Boolean, beforeId: String?): RunPage {
-                actor.requireScope(ServiceScope.USAGE_READ); if (all || memberId != null) actor.requireAdmin(); calls += "list:$memberId:$all:$beforeId"
-                return RunPage(listOf(run()), id)
+            override suspend fun list(actor: Principal, memberId: String?, all: Boolean, beforeId: String?, labels: Map<String, String>): RunPage {
+                actor.requireScope(ServiceScope.USAGE_READ); if (all || memberId != null) actor.requireAdmin(); calls += "list:$memberId:$all:$beforeId:${labels.toSortedMap()}"
+                return RunPage(listOf(run().copy(labels = labels)), id)
             }
             override suspend fun get(actor: Principal, id: String): RunDetail { actor.requireScope(ServiceScope.USAGE_READ); calls += "get"; return RunDetail(run(), emptyList(), true) }
             override suspend fun configure(actor: Principal, id: String, policy: RunPolicy): AgentRun {
@@ -49,15 +49,23 @@ class AgentRunRoutesTest {
         }
         application { configureGateway(gateway, team = team, runs = service, publicOrigin = "http://localhost") }
         TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }.use { sdk ->
-            assertEquals(id, sdk.startRun(StartRunRequest(id, "claude", "background")).id)
+            assertEquals(id, sdk.startRun(StartRunRequest(id, "claude", "background", mapOf("task" to "1234", "team" to "a=b"))).id)
+            assertTrue("start:{task=1234, team=a=b}" in calls)
             assertEquals(3000, sdk.heartbeatRun(id).heartbeatAtMillis)
             assertEquals("ENDED", sdk.endRun(id, 7).state)
             assertEquals(id, sdk.runs(all = true, beforeId = id).nextBeforeId)
             assertEquals("<member>", sdk.run(id).run.username)
             assertTrue(sdk.run(id).observationOnly)
             assertEquals(120, sdk.saveRunPolicy(id, RunPolicyView(120, 2, true)).policy.budgetUnits)
-            assertTrue(calls.contains("list:null:true:$id")); assertEquals(1, writes)
-            assertTrue(sdk.capabilities().features.contains("team.runs.v1"))
+            assertTrue(calls.contains("list:null:true:$id:{}")); assertEquals(1, writes)
+            val filtered = sdk.runs(labels = mapOf("task" to "1234", "team" to "a=b&c"))
+            assertEquals(mapOf("task" to "1234", "team" to "a=b&c"), filtered.runs.single().labels)
+            assertTrue("list:null:false:null:{task=1234, team=a=b&c}" in calls)
+            assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/runs?label=nokey") { bearerAuth("reader") }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/runs") {
+                bearerAuth("inference"); contentType(ContentType.Application.Json); setBody("""{"id":"$id","agent":"claude","workload":"background","labels":{"Upper":"x"}}""")
+            }.status)
+            assertTrue(sdk.capabilities().features.containsAll(listOf("team.runs.v1", "team.runs.labels.v1")))
         }
         val lease = client.post("/api/v1/runs") {
             bearerAuth("inference"); contentType(ContentType.Application.Json); setBody("""{"id":"$id","agent":"claude","workload":"background"}""")

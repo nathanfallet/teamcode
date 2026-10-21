@@ -22,7 +22,7 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
         return database.query {
             lockTeam(actor.teamId); authorize(this, actor)
             val role = requireMember(actor, memberId, lock = true)
-            for (scope in listOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD)) if (scope in scopes && role != Role.ADMIN.name)
+            for (scope in listOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)) if (scope in scopes && role != Role.ADMIN.name)
                 throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can receive the ${scope.wire} scope.")
             ServiceKeyService.requireNoExpiryAllowed(validDays, role == Role.ADMIN.name)
             if (Tokens.select(Tokens.id).where { (Tokens.memberId eq memberId) and serviceKey() }.count() >= ServiceKeyService.LIMIT)

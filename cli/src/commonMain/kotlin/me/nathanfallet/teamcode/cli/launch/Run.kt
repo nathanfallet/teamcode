@@ -11,6 +11,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.cli.SystemExit
+import me.nathanfallet.teamcode.cli.cloud.parseLabels
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.cli.platform.*
@@ -40,6 +41,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     private val noMcp by option("--no-mcp", help = "Do not connect the team MCP servers assigned to you for this launch.").flag()
     private val noTeamHooks by option("--no-team-hooks", help = "Do not install the team hooks you approved for this launch.").flag()
     private val workload by option("--workload", help = "Scheduling class for this launch; quotas and permissions still apply.").choice("interactive", "background").default("interactive")
+    private val labels by option("--label", help = "key=value; repeatable. Attached to this launch; filter with teamcode sessions list --label.").multiple()
     private val arguments by argument("AGENT_ARGS").multiple()
     override suspend fun run() {
         val code = coroutineScope {
@@ -53,14 +55,18 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         if (code != 0) SystemExit.exit(code)
     }
     private suspend fun runAgent(): Int {
+        val parsedLabels = parseLabels(labels)
         val config = loadConfig()
         return sdk(config).use { client ->
             val capabilities = client.capabilities()
+            // An older server ignores unknown fields: never let it drop the labels silently.
+            if (parsedLabels.isNotEmpty() && RUN_LABELS_CAPABILITY !in capabilities.features)
+                throw CliktError("This server does not record run labels; run without --label.")
             // Fails before launching the agent when the saved session is invalid; names only, never an address or credential.
             val servers = assignedMcpServers(client, capabilities)
             val hooks = approvedTeamHooks(client, capabilities)
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
-            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }) { runId ->
+            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin)) {
                     echo("Running $agent through the TeamCode user service.", err = true)
@@ -155,6 +161,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
 }
 
+private const val RUN_LABELS_CAPABILITY = "team.runs.labels.v1"
+
 /** Provider settings that would take precedence over the local proxy; removed for every Claude Code launch. */
 private val claudeProviderOverrides: Map<String, String?> = listOf("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY").associateWith { null }
@@ -214,6 +222,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         } + "$LOCAL_TOKEN_HEADER: $token").joinToString("\n") else inheritedHeaders
         AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
+        "TEAMCODE_RUN_ID" to runId,
         "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty()) token else null,
         "ANTHROPIC_BASE_URL" to origin,
         "ANTHROPIC_AUTH_TOKEN" to if (keepLogin) null else token,
@@ -226,6 +235,6 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         // Put overrides in the leaf command scope (exec/resume/review), before any literal delimiter.
         // Root overrides can be discarded by exec --ignore-user-config in some Codex versions.
         AgentLaunch(arguments.take(delimiter) + overrides + arguments.drop(delimiter),
-            mapOf("TEAMCODE_LOCAL_TOKEN" to token, "TEAMCODE_HOOK_TOKEN" to null))
+            mapOf("TEAMCODE_LOCAL_TOKEN" to token, "TEAMCODE_HOOK_TOKEN" to null, "TEAMCODE_RUN_ID" to runId))
     }
 }

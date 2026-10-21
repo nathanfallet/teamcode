@@ -19,12 +19,36 @@ Select only the required scopes:
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
 | `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it |
+| `team:read` | Read-only operational view of the whole team, as an interactive administrator sees it, with no write and no `TeamCode-On-Behalf-Of`. Only an administrator's key can receive it. See [Team-wide read access](#team-wide-read-access) |
 
-Inference also permits registering, heartbeating and ending the key's own [agent launches](agent-sessions.md); narrow lifecycle replies contain no usage totals. Another login cannot renew or dispatch under that launch ID. Cross-member/all-team registry reads and run policy changes remain interactive administration.
+Inference also permits registering, heartbeating and ending the key's own [agent launches](agent-sessions.md); narrow lifecycle replies contain no usage totals. Another login cannot renew or dispatch under that launch ID. Cross-member/all-team registry reads need a `team:read` key (below) or an interactive administrator; run policy changes remain interactive administration.
 
-Every valid service key can read capabilities and its own authenticated member identity, and revoke itself through logout. Other endpoints require an interactive login unless explicitly added to this scope model. Service keys cannot administer users/accounts/policies/routes, change passwords, manage devices/sessions, inspect other members, or create/list/revoke other keys. Even a key owned by an administrator has only its selected service scopes; `admin:cloud` is the one scope that carries administrator rights, over cloud sessions only. Team-wide status/account/quota endpoints are not part of `usage:read`; use the owner's capacity endpoint. `whoami` reports the owner's member role, not additional rights for the key.
+Every valid service key can read capabilities and its own authenticated member identity, and revoke itself through logout. Other endpoints require an interactive login unless explicitly added to this scope model. Service keys cannot administer users/accounts/policies/routes, change passwords, manage devices/sessions, inspect other members, or create/list/revoke other keys. Even a key owned by an administrator has only its selected service scopes; `admin:cloud` is the one scope that carries administrator rights, over cloud sessions only. Team-wide status/account/quota endpoints are not part of `usage:read`, even on an administrator's key: it reads its owner's figures alone (`?all=true`, `?member=`, another member's run or capacity and the team's accounts, quota windows and MCP usage are refused or reduced to the owner's view). Use `team:read` for the team view. `whoami` reports the owner's member role, not additional rights for the key.
 
 Keys share the member's existing daily ledger, weight, assigned pool, concurrency and model/effort policy. Creating, revoking or rotating keys does not add capacity or erase usage. Guidance and request identifiers remain member-scoped, rather than granting a separate quota/session namespace for each key. Dedicated CI members can have their own normal member policy if separate allocation is needed.
+
+## Team-wide read access
+
+`team:read` gives an unattended monitor the operational view an interactive administrator has, and nothing more. It includes `usage:read` (the owner's own figures) and `cloud:read`, and adds, read-only:
+
+| Area | Reads |
+| --- | --- |
+| Agent launches | `GET /api/v1/runs` with `?all=true` or `?member=`, and `GET /api/v1/runs/{id}` of any member ([agent sessions](agent-sessions.md)) |
+| Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` for every member |
+| Accounts and quotas | `GET /api/v1/accounts`, `GET /api/v1/quotas`, and every account by name and email at `GET /api/v1/pools/accounts` (the data behind `teamcode status` for an administrator). No provider credential is ever returned |
+| Cloud sessions | `GET /api/v1/cloud/sessions?owner=all` or `owner=<member>`, a session's detail and executions, its transcript, inputs and live stream (`events`, `messages`, `events/stream`), and `GET /api/v1/cloud/transfers?scope=team` ([cloud sessions](cloud-sessions.md)) |
+
+Rules:
+
+- Only a key owned by an administrator can be created with this scope (`400 invalid_service_key` otherwise, also for an administrator creating a key for a member), like `admin:cloud`. The owner's role is rechecked in shared state on every call, so a demoted or disabled owner loses the key at once.
+- It never writes. Every other action, including run policies, capacity and pool settings, account changes, key management and all cloud writes, stays interactive or behind its own scope. `team:read` does not carry `TeamCode-On-Behalf-Of` and does not turn a `cloud:write` key into a cloud administrator: combined with `cloud:write`, writes still act as the owner alone.
+- A `usage:read` key stays limited to its owner, even for an administrator.
+- Transcripts are other members' private content: keep a `team:read` key in a secret store, prefer an expiring key and revoke it as soon as it is not needed. Reads are not written to the audit journal, as for interactive administrators.
+- Servers that accept the scope advertise `team.read-key.v1`.
+
+```sh
+teamcode keys create --name team-monitor --scopes team:read --days 30 --json
+```
 
 ## Creation and automation
 
@@ -69,7 +93,7 @@ The additive Exposed migration makes `service_scopes` nullable. Existing session
 - `GET/POST /api/v1/service-keys`: list/create the current member's keys.
 - `GET/POST /api/v1/members/{memberId}/service-keys`: another member requires administrator access.
 - `DELETE /api/v1/service-keys/{id}`: revoke an owned key or, as an administrator, a same-team key.
-- Creation accepts `name`, a nonempty list of the supported `scopes`, and `validDays` (1–90; omitted means 30; an explicit `null` creates a key without expiry, administrators' keys only, otherwise `400 invalid_service_key`). It returns `metadata` and the one-time `accessToken`; list responses never include the token or digest. `metadata.neverExpires` is true for a key without expiry; its `expiresAt` is then `9223372036854775807` so clients written before this option still decode the list. Creating such a key records `service_key.created_no_expiry` in the [audit journal](audit.md) instead of `service_key.created`. A client that sends `validDays: null` to a server without this option gets a `400` (it never receives a 30-day key by mistake).
+- Creation accepts `name`, a nonempty list of the supported `scopes` (`skills:publish`, `admin:cloud` and `team:read` only for an administrator's key), and `validDays` (1–90; omitted means 30; an explicit `null` creates a key without expiry, administrators' keys only, otherwise `400 invalid_service_key`). It returns `metadata` and the one-time `accessToken`; list responses never include the token or digest. `metadata.neverExpires` is true for a key without expiry; its `expiresAt` is then `9223372036854775807` so clients written before this option still decode the list. Creating such a key records `service_key.created_no_expiry` in the [audit journal](audit.md) instead of `service_key.created`. A client that sends `validDays: null` to a server without this option gets a `400` (it never receives a 30-day key by mistake).
 
 Skill publication uses the dedicated `skills:publish` scope described in [skills](skills.md), and team hook publication the separate `hooks:publish` scope described in [team hooks](hooks.md). Cloud orchestration uses the `cloud:*` scopes: an external orchestrator holding an `admin:cloud` key creates one session per task on behalf of a member and relays messages through its own backend, so no administrator credential reaches a device. A `cloud:read` or `cloud:write` key acts as its owner alone, even when the owner is an administrator. Cluster, profile, settings and access-policy administration, GitHub linking and every other administration stay interactive. Servers that accept these scopes advertise `cloud.keys.v1`.
 

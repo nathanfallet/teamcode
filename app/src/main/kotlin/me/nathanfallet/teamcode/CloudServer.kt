@@ -22,6 +22,7 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlVariantService
 import me.nathanfallet.teamcode.infrastructure.database.SqlModelPolicyStore
 import me.nathanfallet.teamcode.infrastructure.github.GitHubAppClient
 import me.nathanfallet.teamcode.infrastructure.database.SqlScheduledWork
+import me.nathanfallet.teamcode.infrastructure.secrets.CipherSecretSealer
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import me.nathanfallet.teamcode.presentation.CloudConversation
 import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
@@ -67,7 +68,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         System.err.println("TeamCode cloud reconciliation failed for session $session (${describe(error)}); retrying.")
     }, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients), activity = conversationStore)
     private val garbage = CollectCloudGarbageUseCase(store, cluster)
-    val admin = CloudAdministrationService(adminStore, cluster)
+    val admin = CloudAdministrationService(adminStore, cluster, KubeconfigImportService(CipherSecretSealer(cipher)))
     private val inferenceCredentials = SqlCloudInferenceCredentialStore(database)
     /** Members' GitHub App links; their tokens are used only by the members' own cloud sessions. */
     val github = GitHubLinkService(githubStore, githubStore, githubClient)

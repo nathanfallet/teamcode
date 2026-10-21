@@ -168,7 +168,7 @@ class ApiDocsTest {
         fun queries(key: String) = operations.getValue(key)["parameters"]?.jsonArray.orEmpty()
             .map { it.jsonObject }.filter { it.getValue("in").jsonPrimitive.content == "query" }.map { it.getValue("name").jsonPrimitive.content }
         // `/runs` reads them; its nested resources inherit them from `RunsResource` but ignore them.
-        assertEquals(listOf("member", "all", "before"), queries("GET /api/v1/runs"))
+        assertEquals(listOf("member", "all", "before", "label"), queries("GET /api/v1/runs"))
         for (key in listOf("POST /api/v1/runs", "POST /api/v1/runs/{id}/end", "GET /api/v1/runs/{id}", "POST /api/v1/members/{memberId}/budget-overrides"))
             assertEquals(emptyList(), queries(key), key)
         val state = operations.getValue("GET /api/v1/cloud/sessions").getValue("parameters").jsonArray.map { it.jsonObject }

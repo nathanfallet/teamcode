@@ -9,6 +9,7 @@ private val skillPinPath = Regex("/api/v1/skills/[a-z0-9-]{1,64}/pin")
 private val skillArtifactPath = Regex("/api/v1/skill-delivery/[a-z0-9-]{1,64}/[^/]{1,64}")
 private val hookPublishPath = Regex("/api/v1/hooks/[a-z0-9-]{1,64}/versions")
 private val hookArtifactPath = Regex("/api/v1/hook-delivery/[a-z0-9-]{1,64}/[^/]{1,64}")
+private val teamReadPath = Regex("/api/v1/(quotas|accounts|pools/budgets|members/[a-zA-Z0-9-]{1,36}/capacity)")
 private const val CLOUD_ID = "[a-zA-Z0-9-]{1,36}"
 /** Session, transcript, input and transfer reads open to `cloud:read`; clusters, settings and the access policy are not listed. */
 private val cloudReadPath = Regex("/api/v1/cloud/(profiles|sessions|sessions/$CLOUD_ID(/executions|/events|/events/stream|/messages|/messages/$CLOUD_ID)?|transfers|transfers/$CLOUD_ID)")
@@ -26,6 +27,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && path == MCP_SERVERS_PATH -> CredentialAction.MCP
     method == "GET" && path == "/api/v1/mcp/usage" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/capacity" -> CredentialAction.USAGE_READ
+    // Team-wide reads that an interactive administrator has: only a `team:read` key (an administrator's) passes the service layer.
+    method == "GET" && teamReadPath.matches(path) -> CredentialAction.TEAM_READ
     method == "GET" && path == "/api/v1/pools/accounts" -> CredentialAction.USAGE_READ
     method == "GET" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}").matches(path)) -> CredentialAction.USAGE_READ
     method == "POST" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}/(heartbeat|end)").matches(path)) -> CredentialAction.INFERENCE

@@ -150,6 +150,11 @@ input[type=number]{max-width:200px;font-family:var(--mono)}
 input[type=checkbox],input[type=radio]{width:16px;height:16px;accent-color:var(--accent);margin:0}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent-dim);box-shadow:0 0 0 3px rgba(61,220,151,.12)}
 input[readonly]{color:var(--muted)}
+.drop{border:1.5px dashed var(--line);border-radius:12px;padding:18px;margin:0 0 14px;text-align:center;color:var(--muted)}
+.drop.over{border-color:var(--accent);background:var(--panel-2)}
+.drop .pick{display:inline;color:var(--accent);cursor:pointer;text-decoration:underline;font-weight:500}
+.choice{display:flex;align-items:flex-start;gap:10px}.choice>span{font-weight:400}
+[hidden]{display:none!important}
 .hint{display:block;margin-top:5px;font-size:12.5px;font-weight:400;color:var(--muted)}
 .hint strong{color:var(--text);font-weight:600}
 fieldset{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 14px}legend{padding:0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
