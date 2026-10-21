@@ -133,13 +133,23 @@ fun main(args: Array<String>): Unit = runBlocking {
     }
     catch (error: CancellationException) { throw error }
     catch (error: CliOperationException) {
-        if (error.code.startsWith("release_")) SystemExit.fail("TeamCode release operation failed (${error.code}). Check connectivity, release files, private permissions and platform crypto libraries.")
+        if (error.code.startsWith("release_")) SystemExit.fail(releaseFailureMessage(error.code))
         SystemExit.fail("TeamCode command failed (${error.code}). Check server connectivity, authentication and private file permissions.")
     }
     catch (_: Exception) {
         // Never print exception chains from TLS, JSON, file paths or remote servers: they may carry credentials.
         SystemExit.fail("TeamCode command failed. Check the server URL, authentication, file permissions and server availability.")
     }
+}
+
+/** Actionable text for release failures; the code stays in the output for diagnostics and scripts. */
+internal fun releaseFailureMessage(code: String): String = when (code) {
+    "release_installation_busy" ->
+        "TeamCode update blocked ($code): an agent session started by TeamCode is still running. Close all agent sessions, then run `teamcode update` again."
+    "release_writer_busy" ->
+        "TeamCode update blocked ($code): another TeamCode update or installation change is in progress. Wait for it to finish, then run `teamcode update` again."
+    else ->
+        "TeamCode release operation failed ($code). Check connectivity, release files, private permissions and platform crypto libraries."
 }
 
 expect object SystemExit { fun fail(message: String): Nothing; fun exit(code: Int): Nothing }
