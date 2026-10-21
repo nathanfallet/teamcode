@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import me.nathanfallet.teamcode.api.formatUnits
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -149,7 +150,7 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
         val servers = variants?.list(actor).orEmpty().filter { it.kind == VariantKind.MCP }
         val policies = servers.associate { it.id to access.toolPolicy(actor, it.id) }
         val usageRows = usage.joinToString("") {
-            """<tr><td>${escape(it.username)}</td><td><code>${escape(it.server.ifEmpty { "(unknown)" })}</code></td><td>${it.calls}</td><td>${it.lists}</td><td>${it.errors}</td><td>${it.denied}</td><td class="num">${units(it.responseBytes)}</td><td>${if (it.calls + it.lists > 0) it.totalDurationMillis / (it.calls + it.lists) else 0} ms</td></tr>"""
+            """<tr><td>${escape(it.username)}</td><td><code>${escape(it.server.ifEmpty { "(unknown)" })}</code></td><td>${it.calls}</td><td>${it.lists}</td><td>${it.errors}</td><td>${it.denied}</td><td class="num">${formatUnits(it.responseBytes)}</td><td>${if (it.calls + it.lists > 0) it.totalDurationMillis / (it.calls + it.lists) else 0} ms</td></tr>"""
         }
         val callRows = page.calls.joinToString("") {
             """<tr><td>${it.id}<br><small>${Instant.ofEpochMilli(it.startedAt)}</small></td><td>${escape(it.memberId)}</td><td><code>${escape(it.server)}</code></td><td>${it.operation}${it.tool?.let { tool -> " <code>${escape(tool)}</code>" } ?: ""}</td><td>${it.outcome}</td><td>${it.durationMillis ?: ""}</td></tr>"""

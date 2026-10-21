@@ -10,7 +10,11 @@ internal fun readMemberPolicy(c: JdbcTransaction, member: String): MemberPolicy 
     .singleOrNull()?.let { MemberPolicy(member, it[MemberPolicies.dailyUnits], it[MemberPolicies.maxConcurrent], it[MemberPolicies.poolId], it[MemberPolicies.weight], it[MemberPolicies.allowSharedOverflow]) } ?: MemberPolicy(member)
 internal fun readMemberCapacity(c: JdbcTransaction, policy: MemberPolicy, now: Long, teamId: String): MemberCapacity {
     val units = Reservations.units.sum()
-    val charged = Reservations.select(units).where { (Reservations.memberId eq policy.memberId) and (Reservations.dayNumber eq now / DAY) }.single()[units] ?: 0L
+    // Reserved: in flight now, an upper estimate settled to the real cost when the request ends. An expired lease stays charged, not reserved.
+    val inFlight = Sum(Case().When((Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now), Reservations.units).Else(longLiteral(0)), LongColumnType())
+    val totals = Reservations.select(units, inFlight).where { (Reservations.memberId eq policy.memberId) and (Reservations.dayNumber eq now / DAY) }.single()
+    val charged = totals[units] ?: 0L
+    val reserved = totals[inFlight] ?: 0L
     val active = Reservations.selectAll().where { (Reservations.memberId eq policy.memberId) and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now) }.count().toInt()
     val weight = Coalesce(MemberPolicies.weight, intLiteral(1)).sum()
     val totalWeight = (Members leftJoin MemberPolicies).select(weight).where {
@@ -23,7 +27,7 @@ internal fun readMemberCapacity(c: JdbcTransaction, policy: MemberPolicy, now: L
     val temporary = readActiveBudgetOverride(teamId, policy, now)
     val effective = temporary?.let { minOf(it.dailyUnits, budget) } ?: allowance
     val queued = AdmissionWaiters.selectAll().where { (AdmissionWaiters.memberId eq policy.memberId) and (AdmissionWaiters.expiresAt greater now) }.count().toInt()
-    return MemberCapacity(policy, charged, active, (now / DAY + 1) * DAY, effective, budget, totalWeight, queued, readGroupAllowances(teamId, policy.memberId, now), temporary, allowance)
+    return MemberCapacity(policy, charged, active, (now / DAY + 1) * DAY, effective, budget, totalWeight, queued, readGroupAllowances(teamId, policy.memberId, now), temporary, allowance, reserved)
 }
 internal fun poolSpent(team: String, pool: String, day: Long): Long = poolSpends(team, setOf(pool), day)[pool] ?: 0L
 private const val DAY = 86_400_000L

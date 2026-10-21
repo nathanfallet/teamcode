@@ -15,18 +15,20 @@ class SkillCatalogTest {
         val candidates = mutableMapOf<String, List<SkillCandidate>>()
         val files = mutableMapOf<String, List<SkillFile>>()
         val published = mutableListOf<SkillArtifact>()
+        val pins = mutableListOf<Pair<String, String>>()
         val reports = mutableListOf<SkillInstallationReport>()
         override suspend fun candidates(actor: Principal, memberId: String) = candidates[memberId].orEmpty()
         override suspend fun files(actor: Principal, versionId: String) = files.getValue(versionId)
-        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact): SkillPublication {
+        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
             published += artifact
-            val skill = Skill("s", name, null, false, 1, 1)
+            if (pin) pins += name to version
+            val skill = Skill("s", name, if (pin) version else null, false, 1, 1)
             return SkillPublication(skill, SkillVersion("v", "s", version, artifact.digest, artifact.sizeBytes, artifact.entries.size, actor.member.id, 1, false), true)
         }
         override suspend fun reportInstallations(actor: Principal, reports: List<SkillInstallationReport>) { this.reports += reports }
         override suspend fun catalog(actor: Principal) = error("unused")
         override suspend fun versions(actor: Principal, name: String) = error("unused")
-        override suspend fun pin(actor: Principal, name: String, version: String) = error("unused")
+        override suspend fun pin(actor: Principal, name: String, version: String): Skill { pins += name to version; return Skill("s", name, version, false, 1, 1) }
         override suspend fun unpin(actor: Principal, name: String) = error("unused")
         override suspend fun retire(actor: Principal, name: String) = error("unused")
         override suspend fun restore(actor: Principal, name: String) = error("unused")
@@ -127,6 +129,35 @@ class SkillCatalogTest {
         catalog.publish(admin, "review", "2", files)
         assertEquals(2, store.published.size)
         assertFailsWith<TeamFailure> { catalog.publish(admin, "Review", "3", files) }
+    }
+
+    @Test fun pinningSharesThePublicationRightAndNothingElse() = runTest {
+        val store = FakeStore()
+        val catalog = SkillCatalog(store)
+        val files = listOf(file("SKILL.md"))
+        val publisher = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH))
+        // Publication pins only when asked.
+        assertNull(catalog.publish(publisher, "review", "1", files).skill.pinnedVersion)
+        assertEquals("1", catalog.publish(publisher, "review", "1", files, pin = true).skill.pinnedVersion)
+        catalog.manage.pin(publisher, "review", "1")
+        catalog.manage.pin(admin, "review", "1")
+        assertEquals(listOf("review" to "1", "review" to "1", "review" to "1"), store.pins)
+        // The same refusals as publication, before the store is reached.
+        for ((actor, code) in listOf(
+            member to "forbidden",
+            member.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH)) to "forbidden",
+            admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_READ)) to "credential_scope",
+            admin.copy(serviceScopes = setOf(ServiceScope.INFERENCE)) to "credential_scope",
+        )) {
+            assertEquals(code, assertFailsWith<TeamFailure> { catalog.manage.pin(actor, "review", "1") }.code)
+            assertEquals(code, assertFailsWith<TeamFailure> { catalog.publish(actor, "review", "2", files, pin = true) }.code)
+        }
+        assertEquals("invalid_skill_version", assertFailsWith<TeamFailure> { catalog.manage.pin(publisher, "review", "../1") }.code)
+        assertEquals(3, store.pins.size)
+        // A publishing key still cannot unpin, retire or read the catalog.
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.manage.unpin(publisher, "review") }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.manage.retire(publisher, "review") }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.manage.catalog(publisher) }.code)
     }
 
     @Test fun downloadsServeOnlyTheEffectiveVersionAndVerifyStoredContent() = runTest {
