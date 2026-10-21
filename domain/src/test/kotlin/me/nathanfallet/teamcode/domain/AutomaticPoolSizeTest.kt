@@ -93,7 +93,7 @@ class AutomaticPoolSizeTest {
         assertEquals(20_357_143, share.dailyMicros)
     }
 
-    @Test fun unknownAccountsAddNothingAndAnUnobservedWindowDoesNotBind() {
+    @Test fun accountsWithoutAnEstimateAreLeftOutAndAnUnobservedWindowDoesNotBind() {
         val unestimated = observed(account("new"), quota("new", "five_hour", .1, hour), quota("new", "seven_day", .1, 3 * day))
         val stale = observed(account("stale"), quota("stale", "five_hour", .1, -hour))
         val weeklyOnlyEstimate = observed(account("half"), quota("half", "five_hour", .1, hour), quota("half", "seven_day", .1, 3 * day))
@@ -107,9 +107,14 @@ class AutomaticPoolSizeTest {
         assertEquals(PoolContribution.NO_ESTIMATE, byId.getValue("half").status, "An observed window without an estimate could bind: no figure")
         assertEquals(PoolContribution.COUNTED, byId.getValue("codex").status)
         assertEquals(45_600_000, byId.getValue("codex").dailyMicros)
-        assertNull(estimate.dailyUnits, "Counting accounts without a figure as zero would undersize the pool: the manual budget applies")
-        assertEquals(PoolSizeEstimate.INCOMPLETE, estimate.reason)
+        assertEquals(0, byId.getValue("new").dailyMicros)
+        assertNull(estimate.reason, "Accounts without a figure are left out of the sum; the others still size the pool")
+        assertEquals(45_600_000, estimate.dailyMicros, "Only the estimated account counts")
+        assertEquals(91_200_000, estimate.dailyUnits)
         assertEquals(91_200_000, size(listOf(fiveHourOnly), mapOf("codex" to capacity(10_000_000, null))).dailyUnits)
+        val none = size(listOf(unestimated, stale, weeklyOnlyEstimate), mapOf("stale" to capacity(10_000_000, 200_000_000), "half" to capacity(null, 200_000_000)))
+        assertNull(none.dailyUnits, "When no account has an estimate the manual budget applies")
+        assertEquals(PoolSizeEstimate.NO_ESTIMATE, none.reason)
     }
 
     @Test fun noEstimateAtAllOrNoPricedUsageGiveNoAutomaticValue() {

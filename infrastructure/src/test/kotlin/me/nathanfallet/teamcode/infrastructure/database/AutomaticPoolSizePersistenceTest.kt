@@ -122,8 +122,14 @@ class AutomaticPoolSizePersistenceTest {
 
                 assertEquals("forbidden", assertFailsWith<TeamFailure> { sizing.report(member) }.code)
                 assertEquals("forbidden", assertFailsWith<TeamFailure> { settings.setAutoPoolSize(member, false) }.code)
+                assertEquals("forbidden", assertFailsWith<TeamFailure> { prices.loadDefaults(member) }.code)
+                val loaded = prices.loadDefaults(admin)
+                assertEquals(AnthropicListPrices.rows.size + 1, loaded.size, "The list is added next to the typed rows")
+                assertTrue(sonnet in loaded)
+                assertEquals(loaded, prices.loadDefaults(admin), "Loading the same list again changes nothing")
                 val actions = db.query { AuditEvents.select(AuditEvents.action).where { AuditEvents.teamId eq "default" }.map { it[AuditEvents.action] } }
                 assertEquals(3, actions.count { it == "capacity.api_price_changed" }, "One audited event per change; the refused ones wrote nothing")
+                assertEquals(1, actions.count { it == "capacity.api_prices_defaults_loaded" }, "The load is audited once; the idempotent repeat wrote nothing")
                 assertEquals(2, actions.count { it == "pool_size.automatic_enabled" })
                 assertEquals(1, actions.count { it == "pool_size.manual_enabled" })
             }

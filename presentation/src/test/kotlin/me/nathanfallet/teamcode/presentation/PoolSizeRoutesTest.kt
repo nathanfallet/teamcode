@@ -96,6 +96,17 @@ class PoolSizeRoutesTest {
                 "provider=anthropic&model=claude-haiku-4&effectiveFrom=2026-10-02&input=18446744073710&cacheWrite=0&cacheRead=0&output=1"), "No silent overflow")
             assertEquals(HttpStatusCode.Found, form("/dashboard/capacity/api-prices", "remove=on&provider=anthropic&model=claude-opus-4&effectiveFrom=2026-10-02"))
             assertEquals(listOf("claude-sonnet-4"), table.map { it.model })
+
+            assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/policy/api-prices/load-defaults") { bearerAuth("member") }.status)
+            assertEquals(listOf("claude-sonnet-4"), table.map { it.model }, "Nothing is loaded without an administrator")
+            assertTrue(page.contains("action=\"/dashboard/capacity/api-prices/load-defaults\""), "The dashboard offers the action")
+            val loaded = sdk.loadDefaultApiPrices().prices
+            assertEquals(AnthropicListPrices.rows.size + 1, loaded.size)
+            assertTrue(loaded.any { it.model == "claude-opus-5-5" && it.effectiveFrom == "2026-10-21" && it.inputMicros == 4_000_000L })
+            assertEquals(loaded, sdk.loadDefaultApiPrices().prices, "Idempotent")
+            table = emptyList()
+            assertEquals(HttpStatusCode.Found, form("/dashboard/capacity/api-prices/load-defaults", ""))
+            assertEquals(AnthropicListPrices.rows.size, table.size)
         } finally { sdk.close() }
     }
 }

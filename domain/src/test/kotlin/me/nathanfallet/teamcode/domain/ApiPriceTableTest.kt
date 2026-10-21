@@ -67,4 +67,36 @@ class ApiPriceTableTest {
         assertNull(CreditRatio.of(table, listOf(unpriced)).creditsPerMicro, "No priced traffic: no ratio")
         assertNull(CreditRatio.of(table, emptyList()).creditsPerMicro)
     }
+
+    @Test fun theAnthropicListIsValidDatedAndPricesEachCurrentModel() {
+        val rows = ApiPrices.validate(AnthropicListPrices.rows)
+        assertTrue(rows.all { it.provider == "anthropic" && it.effectiveFromDay == AnthropicListPrices.CHECKED_ON_DAY })
+        assertEquals(20_747, AnthropicListPrices.CHECKED_ON_DAY, "2026-10-21, the day the list was read")
+        val table = ApiPriceTable(rows)
+        fun prices(model: String) = table.priceFor("anthropic", model, AnthropicListPrices.CHECKED_ON_DAY)?.let {
+            listOf(it.inputMicros, it.cacheWriteMicros, it.cacheReadMicros, it.outputMicros)
+        }
+        assertEquals(listOf(4_000_000L, 5_000_000L, 200_000L, 20_000_000L), prices("claude-opus-5-5"))
+        assertEquals(listOf(5_000_000L, 6_250_000L, 500_000L, 25_000_000L), prices("claude-opus-5"), "The longer claude-opus-5-5 row does not price Opus 5")
+        assertEquals(listOf(5_000_000L, 6_250_000L, 500_000L, 25_000_000L), prices("claude-opus-4-5-20251101"), "A dated identifier uses its family row")
+        assertEquals(listOf(10_000_000L, 12_500_000L, 250_000L, 50_000_000L), prices("claude-fable-5-1"))
+        assertEquals(listOf(10_000_000L, 12_500_000L, 1_000_000L, 50_000_000L), prices("claude-fable-5"))
+        assertEquals(listOf(2_000_000L, 2_500_000L, 100_000L, 10_000_000L), prices("claude-sonnet-5-5"))
+        assertEquals(listOf(2_000_000L, 2_500_000L, 200_000L, 10_000_000L), prices("claude-sonnet-5"))
+        assertEquals(listOf(3_000_000L, 3_750_000L, 300_000L, 15_000_000L), prices("claude-sonnet-4-6"))
+        assertEquals(listOf(100_000L, 125_000L, 10_000L, 500_000L), prices("claude-haiku-5-5"))
+        assertEquals(listOf(1_000_000L, 1_250_000L, 100_000L, 5_000_000L), prices("claude-haiku-4-5"))
+        assertNull(prices("claude-opus-4-1"), "Retired models are not loaded")
+        assertNull(table.priceFor("anthropic", "claude-opus-5-5", AnthropicListPrices.CHECKED_ON_DAY - 1), "Nothing before the day the list was read")
+    }
+
+    @Test fun loadingTheListAddsOnlyMissingRowsAndIsIdempotent() {
+        val typed = price("claude-opus-5-5", from = AnthropicListPrices.CHECKED_ON_DAY, input = 1)
+        val other = price("claude-sonnet-4")
+        val loaded = ApiPrices.withMissing(listOf(typed, other), AnthropicListPrices.rows)
+        assertEquals(typed, loaded.single { it.model == "claude-opus-5-5" }, "A row the administrator typed for the same model and day is kept")
+        assertTrue(other in loaded)
+        assertEquals(AnthropicListPrices.rows.size + 1, loaded.size)
+        assertEquals(loaded, ApiPrices.withMissing(loaded, AnthropicListPrices.rows), "Loading twice changes nothing")
+    }
 }
