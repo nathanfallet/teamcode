@@ -1,0 +1,547 @@
+package me.nathanfallet.teamcode.presentation.docs
+
+import io.ktor.http.HttpStatusCode
+import io.ktor.openapi.Parameters
+import me.nathanfallet.teamcode.api.models.*
+
+/** Cloud administration, sessions, conversations, transfers and GitHub links. */
+internal fun ApiCatalog.cloudOperations() {
+    cloudAdministration()
+    cloudSessions()
+    cloudConversation()
+    cloudTransfers()
+    githubOperations()
+}
+
+private const val ON_BEHALF_TEXT = "Act for another member (administrators, or an `admin:cloud` key): the member's identifier."
+private const val IDEMPOTENCY_TEXT = "1 to 128 characters from `A-Z a-z 0-9 . _ : -`. Retrying with the same key and " +
+    "body returns the first result with `Idempotency-Replayed: true`."
+
+private fun Parameters.Builder.sessionId() = pathId("id", "The cloud session's identifier.")
+private fun Parameters.Builder.onBehalfOf() = headerText("TeamCode-On-Behalf-Of", ON_BEHALF_TEXT)
+
+private fun ApiCatalog.cloudAdministration() {
+    get("/api/v1/cloud/settings") {
+        operationId = "getCloudSettings"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "The cloud settings"
+        description = "Retention of paused and failed workspaces and of transcripts, per-member session limits and the " +
+            "transfer policy. Administrators only."
+        responses { ok<CloudSettingsView>("The settings.") }
+    }
+    put("/api/v1/cloud/settings") {
+        operationId = "saveCloudSettings"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Change the cloud settings"
+        description = "The retention and limit fields are required; an absent transfer field keeps its stored value. " +
+            "`pausedRetentionDays` or `transcriptRetentionDays` set to null keep data indefinitely. Administrators only."
+        body<CloudSettingsView>("The settings.")
+        responses {
+            ok<CloudSettingsView>("The saved settings.")
+            badRequest("A value out of range (`invalid_cloud_settings`).")
+        }
+    }
+    get("/api/v1/cloud/clusters") {
+        operationId = "listCloudClusters"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "List the Kubernetes clusters"
+        description = "The clusters sessions run in, with their namespaces, pod limit and orphaned volumes. The service " +
+            "account token and CA are never returned. Administrators only."
+        responses { ok<List<CloudClusterView>>("The clusters.") }
+    }
+    post("/api/v1/cloud/clusters") {
+        operationId = "createCloudCluster"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Connect a cluster"
+        description = "The API URL, its CA certificate and a service account token TeamCode uses to create session " +
+            "pods, limited to `allowedNamespaces`. At most 16 clusters. Administrators only."
+        body<SaveCloudClusterRequest>("The cluster, its credentials and limits.")
+        responses {
+            ok<CloudClusterView>("Connected.", HttpStatusCode.Created)
+            badRequest("Invalid URL, credentials, namespaces or limits (`invalid_cluster`, `cluster_credentials_required`).")
+            conflict("The name is used (`cluster_conflict`) or 16 clusters exist (`cluster_limit`).")
+        }
+    }
+    put("/api/v1/cloud/clusters/{id}") {
+        operationId = "updateCloudCluster"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Change a cluster"
+        description = "`version` must be the current version. Null credentials keep the stored ones; changing the API " +
+            "URL requires both again. Administrators only."
+        parameters { pathId("id", "The cluster's identifier.") }
+        body<SaveCloudClusterRequest>("The cluster, with its current `version`.")
+        responses {
+            ok<CloudClusterView>("The updated cluster.")
+            badRequest("A missing version, or invalid settings (`invalid_cluster`, `cluster_credentials_required`).")
+            notFound("No such cluster (`cluster_not_found`).")
+            conflict("The cluster changed since it was read, or the name is used (`cluster_conflict`).")
+        }
+    }
+    get("/api/v1/cloud/profiles") {
+        operationId = "listCloudProfiles"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "List the session profiles"
+        description = "A profile is what a session is created from: cluster and namespace, image, resources, workspace " +
+            "size, agent, idle timeouts and the environment recipe (repositories, setup commands, required variables), " +
+            "with the members allowed to use it. Members see the profiles assigned to them; administrators see all."
+        responses { ok<List<CloudProfileView>>("The profiles.") }
+    }
+    post("/api/v1/cloud/profiles") {
+        operationId = "createCloudProfile"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Create a session profile"
+        description = "`version` must be 0. At most 200 profiles. Administrators only."
+        body<SaveCloudProfileRequest>("The profile and the members allowed to use it.")
+        responses {
+            ok<CloudProfileView>("Created.", HttpStatusCode.Created)
+            badRequest("Invalid specification (`type` names the field).")
+            conflict("The name is used (`profile_conflict`) or 200 profiles exist (`profile_limit`).")
+        }
+    }
+    put("/api/v1/cloud/profiles/{id}") {
+        operationId = "updateCloudProfile"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Publish a new version of a profile"
+        description = "Each save publishes an immutable version; running sessions keep the version they started with. " +
+            "`version` must be the current version. Administrators only."
+        parameters { pathId("id", "The profile's identifier.") }
+        body<SaveCloudProfileRequest>("The profile, with its current `version`.")
+        responses {
+            ok<CloudProfileView>("The new version.")
+            badRequest("Invalid specification (`type` names the field).")
+            notFound("No such profile (`not_found`).")
+            conflict("The profile changed since it was read, or the name is used (`profile_conflict`).")
+        }
+    }
+    get("/api/v1/cloud/access") {
+        operationId = "getCloudAccessPolicy"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "The cloud access policy"
+        description = "Rules granting `create`, `attach`, `message` and `transcript` to `everyone`, `member:<id>` or " +
+            "`group:<id>`, on their own sessions (`own`) or every team session (`team`). Administrators hold every " +
+            "permission. Administrators only."
+        responses { ok<CloudAccessPolicyView>("The policy.") }
+    }
+    put("/api/v1/cloud/access") {
+        operationId = "saveCloudAccessPolicy"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Replace the cloud access policy"
+        description = "`version` must be the current version (0 for a team that never saved one). Administrators only."
+        body<CloudAccessPolicyView>("The policy, with its current `version`.")
+        responses {
+            ok<CloudAccessPolicyView>("The saved policy.")
+            badRequest("An unknown subject, permission or scope (`invalid_access_policy`).")
+            conflict("The policy changed since it was read (`access_policy_conflict`).")
+            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 64 KiB (`payload_too_large`).")
+        }
+    }
+}
+
+private fun ApiCatalog.cloudSessions() {
+    post("/api/v1/cloud/sessions") {
+        operationId = "createCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Start a cloud session"
+        description = "Creates a session from a profile: TeamCode prepares a workspace and starts the agent in the " +
+            "cluster. The answer comes at once (202) with the session `creating`; follow `state` with " +
+            "`GET /api/v1/cloud/sessions/{id}` or the transcript. `initialMessage` is delivered once the session is " +
+            "ready (`cloud.sessions.initial-message.v1`). Requires the `create` permission."
+        parameters {
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
+            onBehalfOf()
+        }
+        body<CreateCloudSessionRequest>("The session's name, profile and optional overrides.")
+        responses {
+            ok<CloudSessionView>("Accepted: the session is being created.", HttpStatusCode.Accepted)
+            badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`).")
+            notFound("No such profile for the member (`not_found`).")
+            conflict("The member's session limit is reached (`cloud_session_limit`), or the profile's cluster or namespace is gone (`cluster_unavailable`, `namespace_not_allowed`).")
+            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), or the effective member cannot own sessions (`invalid_effective_member`).")
+        }
+    }
+    get("/api/v1/cloud/sessions") {
+        operationId = "listCloudSessions"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "List cloud sessions"
+        description = "The caller's sessions, newest first, 50 per page by default. `owner` reads another member's " +
+            "(or `all`) where the caller may. Page with `before` = `nextBefore`."
+        parameters {
+            queryText("owner", "A member's identifier, or `all`.")
+            queryText("state", "Only these states (repeatable): `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
+            queryText("label", "Only sessions with this label, as `key=value` (repeatable).")
+            queryText("before", "The `nextBefore` of the previous page.")
+            queryNumber("limit", "The page size, 1 to 50.")
+        }
+        responses {
+            ok<CloudSessionPageView>("A page of sessions.")
+            badRequest("An invalid filter or limit (`invalid_query`, `invalid_state`, `invalid_label`, `invalid_limit`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}") {
+        operationId = "getCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "One cloud session"
+        description = "Its state and phase, profile, image, agent, activity and idle timeout, failure, workspace " +
+            "deletion proof and environment."
+        parameters { sessionId() }
+        responses {
+            ok<CloudSessionView>("The session.")
+            notFound("No such session visible to the caller (`not_found`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}/executions") {
+        operationId = "listCloudExecutions"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "A session's executions"
+        description = "Each pod that ran the session (one per epoch), with its state, node, image digest and exit reason."
+        parameters { sessionId() }
+        responses {
+            ok<List<CloudExecutionView>>("The executions.")
+            notFound("No such session (`not_found`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/pause") {
+        operationId = "pauseCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Pause a session"
+        description = "Stops the pod and keeps the workspace. Without `force`, the running turn finishes first."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        body<PauseCloudSessionRequest>("Optional: `force` pauses at once.", required = false)
+        responses {
+            ok<CloudSessionView>("Accepted: the session is pausing.", HttpStatusCode.Accepted)
+            notFound("No such session (`not_found`).")
+            conflict("The session cannot pause now (`invalid_transition`, `session_preparing`, `session_transferring`, `session_busy`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/resume") {
+        operationId = "resumeCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Resume a paused session"
+        description = "Starts a new execution on the kept workspace and conversation."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        responses {
+            ok<CloudSessionView>("Accepted: the session is resuming.", HttpStatusCode.Accepted)
+            notFound("No such session (`not_found`).")
+            conflict("The session cannot resume now (`invalid_transition`, `session_pausing`, `session_transferring`, `session_busy`).")
+        }
+    }
+    delete("/api/v1/cloud/sessions/{id}") {
+        operationId = "deleteCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Delete a session"
+        description = "Terminates the session and deletes its workspace; `workspaceDeletion` proves when the volume is gone."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        responses {
+            empty("Deleted.")
+            notFound("No such session (`not_found`).")
+            conflict("The session is being transferred (`session_transferring`) or changed concurrently (`session_busy`).")
+        }
+    }
+}
+
+private fun ApiCatalog.cloudConversation() {
+    get("/api/v1/cloud/sessions/{id}/events") {
+        operationId = "listCloudEvents"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Read a session's transcript"
+        description = "Events in ascending `seq` order: user and agent messages, tool calls and results, turns, " +
+            "statuses, errors and input changes. Continue with `after` = `nextAfter`, or go back with `before` = " +
+            "`nextBefore`. Clients must tolerate unknown event types. Requires the `transcript` permission."
+        parameters {
+            sessionId()
+            queryNumber("after", "Events after this sequence number.")
+            queryNumber("before", "Events before this sequence number.")
+            queryNumber("limit", "The page size (100 by default).")
+        }
+        responses {
+            ok<CloudEventPageView>("A page of events.")
+            badRequest("An invalid cursor or limit (`invalid_query`, `invalid_cursor`).")
+            notFound("No such session (`not_found`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}/events/stream") {
+        operationId = "streamCloudEvents"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Follow a session's transcript live"
+        description = "A server-sent event stream (`text/event-stream`): each event has `id` = `seq`, `event` = its " +
+            "type and `data` = the event as JSON. A reconnecting `EventSource` resumes from `Last-Event-ID`. The stream " +
+            "ends with `event: end`, or `event: denied` if access is lost. Requires the `transcript` permission."
+        parameters {
+            sessionId()
+            queryNumber("after", "Start after this sequence number (0 by default).")
+            headerText("Last-Event-ID", "Resume after this sequence number; wins over `after`.")
+        }
+        responses {
+            HttpStatusCode.OK { description = "The event stream." }
+            badRequest("A negative cursor (`invalid_cursor`).")
+            notFound("No such session (`not_found`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/messages") {
+        operationId = "sendCloudMessage"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Send a message to the agent"
+        description = "Queues a message, authored by the caller. Its `status` moves from `queued` to `delivered` and " +
+            "`consumed`, or ends `cancelled` or `rejected`. `wake: false` leaves a paused session paused. " +
+            "`expectedLastEventSeq` refuses the message if newer events exist. Send an `Idempotency-Key` (or " +
+            "`clientMessageId`) to retry safely. Requires the `message` permission."
+        parameters {
+            sessionId()
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT)
+        }
+        body<SendCloudMessageRequest>("The message text and options (at most 256 KiB).")
+        responses {
+            ok<CloudInputView>("Accepted.", HttpStatusCode.Accepted)
+            badRequest("An invalid message or key, or `TeamCode-On-Behalf-Of` was sent (`invalid_message`, `invalid_idempotency_key`, `on_behalf_unsupported`).")
+            notFound("No such session (`not_found`).")
+            conflict("Newer events exist (`stale_view`), or the session cannot take messages (`session_not_running`, `session_transferring`).")
+            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 256 KiB (`payload_too_large`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}/messages") {
+        operationId = "listCloudMessages"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "List a session's messages"
+        description = "Messages and interrupts with their acknowledgement status, newest first. Page with `before` = `nextBefore`."
+        parameters {
+            sessionId()
+            queryText("before", "The `nextBefore` of the previous page.")
+            queryNumber("limit", "The page size (50 by default).")
+        }
+        responses {
+            ok<CloudInputPageView>("A page of messages.")
+            badRequest("An invalid cursor or limit (`invalid_cursor`, `invalid_query`).")
+            notFound("No such session (`not_found`).")
+        }
+    }
+    get("/api/v1/cloud/sessions/{id}/messages/{input}") {
+        operationId = "getCloudMessage"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "One message"
+        description = "A message or interrupt and its acknowledgement."
+        parameters {
+            sessionId()
+            pathId("input", "The message's identifier.")
+        }
+        responses {
+            ok<CloudInputView>("The message.")
+            notFound("No such message (`not_found`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/interrupt") {
+        operationId = "interruptCloudSession"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Interrupt the agent"
+        description = "Stops the agent's current turn, like Escape in a terminal. Requires the `message` permission."
+        parameters {
+            sessionId()
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT)
+        }
+        responses {
+            ok<CloudInputView>("Accepted.", HttpStatusCode.Accepted)
+            badRequest("An invalid key, or `TeamCode-On-Behalf-Of` was sent (`invalid_idempotency_key`, `on_behalf_unsupported`).")
+            notFound("No such session (`not_found`).")
+            conflict("No agent is running (`nothing_to_interrupt`), or the session is not running (`session_not_running`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/attachments") {
+        operationId = "attachCloudSession"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Attach to a session"
+        description = "Takes a lease saying someone is watching (`teamcode cloud attach`): idle detection and transfers " +
+            "take it into account. Renew it before `leaseUntil`. Requires the `attach` permission."
+        parameters { sessionId() }
+        responses {
+            ok<CloudAttachmentView>("Attached.", HttpStatusCode.Created)
+            notFound("No such session (`not_found`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/attachments/{attachment}/renew") {
+        operationId = "renewCloudAttachment"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Renew an attachment"
+        description = "Extends the lease."
+        parameters {
+            sessionId()
+            pathId("attachment", "The attachment's identifier.")
+        }
+        responses {
+            ok<CloudAttachmentView>("Renewed.")
+            notFound("No such attachment (`not_found`).")
+            conflict("The lease expired or was released: attach again (`attachment_expired`).")
+        }
+    }
+    delete("/api/v1/cloud/sessions/{id}/attachments/{attachment}") {
+        operationId = "detachCloudSession"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Detach from a session"
+        description = "Releases the lease."
+        parameters {
+            sessionId()
+            pathId("attachment", "The attachment's identifier.")
+        }
+        responses {
+            empty("Detached.")
+            notFound("No such attachment (`not_found`).")
+        }
+    }
+}
+
+private fun ApiCatalog.cloudTransfers() {
+    post("/api/v1/cloud/sessions/{id}/transfer") {
+        operationId = "transferCloudSession"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "Give a session to another member"
+        description = "An owner offers the session (the recipient accepts within the offer delay); an administrator " +
+            "transfers it at once. The session pauses, changes owner, then resumes for the recipient if `resume`."
+        parameters {
+            sessionId()
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
+            onBehalfOf()
+        }
+        body<CreateCloudTransferRequest>("The recipient and options.")
+        responses {
+            ok<CloudTransferView>("Accepted: the transfer is open.", HttpStatusCode.Accepted)
+            badRequest("A missing or invalid `Idempotency-Key`, or an invalid recipient (`idempotency_key_required`, `invalid_transfer`).")
+            notFound("No such session (`not_found`).")
+            conflict("The session already has an open transfer (`transfer_pending`) or is still prepared (`session_preparing`).")
+            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`).")
+        }
+    }
+    get("/api/v1/cloud/transfers") {
+        operationId = "listCloudTransfers"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "List transfers"
+        description = "The caller's incoming and outgoing transfers, newest first; administrators can read the team's " +
+            "(`scope=team`). Page with `before` = `nextBefore`."
+        parameters {
+            queryText("direction", "`incoming`, `outgoing` or `all` (default).")
+            queryText("scope", "`mine` (default) or `team`.")
+            queryText("state", "Only these states (repeatable): `offered`, `accepted`, `completed`, `declined`, `cancelled`, `expired`, `failed`.")
+            queryText("session", "Only this session's transfers.")
+            queryText("before", "The `nextBefore` of the previous page.")
+            queryNumber("limit", "The page size, 1 to 50.")
+        }
+        responses {
+            ok<CloudTransferPageView>("A page of transfers.")
+            badRequest("An invalid filter or limit (`invalid_query`, `invalid_state`, `invalid_limit`).")
+        }
+    }
+    get("/api/v1/cloud/transfers/{transfer}") {
+        operationId = "getCloudTransfer"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "One transfer"
+        description = "The transfer and who decided it."
+        parameters { pathId("transfer", "The transfer's identifier.") }
+        responses {
+            ok<CloudTransferView>("The transfer.")
+            notFound("No such transfer (`not_found`).")
+        }
+    }
+    post("/api/v1/cloud/transfers/{transfer}/accept") {
+        operationId = "acceptCloudTransfer"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "Accept an offered session"
+        description = "The recipient accepts; `resume` overrides what the offer asked for."
+        parameters {
+            pathId("transfer", "The transfer's identifier.")
+            onBehalfOf()
+        }
+        body<AcceptCloudTransferRequest>("Optional: whether to resume.", required = false)
+        responses {
+            ok<CloudTransferView>("Accepted.", HttpStatusCode.Accepted)
+            notFound("No such transfer (`not_found`).")
+            conflict("The offer is no longer open or expired (`transfer_not_open`, `transfer_expired`).")
+        }
+    }
+    post("/api/v1/cloud/transfers/{transfer}/decline") {
+        operationId = "declineCloudTransfer"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "Decline an offered session"
+        description = "The recipient refuses; the session stays with its owner."
+        parameters {
+            pathId("transfer", "The transfer's identifier.")
+            onBehalfOf()
+        }
+        responses {
+            ok<CloudTransferView>("Declined.")
+            notFound("No such transfer (`not_found`).")
+            conflict("The offer is no longer open (`transfer_not_open`).")
+        }
+    }
+    post("/api/v1/cloud/transfers/{transfer}/cancel") {
+        operationId = "cancelCloudTransfer"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "Cancel a transfer"
+        description = "The owner withdraws an offer, before the owner changes."
+        parameters {
+            pathId("transfer", "The transfer's identifier.")
+            onBehalfOf()
+        }
+        responses {
+            ok<CloudTransferView>("Cancelled.")
+            notFound("No such transfer (`not_found`).")
+            conflict("The transfer is no longer open, or the owner is already changing (`transfer_not_open`, `transfer_in_progress`).")
+        }
+    }
+}
+
+private fun ApiCatalog.githubOperations() {
+    get("/api/v1/github/app") {
+        operationId = "getGitHubApp"; tag(ApiTags.GITHUB)
+        summary = "The team's GitHub App"
+        description = "Whether a GitHub App is configured, and the callback URL to register in it. The client secret " +
+            "and private key are never returned. Administrators only."
+        responses { ok<GitHubAppView>("The App.") }
+    }
+    put("/api/v1/github/app") {
+        operationId = "saveGitHubApp"; tag(ApiTags.GITHUB)
+        summary = "Configure the GitHub App"
+        description = "Cloud sessions clone and push with each member's own GitHub permissions through this App. " +
+            "`version` is required to update; a null secret or key keeps the stored one. Administrators only."
+        body<SaveGitHubAppRequest>("The App's identifiers and secrets.")
+        responses {
+            ok<GitHubAppView>("The saved App.")
+            badRequest("Invalid identifiers, secret or key (`invalid_github_app`).")
+            conflict("The App changed since it was read (`github_app_conflict`).")
+        }
+    }
+    get("/api/v1/github/link") {
+        operationId = "getGitHubLink"; tag(ApiTags.GITHUB)
+        summary = "The caller's GitHub link"
+        description = "`state` is `not_linked`, `linked` or `reconnect_required`. No token is ever returned: it only " +
+            "reaches the runners of the caller's own cloud sessions."
+        responses { ok<GitHubLinkView>("The link.") }
+    }
+    delete("/api/v1/github/link") {
+        operationId = "unlinkGitHub"; tag(ApiTags.GITHUB)
+        summary = "Unlink the caller's GitHub account"
+        description = "Forgets the caller's GitHub tokens."
+        responses { empty("Unlinked.") }
+    }
+    post("/api/v1/github/link/device") {
+        operationId = "startGitHubDeviceLink"; tag(ApiTags.GITHUB)
+        summary = "Start linking GitHub from a terminal"
+        description = "GitHub's device flow: open `verificationUri`, enter `userCode`, then poll " +
+            "`POST /api/v1/github/link/device/{id}` every `interval` seconds until `expiresAt`."
+        responses {
+            ok<GitHubDeviceLinkView>("The code to enter.", HttpStatusCode.Created)
+            conflict("No App is configured (`github_app_not_configured`), the App disables the device flow " +
+                "(`github_device_flow_disabled`), or it is misconfigured (`github_app_misconfigured`).")
+        }
+    }
+    post("/api/v1/github/link/device/{id}") {
+        operationId = "pollGitHubDeviceLink"; tag(ApiTags.GITHUB)
+        summary = "Check a device link"
+        description = "`status` is `pending` (poll again after `interval`), `linked` (with the link), `expired` or `denied`."
+        parameters { pathId("id", "The device link's identifier.") }
+        responses {
+            ok<GitHubDeviceLinkPollView>("The progress.")
+            notFound("No such device link (`github_link_not_found`).")
+            conflict("The GitHub account is already linked to another member (`github_account_in_use`).")
+        }
+    }
+    get("/api/v1/github/links") {
+        operationId = "listGitHubLinks"; tag(ApiTags.GITHUB)
+        summary = "Every member's GitHub link"
+        description = "Administrators only."
+        responses { ok<List<GitHubLinkView>>("The links.") }
+    }
+    get("/api/v1/github/links/{memberId}") {
+        operationId = "getMemberGitHubLink"; tag(ApiTags.GITHUB)
+        summary = "A member's GitHub link"
+        description = "Administrators only."
+        parameters { pathId("memberId", "The member's identifier.") }
+        responses {
+            ok<GitHubLinkView>("The link.")
+            notFound("No such member (`member_not_found`).")
+        }
+    }
+    delete("/api/v1/github/links/{memberId}") {
+        operationId = "unlinkMemberGitHub"; tag(ApiTags.GITHUB)
+        summary = "Unlink a member's GitHub account"
+        description = "Administrators only."
+        parameters { pathId("memberId", "The member's identifier.") }
+        responses {
+            empty("Unlinked.")
+            notFound("No such member (`member_not_found`).")
+        }
+    }
+}
