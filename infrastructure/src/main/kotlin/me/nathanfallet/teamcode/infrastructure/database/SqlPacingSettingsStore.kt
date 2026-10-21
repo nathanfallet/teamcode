@@ -16,12 +16,16 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
 
     override suspend fun save(actor: Principal, settings: PacingSettings): PacingSettings = database.query {
         actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
+        val previous = readPacingSettings(actor.teamId)
         PacingSettingsTable.upsert {
             it[teamId] = actor.teamId
             it[observationOnly] = settings.observationOnly
+            it[quotaPressurePercent] = settings.quotaPressurePercent
         }
-        audit(actor.teamId, actor.member.id,
+        if (settings.observationOnly != previous.observationOnly) audit(actor.teamId, actor.member.id,
             if (settings.observationOnly) "pacing.observation_enabled" else "pacing.enforcement_enabled", actor.teamId)
+        if (settings.quotaPressurePercent != previous.quotaPressurePercent) audit(actor.teamId, actor.member.id,
+            "pacing.quota_pressure_changed", "${actor.teamId}:${previous.quotaPressurePercent}->${settings.quotaPressurePercent}")
         settings
     }
 }
@@ -29,4 +33,4 @@ class SqlPacingSettingsStore(private val database: Database) : PacingSettingsSto
 /** Call inside the caller's transaction so mode and policy decisions share the same team lock. */
 internal fun readPacingSettings(teamId: String): PacingSettings = PacingSettingsTable.selectAll()
     .where { PacingSettingsTable.teamId eq teamId }.singleOrNull()
-    ?.let { PacingSettings(it[PacingSettingsTable.observationOnly]) } ?: PacingSettings()
+    ?.let { PacingSettings(it[PacingSettingsTable.observationOnly], it[PacingSettingsTable.quotaPressurePercent]) } ?: PacingSettings()

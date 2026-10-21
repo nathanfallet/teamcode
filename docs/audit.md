@@ -35,7 +35,7 @@ The API returns at most 50 events, newest identifier first. Response shape (even
 - Member allowance/concurrency/weight policy, pool budgets, model/effort/experimental settings and routing rule changes.
 - Group creation/policy/archive changes and assignments/removal/pause/resume. Assignment event subjects use `groupId/memberId`; the metadata field supports 100 characters. Group writes and their audit event commit together under the team lock. See [groups](groups.md).
 - Local agent-launch start/end and run policy changes (`run.started`, `run.ended`, `run.policy_updated`); no per-heartbeat journal entry.
-- Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`).
+- Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`) and quota pressure threshold changes (`pacing.quota_pressure_changed`).
 
 Account writes and their audit event commit in the same team-locked transaction. The write names either an authenticated principal or an explicit trusted system operation. Current interactive administrator permissions are checked again after provider identity verification and before any write or idempotency replay is returned. Revocation during a remote verification therefore prevents the later mutation. Repeating the same enrollment operation does not append a duplicate event; conflicting or denied writes append none. Repeating an unchanged handover state also appends none.
 
