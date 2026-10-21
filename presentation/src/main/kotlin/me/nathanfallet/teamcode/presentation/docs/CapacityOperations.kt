@@ -181,6 +181,18 @@ private fun ApiCatalog.allowanceOperations() {
             badRequest("An invalid provider, model, date or price, a duplicate row or more than 200 rows (`invalid_api_price`).")
         }
     }
+    post("/api/v1/policy/api-prices/load-defaults") {
+        operationId = "loadDefaultApiPrices"; tag(ApiTags.CAPACITY)
+        summary = "Load Anthropic's current list prices"
+        description = "Adds Anthropic's pay-as-you-go list prices for the current Claude models, as read from the public pricing " +
+            "page on the date the rows carry (cache writes at the five-minute rate). A row already present for the same model " +
+            "and date is kept, so loading twice changes nothing. No price applies until an administrator loads or enters it. " +
+            "Interactive administrators only; audited (`capacity.api_prices_defaults_loaded`)."
+        responses {
+            ok<ApiPriceTableView>("The table with the list prices added.")
+            badRequest("The table would exceed 200 rows (`invalid_api_price`).")
+        }
+    }
     get("/api/v1/quotas") {
         operationId = "listQuotas"; tag(ApiTags.CAPACITY)
         summary = "Provider quota windows"

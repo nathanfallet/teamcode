@@ -16,7 +16,10 @@ data class ApiPrice(
     val inputMicros: Long, val cacheWriteMicros: Long, val cacheReadMicros: Long, val outputMicros: Long,
 )
 
-/** The team's dated price table. TeamCode ships no built-in prices: list prices change, and a stale default would mislead. */
+/**
+ * The team's dated price table. No price applies until an administrator enters one or loads [AnthropicListPrices]
+ * (an explicit, audited action): list prices change, and a silent default would mislead.
+ */
 class ApiPriceTable(private val prices: List<ApiPrice>) {
     val isEmpty: Boolean get() = prices.isEmpty()
 
@@ -62,6 +65,43 @@ object ApiPrices {
             refuse("Each provider, model and effective date has one row.")
         return prices
     }
+
+    /** [current] plus the rows of [list] it lacks: a row already present for the same provider, model and day is kept as typed. */
+    fun withMissing(current: List<ApiPrice>, list: List<ApiPrice>): List<ApiPrice> = current + list.filterNot { row -> current.any { it.sameKey(row) } }
+}
+
+/**
+ * Anthropic's pay-as-you-go list prices, read on 2026-10-21 from https://platform.claude.com/docs/en/about-claude/pricing
+ * (first-party API rates, in micro-dollars per million tokens). Never applied on its own: an administrator loads it with
+ * `POST /api/v1/policy/api-prices/load-defaults` or the dashboard button, which adds these rows dated [CHECKED_ON_DAY].
+ * Cache writes use the 5-minute rate (1.25 × input; the ledger does not split 5-minute and 1-hour writes). Claude Haiku 5.5
+ * uses its rate for prompts up to 100,000 tokens. Retired models and limited-availability models (Mythos) are not listed.
+ * A new list is a new [CHECKED_ON_DAY], so loading it adds rows instead of rewriting past days.
+ */
+object AnthropicListPrices {
+    const val SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
+    /** 2026-10-21 as a UTC day number. */
+    const val CHECKED_ON_DAY = 20_747L
+
+    private fun row(model: String, input: Long, cacheWrite: Long, cacheRead: Long, output: Long) =
+        ApiPrice("anthropic", model, CHECKED_ON_DAY, input, cacheWrite, cacheRead, output)
+
+    val rows: List<ApiPrice> = listOf(
+        row("claude-fable-5-1", 10_000_000, 12_500_000, 250_000, 50_000_000),
+        row("claude-fable-5", 10_000_000, 12_500_000, 1_000_000, 50_000_000),
+        row("claude-opus-5-5", 4_000_000, 5_000_000, 200_000, 20_000_000),
+        row("claude-opus-5", 5_000_000, 6_250_000, 500_000, 25_000_000),
+        row("claude-opus-4-8", 5_000_000, 6_250_000, 500_000, 25_000_000),
+        row("claude-opus-4-7", 5_000_000, 6_250_000, 500_000, 25_000_000),
+        row("claude-opus-4-6", 5_000_000, 6_250_000, 500_000, 25_000_000),
+        row("claude-opus-4-5", 5_000_000, 6_250_000, 500_000, 25_000_000),
+        row("claude-sonnet-5-5", 2_000_000, 2_500_000, 100_000, 10_000_000),
+        row("claude-sonnet-5", 2_000_000, 2_500_000, 200_000, 10_000_000),
+        row("claude-sonnet-4-6", 3_000_000, 3_750_000, 300_000, 15_000_000),
+        row("claude-sonnet-4-5", 3_000_000, 3_750_000, 300_000, 15_000_000),
+        row("claude-haiku-5-5", 100_000, 125_000, 10_000, 500_000),
+        row("claude-haiku-4-5", 1_000_000, 1_250_000, 100_000, 5_000_000),
+    )
 }
 
 /** Tokens of one provider, model and UTC day, as the raw ledger stores them. */
@@ -98,6 +138,11 @@ interface ApiPriceStore {
     /** Removes the row of [provider], [model] and [effectiveFromDay], if any; implementations do it under the team lock. */
     suspend fun remove(actor: Principal, provider: String, model: String, effectiveFromDay: Long): List<ApiPrice> =
         replace(actor, list(actor).filterNot { it.provider == provider && it.model == model && it.effectiveFromDay == effectiveFromDay })
+    /**
+     * Adds the rows of [AnthropicListPrices] the table lacks (administrators only, audited); rows already present for the
+     * same model and day are kept, so loading twice changes nothing. Implementations do it under the team lock.
+     */
+    suspend fun loadDefaults(actor: Principal): List<ApiPrice> = replace(actor, ApiPrices.withMissing(list(actor), AnthropicListPrices.rows))
 }
 
 fun ApiPrice.sameKey(other: ApiPrice) = provider == other.provider && model == other.model && effectiveFromDay == other.effectiveFromDay

@@ -77,7 +77,7 @@ data class PoolSizeAccountView(
 /**
  * The automatic home pool size. [effectiveDailyUnits] is what admission uses now ([source] `automatic` or `manual`).
  * [estimatedDailyUnits] is the current estimate before smoothing, null with [reason] (`no_accounts`, `no_estimate`,
- * `no_priced_usage`, `incomplete_estimate`); [automaticDailyUnits] the stored, smoothed value written every ten minutes.
+ * `no_priced_usage`); [automaticDailyUnits] the stored, smoothed value written every ten minutes.
  */
 @Serializable
 data class PoolSizeView(

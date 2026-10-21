@@ -21,8 +21,11 @@ class SqlApiPriceStore(private val database: Database) : ApiPriceStore {
         current.filterNot { it.provider == provider && it.model == model && it.effectiveFromDay == effectiveFromDay }
     }
 
+    override suspend fun loadDefaults(actor: Principal): List<ApiPrice> =
+        edit(actor, "capacity.api_prices_defaults_loaded") { current -> ApiPrices.withMissing(current, AnthropicListPrices.rows) }
+
     /** The current table is read under the team lock, so concurrent administrators cannot drop each other's rows. */
-    private suspend fun edit(actor: Principal, change: (List<ApiPrice>) -> List<ApiPrice>): List<ApiPrice> = database.query {
+    private suspend fun edit(actor: Principal, action: String = "capacity.api_price_changed", change: (List<ApiPrice>) -> List<ApiPrice>): List<ApiPrice> = database.query {
         actor.requireAdmin()
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val previous = readApiPrices(actor.teamId)
@@ -35,7 +38,7 @@ class SqlApiPriceStore(private val database: Database) : ApiPriceStore {
             this[ApiPricesTable.cacheWriteMicros] = price.cacheWriteMicros; this[ApiPricesTable.cacheReadMicros] = price.cacheReadMicros
             this[ApiPricesTable.outputMicros] = price.outputMicros
         }
-        audit(actor.teamId, actor.member.id, "capacity.api_price_changed", "${actor.teamId}:${previous.size}->${next.size}")
+        audit(actor.teamId, actor.member.id, action, "${actor.teamId}:${previous.size}->${next.size}")
         next
     }
 

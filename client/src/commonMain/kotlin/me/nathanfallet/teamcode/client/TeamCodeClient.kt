@@ -115,6 +115,8 @@ class TeamCodeClient(
     /** The team's dated API price table (`usage:read`); saving replaces the whole table and needs an interactive administrator. */
     suspend fun apiPrices(): ApiPriceTableView = request("/api/v1/policy/api-prices", HttpMethod.Get)
     suspend fun saveApiPrices(table: ApiPriceTableView): ApiPriceTableView = request("/api/v1/policy/api-prices", HttpMethod.Put, table)
+    /** Adds Anthropic's current list prices, dated the day they were read, keeping rows already present (administrators). */
+    suspend fun loadDefaultApiPrices(): ApiPriceTableView = request("/api/v1/policy/api-prices/load-defaults", HttpMethod.Post)
     /** Controller configuration is managed with an interactive administrator login. */
     suspend fun pacingSettings(): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Get)
     suspend fun savePacingSettings(settings: PacingSettingsView): PacingSettingsView = request("/api/v1/policy/pacing", HttpMethod.Put, settings)

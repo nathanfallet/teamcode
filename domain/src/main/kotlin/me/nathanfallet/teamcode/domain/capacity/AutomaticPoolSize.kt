@@ -92,8 +92,6 @@ data class PoolSizeEstimate(val dailyMicros: Long, val dailyUnits: Long?, val ac
         const val NO_ACCOUNTS = "no_accounts"
         const val NO_ESTIMATE = "no_estimate"
         const val NO_PRICED_USAGE = "no_priced_usage"
-        /** An account that can serve has no figure yet: counting it as zero would undersize the pool. */
-        const val INCOMPLETE = "incomplete_estimate"
     }
 }
 
@@ -107,8 +105,8 @@ data class PoolSizeEstimate(val dailyMicros: Long, val dailyUnits: Long?, val ac
  * - seven-day term: the remaining points × C7 spread over the days left before the reset (seven when it is unknown); when the reset
  *   comes within the day, plus the share of a fresh window (threshold × C7 / 7 per day) for the hours after it.
  * The account counts the smaller term. A window the provider does not report does not bind; a window observed without an
- * estimate leaves the account without a figure, and then the whole pool has no automatic value ([PoolSizeEstimate.INCOMPLETE]):
- * counting it as zero would undersize the pool. Credits = micro-dollars × [creditsPerMicro].
+ * estimate, or no fresh observation at all, leaves the account without a figure, and it is left out of the sum. Only when
+ * no account has a figure is there no automatic value ([PoolSizeEstimate.NO_ESTIMATE]). Credits = micro-dollars × [creditsPerMicro].
  */
 class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = AccountHeadroomUseCase()) {
     fun size(
@@ -126,7 +124,6 @@ class SizeSharedPoolUseCase(private val headroom: AccountHeadroomUseCase = Accou
         val micros = counted.sumOf { it.dailyMicros }
         val reason = when {
             counted.isEmpty() -> PoolSizeEstimate.NO_ESTIMATE
-            shares.any { it.status == PoolContribution.NO_ESTIMATE || it.status == PoolContribution.NO_FRESH_OBSERVATION } -> PoolSizeEstimate.INCOMPLETE
             creditsPerMicro == null -> PoolSizeEstimate.NO_PRICED_USAGE
             else -> null
         }
