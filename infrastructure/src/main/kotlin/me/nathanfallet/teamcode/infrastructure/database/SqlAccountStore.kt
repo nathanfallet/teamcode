@@ -11,7 +11,7 @@ import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
-class SqlAccountStore(private val database: Database, private val cipher: CredentialCipher) : AccountStore {
+class SqlAccountStore(private val database: Database, private val cipher: CredentialCipher) : AccountStore, AccountEmailStore {
     private val merge = MergeAccountUseCase()
     private fun identityFilter(identity: AccountIdentity) = (Accounts.teamId eq identity.teamId) and (Accounts.provider eq identity.provider) and
         (Accounts.providerAccountId eq identity.accountId) and (Accounts.organizationId eq identity.organizationId)
@@ -43,6 +43,10 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
         EnrollmentOperations.insert { it[teamId] = identity.teamId; it[EnrollmentOperations.operationId] = operationId; it[requestHash] = hash; it[accountId] = account.id; it[created] = existing == null }
         audit(identity.teamId, actorId, if (existing == null) "account.enrolled" else "account.credentials_updated", account.id)
         if (existing == null) EnrollmentResult.Created(account) else EnrollmentResult.Updated(account)
+    }
+    /** Fills a missing display address only; an address already known is never replaced and credentials are untouched. */
+    override suspend fun recordEmail(identity: AccountIdentity, accountId: String, email: String): Boolean = database.query {
+        Accounts.update({ (Accounts.id eq accountId) and identityFilter(identity) and Accounts.email.isNull() }) { it[Accounts.email] = email } == 1
     }
     override suspend fun list(teamId: String): List<AccountRecord> = database.query { Accounts.selectAll().where { Accounts.teamId eq teamId }.orderBy(Accounts.displayName).limit(1000).map(::accountRecord) }
     override suspend fun configure(author: AccountMutationActor, teamId: String, id: String, displayName: String, disabled: Boolean, priority: Int, poolId: String?): AccountRecord = database.query {

@@ -15,7 +15,8 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 class CodexTransport(private val http: HttpClient) : ProviderTransport {
     override val provider = "codex"
     override val protocol = WireProtocol.RESPONSES
-    override suspend fun refresh(previous: ProviderCredentials): ProviderCredentials = http.preparePost("https://auth.openai.com/oauth/token") {
+    override suspend fun refresh(previous: ProviderCredentials): ProviderCredentials = renew(previous).credentials
+    override suspend fun renew(previous: ProviderCredentials): RefreshedCredentials = http.preparePost("https://auth.openai.com/oauth/token") {
         contentType(ContentType.Application.Json)
         timeout { requestTimeoutMillis = 15_000 }
         setBody(buildJsonObject {
@@ -29,7 +30,8 @@ class CodexTransport(private val http: HttpClient) : ProviderTransport {
         val refresh = (value["refresh_token"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: previous.refreshToken
         val seconds = (value["expires_in"] as? JsonPrimitive)?.longOrNull
         if (access.isNullOrBlank() || seconds == null || seconds !in 1..31_536_000) throw TeamFailure("refresh_failed", 503, "Codex returned incomplete credentials.")
-        ProviderCredentials(access, refresh, System.currentTimeMillis() + seconds * 1000)
+        RefreshedCredentials(ProviderCredentials(access, refresh, System.currentTimeMillis() + seconds * 1000),
+            CodexTokenClaims.reported((value["id_token"] as? JsonPrimitive)?.contentOrNull, access))
     }
     internal suspend fun usageDocument(accountId: String, credentials: ProviderCredentials): JsonObject = http.prepareGet("https://chatgpt.com/backend-api/wham/usage") {
         bearerAuth(credentials.accessToken); header("ChatGPT-Account-Id", accountId)
