@@ -108,6 +108,15 @@ private fun ApiCatalog.allowanceOperations() {
             conflict("The pool is a shared overflow reserve and cannot be a primary pool (`overflow_primary_pool`).")
         }
     }
+    get("/api/v1/pools/accounts") {
+        operationId = "listPoolAccounts"; tag(ApiTags.CAPACITY)
+        summary = "List the pool accounts the caller can use"
+        description = "The subscription accounts of the caller's pool and of the shared overflow pools it opted into, " +
+            "with their current provider windows and whether they can serve now. `unavailableReason` is one of `disabled`, " +
+            "`pending_handover`, `reconnect_required`, `cooling_down` or `quota_exhausted`. Interactive administrators see " +
+            "every account with its name and email; members and service keys see neutral labels."
+        responses { ok<List<PoolAccountStatusView>>("The accounts, by priority.") }
+    }
     get("/api/v1/pools/budgets") {
         operationId = "listPoolBudgets"; tag(ApiTags.CAPACITY)
         summary = "List the pool budgets"
