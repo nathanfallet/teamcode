@@ -111,7 +111,7 @@ internal fun settingsContent(actor: Principal, features: Set<DashboardFeature>):
         add(Triple("/dashboard/password", "Password", "Change your password; every device is signed out."))
         if (on(DashboardFeature.DEVICES)) add(Triple("/dashboard/devices", "Devices", "Rename or sign out the computers using your account."))
         if (on(DashboardFeature.SERVICE_KEYS)) add(Triple("/dashboard/service-keys", "Service keys", "Scoped keys for CI that share your quotas."))
-        if (on(DashboardFeature.GITHUB) && (on(DashboardFeature.CLOUD_RUNNING) || actor.member.role.isAdministrator)) add(Triple("/dashboard/github", "GitHub link", "The GitHub account your cloud sessions use."))
+        if (on(DashboardFeature.GITHUB)) add(Triple("/dashboard/github", "GitHub link", "The GitHub account your cloud sessions use."))
         if (on(DashboardFeature.CAPACITY) && !actor.member.role.isAdministrator) add(Triple("/dashboard/capacity", "Your quota", "Your daily allowance and concurrency, set by an administrator."))
     }
     val teamSection = if (actor.member.role.isAdministrator && team.isNotEmpty()) "<h2>Team-wide</h2>" + entries(team) else ""

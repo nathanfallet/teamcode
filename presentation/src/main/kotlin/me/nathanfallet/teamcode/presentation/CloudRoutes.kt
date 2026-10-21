@@ -68,13 +68,16 @@ private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifie
  * (empty segments skipped, each segment percent-decoded); a segment that cannot be decoded is refused.
  */
 internal fun cloudStartsWork(method: String, path: String): Boolean {
+    // Most requests (inference included) are outside /api and /dashboard: skip the segment parse for them.
+    val first = path.trimStart('/').substringBefore('/')
+    if (first != "api" && first != "dashboard" && '%' !in first) return false
     // null marks a segment that cannot be decoded: it matches anything, so a malformed spelling of a gated route is
     // refused, while malformed paths elsewhere are left to routing.
     val segments = path.split('/').filter { it.isNotEmpty() }.map { segment -> try { segment.decodeURLPart() } catch (_: Exception) { null } }
     fun matches(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || segments[it] == null || segments[it] == pattern[it] }
     fun under(vararg prefix: String) = segments.size > prefix.size && prefix.indices.all { segments[it] == null || segments[it] == prefix[it] }
     return (method == "POST" && WORK_ROUTES.any { matches(*it) }) || under("api", "v1", "github", "link") ||
-        matches("dashboard", "github", "link") || matches("dashboard", "github", "callback")
+        matches(*GITHUB_LINK_PATH.split('/').filter { it.isNotEmpty() }.toTypedArray())
 }
 
 /** Every `POST` that starts or keeps up new cloud work; reads, pauses, interrupts and deletions are not listed on purpose. */

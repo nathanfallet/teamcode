@@ -104,6 +104,8 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
         private val image = Regex("[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,511}")
         private val binary = Regex("/[A-Za-z0-9._/+-]{1,255}")
         private val httpsOrigin = Regex("https://[^/?#@\\s]+/?")
+        private val dottedQuad = Regex("(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])")
+        private val ipv6Literal = Regex("[0-9a-f:.]{2,45}")
 
         fun normalize(runtime: CloudRuntime) = runtime.copy(
             runnerImage = runtime.runnerImage?.trim()?.takeIf { it.isNotEmpty() },
@@ -131,12 +133,13 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, val publicOrigin
             val authority = url.removePrefix("https://").trimEnd('/').substringAfterLast('@')
             val host = (if (authority.startsWith("[")) authority.substringAfter('[').substringBefore(']') else authority.substringBefore(':')).lowercase().trimEnd('.')
             if (host.isEmpty() || host == "localhost" || host.endsWith(".localhost")) return false
-            // Only literal addresses are parsed, so no name is ever resolved here.
-            val literal = ':' in host || host.all { it.isDigit() || it == '.' }
-            if (!literal) return true
-            // Short numeric spellings (2130706433, 127.1) and out-of-range octets are refused rather than handed to the
-            // resolver, which would look them up as names.
-            if (':' !in host && host.split('.').let { parts -> parts.size != 4 || parts.any { it.isEmpty() || it.length > 3 || it.toInt() > 255 } }) return false
+            // A name never ends with a label starting with an ASCII digit; such a host is an address spelling. Only a plain
+            // ASCII dotted quad or IPv6 literal is accepted, and only those reach the parser, so no name is ever resolved
+            // here; short, hexadecimal, octal (leading zero) or non-ASCII-digit spellings are refused.
+            val ipv6 = ':' in host
+            if (!ipv6 && host.substringAfterLast('.').firstOrNull()?.let { it in '0'..'9' } != true) return true
+            if (ipv6 && !ipv6Literal.matches(host)) return false
+            if (!ipv6 && !dottedQuad.matches(host)) return false
             val address = try { java.net.InetAddress.getByName(host) } catch (_: Exception) { return false }
             return !address.isLoopbackAddress && !address.isAnyLocalAddress
         }

@@ -10,6 +10,7 @@ import me.nathanfallet.teamcode.domain.github.*
 import me.nathanfallet.teamcode.domain.team.*
 
 internal const val GITHUB_CALLBACK_PATH = "/dashboard/github/callback"
+internal const val GITHUB_LINK_PATH = "/dashboard/github/link"
 private const val BROWSER_COOKIE = "teamcode_github_link"
 
 private fun GitHubApp?.view(callbackUrl: String) = GitHubAppView(this != null, this?.appId, this?.clientId, this?.slug, this?.name, this?.version, this?.updatedAt, callbackUrl)
@@ -59,7 +60,7 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
         val own = github.status(actor)
         val member = when {
             !call.cloudEnabled() && own.link != null -> """<p>Cloud sessions are turned off. Your GitHub account <strong>${escape(own.link!!.identity.login)}</strong> is still linked.</p><form action="/dashboard/github/unlink" method="post">${csrf(actor)}<button>Unlink GitHub</button></form>"""
-            !call.cloudEnabled() && !administrator -> throw TeamFailure("not_found", 404, "Cloud sessions are disabled on this server.")
+            !call.cloudEnabled() && !administrator -> "<p>Cloud sessions are turned off on this server. You can link your GitHub account once they are on.</p>"
             !call.cloudEnabled() -> "<p>Cloud sessions are turned off (<a href=\"/dashboard/cloud\">Cloud sessions</a>). Members can link their GitHub account once they are on.</p>"
             !own.appConfigured -> "<p>Your administrator has not configured the team's GitHub App yet.</p>"
             own.state == GitHubLinkState.LINKED && own.link != null -> """<p>Linked as <strong>${escape(own.link!!.identity.login)}</strong> since ${escape(Instant.fromEpochMilliseconds(own.link!!.linkedAt).toString())}. Your cloud sessions use this account for Git and <code>gh</code>.</p><form action="/dashboard/github/unlink" method="post">${csrf(actor)}<button>Unlink GitHub</button></form>"""
@@ -81,7 +82,7 @@ internal fun Route.githubRoutes(github: GitHubLinkService, team: TeamService, pu
         } else ""
         call.respondText(call.page("GitHub", member + administration), ContentType.Text.Html)
     }
-    post("/dashboard/github/link") {
+    post(GITHUB_LINK_PATH) {
         call.form(origin)
         val link = github.startWeb(call.principal, callback)
         // Lax, unlike the session cookie: it must come back on GitHub's top-level redirect to the callback.

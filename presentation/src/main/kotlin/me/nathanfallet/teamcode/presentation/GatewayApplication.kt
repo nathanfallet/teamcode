@@ -35,7 +35,6 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
     val cloudOn: () -> Boolean = { cloudRuntime?.enabled ?: true }
     // The runner channel answers only once a runtime is stored: a server that never used cloud sessions exposes none of it.
-    val cloudManaged: () -> Boolean = { cloudRuntime == null || cloudRuntime.current.updatedAt != null }
     attributes.put(CLOUD_ENABLED, cloudOn)
     install(io.ktor.server.resources.Resources)
     install(ContentNegotiation) { json(Serialization.json) }
@@ -104,10 +103,11 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 finish()
             }
         }
-        // After authentication, so the state is not disclosed to anonymous callers: while cloud sessions are off, only
-        // requests that start new work are refused; reading, stopping and configuring stay available.
+        // After authentication, and only on authenticated routes, so the state is not disclosed to anonymous callers:
+        // while cloud sessions are off, only requests that start new work are refused; reading, stopping and configuring
+        // stay available. The runner channel and the GitHub callback authenticate themselves and are never gated: no
+        // pod exists before a runtime is stored, and a callback only completes a link started while cloud sessions were on.
         if (!cloudOn() && !call.response.isCommitted && cloudStartsWork(call.request.httpMethod.value, path)) throw TeamFailure("not_found", 404, "Cloud sessions are turned off on this server.")
-        if (!cloudManaged() && !call.response.isCommitted && path.startsWith(RUNNER_PATH)) throw TeamFailure("not_found", 404, "Not found.")
     }
     // The menu mirrors the route registrations below, so it never links to a page this server does not serve.
     attributes.put(DASHBOARD_FEATURES, buildSet {

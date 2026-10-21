@@ -84,7 +84,13 @@ fun main() {
         }
     }
     // Cloud sessions are configured on the dashboard; the former variables only seed an empty database.
-    val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also { runBlocking { it.start(initialCloudRuntime()) }; it.launch(workers) }
+    val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also {
+        // The seed is a convenience: a database error here is reported and the stored runtime is reread later.
+        try { runBlocking { it.start(initialCloudRuntime()) } }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) { System.err.println("TeamCode could not seed the cloud runtime from the environment: ${error.message}") }
+        it.launch(workers)
+    }
     val team = database?.let { SqlTeamService(it) }
     val runs = database?.let { me.nathanfallet.teamcode.infrastructure.database.AgentRunServiceImpl(it) }
     val reconciliation = database?.let { me.nathanfallet.teamcode.infrastructure.database.UsageReconciliationServiceImpl(it) }

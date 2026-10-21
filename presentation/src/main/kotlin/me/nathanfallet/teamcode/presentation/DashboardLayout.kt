@@ -54,7 +54,7 @@ internal val DASHBOARD_MENU = listOf(
     DashboardSection("Settings", listOf(
         SETTINGS_LINK,
         DashboardLink("/dashboard/cloud", "Cloud sessions", "Turn cloud sessions on, choose the runner image, connect Kubernetes clusters, and set retention, limits and transfers.", DashboardFeature.CLOUD, adminOnly = true),
-        DashboardLink("/dashboard/github", "GitHub", "The team's GitHub App, and the GitHub account your cloud sessions use.", DashboardFeature.GITHUB, memberFeature = DashboardFeature.CLOUD_RUNNING),
+        DashboardLink("/dashboard/github", "GitHub", "The team's GitHub App, and the GitHub account your cloud sessions use.", DashboardFeature.GITHUB),
         DashboardLink("/dashboard/devices", "Devices", "The computers signed in to your account, and their sessions.", DashboardFeature.DEVICES),
         DashboardLink("/dashboard/service-keys", "Service keys", "Scoped keys for CI and services, sharing your quotas.", DashboardFeature.SERVICE_KEYS),
         DashboardLink("/dashboard/password", "Password", "Change your password; every device is signed out."),

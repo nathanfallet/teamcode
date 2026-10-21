@@ -172,7 +172,7 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `GET /cloud/transfers` | `direction=incoming\|outgoing\|all`, `scope=team` (administrators), `state` (repeatable), `session`, `before`, `limit` â‰¤ 50 | Both members, administrator | Implemented |
 | `GET /cloud/transfers/{id}`; `POST .../accept` (`{resume?}`), `.../decline`, `.../cancel` | Read and decide | Recipient (accept, decline), former owner (cancel an offer), administrator (all) | Implemented |
 
-While cloud sessions are off, the requests that start new work answer `404` after authentication: creating a session, resuming, sending a message, attaching, offering or accepting a transfer, and starting a GitHub link (device flow, web flow and its callback), whatever the path spelling (the gate reads the path the way routing matches it). Reading, pausing, interrupting and deleting sessions, declining or cancelling transfers, unlinking GitHub, configuration and the runner channel stay available, so existing sessions can always be stopped and running pods keep their channel. A session that was already starting when cloud sessions were turned off finishes starting; queued messages do not wake paused sessions while they are off. The runner channel answers only once a runtime is stored, so a server that never used cloud sessions exposes none of it. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
+While cloud sessions are off, the requests that start new work answer `404` after authentication: creating a session, resuming, sending a message, attaching, offering or accepting a transfer, and starting a GitHub link (device flow and web flow; the callback, which authenticates itself, completes a link started while cloud sessions were on), whatever the path spelling (the gate reads the path the way routing matches it). Reading, pausing, interrupting and deleting sessions, declining or cancelling transfers, unlinking GitHub, configuration and the runner channel stay available, so existing sessions can always be stopped and running pods keep their channel. No new pod starts while they are off: a session still queued waits until they are on again, and queued messages do not wake paused sessions. Routes that authenticate themselves (the runner channel, the GitHub callback) are never gated, so an anonymous caller cannot learn whether cloud sessions are on. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
 
 ### Create request and view
 
@@ -451,7 +451,7 @@ Then save the App id, client id, client secret and private key on **Dashboard â†
 
 ### Routes under `/api/v1/github`
 
-Advertised by `github.link.v1` while cloud sessions are on. While they are off, starting a new link answers `404`; reading and removing one's own link still work (`GET`/`DELETE /github/link`, and the dashboard's GitHub page for a member who has a link). Interactive logins only: service and CI keys are refused.
+Advertised by `github.link.v1` while cloud sessions are on. While they are off, starting a new link answers `404`; reading and removing one's own link still work (`GET`/`DELETE /github/link`, and the dashboard's GitHub page, which stays in every member's menu). Interactive logins only: service and CI keys are refused.
 
 | Route | Purpose | Authorization |
 | --- | --- | --- |

@@ -102,8 +102,8 @@ class CloudRuntimeRoutesTest {
             contentType(ContentType.Application.FormUrlEncoded); setBody(body)
         }
 
-        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/runner/heartbeat") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("{}") }.status,
-            "No runner channel before a runtime is stored")
+        assertEquals(HttpStatusCode.Unauthorized, client.post("/api/v1/cloud/runner/heartbeat") { contentType(ContentType.Application.Json); setBody("{}") }.status,
+            "An anonymous caller learns nothing about the cloud state")
         // Off: no capability, sessions answer 404, configuration stays available to administrators.
         assertTrue(features().none { it.startsWith("cloud.") })
         assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions") { bearerAuth("admin"); header("Idempotency-Key", "k1"); contentType(ContentType.Application.Json); setBody("{}") }.status)
@@ -171,13 +171,13 @@ class CloudRuntimeRoutesTest {
         for ((method, path) in listOf("POST" to "/api/v1/cloud/sessions", "POST" to "/api/v1/cloud/sessions/s1/resume", "POST" to "/api/v1/cloud/sessions/s1/messages",
             "POST" to "/api/v1/cloud/sessions/s1/attachments", "POST" to "/api/v1/cloud/sessions/s1/attachments/a1/renew", "POST" to "/api/v1/cloud/sessions/s1/transfer", "POST" to "/api/v1/cloud/transfers/t1/accept",
             "POST" to "//api/v1/cloud/sessions", "POST" to "/api/v1//cloud/sessions", "POST" to "/api/v1/cl%6Fud/sessions", "POST" to "/api/v1/cloud/%ZZ",
-            "POST" to "/api/v1/github/link/device", "POST" to "/api/v1/github//link/device/abc", "GET" to GITHUB_CALLBACK_PATH, "POST" to "/dashboard/github/link"))
+            "POST" to "/api/v1/github/link/device", "POST" to "/api/v1/github//link/device/abc", "POST" to "/dashboard/github/link", "POST" to "/%61pi/v1/cloud/sessions"))
             assertTrue(cloudStartsWork(method, path), "$method $path")
         for ((method, path) in listOf("GET" to "/api/v1/cloud/sessions", "GET" to "/api/v1/cloud/sessions/s1", "POST" to "/api/v1/cloud/sessions/s1/pause",
             "POST" to "/api/v1/cloud/sessions/s1/interrupt", "DELETE" to "/api/v1/cloud/sessions/s1", "GET" to "/api/v1/cloud/sessions/s1/events",
             "POST" to "/api/v1/cloud/transfers/t1/decline", "PUT" to "/api/v1/cloud/runtime", "POST" to "/api/v1/cloud/clusters", "GET" to "/api/v1/cloud/profiles",
             "POST" to "/api/v1/cloud/runner/register", "POST" to "/api/v1/cloud/runner/heartbeat", "POST" to "/api/v1/cloud/runner/inputs",
-            "GET" to "/api/v1/github/link", "DELETE" to "/api/v1/github/link", "POST" to "/dashboard/github/unlink", "GET" to "/dashboard/github", "GET" to "/api/v1/capabilities",
+            "GET" to "/api/v1/github/link", "DELETE" to "/api/v1/github/link", "POST" to "/dashboard/github/unlink", "GET" to "/dashboard/github", "GET" to "/api/v1/capabilities", "GET" to GITHUB_CALLBACK_PATH, "POST" to "/v1/messages",
             // A malformed path outside cloud routes is left to routing.
             "GET" to "/dashboard/%ZZ", "POST" to "/v1/messages%zz", "GET" to "/health/%"))
             assertFalse(cloudStartsWork(method, path), "$method $path")
@@ -197,6 +197,10 @@ class CloudRuntimeRoutesTest {
         refused(CloudRuntime(runnerBinary = "/opt/../teamcode"))
         refused(CloudRuntime(workspaceAccessMode = "ReadWriteMany"))
         refused(CloudRuntime(serverUrl = "http://teamcode.internal"))
+        for (spelling in listOf("https://0x7f.0.0.1", "https://0177.0.0.1", "https://127.000.0.1", "https://\u0661\u0662\u0667.0.0.1", "https://[::ffff:127.0.0.1]", "https://[fe80::1%25eth0]"))
+            refused(CloudRuntime(serverUrl = spelling))
+        CloudRuntimeService.validate(CloudRuntime(serverUrl = "https://10.0.0.5:8443"), origin)
+        CloudRuntimeService.validate(CloudRuntime(serverUrl = "https://teamcode.internal.example"), origin)
         for (loopback in listOf("https://LocalHost:8443", "https://0.0.0.0", "https://[0:0:0:0:0:0:0:1]", "https://[::]", "https://127.1", "https://2130706433", "https://api.localhost", "https://999.1.1.1", "https://256.0.0.1"))
             refused(CloudRuntime(serverUrl = loopback))
         CloudRuntimeService.validate(CloudRuntime(enabled = true, runnerImage = "runner:1", serverUrl = "https://teamcode.internal"), "http://localhost:8080")
