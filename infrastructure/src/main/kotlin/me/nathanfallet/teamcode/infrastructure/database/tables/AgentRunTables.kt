@@ -33,6 +33,15 @@ object AgentRuns : Table("agent_runs") {
     }
 }
 
+/** The same label model as `cloud_session_labels`: non-secret `key=value` pairs, filterable by exact match. */
+object AgentRunLabels : Table("agent_run_labels") {
+    val runId = reference("run_id", AgentRuns.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "agent_run_labels_run")
+    val key = varchar("label_key", 63)
+    val value = varchar("label_value", 256)
+    override val primaryKey = PrimaryKey(runId, key)
+    init { index("run_label_lookup", false, key, value) }
+}
+
 /** Native session and conversation hashes retain TeamClaude's distinction for subagent fan-out. */
 object RunConversations : Table("run_conversations") {
     val runId = reference("run_id", AgentRuns.id, onDelete = ReferenceOption.CASCADE)

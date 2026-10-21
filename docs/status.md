@@ -1,5 +1,9 @@
 # Implementation status
 
+## Run labels and `TEAMCODE_RUN_ID` (2026-10-21)
+
+`teamcode run claude|codex --label key=value` (repeatable) labels a launch with the cloud-session label model, shared through `LabelRules` in the domain. Labels travel in `StartRunRequest`, are stored in `agent_run_labels` (migration `V20261021180000`), returned by `GET /api/v1/runs` and `/runs/{id}`, and filterable with `GET /api/v1/runs?label=key=value` and `teamcode sessions list --label`; the capability is `team.runs.labels.v1`. Both agents now receive `TEAMCODE_RUN_ID` (the launch UUID); the cloud pod's agent container keeps its session identifier out by design. Evidence: `LabelRulesTest`, `RunLifecycleTest` (label parsing, start request, environment for Claude and Codex), `AgentRunRoutesTest` (typed client, filter, validation, capability) and `AgentRunPersistenceTest.labelsArePersistedReturnedFilteredAndBoundToTheLaunch` (MySQL, run in CI). The live Codex process environment was not exercised.
+
 ## Status fallback for 0.3.1 (2026-10-21)
 
 The 0.3.1 release run failed on the Windows smoke: `teamcode status` aborted because its fixture answers every unknown GET, including the new `GET /api/v1/capacity`, with a generic 200 body, and only `404`/`403` were tolerated, not a decoding failure. Only the gateway line is now required: the quota, pacing and account reads run together, and each failure leaves its section out with a reason (`not_served`, `unexpected_response`, `read_failed`) shown as an `unavailable` line and in the JSON `unavailable` map; cancellation still propagates. Evidence: the macOS ARM64 release binary from `main` exits 1 against a fixture with a generic body or invalid JSON (404 was already handled) and succeeds with the fix; the CLI JVM tests and the native `smoke-native`, `smoke-team`, `smoke-run` and `smoke-service` scripts pass; `smoke-windows` now asserts the fallback lines.
