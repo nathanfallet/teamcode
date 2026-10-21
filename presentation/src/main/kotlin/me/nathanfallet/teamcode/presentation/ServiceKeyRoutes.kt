@@ -42,7 +42,7 @@ internal fun Route.serviceKeyRoutes(keys: ServiceKeyService, origin: String) {
         post(base) {
             val input = call.form(origin.trimEnd('/'))
             val member = call.parameters["memberId"] ?: call.principal.member.id
-            val created = keys.create(call.principal, member, input["name"].orEmpty(), scopes(input.getAll("scope").orEmpty()), if (input["never"] != null) null else input["days"]?.toIntOrNull() ?: 0)
+            val created = keys.create(call.principal, member, input["name"].orEmpty(), scopes(input.getAll("scope").orEmpty()), if (input["never"] != null) null else if (input["days"].isNullOrBlank()) 30 else input["days"]?.toIntOrNull() ?: 0)
             call.respondText(call.page("Save your service key", """<p>This credential is shown only now. Save it in your CI secret store. It cannot be recovered later.</p><pre>${escape(created.accessToken)}</pre><a href="${keysPath(call.principal, member)}">Back to key metadata</a>"""), ContentType.Text.Html)
         }
         post("$base/{id}/revoke") {
