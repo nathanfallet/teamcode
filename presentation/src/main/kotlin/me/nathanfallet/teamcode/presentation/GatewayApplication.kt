@@ -23,6 +23,9 @@ import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.api.resources.*
 import me.nathanfallet.teamcode.domain.gateway.*
+import me.nathanfallet.teamcode.presentation.docs.API_DOCS_PATH
+import me.nathanfallet.teamcode.presentation.docs.API_OPENAPI_PATH
+import me.nathanfallet.teamcode.presentation.docs.apiDocsRoutes
 
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
@@ -70,7 +73,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             val runnerCall = cloudRunner != null && path.startsWith(RUNNER_PATH) && ".." !in path && '%' !in path && ';' !in path
             // GitHub's redirect back to the dashboard carries no session cookie (SameSite=Strict); the route checks its own state.
             val githubCallback = github != null && path == GITHUB_CALLBACK_PATH
-            if (!runnerCall && !githubCallback && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login")) {
+            if (!runnerCall && !githubCallback && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login", API_OPENAPI_PATH, API_DOCS_PATH)) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
                 val principal = credential?.let { team.authenticate(it) }
@@ -88,7 +91,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     }
                 }
             }
-        } else if (path !in setOf("/health", "/ready")) {
+        } else if (path !in setOf("/health", "/ready", API_OPENAPI_PATH, API_DOCS_PATH)) {
             val presented = call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer ") ?: ""
             val actual = MessageDigest.getInstance("SHA-256").digest(presented.toByteArray())
             if (!MessageDigest.isEqual(expected, actual)) {
@@ -152,6 +155,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 call.respond(HttpStatusCode.NoContent)
             }
         }
+        apiDocsRoutes(publicOrigin, inboundProtocols.map { it.path }.toSet())
         get("/health") { call.respondText("OK") }
         get("/ready") {
             if (readiness()) call.respondText("OK")
