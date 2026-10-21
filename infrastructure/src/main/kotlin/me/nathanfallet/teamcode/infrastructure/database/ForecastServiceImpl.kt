@@ -14,7 +14,7 @@ class ForecastServiceImpl(private val database: Database) : ForecastService {
         return database.query {
             lockTeam(actor.teamId); requireCurrent(this, actor)
             val now = nowMillis()
-            val columns = listOf(Accounts.id, Accounts.provider, Accounts.displayName, Accounts.state, Accounts.disabled, Accounts.poolId)
+            val columns = listOf(Accounts.id, Accounts.provider, Accounts.displayName, Accounts.state, Accounts.disabled, Accounts.poolId, Accounts.email)
             val listed = Accounts.select(columns).where { Accounts.teamId eq actor.teamId }.orderBy(Accounts.id).limit(65).map(::forecastAccount)
             val accounts = listed.take(64)
             val selected = if (accountId == null) accounts.firstOrNull() else Accounts.select(columns)
@@ -36,7 +36,7 @@ class ForecastServiceImpl(private val database: Database) : ForecastService {
     }
 }
 
-private fun forecastAccount(row: ResultRow) = ForecastAccount(row[Accounts.id], row[Accounts.provider], row[Accounts.displayName], row[Accounts.state], row[Accounts.disabled], row[Accounts.poolId])
+private fun forecastAccount(row: ResultRow) = ForecastAccount(row[Accounts.id], row[Accounts.provider], row[Accounts.displayName], row[Accounts.state], row[Accounts.disabled], row[Accounts.poolId], row[Accounts.email])
 
 /** Shared with the local execution-plan fixture so it analyzes the production query itself. */
 internal fun forecastHistoryQuery(accountId: String, now: Long, windowStarts: Map<String, Long>): Query {

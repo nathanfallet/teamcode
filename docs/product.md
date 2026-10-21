@@ -42,7 +42,7 @@ Implemented identity-management commands include `teamcode whoami`, `teamcode de
 
 Add, import and reconnect perform a server-side upsert using verified canonical provider identity, scoped to the team. Claude identity includes the organization when authorizations differ; display names/emails or TeamClaude row IDs are not enough. Preserve TeamCode account ID, history, pool, permissions, limits, priority, custom name and disabled state when updating credentials. Enforce uniqueness, idempotent retries and versioned credential updates. An invalid/stale import cannot replace working newer credentials. Resolve ambiguous identities through reconnection, not name guessing.
 
-Imports do not stop another program. Coordinate a refresh ownership handover before activation: two engines must not rotate the same refresh token. Account records can remain pending until the operator confirms handover. Do not mutate local Claude Code/Codex credential stores.
+Imports do not stop another program. Coordinate a refresh ownership handover before activation: two engines must not rotate the same refresh token. Imported account records remain pending until the operator confirms handover, from the CLI or the dashboard. An `accounts add` sign-in is TeamCode's own session and is active immediately. Accounts are shown as "Name (email)" when the provider reports an email, and by name alone otherwise. Do not mutate local Claude Code/Codex credential stores.
 
 ### Local proxy and service
 

@@ -113,6 +113,15 @@ code,pre{font-family:var(--mono);font-size:13px;color:var(--accent);background:v
 pre{display:block;padding:14px 16px;color:var(--text);white-space:pre-wrap;word-break:break-all}
 .notice{padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius);margin:16px 0}
 .notice p{margin:6px 0 0}
+.notice.warn{border-left-color:var(--warn)}.notice.danger{border-left-color:var(--danger);background:linear-gradient(90deg,rgba(255,107,107,.08),var(--panel) 40%)}
+details.confirm{margin-top:10px}
+details.confirm>summary{display:inline-block;cursor:pointer;list-style:none;font-weight:600;font-size:13px;padding:7px 12px;border-radius:10px;background:var(--warn);color:#2a2000}
+details.confirm>summary::-webkit-details-marker{display:none}
+details.confirm[open]>summary{margin-bottom:10px;filter:brightness(.9)}
+details.confirm form{max-width:520px;margin:0;padding:12px 14px;background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:12px}
+details.confirm p{margin:0 0 8px;font-size:13px}
+details.confirm label{display:flex;flex-direction:row;max-width:none}
+button.danger,td button.danger{background:var(--danger);color:#fff;border-color:transparent}
 table{width:100%;border-collapse:separate;border-spacing:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:0 0 18px}
 thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600;padding:12px 16px;background:var(--panel-2);border-bottom:1px solid var(--line)}
 tbody td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}

@@ -1,0 +1,1 @@
+ALTER TABLE accounts ADD email VARCHAR(320) NULL;

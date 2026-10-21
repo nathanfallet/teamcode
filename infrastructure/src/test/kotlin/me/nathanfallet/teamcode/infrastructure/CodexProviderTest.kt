@@ -16,8 +16,8 @@ import me.nathanfallet.teamcode.infrastructure.providers.*
 import kotlin.test.*
 
 class CodexProviderTest {
-    private fun credentials(account: String = "workspace-1") = ProviderCredentials(
-        "header." + Base64.getUrlEncoder().withoutPadding().encodeToString("""{"https://api.openai.com/auth":{"chatgpt_account_id":"$account"}}""".toByteArray()) + ".signature",
+    private fun credentials(account: String = "workspace-1", profile: String = "") = ProviderCredentials(
+        "header." + Base64.getUrlEncoder().withoutPadding().encodeToString("""{"https://api.openai.com/auth":{"chatgpt_account_id":"$account"}$profile}""".toByteArray()) + ".signature",
         "refresh-secret", Long.MAX_VALUE)
     @Test fun remoteIdentityMustMatchAccountHint() = runBlocking {
         val http = HttpClient(MockEngine { request ->
@@ -28,7 +28,12 @@ class CodexProviderTest {
         http.use {
             val account = CodexAccountVerifier(it).verify("team", credentials())
             assertEquals(AccountIdentity("team", "codex", "user-1", "workspace-1"), account.identity)
+            assertNull(account.email)
+            assertEquals("grace@example.com", CodexAccountVerifier(it).verify("team", credentials(profile = ""","https://api.openai.com/profile":{"email":"grace@example.com"}""")).email,
+                "Without an email in the usage document, the token's profile claim names the account")
         }
+        val withEmail = HttpClient(MockEngine { respond("""{"account_id":"workspace-1","user_id":"user-1","email":"ada@example.com"}""", headers = headersOf(HttpHeaders.ContentType, "application/json")) }) { install(HttpTimeout) }
+        withEmail.use { assertEquals("ada@example.com", CodexAccountVerifier(it).verify("team", credentials(profile = ""","https://api.openai.com/profile":{"email":"other@example.com"}""")).email) }
         val mismatch = HttpClient(MockEngine { respond("""{"account_id":"different","user_id":"user-1"}""") }) { install(HttpTimeout) }
         mismatch.use { assertFailsWith<TeamFailure> { CodexAccountVerifier(it).verify("team", credentials()) } }
     }

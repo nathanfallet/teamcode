@@ -32,7 +32,7 @@ class OAuthEnrollmentClient(private val provider: OAuthEnrollmentProvider, creat
         val refresh = (value["refresh_token"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
         val seconds = (value["expires_in"] as? JsonPrimitive)?.longOrNull
         require(!access.isNullOrBlank() && !refresh.isNullOrBlank() && seconds != null && seconds in 1..31_536_000) { "Invalid token response." }
-        EnrollAccountRequest(access, refresh, Clock.System.now().toEpochMilliseconds() + seconds * 1000, operationId, provider.provider)
+        EnrollAccountRequest(access, refresh, Clock.System.now().toEpochMilliseconds() + seconds * 1000, operationId, provider.provider, freshSignIn = true)
     }
     override fun close() = http.close()
 }

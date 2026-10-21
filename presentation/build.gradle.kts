@@ -28,3 +28,11 @@ tasks.register<JavaExec>("previewForecastDashboard") {
     mainClass.set("me.nathanfallet.teamcode.presentation.ForecastPreviewKt")
     args(layout.buildDirectory.file("preview/forecasts.html").get().asFile.absolutePath)
 }
+tasks.register<JavaExec>("previewAccountsDashboard") {
+    group = "verification"
+    description = "Render the real subscription accounts page with synthetic pending accounts into build/preview/accounts.html"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("me.nathanfallet.teamcode.presentation.AccountsPreviewKt")
+    args(layout.buildDirectory.file("preview/accounts.html").get().asFile.absolutePath)
+}

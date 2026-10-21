@@ -27,6 +27,12 @@ class ClaudeAccountVerifier(private val http: HttpClient) : AccountVerifier {
         if (accountId.isNullOrBlank() || organizationId.isNullOrBlank() || accountId.length > 128 || organizationId.length > 128) throw TeamFailure("provider_verification_failed", 422, "Claude did not return an account and organization identity.")
         if ((account["has_claude_max"] as? JsonPrimitive)?.booleanOrNull != true) throw TeamFailure("max_subscription_required", 422, "This account does not report a Claude Max subscription.")
         val label = (account["display_name"] as? JsonPrimitive)?.contentOrNull ?: "Claude Max"
-        VerifiedProviderAccount(AccountIdentity(teamId, "anthropic", accountId, organizationId), label.filter { !it.isISOControl() }.take(120))
+        val email = providerEmail((account["email"] as? JsonPrimitive)?.contentOrNull)
+        VerifiedProviderAccount(AccountIdentity(teamId, "anthropic", accountId, organizationId), label.filter { !it.isISOControl() }.take(120), email)
     }
+}
+
+/** A provider-reported address kept for display only; anything that does not look like one is dropped, never an error. */
+internal fun providerEmail(value: String?): String? = value?.trim()?.takeIf {
+    it.length in 3..MAX_ACCOUNT_EMAIL && it.count { c -> c == '@' } == 1 && !it.startsWith('@') && !it.endsWith('@') && it.none { c -> c.isWhitespace() || c.isISOControl() }
 }

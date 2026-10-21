@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 internal fun PendingUsage.view() = PendingUsageView(id, memberId, username, accountId, accountName, provider, providerRequestId,
-    poolId, runId, dayNumber, units, state, createdAtMillis, leaseExpiresAtMillis, sourcePoolId)
+    poolId, runId, dayNumber, units, state, createdAtMillis, leaseExpiresAtMillis, sourcePoolId, accountEmail)
 internal fun ReconciledUsage.view() = ReconciledUsageView(id, memberId, accountId, poolId, runId, dayNumber, providerRequestId,
     previousState, previousUnits, actualUnits, source.name, reference, reason, actorId, reconciledAtMillis, groupIds, sourcePoolId)
 internal fun usageEvidence(value: String) = UsageEvidence.entries.find { it.name == value }

@@ -3,7 +3,7 @@ package me.nathanfallet.teamcode.domain.capacity
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Public administration metadata only; credentials and provider identities are never selected. */
-data class ForecastAccount(val id: String, val provider: String, val displayName: String, val state: String, val disabled: Boolean, val poolId: String?)
+data class ForecastAccount(val id: String, val provider: String, val displayName: String, val state: String, val disabled: Boolean, val poolId: String?, val email: String? = null)
 
 /** An observed window, its disconnected history segments and the controller's window estimator. */
 data class ForecastSeries(val quota: AccountQuota, val forecast: QuotaForecast, val segments: List<List<AccountQuota>>) {

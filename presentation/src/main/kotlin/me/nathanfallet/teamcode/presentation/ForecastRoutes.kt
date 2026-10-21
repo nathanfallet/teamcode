@@ -29,7 +29,7 @@ internal fun ApplicationCall.singleForecastAccount(): String? {
     return accounts.single()
 }
 
-private fun ForecastAccount.view() = ForecastAccountView(id, provider, displayName, state, disabled, poolId)
+private fun ForecastAccount.view() = ForecastAccountView(id, provider, displayName, state, disabled, poolId, email)
 private fun ForecastSnapshot.view() = ForecastSnapshotView(generatedAtMillis, accounts.map { it.view() }, account?.view(), windows.map { series ->
     with(series) { ForecastWindowView(quota.window, quota.utilization, quota.observedAtMillis, quota.resetsAtMillis, forecast.state.name,
         forecast.pointsPerHour, forecast.reachesThresholdAtMillis,

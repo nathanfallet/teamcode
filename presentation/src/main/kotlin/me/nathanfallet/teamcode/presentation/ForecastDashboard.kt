@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import me.nathanfallet.teamcode.api.models.accountLabel
 import me.nathanfallet.teamcode.domain.capacity.*
 
 private fun decimal(value: Double) = String.format(Locale.ROOT, "%.1f", value)
@@ -11,7 +12,7 @@ private fun timestamp(value: Long?) = value?.let { Instant.ofEpochMilli(it).toSt
 
 /** Options are rendered once by the server and reused by its authenticated live snapshot stream. */
 internal fun forecastAccountOptions(snapshot: ForecastSnapshot) = snapshot.accounts.joinToString("") {
-    """<option value="${escape(it.id)}" ${if (it.id == snapshot.account?.id) "selected" else ""}>${escape(it.displayName)} · ${escape(it.provider)}</option>"""
+    """<option value="${escape(it.id)}" ${if (it.id == snapshot.account?.id) "selected" else ""}>${escape(accountLabel(it.displayName, it.email))} · ${escape(it.provider)}</option>"""
 }
 
 /** Progressive enhancement preserves manual refresh when scripting is disabled or unavailable. */

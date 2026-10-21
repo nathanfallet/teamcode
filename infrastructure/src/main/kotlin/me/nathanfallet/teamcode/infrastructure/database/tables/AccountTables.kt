@@ -10,6 +10,7 @@ object Accounts : Table("accounts") {
     val providerAccountId = varchar("provider_account_id", 128)
     val organizationId = varchar("organization_id", 128)
     val displayName = varchar("display_name", 120)
+    val email = varchar("email", 320).nullable()
     val credentialVersion = long("credential_version")
     val credentialEnvelope = mediumText("credential_envelope")
     val disabled = bool("disabled").default(false)

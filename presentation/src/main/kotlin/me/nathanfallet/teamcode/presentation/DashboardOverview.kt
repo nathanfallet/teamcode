@@ -28,7 +28,8 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
     val now = System.currentTimeMillis()
     // A window whose reset has passed no longer describes the account; it is refreshed by the next request.
     val quotas = if (admin && admission != null) admission.quotas(actor).filter { (it.resetsAtMillis ?: Long.MAX_VALUE) > now } else emptyList()
-    val names = if (admin && quotas.isNotEmpty()) sources.accounts?.list(actor)?.associate { it.id to it.displayName }.orEmpty() else emptyMap()
+    val pool = if (admin) sources.accounts?.list(actor).orEmpty() else emptyList()
+    val names = pool.associate { it.id to it.label }
     val pressured = quotas.groupBy { it.accountId }.mapValues { (_, windows) -> windows.maxBy { it.utilization } }
         .values.sortedByDescending { it.utilization }
 
@@ -83,7 +84,7 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
 
     val left = consumption + pools
     val right = accounts + sessions
-    return summary + if (left.isEmpty() || right.isEmpty()) left + right else """<div class="grid-2"><div>$left</div><div>$right</div></div>"""
+    return handoverBanner(pool, onAccountsPage = false) + summary + if (left.isEmpty() || right.isEmpty()) left + right else """<div class="grid-2"><div>$left</div><div>$right</div></div>"""
 }
 
 /** Entry point listing every setting, grouped by scope; each link opens the page that already owns the setting. */

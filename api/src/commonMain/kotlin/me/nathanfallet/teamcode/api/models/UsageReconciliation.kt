@@ -8,7 +8,7 @@ data class UsageReconciliationRequest(val expectedUnits: Long, val actualUnits: 
 data class PendingUsageView(
     val id: String, val memberId: String, val username: String, val accountId: String, val accountName: String, val provider: String,
     val providerRequestId: String?, val poolId: String, val runId: String?, val dayNumber: Long, val units: Long,
-    val state: String, val createdAtMillis: Long, val leaseExpiresAtMillis: Long, val sourcePoolId: String = poolId,
+    val state: String, val createdAtMillis: Long, val leaseExpiresAtMillis: Long, val sourcePoolId: String = poolId, val accountEmail: String? = null,
 )
 @Serializable
 data class ReconciledUsageView(

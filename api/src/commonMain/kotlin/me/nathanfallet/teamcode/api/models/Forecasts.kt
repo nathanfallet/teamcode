@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /** Administrative account labels without provider identities or credentials. */
 @Serializable
-data class ForecastAccountView(val id: String, val provider: String, val displayName: String, val state: String, val disabled: Boolean, val poolId: String?)
+data class ForecastAccountView(val id: String, val provider: String, val displayName: String, val state: String, val disabled: Boolean, val poolId: String?, val email: String? = null)
 
 /** One real measurement; absent measurements are not represented by zeroes. */
 @Serializable

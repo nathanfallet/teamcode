@@ -22,12 +22,8 @@ class UnknownQuotaResetPersistenceTest {
             Database(container.jdbcUrl, container.username, container.password).use { a ->
             Database(container.jdbcUrl, container.username, container.password).use { b ->
                 val admin = seedLegacyAdministrator(a, "quota fixture replacement password").principal
-                val store = SqlAccountStore(a, CredentialCipher(ByteArray(32) { 19 }))
-                val account = (store.upsert(AccountMutationActor.System,
-                    VerifiedProviderAccount(AccountIdentity("default", "anthropic", "fixture-user", "fixture-org"), "Fixture account"),
-                    ProviderCredentials("synthetic-access", "synthetic-refresh", System.currentTimeMillis() + 3_600_000), null, "quota-fixture-enrollment"
-                ) as EnrollmentResult.Created).account
-                store.handover(AccountMutationActor.System, "default", account.id)
+                // Seed the account through the V9 schema too: current stores read columns that later migrations add.
+                val account = seedLegacyAccount(a, CredentialCipher(ByteArray(32) { 19 }), ProviderCredentials("synthetic-access", "synthetic-refresh", System.currentTimeMillis() + 3_600_000))
                 val first = SqlAdmissionStore(a)
                 val second = SqlAdmissionStore(b)
                 val now = a.query { nowMillis() }
@@ -84,4 +80,22 @@ private object LegacyQuotaWindowsV9 : Table("quota_windows") {
     val observedAt = long("observed_at")
     val resetsAt = long("resets_at")
     override val primaryKey = PrimaryKey(accountId, windowName)
+}
+
+private object LegacyAccountsV9 : Table("accounts") {
+    val id = varchar("id", 36); val teamId = varchar("team_id", 36); val provider = varchar("provider", 32)
+    val providerAccountId = varchar("provider_account_id", 128); val organizationId = varchar("organization_id", 128)
+    val displayName = varchar("display_name", 120); val credentialVersion = long("credential_version")
+    val credentialEnvelope = mediumText("credential_envelope"); val state = varchar("state", 32)
+}
+/** A refresh-owned account written with the V9 columns only, as an older server would have stored it. */
+private suspend fun seedLegacyAccount(database: Database, cipher: CredentialCipher, credentials: ProviderCredentials): AccountRecord = database.query {
+    val id = java.util.UUID.randomUUID().toString()
+    val payload = kotlinx.serialization.json.Json.encodeToString(CredentialPayload(credentials.accessToken, credentials.refreshToken, credentials.expiresAtMillis))
+    LegacyAccountsV9.insert {
+        it[LegacyAccountsV9.id] = id; it[teamId] = "default"; it[provider] = "anthropic"; it[providerAccountId] = "fixture-user"
+        it[organizationId] = "fixture-org"; it[displayName] = "Fixture account"; it[credentialVersion] = 1
+        it[credentialEnvelope] = cipher.encrypt(payload.toByteArray(), "default:$id"); it[state] = AccountState.READY.name
+    }
+    AccountRecord(id, AccountIdentity("default", "anthropic", "fixture-user", "fixture-org"), "Fixture account", 1, false, null, 0, AccountState.READY)
 }

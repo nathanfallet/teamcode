@@ -98,10 +98,10 @@ class UsageReconciliationServiceImpl(private val database: Database) : UsageReco
 
 private fun pendingUsageQuery() = Reservations.join(Members, JoinType.INNER, Reservations.memberId, Members.id)
     .join(Accounts, JoinType.INNER, Reservations.accountId, Accounts.id)
-    .select(Reservations.columns + listOf(Members.username, Accounts.displayName, Accounts.provider))
+    .select(Reservations.columns + listOf(Members.username, Accounts.displayName, Accounts.email, Accounts.provider))
 private fun pendingUsageRecord(row: ResultRow) = with(Reservations) {
     PendingUsage(row[id], row[memberId], row[Members.username], row[accountId], row[Accounts.displayName], row[Accounts.provider], row[providerRequestId],
-        row[poolId], row[runId], row[dayNumber], row[units], row[state], row[createdAt], row[expiresAt], row[sourcePoolId] ?: row[poolId])
+        row[poolId], row[runId], row[dayNumber], row[units], row[state], row[createdAt], row[expiresAt], row[sourcePoolId] ?: row[poolId], row[Accounts.email])
 }
 private fun reconciledUsageRecords(rows: List<ResultRow>): List<ReconciledUsage> {
     if (rows.isEmpty()) return emptyList()

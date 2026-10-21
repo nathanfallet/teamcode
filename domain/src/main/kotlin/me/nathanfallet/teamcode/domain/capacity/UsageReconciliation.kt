@@ -9,7 +9,7 @@ data class UsageReconciliationChange(val expectedUnits: Long, val actualUnits: L
 data class PendingUsage(
     val id: String, val memberId: String, val username: String, val accountId: String, val accountName: String, val provider: String,
     val providerRequestId: String?, val poolId: String, val runId: String?, val dayNumber: Long, val units: Long,
-    val state: String, val createdAtMillis: Long, val leaseExpiresAtMillis: Long, val sourcePoolId: String = poolId,
+    val state: String, val createdAtMillis: Long, val leaseExpiresAtMillis: Long, val sourcePoolId: String = poolId, val accountEmail: String? = null,
 )
 /** Durable correction metadata survives ordinary detailed-ledger retention. No prompt or response content. */
 data class ReconciledUsage(

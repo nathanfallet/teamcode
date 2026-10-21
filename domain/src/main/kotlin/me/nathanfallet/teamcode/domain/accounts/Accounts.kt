@@ -12,7 +12,11 @@ class ProviderCredentials(val accessToken: String, val refreshToken: String, val
     override fun toString(): String = "ProviderCredentials([REDACTED])"
 }
 
-data class VerifiedProviderAccount(val identity: AccountIdentity, val displayName: String)
+/** [email] is the address the provider reports for the subscription, when it reports one. */
+data class VerifiedProviderAccount(val identity: AccountIdentity, val displayName: String, val email: String? = null) {
+    init { require(email == null || (email.length <= MAX_ACCOUNT_EMAIL && email.none { it.isISOControl() })) }
+}
+const val MAX_ACCOUNT_EMAIL = 320
 data class AccountRecord(
     val id: String,
     val identity: AccountIdentity,
@@ -22,6 +26,8 @@ data class AccountRecord(
     val poolId: String?,
     val priority: Int,
     val state: AccountState,
+    /** Provider-reported email; null for accounts enrolled before it was recorded, until they are added or imported again. */
+    val email: String? = null,
 )
 enum class AccountState { PENDING_HANDOVER, READY, ACCESS_ONLY, RECONNECT_REQUIRED;
     val canServe: Boolean get() = this == READY || this == ACCESS_ONLY
@@ -37,10 +43,17 @@ sealed interface AccountMutationActor {
     data object System : AccountMutationActor
 }
 
+/**
+ * Where enrolled credentials come from. A [SIGN_IN] is an OAuth sign-in TeamCode ran itself (`teamcode accounts add`):
+ * nothing else holds that refresh token, so TeamCode owns it at once and the account serves requests immediately. An
+ * [IMPORT] reuses a session another tool may still refresh, so a new account waits for an explicit handover.
+ */
+enum class EnrollmentOrigin { SIGN_IN, IMPORT }
+
 interface AccountsRepository {
     suspend fun find(identity: AccountIdentity): AccountRecord?
     /** Must atomically enforce identity uniqueness, version and metadata-preserving updates. */
-    suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String): EnrollmentResult
+    suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String, origin: EnrollmentOrigin = EnrollmentOrigin.IMPORT): EnrollmentResult
 }
 
 sealed interface EnrollmentResult {

@@ -22,11 +22,12 @@ class Accounts : SuspendingNoOpCliktCommand(name = "accounts") {
 private fun randomCode() = secureRandomBytes(32).toByteString().base64().replace('+', '-').replace('/', '_').trimEnd('=')
 private class ListAccounts : SuspendingCliktCommand(name = "list") {
     override suspend fun run() { sdk(loadConfig()).use { client ->
-        client.accounts().forEach { echo("${it.id} | ${it.displayName} | ${it.state}${if (it.disabled) " | disabled" else ""}") }
+        client.accounts().forEach { echo("${it.id} | ${it.label} | ${it.state}${if (it.disabled) " | disabled" else ""}") }
     } }
 }
 private class AddAccount : SuspendingCliktCommand(name = "add") {
     private val providerName by option("--provider").choice("claude", "claude-max", "codex").default("claude")
+    private val noBrowser by option("--no-browser", help = "Print the sign-in link without opening a browser.").flag()
     override fun help(context: Context) = "Sign in to Claude or Codex locally, then send verified credentials to your TeamCode server. Existing accounts are updated without replacing their settings."
     override suspend fun run() {
         val config = loadConfig()
@@ -37,14 +38,20 @@ private class AddAccount : SuspendingCliktCommand(name = "add") {
             val state = randomCode()
             val challenge = verifier.encodeToByteArray().toByteString().sha256().base64().replace('+', '-').replace('/', '_').trimEnd('=')
             val url = provider.authorizationUrl(state, challenge)
-            echo("Open this URL in your browser and sign in. ${provider.pasteInstructions}")
+            echo("Sign in with the browser. ${provider.pasteInstructions}")
             echo(url)
+            if (!noBrowser) {
+                val command = browserCommand(hostOs(), url, ::environment)
+                if (command == null) echo("No local browser here: open the link above on any device.")
+                else if (!openBrowser(command)) echo("Could not open a browser: open the link above by hand.")
+            }
             val paste = Terminal().readLineOrNull(hideInput = true)?.trim().orEmpty()
             val code = provider.parseCode(paste, state)
             val input = OAuthEnrollmentClient(provider) { configure -> HttpClient() { configure(this) } }.use { it.exchange(code, state, verifier, randomCode()) }
             val result = client.enrollAccount(input)
-            echo("${if (result.created) "Added" else "Updated"} ${result.account.displayName} (${result.account.id}).")
-            echo("Stop any other refresher for this account, then run: teamcode accounts handover ${result.account.id} --confirm")
+            echo("${if (result.created) "Added" else "Updated"} ${result.account.label}, id ${result.account.id}.")
+            if (result.account.state == "PENDING_HANDOVER") echo("Stop any other refresher for this account, then run: teamcode accounts handover ${result.account.id} --confirm")
+            else echo("TeamCode owns this sign-in: the account serves requests now (state ${result.account.state}).")
         }
     }
 }
@@ -76,7 +83,7 @@ private class ImportAccounts : SuspendingCliktCommand(name = "import") {
                     val credentials = entry.credentials
                     val result = client.enrollAccount(EnrollAccountRequest(credentials.accessToken, credentials.refreshToken, credentials.expiresAtMillis, randomCode(), credentials.provider))
                     if (takeOwnership || accessOnly) client.handoverAccount(result.account.id, accessOnly)
-                    echo("${if (result.created) "Added" else "Updated"} ${result.account.displayName} (${result.account.id}).")
+                    echo("${if (result.created) "Added" else "Updated"} ${result.account.label}, id ${result.account.id}.")
                 } catch (error: TeamCodeException) { failed++; echo("Failed ${entry.label}: server returned HTTP ${error.statusCode}. Reconnect expired accounts with accounts add.") }
             }
         }
@@ -97,6 +104,6 @@ private class Handover : SuspendingCliktCommand(name = "handover") {
     private val confirm by option("--confirm", help = "Confirm no other process will refresh this account's tokens.").flag()
     override suspend fun run() {
         require(confirm) { "Stop other refreshers first, then pass --confirm." }
-        sdk(loadConfig()).use { echo("Account ${it.handoverAccount(id).id} is now owned by TeamCode.") }
+        sdk(loadConfig()).use { client -> client.handoverAccount(id).let { echo("${it.label}, id ${it.id}, is now owned by TeamCode.") } }
     }
 }
