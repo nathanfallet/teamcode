@@ -88,24 +88,27 @@ class SqlTeamEventStore(private val database: Database) : TeamEventStore {
  * Only the last day is scanned (an index range on the heartbeat): an older silent run is long past being news.
  */
 class SqlRunStaleSweep(private val database: Database) {
-    suspend fun sweep(limit: Int = 200): Int = database.query {
-        val now = nowMillis()
+    suspend fun sweep(limit: Int = 200): Int {
+        val now = database.query { nowMillis() }
         val newest = now - AgentRunService.HEARTBEAT_TTL_MILLIS
         val oldest = now - 24 * 3_600_000L
-        val rows = AgentRuns.selectAll().where {
-            AgentRuns.endedAt.isNull() and (AgentRuns.heartbeatAt less newest) and (AgentRuns.heartbeatAt greater oldest) and
-                (AgentRuns.staleNotifiedAt.isNull() or (AgentRuns.staleNotifiedAt less AgentRuns.heartbeatAt))
-        }.orderBy(AgentRuns.teamId to SortOrder.ASC).limit(limit).toList()
+        val rows = database.query {
+            AgentRuns.selectAll().where {
+                AgentRuns.endedAt.isNull() and (AgentRuns.heartbeatAt less newest) and (AgentRuns.heartbeatAt greater oldest) and
+                    (AgentRuns.staleNotifiedAt.isNull() or (AgentRuns.staleNotifiedAt less AgentRuns.heartbeatAt))
+            }.limit(limit).toList()
+        }
         var reported = 0
-        for (row in rows) {
+        // One short transaction per run: the team's cursor lock is held only for one publish, after the run's own row.
+        for (row in rows) database.query {
             // Conditional on the heartbeat we read: a run that beat meanwhile is not stale.
             val marked = AgentRuns.update({ (AgentRuns.id eq row[AgentRuns.id]) and AgentRuns.endedAt.isNull() and (AgentRuns.heartbeatAt eq row[AgentRuns.heartbeatAt]) }) { it[staleNotifiedAt] = now }
-            if (marked != 1) continue
+            if (marked != 1) return@query
             publishTeamEvent(row[AgentRuns.teamId], TeamEventType.RUN_STALE, row[AgentRuns.id], row[AgentRuns.memberId], buildJsonObject {
                 put("runId", row[AgentRuns.id]); put("agent", row[AgentRuns.agent]); put("workload", row[AgentRuns.workload]); put("lastHeartbeatAt", row[AgentRuns.heartbeatAt])
             }, now)
             reported++
         }
-        reported
+        return reported
     }
 }

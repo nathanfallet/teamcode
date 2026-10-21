@@ -125,7 +125,8 @@ class TeamEventService(private val store: TeamEventStore, private val sleep: sus
         if (after != null && after > head) throw TeamFailure("invalid_cursor", 400, "This cursor is ahead of the team's events. Reconnect without Last-Event-ID.")
         val oldest = store.oldest(principal.teamId)
         // Events between the client's cursor and the oldest retained one were purged: say so instead of skipping silently.
-        val purged = if (after != null && after > 0 && oldest != null && after < oldest - 1) oldest else null
+        // When every event of the team was purged, the history restarts after the head.
+        val purged = if (after == null || after <= 0) null else if (oldest == null) head + 1 else if (after < oldest - 1) oldest else null
         return TeamEventFeed(principal, audience, store, types, after ?: head, purged, sleep)
     }
 
@@ -154,7 +155,7 @@ object TeamEventRules {
             if (action == "cloud.session.woken") add(TeamEventType.SESSION_WOKEN)
             if (before == after) return@buildList
             when {
-                after == CloudSessionState.PAUSED -> add(TeamEventType.SESSION_PAUSED)
+                after == CloudSessionState.PAUSED && before != CloudSessionState.TRANSFERRING -> add(TeamEventType.SESSION_PAUSED)
                 before == CloudSessionState.RESUMING && after == CloudSessionState.READY -> add(TeamEventType.SESSION_RESUMED)
                 after.terminal -> add(TeamEventType.SESSION_ENDED)
             }

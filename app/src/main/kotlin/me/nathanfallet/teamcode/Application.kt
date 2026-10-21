@@ -90,7 +90,7 @@ fun main() {
         val feed = me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)
         workers.launch {
             while (isActive) {
-                try { work.runDue("team-events", intervalMillis = 30_000) { stale.sweep(); feed.purge(1_000) } }
+                try { work.runDue("team-events/stale", intervalMillis = 30_000) { stale.sweep() }; work.runDue("team-events/purge", intervalMillis = 60_000) { feed.purge(1_000) } }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode event feed maintenance deadline exceeded.") }
                 catch (error: CancellationException) { throw error }
                 catch (_: Exception) { System.err.println("TeamCode event feed maintenance is temporarily unavailable.") }

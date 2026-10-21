@@ -28,13 +28,17 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         var last = cursor?.get(CloudSessionTranscripts.lastSeq) ?: 0L
         val start = last
         val now = nowMillis()
+        val turns = mutableListOf<Pair<Long, String>>()
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
             if (event.sequence != through + 1) break // A gap: the runner resends from acceptedThrough + 1.
             insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data)
+            if (event.type == CloudEventType.TURN) turns += last to event.data
             through = event.sequence
         }
         if (last != start) saveCursor(sessionId, cursor != null, last, epoch, through)
+        // Last, so the team's cursor lock is taken after every other write of this transaction.
+        for ((seq, data) in turns) publishTurn(sessionId, teamId, seq, data, now)
         RunnerEventsAck(through, last)
     }
 
@@ -303,14 +307,16 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             it[CloudSessionEvents.epoch] = epoch; it[CloudSessionEvents.runnerSeq] = runnerSeq; it[CloudSessionEvents.type] = type.wire
             it[CloudSessionEvents.at] = at; it[CloudSessionEvents.data] = data
         }
-        if (type == CloudEventType.TURN) publishTurn(sessionId, teamId, seq, data, at)
     }
 
     /** `cloud.turn` in the team feed: the phase and where to read the transcript, never its text. Called under the session row lock. */
+    private val TURN_PHASES = setOf("started", "completed", "interrupted", "failed")
+
     private fun publishTurn(sessionId: String, teamId: String, seq: Long, data: String, at: Long) {
-        val phase = try { (Json.parseToJsonElement(data) as? JsonObject)?.get("phase")?.jsonPrimitive?.contentOrNull } catch (_: Exception) { null } ?: return
+        val phase = try { (Json.parseToJsonElement(data) as? JsonObject)?.get("phase")?.jsonPrimitive?.contentOrNull } catch (_: Exception) { null }
+        if (phase !in TURN_PHASES) return
         val owner = CloudSessions.select(CloudSessions.ownerId).where { CloudSessions.id eq sessionId }.single()[CloudSessions.ownerId]
-        publishTeamEvent(teamId, TeamEventType.CLOUD_TURN, sessionId, owner, buildJsonObject { put("sessionId", sessionId); put("phase", phase.take(32)); put("eventSeq", seq) }, at)
+        publishTeamEvent(teamId, TeamEventType.CLOUD_TURN, sessionId, owner, buildJsonObject { put("sessionId", sessionId); put("phase", phase); put("eventSeq", seq) }, at)
     }
 
     private fun saveCursor(sessionId: String, exists: Boolean, last: Long, epoch: Int, through: Long) {

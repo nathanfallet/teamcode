@@ -16,9 +16,10 @@ class TeamEventsTest {
         val events = mutableListOf<TeamEvent>()
         var oldestKept: Long? = null
         var revoked = false
+        var head: Long? = null
         fun add(type: TeamEventType, owner: String, subject: String = "s-$owner") = events.add(TeamEvent(events.size + 1L, type, subject, owner, 1_000, "{}"))
         override suspend fun revalidate(actor: Principal) { if (revoked) throw TeamFailure("unauthorized", 401, "Revoked.") }
-        override suspend fun head(teamId: String) = events.size.toLong()
+        override suspend fun head(teamId: String) = head ?: events.size.toLong()
         override suspend fun oldest(teamId: String) = oldestKept ?: events.firstOrNull()?.seq
         override suspend fun read(teamId: String, audience: TeamEventAudience, after: Long, types: Set<TeamEventType>?, limit: Int): TeamEventPage {
             val head = events.size.toLong()
@@ -47,6 +48,7 @@ class TeamEventsTest {
         assertEquals(emptyList(), of(READY, ACTIVE), "A turn is its own event, not a state event")
         assertEquals(emptyList(), of(CREATING, PREPARING))
         assertEquals(emptyList(), of(PAUSED, PAUSED), "A same-state write is silent")
+        assertEquals(emptyList(), of(TRANSFERRING, PAUSED), "A declined or cancelled transfer is not a new pause")
     }
 
     @Test fun audienceFollowsTheCredential() {
@@ -78,6 +80,8 @@ class TeamEventsTest {
         assertNull(service.open(principal(member), 0, null).oldestRetained, "0 asks for the whole retained history")
         journal.oldestKept = 5
         assertEquals(5L, service.open(principal(member), 2, null).oldestRetained)
+        journal.oldestKept = null; val emptied = Journal().apply { repeat(3) { add(TeamEventType.CLOUD_TURN, "member") } }; emptied.events.clear(); emptied.head = 10
+        assertEquals(11L, TeamEventService(emptied, sleep = {}).open(principal(member), 5, null).oldestRetained, "Everything was purged: the history restarts after the head")
         assertEquals(1, collect(service.open(principal(member), null, null), 1) { journal.add(TeamEventType.CLOUD_TURN, "member") }.size, "Without a cursor, only what comes next")
     }
 
