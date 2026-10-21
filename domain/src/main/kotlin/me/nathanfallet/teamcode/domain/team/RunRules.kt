@@ -30,10 +30,10 @@ class RunStateUseCase {
 data class RunPacingPolicy(val id: String, val policy: RunPolicy, val chargedUnits: Long)
 data class RunPacingLimits(val maxConcurrent: Int, val allowanceAvailable: Boolean, val contextKey: String)
 
-/** Only recent associated launches constrain a native-session directive; counters do not churn its key. */
+/** Only recent associated launches constrain a native-session directive; counters do not churn its key. A zero maximum is unlimited. */
 class CheckRunPacingUseCase {
     fun limits(runs: List<RunPacingPolicy>, maximum: Int) = RunPacingLimits(
-        minOf(maximum, runs.map { it.policy.maxConcurrent }.filter { it > 0 }.minOrNull() ?: maximum),
+        me.nathanfallet.teamcode.domain.capacity.concurrencyCeiling(runs.map { it.policy.maxConcurrent } + maximum),
         runs.all { !it.policy.paused && (it.policy.budgetUnits == 0L || it.chargedUnits < it.policy.budgetUnits) },
         runs.sortedBy { it.id }.joinToString("\n") { "${it.id}:${it.policy}" },
     )

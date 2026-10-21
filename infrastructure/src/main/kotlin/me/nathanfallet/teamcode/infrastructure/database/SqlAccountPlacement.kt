@@ -63,9 +63,9 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
             .maxOfOrNull { it.utilization } ?: 0.0
         if (utilization >= pressureThreshold) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
     }
-    val selector = SelectPoolAccountUseCase()
-    val chosen = selector.select(available.filter { it.activeRequests < 2 }, pins, policy.poolId)
-    val waiting = chosen ?: selector.select(available, pins, policy.poolId)
+    // No per-account parallelism limit, for any provider: a pinned conversation keeps its account, new ones go to the
+    // least loaded account, and quota pacing is what slows an account down.
+    val chosen = SelectPoolAccountUseCase().select(available, pins, policy.poolId)
     val standing = if (chosen != null) null else {
         var result = PoolStanding(input.provider)
         val next = mutableListOf<Long>()
@@ -81,14 +81,15 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
                     next += windows.maxOf { it.resetsAtMillis ?: (it.observedAtMillis + MAX_QUOTA_OBSERVATION_AGE_MILLIS) }
                     result.copy(quotaExhausted = result.quotaExhausted + 1)
                 }
-                // Already refused for this request by the provider, without a recorded cooldown.
-                null -> if (account.id in input.excludedAccountIds) result.copy(coolingDown = result.coolingDown + 1) else result.copy(busy = result.busy + 1)
+                // Already refused for this request by the provider (an exclusion), without a recorded cooldown: the only
+                // case left, since accounts have no parallelism limit.
+                else -> result.copy(coolingDown = result.coolingDown + 1)
             }
         }
         result.copy(nextAvailableAt = next.filter { it > now }.minOrNull())
     }
-    return Placement(chosen, available.isNotEmpty(), if (waiting == null) policy.poolId.orEmpty() else waiting.poolId.orEmpty(), standing)
+    return Placement(chosen, if (chosen == null) policy.poolId.orEmpty() else chosen.poolId.orEmpty(), standing)
 }
 
 /** [standing] explains an empty placement; it is computed only then. */
-internal data class Placement(val chosen: AccountRecord?, val hasAvailable: Boolean, val turnPool: String, val standing: PoolStanding? = null)
+internal data class Placement(val chosen: AccountRecord?, val turnPool: String, val standing: PoolStanding? = null)

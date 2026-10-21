@@ -128,10 +128,13 @@ class SharedOverflowPersistenceTest {
         failure("queue_turn") { a.reserveQueued(f.member, third, input) }
         val next = b.reserveQueued(f.admin, second, input)
         assertEquals(f.reserve, next.account.id)
-        failure("pool_busy") { a.reserveQueued(f.member, third, input) }
-        a.settle(held, 5, true); b.settle(next, 5, true)
+        // The busy reserve account takes the third request at once: accounts have no parallelism limit.
+        val extra = a.reserveQueued(f.member, third, input)
+        assertEquals(f.reserve, extra.account.id)
+        a.settle(held, 5, true); b.settle(next, 5, true); a.settle(extra, 5, true)
         a.configure(f.admin, MemberPolicy(f.member.member.id, 1000, 4, "home-a"))
-        failure("pool_unavailable") { a.reserveQueued(f.member, third, input) }; a.release(f.member, third)
+        val fourth = a.enqueue(f.member, input)
+        failure("pool_unavailable") { a.reserveQueued(f.member, fourth, input) }; a.release(f.member, fourth)
         assertEquals(0, a.capacity(f.member).queuedRequests)
         // An ineligible member's old turn cannot block eligible work until its poll happens.
         f.optIn()

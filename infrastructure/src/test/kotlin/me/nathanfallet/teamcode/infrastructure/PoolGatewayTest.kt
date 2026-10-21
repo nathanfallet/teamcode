@@ -92,7 +92,7 @@ class PoolGatewayTest {
         val queue = object : AdmissionQueueStore {
             override suspend fun enqueue(actor: Principal, input: AdmissionInput) = AdmissionTicket(input.model)
             override suspend fun reserveQueued(actor: Principal, ticket: AdmissionTicket, input: AdmissionInput): Reservation {
-                if (input.model == "claude-opus-test") throw TeamFailure("pool_busy", 429, "Busy")
+                if (input.model == "claude-opus-test") throw TeamFailure("queue_turn", 429, "Not your turn")
                 return store.reserve(actor, input.units, input.model, input.provider, input.excludedAccountIds, input.affinity)
             }
             override suspend fun renew(actor: Principal, ticket: AdmissionTicket, blocked: Boolean) { assertFalse(blocked) }

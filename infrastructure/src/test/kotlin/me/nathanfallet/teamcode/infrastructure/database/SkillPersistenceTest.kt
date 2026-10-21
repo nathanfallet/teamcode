@@ -115,10 +115,41 @@ class SkillPersistenceTest {
                 catalogA.store.pin(admin, "review", "1.0.0")
                 assertEquals(listOf("1.0.0"), catalogB.effective(member).map { it.version })
 
-                // A publishing key cannot administer the catalog, and its revocation is shared by every replica.
+                // CI pins what it publishes, in the publication transaction and with the same key; a retry changes nothing.
+                val auto = catalogA.publish(publisher, "review", "5.0.0", files("five"), pin = true)
+                assertTrue(auto.created); assertEquals("5.0.0", auto.skill.pinnedVersion); assertTrue(auto.version.id.isNotEmpty())
+                assertEquals(listOf("5.0.0"), catalogB.effective(member).map { it.version })
+                val retried = catalogB.publish(publisher, "review", "5.0.0", files("five"), pin = true)
+                assertFalse(retried.created); assertEquals("5.0.0", retried.skill.pinnedVersion)
+                failure("skill_version_conflict") { catalogB.publish(publisher, "review", "5.0.0", files("changed"), pin = true) }
+                failure("skill_version_retired") { catalogA.publish(publisher, "review", "2.0.0", files("two"), pin = true) }
+                failure("skill_version_retired") { catalogA.store.pin(publisher, "review", "2.0.0") }
+                assertEquals("5.0.0", catalogA.store.versions(admin, "review").first.pinnedVersion)
+                // Republishing an existing version with pin, or the pin route, is a rollback the key may make.
+                assertEquals("1.0.0", catalogB.publish(publisher, "review", "1.0.0", files("one", large), pin = true).skill.pinnedVersion)
+                assertEquals("5.0.0", catalogA.store.pin(publisher, "review", "5.0.0").pinnedVersion)
+                assertEquals("5.0.0", catalogB.store.pin(publisher, "review", "5.0.0").pinnedVersion)
+                // Each actual change is one audit event naming the key; interactive pins leave the credential empty.
+                val pins = a.query {
+                    AuditEvents.select(AuditEvents.subjectId, AuditEvents.credentialId).where { AuditEvents.action eq "skill.pinned" }
+                        .orderBy(AuditEvents.id to SortOrder.ASC).map { it[AuditEvents.credentialId] to it[AuditEvents.subjectId] }
+                }
+                assertEquals(listOf(publisher.tokenId to auto.version.id, publisher.tokenId to v1.version.id, publisher.tokenId to auto.version.id),
+                    pins.filter { it.first == publisher.tokenId })
+                assertTrue(pins.filter { it.first != publisher.tokenId }.all { it.first == null })
+                assertTrue(pins.any { it.first == null })
+                val published = a.query {
+                    AuditEvents.select(AuditEvents.subjectId).where { (AuditEvents.action eq "skill.version.published") and (AuditEvents.credentialId eq publisher.tokenId) }.map { it[AuditEvents.subjectId] }
+                }
+                assertEquals(listOf(v1.version.id, auto.version.id), published, "A key's publications name it; the administrator's 2.0.0 does not")
+
+                // A publishing key cannot otherwise administer the catalog, and its revocation is shared by every replica.
                 failure("forbidden") { catalogB.store.catalog(member) }
                 failure("credential_scope") { catalogB.store.catalog(publisher) }
-                failure("credential_scope") { catalogB.store.pin(publisher, "review", "1.0.0") }
+                failure("credential_scope") { catalogB.store.unpin(publisher, "review") }
+                failure("credential_scope") { catalogB.store.retire(publisher, "review") }
+                failure("forbidden") { catalogB.store.pin(member, "review", "1.0.0") }
+                failure("credential_scope") { catalogB.store.pin(inference, "review", "1.0.0") }
                 keys.revoke(admin, publisher.tokenId)
                 failure("authentication_required") { catalogB.publish(publisher, "review", "4.0.0", files("four")) }
 
@@ -126,7 +157,7 @@ class SkillPersistenceTest {
                 val actions = a.query { AuditEvents.select(AuditEvents.action, AuditEvents.subjectId).where { AuditEvents.action like "skill.%" }.map { it[AuditEvents.action] to it[AuditEvents.subjectId] } }
                 assertTrue(actions.map { it.first }.containsAll(listOf("skill.created", "skill.version.published", "skill.pinned", "skill.access.allowed",
                     "skill.access.denied", "skill.access.cleared", "skill.version.retired", "skill.unpinned", "skill.retired", "skill.restored")))
-                assertEquals(2, actions.count { it.first == "skill.version.published" }, "Idempotent and refused publications append nothing")
+                assertEquals(3, actions.count { it.first == "skill.version.published" }, "Idempotent and refused publications append nothing")
                 assertTrue(actions.all { (_, subject) -> subject.length == 36 })
                 // Access events name the assignment, which resolves to both the skill and the member, even once cleared.
                 val accessSubjects = actions.filter { it.first.startsWith("skill.access.") }.map { it.second }.toSet()
@@ -158,6 +189,44 @@ class SkillPersistenceTest {
                 assertTrue(catalog.publish(admin, "race", "V2", files("upper")).created)
                 catalog.store.pin(admin, "race", "V2")
                 assertEquals("V2", catalog.store.versions(admin, "race").first.pinnedVersion)
+            } }
+        }
+    }
+
+    @Test fun aPinningPublicationAndAVersionRetirementNeverLeaveARetiredVersionPinned() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                a.migrate(); b.migrate()
+                val team = SqlTeamService(a)
+                val initial = team.bootstrap()!!
+                team.changePassword(team.login("admin", initial, "fixture").principal, initial, "skill administrator password")
+                val admin = team.login("admin", "skill administrator password", "fixture").principal
+                val publisher = team.authenticate(SqlServiceKeyService(a).create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                val ci = SkillCatalog(SqlSkillStore(a)); val dashboard = SkillCatalog(SqlSkillStore(b))
+                repeat(20) { round ->
+                    val name = "race-$round"
+                    ci.publish(publisher, name, "1", files("one"), pin = true)
+                    ci.publish(publisher, name, "2", files("two"))
+                    // CI re-pins 2 by retrying its publication while an administrator retires 2: one of them wins, never both.
+                    val (published, retired) = listOf(
+                        async(Dispatchers.IO) { runCatching { ci.publish(publisher, name, "2", files("two"), pin = true) } },
+                        async(Dispatchers.IO) { runCatching { dashboard.store.retireVersion(admin, name, "2") } },
+                    ).awaitAll()
+                    val (skill, versions) = dashboard.store.versions(admin, name)
+                    val pinned = versions.single { it.version == skill.pinnedVersion }
+                    assertFalse(pinned.retired, "round $round: pinned ${skill.pinnedVersion} is retired")
+                    // Exactly one wins, and the other is refused for the reason the winner created.
+                    assertTrue(published.isSuccess != retired.isSuccess, "round $round: publication ${published.isSuccess}, retirement ${retired.isSuccess}")
+                    if (published.isSuccess) {
+                        assertEquals("2", skill.pinnedVersion)
+                        assertEquals("skill_version_pinned", (retired.exceptionOrNull() as TeamFailure).code)
+                    } else {
+                        assertEquals("1", skill.pinnedVersion)
+                        assertEquals("skill_version_retired", (published.exceptionOrNull() as TeamFailure).code)
+                    }
+                }
             } }
         }
     }

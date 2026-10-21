@@ -6,7 +6,8 @@ import org.jetbrains.exposed.v1.core.Table
 object MemberPolicies : Table("member_policies") {
     val memberId = reference("member_id", Members.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "member_policies_ibfk_1")
     val dailyUnits = long("daily_units").default(0)
-    val maxConcurrent = integer("max_concurrent").default(2)
+    // Zero disables the member concurrency limit.
+    val maxConcurrent = integer("max_concurrent").default(0)
     val poolId = varchar("pool_id", 36).nullable()
     val weight = integer("weight").default(1)
     val allowSharedOverflow = bool("allow_shared_overflow").default(false)
