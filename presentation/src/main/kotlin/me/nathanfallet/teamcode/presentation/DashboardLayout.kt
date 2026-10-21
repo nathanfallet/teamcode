@@ -41,7 +41,7 @@ internal val DASHBOARD_MENU = listOf(
     DashboardSection("Agents and MCP", listOf(
         DashboardLink("/dashboard/sessions", "Agent sessions", "Agent launches, their activity and their optional per-launch limits.", DashboardFeature.RUNS),
         DashboardLink("/dashboard/agent-guidance", "Agent guidance", "The pacing advice the server currently gives agents, and the controller mode.", DashboardFeature.GUIDANCE),
-        DashboardLink("/dashboard/skills", "Skills", "Published skills, pinned versions and who receives them.", DashboardFeature.SKILLS, adminOnly = true),
+        DashboardLink("/dashboard/skills", "Skills", "Published skills, pinned versions and who receives them.", DashboardFeature.SKILLS),
         DashboardLink("/dashboard/variants", "Variants", "Environment variables and MCP servers, and which members receive them.", DashboardFeature.VARIANTS, adminOnly = true),
         DashboardLink("/dashboard/mcp", "MCP gateway", "Tool policies, usage and the call journal of the MCP servers agents reach through TeamCode.", DashboardFeature.MCP, adminOnly = true),
     )),
@@ -78,7 +78,7 @@ internal fun ApplicationCall.page(title: String, content: String, lede: String? 
     }.joinToString("")
     val member = principal.member
     val sidebar = """<aside class="sidebar"><a class="brand" href="/dashboard"><span class="glyph" aria-hidden="true"></span><span class="brand-name">TeamCode</span></a><nav class="nav" aria-label="Dashboard">${item(OVERVIEW_LINK)}$sections</nav><div class="whoami"><span class="who">${escape(member.username)}</span><span class="chip">${escape(member.role.name.lowercase())}</span><form action="/dashboard/logout" method="post">${csrf(principal)}<button class="link">Sign out</button></form></div></aside>"""
-    val description = lede ?: active?.takeIf { it.path == path }?.description
+    val description = (lede ?: active?.takeIf { it.path == path }?.description)?.takeIf { it.isNotEmpty() }
     return pageShell(title, content, sidebar, description)
 }
 
@@ -222,7 +222,7 @@ internal fun units(value: Long): String = grouping.get().format(value)
 
 /** Short form for tight spaces: 333333 → "333k", 2500000 → "2.5M". */
 internal fun compactUnits(value: Long): String = when {
-    value >= 1_000_000 -> trimDecimal(value / 1_000_000.0) + "M"
+    value >= 999_500 -> trimDecimal(value / 1_000_000.0) + "M"
     value >= 1_000 -> trimDecimal(value / 1_000.0) + "k"
     else -> value.toString()
 }

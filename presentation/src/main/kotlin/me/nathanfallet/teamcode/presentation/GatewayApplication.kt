@@ -35,7 +35,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         exception<TeamFailure> { call, error ->
             if (call.response.isCommitted) throw error // A revoked/failed stream cannot become a replacement JSON response.
             if (error.status == 429) call.response.header(HttpHeaders.RetryAfter, "60")
-            if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>"), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
+            if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>", lede = ""), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }
         exception<CancellationException> { _, error -> throw error }

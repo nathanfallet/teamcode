@@ -22,20 +22,25 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
     val admission = sources.admission
     val people = if (admission == null) emptyList() else if (admin) team.members(actor) else listOf(actor.member)
     val capacities = people.map { it to admission!!.capacity(actor, it.id) }
-    val runs = sources.runs?.list(actor, null, all = admin)?.runs?.filter { it.state == RunState.RUNNING }
-    val quotas = if (admin && admission != null) admission.quotas(actor) else emptyList()
+    // The newest page of launches is the bounded read; a session running since before it is listed on the sessions page.
+    val launches = sources.runs?.list(actor, null, all = admin)
+    val runs = launches?.runs?.filter { it.state == RunState.RUNNING }
+    val now = System.currentTimeMillis()
+    // A window whose reset has passed no longer describes the account; it is refreshed by the next request.
+    val quotas = if (admin && admission != null) admission.quotas(actor).filter { (it.resetsAtMillis ?: Long.MAX_VALUE) > now } else emptyList()
     val names = if (admin && quotas.isNotEmpty()) sources.accounts?.list(actor)?.associate { it.id to it.displayName }.orEmpty() else emptyMap()
     val pressured = quotas.groupBy { it.accountId }.mapValues { (_, windows) -> windows.maxBy { it.utilization } }
         .values.sortedByDescending { it.utilization }
 
     val cards = buildList {
         if (admission != null) {
-            val used = capacities.sumOf { it.second.chargedAndReservedUnits }
-            val allowed = capacities.filterNot { it.first.disabled }.sumOf { it.second.dailyAllowanceUnits }
+            val enabled = capacities.filterNot { it.first.disabled }
+            val used = enabled.sumOf { it.second.chargedAndReservedUnits }
+            val allowed = enabled.sumOf { it.second.dailyAllowanceUnits }
             add(card(if (admin) "Team usage today" else "Your usage today", "<div class=\"big\">${compactUnits(used)}</div>" + meter(used, allowed, "of <strong>${units(allowed)}</strong> credits allocated")))
             add(card("Requests now", "<div class=\"big\">${capacities.sumOf { it.second.activeRequests }}</div><span class=\"meter-label\">active · ${capacities.sumOf { it.second.queuedRequests }} waiting</span>"))
         }
-        if (runs != null) add(card("Running sessions", "<div class=\"big\">${runs.size}</div><span class=\"meter-label\">${if (admin) "across the team" else "of yours"}</span>"))
+        if (runs != null) add(card("Running sessions", "<div class=\"big\">${runs.size}</div><span class=\"meter-label\">${if (admin) "across the team" else "of yours"}${if (launches.nextBeforeId != null) " · among the latest launches" else ""}</span>"))
         if (admin && admission != null) {
             val near = pressured.count { it.utilization >= PRESSURE }
             add(card("Accounts near their limit", "<div class=\"big\">$near</div><span class=\"meter-label\">of ${pressured.size} observed · ${percent(PRESSURE)} or more</span>"))
