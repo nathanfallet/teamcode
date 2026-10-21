@@ -16,7 +16,7 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Caller-wide SSE feed, webhooks | Planned |
 | Transfer: leases removed, unconsumed messages cancelled or kept, `transfer` event | Implemented, see [transfer](cloud-sessions.md#transfer) |
 
-The capabilities are advertised with `cloud.sessions.v1`, when cloud sessions are enabled.
+The capabilities are advertised with `cloud.sessions.v1`, while cloud sessions are on in the stored [runtime](cloud-sessions.md#runtime-on-off-runner-image-and-pod-callback).
 
 ## The agent in the pod
 

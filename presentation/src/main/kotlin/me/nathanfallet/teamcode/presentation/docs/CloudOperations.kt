@@ -21,6 +21,28 @@ private fun Parameters.Builder.sessionId() = pathId("id", "The cloud session's i
 private fun Parameters.Builder.onBehalfOf() = headerText("TeamCode-On-Behalf-Of", ON_BEHALF_TEXT)
 
 private fun ApiCatalog.cloudAdministration() {
+    get("/api/v1/cloud/runtime") {
+        operationId = "getCloudRuntime"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Whether cloud sessions are on, and how their pods are built"
+        description = "On or off, runner image and binary, the origin pods call back (`effectiveServerUrl` is the public URL " +
+            "when `serverUrl` is null) and the workspace access mode. Stored in the database and reachable while cloud " +
+            "sessions are off; no field is a credential. Administrators only."
+        responses { ok<CloudRuntimeView>("The runtime; `updatedAt` is null while nothing is stored.") }
+    }
+    put("/api/v1/cloud/runtime") {
+        operationId = "saveCloudRuntime"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "Turn cloud sessions on or off, or change how their pods are built"
+        description = "Replaces the whole runtime: every field is required, plus the `updatedAt` it was based on (null when " +
+            "nothing was stored yet). Turning cloud sessions on needs a runner image; a stored image needs an HTTPS, " +
+            "non-loopback callback origin and can be replaced but not removed. Every replica applies it within seconds. " +
+            "Administrators only."
+        body<CloudRuntimeView>("The runtime; `effectiveServerUrl` is ignored.")
+        responses {
+            ok<CloudRuntimeView>("The saved runtime.")
+            badRequest("An invalid image, binary path, origin or access mode, or a removed image (`invalid_cloud_runtime`).")
+            conflict("Another administrator saved the runtime since `updatedAt` (`cloud_runtime_conflict`).")
+        }
+    }
     get("/api/v1/cloud/settings") {
         operationId = "getCloudSettings"; tag(ApiTags.CLOUD_ADMIN)
         summary = "The cloud settings"

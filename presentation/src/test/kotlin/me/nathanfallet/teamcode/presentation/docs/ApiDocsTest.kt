@@ -56,7 +56,7 @@ class ApiDocsTest {
             audit = stub(), pacingSettings = stub(), forecasts = stub(), groups = stub(), runs = stub(), budgetOverrides = stub(),
             reconciliation = stub(), variants = stub(), skills = SkillCatalog(stub()),
             mcp = McpGateway(ResolveEffectiveVariantsUseCase(stub()), stub(), stub()), mcpAccess = stub(),
-            cloudSessions = sessions, cloudAdmin = CloudAdministrationService(stub(), cluster),
+            cloudRuntime = CloudRuntimeService(stub(), "https://teamcode.example.org"), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(stub(), cluster),
             cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(sessionStore), AuthenticateRunnerUseCase(sessionStore, cluster),
                 RunnerInferenceUseCase(sessionStore, stub()), RunnerGitHubUseCase(sessionStore, stub())),
             github = GitHubLinkService(stub(), stub(), stub()),
