@@ -105,6 +105,18 @@ class TeamHooksTest {
         assertFalse(fs.exists(root / "installed" / "stop-guard" / hooks[0].digest.removePrefix("sha256:")))
     }
 
+    @Test fun approvingInstallsFirstThenRecordsInTheSameNewHooksDirectory() = runTest {
+        // The order of `teamcode hooks approve`: verify and install, then record. The hooks directory does not exist yet.
+        val root = temporary() / "hooks"
+        val hook = fixture()
+        val approvals = HookApprovals(root / "approvals.json")
+        val sync = TeamHookSync({ listOf(hook.manifest()) }, { hook.artifact() }, approvals, LocalHookInstaller(root / "installed", makeExecutable = {}))
+        sync.ensure(hook.manifest())
+        approvals.record(hook.name, HookApproval(hook.digest, approved = true))
+        assertEquals(mapOf(hook.name to HookApproval(hook.digest, approved = true)), approvals.load())
+        assertEquals("stop-guard", sync.plan().installed.single().name)
+    }
+
     private fun installed(name: String, definition: HookDefinitionView) = InstalledHook(name, "1", "sha256:" + "0".repeat(64), definition, "/home/me/.config/teamcode/hooks/installed/$name/x/bin/it's.sh")
 
     @Test fun claudeGetsGuidanceAndTeamHooksInOnePluginWithQuotedCommands() {

@@ -76,6 +76,14 @@ internal class HookApprovals(private val file: Path, private val fileSystem: Fil
     fun load(): Map<String, HookApproval> = try {
         if (!fileSystem.exists(file)) emptyMap() else json.decodeFromString<Map<String, HookApproval>>(fileSystem.read(file) { readUtf8() })
     } catch (_: Exception) { emptyMap() }
+    /**
+     * Creates the approvals file, and so its directory, through a private write when it does not exist yet. Called
+     * before anything is installed under that directory: on Windows a private write refuses an existing directory the
+     * user does not own, and a directory created by another API under an elevated token belongs to Administrators.
+     */
+    fun prepare() {
+        if (!fileSystem.exists(file)) writePrivateFile(file.toString(), json.encodeToString(emptyMap<String, HookApproval>()))
+    }
     fun record(name: String, approval: HookApproval?) {
         val next = load().toMutableMap()
         if (approval == null) next.remove(name) else next[name] = approval
@@ -196,6 +204,8 @@ internal class TeamHookSync(
         installer.installed(hook.name, hook.digest, hook.definition)?.let { return it }
         val files = artifact(hook)
         HookDigest.problem(hook, files)?.let { throw IllegalStateException("The hook ${hook.name} was refused ($it).") }
+        // `hooks approve` installs before it records the approval: the hooks directory must already be private then.
+        approvals.prepare()
         return installer.install(files)
     }
 }

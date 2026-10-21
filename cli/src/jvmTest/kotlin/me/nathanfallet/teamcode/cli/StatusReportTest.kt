@@ -34,10 +34,11 @@ class StatusReportTest {
         val report = sdk(mapOf(gateway, capacity, accounts, directive), calls).use { readStatusReport(it) }
         assertEquals(4, report.capacity?.reservedUnits); assertEquals("Account 1", report.accounts?.single()?.label); assertNull(report.pacing)
         // The gateway is read first; the three sections are read concurrently, so their order is not part of the contract.
-        assertEquals("/api/v1/status", calls.first())
-        assertEquals(4, calls.size)
-        assertEquals(setOf("/api/v1/capacity", "/api/v1/directives/current", "/api/v1/pools/accounts"), calls.drop(1).toSet())
-        assertFalse(calls.any { it.startsWith("/api/v1/members/") || it == "/api/v1/quotas" || it == "/api/v1/accounts" })
+        val seen = synchronized(calls) { calls.toList() }
+        assertEquals("/api/v1/status", seen.first())
+        assertEquals(4, seen.size)
+        assertEquals(setOf("/api/v1/capacity", "/api/v1/directives/current", "/api/v1/pools/accounts"), seen.drop(1).toSet())
+        assertFalse(seen.any { it.startsWith("/api/v1/members/") || it == "/api/v1/quotas" || it == "/api/v1/accounts" })
     }
 
     @Test fun olderServersAndNarrowKeysStillShowWhatTheyServe() = runTest {
