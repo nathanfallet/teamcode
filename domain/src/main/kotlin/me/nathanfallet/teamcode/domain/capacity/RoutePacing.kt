@@ -6,7 +6,7 @@ import me.nathanfallet.teamcode.domain.routing.RouteTarget
 data class AccountPacing(val account: AccountRecord, val windows: List<WindowPacing>, val modelLimits: Map<String, String> = emptyMap())
 
 /** Capacity is specific to the target actually serving work, never a sum of unrelated plans. */
-class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase()) {
+class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase(), private val pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD) {
     fun advise(targets: Set<RouteTarget>, accounts: List<AccountPacing>, maximum: Int, now: Long, allowanceAvailable: Boolean = true, homePool: String? = null, preferHome: Boolean = false, pinnedAccountIds: Map<RouteTarget, Set<String>> = emptyMap()): PacingAdvice {
         if (!allowanceAvailable) return PacingAdvice(Pace.PAUSE, 1, 30_000,
             "An applicable member, group, run or pool allowance is unavailable, or admission is paused. Pause new work until capacity returns or access is reviewed.")
@@ -16,7 +16,7 @@ class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase()) {
             // Match placement priority. Idle low-priority capacity does not promise headroom
             // while requests still go to a pressured higher-priority account.
             val available = candidates.filter { account -> account.windows.none {
-                target.model != null && it.quota.appliesTo(target.model, account.modelLimits[target.model.lowercase()]) && it.quota.utilization >= .95 && it.quota.isCurrent(now)
+                target.model != null && it.quota.appliesTo(target.model, account.modelLimits[target.model.lowercase()]) && it.quota.utilization >= pressureThreshold && it.quota.isCurrent(now)
             } }
             val authorized = available.ifEmpty { candidates }
             val pinned = authorized.filter { candidate -> candidate.account.id in pinnedAccountIds[target].orEmpty() &&

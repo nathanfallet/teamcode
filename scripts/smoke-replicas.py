@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-replicas-') as directory:
         status, body = request(origins[1], '/api/v1/forecasts', token=token)
         forecast = json.loads(body)
         assert status == 200 and forecast['account'] is None and forecast['windows'] == []
-        assert forecast['pressureThreshold'] == .9 and not forecast['truncated']
+        assert forecast['pressureThreshold'] == .95 and not forecast['truncated']
         status, body = request(origins[0], '/dashboard/assets/forecasts.js', token=token, dashboard=True)
         assert status == 200 and 'new EventSource(url)' in body
         status, body = request(origins[1], '/dashboard/forecasts', token=token, dashboard=True)

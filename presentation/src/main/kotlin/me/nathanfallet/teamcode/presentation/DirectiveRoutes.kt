@@ -4,9 +4,7 @@ import io.ktor.http.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import me.nathanfallet.teamcode.api.models.*
-import me.nathanfallet.teamcode.domain.capacity.DirectiveService
-import me.nathanfallet.teamcode.domain.capacity.PacingSettings
-import me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore
+import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.team.Role
 
 internal fun Route.directiveRoutes(directives: DirectiveService, settings: PacingSettingsStore? = null) {
@@ -38,7 +36,7 @@ internal fun Route.directiveRoutes(directives: DirectiveService, settings: Pacin
         val policy = settings?.get(actor) ?: PacingSettings()
         val value = directives.preview(actor)
         val mode = if (policy.observationOnly) "Observation only" else "Predictive pacing enabled"
-        val controls = if (settings != null && actor.member.role.isAdministrator) """<form method="post" action="/dashboard/agent-guidance/pacing">${csrf(actor)}<label><input type="checkbox" name="observationOnly" ${if (policy.observationOnly) "checked" else ""}> Observation only</label><p>Keep collecting forecasts without predictive admission delays or sending advice to agents. Member budgets, concurrency, pool isolation and provider quota exclusions remain enforced. Previously emitted advice cannot be recalled.</p><button>Save controller mode</button></form>""" else ""
+        val controls = if (settings != null && actor.member.role.isAdministrator) """<form method="post" action="/dashboard/agent-guidance/pacing">${csrf(actor)}<label><input type="checkbox" name="observationOnly" ${if (policy.observationOnly) "checked" else ""}> Observation only</label><p>Keep collecting forecasts without predictive admission delays or sending advice to agents. Member budgets, concurrency, pool isolation and provider quota exclusions remain enforced. Previously emitted advice cannot be recalled.</p><p><label>Quota pressure threshold (%) <input type="number" name="quotaPressurePercent" value="${policy.quotaPressurePercent}" min="$MIN_QUOTA_PRESSURE_PERCENT" max="$MAX_QUOTA_PRESSURE_PERCENT" step="1" required></label></p><p>When a provider window (five-hour, seven-day or model) reaches this share of its quota, the account is no longer chosen for new requests, conversations pinned to it move to another account, and forecasts and pacing treat the window as exhausted. Allowed from $MIN_QUOTA_PRESSURE_PERCENT to $MAX_QUOTA_PRESSURE_PERCENT; the default is $DEFAULT_QUOTA_PRESSURE_PERCENT.</p><button>Save controller settings</button></form>""" else ""
         val content = if (value == null) "<div class='empty'><strong>No fresh guidance yet. The controller is collecting observations.</strong></div>" else """<div class="notice"><strong>${escape(value.advice.pace.name)}</strong><p>${escape(value.advice.message)}</p><p>Concurrency ceiling: ${value.advice.maxConcurrent}. Minimum admission interval: ${value.advice.minIntervalMillis} ms.</p><small>Expires ${java.time.Instant.ofEpochMilli(value.expiresAtMillis)}</small></div>"""
         call.respondText(call.page("Agent guidance", "<h2>$mode</h2>" + controls + content + """<details class='help'><summary>How agents receive guidance</summary><p>The forecast above describes the controller's proposed action; it is informational during observation mode. Run <code>teamcode run claude -- ...</code> to receive session guidance automatically when predictive pacing is enabled, or <code>teamcode agents watch --session SESSION_ID</code> for scoped JSON updates. Manual bridges can use <code>teamcode agents hint --session SESSION_ID --format claude</code>. Delivery receipts record emission by the local bridge, not compliance by an agent. Capacity limits are enforced independently by the server.</p></details>"""), ContentType.Text.Html)
     }

@@ -1,0 +1,1 @@
+ALTER TABLE pacing_settings ADD quota_pressure_percent INT DEFAULT 95 NOT NULL;
