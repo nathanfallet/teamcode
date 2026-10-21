@@ -29,7 +29,7 @@ class RoutePacingTest {
         assertEquals(Pace.SLOW_DOWN, controller.advise(setOf(opus), listOf(busy, lowerPriority), 4, now).pace)
         val exhausted = account("anthropic", listOf(1.0, 1.0, 1.0), 5)
         assertEquals(Pace.CAN_INCREASE, controller.advise(setOf(opus), listOf(exhausted, lowerPriority), 4, now).pace)
-        assertEquals(2, controller.advise(setOf(opus), listOf(lowerPriority), 16, now).maxConcurrent)
+        assertEquals(16, controller.advise(setOf(opus), listOf(lowerPriority), 16, now).maxConcurrent)
         assertEquals(Pace.PAUSE, controller.advise(setOf(opus), listOf(lowerPriority), 4, now, allowanceAvailable = false).pace)
         val fable = account("anthropic", listOf(.99, .99, .99), model = "fable")
         val mixed = lowerPriority.copy(windows = lowerPriority.windows + fable.windows)

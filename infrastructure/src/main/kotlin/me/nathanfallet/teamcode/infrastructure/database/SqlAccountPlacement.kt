@@ -1,7 +1,6 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
 import me.nathanfallet.teamcode.domain.accounts.AccountRecord
-import me.nathanfallet.teamcode.domain.accounts.AccountState
 import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.routing.*
 import me.nathanfallet.teamcode.domain.team.Principal
@@ -64,33 +63,33 @@ internal fun JdbcTransaction.accountPlacement(actor: Principal, policy: MemberPo
             .maxOfOrNull { it.utilization } ?: 0.0
         if (utilization >= pressureThreshold) null else AccountPlacement(account, active[account.id] ?: 0, loads[account.id] ?: 0, utilization)
     }
-    val selector = SelectPoolAccountUseCase()
-    val chosen = selector.select(available.filter { it.activeRequests < 2 }, pins, policy.poolId)
-    val waiting = chosen ?: selector.select(available, pins, policy.poolId)
+    // No per-account parallelism limit, for any provider: a pinned conversation keeps its account, new ones go to the
+    // least loaded account, and quota pacing is what slows an account down.
+    val chosen = SelectPoolAccountUseCase().select(available, pins, policy.poolId)
     val standing = if (chosen != null) null else {
         var result = PoolStanding(input.provider)
         val next = mutableListOf<Long>()
         for ((account, cooldown) in pool) {
             val windows = blocking(account)
-            result = when {
-                account.disabled -> result.copy(disabled = result.disabled + 1)
-                account.state == AccountState.PENDING_HANDOVER -> result.copy(pendingHandover = result.pendingHandover + 1)
-                !account.state.canServe -> result.copy(reconnectRequired = result.reconnectRequired + 1)
-                cooldown > now -> { next += cooldown; result.copy(coolingDown = result.coolingDown + 1) }
-                windows.isNotEmpty() -> {
+            result = when (AccountUnavailability.of(account, cooldown, windows.isNotEmpty(), now)) {
+                AccountUnavailability.DISABLED -> result.copy(disabled = result.disabled + 1)
+                AccountUnavailability.PENDING_HANDOVER -> result.copy(pendingHandover = result.pendingHandover + 1)
+                AccountUnavailability.RECONNECT_REQUIRED -> result.copy(reconnectRequired = result.reconnectRequired + 1)
+                AccountUnavailability.COOLING_DOWN -> { next += cooldown; result.copy(coolingDown = result.coolingDown + 1) }
+                AccountUnavailability.QUOTA_EXHAUSTED -> {
                     // An unknown reset stops excluding the account once its observation is too old.
                     next += windows.maxOf { it.resetsAtMillis ?: (it.observedAtMillis + MAX_QUOTA_OBSERVATION_AGE_MILLIS) }
                     result.copy(quotaExhausted = result.quotaExhausted + 1)
                 }
-                // Already refused for this request by the provider, without a recorded cooldown.
-                account.id in input.excludedAccountIds -> result.copy(coolingDown = result.coolingDown + 1)
-                else -> result.copy(busy = result.busy + 1)
+                // Already refused for this request by the provider (an exclusion), without a recorded cooldown: the only
+                // case left, since accounts have no parallelism limit.
+                else -> result.copy(coolingDown = result.coolingDown + 1)
             }
         }
         result.copy(nextAvailableAt = next.filter { it > now }.minOrNull())
     }
-    return Placement(chosen, available.isNotEmpty(), if (waiting == null) policy.poolId.orEmpty() else waiting.poolId.orEmpty(), standing)
+    return Placement(chosen, if (chosen == null) policy.poolId.orEmpty() else chosen.poolId.orEmpty(), standing)
 }
 
 /** [standing] explains an empty placement; it is computed only then. */
-internal data class Placement(val chosen: AccountRecord?, val hasAvailable: Boolean, val turnPool: String, val standing: PoolStanding? = null)
+internal data class Placement(val chosen: AccountRecord?, val turnPool: String, val standing: PoolStanding? = null)

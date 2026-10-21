@@ -13,7 +13,10 @@ class PoolAccountSelectionTest {
         assertEquals(reserve.account, selector.select(listOf(reserve, home), listOf("reserve"), "private"))
         assertEquals(home.account, selector.select(listOf(home), listOf("reserve"), "private"))
         val preferred = account("preferred", "private", 20)
-        assertEquals(preferred.account, selector.select(listOf(home, preferred), listOf("home"), "private"))
+        assertEquals(home.account, selector.select(listOf(home, preferred), listOf("home"), "private"), "A higher priority never preempts a pin")
+        assertEquals(preferred.account, selector.select(listOf(home, preferred), emptyList(), "private"))
+        val loaded = account("loaded", "private", -10, 50)
+        assertEquals(loaded.account, selector.select(listOf(loaded, preferred), listOf("loaded"), "private"), "Load never moves a pin")
         assertNull(selector.select(emptyList(), listOf("reserve"), "private"))
     }
     @Test fun reserveTierRetainsPriorityAndLoadOrderingWithoutTreatingPinsAsAuthorization() {

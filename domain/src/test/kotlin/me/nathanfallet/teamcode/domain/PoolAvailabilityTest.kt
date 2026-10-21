@@ -57,14 +57,6 @@ class PoolAvailabilityTest {
             "The next account should be usable at 12:00 UTC (in 45s).", failure.message)
     }
 
-    @Test fun busyAccountsRetrySoon() {
-        val failure = describe.failure(PoolStanding("anthropic", busy = 3, quotaExhausted = 1, nextAvailableAt = now + 3_600_000), now)
-        assertEquals(429, failure.status)
-        assertEquals(RetryWindows.SHORT_RETRY_SECONDS, failure.retryAfterSeconds)
-        assertTrue(failure.retryable)
-        assertTrue(failure.message!!.endsWith("3 accounts are busy with other requests. Retry in a few seconds."), failure.message)
-    }
-
     @Test fun dailyBudgetsResetAtUtcMidnightAndAreNotRetried() {
         val failure = RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it.", now)
         assertEquals(429, failure.status)
@@ -92,7 +84,7 @@ class PoolAvailabilityTest {
 
     @Test fun conflictsAreFinalUnlessMarkedRetryable() {
         assertFalse(me.nathanfallet.teamcode.domain.team.TeamFailure("run_ended", 409, "Ended.").retryable)
-        assertTrue(me.nathanfallet.teamcode.domain.team.TeamFailure("pool_busy", 429, "Busy.").retryable)
+        assertTrue(me.nathanfallet.teamcode.domain.team.TeamFailure("queue_turn", 429, "Not your turn.").retryable)
     }
 
     @Test fun envelopeTypesAreDocumentedValues() {

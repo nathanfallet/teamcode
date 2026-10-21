@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
-/** Admission is serialized per team; both member and physical account slots are reserved atomically. */
+/** Admission is serialized per team; the member's slot and the chosen account are reserved atomically. */
 class SqlAdmissionStore(private val database: Database) : AdmissionStore, AdmissionQueueStore {
     private val affinities = SqlSessionAffinity()
     private val queue = SqlAdmissionQueue(database)
@@ -58,7 +58,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         val scope = affinity?.sessionKey.orEmpty()
         val table = if (scope.isEmpty()) Directives else SessionDirectives
         val directive = table.selectAll().where { (table.memberId eq actor.member.id) and (table.scopeKey eq scope) and (table.expiresAt greater now) }.singleOrNull()
-        if (current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "You already have ${policy.maxConcurrent} TeamCode requests running, your concurrent limit. This one can start when one of them finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
+        if (policy.maxConcurrent > 0 && current.activeRequests >= policy.maxConcurrent) throw TeamFailure("member_concurrency", 429, "You already have ${policy.maxConcurrent} TeamCode requests running, your concurrent limit. This one can start when one of them finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         if (directive != null && directive[table.minInterval] > 0 && !readPacingSettings(actor.teamId).observationOnly) {
             val session = directive[table.scopeKey].takeIf { it.isNotEmpty() }
             val sessionFilter = session?.let { Reservations.sessionKey eq it } ?: Op.TRUE
@@ -70,7 +70,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             val active = if (session == null) current.activeRequests else Reservations.selectAll().where {
                 (Reservations.memberId eq actor.member.id) and sessionFilter and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
             }.count().toInt()
-            if (active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "TeamCode is limiting this session's parallel requests because the pool's subscription quota is burning fast. This one can start when another finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
+            if (directive[table.maxConcurrent] > 0 && active >= directive[table.maxConcurrent]) throw TeamFailure("pacing_concurrency", 429, "TeamCode is limiting this session's parallel requests because the pool's subscription quota is burning fast. This one can start when another finishes.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         }
         if (units > current.dailyAllowanceUnits - current.chargedAndReservedUnits) throw RetryWindows.dailyBudget("member_allowance", "Your daily TeamCode allowance", "An administrator can raise it or grant you a temporary budget override.", now, heldByRunningRequests = current.activeRequests > 0)
         val spent = poolSpent(actor.teamId, policy.poolId.orEmpty(), now / DAY)
@@ -78,7 +78,6 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             heldByRunningRequests = Reservations.selectAll().where { (Reservations.teamId eq actor.teamId) and (Reservations.state eq "ACTIVE") and
                 (Reservations.expiresAt greater now) and ((Reservations.poolId eq policy.poolId.orEmpty()) or (Reservations.sourcePoolId eq policy.poolId.orEmpty())) }.limit(1).any())
         val placement = accountPlacement(actor, policy, AdmissionInput(units, model, provider, excludedAccountIds, affinity), now)
-        if (ticket != null && placement.chosen == null && placement.hasAvailable) throw TeamFailure("pool_busy", 429, "Every usable account of your TeamCode pool is busy with other requests. Retry in a few seconds.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         val chosen = placement.chosen ?: throw DescribePoolUnavailableUseCase().failure(placement.standing ?: PoolStanding(provider), now)
         ticket?.let { consumeQueueTurn(actor, it, policy, provider, now, runId, chosen.poolId.orEmpty()) }
         affinity?.let { affinities.record(this, actor, it, RouteTarget(provider, model), chosen.id, now) }
@@ -130,7 +129,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     }
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = database.query {
         actor.requireAdmin()
-        if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 1..32 || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")
+        if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 0..MAX_MEMBER_CONCURRENCY || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")
         lockTeam(actor.teamId); requireCurrent(this, actor); ensureMember(actor.teamId, policy.memberId)
         if (PoolBudgets.selectAll().where { (PoolBudgets.teamId eq actor.teamId) and (PoolBudgets.poolId eq policy.poolId.orEmpty()) and (PoolBudgets.sharedOverflow eq true) }.any())
             throw TeamFailure("overflow_primary_pool", 409, "A shared overflow reserve cannot be a member's primary pool.")
@@ -167,6 +166,24 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     override suspend fun quotas(actor: Principal): List<AccountQuota> = database.query {
         actor.requireAdmin(); requireCurrent(this, actor)
         (QuotaWindows innerJoin Accounts).select(QuotaWindows.columns).where { Accounts.teamId eq actor.teamId }.map(::quotaRecord)
+    }
+    override suspend fun poolAccounts(actor: Principal): List<PoolAccountStatus> = database.query {
+        actor.requireScope(ServiceScope.USAGE_READ); requireCurrent(this, actor)
+        val now = nowMillis()
+        // Interactive administrators only: a service key acts as its owner's member view, like every admin read.
+        val admin = actor.serviceScopes == null && actor.member.role.isAdministrator
+        val visible = if (admin) Op.TRUE else {
+            val policy = readMemberPolicy(this, actor.member.id)
+            val overflow = if (policy.allowSharedOverflow) sharedOverflowBudgets(actor.teamId).keys else emptySet()
+            (Accounts.poolId eq policy.poolId) or (Accounts.poolId inList overflow)
+        }
+        val rows = Accounts.selectAll().where { (Accounts.teamId eq actor.teamId) and visible }
+            .orderBy(Accounts.priority to SortOrder.DESC, Accounts.id to SortOrder.ASC).limit(POOL_ACCOUNTS_LIMIT)
+            .map { accountRecord(it) to it[Accounts.cooldownUntil] }
+        val ids = rows.map { it.first.id }
+        val windows = if (ids.isEmpty()) emptyList() else QuotaWindows.selectAll().where { QuotaWindows.accountId inList ids }.map(::quotaRecord)
+        DescribePoolAccountsUseCase().describe(rows.map { (account, cooldown) -> PoolAccountObservation(account, cooldown, windows.filter { it.accountId == account.id }) }, now, admin,
+            readPacingSettings(actor.teamId).quotaPressureThreshold)
     }
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = observe(accountId, QuotaUpdate(observations, System.currentTimeMillis()))
     override suspend fun observe(accountId: String, update: QuotaUpdate) = SqlQuotaObservations(database).observe(accountId, update)
@@ -209,3 +226,5 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
     companion object { private const val DAY = 86_400_000L }
 }
 internal fun quotaRecord(row: ResultRow) = AccountQuota(row[QuotaWindows.accountId], row[QuotaWindows.windowName], row[QuotaWindows.utilization], row[QuotaWindows.observedAt], row[QuotaWindows.resetsAt])
+
+private const val POOL_ACCOUNTS_LIMIT = 200

@@ -63,19 +63,36 @@ class SessionAffinityPersistenceTest {
                 a.query { Accounts.update({ Accounts.id eq other.id }) { it[cooldownUntil] = 0 } }
 
                 store.configure(AccountMutationActor.System, "default", other.id, other.displayName, false, 5)
-                assertEquals(other.id, place(admissionB, parent).account.id, "An administrator's higher priority preempts affinity")
-                store.configure(AccountMutationActor.System, "default", other.id, other.displayName, true, 5)
-                assertEquals(first.id, place(admissionB, parent).account.id, "Disabled accounts cannot retain a pin")
+                assertEquals(first.id, place(admissionB, parent).account.id, "A higher-priority account never preempts a pinned conversation")
+                assertEquals(other.id, place(admissionA, hint('9')).account.id, "Priority still places new conversations")
+                store.configure(AccountMutationActor.System, "default", first.id, first.displayName, true, 0)
+                assertEquals(other.id, place(admissionB, parent).account.id, "Disabled accounts cannot retain a pin")
+                store.configure(AccountMutationActor.System, "default", first.id, first.displayName, false, 0)
+                assertEquals(other.id, place(admissionA, parent).account.id, "The pin moved with the conversation and stays put")
                 store.configure(AccountMutationActor.System, "default", other.id, other.displayName, false, 0)
+                assertEquals(other.id, place(admissionA, parent).account.id)
 
-                // Two independent connection pools see the first placement before admitting the next.
-                val concurrent = coroutineScope { listOf(admissionA, admissionB).map { service -> async {
-                    service.reserve(actor, 100, parent.requestedModel, affinity = hint('e'))
+                // Only a relevant window at 95% moves a pin: 94% keeps it, 95% of the five-hour or weekly window does not.
+                val observedAt = a.query { nowMillis() }
+                admissionA.observe(other.id, listOf(AccountQuota(other.id, "five_hour", .94, observedAt, observedAt + 3_600_000)))
+                assertEquals(other.id, place(admissionB, parent).account.id)
+                admissionA.observe(other.id, listOf(AccountQuota(other.id, "five_hour", .95, observedAt + 1, observedAt + 3_600_000)))
+                assertEquals(first.id, place(admissionB, parent).account.id, "A five-hour window at 95% moves the pin")
+                admissionA.observe(first.id, listOf(AccountQuota(first.id, "seven_day", .96, observedAt + 1, observedAt + 86_400_000)))
+                admissionA.observe(other.id, listOf(AccountQuota(other.id, "five_hour", .2, observedAt + 2, observedAt + 3_600_000)))
+                assertEquals(other.id, place(admissionA, parent).account.id, "A weekly window at 95% moves the pin")
+                admissionA.observe(first.id, listOf(AccountQuota(first.id, "seven_day", .1, observedAt + 2, observedAt + 86_400_000)))
+                assertEquals(other.id, place(admissionA, parent).account.id, "Recovered capacity elsewhere does not pull the conversation back")
+
+                // Two independent connection pools see the first placement before admitting the next, and concurrent
+                // turns of one conversation never spill to another account: accounts have no parallelism limit.
+                val concurrent = coroutineScope { (1..3).map { index -> async(Dispatchers.IO) {
+                    (if (index % 2 == 0) admissionA else admissionB).reserve(actor, 100, parent.requestedModel, affinity = hint('e'))
                 } }.awaitAll() }
                 assertEquals(1, concurrent.map { it.account.id }.distinct().size)
-                val overflow = admissionB.reserve(actor, 100, parent.requestedModel, affinity = hint('e'))
-                assertNotEquals(concurrent.first().account.id, overflow.account.id, "A full physical account must not bypass its slot ceiling")
-                (concurrent + overflow).forEach { admissionA.settle(it, 0) }
+                val more = admissionB.reserve(actor, 100, parent.requestedModel, affinity = hint('e'))
+                assertEquals(concurrent.first().account.id, more.account.id, "A busy pinned account keeps its conversation")
+                (concurrent + more).forEach { admissionA.settle(it, 0) }
 
                 account("codex", "codex")
                 place(admissionB, parent, "gpt-6-astra", "codex")

@@ -20,7 +20,7 @@ class QueuedDisconnectTest {
                 entered.complete(Unit)
                 return AdmissionTicket("test")
             }
-            override suspend fun reserveQueued(actor: Principal, ticket: AdmissionTicket, input: AdmissionInput): Reservation = throw TeamFailure("pool_busy", 429, "Synthetic occupied capacity")
+            override suspend fun reserveQueued(actor: Principal, ticket: AdmissionTicket, input: AdmissionInput): Reservation = throw TeamFailure("queue_turn", 429, "Synthetic queue turn")
             override suspend fun renew(actor: Principal, ticket: AdmissionTicket, blocked: Boolean) = Unit
             override suspend fun release(actor: Principal, ticket: AdmissionTicket) { released.complete(Unit) }
         }

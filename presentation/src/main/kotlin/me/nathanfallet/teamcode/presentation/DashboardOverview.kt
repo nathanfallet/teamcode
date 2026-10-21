@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import me.nathanfallet.teamcode.api.formatUnits
 import me.nathanfallet.teamcode.domain.accounts.AccountManagement
 import me.nathanfallet.teamcode.domain.capacity.AdmissionStore
 import me.nathanfallet.teamcode.domain.capacity.MemberCapacity
@@ -38,7 +39,7 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
             val enabled = capacities.filterNot { it.first.disabled }
             val used = enabled.sumOf { it.second.chargedAndReservedUnits }
             val allowed = enabled.sumOf { it.second.dailyAllowanceUnits }
-            add(card(if (admin) "Team usage today" else "Your usage today", "<div class=\"big\">${compactUnits(used)}</div>" + meter(used, allowed, "of <strong>${units(allowed)}</strong> credits allocated")))
+            add(card(if (admin) "Team usage today" else "Your usage today", "<div class=\"big\">${formatUnits(used)}</div>" + meter(used, allowed, "of <strong>${formatUnits(allowed)}</strong> credits allocated")))
             add(card("Requests now", "<div class=\"big\">${capacities.sumOf { it.second.activeRequests }}</div><span class=\"meter-label\">active · ${capacities.sumOf { it.second.queuedRequests }} waiting</span>"))
         }
         if (runs != null) add(card("Running sessions", "<div class=\"big\">${runs.size}</div><span class=\"meter-label\">${if (admin) "across the team" else "of yours"}${if (launches.nextBeforeId != null) " · among the latest launches" else ""}</span>"))
@@ -64,7 +65,7 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
             val used = members.sumOf { it.second.chargedAndReservedUnits }
             val overflow = budgets[pool]?.sharedOverflow == true
             val detail = if (members.isEmpty()) "No primary members${if (overflow) " · shared overflow reserve" else ""}" else "${members.size} member${if (members.size == 1) "" else "s"}${if (overflow) " · shared overflow" else ""}"
-            """<tr><td>${escape(poolName(pool.ifEmpty { null }))}<br><small>$detail</small></td><td>${if (members.isEmpty()) "<span class=\"meter-label\">${units(budget)} credits / day</span>" else meter(used, budget)}</td><td class="num">${if (members.isEmpty()) "—" else units((budget - used).coerceAtLeast(0))}</td></tr>"""
+            """<tr><td>${escape(poolName(pool.ifEmpty { null }))}<br><small>$detail</small></td><td>${if (members.isEmpty()) "<span class=\"meter-label\">${formatUnits(budget)} credits / day</span>" else meter(used, budget)}</td><td class="num">${if (members.isEmpty()) "—" else formatUnits((budget - used).coerceAtLeast(0))}</td></tr>"""
         } + help("How pool usage is counted", "<p>Used is what this pool's enabled members charged or reserved today; it resets at midnight UTC. A request that borrows a shared overflow account also counts against the overflow pool, which this table does not show.</p>"))
     }
 
@@ -79,7 +80,7 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
     val sessions = if (runs == null) "" else section("Running sessions",
         if (runs.isEmpty()) empty("No agent is running", "<p>Sessions appear here while <code>teamcode run claude</code> or <code>teamcode run codex</code> is active.</p>")
         else runs.take(OVERVIEW_SESSIONS).joinToString("", "<table><thead><tr><th>Launch</th><th class=\"num\">Credits</th><th class=\"num\">Requests</th></tr></thead><tbody>", "</tbody></table>") { run ->
-            """<tr><td><a href="/dashboard/sessions/${escape(run.id)}">${escape(run.username)} · ${escape(run.agent)}</a><br><small>${escape(run.workload)}</small></td><td class="num">${units(run.chargedAndReservedUnits)}</td><td class="num">${run.activeRequests} · ${run.queuedRequests} waiting</td></tr>"""
+            """<tr><td><a href="/dashboard/sessions/${escape(run.id)}">${escape(run.username)} · ${escape(run.agent)}</a><br><small>${escape(run.workload)}</small></td><td class="num">${formatUnits(run.chargedAndReservedUnits)}</td><td class="num">${run.activeRequests} · ${run.queuedRequests} waiting</td></tr>"""
         } + "<p><a href=\"/dashboard/sessions${if (admin) "?all=true" else ""}\">All sessions</a></p>")
 
     val left = consumption + pools

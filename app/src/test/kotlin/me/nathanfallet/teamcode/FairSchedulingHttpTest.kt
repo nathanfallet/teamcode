@@ -37,7 +37,7 @@ class FairSchedulingHttpTest {
     private data class Work(val id: String, val token: String, val background: Boolean = false)
 
     @Test @Timeout(180)
-    fun interactiveMembersAlternateAheadOfBackgroundAndCancelledWorkNeverDispatches() = runBlocking {
+    fun unlimitedMembersShareABusyAccountWhileALimitedMemberQueuesInOrder() = runBlocking {
         MySQLContainer("mysql:8.4").withDatabaseName("teamcode")
             .withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
             container.start()
@@ -61,7 +61,8 @@ class FairSchedulingHttpTest {
                     val admission = SqlAdmissionStore(a)
                     admission.configurePool(heavy.principal, PoolBudget("", 1_100_000))
                     listOf(heavy to 5, developer to 5, support to 1).forEach { (session, weight) ->
-                        admission.configure(heavy.principal, MemberPolicy(session.principal.member.id, weight = weight))
+                        // Only the heavy member has a concurrency limit; the others are unlimited, the default.
+                        admission.configure(heavy.principal, MemberPolicy(session.principal.member.id, maxConcurrent = if (session == heavy) 2 else 0, weight = weight))
                     }
                     assertEquals(listOf(500_000L, 500_000L, 100_000L), listOf(heavy, developer, support).map { admission.capacity(it.principal).dailyAllowanceUnits })
                     val cipher = CredentialCipher(ByteArray(32) { 39 })
@@ -80,10 +81,10 @@ class FairSchedulingHttpTest {
         val initial = (1..2).map { Work("held-$it", heavy.token) }
         val background = (1..8).map { Work("background-$it", heavy.token, true) }
         val interactive = (1..3).map { Work("developer-$it", developer.token) } + (1..3).map { Work("support-$it", support.token) }
-        val cancelled = Work("cancelled", support.token)
+        val cancelled = Work("cancelled", heavy.token)
         val overflow = Work("overflow", heavy.token, true)
         val all = initial + background + interactive
-        val pending = background + interactive
+        val pending = background
         val known = (all + cancelled + overflow).associateBy { it.id }
         val dispatched = Channel<Dispatch>(Channel.UNLIMITED)
         val gates = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
@@ -107,7 +108,7 @@ class FairSchedulingHttpTest {
                         val active = inFlight.incrementAndGet()
                         peakInFlight.updateAndGet { maxOf(it, active) }
                         try {
-                            check(active <= 2)
+                            check(active <= 2 + interactive.size)
                             dispatched.send(Dispatch(id, gate, System.nanoTime()))
                             call.respondTextWriter(ContentType.Text.EventStream) {
                                 write(stream.first()); flush()
@@ -173,16 +174,7 @@ class FairSchedulingHttpTest {
             val held = listOf(next(), next())
             assertEquals(initial.map { it.id }.toSet(), held.map { it.id }.toSet())
             assertEquals(2, stores.last().statistics().active)
-            background.forEachIndexed { index, work -> start(work); untilQueued(index + 1) }
-            val rejected = client.post("http://127.0.0.1:${ports.last()}/v1/messages") {
-                bearerAuth(overflow.token); contentType(ContentType.Application.Json)
-                header("x-teamcode-workload", "background"); setBody(body(overflow.id))
-            }
-            assertEquals(HttpStatusCode.ServiceUnavailable, rejected.status, "A member cannot exceed eight queued requests")
-            assertNull(counts[overflow.id])
-            interactive.forEachIndexed { index, work -> start(work); untilQueued(background.size + index + 1) }
-            assertTrue(jobs.values.none { it.isCompleted }, "Contending HTTP requests must wait without a client-facing quota rejection")
-            assertEquals(0, stores.first().capacity(support.principal).chargedAndReservedUnits)
+            background.dropLast(1).forEachIndexed { index, work -> start(work); untilQueued(index + 1) }
             Socket("127.0.0.1", ports.last()).use { socket ->
                 val bytes = body(cancelled.id).toByteArray()
                 withContext(Dispatchers.IO) {
@@ -191,14 +183,29 @@ class FairSchedulingHttpTest {
                         write(bytes); flush()
                     }
                 }
-                untilQueued(pending.size + 1)
+                untilQueued(background.size)
                 socket.setSoLinger(true, 0)
             }
-            untilQueued(pending.size)
-            assertEquals(0, stores.last().capacity(support.principal).chargedAndReservedUnits)
+            untilQueued(background.size - 1)
             assertNull(counts[cancelled.id])
+            start(background.last()); untilQueued(background.size)
+            val rejected = client.post("http://127.0.0.1:${ports.last()}/v1/messages") {
+                bearerAuth(overflow.token); contentType(ContentType.Application.Json)
+                header("x-teamcode-workload", "background"); setBody(body(overflow.id))
+            }
+            assertEquals(HttpStatusCode.ServiceUnavailable, rejected.status, "A member cannot exceed eight queued requests")
+            assertNull(counts[overflow.id])
+            assertTrue(jobs.values.none { it.isCompleted }, "Requests over a member limit wait without a client-facing quota rejection")
 
-            // Keep one original stream held, exposing exactly one slot at a time.
+            // Unlimited members share the busy account at once: an account has no parallelism limit.
+            interactive.forEach { start(it) }
+            val immediate = (1..interactive.size).map { next() }
+            assertEquals(interactive.map { it.id }.toSet(), immediate.map { it.id }.toSet())
+            assertEquals(background.size, stores.first().statistics().queued, "Other members never wait behind a busy account")
+            immediate.forEach { assertTrue(it.release.complete(Unit)); jobs.getValue(it.id).await() }
+            assertTrue(background.none { jobs.getValue(it.id).isCompleted })
+
+            // Keep one original stream held, so the heavy member's own limit exposes exactly one slot at a time.
             held.first().release.complete(Unit)
             jobs.getValue(held.first().id).await()
             val seen = mutableListOf<String>()
@@ -208,19 +215,17 @@ class FairSchedulingHttpTest {
                 assertTrue(dispatch.release.complete(Unit))
                 jobs.getValue(dispatch.id).await()
             }
-            assertEquals(listOf("developer-1", "support-1", "developer-2", "support-2", "developer-3", "support-3"), seen.take(6),
-                "Interactive members rotate independently of weight before unaged background work")
-            assertEquals(background.map { it.id }.toSet(), seen.drop(6).toSet())
+            assertEquals(background.map { it.id }.toSet(), seen.toSet(), "Each freed slot of the member's limit admits one of its queued requests")
             held.last().release.complete(Unit)
             jobs.getValue(held.last().id).await()
             withTimeout(5_000) { while (stores.first().statistics().active != 0 || stores.first().statistics().completed != all.size.toLong()) delay(10) }
             assertEquals(0, stores.last().statistics().queued)
-            assertEquals(2, peakInFlight.get())
+            assertEquals(2 + interactive.size, peakInFlight.get())
             assertEquals(all.map { it.id }.toSet(), counts.keys)
             assertTrue(counts.values.all { it.get() == 1 })
             assertEquals(listOf(60L, 18L, 18L), listOf(heavy, developer, support).map { stores.last().capacity(it.principal).chargedAndReservedUnits })
             val sorted = waits.sorted()
-            println("HTTP queue fixture passed: replicas=2, members=3, completed=${all.size}, cancelledPending=1, rejectedOverflow=1, peakQueued=${pending.size + 1}, peakUpstream=2, dispatchP50Ms=${sorted[sorted.size / 2]}, dispatchP95Ms=${sorted.last()}; no real provider calls.")
+            println("HTTP queue fixture passed: replicas=2, members=3, completed=${all.size}, cancelledPending=1, rejectedOverflow=1, peakQueued=${pending.size}, peakUpstream=${peakInFlight.get()}, dispatchP50Ms=${sorted[sorted.size / 2]}, dispatchP95Ms=${sorted.last()}; no real provider calls.")
         } finally {
             withContext(NonCancellable) {
                 gates.values.forEach { it.complete(Unit) }

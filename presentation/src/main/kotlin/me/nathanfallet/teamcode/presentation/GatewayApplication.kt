@@ -129,7 +129,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
         if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
-        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null, groups)
+        if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null, groups, accounts)
         if (team != null && admission != null && budgetOverrides != null) { budgetOverrideRoutes(budgetOverrides); budgetOverrideDashboardRoutes(budgetOverrides, admission, publicOrigin) }
         if (team != null && reconciliation != null) { usageReconciliationRoutes(reconciliation); usageReconciliationDashboardRoutes(reconciliation, publicOrigin) }
         if (directives != null) directiveRoutes(directives, pacingSettings)
@@ -178,7 +178,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && serviceKeys != null) listOf("team.service-keys.v1") else emptyList()) +
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
-                    (if (team != null && skills != null) listOf("team.skills.v1") else emptyList()) +
+                    (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
                     (if (team != null && cloudOn() && cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else emptyList()) +
                     (if (team != null && cloudOn() && cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1") else emptyList()) +
