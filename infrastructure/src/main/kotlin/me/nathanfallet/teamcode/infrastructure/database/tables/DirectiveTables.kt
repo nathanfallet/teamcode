@@ -15,6 +15,8 @@ abstract class DirectiveTable(name: String) : Table(name) {
     val contextKey = char("context_key", 64, "ascii_bin").nullable()
     val recoveryPace = varchar("recovery_pace", 20).nullable()
     val recoveryStartedAt = long("recovery_started_at").nullable()
+    // Interval of the SLOW_DOWN level being stabilized, so easing between levels also needs a stable candidate.
+    val recoveryMinInterval = long("recovery_min_interval").nullable()
     val scopeKey = varchar("scope_key", 64, "ascii_bin").default("")
     // Recent peak of parallel requests in this scope, which sizes a progressive SLOW_DOWN.
     val observedConcurrency = integer("observed_concurrency").nullable()

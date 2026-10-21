@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
-/** Admission is serialized per team; both member and physical account slots are reserved atomically. */
+/** Admission is serialized per team; the member's slot and the chosen account are reserved atomically. */
 class SqlAdmissionStore(private val database: Database) : AdmissionStore, AdmissionQueueStore {
     private val affinities = SqlSessionAffinity()
     private val queue = SqlAdmissionQueue(database)
@@ -78,7 +78,6 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             heldByRunningRequests = Reservations.selectAll().where { (Reservations.teamId eq actor.teamId) and (Reservations.state eq "ACTIVE") and
                 (Reservations.expiresAt greater now) and ((Reservations.poolId eq policy.poolId.orEmpty()) or (Reservations.sourcePoolId eq policy.poolId.orEmpty())) }.limit(1).any())
         val placement = accountPlacement(actor, policy, AdmissionInput(units, model, provider, excludedAccountIds, affinity), now)
-        if (ticket != null && placement.chosen == null && placement.hasAvailable) throw TeamFailure("pool_busy", 429, "Every usable account of your TeamCode pool is busy with other requests. Retry in a few seconds.", retryAfterSeconds = RetryWindows.SHORT_RETRY_SECONDS)
         val chosen = placement.chosen ?: throw DescribePoolUnavailableUseCase().failure(placement.standing ?: PoolStanding(provider), now)
         ticket?.let { consumeQueueTurn(actor, it, policy, provider, now, runId, chosen.poolId.orEmpty()) }
         affinity?.let { affinities.record(this, actor, it, RouteTarget(provider, model), chosen.id, now) }

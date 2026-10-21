@@ -63,12 +63,14 @@ class ProgressivePacingPersistenceTest {
                     admissionA.configure(actor, MemberPolicy(colleague.id, maxConcurrent = 2))
 
                     val store = SqlAccountStore(a, CredentialCipher(ByteArray(32) { 41 }))
-                    val accounts = (1..3).map { index ->
-                        val identity = VerifiedProviderAccount(AccountIdentity("default", "anthropic", "synthetic-$index", "org-$index"), "Fixture $index")
+                    // One account per provider: neither has a parallelism limit of its own.
+                    val (claude, codex) = listOf("anthropic", "codex").map { provider ->
+                        val identity = VerifiedProviderAccount(AccountIdentity("default", provider, "synthetic-$provider", "org-$provider"), "Fixture $provider")
                         val enrolled = store.upsert(AccountMutationActor.System, identity,
-                            ProviderCredentials("synthetic-access-$index", "synthetic-refresh-$index", Long.MAX_VALUE), null, "pacing-fixture-$index") as EnrollmentResult.Created
+                            ProviderCredentials("synthetic-access-$provider", "synthetic-refresh-$provider", Long.MAX_VALUE), null, "pacing-fixture-$provider") as EnrollmentResult.Created
                         store.handover(AccountMutationActor.System, "default", enrolled.account.id, accessOnly = true)
                     }
+                    val accounts = listOf(claude)
                     val controller = SqlDirectiveService(a)
                     val model = "claude-opus-test"
                     val session = "parallel-session"
@@ -76,23 +78,26 @@ class ProgressivePacingPersistenceTest {
                     val affinity = SessionAffinityKey.from(mapOf("session-id" to session),
                         Json.parseToJsonElement("""{"messages":[{"role":"user","content":"synthetic"}]}""").jsonObject,
                         WireProtocol.MESSAGES, model, targets)!!
-                    a.query { lockTeam("default"); SqlSessionAffinity().record(this, actor, affinity, RouteTarget("anthropic", model), accounts[0].id, nowMillis()) }
+                    a.query { lockTeam("default"); SqlSessionAffinity().record(this, actor, affinity, RouteTarget("anthropic", model), claude.id, nowMillis()) }
                     controller.update()
                     val unknown = controller.current(actor, session)!!.advice
-                    assertEquals(Triple(Pace.UNKNOWN, 6, 0L), Triple(unknown.pace, unknown.maxConcurrent, unknown.minIntervalMillis),
-                        "Without a member limit, only the accounts' physical slots bound the advice")
+                    assertEquals(Triple(Pace.UNKNOWN, 0, 0L), Triple(unknown.pace, unknown.maxConcurrent, unknown.minIntervalMillis),
+                        "Without a member limit, nothing caps the advice")
 
-                    // Five simultaneous requests are admitted at once: no member limit, no queue, no interval.
-                    val parallel = coroutineScope {
-                        (1..5).map { index -> async(Dispatchers.IO) { (if (index % 2 == 0) admissionA else admissionB).reserve(actor, 100, model, affinity = affinity) } }.awaitAll()
+                    // Eight simultaneous requests on one account of each provider are admitted at once: no member or
+                    // account limit, no queue, no interval.
+                    val codexRequests = coroutineScope {
+                        (1..8).map { index -> async(Dispatchers.IO) { (if (index % 2 == 0) admissionA else admissionB).reserve(actor, 100, "gpt-6-astra", "codex") } }.awaitAll()
                     }
-                    assertEquals(5, admissionA.capacity(actor).activeRequests)
-                    val sixth = admissionA.reserve(actor, 100, model, affinity = affinity)
-                    refusal("pool_unavailable") { admissionB.reserve(actor, 100, model, affinity = affinity) }
-                    assertEquals(List(3) { 2 }, a.query {
-                        accounts.map { account -> Reservations.selectAll().where { (Reservations.accountId eq account.id) and (Reservations.state eq "ACTIVE") }.count().toInt() }
-                    }, "Each physical account still serves at most two requests")
-                    admissionA.settle(sixth, 0)
+                    assertTrue(codexRequests.all { it.account.id == codex.id })
+                    val claudeRequests = coroutineScope {
+                        (1..8).map { index -> async(Dispatchers.IO) { (if (index % 2 == 0) admissionA else admissionB).reserve(actor, 100, model, affinity = affinity) } }.awaitAll()
+                    }
+                    assertTrue(claudeRequests.all { it.account.id == claude.id })
+                    assertEquals(16, admissionA.capacity(actor).activeRequests)
+                    codexRequests.forEach { admissionB.settle(it, 0) }
+                    claudeRequests.drop(5).forEach { admissionA.settle(it, 0) }
+                    val parallel = claudeRequests.take(5)
 
                     // A light overshoot: at the current rate the threshold arrives at 3/4 of the time left before reset.
                     val now = a.query { nowMillis() }
@@ -106,7 +111,7 @@ class ProgressivePacingPersistenceTest {
                     controller.update()
                     val light = SqlDirectiveService(b).current(actor, session)!!.advice
                     assertEquals(Triple(Pace.SLOW_DOWN, 3, 2_000L), Triple(light.pace, light.maxConcurrent, light.minIntervalMillis),
-                        "Five observed requests are halved, with a short interval")
+                        "The five requests still running in the session are halved, with a short interval")
                     assertFalse("one request" in light.message, light.message)
                     delay(2_100)
                     refusal("pacing_concurrency") { admissionB.reserve(actor, 100, model, affinity = affinity) }

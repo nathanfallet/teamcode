@@ -79,7 +79,8 @@ class PacingObservationPersistenceTest {
                     val second = admissionB.reserve(actor, 100, model, affinity = affinity)
                     refusal("member_concurrency") { admissionA.reserve(actor, 1, model, affinity = affinity) }
                     admissionA.configure(actor, MemberPolicy(actor.member.id, maxConcurrent = 3))
-                    refusal("pool_unavailable") { admissionB.reserve(actor, 1, model, affinity = affinity) }
+                    // The single account takes a third concurrent request: accounts have no parallelism limit.
+                    admissionB.settle(admissionB.reserve(actor, 1, model, affinity = affinity), 0)
                     admissionA.configure(actor, MemberPolicy(actor.member.id, dailyUnits = 100, maxConcurrent = 3))
                     refusal("member_allowance") { admissionB.reserve(actor, 1, model, affinity = affinity) }
                     admissionA.configure(actor, MemberPolicy(actor.member.id, maxConcurrent = 3, poolId = "protected"))

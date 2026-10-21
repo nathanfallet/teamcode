@@ -116,7 +116,7 @@ class GatewayTest {
         assertEquals(failure.message, openai["message"]!!.jsonPrimitive.content)
     }
     @Test fun `a transient refusal stays retryable with its Retry-After`() = testApplication {
-        application { configureGateway(RefusingGateway(me.nathanfallet.teamcode.domain.team.TeamFailure("pool_busy", 429, "Busy.", retryAfterSeconds = 5)), accessToken) }
+        application { configureGateway(RefusingGateway(me.nathanfallet.teamcode.domain.team.TeamFailure("queue_turn", 429, "Not your turn.", retryAfterSeconds = 5)), accessToken) }
         val response = refuse("/v1/messages", """{"model":"claude-test","stream":true,"messages":[]}""")
         assertEquals(HttpStatusCode.TooManyRequests, response.status)
         assertEquals("5", response.headers[HttpHeaders.RetryAfter])

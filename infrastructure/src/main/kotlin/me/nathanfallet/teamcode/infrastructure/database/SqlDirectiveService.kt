@@ -45,6 +45,11 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
             }.map { row -> with(ConversationAffinities) {
                 row[memberId] to Context(row[sessionKey], row[requestedModel], RouteTarget(row[provider], row[resolvedModel]), row[routeKey], row[wireProtocol], row[requestedEffort], row[thinkingTokens], row[accountId])
             } }.groupBy({ it.first }, { it.second })
+            // One grouped read per pass sizes every session's observed parallelism.
+            val activeCount = Reservations.id.count()
+            val activeBySession = Reservations.select(Reservations.memberId, Reservations.sessionKey, activeCount).where {
+                (Reservations.teamId eq "default") and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now) and Reservations.sessionKey.isNotNull()
+            }.groupBy(Reservations.memberId, Reservations.sessionKey).associate { (it[Reservations.memberId] to it[Reservations.sessionKey].orEmpty()) to it[activeCount].toInt() }
             val overflowBudgets = sharedOverflowBudgets("default")
             val overflowSpends = poolSpends("default", overflowBudgets.keys, now / 86_400_000L)
             val overflowPools = overflowBudgets.filter { (pool, budget) -> (overflowSpends[pool] ?: 0L) < budget }.keys
@@ -80,15 +85,13 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                     val targets = if (valid) active.map { it.target }.toSet() else emptySet()
                     val previous = table.selectAll().where { (table.memberId eq member) and (table.scopeKey eq scopeKey) }.singleOrNull()?.let { row ->
                         val old = directiveRecord(row, table)
-                        val recovery = row[table.recoveryPace]?.let { PacingRecovery(Pace.valueOf(it), row[table.recoveryStartedAt] ?: 0L) }
+                        val recovery = row[table.recoveryPace]?.let { PacingRecovery(Pace.valueOf(it), row[table.recoveryStartedAt] ?: 0L, row[table.recoveryMinInterval] ?: 0L) }
                         Stored(old, row[table.contextKey], PacingMemory(old.advice, old.expiresAtMillis, recovery), row[table.observedConcurrency])
                     }
                     // The peak follows the scope's demand, not its capacity context, so a changed key keeps it.
-                    val running = if (scopeKey.isEmpty()) capacity.activeRequests else Reservations.selectAll().where {
-                        (Reservations.memberId eq member) and (Reservations.sessionKey eq scopeKey) and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
-                    }.count().toInt()
+                    val running = if (scopeKey.isEmpty()) capacity.activeRequests else activeBySession[member to scopeKey] ?: 0
                     val current = previous?.takeIf { it.directive.expiresAtMillis > now }
-                    val observed = observedConcurrency.next(current?.observed, current?.directive?.advice?.pace, running)
+                    val observed = observedConcurrency.next(current?.observed, current?.directive?.advice, running)
                     val advice = if (runPolicies.truncated && scopedAllowanceAvailable) PacingAdvice(Pace.UNKNOWN, runLimits.maxConcurrent, 0,
                         "Recent launch/session metadata is incomplete. Do not increase parallelism from this signal; server-side limits remain authoritative.")
                         else pacing.advise(targets, accountPacing, runLimits.maxConcurrent, now, scopedAllowanceAvailable, pool, policy.allowSharedOverflow, active.groupBy { it.target }.mapValues { (_, contexts) -> contexts.map { it.accountId }.toSet() }, observed)
@@ -111,6 +114,7 @@ class SqlDirectiveService(private val database: Database) : DirectiveService {
                         it[memberId] = member; it[table.scopeKey] = scopeKey; it[table.id] = id; it[pace] = chosen.pace.name; it[maxConcurrent] = chosen.maxConcurrent
                         it[minInterval] = chosen.minIntervalMillis; it[message] = chosen.message; it[createdAt] = created; it[expiresAt] = now + 180_000
                         it[contextKey] = key; it[recoveryPace] = recovery?.pace?.name; it[recoveryStartedAt] = recovery?.startedAtMillis
+                        it[table.recoveryMinInterval] = recovery?.minIntervalMillis
                         it[table.observedConcurrency] = observed
                     }
                 }

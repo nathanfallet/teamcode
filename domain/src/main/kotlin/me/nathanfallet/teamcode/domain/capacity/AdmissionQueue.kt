@@ -51,7 +51,7 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
         const val MAX_WAIT_MILLIS = 90_000L
         const val POLL_MILLIS = 500L
         const val LEASE_MILLIS = 15_000L
-        val WAITABLE = setOf("member_concurrency", "group_concurrency", "run_concurrency", "pacing_concurrency", "pacing_delay", "pool_busy", "queue_turn")
+        val WAITABLE = setOf("member_concurrency", "group_concurrency", "run_concurrency", "pacing_concurrency", "pacing_delay", "queue_turn")
     }
 }
 

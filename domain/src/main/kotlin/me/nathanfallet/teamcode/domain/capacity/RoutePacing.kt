@@ -7,7 +7,7 @@ data class AccountPacing(val account: AccountRecord, val windows: List<WindowPac
 
 /** Capacity is specific to the target actually serving work, never a sum of unrelated plans. */
 class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase()) {
-    /** [maximum] zero means no member/group/run limit: the eligible accounts' physical slots then bound the advice. */
+    /** [maximum] zero means no member/group/run limit; accounts have no parallelism limit of their own, only quota windows. */
     fun advise(targets: Set<RouteTarget>, accounts: List<AccountPacing>, maximum: Int, now: Long, allowanceAvailable: Boolean = true, homePool: String? = null, preferHome: Boolean = false, pinnedAccountIds: Map<RouteTarget, Set<String>> = emptyMap(), observedConcurrency: Int = 0): PacingAdvice {
         if (!allowanceAvailable) return PacingAdvice(Pace.PAUSE, 1, 30_000,
             "An applicable member, group, run or pool allowance is unavailable, or admission is paused. Pause new work until capacity returns or access is reviewed.")
@@ -20,8 +20,8 @@ class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase()) {
                 target.model != null && it.quota.appliesTo(target.model, account.modelLimits[target.model.lowercase()]) && it.quota.utilization >= .95 && it.quota.isCurrent(now)
             } }
             val authorized = available.ifEmpty { candidates }
-            val pinned = authorized.filter { candidate -> candidate.account.id in pinnedAccountIds[target].orEmpty() &&
-                candidate.account.priority == authorized.filter { it.account.poolId == candidate.account.poolId }.maxOf { it.account.priority } }
+            // A pin holds while its account is eligible, whatever the priority of the others (as placement does).
+            val pinned = authorized.filter { candidate -> candidate.account.id in pinnedAccountIds[target].orEmpty() }
             val home = authorized.filter { it.account.poolId == homePool }
             val selectable = if (!preferHome) authorized else pinned.ifEmpty { home.ifEmpty { authorized } }
             // Active pins represent separate conversations, even on the same target.
@@ -32,7 +32,7 @@ class RoutePacingUseCase(private val pacing: PacingUseCase = PacingUseCase()) {
                 val windows = group.filter { it.account.priority == priority }.map { account ->
                     account.windows.filter { target.model != null && it.quota.appliesTo(target.model, account.modelLimits[target.model.lowercase()]) }
                 }
-                pacing.advise(windows, concurrencyCeiling(listOf(maximum, maxOf(1, windows.size * 2))), now, observedConcurrency)
+                pacing.advise(windows, maximum, now, observedConcurrency)
             }, maximum)
         }
         // One scope may use several targets. Never advise acceleration merely because

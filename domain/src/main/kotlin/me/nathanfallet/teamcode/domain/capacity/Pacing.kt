@@ -98,7 +98,8 @@ class PacingUseCase {
                 windows.all { it.quota.utilization < .5 && it.forecast.state in setOf(QuotaForecast.State.IDLE, QuotaForecast.State.RESET_FIRST) } -> Pace.CAN_INCREASE
                 else -> Pace.NORMAL
             }
-            // The most pressured window of an account bounds what that account can absorb.
+            // The most pressured window of an account bounds what that account can absorb. A SLOW_DOWN whose share
+            // cannot be computed counts as fully pressured (SEVERE), the conservative former behavior.
             pace to (windows.mapNotNull { it.affordableShare(now) }.minOrNull() ?: 0.0)
         }
         val selected = states.minWith(compareBy<Pair<Pace, Double>> { when (it.first) {

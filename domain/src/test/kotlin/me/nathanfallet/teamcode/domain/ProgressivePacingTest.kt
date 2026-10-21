@@ -60,14 +60,15 @@ class ProgressivePacingTest {
         assertFailsWith<IllegalArgumentException> { controller.advise(emptyList(), -1, now) }
     }
 
-    @Test fun routesWithoutAMemberLimitUseTheAccountsPhysicalSlots() {
+    @Test fun routesWithoutAMemberLimitHaveNoConcurrencyCeiling() {
         val route = RoutePacingUseCase()
         val opus = RouteTarget("anthropic", "claude-opus-test")
         fun account(id: String, windows: List<WindowPacing>) = AccountPacing(
             AccountRecord(id, AccountIdentity("team", "anthropic", id, "org"), id, 1, false, null, 0, AccountState.READY), windows)
         val wide = listOf("a", "b", "c").map { account(it, windows(null, utilization = .7)) }
         val normal = route.advise(setOf(opus), wide, 0, now)
-        assertEquals(Triple(Pace.NORMAL, 6, 0L), Triple(normal.pace, normal.maxConcurrent, normal.minIntervalMillis))
+        assertEquals(Triple(Pace.NORMAL, 0, 0L), Triple(normal.pace, normal.maxConcurrent, normal.minIntervalMillis))
+        assertEquals(0, route.advise(setOf(opus), wide.take(1), 0, now).maxConcurrent, "A single account sets no ceiling either")
         val slow = route.advise(setOf(opus), listOf("a", "b", "c").map { account(it, windows(.7)) }, 0, now, observedConcurrency = 5)
         assertEquals(Triple(Pace.SLOW_DOWN, 3, 2_000L), Triple(slow.pace, slow.maxConcurrent, slow.minIntervalMillis))
         assertEquals(2, route.advise(setOf(opus), listOf("a", "b", "c").map { account(it, windows(.7)) }, 2, now, observedConcurrency = 5).maxConcurrent)
@@ -86,15 +87,23 @@ class ProgressivePacingTest {
         assertEquals(severe, hysteresis.decide(memory(severe, pending.recovery), light, now + 119_999).advice)
         assertEquals(light, hysteresis.decide(memory(severe, pending.recovery), light, now + 120_000).advice)
         assertEquals(narrowLight, hysteresis.decide(memory(narrowLight), light, now).advice, "More requests wait for stability")
+        val moderate = controller.advise(listOf(windows(.3)), 0, now, observedConcurrency = 6)
+        val flapped = hysteresis.decide(memory(severe, pending.recovery), moderate, now + 60_000)
+        assertEquals(severe, flapped.advice)
+        assertEquals(now + 60_000, flapped.recovery!!.startedAtMillis, "Another SLOW_DOWN level restarts the recovery")
+        assertEquals(severe, hysteresis.decide(memory(severe, flapped.recovery), moderate, now + 120_000).advice)
     }
 
     @Test fun theObservedPeakIsHeldUnderAThrottleAndDecaysOtherwise() {
         val observed = ObservedConcurrencyUseCase()
+        val normal = PacingAdvice(Pace.NORMAL, 0, 0, "")
+        val slow = PacingAdvice(Pace.SLOW_DOWN, 3, 2_000, "")
         assertEquals(5, observed.next(null, null, 5))
-        assertEquals(4, observed.next(5, Pace.NORMAL, 0), "A gap between turns only decays the peak")
-        assertEquals(6, observed.next(5, Pace.NORMAL, 6))
-        assertEquals(5, observed.next(5, Pace.SLOW_DOWN, 1), "The throttle cannot shrink its own baseline")
-        assertEquals(5, observed.next(5, Pace.PAUSE, 0))
+        assertEquals(4, observed.next(5, normal, 0), "A gap between turns only decays the peak")
+        assertEquals(6, observed.next(5, normal, 6))
+        assertEquals(6, observed.next(6, slow, 3), "A binding throttle cannot shrink its own baseline")
+        assertEquals(5, observed.next(6, slow, 1), "Demand below the throttle's cap decays the peak")
+        assertEquals(5, observed.next(5, PacingAdvice(Pace.PAUSE, 1, 30_000, ""), 1))
         assertEquals(0, observed.next(null, null, -3))
         assertEquals(ObservedConcurrencyUseCase.MAX_OBSERVED_CONCURRENCY, observed.next(null, null, 10_000))
     }
