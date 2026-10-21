@@ -64,6 +64,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         var compatibleTargetFound = false
         var translationFailure: TeamFailure? = null
         var waitingFailure: TeamFailure? = null
+        var poolFailure: TeamFailure? = null
         // Exhaust eligible accounts for each preferred target before trying the next configured provider/model.
         for (target in targets) {
             val resolved = target.model ?: model
@@ -111,6 +112,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 } catch (error: TeamFailure) {
                     if (error.code in setOf("queue_timeout", "queue_full", "queue_expired")) waitingFailure = error
                     else if (error.code != "pool_unavailable") throw error
+                    else poolFailure = moreHopeful(poolFailure, error)
                     break
                 }
                 attemptedAccounts += reservation.account.id
@@ -123,7 +125,14 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         }
         if (!compatibleTargetFound) translationFailure?.let { throw it }
         waitingFailure?.let { throw it }
-        throw TeamFailure("pool_unavailable", 429, "No eligible account remains in your pool across the configured route targets.")
+        throw poolFailure ?: TeamFailure("pool_unavailable", 429, "No account of your TeamCode pool can take this request on its configured routes. Retry shortly.")
+    }
+
+    /** Across route targets, report the one that unblocks soonest: the client retries for that one. */
+    private fun moreHopeful(current: TeamFailure?, next: TeamFailure): TeamFailure = when {
+        current == null -> next
+        current.retryable != next.retryable -> if (next.retryable) next else current
+        else -> if ((next.retryAfterSeconds ?: Long.MAX_VALUE) < (current.retryAfterSeconds ?: Long.MAX_VALUE)) next else current
     }
 
     private class SafeRetry(val failure: TeamFailure) : RuntimeException()
@@ -172,9 +181,11 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                             if (status in setOf(401, 403, 429)) throw SafeRetry(TeamFailure("pool_unavailable", 429, "Configured subscriptions are unavailable or rate-limited. Retry shortly."))
                             val publicStatus = if (status in setOf(400, 413, 429)) status else 502
                             val publicError = if (status == 429) "The selected subscription is rate-limited. Retry after the indicated delay." else "The provider rejected this request. Check the model and account status."
-                            val error = buildJsonObject { put("type", "error"); putJsonObject("error") { put("type", "upstream_error"); put("message", publicError) } }.toString().toByteArray()
+                            val type = InferenceErrors.type(request.protocol, publicStatus, "upstream_error")
+                            val error = (if (request.protocol == WireProtocol.MESSAGES) buildJsonObject { put("type", "error"); putJsonObject("error") { put("type", type); put("message", publicError) } }
+                                else buildJsonObject { putJsonObject("error") { put("type", type); put("code", "upstream_error"); put("message", publicError); put("param", JsonNull) } }).toString().toByteArray()
                             committed = true
-                            receive(GenerationHead(publicStatus, "application/json", mapOf("retry-after" to retry.toString(), "x-teamcode-request-id" to reservation.id)), flow { emit(error) })
+                            receive(GenerationHead(publicStatus, "application/json", mapOf("retry-after" to retry.toString(), "x-teamcode-request-id" to reservation.id, "x-teamcode-error" to "upstream_error")), flow { emit(error) })
                             return@send
                         }
                         val reportedType = response.headers["content-type"].orEmpty()

@@ -37,7 +37,7 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
                 }
                 @Suppress("UNREACHABLE_CODE")
                 error("unreachable")
-            } ?: throw TeamFailure("queue_timeout", 503, "The bounded admission wait expired. Retry shortly.")
+            } ?: throw TeamFailure("queue_timeout", 503, "TeamCode waited ${MAX_WAIT_MILLIS / 1000}s for free capacity in your pool without getting a turn. Retry shortly.", retryAfterSeconds = 15)
         } finally {
             // A revoked session must still be able to remove its own pending row.
             // Lease expiry provides cleanup if the database is unreachable or the replica crashes.

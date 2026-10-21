@@ -82,6 +82,22 @@ Session deliveries are claimed atomically in MySQL for 15 seconds. Parallel hook
 
 Admission applies the scoped directive when session metadata exists and the member directive for requests without it. A new session begins without a forecast throttle until its own activity is observed; it never inherits another session’s throttle. Hard member concurrency, weighted allowance, pool budget and physical account limits remain independent and apply immediately, including to new or renamed sessions. Scoped pacing counts that session’s requests rather than all of the member’s work. TeamCode never kills agent processes.
 
+## Refusals seen by agents
+
+An inference refusal uses the envelope of the agent's own protocol, so the agent prints its message: Anthropic Messages `{"type":"error","error":{"type","message"}}` on `/v1/messages`, OpenAI Responses `{"error":{"type","code","message","param"}}` on `/v1/responses`. `error.type` is a documented value for the status (`rate_limit_error`, `billing_error` for an exhausted daily or run budget, `api_error` or `server_error` for 5xx, never `overloaded_error`, which Claude Code retries whatever the headers say). The TeamCode code is in `x-teamcode-error` and, for Responses, in `code`. Messages state the cause, what to do and when it unblocks; they count accounts per cause and never name accounts or other members.
+
+| Refusal | Status | Retry |
+|---|---|---|
+| No usable account, and none will become usable by itself (accounts awaiting a handover, to reconnect, disabled, or none connected) | 503 | `x-should-retry: false` |
+| No usable account, but some are cooling down, at a quota, or busy | 429 | `Retry-After` until the earliest known return; `x-should-retry: false` beyond 120 s |
+| Daily member, group or pool budget used up | 429 | `Retry-After` until 00:00 UTC, `x-should-retry: false`; `Retry-After: 30` and retried while that budget is held by running requests, which settle at their real cost |
+| Run budget used up | 429 | `x-should-retry: false` |
+| Concurrency, pacing, busy pool | 429 | `Retry-After` of a few seconds |
+| Queue wait expired or queue full | 503 | `Retry-After: 15` |
+| Invalid request, model, effort or pause policy, ended run | 4xx | `x-should-retry: false` (except `route_changed` and `queue_context_changed`, which a resubmission resolves) |
+
+Claude Code (and the Anthropic SDKs) skip their retries on `x-should-retry: false`, so a state only an administrator can fix is shown at once instead of looping on "API Error"; a 429 without that header is retried after `Retry-After`. Codex retries 5xx on its own and ignores the header. The local proxy of `teamcode run` relays these headers and prints the cause of a TeamCode refusal on stderr once per status and code every 10 minutes.
+
 ## Models and effort
 
 Administrators edit the allow/deny patterns and allowed efforts in the dashboard. Deny takes precedence. Missing effort is represented as `provider-default`; an explicit token thinking budget also requires `budgeted` permission and must fit the administrator's cap. This policy validates the requested and resolved model names, so route aliases cannot bypass a forbidden model. The gateway checks native Claude/GPT requests and both sides of configured cross-provider routes; see [routing](routing.md) for conversion capability limits.

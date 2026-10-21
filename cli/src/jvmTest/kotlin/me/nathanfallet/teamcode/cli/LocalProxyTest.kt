@@ -86,6 +86,49 @@ class LocalProxyTest {
         } finally { sdk.close() }
     }
 
+    @Test fun `a TeamCode refusal keeps its body and retry headers and its cause is reported once`() = testApplication {
+        val refusal = """{"type":"error","error":{"type":"api_error","message":"No Claude account in your TeamCode pool is usable.\u001b[31m 6 accounts are waiting for a handover."}}"""
+        var refusing = true
+        val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine {
+            if (refusing) respond(refusal, HttpStatusCode.ServiceUnavailable, headersOf(HttpHeaders.ContentType to listOf("application/json"),
+                "x-should-retry" to listOf("false"), "x-teamcode-error" to listOf("pool_unavailable"), HttpHeaders.RetryAfter to listOf("30")))
+            else respond("event: done\ndata: {}\n\n", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { config(this) } }
+        val reports = mutableListOf<String>()
+        application { localProxy(sdk, localToken, report = { reports += it }) }
+        try {
+            suspend fun post() = client.post("/v1/messages") { header("x-api-key", localToken); contentType(ContentType.Application.Json); setBody(payload()) }
+            repeat(3) {
+                val response = post()
+                assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                assertEquals("false", response.headers["x-should-retry"])
+                assertEquals("pool_unavailable", response.headers["x-teamcode-error"])
+                assertEquals("30", response.headers[HttpHeaders.RetryAfter])
+                assertEquals(refusal, response.bodyAsText())
+            }
+            assertEquals(listOf("TeamCode answered HTTP 503 (pool_unavailable): No Claude account in your TeamCode pool is usable. [31m 6 accounts are waiting for a handover."), reports)
+            refusing = false
+            assertEquals(HttpStatusCode.OK, post().status)
+            refusing = true
+            post()
+            assertEquals(1, reports.size, "A success of another request does not repeat the notice")
+        } finally { sdk.close() }
+    }
+
+    @Test fun `each refusal cause is reported again only after its interval`() = kotlinx.coroutines.runBlocking {
+        val clock = kotlin.time.TestTimeSource()
+        val reports = mutableListOf<String>()
+        val notices = me.nathanfallet.teamcode.cli.proxy.RefusalNotices({ reports += it }, kotlin.time.Duration.parse("10m"), clock)
+        fun body() = io.ktor.utils.io.ByteReadChannel("""{"error":{"type":"rate_limit_error","message":"Busy."}}""")
+        notices.inspect(429, "pool_busy", body()); notices.inspect(429, "pool_busy", body())
+        notices.inspect(429, "member_allowance", body()); notices.inspect(200, null, body()); notices.inspect(429, "pool_busy", body())
+        assertEquals(2, reports.size)
+        clock += kotlin.time.Duration.parse("11m")
+        notices.inspect(429, "pool_busy", body())
+        assertEquals(3, reports.size)
+        assertEquals(0, notices.inspect(502, null, body()).size, "Responses not written by TeamCode are never read")
+    }
+
     @Test fun `unkeyed browser and oversized requests never reach upstream`() = testApplication {
         var calls = 0
         val sdk = TeamCodeClient("https://self.hosted.example", { "server-token" }) { config -> HttpClient(MockEngine {

@@ -31,16 +31,28 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     install(io.ktor.server.resources.Resources)
     install(ContentNegotiation) { json(Serialization.json) }
+    fun inference(call: ApplicationCall) = inboundProtocols.firstOrNull { it.path == call.request.path() }?.protocol
     install(StatusPages) {
         exception<TeamFailure> { call, error ->
             if (call.response.isCommitted) throw error // A revoked/failed stream cannot become a replacement JSON response.
-            if (error.status == 429) call.response.header(HttpHeaders.RetryAfter, "60")
+            val protocol = inference(call)
+            if (protocol != null) return@exception call.respondInferenceError(protocol, error.status, error.code,
+                error.message ?: "Request failed.", error.retryAfterSeconds, error.retryable)
+            (error.retryAfterSeconds ?: if (error.status == 429) 60L else null)?.let { call.response.header(HttpHeaders.RetryAfter, it.toString()) }
             if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>", lede = ""), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }
         exception<CancellationException> { _, error -> throw error }
-        exception<InvalidRequest> { call, error -> call.respond(HttpStatusCode.BadRequest, ApiError(ErrorDetail("invalid_request", error.message ?: "Invalid request."))) }
-        exception<PayloadTooLarge> { call, _ -> call.respond(HttpStatusCode.PayloadTooLarge, ApiError(ErrorDetail("payload_too_large", "Request exceeds the configured limit."))) }
+        exception<InvalidRequest> { call, error ->
+            val protocol = inference(call)
+            if (protocol != null) call.respondInferenceError(protocol, 400, "invalid_request", error.message ?: "Invalid request.")
+            else call.respond(HttpStatusCode.BadRequest, ApiError(ErrorDetail("invalid_request", error.message ?: "Invalid request.")))
+        }
+        exception<PayloadTooLarge> { call, _ ->
+            val protocol = inference(call)
+            if (protocol != null) call.respondInferenceError(protocol, 413, "payload_too_large", "Request exceeds the configured limit.")
+            else call.respond(HttpStatusCode.PayloadTooLarge, ApiError(ErrorDetail("payload_too_large", "Request exceeds the configured limit.")))
+        }
     }
     intercept(ApplicationCallPipeline.Plugins) {
         call.response.header(HttpHeaders.CacheControl, "no-store")
@@ -192,7 +204,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             val headers = me.nathanfallet.teamcode.api.InferenceHeaders.capture(call.request.headers::getAll)
             val clientRequestId = call.request.headers.getAll("x-teamcode-client-request-id")?.let { it.singleOrNull() ?: "" }
             gateway.forward(GenerationRequest(bytes, headers, if (team != null) call.principal else null, inbound.protocol, clientRequestId)) { head, chunks ->
-                head.headers.filterKeys { it.lowercase() in setOf("retry-after", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider") }.forEach { (name, value) -> call.response.header(name, value) }
+                head.headers.filterKeys { it.lowercase() in setOf("retry-after", "x-teamcode-request-id", "x-teamcode-model", "x-teamcode-provider", "x-teamcode-error") }.forEach { (name, value) -> call.response.header(name, value) }
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.response.header("X-Accel-Buffering", "no")
                 val consumed = CompletableDeferred<Unit>()

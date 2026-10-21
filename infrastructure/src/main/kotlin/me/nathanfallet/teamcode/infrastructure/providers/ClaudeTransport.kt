@@ -18,7 +18,8 @@ class ClaudeTransport(private val http: HttpClient) : ProviderTransport {
     override val provider = "anthropic"
     override val protocol = me.nathanfallet.teamcode.domain.gateway.WireProtocol.MESSAGES
     override fun quotas(accountId: String, headers: Headers, now: Long) = headerQuotas(accountId, headers, now)
-    override suspend fun refresh(previous: ProviderCredentials): ProviderCredentials = http.preparePost("https://platform.claude.com/v1/oauth/token") {
+    override suspend fun refresh(previous: ProviderCredentials): ProviderCredentials = renew(previous).credentials
+    override suspend fun renew(previous: ProviderCredentials): RefreshedCredentials = http.preparePost("https://platform.claude.com/v1/oauth/token") {
         contentType(ContentType.Application.Json)
         timeout { requestTimeoutMillis = 15_000 }
         setBody(buildJsonObject {
@@ -32,7 +33,9 @@ class ClaudeTransport(private val http: HttpClient) : ProviderTransport {
         val refresh = (value["refresh_token"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: previous.refreshToken
         val seconds = (value["expires_in"] as? JsonPrimitive)?.longOrNull
         if (access.isNullOrBlank() || seconds == null || seconds !in 1..31_536_000) throw TeamFailure("refresh_failed", 503, "Provider refresh returned incomplete credentials.")
-        ProviderCredentials(access, refresh, System.currentTimeMillis() + seconds * 1000)
+        val account = value["account"] as? JsonObject
+        val reported = account?.let { ReportedAccount(it.text("uuid"), (value["organization"] as? JsonObject)?.text("uuid"), providerEmail(it.text("email_address"))) }
+        RefreshedCredentials(ProviderCredentials(access, refresh, System.currentTimeMillis() + seconds * 1000), reported)
     }
     private suspend fun usageDocument(credentials: ProviderCredentials): JsonObject = http.prepareGet("https://api.anthropic.com/api/oauth/usage?cedar_ember=1") {
         bearerAuth(credentials.accessToken); header("anthropic-beta", "oauth-2025-04-20")

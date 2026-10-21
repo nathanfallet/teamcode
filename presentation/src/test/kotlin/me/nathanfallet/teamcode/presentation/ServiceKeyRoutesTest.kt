@@ -19,14 +19,17 @@ class ServiceKeyRoutesTest {
         val records = mutableMapOf<String, ServiceKey>()
         var creates = 0
         var lastSecret = ""
+        var lastDays: Int? = -1
         private fun authorize(actor: Principal, member: String) {
             actor.requireReady(); actor.requireInteractive()
             if (actor.member.id != member) actor.requireAdmin()
         }
         override suspend fun list(actor: Principal, memberId: String): List<ServiceKey> { authorize(actor, memberId); return records.values.filter { it.memberId == memberId } }
-        override suspend fun create(actor: Principal, memberId: String, name: String, scopes: Set<ServiceScope>, validDays: Int): CreatedServiceKey {
+        override suspend fun create(actor: Principal, memberId: String, name: String, scopes: Set<ServiceScope>, validDays: Int?): CreatedServiceKey {
             authorize(actor, memberId); ServiceKeyService.validate(name, scopes, validDays)
-            val key = ServiceKey("00000000-0000-0000-0000-${(++creates).toString().padStart(12, '0')}", memberId, name, scopes, 1, Long.MAX_VALUE)
+            ServiceKeyService.requireNoExpiryAllowed(validDays, actor.member.role.isAdministrator)
+            lastDays = validDays
+            val key = ServiceKey("00000000-0000-0000-0000-${(++creates).toString().padStart(12, '0')}", memberId, name, scopes, 1, if (validDays == null) ServiceKeyService.NO_EXPIRY else 1_000L * validDays)
             records[key.id] = key
             lastSecret = "tcsk_" + "synthetic-service-secret".repeat(2) + creates
             return CreatedServiceKey(key, lastSecret)
@@ -127,5 +130,38 @@ class ServiceKeyRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/service-keys") {
             bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"name":"CI","scopes":["admin"],"validDays":30}""")
         }.status)
+    }
+    @Test fun keysWithoutExpiryUseExplicitNullAndLegacyRequestsKeepTheirLifetime() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway(), team = team(), serviceKeys = registry, publicOrigin = "http://localhost") }
+        suspend fun create(body: String) = client.post("/api/v1/service-keys") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody(body) }
+        assertEquals(HttpStatusCode.Created, create("""{"name":"old client","scopes":["inference"],"validDays":7}""").status)
+        assertEquals(7, registry.lastDays)
+        assertEquals(HttpStatusCode.Created, create("""{"name":"no field","scopes":["inference"]}""").status)
+        assertEquals(30, registry.lastDays, "An omitted lifetime keeps the 30-day default, never 'no expiry'")
+        val forever = create("""{"name":"ci","scopes":["inference"],"validDays":null}""")
+        assertEquals(HttpStatusCode.Created, forever.status)
+        assertNull(registry.lastDays)
+        assertTrue(forever.bodyAsText().contains(""""neverExpires":true"""))
+        assertTrue(client.get("/api/v1/service-keys") { bearerAuth("admin") }.bodyAsText().contains(""""expiresAt":${Long.MAX_VALUE}"""))
+        assertEquals(HttpStatusCode.BadRequest, create("""{"name":"bad","scopes":["inference"],"validDays":0}""").status)
+        val dashboard = client.get("/dashboard/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(dashboard.contains("<td>never</td>")); assertTrue(dashboard.contains("""name="never""""))
+        val form = client.post("/dashboard/service-keys") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=session&name=form&scope=inference&days=30&never=1")
+        }
+        assertEquals(HttpStatusCode.OK, form.status); assertNull(registry.lastDays)
+        val memberCreate = client.post("/api/v1/service-keys") { bearerAuth("member"); contentType(ContentType.Application.Json); setBody("""{"name":"m","scopes":["inference"],"validDays":null}""") }
+        assertEquals(HttpStatusCode.BadRequest, memberCreate.status)
+        assertFalse(client.get("/dashboard/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText().contains("""name="never""""))
+        val sdk = TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            val created = sdk.createServiceKey(CreateServiceKeyRequest("sdk", listOf("inference"), null))
+            assertTrue(created.metadata.neverExpires)
+            assertTrue(sdk.serviceKeys().first { it.id == created.metadata.id }.neverExpires)
+            sdk.revokeServiceKey(created.metadata.id)
+            assertTrue(sdk.serviceKeys().none { it.id == created.metadata.id })
+        } finally { sdk.close() }
     }
 }

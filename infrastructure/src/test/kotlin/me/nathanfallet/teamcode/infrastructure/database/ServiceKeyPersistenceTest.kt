@@ -52,6 +52,7 @@ class ServiceKeyPersistenceTest {
                 verifyLedgerAndRevocation(a, b, admin, key, actor)
                 verifyLoginLimit(a, b, admin, password)
                 verifyExpiryAndInvalidation(a, b, admin, colleague, password)
+                verifyNoExpiry(a, b, password)
                 verifyCreationLimit(a, b, password)
                 assertTrue(a.query { AuditEvents.select(AuditEvents.action).where { AuditEvents.action inList listOf("service_key.created", "service_key.revoked") }.count() } >= 2)
             } }
@@ -128,6 +129,37 @@ class ServiceKeyPersistenceTest {
         assertNull(SqlTeamService(b).authenticate(revoked.accessToken))
         assertEquals(30, SqlAdmissionStore(a).capacity(admin).chargedAndReservedUnits)
         assertEquals(original.member.id, admin.member.id)
+    }
+    private suspend fun verifyNoExpiry(a: Database, b: Database, password: String) {
+        val team = SqlTeamService(a)
+        val admin = team.login("admin", password, "No expiry").principal
+        // The earlier colleague was disabled by the role-change check; use a fresh, active member.
+        val created = team.createMember(admin, "no-expiry-colleague", Role.MEMBER)
+        val temporary = team.login("no-expiry-colleague", created.temporaryPassword, "test")
+        team.changePassword(temporary.principal, created.temporaryPassword, "no expiry colleague password")
+        val colleague = team.login("no-expiry-colleague", "no expiry colleague password", "test").principal
+        val keys = SqlServiceKeyService(b)
+        val forever = keys.create(admin, admin.member.id, "Skills CI", setOf(ServiceScope.SKILLS_PUBLISH), null)
+        assertTrue(forever.metadata.neverExpires)
+        assertEquals(ServiceKeyService.NO_EXPIRY, forever.metadata.expiresAt)
+        assertEquals(forever.metadata, SqlServiceKeyService(a).list(admin).single { it.id == forever.metadata.id })
+        assertEquals(1, a.query { AuditEvents.select(AuditEvents.id).where { (AuditEvents.action eq "service_key.created_no_expiry") and (AuditEvents.subjectId eq forever.metadata.id) }.count() })
+        assertEquals(0, a.query { AuditEvents.select(AuditEvents.id).where { (AuditEvents.action eq "service_key.created") and (AuditEvents.subjectId eq forever.metadata.id) }.count() })
+        // Accepted well past any 90-day lifetime: move the key's creation time back ten years; only the expiry decides.
+        a.query { Tokens.update({ Tokens.id eq forever.metadata.id }) { it[createdAt] = nowMillis() - 10 * 365 * 86_400_000L } }
+        val actor = SqlTeamService(b).authenticate(forever.accessToken)!!
+        assertEquals(setOf(ServiceScope.SKILLS_PUBLISH), actor.serviceScopes)
+        // A regular 90-day key is still bounded, and members and keys created for members cannot be unlimited.
+        failure("invalid_service_key") { keys.create(admin, admin.member.id, "Too long", setOf(ServiceScope.INFERENCE), 91) }
+        failure("invalid_service_key") { keys.create(admin, colleague.member.id, "Member unlimited", setOf(ServiceScope.INFERENCE), null) }
+        failure("invalid_service_key") { keys.create(colleague, colleague.member.id, "Self unlimited", setOf(ServiceScope.INFERENCE), null) }
+        val bounded = keys.create(colleague, colleague.member.id, "Member bounded", setOf(ServiceScope.INFERENCE), 90)
+        assertFalse(bounded.metadata.neverExpires)
+        // Revocation works the same, across replicas.
+        SqlServiceKeyService(a).revoke(admin, forever.metadata.id)
+        assertNull(SqlTeamService(a).authenticate(forever.accessToken))
+        assertTrue(keys.list(admin).none { it.id == forever.metadata.id })
+        keys.revoke(colleague, bounded.metadata.id)
     }
     private suspend fun verifyCreationLimit(a: Database, b: Database, password: String) = coroutineScope {
         val admin = SqlTeamService(a).login("admin", password, "Limits").principal

@@ -14,6 +14,7 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlAdmissionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlDirectiveService
 import me.nathanfallet.teamcode.infrastructure.database.SqlModelPolicyStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCredentialSource
+import me.nathanfallet.teamcode.infrastructure.database.AccountEmailBackfill
 import me.nathanfallet.teamcode.infrastructure.gateway.PoolGateway
 import me.nathanfallet.teamcode.infrastructure.gateway.QuotaMonitor
 import me.nathanfallet.teamcode.infrastructure.providers.ClaudeTransport
@@ -59,7 +60,8 @@ fun main() {
     val pacingSettings = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlPacingSettingsStore(it) }
     val forecasts = database?.let { me.nathanfallet.teamcode.infrastructure.database.ForecastServiceImpl(it) }
     val transports = listOf(ClaudeTransport(providerHttp), CodexTransport(providerHttp))
-    val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> transports.single { it.provider == account.identity.provider }.refresh(token) } }
+    val emailBackfill = accountStore?.let { AccountEmailBackfill(transports, mapOf("anthropic" to ClaudeAccountVerifier(providerHttp), "codex" to CodexAccountVerifier(providerHttp)), it) }
+    val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> emailBackfill?.renew(account, token) ?: transports.single { it.provider == account.identity.provider }.refresh(token) } }
     val cancellationStore = database?.let { SqlRequestCancellationStore(it) }
     val cancellation = cancellationStore?.let { RequestCancellationService(it) }
     val mcpAccess = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlMcpAccessStore(it) }
@@ -67,7 +69,7 @@ fun main() {
     val workers = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     if (accountStore != null) {
         val work = SqlScheduledWork(database!!)
-        val monitor = QuotaMonitor(accountStore, credentialSource!!, admission!!, transports, work)
+        val monitor = QuotaMonitor(accountStore, credentialSource!!, admission!!, transports, work, emailBackfill)
         workers.launch {
             while (isActive) {
                 try {
