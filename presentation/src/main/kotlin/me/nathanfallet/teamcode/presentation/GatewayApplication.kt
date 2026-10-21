@@ -178,7 +178,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             call.respond(Capabilities(serverVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION, mode = mode,
                 features = listOf("status", if (mode == "fixture") "messages.fixture.streaming" else "subscriptions.streaming") +
                     (if (team != null) listOf("team.auth", "team.members", "dashboard") else emptyList()) +
-                    (if (team != null && admission != null) listOf("capacity.shared-overflow.v1") else emptyList()) +
+                    (if (team != null && admission != null) listOf("capacity.shared-overflow.v1", "usage.tokens.v1") else emptyList()) +
                     (if (team != null && cancellation != null) listOf("requests.cancel.v1") else emptyList()) +
                     (if (team != null && runs != null) listOf("team.runs.v1") else emptyList()) +
                     (if (team != null && reconciliation != null) listOf("capacity.usage-reconciliation.v1") else emptyList()) +

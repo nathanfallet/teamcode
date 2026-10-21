@@ -104,11 +104,13 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             }
         }
     }
-    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) {
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) = settle(reservation, actualUnits, completed, null)
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean, usage: MeteredUsage?) {
         require(actualUnits == null || actualUnits in 0..100_000_000)
         database.query {
             lockTeam(reservation.account.identity.teamId)
-            val before = Reservations.select(Reservations.units, Reservations.runId).where { Reservations.id eq reservation.id }.singleOrNull()
+            val before = Reservations.select(Reservations.units, Reservations.runId, Reservations.teamId, Reservations.memberId, Reservations.accountId, Reservations.dayNumber)
+                .where { Reservations.id eq reservation.id }.singleOrNull()
             val changed = Reservations.update({ (Reservations.id eq reservation.id) and (Reservations.state eq "ACTIVE") }) {
                 it[state] = if (actualUnits == null) "UNCERTAIN" else "SETTLED"; it[units] = actualUnits ?: reservation.units
             }
@@ -118,9 +120,14 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                     if (completed) it[AgentRuns.completed] = AgentRuns.completed + 1
                 }
             }
+            // Same transaction and same "first settlement wins" condition as the credits: never counted twice.
+            if (changed == 1 && before != null && usage != null)
+                recordTokenUsage(before[Reservations.teamId], before[Reservations.memberId], before[Reservations.accountId], before[Reservations.dayNumber],
+                    nowMillis() / 3_600_000, before[Reservations.runId], usage) // The provider meters the account when the request ends.
             if (changed == 1 && completed) GatewayTotals.update({ GatewayTotals.teamId eq reservation.account.identity.teamId }) { it[GatewayTotals.completed] = GatewayTotals.completed + 1 }
         }
     }
+    override suspend fun tokenUsage(actor: Principal, query: TokenUsageQuery): TokenUsagePage = database.query { readTokenUsage(actor, query) }
     override suspend fun capacity(actor: Principal, memberId: String): MemberCapacity = database.query {
         actor.requireScope(ServiceScope.USAGE_READ); requireCurrent(this, actor)
         if (memberId != actor.member.id) actor.requireAdmin()

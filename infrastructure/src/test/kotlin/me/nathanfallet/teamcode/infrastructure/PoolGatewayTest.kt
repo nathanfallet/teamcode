@@ -189,6 +189,8 @@ class PoolGatewayTest {
             assertEquals(events, output.toString())
             assertEquals(1, calls)
             assertEquals(65, store.settled)
+            assertEquals(listOf<MeteredUsage?>(MeteredUsage("anthropic", "claude-opus-test", TokenUsage(input = 10, output = 1, cacheRead = 20, cacheCreation = 30))), store.usages,
+                "The raw ledger keeps each token type apart, unweighted")
             assertEquals(0, gateway.status().active)
         }
     }
@@ -205,6 +207,7 @@ class PoolGatewayTest {
             assertTrue(store.didSettle)
             assertNull(store.settled)
             assertEquals(listOf(false), store.settlementCompletions)
+            assertEquals(listOf<MeteredUsage?>(MeteredUsage("anthropic", "claude-opus-test", null)), store.usages, "Dispatched without usage: unmetered, never zero tokens")
             assertEquals(0, gateway.status().active)
         }
     }
@@ -229,6 +232,8 @@ class PoolGatewayTest {
                 assertEquals(1, calls)
                 assertEquals(6, store.settled)
                 assertEquals(listOf(true), store.settlementCompletions)
+                val model = if (protocol == WireProtocol.MESSAGES) "claude-opus-test" else "gpt-test"
+                assertEquals(listOf<MeteredUsage?>(MeteredUsage(provider, model, TokenUsage(input = 1, output = 1))), store.usages)
             }
         }
     }
@@ -244,6 +249,7 @@ class PoolGatewayTest {
             assertEquals(1, store.charges.size)
             assertTrue(store.charges.all { it == 0L })
             assertEquals(0, store.settled)
+            assertTrue(store.usages.all { it == null }, "A provider refusal consumed no tokens")
             assertTrue(store.cooled)
         }
     }
@@ -578,6 +584,10 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     }
     override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean) {
         didSettle = true; settled = actualUnits; charges += actualUnits; settlementCompletions += completed
+    }
+    val usages = mutableListOf<MeteredUsage?>()
+    override suspend fun settle(reservation: Reservation, actualUnits: Long?, completed: Boolean, usage: MeteredUsage?) {
+        usages += usage; settle(reservation, actualUnits, completed)
     }
     override suspend fun capacity(actor: Principal, memberId: String): MemberCapacity = error("unused")
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = error("unused")

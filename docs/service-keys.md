@@ -9,7 +9,7 @@ Select only the required scopes:
 | Scope | Access |
 | --- | --- |
 | `inference` | Registered inference endpoints and authenticated request cancellation |
-| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs`, the owner's pool accounts under neutral labels at `GET /api/v1/pools/accounts`, and MCP gateway usage at `GET /api/v1/mcp/usage` |
+| `usage:read` | The owner's capacity/allowance and agent-launch registry at `GET /api/v1/capacity` and `/api/v1/runs`, the owner's pool accounts under neutral labels at `GET /api/v1/pools/accounts`, the owner's raw token usage at `GET /api/v1/usage/tokens`, and MCP gateway usage at `GET /api/v1/mcp/usage` |
 | `guidance` | The owner's current/session pacing directives, delivery claims and receipts |
 | `mcp` | The [MCP gateway](mcp-gateway.md) endpoints `/mcp/<server>` and `GET /api/v1/mcp/servers`, with the owner's MCP assignments (V2 branch) |
 | `skills:read` | The owner's effective skill manifest and artifacts (V2, see [skills](skills.md)) |

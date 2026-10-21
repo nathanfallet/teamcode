@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.presentation
 
 import io.ktor.http.*
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import me.nathanfallet.teamcode.api.formatUnits
@@ -28,6 +29,7 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
         call.respond(PoolBudgetView(saved.poolId, saved.dailyUnits, saved.sharedOverflow))
     }
     get("/api/v1/pools/accounts") { call.respond(admission.poolAccounts(call.principal).map { it.view() }) }
+    get("/api/v1/usage/tokens") { call.respond(admission.tokenUsage(call.principal, call.tokenUsageQuery()).view()) }
     get("/api/v1/quotas") { call.respond(admission.quotas(call.principal).map { QuotaView(it.accountId, it.window, it.utilization, it.observedAtMillis, it.resetsAtMillis) }) }
     get("/dashboard/capacity") {
         val actor = call.principal
@@ -101,3 +103,21 @@ private fun memberRow(actor: Principal, member: Member, current: MemberCapacity,
 
 /** A disabled (zero) concurrency limit reads as unlimited. */
 internal fun concurrencyLabel(limit: Int) = if (limit <= 0) "unlimited" else limit.toString()
+
+private val USAGE_DAY = Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}")
+/** `from`/`to` are inclusive UTC dates; the default is the last seven days, today included. */
+internal fun ApplicationCall.tokenUsageQuery(today: java.time.LocalDate = java.time.LocalDate.now(java.time.ZoneOffset.UTC)): TokenUsageQuery {
+    val parameters = request.queryParameters
+    fun day(name: String): Long? = parameters[name]?.let { value ->
+        val date = if (USAGE_DAY.matches(value)) runCatching { java.time.LocalDate.parse(value) }.getOrNull() else null
+        date?.toEpochDay() ?: throw TeamFailure("invalid_window", 400, "Use dates written YYYY-MM-DD.")
+    }
+    val to = day("to") ?: today.toEpochDay()
+    val from = day("from") ?: (to - 6)
+    val all = when (parameters["all"]) { null, "false" -> false; "true" -> true; else -> throw TeamFailure("invalid_usage_query", 400, "all must be true or false.") }
+    return TokenUsageQuery(from, to, parameters["member"], all, parameters["after"]?.let(TokenUsageCursor::decode))
+}
+internal fun TokenUsagePage.view() = TokenUsagePageView(rows.map {
+    TokenUsageRowView(java.time.LocalDate.ofEpochDay(it.dayNumber).toString(), it.memberId, it.username, it.runId, it.provider, it.model,
+        it.requests, it.unmeteredRequests, it.input, it.cacheCreation, it.cacheRead, it.output)
+}, nextAfter)

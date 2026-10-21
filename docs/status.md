@@ -1,5 +1,11 @@
 # Implementation status
 
+## Raw token usage ledger (2026-10-21)
+
+Settlement now also records the provider's raw tokens (uncached input, cache writes, cache reads, output) per UTC day, member, agent launch, provider and model (`token_usage`), and per account and UTC hour (`account_token_usage`, internal), once per reservation and in the settlement transaction. `GET /api/v1/usage/tokens` (`usage:read`, own rows; `member=`/`all=true` for interactive administrators) serves date-ranged keyset pages; capability `usage.tokens.v1`. Responses cached input is split out of `input_tokens` once; credits are unchanged. The planned API-equivalent pricing and automatic shared pool sizing are designed in [decision 0002](decisions/0002-api-equivalent-capacity.md), not implemented. See [capacity](capacity.md#raw-token-usage).
+
+Evidence: `PoolGatewayTest` (the four types reach settlement unweighted for Messages and Responses, unmetered on a committed disconnect, nothing on a provider refusal), `CodexProviderTest` (Responses cached split), `TokenUsageRoutesTest` (date parsing, defaults, cursor, scopes, capability, errors) and `TokenUsagePersistenceTest` (MySQL 8.4, CI: migrations match the Exposed tables, a repeated settlement adds nothing, run/model rows, account hours, member/key/administrator visibility, keyset pages).
+
 ## Status fallback for 0.3.1 (2026-10-21)
 
 The 0.3.1 release run failed on the Windows smoke: `teamcode status` aborted because its fixture answers every unknown GET, including the new `GET /api/v1/capacity`, with a generic 200 body, and only `404`/`403` were tolerated, not a decoding failure. Only the gateway line is now required: the quota, pacing and account reads run together, and each failure leaves its section out with a reason (`not_served`, `unexpected_response`, `read_failed`) shown as an `unavailable` line and in the JSON `unavailable` map; cancellation still propagates. Evidence: the macOS ARM64 release binary from `main` exits 1 against a fixture with a generic body or invalid JSON (404 was already handled) and succeeds with the fix; the CLI JVM tests and the native `smoke-native`, `smoke-team`, `smoke-run` and `smoke-service` scripts pass; `smoke-windows` now asserts the fallback lines.

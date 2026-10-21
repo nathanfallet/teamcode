@@ -231,8 +231,11 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 // provider terminal usage, independently of downstream delivery.
                 val terminalUsage = meter.settledUnits
                 val charge = if (!dispatched) 0 else knownCharge ?: terminalUsage
+                // A request never sent or refused by the provider consumed no tokens; anything else enters the raw
+                // ledger, as unmetered when the stream gave no terminal usage.
+                val usage = if (!dispatched || knownCharge != null) null else MeteredUsage(transport.provider, model, meter.tokens)
                 try {
-                    withTimeout(5_000) { admission.settle(reservation, charge, terminalUsage != null) }
+                    withTimeout(5_000) { admission.settle(reservation, charge, terminalUsage != null, usage) }
                     System.out.println("TeamCode inference settled request=${reservation.id} units=${charge ?: "unknown"} terminal=${meter.lastEvent} failure=${meter.failureCategory}")
                 } catch (_: Exception) {
                     // The durable reservation remains charged; never mask cancellation or a stream failure.
