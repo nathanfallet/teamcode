@@ -143,8 +143,9 @@ class AutomaticPoolSizeTest {
         assertEquals(100, AutomaticPoolSize.smooth(null, null, 100, now), "The first value is the estimate")
         assertEquals(120, AutomaticPoolSize.smooth(100, now - hour, 1_000, now))
         assertEquals(80, AutomaticPoolSize.smooth(100, now - hour, 10, now))
+        assertEquals(103, AutomaticPoolSize.smooth(100, now - 10 * 60_000, 1_000, now), "Ten minutes allow a sixth of the hourly step")
         assertEquals(1_100, AutomaticPoolSize.smooth(1_000, now - 30 * 60_000, 2_000, now), "Half an hour allows half the step: 20% of 1000 / 2 = 100")
-        assertEquals(105, AutomaticPoolSize.smooth(100, now - 10 * 60_000, 105, now), "Within the step the estimate applies as is")
+        assertEquals(102, AutomaticPoolSize.smooth(100, now - 10 * 60_000, 102, now), "Within the step the estimate applies as is")
         assertEquals(5_000, AutomaticPoolSize.smooth(100, now - 3 * hour, 5_000, now), "A value older than two hours restarts from the estimate")
         assertEquals(1_000, AutomaticPoolSize.smooth(0, now - hour, 1_000, now), "Nothing scales from zero: the estimate applies, so the pool grows back after a full reset")
     }

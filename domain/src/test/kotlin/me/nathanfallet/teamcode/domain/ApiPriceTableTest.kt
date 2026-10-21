@@ -26,7 +26,7 @@ class ApiPriceTableTest {
         assertEquals(15_000_000, table.priceFor("anthropic", "claude-opus-4-1", day - 1)!!.inputMicros, "Past days keep the price that applied to them")
         assertEquals(5_000_000, table.priceFor("anthropic", "claude-opus-4-1", day)!!.inputMicros)
         assertNull(table.priceFor("anthropic", "claude-opus-4-1", day - 31), "No row yet on that day")
-        assertEquals(1, table.priceFor("anthropic", "claude-opus-4", day + 1)!!.inputMicros, "An exact model row dated later does not apply before its day")
+        assertEquals(1, table.priceFor("anthropic", "claude-opus-4", day + 1)!!.inputMicros, "A row applies from its own day")
     }
 
     @Test fun theApiEquivalentPricesEachTokenTypeSeparately() {
