@@ -138,6 +138,10 @@ class SkillPersistenceTest {
                     pins.filter { it.first == publisher.tokenId })
                 assertTrue(pins.filter { it.first != publisher.tokenId }.all { it.first == null })
                 assertTrue(pins.any { it.first == null })
+                val published = a.query {
+                    AuditEvents.select(AuditEvents.subjectId).where { (AuditEvents.action eq "skill.version.published") and (AuditEvents.credentialId eq publisher.tokenId) }.map { it[AuditEvents.subjectId] }
+                }
+                assertEquals(listOf(v1.version.id, auto.version.id), published, "A key's publications name it; the administrator's 2.0.0 does not")
 
                 // A publishing key cannot otherwise administer the catalog, and its revocation is shared by every replica.
                 failure("forbidden") { catalogB.store.catalog(member) }
@@ -206,13 +210,22 @@ class SkillPersistenceTest {
                     ci.publish(publisher, name, "1", files("one"), pin = true)
                     ci.publish(publisher, name, "2", files("two"))
                     // CI re-pins 2 by retrying its publication while an administrator retires 2: one of them wins, never both.
-                    listOf(
+                    val (published, retired) = listOf(
                         async(Dispatchers.IO) { runCatching { ci.publish(publisher, name, "2", files("two"), pin = true) } },
                         async(Dispatchers.IO) { runCatching { dashboard.store.retireVersion(admin, name, "2") } },
                     ).awaitAll()
                     val (skill, versions) = dashboard.store.versions(admin, name)
                     val pinned = versions.single { it.version == skill.pinnedVersion }
                     assertFalse(pinned.retired, "round $round: pinned ${skill.pinnedVersion} is retired")
+                    // Exactly one wins, and the other is refused for the reason the winner created.
+                    assertTrue(published.isSuccess != retired.isSuccess, "round $round: publication ${published.isSuccess}, retirement ${retired.isSuccess}")
+                    if (published.isSuccess) {
+                        assertEquals("2", skill.pinnedVersion)
+                        assertEquals("skill_version_pinned", (retired.exceptionOrNull() as TeamFailure).code)
+                    } else {
+                        assertEquals("1", skill.pinnedVersion)
+                        assertEquals("skill_version_retired", (published.exceptionOrNull() as TeamFailure).code)
+                    }
                 }
             } }
         }

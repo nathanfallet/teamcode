@@ -56,7 +56,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                         it[Skills.id] = id; it[teamId] = actor.teamId; it[Skills.name] = name
                         it[pinnedVersionId] = null; it[retiredAt] = null; it[createdAt] = now; it[updatedAt] = now
                     }
-                    audit(actor.teamId, actor.member.id, "skill.created", id)
+                    audit(actor.teamId, actor.member.id, "skill.created", id, credential = keyId(actor))
                     id
                 }
         }
@@ -90,9 +90,9 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             val row = Skills.selectAll().where { Skills.id eq skillId }.forUpdate().singleOrNull()
                 ?: throw TeamFailure("skill_busy", 409, "This skill changed while it was being published. Retry the publication.")
             if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before publishing new versions.")
-            // A locking read: the transaction's snapshot predates the row lock wait, and a concurrent publication or
-            // version retirement committed meanwhile must be seen, both for idempotency and before pinning.
-            val existing = SkillVersions.selectAll().where { (SkillVersions.skillId eq skillId) and (SkillVersions.version eq version) }.forUpdate().singleOrNull()
+            // Read under the skill row lock (READ COMMITTED): a version retirement, which takes the same lock, is either
+            // committed and seen here, or waits until this publication and its pin commit.
+            val existing = SkillVersions.selectAll().where { (SkillVersions.skillId eq skillId) and (SkillVersions.version eq version) }.singleOrNull()
             if (existing != null) {
                 if (existing[SkillVersions.digest] != artifact.digest)
                     throw TeamFailure("skill_version_conflict", 409, "Version $version is already published with different content. Publish a new version.")
@@ -117,7 +117,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                 this[SkillFiles.size] = entry.size; this[SkillFiles.sha256] = entry.sha256; this[SkillFiles.content] = file.content
             }
             Skills.update({ Skills.id eq skillId }) { it[updatedAt] = now }
-            audit(actor.teamId, actor.member.id, "skill.version.published", id)
+            audit(actor.teamId, actor.member.id, "skill.version.published", id, credential = keyId(actor))
             // Pinned in the publication transaction: the version is never visible as published-but-unpinned to CI.
             if (pin) pinLocked(actor, row, id, now)
             SkillPublication(skill(skillRow(actor.teamId, name)), version(versionRow(skillId, version)), created = true)
@@ -127,7 +127,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     /** Open to skill publishers, so a `skills:publish` key can approve a version it published earlier. */
     override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name, { requireSkillPublisher() }) { row, now ->
         if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before pinning a version.")
-        val target = versionRow(row[Skills.id], version, lock = true)
+        val target = versionRow(row[Skills.id], version)
         if (target[SkillVersions.retiredAt] != null) throw TeamFailure("skill_version_retired", 409, "This version is retired and cannot be pinned.")
         pinLocked(actor, row, target[SkillVersions.id], now)
     }
@@ -135,14 +135,17 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     /**
      * Points the skill at [versionId] when it is not already pinned there. The caller holds the team lock or the skill
      * row lock (and read [row] with it) and has checked that neither the skill nor the version is retired. A pin made by
-     * a service key names that key in `credentialId`; an interactive pin leaves it empty, as before, so the column alone
-     * tells a CI pin from an administrator's.
+     * a service key names that key in `credentialId` (as do the key's `skill.created` and `skill.version.published`); an
+     * interactive pin leaves it empty, as before, so the column alone tells a CI write from an administrator's.
      */
     private fun JdbcTransaction.pinLocked(actor: Principal, row: ResultRow, versionId: String, now: Long) {
         if (row[Skills.pinnedVersionId] == versionId) return
         Skills.update({ Skills.id eq row[Skills.id] }) { it[pinnedVersionId] = versionId; it[updatedAt] = now }
-        audit(actor.teamId, actor.member.id, "skill.pinned", versionId, credential = actor.tokenId.takeIf { actor.serviceScopes != null })
+        audit(actor.teamId, actor.member.id, "skill.pinned", versionId, credential = keyId(actor))
     }
+
+    /** The service key behind a catalog write, for its audit event; null for an interactive login. */
+    private fun keyId(actor: Principal) = actor.tokenId.takeIf { actor.serviceScopes != null }
 
     override suspend fun unpin(actor: Principal, name: String): Skill = write(actor, name) { row, now ->
         if (row[Skills.pinnedVersionId] != null) {
@@ -171,7 +174,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             lockTeam(actor.teamId); requireCurrent(this, actor)
             // Locks the skill row: a publication pinning this version holds it without the team lock.
             val row = skillRow(actor.teamId, name, lock = true)
-            val target = versionRow(row[Skills.id], version, lock = true)
+            val target = versionRow(row[Skills.id], version)
             if (row[Skills.pinnedVersionId] == target[SkillVersions.id])
                 throw TeamFailure("skill_version_pinned", 409, "Pin another version before retiring the approved one.")
             if (target[SkillVersions.retiredAt] == null) {
@@ -307,8 +310,8 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     private fun skillRow(team: String, name: String, lock: Boolean = false) =
         Skills.selectAll().where { (Skills.teamId eq team) and (Skills.name eq name) }.let { if (lock) it.forUpdate() else it }.singleOrNull()
             ?: throw TeamFailure("not_found", 404, "Skill not found.")
-    private fun versionRow(skill: String, version: String, lock: Boolean = false) =
-        SkillVersions.selectAll().where { (SkillVersions.skillId eq skill) and (SkillVersions.version eq version) }.let { if (lock) it.forUpdate() else it }.singleOrNull()
+    private fun versionRow(skill: String, version: String) =
+        SkillVersions.selectAll().where { (SkillVersions.skillId eq skill) and (SkillVersions.version eq version) }.singleOrNull()
             ?: throw TeamFailure("not_found", 404, "Skill version not found.")
 
     /** Single-row reads resolve the pinned label by primary key; list reads join it. */
