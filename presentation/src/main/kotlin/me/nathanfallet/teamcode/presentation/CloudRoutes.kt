@@ -148,10 +148,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val q = call.request.queryParameters
             fun single(name: String) = q.getAll(name)?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send $name at most once.") }
             val states = q.getAll("state").orEmpty().map { value -> CloudSessionState.entries.find { it.wire == value } ?: throw TeamFailure("invalid_state", 400, "Unknown session state.") }.toSet()
-            val labels = q.getAll("label").orEmpty().associate { value ->
-                val (key, label) = value.split('=', limit = 2).takeIf { it.size == 2 } ?: throw TeamFailure("invalid_label", 400, "Filter labels as key=value.")
-                key to label
-            }
+            val labels = LabelRules.parseFilter(q.getAll("label").orEmpty())
             val owner = single("owner")?.let { if (it == "all") "*" else it }
             val limit = single("limit")?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.") } ?: 50
             val page = sessions.list(call.principal, CloudSessionQuery(owner, states, labels, single("before"), limit))

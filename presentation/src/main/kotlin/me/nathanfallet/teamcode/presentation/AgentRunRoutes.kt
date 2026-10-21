@@ -10,7 +10,7 @@ import me.nathanfallet.teamcode.domain.team.*
 
 internal fun RunPolicy.view() = RunPolicyView(budgetUnits, maxConcurrent, paused)
 internal fun AgentRun.view() = AgentRunView(id, memberId, username, agent, workload, deviceId, startedAtMillis, heartbeatAtMillis, lastRequestAtMillis,
-    endedAtMillis, exitCode, state.name, policy.view(), chargedAndReservedUnits, attempts, completed, activeRequests, contextsTruncated, queuedRequests)
+    endedAtMillis, exitCode, state.name, policy.view(), chargedAndReservedUnits, attempts, completed, activeRequests, contextsTruncated, queuedRequests, labels)
 internal fun RunLease.view() = RunLeaseView(id, startedAtMillis, heartbeatAtMillis, endedAtMillis, state.name)
 internal fun RunDetail.view() = RunDetailView(run.view(), conversations.map {
     RunConversationView(it.sessionKey, it.conversationKey, it.requestedModel, it.provider, it.model, it.lastSeenAtMillis, it.pace, it.directiveId, it.receivedByCliAtMillis, it.emittedToHookAtMillis)
@@ -19,10 +19,10 @@ internal fun RunDetail.view() = RunDetailView(run.view(), conversations.map {
 internal fun Route.agentRunRoutes(runs: AgentRunService) {
     post<RunsResource> {
         val input = call.jsonBody<StartRunRequest>()
-        call.respond(HttpStatusCode.Created, runs.start(call.principal, input.id, input.agent, input.workload).view())
+        call.respond(HttpStatusCode.Created, runs.start(call.principal, input.id, input.agent, input.workload, input.labels).view())
     }
     get<RunsResource> {
-        val page = runs.list(call.principal, it.member, it.all, it.before)
+        val page = runs.list(call.principal, it.member, it.all, it.before, LabelRules.parseFilter(it.label))
         call.respond(RunPageView(page.runs.map { it.view() }, page.nextBeforeId))
     }
     get<RunsResource.Id> { call.respond(runs.get(call.principal, it.id).view()) }

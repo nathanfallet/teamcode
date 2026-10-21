@@ -46,7 +46,8 @@ private fun CloudSessionView.details() = buildString {
     transferId?.let { appendLine("Transfer:     $it (accepted; the owner changes once paused)") }
 }.trimEnd()
 
-private fun parseLabels(labels: List<String>) = labels.associate { label ->
+/** `--label key=value` options, shared with `teamcode run`; the server validates keys and values. */
+internal fun parseLabels(labels: List<String>) = labels.associate { label ->
     val key = label.substringBefore('=', "")
     require(key.isNotEmpty()) { "Use --label key=value." }
     key to label.substringAfter('=')

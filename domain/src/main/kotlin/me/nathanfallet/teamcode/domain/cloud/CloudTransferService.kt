@@ -125,12 +125,12 @@ class CloudTransferService(
         throw busy()
     }
 
-    suspend fun get(principal: Principal, id: String): CloudTransfer = expiredAsOf(visible(principal, id), store.now())
+    suspend fun get(principal: Principal, id: String): CloudTransfer = expiredAsOf(visible(principal, id, read = true), store.now())
 
     suspend fun list(principal: Principal, query: CloudTransferQuery): CloudTransferPage {
         principal.requireCloudRead()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
-        if (query.team) principal.requireCloudAdministrator()
+        if (query.team) principal.requireCloudTeamRead()
         store.revalidate(principal)
         val now = store.now()
         return transfers.list(principal.teamId, principal.member.id, query).let { page -> page.copy(transfers = page.transfers.map { expiredAsOf(it, now) }) }
@@ -144,13 +144,13 @@ class CloudTransferService(
     suspend fun expireOffers(limit: Int = 100): Int = transfers.expireOffers(limit)
 
     /** Visible to both members and administrators; anyone else gets `404`. */
-    private suspend fun visible(principal: Principal, id: String): CloudTransfer {
+    private suspend fun visible(principal: Principal, id: String, read: Boolean = false): CloudTransfer {
         principal.requireCloudRead()
         store.revalidate(principal)
         if (!CloudIdentifier.valid(id)) throw missingTransfer()
         val transfer = transfers.find(principal.teamId, id) ?: throw missingTransfer()
         val member = principal.member.id
-        if (!principal.isCloudAdministrator && member != transfer.fromMemberId && member != transfer.toMemberId) throw missingTransfer()
+        if (!(if (read) principal.canReadTeamCloud else principal.isCloudAdministrator) && member != transfer.fromMemberId && member != transfer.toMemberId) throw missingTransfer()
         return transfer
     }
 
