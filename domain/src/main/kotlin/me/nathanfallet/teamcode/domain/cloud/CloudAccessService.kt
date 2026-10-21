@@ -34,7 +34,7 @@ class CloudAccessService(
 
     /**
      * The permissions [member] holds on a session owned by [ownerId] (or on creation, with [ownerId] = the member).
-     * [administrator] is false for a key without `admin:cloud`, which then holds only what the rules give its owner.
+     * [administrator] is false for a key without `admin:cloud`, which then holds only what the rules give its owner; a read by an administrator's `team:read` key passes true.
      */
     suspend fun permissions(teamId: String, member: Member, ownerId: String, administrator: Boolean = member.role.isAdministrator): Set<CloudPermission> {
         if (administrator) return CloudPermission.entries.toSet()

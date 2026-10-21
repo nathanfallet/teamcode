@@ -52,6 +52,9 @@ class PoolAccountStatusPersistenceTest {
                 val key = SqlServiceKeyService(db).create(admin, admin.member.id, "Usage reader", setOf(ServiceScope.USAGE_READ), 1)
                 val service = assertNotNull(team.authenticate(key.accessToken))
                 assertEquals(listOf(null), admission.poolAccounts(service).map { it.name })
+                // team:read sees what an interactive administrator sees: every account by name.
+                val teamKey = SqlServiceKeyService(db).create(admin, admin.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1)
+                assertEquals(admission.poolAccounts(admin).map { it.label }, admission.poolAccounts(assertNotNull(team.authenticate(teamKey.accessToken))).map { it.label })
                 val inference = SqlServiceKeyService(db).create(admin, admin.member.id, "Inference only", setOf(ServiceScope.INFERENCE), 1)
                 assertEquals("credential_scope", assertFailsWith<TeamFailure> { admission.poolAccounts(assertNotNull(team.authenticate(inference.accessToken))) }.code)
 
