@@ -27,7 +27,7 @@ actual suspend fun runInteractiveProcess(command: String, arguments: List<String
         }
         val pid = alloc<IntVar>()
         val result = teamcode_spawn(command, vector(listOf(command) + arguments), vector(values.map { "${it.key}=${it.value}" }), pid.ptr, if (quiet) 1 else 0)
-        check(result == 0) { "Cannot start the requested agent. Install it and make it available on PATH." }
+        if (result != 0) throw me.nathanfallet.teamcode.cli.CliUserException("Cannot start \"$command\". Install it and make it available on PATH.")
         pid.value
     }
     var reaped = false
