@@ -31,7 +31,7 @@ This page is the contract and the record of what is implemented. It follows the 
 | Team MCP servers (through the runner's loopback relay) and pinned skills (installed under the agent's UID), resolved for the current owner at every agent start | Implemented, see [team MCP servers and skills](#team-mcp-servers-and-skills) |
 | Transcript, messages, attach, personal and administrator keys | Implemented (#9, #21) |
 
-The server mounts the cloud routes and advertises `cloud.sessions.v1` only when cloud sessions are enabled (see [deployment](#deployment)). Clients must check that capability before using any route below.
+The server advertises `cloud.sessions.v1` only while cloud sessions are on in the stored [runtime](#runtime-on-off-runner-image-and-pod-callback); while they are off, the member-facing routes below answer `404` and only configuration and the runner channel stay reachable. Clients must check that capability before using any route below.
 
 ## Resources
 
@@ -172,7 +172,7 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `GET /cloud/transfers` | `direction=incoming\|outgoing\|all`, `scope=team` (administrators), `state` (repeatable), `session`, `before`, `limit` ≤ 50 | Both members, administrator | Implemented |
 | `GET /cloud/transfers/{id}`; `POST .../accept` (`{resume?}`), `.../decline`, `.../cancel` | Read and decide | Recipient (accept, decline), former owner (cancel an offer), administrator (all) | Implemented |
 
-While cloud sessions are off, every route above except `/cloud/runtime`, `/cloud/settings`, `/cloud/clusters` and `/cloud/profiles` answers `404`, as do the members' GitHub link routes; administrators keep configuring the team meanwhile. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
+While cloud sessions are off, every route above except `/cloud/runtime`, `/cloud/settings`, `/cloud/clusters`, `/cloud/profiles` and the runner channel (`/cloud/runner/...`) answers `404`, as do the members' GitHub link routes, whatever their spelling (the gate reads the path the way routing matches it). Administrators keep configuring the team meanwhile, and pods that already run keep their channel. A session the caller cannot see returns `404`. Errors use the existing `ApiError {error: {type, message}}`.
 
 ### Create request and view
 
@@ -497,15 +497,15 @@ The deployment carries no cloud, GitHub or Kubernetes setting: the [Helm chart](
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| On | off | Whether cloud sessions run. Off: members see no cloud page, `cloud.*` and `github.link.v1` capabilities are not advertised, session, transfer, transcript, runner and GitHub link routes answer `404`, and the reconciler, garbage collection and maintenance workers stay idle; pods and workspaces that exist are left untouched until cloud sessions are on again |
+| On | off | Whether members can use cloud sessions. Off: members see no cloud page, `cloud.*` and `github.link.v1` capabilities are not advertised, and the session, transfer, transcript and GitHub link routes answer `404`, so no session is created, resumed or messaged. Sessions that already exist are not abandoned: the runner channel stays open and the reconciler, garbage collection and maintenance keep running (idle pause, retention, deletion), so a running agent is never killed by the switch. The workers start once a runtime is stored |
 | Runner image | (none) | Image holding the `teamcode` Linux binary and `cp`, copied into each session pod. Required to turn cloud sessions on. Pin it by digest (`image@sha256:...`); it is pulled with the profile's `imagePullSecrets`, so host it publicly or where those secrets reach |
 | Runner binary | `/usr/local/bin/teamcode` | Path of the binary in that image |
 | Server URL for pods | the public URL | HTTPS origin the runner calls, reachable from the cluster. Turning cloud sessions on is refused while the effective origin is not HTTPS or is loopback |
 | Workspace access mode | `ReadWriteOncePod` | `ReadWriteOnce` for drivers without `ReadWriteOncePod` |
 
-The runtime lives in `cloud_runtime` (`GET/PUT /api/v1/cloud/runtime`, administrators only; no field is a credential). Each replica rereads it every 5 seconds and reads it again for every pod it creates, so a change applies without a restart or a redeployment.
+The runtime lives in `cloud_runtime` (`GET/PUT /api/v1/cloud/runtime`, administrators only; no field is a credential). A save carries the `updatedAt` it was based on and is refused with `409 cloud_runtime_conflict` if another administrator saved meanwhile. Each replica rereads it every 5 seconds, never replacing a newer value it saved itself, and reads it again for every pod it creates, so a change applies without a restart or a redeployment.
 
-**Former variables.** Before this, the runtime came from `TEAMCODE_CLOUD_RUNNER_IMAGE`, `TEAMCODE_CLOUD_RUNNER_BINARY`, `TEAMCODE_CLOUD_SERVER_URL` and `TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE`. When the database holds no runtime yet and `TEAMCODE_CLOUD_RUNNER_IMAGE` is set, the server stores them once at startup, turned on (journaled as `cloud.runtime.seeded`); an invalid combination, such as a plain-HTTP server URL, is stored turned off with a startup warning instead of preventing the start. From then on the database is the source of truth: the variables are never read again, and they can be removed from the deployment.
+**Former variables.** Before this, the runtime came from `TEAMCODE_CLOUD_RUNNER_IMAGE`, `TEAMCODE_CLOUD_RUNNER_BINARY`, `TEAMCODE_CLOUD_SERVER_URL` and `TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE`. When the database holds no runtime yet and `TEAMCODE_CLOUD_RUNNER_IMAGE` is set, the server stores them once at startup, turned on (journaled as `cloud.runtime.seeded`); an invalid combination, such as a plain-HTTP server URL, is stored turned off with a startup warning, keeping only the fields that are valid on their own, instead of preventing the start. From then on the database is the source of truth: the variables are never read again, and they can be removed from the deployment.
 
 ### Clusters and GitHub
 

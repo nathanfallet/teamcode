@@ -199,7 +199,8 @@ data class CloudSettingsView(
 /**
  * Whether cloud sessions run on the server and how their pods are built (`GET/PUT /api/v1/cloud/runtime`, administrators).
  * Stored in the database; no field is a credential. `serverUrl = null` makes pods call the server's public URL, shown
- * as `effectiveServerUrl`. In a `PUT`, `effectiveServerUrl` and `updatedAt` are ignored.
+ * as `effectiveServerUrl`, which a `PUT` ignores. A `PUT` must carry the `updatedAt` it read (null when nothing was stored yet):
+ * a runtime changed meanwhile answers `409 cloud_runtime_conflict`.
  */
 @Serializable
 data class CloudRuntimeView(

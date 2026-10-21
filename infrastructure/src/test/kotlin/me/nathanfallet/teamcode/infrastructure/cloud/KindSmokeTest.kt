@@ -38,7 +38,7 @@ class KindSmokeTest {
                 val cipher = CredentialCipher(ByteArray(32) { 7 })
                 val adminStore = SqlCloudAdminStore(database, cipher)
                 val port = KubernetesClusterPort({ adminStore.connection(it) },
-                    KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce"))
+                    KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce").let { options -> { options } })
                 val store = SqlCloudSessionStore(database)
                 val admin = CloudAdministrationService(adminStore, port)
                 val sessions = CloudSessionService(store)

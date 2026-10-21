@@ -20,7 +20,10 @@ class CloudRuntimeRoutesTest {
     private class Runtime : CloudRuntimeStore {
         var stored = CloudRuntime()
         override suspend fun runtime(actor: Principal) = stored
-        override suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime) = runtime.copy(updatedAt = 1).also { stored = it }
+        override suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime, expectedUpdatedAt: Long?): CloudRuntime {
+            if (stored.updatedAt != expectedUpdatedAt) throw TeamFailure("cloud_runtime_conflict", 409, "Changed.")
+            return runtime.copy(updatedAt = (expectedUpdatedAt ?: 0) + 1).also { stored = it }
+        }
         override suspend fun current() = stored
         override suspend fun seed(initial: CloudRuntime) = stored.takeIf { it.updatedAt != null } ?: initial.copy(updatedAt = 1).also { stored = it }
     }
@@ -120,10 +123,15 @@ class CloudRuntimeRoutesTest {
         assertEquals("https://teamcode.example.test", view.effectiveServerUrl, "An empty server URL uses the public URL")
 
         // A loopback callback origin cannot be stored; turning off through the API hides everything again.
-        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":true,"runnerImage":"r:1","serverUrl":"https://127.0.0.1:8443"}""") }.status)
-        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1"}""") }.status)
+        assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":true,"runnerImage":"r:1","serverUrl":"https://127.0.0.1:8443","updatedAt":1}""") }.status)
+        assertEquals(HttpStatusCode.Conflict, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1"}""") }.status,
+            "A save based on an older read never overwrites another administrator's change")
+        assertTrue(store.stored.enabled)
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/runtime") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"enabled":false,"runnerImage":"r:1","updatedAt":1}""") }.status)
         assertTrue(features().none { it.startsWith("cloud.") })
         assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions") { bearerAuth("colleague") }.status)
+        for (spelling in listOf("/api/v1//cloud/sessions", "/api/v1/cloud//sessions", "/api/v1/cl%6Fud/sessions"))
+            assertEquals(HttpStatusCode.NotFound, client.get(spelling) { bearerAuth("admin") }.status, spelling)
     }
 
     @Test fun clustersAreEditedOnTheDashboardWithoutShowingTheirCredentials() = testApplication {
@@ -155,11 +163,13 @@ class CloudRuntimeRoutesTest {
     }
 
     @Test fun onlyRunningAndLinkingPathsAreGated() {
-        for (path in listOf("/api/v1/cloud/sessions", "/api/v1/cloud/sessions/s1/pause", "/api/v1/cloud/transfers", "/api/v1/cloud/runner/register",
-            "/api/v1/cloud/settings/../sessions", "/api/v1/cloud/clusters%2F..%2Fsessions", "/api/v1/github/link", "/api/v1/github/link/device", GITHUB_CALLBACK_PATH, "/dashboard/github/link"))
+        for (path in listOf("/api/v1/cloud/sessions", "/api/v1/cloud/sessions/s1/pause", "/api/v1/cloud/transfers", "/api/v1/cloud/access", "//api/v1/cloud/sessions",
+            "/api/v1//cloud/sessions", "/api/v1/cl%6Fud/sessions", "/api/v1/cloud/%ZZ", "/api/v1/github/link", "/api/v1/github//link/device", GITHUB_CALLBACK_PATH, "/dashboard/github/link"))
             assertTrue(cloudOperationalPath(path), path)
         for (path in listOf("/api/v1/cloud/settings", "/api/v1/cloud/runtime", "/api/v1/cloud/clusters", "/api/v1/cloud/clusters/c1", "/api/v1/cloud/profiles",
-            "/api/v1/github/app", "/api/v1/github/links", "/dashboard/cloud", "/dashboard/github", "/api/v1/capabilities"))
+            "/api/v1/github/app", "/api/v1/github/links", "/dashboard/cloud", "/dashboard/github", "/api/v1/capabilities",
+            // Pods that already run keep their channel, so turning cloud sessions off never kills an agent.
+            "/api/v1/cloud/runner/register", "/api/v1/cloud/runner/heartbeat", "/api/v1/cloud/runner/inputs"))
             assertFalse(cloudOperationalPath(path), path)
     }
 

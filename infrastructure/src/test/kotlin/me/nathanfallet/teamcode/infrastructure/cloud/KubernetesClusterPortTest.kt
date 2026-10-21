@@ -19,7 +19,7 @@ class KubernetesClusterPortTest {
     private fun address(vararg octets: Int) = java.net.InetAddress.getByAddress(ByteArray(octets.size) { octets[it].toByte() })
     private fun port(resolver: (String) -> List<java.net.InetAddress> = { listOf(address(10, 0, 0, 1)) }, handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData) = KubernetesClusterPort(
         { ClusterConnection("https://k8s.example.test:6443", "unused-with-mock", token) },
-        KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0"),
+        { KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0") },
         MockEngine { request ->
             requests += request
             bodies += (request.body as? TextContent)?.text?.let { Json.parseToJsonElement(it).jsonObject }

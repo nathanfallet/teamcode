@@ -60,19 +60,25 @@ internal fun ApplicationCall.idempotencyKey(required: Boolean): String? {
 internal fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 private fun ApplicationCall.id() = parameters["id"]!!.also { if (!CloudIdentifier.valid(it)) throw TeamFailure("not_found", 404, "Not found.") }
 
-/** Configuration paths an administrator uses while cloud sessions are off; every other cloud path is gated. */
-private val CLOUD_CONFIGURATION_PATHS = listOf("/api/v1/cloud/settings", "/api/v1/cloud/runtime", "/api/v1/cloud/clusters", "/api/v1/cloud/profiles")
-private val GITHUB_LINK_PATHS = setOf("/dashboard/github/link", "/dashboard/github/unlink", GITHUB_CALLBACK_PATH)
+/** Cloud sub-trees that stay reachable while cloud sessions are off: configuration, and the runner channel of pods that already run. */
+private val CLOUD_UNGATED = setOf("settings", "runtime", "clusters", "profiles", "runner")
 
 /**
- * Paths that run or link cloud sessions, answered `404` while the stored runtime is disabled: sessions, transfers,
- * transcripts, the runner channel and members' GitHub links. Paths with dot segments, escapes or parameters are
- * always treated as operational, so they never pass as configuration.
+ * Paths members use to run or link cloud sessions, answered `404` while the stored runtime is off: sessions, transfers,
+ * transcripts, access and members' GitHub links. The path is read the way routing matches it (empty segments skipped,
+ * each segment percent-decoded), so no other spelling of a gated route passes; a segment that cannot be decoded is gated.
  */
 internal fun cloudOperationalPath(path: String): Boolean {
-    val plain = ".." !in path && '%' !in path && ';' !in path
-    if (path.startsWith("/api/v1/cloud/")) return !plain || CLOUD_CONFIGURATION_PATHS.none { path == it || path.startsWith("$it/") }
-    return path == "/api/v1/github/link" || path.startsWith("/api/v1/github/link/") || path in GITHUB_LINK_PATHS
+    val segments = path.split('/').filter { it.isNotEmpty() }.map { segment ->
+        try { segment.decodeURLPart() } catch (_: Exception) { return true }
+    }
+    fun under(vararg prefix: String) = segments.size >= prefix.size && prefix.indices.all { segments[it] == prefix[it] }
+    return when {
+        under("api", "v1", "cloud") -> segments.getOrNull(3) !in CLOUD_UNGATED
+        under("api", "v1", "github", "link") -> true
+        under("dashboard", "github") -> segments.getOrNull(2) in setOf("link", "unlink", "callback")
+        else -> false
+    }
 }
 
 private fun CloudRuntime.view(runtime: CloudRuntimeService) = CloudRuntimeView(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode, runtime.serverUrl(this), updatedAt)
@@ -82,7 +88,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
     route("/api/v1/cloud") {
         if (runtime != null) {
             get("/runtime") { call.respond(runtime.get(call.principal).view(runtime)) }
-            put("/runtime") { call.respond(runtime.save(call.principal, call.jsonBody<CloudRuntimeView>().domain()).view(runtime)) }
+            put("/runtime") {
+                val input = call.jsonBody<CloudRuntimeView>()
+                call.respond(runtime.save(call.principal, input.domain(), input.updatedAt).view(runtime))
+            }
         }
         get("/settings") { call.respond(admin.settings(call.principal).view()) }
         put("/settings") {
@@ -163,7 +172,8 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
     if (runtime != null) post("/dashboard/cloud/runtime") {
         val input = call.form(origin.trimEnd('/'))
         runtime.save(call.principal, CloudRuntime(enabled = input["enabled"] == "on", runnerImage = input["runnerImage"], runnerBinary = input["runnerBinary"].orEmpty(),
-            serverUrl = input["serverUrl"], workspaceAccessMode = input["workspaceAccessMode"].orEmpty()))
+            serverUrl = input["serverUrl"], workspaceAccessMode = input["workspaceAccessMode"].orEmpty()),
+            input["updatedAt"]?.takeIf { it.isNotBlank() }?.let { it.toLongOrNull() ?: -1 })
         call.respondRedirect("/dashboard/cloud")
     }
     post("/dashboard/cloud/clusters") {
@@ -199,8 +209,8 @@ private const val KEPT = " (defined; leave empty to keep it, or paste a replacem
 
 private fun runtimeForm(actor: Principal, runtime: CloudRuntime, publicOrigin: String): String {
     val state = if (runtime.enabled) "<span class=\"chip\">on</span>" else "<span class=\"chip danger\">off</span>"
-    return "<h2>Cloud sessions $state</h2>" + help("What this controls", "<p>While cloud sessions are off, members see no cloud page, clients are told the server has no cloud sessions, and no pod is created or watched; existing pods and workspaces are left as they are. Every replica applies a change within a few seconds, without a restart. Turning them on needs a runner image: an image holding the <code>teamcode</code> Linux binary and <code>cp</code>, copied into each session pod. Pin it by digest (<code>image@sha256:...</code>).</p>") +
-        """<form action="/dashboard/cloud/runtime" method="post">${csrf(actor)}<label><input type="checkbox" name="enabled"${if (runtime.enabled) " checked" else ""}> Cloud sessions are on</label>""" +
+    return "<h2>Cloud sessions $state</h2>" + help("What this controls", "<p>While cloud sessions are off, members see no cloud page and clients are told the server has no cloud sessions, so none is created, resumed or messaged. Sessions that already exist keep being managed (idle pause, retention), and a running agent is never stopped by this switch. Every replica applies a change within a few seconds, without a restart. Turning them on needs a runner image: an image holding the <code>teamcode</code> Linux binary and <code>cp</code>, copied into each session pod. Pin it by digest (<code>image@sha256:...</code>).</p>") +
+        """<form action="/dashboard/cloud/runtime" method="post">${csrf(actor)}<input type="hidden" name="updatedAt" value="${runtime.updatedAt ?: ""}"><label><input type="checkbox" name="enabled"${if (runtime.enabled) " checked" else ""}> Cloud sessions are on</label>""" +
         """<label>Runner image <input name="runnerImage" maxlength="512" placeholder="registry.example.com/teamcode-runner@sha256:..." value="${escape(runtime.runnerImage ?: "")}"></label>""" +
         """<label>Path of the binary in the runner image <input name="runnerBinary" maxlength="256" required value="${escape(runtime.runnerBinary)}"></label>""" +
         """<label>Server URL for pods (empty uses the public URL, ${escape(publicOrigin)}) <input name="serverUrl" type="url" maxlength="512" placeholder="${escape(publicOrigin)}" value="${escape(runtime.serverUrl ?: "")}"></label>""" +

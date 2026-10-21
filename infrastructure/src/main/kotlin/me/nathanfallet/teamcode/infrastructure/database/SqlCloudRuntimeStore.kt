@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.infrastructure.database
 import me.nathanfallet.teamcode.domain.cloud.CloudRuntime
 import me.nathanfallet.teamcode.domain.cloud.CloudRuntimeStore
 import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.team.requireAdmin
 import me.nathanfallet.teamcode.infrastructure.database.tables.CloudRuntimeTable
 import org.jetbrains.exposed.v1.core.ResultRow
@@ -14,14 +15,20 @@ import org.jetbrains.exposed.v1.jdbc.*
  * interactive administrator under the team lock; no value here is a credential.
  */
 class SqlCloudRuntimeStore(private val database: Database, private val teamId: String = "default") : CloudRuntimeStore {
-    override suspend fun runtime(actor: Principal): CloudRuntime = database.query { requireCurrent(this, actor); read(actor.teamId) }
+    override suspend fun runtime(actor: Principal): CloudRuntime = database.query { serverTeam(actor); requireCurrent(this, actor); read(teamId) }
 
-    override suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime): CloudRuntime = database.query {
-        actor.requireAdmin(); lockTeam(actor.teamId); requireCurrent(this, actor)
-        write(actor.teamId, actor.member.id, runtime, nowMillis())
-        audit(actor.teamId, actor.member.id, "cloud.runtime.updated", actor.teamId, null, actor.tokenId)
-        read(actor.teamId)
+    override suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime, expectedUpdatedAt: Long?): CloudRuntime = database.query {
+        actor.requireAdmin(); serverTeam(actor); lockTeam(teamId); requireCurrent(this, actor)
+        if (read(teamId).updatedAt != expectedUpdatedAt)
+            throw TeamFailure("cloud_runtime_conflict", 409, "The cloud runtime changed since you loaded it. Reload and apply your change again.")
+        // Strictly after the previous save, so replicas order runtimes by this value.
+        write(teamId, actor.member.id, runtime, maxOf(nowMillis(), (expectedUpdatedAt ?: 0) + 1))
+        audit(teamId, actor.member.id, "cloud.runtime.updated", teamId, null, actor.tokenId)
+        read(teamId)
     }
+
+    /** The runtime belongs to the server's team; every reader and writer uses that one row. */
+    private fun serverTeam(actor: Principal) { if (actor.teamId != teamId) throw TeamFailure("forbidden", 403, "Administrator access is required.") }
 
     override suspend fun current(): CloudRuntime = database.query { read(teamId) }
 

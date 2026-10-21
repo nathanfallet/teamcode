@@ -29,7 +29,11 @@ data class CloudRuntime(
 
 interface CloudRuntimeStore {
     suspend fun runtime(actor: Principal): CloudRuntime
-    suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime): CloudRuntime
+    /**
+     * Stores [runtime] when the stored one still carries [expectedUpdatedAt] (null: nothing stored yet); otherwise
+     * `409 cloud_runtime_conflict`, so two administrators never silently overwrite each other.
+     */
+    suspend fun saveRuntime(actor: Principal, runtime: CloudRuntime, expectedUpdatedAt: Long?): CloudRuntime
     /** The stored runtime of the server's team, for the background workers; the defaults (disabled) without a row. */
     suspend fun current(): CloudRuntime
     /** Stores [initial] only when nothing was ever stored, and returns what is stored. */
@@ -50,15 +54,21 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, private val publ
     /** The origin pods call back: the stored one, or the server's public URL. */
     fun serverUrl(runtime: CloudRuntime = cached) = runtime.serverUrl ?: publicOrigin
 
-    suspend fun refresh(): CloudRuntime = store.current().also { cached = it }
+    /** Never replaces a newer runtime this replica saved while the read was in flight. */
+    suspend fun refresh(): CloudRuntime {
+        val read = store.current()
+        synchronized(this) { if ((read.updatedAt ?: 0) >= (cached.updatedAt ?: 0)) cached = read }
+        return cached
+    }
 
     suspend fun get(actor: Principal): CloudRuntime { actor.requireAdmin(); return store.runtime(actor) }
 
-    suspend fun save(actor: Principal, runtime: CloudRuntime): CloudRuntime {
+    /** [expectedUpdatedAt] is the `updatedAt` of the runtime the administrator edited (null when none was stored). */
+    suspend fun save(actor: Principal, runtime: CloudRuntime, expectedUpdatedAt: Long?): CloudRuntime {
         actor.requireAdmin()
         val normalized = normalize(runtime)
         validate(normalized, publicOrigin)
-        return store.saveRuntime(actor, normalized).also { cached = it }
+        return store.saveRuntime(actor, normalized, expectedUpdatedAt).also { saved -> synchronized(this) { cached = saved } }
     }
 
     /**
@@ -70,11 +80,23 @@ class CloudRuntimeService(private val store: CloudRuntimeStore, private val publ
         val stored = if (candidate == null) store.current() else {
             val usable = try { validate(candidate, publicOrigin); candidate }
                 catch (error: CancellationException) { throw error }
-                catch (error: TeamFailure) { warn(error.message ?: "Invalid cloud runtime."); candidate.copy(enabled = false) }
+                catch (error: TeamFailure) { warn(error.message ?: "Invalid cloud runtime."); disabledSeed(candidate) }
             store.seed(usable)
         }
-        cached = stored
+        synchronized(this) { cached = stored }
         return stored
+    }
+
+    /** Off, keeping only the fields that are valid on their own, so an invalid variable never prevents the start. */
+    private fun disabledSeed(candidate: CloudRuntime): CloudRuntime {
+        fun valid(runtime: CloudRuntime) = try { validate(runtime, publicOrigin); true } catch (_: TeamFailure) { false }
+        val base = CloudRuntime()
+        return base.copy(
+            runnerImage = candidate.runnerImage.takeIf { valid(base.copy(runnerImage = it)) },
+            runnerBinary = candidate.runnerBinary.takeIf { valid(base.copy(runnerBinary = it)) } ?: base.runnerBinary,
+            serverUrl = candidate.serverUrl.takeIf { valid(base.copy(serverUrl = it)) },
+            workspaceAccessMode = candidate.workspaceAccessMode.takeIf { valid(base.copy(workspaceAccessMode = it)) } ?: base.workspaceAccessMode,
+        )
     }
 
     companion object {

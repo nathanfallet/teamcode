@@ -42,7 +42,10 @@ class CloudRuntimePersistenceTest {
 
                 // The administrator turns cloud sessions off; a later restart with the variable still set changes nothing.
                 val admin = admin(a)
-                ra.save(admin, ra.get(admin).copy(enabled = false, serverUrl = "https://teamcode.internal"))
+                val before = ra.get(admin)
+                ra.save(admin, before.copy(enabled = false, serverUrl = "https://teamcode.internal"), before.updatedAt)
+                assertEquals("cloud_runtime_conflict", assertFailsWith<TeamFailure> { rb.save(admin, before.copy(runnerImage = "other:1"), before.updatedAt) }.code,
+                    "A save based on an older read is refused")
                 assertFalse(ra.enabled)
                 assertTrue(rb.enabled, "The other replica keeps its cached value until it rereads")
                 assertFalse(rb.refresh().enabled, "and sees the change on its next refresh, without a restart")
@@ -53,7 +56,8 @@ class CloudRuntimePersistenceTest {
                 // An invalid seed is stored disabled so the server still starts.
                 a.query { CloudRuntimeTable.deleteAll() }
                 val warnings = mutableListOf<String>()
-                assertFalse(ra.seed(fromEnvironment.copy(serverUrl = "http://teamcode.internal"), warnings::add).enabled)
+                val invalid = ra.seed(fromEnvironment.copy(serverUrl = "http://teamcode.internal", workspaceAccessMode = "x".repeat(64)), warnings::add)
+                assertEquals(CloudRuntime(enabled = false, runnerImage = fromEnvironment.runnerImage), invalid.copy(updatedAt = null), "Off, keeping only the valid fields, never failing on column sizes")
                 assertEquals(1, warnings.size)
 
                 assertFailsWith<TeamFailure> { ra.get(member(a, admin)) }

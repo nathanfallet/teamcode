@@ -28,8 +28,9 @@ import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
 
 /**
  * Cloud sessions. Built whenever the server has a database, so administrators can configure them from the dashboard;
- * [runtime] (stored in the database) says whether they run: while it is disabled the session routes answer `404`,
- * `cloud.*` capabilities are not advertised and the workers stay idle.
+ * [runtime] (stored in the database) says whether members can use them: while it is off the member-facing routes answer
+ * `404` and `cloud.*` capabilities are not advertised. The runner channel and the workers keep serving the sessions that
+ * already exist, so turning cloud sessions off never kills a running agent; they stay idle until a runtime is stored.
  */
 class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: String) : AutoCloseable {
     val runtime = CloudRuntimeService(SqlCloudRuntimeStore(database), publicOrigin)
@@ -39,11 +40,11 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         val current = runtime.current
         KubernetesPodOptions(
             serverUrl = runtime.serverUrl(current),
-            runnerImage = checkNotNull(current.runnerImage?.takeIf { current.enabled }) { "Cloud sessions are disabled." },
+            runnerImage = checkNotNull(current.runnerImage) { "Set the runner image on Dashboard → Cloud sessions." },
             runnerBinary = current.runnerBinary,
             workspaceAccessMode = current.workspaceAccessMode,
         )
-    })
+    }, workspaceAccessMode = { runtime.current.workspaceAccessMode })
     private val work = SqlScheduledWork(database)
     private val replica = UUID.randomUUID().toString()
 
@@ -85,6 +86,9 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
      */
     suspend fun start(initial: CloudRuntime?) = runtime.seed(initial) { reason -> System.err.println("TeamCode cloud runtime from the environment was stored disabled: $reason") }
 
+    /** Workers run once a runtime is stored, on or off: sessions created while it was on keep being reconciled. */
+    private fun managing() = runtime.current.updatedAt != null
+
     fun launch(scope: CoroutineScope) {
         scope.launch {
             // Another replica's dashboard save reaches this one within one interval.
@@ -98,7 +102,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         scope.launch {
             // Messages sent while a session was pausing wake it once paused; inputs of ended sessions are cancelled.
             while (isActive) {
-                if (!runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 try { conversationService.wakePending(); conversationStore.cancelEnded(50) }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { System.err.println("TeamCode cloud message delivery is temporarily unavailable (${describe(error)}).") }
@@ -107,7 +111,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         }
         scope.launch {
             while (isActive) {
-                if (!runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 try { work.runDue("cloud-transcript-retention", intervalMillis = 10 * 60_000, timeoutMillis = 120_000) { conversationStore.purgeTranscripts(1_000) } }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode cloud transcript retention deadline exceeded.") }
                 catch (error: CancellationException) { throw error }
@@ -117,7 +121,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         }
         scope.launch {
             while (isActive) {
-                if (!runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 val claimed = try { reconciler(replica) }
                     catch (error: TimeoutCancellationException) { System.err.println("TeamCode cloud reconciler pass timed out."); 0 }
                     catch (error: CancellationException) { throw error }
@@ -127,7 +131,7 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         }
         scope.launch {
             while (isActive) {
-                if (!runtime.enabled) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
                 try {
                     work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain(); transferStore.maintain(); transfers.expireOffers(); inferenceCredentials.purge(500) }
                     work.runDue("cloud-gc", intervalMillis = 10 * 60_000, timeoutMillis = 240_000) { collectGarbage() }
