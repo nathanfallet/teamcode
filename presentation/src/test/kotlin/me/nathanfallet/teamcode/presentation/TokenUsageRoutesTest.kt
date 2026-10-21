@@ -20,6 +20,7 @@ class TokenUsageRoutesTest {
             override suspend fun authenticate(token: String): Principal? = when (token) {
                 "usage-key" -> FakeTeam().authenticate("member")!!.copy(serviceScopes = setOf(ServiceScope.USAGE_READ))
                 "inference-key" -> FakeTeam().authenticate("member")!!.copy(serviceScopes = setOf(ServiceScope.INFERENCE))
+                "team-key" -> FakeTeam().authenticate("admin")!!.copy(serviceScopes = setOf(ServiceScope.TEAM_READ))
                 else -> FakeTeam().authenticate(token)
             }
         }
@@ -46,6 +47,8 @@ class TokenUsageRoutesTest {
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/usage/tokens") { bearerAuth("member") }.status)
         assertEquals(today - 6 to today, admission.queries.last().let { it.fromDay to it.toDay }, "The last seven days by default")
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/usage/tokens?all=true") { bearerAuth("member") }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/usage/tokens?all=true") { bearerAuth("team-key") }.status, "team:read reads the team")
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/usage/tokens?all=true") { bearerAuth("usage-key") }.status)
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/usage/tokens") { bearerAuth("inference-key") }.status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/api/v1/usage/tokens").status)
         for ((query, code) in listOf("from=2024-13-01" to "invalid_window", "from=21/10/2024" to "invalid_window", "from=2024-10-02&to=2024-10-01" to "invalid_window",
@@ -62,8 +65,8 @@ class TokenUsageRoutesTest {
 private class LedgerAdmission : AdmissionStore {
     val queries = mutableListOf<TokenUsageQuery>()
     override suspend fun tokenUsage(actor: Principal, query: TokenUsageQuery): TokenUsagePage {
-        actor.requireScope(ServiceScope.USAGE_READ)
-        if (query.all || query.memberId != null) actor.requireAdmin()
+        actor.requireUsageRead()
+        if (query.all || query.memberId != null) actor.requireTeamRead()
         queries += TokenUsageLedger.validate(query)
         return TokenUsagePage(listOf(TokenUsageRow(LocalDate.of(2024, 10, 21).toEpochDay(), actor.member.id, actor.member.username, null, "anthropic", "claude-opus-test",
             5, 1, 10, 20, 30, 40)), "next")

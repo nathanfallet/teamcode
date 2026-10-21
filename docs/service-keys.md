@@ -32,7 +32,7 @@ Keys share the member's existing daily ledger, weight, assigned pool, concurrenc
 | Area | Reads |
 | --- | --- |
 | Agent launches | `GET /api/v1/runs` with `?all=true` or `?member=`, and `GET /api/v1/runs/{id}` of any member ([agent sessions](agent-sessions.md)) |
-| Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` for every member |
+| Capacity and usage | `GET /api/v1/members/{id}/capacity`, `GET /api/v1/pools/budgets`, `GET /api/v1/mcp/usage` and `GET /api/v1/usage/tokens?all=true` (or `member=`) for every member |
 | Accounts and quotas | `GET /api/v1/accounts`, `GET /api/v1/quotas`, and every account by name and email at `GET /api/v1/pools/accounts` (the data behind `teamcode status` for an administrator). No provider credential is ever returned |
 | Cloud sessions | `GET /api/v1/cloud/sessions?owner=all` or `owner=<member>`, a session's detail and executions, its transcript, inputs and live stream (`events`, `messages`, `events/stream`), and `GET /api/v1/cloud/transfers?scope=team` ([cloud sessions](cloud-sessions.md)) |
 

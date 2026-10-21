@@ -125,12 +125,12 @@ private fun ApiCatalog.allowanceOperations() {
             "registered launch), provider and model: uncached input, cache writes, cache reads and output (reasoning " +
             "included), never converted into credits or money. Requests that ended without provider usage are counted in " +
             "`unmeteredRequests` and not in the token sums. A member reads their own rows; an interactive administrator " +
-            "reads one member's (`member`) or the team's (`all=true`). Page with `after` = `nextAfter`."
+            "or a `team:read` key reads one member's (`member`) or the team's (`all=true`). Page with `after` = `nextAfter`."
         parameters {
             queryText("from", "First UTC day, `YYYY-MM-DD` (six days before `to` by default).")
             queryText("to", "Last UTC day, `YYYY-MM-DD`, included (today by default). At most 366 days in all.")
-            queryText("member", "A member's identifier (administrators).")
-            queryFlag("all", "Every member's rows (administrators).")
+            queryText("member", "A member's identifier (administrators, `team:read`).")
+            queryFlag("all", "Every member's rows (administrators, `team:read`).")
             queryText("after", "The `nextAfter` of the previous page.")
         }
         responses {

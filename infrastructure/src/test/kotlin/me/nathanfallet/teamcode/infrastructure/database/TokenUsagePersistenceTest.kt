@@ -74,6 +74,8 @@ class TokenUsagePersistenceTest {
                 val ownerKey = assertNotNull(team.authenticate(keys.create(admin, admin.member.id, "Usage reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
                 assertEquals("credential_scope", assertFailsWith<TeamFailure> { admission.tokenUsage(ownerKey, TokenUsageQuery(today, today, all = true)) }.code)
                 assertEquals(listOf(admin.member.id), admission.tokenUsage(ownerKey, TokenUsageQuery(today, today)).rows.map { it.memberId }, "A usage:read key reads its owner's rows")
+                val teamKey = assertNotNull(team.authenticate(keys.create(admin, admin.member.id, "Team reader", setOf(ServiceScope.TEAM_READ), 1).accessToken))
+                assertEquals(3, admission.tokenUsage(teamKey, TokenUsageQuery(today, today, all = true)).rows.size, "An administrator's team:read key reads the team")
                 val inference = assertNotNull(team.authenticate(keys.create(member, member.member.id, "Inference", setOf(ServiceScope.INFERENCE), 1).accessToken))
                 assertEquals("credential_scope", assertFailsWith<TeamFailure> { admission.tokenUsage(inference, TokenUsageQuery(today, today)) }.code)
 

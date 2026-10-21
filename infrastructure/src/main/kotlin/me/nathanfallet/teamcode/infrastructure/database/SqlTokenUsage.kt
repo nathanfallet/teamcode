@@ -47,15 +47,15 @@ private fun add(c: Counters, usage: MeteredUsage, key: Op<Boolean>, keyColumns: 
     }
 }
 
-/** Keyset pages in primary-key order; a member reads their own rows, an interactive administrator any member's or the team's. */
+/** Keyset pages in primary-key order; a member reads their own rows, an interactive administrator or a `team:read` key any member's or the team's. */
 internal fun JdbcTransaction.readTokenUsage(actor: Principal, query: TokenUsageQuery): TokenUsagePage {
-    actor.requireScope(ServiceScope.USAGE_READ)
+    actor.requireUsageRead()
     requireCurrent(this, actor)
     TokenUsageLedger.validate(query)
     val reader = when {
-        query.all -> { actor.requireAdmin(); null }
+        query.all -> { actor.requireTeamRead(); null }
         query.memberId != null && query.memberId != actor.member.id -> {
-            actor.requireAdmin()
+            actor.requireTeamRead()
             Members.select(Members.id).where { (Members.id eq query.memberId!!) and (Members.teamId eq actor.teamId) }.singleOrNull()
                 ?: throw TeamFailure("not_found", 404, "Member not found.")
             query.memberId
