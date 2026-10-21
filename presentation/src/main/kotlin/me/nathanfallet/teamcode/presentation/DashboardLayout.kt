@@ -179,7 +179,7 @@ details.help p{margin:0 0 10px}
 .link-list a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;color:var(--text)}
 .link-list a:hover{border-color:var(--accent-dim);text-decoration:none}
 .link-list a span{display:block;color:var(--muted);font-size:13px;margin-top:4px}
-.pager{display:flex;gap:14px;margin:0 0 14px;font-size:14px}
+.forecast-card svg text{font-family:var(--mono);font-size:11px}
 @media (max-width:900px){
 .shell{grid-template-columns:minmax(0,1fr)}
 .sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px}
@@ -190,6 +190,7 @@ main{padding:22px 16px 48px}
 .grid-2{grid-template-columns:minmax(0,1fr)}
 .cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.big{font-size:22px}
 table{display:block;overflow-x:auto}
+table.stack{overflow:hidden}table.stack thead{display:none}table.stack tbody,table.stack tr,table.stack td{display:block;width:100%}table.stack td{border-bottom:0;padding:10px 16px}table.stack tr{border-bottom:1px solid var(--line);padding:6px 0}table.stack tr:last-child{border-bottom:0}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 """
