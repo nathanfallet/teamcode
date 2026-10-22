@@ -148,12 +148,11 @@ class EventStreamTest {
         assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
-    @Test fun invalidUtf8IsAMalformedEvent() = runTest {
+    @Test fun invalidUtf8IsDecodedWithAReplacementCharacter() = runTest {
         val body = "event: message.agent\ndata: ".encodeToByteArray() + byteArrayOf(0xC3.toByte(), 0x28) + "\n\n".encodeToByteArray()
-        val result = runCatching { readServerSentEvents(ByteReadChannel(body)) { false } }.exceptionOrNull()
-        // A platform may decode invalid bytes as U+FFFD and dispatch the frame; when it refuses them, the failure is not
-        // one to reconnect on, since a reconnection would replay the same bytes.
-        if (result != null) assertEquals(TeamCodeClient.MALFORMED_EVENT, (result as? TeamCodeException)?.code, result.toString())
+        val frames = mutableListOf<ServerSentEvent>()
+        readServerSentEvents(ByteReadChannel(body)) { frames += it; false }
+        assertEquals("\uFFFD(", frames.single().data)
     }
 
     @Test fun theReaderParsesFieldsWithoutASpaceOrAValue() = runTest {

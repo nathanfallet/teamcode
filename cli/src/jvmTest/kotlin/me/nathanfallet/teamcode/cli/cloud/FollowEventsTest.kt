@@ -11,14 +11,11 @@ import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** `teamcode cloud events --follow`: which stream failures reconnect and which stop. */
 class FollowEventsTest {
-    /** Stands for the process exit; an Error so the follow loop's own `catch (Exception)` cannot swallow it. */
-    private class Exited(val code: Int) : Error()
-
     @Test fun anUnreadableEventStopsInsteadOfReplayingForever() = runTest {
         var requests = 0
         val notices = mutableListOf<String>()
@@ -29,10 +26,10 @@ class FollowEventsTest {
             }) { configure(this) }
         }
         client.use {
-            val exited = assertFailsWith<Exited> { followEvents(it, "s1", 4, { }, exit = { code -> throw Exited(code) }) { notice -> notices += notice } }
-            assertEquals(1, exited.code)
+            // Returns instead of exiting, so `attach` still detaches; `events --follow` then exits with status 1.
+            assertFalse(followEvents(it, "s1", 4, { }) { notice -> notices += notice })
         }
         assertEquals(1, requests)
-        assertTrue(notices.single().startsWith("The event after 4 cannot be read"), notices.toString())
+        assertTrue(notices.single().startsWith("The event after 4 cannot be read") && "--after 5" in notices.single(), notices.toString())
     }
 }

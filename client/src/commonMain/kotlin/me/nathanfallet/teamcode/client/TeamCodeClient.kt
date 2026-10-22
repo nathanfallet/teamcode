@@ -397,7 +397,7 @@ class TeamCodeClient(
     private inline fun <reified T> decodeFrame(frame: ServerSentEvent): T = try {
         Serialization.json.decodeFromString<T>(frame.data)
     } catch (_: IllegalArgumentException) {
-        // SerializationException is an IllegalArgumentException. Its message quotes the payload, so it is not kept as the
+        // SerializationException is an IllegalArgumentException. Its message quotes the payload, so it is not kept as a
         // cause: the exception stays safe to print.
         throw TeamCodeException(0, "The event stream sent a malformed event.", MALFORMED_EVENT)
     }
@@ -671,21 +671,13 @@ class TeamCodeClient(
  * A refused or failed TeamCode call. [code] is the API error `type` when the server sent one, [retryAfterSeconds] the
  * `Retry-After` delay and [requestId] a request id set by the server or a proxy; all are validated and safe to print.
  */
-class TeamCodeException private constructor(
+class TeamCodeException(
     val statusCode: Int,
     message: String,
-    val code: String?,
-    val retryAfterSeconds: Long?,
-    val requestId: String?,
-    cause: Throwable?,
-) : Exception(message, cause) {
-    // The public signature of earlier releases, so callers compiled against them still link.
-    constructor(statusCode: Int, message: String, code: String? = null, retryAfterSeconds: Long? = null, requestId: String? = null) :
-        this(statusCode, message, code, retryAfterSeconds, requestId, null)
-
-    /** A status `0` stream failure; [cause] is the transport or decoding failure behind it, kept for diagnostics. */
-    internal constructor(statusCode: Int, message: String, code: String?, cause: Throwable) : this(statusCode, message, code, null, null, cause)
-}
+    val code: String? = null,
+    val retryAfterSeconds: Long? = null,
+    val requestId: String? = null,
+) : Exception(message)
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
 internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all { c -> c in '0'..'9' } }?.toLong()

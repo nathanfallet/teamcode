@@ -1,7 +1,6 @@
 package me.nathanfallet.teamcode.client
 
 import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.charsets.MalformedInputException
 import io.ktor.utils.io.charsets.TooLongLineException
 import io.ktor.utils.io.readUTF8Line
 
@@ -13,8 +12,9 @@ internal class ServerSentEvent(val event: String?, val data: String)
  * (keep-alives), `id:` and `retry:` are skipped (callers resume from the sequence in the decoded data); a frame with
  * neither a name nor data is not dispatched. Lines are bounded by [maxLine] characters and the whole data of one event by
  * [maxData] characters. Throws [TeamCodeException] when the stream closes, so the caller reconnects from the last
- * sequence it handled, and with code [TeamCodeClient.MALFORMED_EVENT] when it breaks a bound or is not UTF-8, which a
- * reconnection would replay. Transport failures propagate as the engine reports them.
+ * sequence it handled, and with code [TeamCodeClient.MALFORMED_EVENT] when it breaks a bound, which a
+ * reconnection would replay. Invalid UTF-8 becomes replacement characters; transport failures propagate as the engine
+ * reports them.
  */
 internal suspend fun readServerSentEvents(
     channel: ByteReadChannel,
@@ -28,11 +28,9 @@ internal suspend fun readServerSentEvents(
     while (true) {
         val line = try {
             channel.readUTF8Line(maxLine)
-        } catch (error: TooLongLineException) {
+        } catch (_: TooLongLineException) {
             // Reconnecting replays the same line from the same cursor: as unreadable as an over-long event.
-            throw TeamCodeException(0, "A line of the event stream exceeds the limit.", TeamCodeClient.MALFORMED_EVENT, error)
-        } catch (error: MalformedInputException) {
-            throw TeamCodeException(0, "The event stream is not valid UTF-8.", TeamCodeClient.MALFORMED_EVENT, error)
+            throw TeamCodeException(0, "A line of the event stream exceeds the limit.", TeamCodeClient.MALFORMED_EVENT)
         } ?: throw TeamCodeException(0, "The event stream closed.")
         val field = line.substringBefore(':')
         // "field: value" loses exactly one leading space after the colon; a line without a colon is a field with no value.
