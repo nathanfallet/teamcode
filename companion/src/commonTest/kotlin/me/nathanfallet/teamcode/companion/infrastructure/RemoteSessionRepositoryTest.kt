@@ -108,13 +108,21 @@ class RemoteSessionRepositoryTest {
         assertEquals(4, requests.size)
     }
 
-    @Test fun anAcceptedConnectionRestartsTheBackOffOfAQuietStream() = runTest {
-        // Three quiet connections, each accepted then cut: every reconnection waits the first delay.
-        repeat(3) { sse(": keep-alive\n\n") }
-        sse("event: denied\ndata: {}\n\n")
-        val seen = mutableListOf<LiveUpdate<*>>()
-        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { seen += it } }
-        assertEquals(listOf(2_000L, 2_000, 2_000), seen.filterIsInstance<LiveUpdate.Reconnecting>().map { it.delayMillis })
+    @Test fun aConnectionThatStayedOpenRestartsTheBackOffAndOneDroppedAtOnceDoesNot() = runTest {
+        // Each clock read moves on by [step]: a connection lasts one step between being accepted and cut.
+        suspend fun delays(step: Long): List<Long> {
+            var clock = 0L
+            val repository = RemoteSessionRepository(calls, ReconnectPolicy(random = noJitter, now = { clock.also { clock += step } }))
+            repeat(3) { sse(": keep-alive\n\n") }
+            sse("event: denied\ndata: {}\n\n")
+            val seen = mutableListOf<LiveUpdate<*>>()
+            assertFailsWith<CompanionException.AccessRevoked> { repository.sessionChanges("a1").collect { seen += it } }
+            return seen.filterIsInstance<LiveUpdate.Reconnecting>().map { it.delayMillis }
+        }
+        // Quiet but open for a minute each time (a proxy's idle cut): every reconnection waits the first delay.
+        assertEquals(listOf(2_000L, 2_000, 2_000), delays(60_000))
+        // Accepted then dropped at once: the delays keep doubling.
+        assertEquals(listOf(2_000L, 4_000, 8_000), delays(1))
     }
 
     @Test fun aRefusalOrAnUnreadableEventStopsWithoutReconnecting() = runTest {

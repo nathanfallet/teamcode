@@ -56,6 +56,7 @@ import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.new_session_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
+import me.nathanfallet.teamcode.companion.resources.home_signed_in_as
 import me.nathanfallet.teamcode.companion.resources.home_signed_out
 import me.nathanfallet.teamcode.companion.resources.sessions_active
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_active
@@ -108,7 +109,16 @@ fun HomeScreen(
         },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(Res.string.sessions_title)) },
+                title = {
+                    Column {
+                        Text(stringResource(Res.string.sessions_title))
+                        // With several accounts, which one the list is.
+                        account?.let {
+                            Text(stringResource(Res.string.home_signed_in_as, it.username, it.origin.substringAfter("://")),
+                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("account-line"))
+                        }
+                    }
+                },
                 actions = {
                     IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("settings")) {
                         Icon(PhosphorIcons.Regular.Gear, contentDescription = stringResource(Res.string.settings_title), modifier = Modifier.size(22.dp))

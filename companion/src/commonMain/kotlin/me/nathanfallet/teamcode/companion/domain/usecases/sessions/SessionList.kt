@@ -19,6 +19,8 @@ data class SessionList(
     /** Null once every page is loaded. */
     val nextBefore: String? = null,
     val finishedTurns: Set<String> = emptySet(),
+    /** Sessions read and found outside this list (another group, or past the loaded pages): their turns are not read again. */
+    val outside: Set<String> = emptySet(),
 ) {
     fun loaded(page: SessionPage): SessionList = copy(sessions = page.sessions.filter(::belongs).sortedWith(NEWEST_FIRST), nextBefore = page.nextBefore)
 
@@ -41,7 +43,8 @@ data class SessionList(
 
     fun appended(page: SessionPage): SessionList {
         val known = sessions.map { it.id }.toSet()
-        return copy(sessions = (sessions + page.sessions.filter { it.id !in known && belongs(it) }).sortedWith(NEWEST_FIRST), nextBefore = page.nextBefore)
+        return copy(sessions = (sessions + page.sessions.filter { it.id !in known && belongs(it) }).sortedWith(NEWEST_FIRST), nextBefore = page.nextBefore,
+            outside = outside - page.sessions.map { it.id }.toSet())
     }
 
     /**
@@ -54,7 +57,9 @@ data class SessionList(
         val finished = change.turnPhase != null && change.turnPhase != "started"
         val marks = if (finished) finishedTurns + change.sessionId else finishedTurns
         if (current == null) {
-            val mayBelong = change.state == null || change.state.group == group
+            // A turn runs only in an active session; a session already read and found elsewhere is read again only when
+            // an event says its state changed.
+            val mayBelong = if (change.state == null) group == SessionGroup.ACTIVE && change.sessionId !in outside else change.state.group == group
             return copy(finishedTurns = marks) to change.sessionId.takeIf { mayBelong }
         }
         // A turn of a session the list still shows as preparing, pausing...: its state moved without an event, read it.
@@ -72,12 +77,14 @@ data class SessionList(
     /** Puts [session] in place (or in order), or removes it when it no longer belongs to this list. */
     fun upserted(session: CloudSession): SessionList {
         val others = sessions.filterNot { it.id == session.id }
-        if (!belongs(session)) return copy(sessions = others)
+        if (!belongs(session)) return copy(sessions = others, outside = remembered(session.id))
         // Older than the last loaded session while pages remain: it will come with the next page.
         val last = others.lastOrNull()
-        if (nextBefore != null && last != null && NEWEST_FIRST.compare(session, last) > 0) return copy(sessions = others)
-        return copy(sessions = (others + session).sortedWith(NEWEST_FIRST))
+        if (nextBefore != null && last != null && NEWEST_FIRST.compare(session, last) > 0) return copy(sessions = others, outside = remembered(session.id))
+        return copy(sessions = (others + session).sortedWith(NEWEST_FIRST), outside = outside - session.id)
     }
+
+    private fun remembered(id: String) = (if (outside.size >= MAX_OUTSIDE) outside.drop(outside.size - MAX_OUTSIDE + 1).toSet() else outside) + id
 
     fun opened(sessionId: String): SessionList = copy(finishedTurns = finishedTurns - sessionId)
 
@@ -86,6 +93,8 @@ data class SessionList(
     private companion object {
         val NEWEST_FIRST = compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id }
         val SETTLED = setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.TERMINATED, SessionState.FAILED)
-        val UNSETTLED = SessionState.entries.toSet() - SETTLED
+        /** A state this version does not know is not read again and again: it may never settle into one it knows. */
+        val UNSETTLED = SessionState.entries.toSet() - SETTLED - SessionState.UNKNOWN
+        const val MAX_OUTSIDE = 500
     }
 }

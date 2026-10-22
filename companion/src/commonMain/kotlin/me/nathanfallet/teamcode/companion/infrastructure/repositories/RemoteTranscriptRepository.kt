@@ -17,12 +17,12 @@ class RemoteTranscriptRepository(private val calls: AccountCalls, private val po
     override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = flow {
         // One cursor per collection: each reconnection resumes after the last event delivered.
         var cursor = after
-        emitAll(reconnecting(policy) { send, itemSent ->
+        emitAll(reconnecting(policy, resource = true) { send, progress ->
             val client = calls.client(accountId)
-            client.followCloudEvents(sessionId, cursor, onOpen = { itemSent(); send(LiveUpdate.Opened(resumed = true)) }) { event ->
+            client.followCloudEvents(sessionId, cursor, onOpen = { progress.opened(); send(LiveUpdate.Opened(resumed = true)) }) { event ->
                 send(LiveUpdate.Item(event.domain()))
                 cursor = event.seq
-                itemSent()
+                progress.itemSent()
             }
         })
     }

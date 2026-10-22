@@ -51,18 +51,18 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
     override fun sessionChanges(accountId: String): Flow<LiveUpdate<SessionChange>> = flow {
         // One cursor per collection, shared by its attempts: a reconnection resumes after the last event seen, any subject.
         var cursor: Long? = null
-        emitAll(reconnecting(policy) { send, itemSent ->
+        emitAll(reconnecting(policy, resource = false) { send, progress ->
             val client = calls.client(accountId)
             val resumed = cursor != null
             client.followTeamEvents(
                 after = cursor,
                 types = SESSION_EVENT_TYPES,
                 onGap = { send(LiveUpdate.Gap) },
-                onOpen = { itemSent(); send(LiveUpdate.Opened(resumed)) },
+                onOpen = { progress.opened(); send(LiveUpdate.Opened(resumed)) },
             ) { event ->
                 event.sessionChange()?.let { send(LiveUpdate.Item(it)) }
                 cursor = event.seq
-                itemSent()
+                progress.itemSent()
             }
         })
     }

@@ -76,7 +76,7 @@ private fun UserBubble(event: TranscriptEvent.UserMessage, memberId: String?) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         // Another member (or an administrator) wrote it: say who.
         if (event.authorId != null && event.authorId != memberId) {
-            Text(stringResource(Res.string.transcript_from, event.authorId), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(Res.string.transcript_from), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         SelectionContainer {
             Text(

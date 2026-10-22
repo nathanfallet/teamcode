@@ -35,6 +35,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUs
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import kotlin.test.*
 
@@ -79,6 +80,22 @@ class SessionViewModelTest {
         assertEquals(2, sessions.calls.count { it == "send s1 Run the tests ${failed.clientMessageId}" })
         live.send(LiveUpdate.Item(TranscriptEvent.UserMessage(5, 5, "Run the tests", "in-${failed.clientMessageId}", "m1"))); settle()
         assertTrue(model.uiState.value.pending.isEmpty())
+        model.stop()
+    }
+
+    @Test fun aSignedOutHeaderRefreshKeepsTheScreenAndTheEndedStateStays() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        // The header read every 30 seconds meets an expired login: nothing escapes, the screen stays as it was.
+        sessions.sessionFailure = CompanionException.Unauthorized()
+        advanceTimeBy(31_000); runCurrent()
+        assertEquals("s1", model.uiState.value.session?.id)
+        assertTrue(sessions.calls.count { it == "get s1" } >= 2)
+        // The stream ends while the header cannot be read: the final state stays.
+        sessions.sessionFailure = CompanionException.Unreachable()
+        live.send(LiveUpdate.Ended); settle()
+        assertEquals(LiveState.ENDED, model.uiState.value.live)
+        assertNull(model.uiState.value.error)
         model.stop()
     }
 

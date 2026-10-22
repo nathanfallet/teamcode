@@ -22,9 +22,7 @@
     <string name="password_change_new">New password</string>
     <string name="password_change_confirm">Confirm the new password</string>
     <string name="password_change_submit">Change the password</string>
-    <string name="home_signed_in_as">Signed in as %1$s</string>
-    <string name="home_role">Role: %1$s</string>
-    <string name="home_server">TeamCode %1$s on %2$s</string>
+    <string name="home_signed_in_as">%1$s on %2$s</string>
     <string name="home_signed_out">This device was signed out of %1$s.</string>
     <string name="home_sign_in_again">Sign in again</string>
     <string name="sessions_title">Sessions</string>
@@ -85,7 +83,7 @@
     <string name="transcript_permission_expired">A permission request expired and was denied</string>
     <string name="transcript_transferred">The session changed owner</string>
     <string name="transcript_truncated">An event too large to show (%1$s)</string>
-    <string name="transcript_from">From %1$s</string>
+    <string name="transcript_from">From another member</string>
     <string name="link_open_title">Open this link?</string>
     <string name="link_open_confirm">Open</string>
     <string name="link_open_refused">Only http and https links open from the app.</string>
@@ -113,7 +111,6 @@
     <string name="action_interrupt">Interrupt</string>
     <string name="action_pause">Pause</string>
     <string name="action_resume">Resume</string>
-    <string name="action_more">More</string>
     <string name="settings_title">Settings</string>
     <string name="settings_accounts">Accounts</string>
     <string name="settings_add_account">Add an account</string>

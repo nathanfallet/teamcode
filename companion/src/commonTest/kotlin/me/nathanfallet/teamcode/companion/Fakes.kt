@@ -112,6 +112,7 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     var pages: (me.nathanfallet.teamcode.companion.domain.models.SessionGroup, String?) -> me.nathanfallet.teamcode.companion.domain.models.SessionPage =
         { _, _ -> me.nathanfallet.teamcode.companion.domain.models.SessionPage(emptyList(), null) }
     val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.CloudSession>()
+    var sessionFailure: Exception? = null
     var changes: kotlinx.coroutines.flow.Flow<me.nathanfallet.teamcode.companion.domain.models.LiveUpdate<me.nathanfallet.teamcode.companion.domain.models.SessionChange>> =
         kotlinx.coroutines.flow.emptyFlow()
     /** Suspends each list load until released, to change things while it is in flight. */
@@ -124,6 +125,7 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     }
     override suspend fun session(accountId: String, sessionId: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
         calls += "get $sessionId"
+        sessionFailure?.let { throw it }
         return byId[sessionId] ?: throw CompanionException.NotFound()
     }
     var profileList = emptyList<me.nathanfallet.teamcode.companion.domain.models.Profile>()

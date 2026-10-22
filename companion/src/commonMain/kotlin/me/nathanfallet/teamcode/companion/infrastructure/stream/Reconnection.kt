@@ -14,17 +14,23 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.translated
 import kotlin.random.Random
+import kotlin.time.TimeSource
 
 /**
  * When to reconnect a stream: [firstDelayMillis] after the first failure (the server's `retry:`), then doubling up to
  * [maxDelayMillis], each delay shortened by up to a fifth at random so clients cut together do not return together.
- * The count restarts once a connection is accepted or an item arrives. A `429` waits at least its `Retry-After`, bounded by [maxRetryAfterMillis].
+ * The count restarts when an item arrives, or when an accepted connection stayed open at least [stableMillis] (a quiet
+ * stream cut by a proxy now and then); a connection accepted then dropped at once keeps backing off.
+ * A `429` waits at least its `Retry-After`, bounded by [maxRetryAfterMillis].
  */
 class ReconnectPolicy(
     private val firstDelayMillis: Long = 2_000,
     private val maxDelayMillis: Long = 30_000,
     private val maxRetryAfterMillis: Long = 300_000,
     private val random: Random = Random.Default,
+    val stableMillis: Long = 30_000,
+    /** Monotonic milliseconds. */
+    val now: () -> Long = monotonicMillis(),
 ) {
     fun delayMillis(failures: Int, retryAfterSeconds: Long? = null): Long {
         val base = (firstDelayMillis shl (failures - 1).coerceIn(0, 16)).coerceAtMost(maxDelayMillis)
@@ -39,21 +45,40 @@ class ReconnectPolicy(
  * reconnect after the policy's delay ([LiveUpdate.Reconnecting] says when); `ENDED` emits [LiveUpdate.Ended] and
  * completes; `DENIED` and every other refusal end the flow with a [CompanionException] (a `401` is
  * [CompanionException.Unauthorized], an unreadable event [CompanionException.UnreadableEvent], which a reconnection
- * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent, and calls `itemSent` once
- * accepted and after each item.
+ * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent, and calls
+ * [StreamProgress.opened] once accepted and [StreamProgress.itemSent] after each item. [resource] says whether the stream
+ * belongs to one resource (a session), whose `403` or `404` means it is gone, or to the caller (the team feed).
  */
+internal interface StreamProgress {
+    fun opened()
+    fun itemSent()
+}
+
+private fun monotonicMillis(): () -> Long {
+    val origin = TimeSource.Monotonic.markNow()
+    return { origin.elapsedNow().inWholeMilliseconds }
+}
+
 internal fun <T> reconnecting(
     policy: ReconnectPolicy,
-    connect: suspend (send: suspend (LiveUpdate<T>) -> Unit, itemSent: () -> Unit) -> CloudStreamEnd,
+    resource: Boolean,
+    connect: suspend (send: suspend (LiveUpdate<T>) -> Unit, progress: StreamProgress) -> CloudStreamEnd,
 ): Flow<LiveUpdate<T>> = channelFlow<Any> {
     var failures = 0
+    var openedAt: Long? = null
+    val progress = object : StreamProgress {
+        override fun opened() { openedAt = policy.now() }
+        override fun itemSent() { failures = 0 }
+    }
     while (true) {
+        openedAt = null
         val end = try {
-            connect({ send(it) }) { failures = 0 }
+            connect({ send(it) }, progress)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (!error.isTransient()) { send(Stop(error.translated(resource = true))); return@channelFlow }
+            if (!error.isTransient()) { send(Stop(error.translated(resource = resource))); return@channelFlow }
+            if (openedAt?.let { policy.now() - it >= policy.stableMillis } == true) failures = 0
             failures++
             val wait = policy.delayMillis(failures, (error as? TeamCodeException)?.retryAfterSeconds)
             send(LiveUpdate.Reconnecting(wait))

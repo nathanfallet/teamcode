@@ -96,6 +96,39 @@ class SessionUseCasesTest {
         assertEquals("c", refreshed.applied(change(1, "c", phase = "started")).second)
     }
 
+    @Test fun turnsOfSessionsFoundOutsideTheListAreNotReadAgainAndUnknownStatesAreNotPolled() {
+        val active = SessionList(SessionScope.TEAM, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("a", createdAt = 10)), "more"))
+        // A turn of a session the list does not hold: read once; found past the loaded pages, its next turns are not read.
+        assertEquals("old", active.applied(change(1, "old")).second)
+        val remembered = active.upserted(cloudSession("old", createdAt = 1))
+        assertNull(remembered.applied(change(2, "old")).second)
+        // An event saying its state changed reads it again, and the page that brings it forgets it.
+        assertEquals("old", remembered.applied(change(3, "old", "cloud.session.resumed", state = SessionState.READY)).second)
+        assertTrue("old" !in remembered.appended(SessionPage(listOf(cloudSession("old", createdAt = 1)), null)).outside)
+        // A turn never runs in a paused or ended session: those lists never read one.
+        val paused = SessionList(SessionScope.TEAM, SessionGroup.PAUSED, "m1")
+        assertNull(paused.applied(change(4, "z")).second)
+        // A state this version does not know is not read again every tick.
+        val unknown = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("u", SessionState.UNKNOWN)), null))
+        assertTrue(unknown.unsettled.isEmpty())
+    }
+
+    @Test fun anUnreachableServerAtStartIsAskedAgainInsteadOfEndingTheList() = runTest {
+        val sessions = FakeSessionRepository()
+        sessions.changes = flowOf(LiveUpdate.Opened(false))
+        var failures = 2
+        val features = object : me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
+            override suspend fun features(accountId: String, refresh: Boolean): Set<String> {
+                if (failures-- > 0) throw CompanionException.Unreachable()
+                return setOf("cloud.sessions.v1", "cloud.events.v1")
+            }
+        }
+        val start = testScheduler.currentTime
+        val signals = FollowSessionListUseCase(sessions, features, guard())("a1").toList()
+        assertEquals(listOf(SessionListSignal.Connection(true), SessionListSignal.Connection(true), SessionListSignal.Connection(false), SessionListSignal.Reload), signals)
+        assertEquals(6_000, testScheduler.currentTime - start)
+    }
+
     @Test fun theListReloadsWhenTheFeedOpensFromNowAndOnAGapButNotOnAResume() = runTest {
         val sessions = FakeSessionRepository()
         val c = change(1, "a")

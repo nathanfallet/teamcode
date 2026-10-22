@@ -110,7 +110,8 @@ class SessionViewModel(
                         LiveUpdate.Gap -> Unit
                         LiveUpdate.Ended -> {
                             state.update { it.copy(live = LiveState.ENDED) }
-                            refreshSession()
+                            // The final state stays whatever the header read does.
+                            refreshSessionQuietly()
                         }
                     }
                 }
@@ -231,10 +232,9 @@ class SessionViewModel(
             refreshSession()
         } catch (error: CancellationException) {
             throw error
-        } catch (error: CompanionException.Unauthorized) {
-            throw error
         } catch (_: Exception) {
-            // The header stays as it was; the transcript goes on.
+            // The header stays as it was; the transcript goes on. An expired login was already signed out by the guard,
+            // which takes the app back to sign-in: nothing here may throw, since its callers are plain launches.
         }
     }
 

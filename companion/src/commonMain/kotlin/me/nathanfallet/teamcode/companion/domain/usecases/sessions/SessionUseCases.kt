@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.companion.domain.usecases.sessions
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
@@ -45,7 +46,7 @@ class FollowSessionListUseCase(
     private val pollMillis: Long = 15_000,
 ) {
     operator fun invoke(accountId: String): Flow<SessionListSignal> = guard.flow(accountId, flow {
-        if (Features.EVENTS in features.features(accountId, refresh = true)) {
+        if (Features.EVENTS in featuresWhenReachable(accountId)) {
             sessions.sessionChanges(accountId).collect { update ->
                 when (update) {
                     is LiveUpdate.Opened -> {
@@ -66,4 +67,26 @@ class FollowSessionListUseCase(
             }
         }
     })
+
+    /** Offline or a failing server at start: waits and asks again, as a cut stream does, instead of ending the list. */
+    private suspend fun FlowCollector<SessionListSignal>.featuresWhenReachable(accountId: String): Set<String> {
+        var wait = FIRST_RETRY_MILLIS
+        while (true) {
+            try {
+                return features.features(accountId, refresh = true)
+            } catch (error: Exception) {
+                val transient = error is CompanionException.Unreachable || error is CompanionException.RateLimited ||
+                    (error is CompanionException.Server && (error.statusCode >= 500 || error.statusCode == 408))
+                if (!transient) throw error
+                emit(SessionListSignal.Connection(reconnecting = true))
+                delay(wait)
+                wait = minOf(wait * 2, MAX_RETRY_MILLIS)
+            }
+        }
+    }
+
+    private companion object {
+        const val FIRST_RETRY_MILLIS = 2_000L
+        const val MAX_RETRY_MILLIS = 30_000L
+    }
 }

@@ -138,7 +138,8 @@ class SessionsViewModel(
         val list = state.value.list ?: return
         // The spinner only for a list with nothing to show yet: a refresh of a shown list stays quiet.
         state.update { it.copy(loading = list.sessions.isEmpty()) }
-        val outcome = attempt { loadSessions(accountId, list.scope, list.group) }
+        // Cancelled by a restart (retry, account change): the flag never stays on.
+        val outcome = try { attempt { loadSessions(accountId, list.scope, list.group) } } finally { state.update { it.copy(loading = false) } }
         state.update { current ->
             // A filter changed while loading: that change queued its own reload.
             val target = current.list?.takeIf { it.scope == list.scope && it.group == list.group }
@@ -150,7 +151,7 @@ class SessionsViewModel(
         val list = state.value.list ?: return
         val before = list.nextBefore ?: return
         state.update { it.copy(loadingMore = true) }
-        val outcome = attempt { loadSessions(accountId, list.scope, list.group, before) }
+        val outcome = try { attempt { loadSessions(accountId, list.scope, list.group, before) } } finally { state.update { it.copy(loadingMore = false) } }
         state.update { current ->
             val target = current.list?.takeIf { it.scope == list.scope && it.group == list.group && it.nextBefore == before }
             current.copy(loadingMore = false, list = outcome.getOrNull()?.let { page -> target?.appended(page) } ?: current.list, error = outcome.exceptionOrNull()?.userMessage())
