@@ -15,7 +15,12 @@ import androidx.navigation.toRoute
 import me.nathanfallet.teamcode.companion.presentation.screens.AddServerScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.HomeScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SettingsScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
+import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
+import org.koin.compose.koinInject
+import org.koin.core.parameter.parametersOf
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.RootViewModel
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -47,7 +52,14 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             HomeScreen(
                 onOpenSettings = { navController.navigate(SettingsRoute) },
                 onSignInAgain = { account -> navController.navigate(LoginRoute(account.origin, account.username)) },
+                onOpenSession = { account, session -> navController.navigate(SessionRoute(account.id, session.id)) },
             )
+        }
+        composable<SessionRoute> { entry ->
+            val route = entry.toRoute<SessionRoute>()
+            val viewModel: SessionViewModel = koinViewModel { parametersOf(route) }
+            val accounts: AccountRepository = koinInject()
+            SessionScreen(viewModel, memberId = accounts.accounts.value.firstOrNull { it.id == route.accountId }?.memberId, onBack = { navController.popBackStack() })
         }
         composable<SettingsRoute> {
             SettingsScreen(

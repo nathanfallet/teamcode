@@ -45,6 +45,7 @@ kotlin {
             implementation(libs.koin.compose.viewmodel)
             implementation(libs.serialization)
             implementation(libs.multiplatform.settings)
+            implementation(libs.markdown.renderer.m3)
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)

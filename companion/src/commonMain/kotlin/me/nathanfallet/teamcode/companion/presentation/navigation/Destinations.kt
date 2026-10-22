@@ -16,3 +16,7 @@ object HomeRoute
 
 @Serializable
 object SettingsRoute
+
+/** One cloud session of an account: header and live transcript. */
+@Serializable
+data class SessionRoute(val accountId: String, val sessionId: String)

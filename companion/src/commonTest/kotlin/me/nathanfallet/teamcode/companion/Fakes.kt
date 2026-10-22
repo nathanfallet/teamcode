@@ -89,3 +89,43 @@ fun account(id: String = "a1", origin: String = "https://team.example", memberId
 fun credentials() = MemoryCredentialStore()
 
 fun unauthorized(): Member = throw CompanionException.Unauthorized()
+
+fun cloudSession(
+    id: String,
+    state: me.nathanfallet.teamcode.companion.domain.models.SessionState = me.nathanfallet.teamcode.companion.domain.models.SessionState.READY,
+    ownerId: String = "m1",
+    createdAt: Long = 1_000,
+) = me.nathanfallet.teamcode.companion.domain.models.CloudSession(
+    id = id, name = "Session $id", ownerId = ownerId, state = state, phase = null, agentKind = "claude", model = "opus", effort = null,
+    profileId = "p1", repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = null,
+)
+
+class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1")) :
+    me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
+    val refreshes = mutableListOf<Boolean>()
+    override suspend fun features(accountId: String, refresh: Boolean): Set<String> { refreshes += refresh; return features }
+}
+
+/** Sessions answered from a map; the feed is whatever [changes] emits. */
+class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository {
+    val calls = mutableListOf<String>()
+    var pages: (me.nathanfallet.teamcode.companion.domain.models.SessionGroup, String?) -> me.nathanfallet.teamcode.companion.domain.models.SessionPage =
+        { _, _ -> me.nathanfallet.teamcode.companion.domain.models.SessionPage(emptyList(), null) }
+    val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.CloudSession>()
+    var changes: kotlinx.coroutines.flow.Flow<me.nathanfallet.teamcode.companion.domain.models.LiveUpdate<me.nathanfallet.teamcode.companion.domain.models.SessionChange>> =
+        kotlinx.coroutines.flow.emptyFlow()
+    /** Suspends each list load until released, to change things while it is in flight. */
+    var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, group: me.nathanfallet.teamcode.companion.domain.models.SessionGroup, before: String?): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
+        calls += "list $scope $group $before"
+        gate?.await()
+        return pages(group, before)
+    }
+    override suspend fun session(accountId: String, sessionId: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "get $sessionId"
+        return byId[sessionId] ?: throw CompanionException.NotFound()
+    }
+    override suspend fun profiles(accountId: String) = emptyList<me.nathanfallet.teamcode.companion.domain.models.Profile>()
+    override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }
+}

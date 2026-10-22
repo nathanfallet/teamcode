@@ -1,14 +1,8 @@
 package me.nathanfallet.teamcode.companion.infrastructure.repositories
 
-import io.ktor.client.call.NoTransformationFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.SerializationException
 import me.nathanfallet.teamcode.api.models.LoginResponse
 import me.nathanfallet.teamcode.api.models.MemberView
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -24,9 +18,11 @@ import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientPr
 /** [AuthRepository] over the typed client; maps its DTOs and failures to the domain's, never forwarding a server message. */
 class RemoteAuthRepository(
     private val clients: TeamCodeClientProvider,
-    private val accounts: AccountRepository,
+    accounts: AccountRepository,
     private val scope: CoroutineScope,
 ) : AuthRepository {
+    private val calls = AccountCalls(clients, accounts)
+
     override suspend fun serverInfo(origin: String): ServerInfo = detached(origin) { client ->
         val capabilities = try {
             client.capabilities()
@@ -79,54 +75,11 @@ class RemoteAuthRepository(
         }
     }
 
-    private suspend fun <T> withAccount(accountId: String, call: suspend (TeamCodeClient) -> T): T {
-        val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: throw CompanionException.Unauthorized()
-        return translate(credentialsFailure = false) { call(clients.forAccount(accountId, account.origin)) }
-    }
+    private suspend fun <T> withAccount(accountId: String, call: suspend (TeamCodeClient) -> T): T = calls.withAccount(accountId, call = call)
 
     private suspend fun <T> detached(origin: String, token: String? = null, credentialsFailure: Boolean = false, call: suspend (TeamCodeClient) -> T): T =
-        translate(credentialsFailure) { clients.detached(origin, token).use { call(it) } }
-
-    private suspend fun <T> translate(credentialsFailure: Boolean, call: suspend () -> T): T = try {
-        // Every call here is a short request and answer: a stalled server or a captive portal ends as unreachable
-        // instead of a spinner that lasts minutes.
-        // (Timed on the default dispatcher, in real time, whatever the caller's dispatcher.)
-        try {
-            withContext(Dispatchers.Default) { withTimeout(REQUEST_TIMEOUT_MILLIS) { call() } }
-        } catch (_: TimeoutCancellationException) {
-            throw CompanionException.Unreachable()
-        }
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: CompanionException) {
-        throw error
-    } catch (error: TeamCodeException) {
-        throw when {
-            error.statusCode == 0 -> CompanionException.Unreachable()
-            error.statusCode == 401 && credentialsFailure -> CompanionException.InvalidCredentials()
-            error.statusCode == 401 -> CompanionException.Unauthorized()
-            error.statusCode == 429 -> CompanionException.RateLimited(error.retryAfterSeconds)
-            error.statusCode == 400 && error.code == "invalid_password" -> CompanionException.PasswordRejected(error.code)
-            else -> CompanionException.Server(error.statusCode, error.code)
-        }
-    } catch (error: Exception) {
-        throw when {
-            error.isDecodingFailure() -> CompanionException.NotTeamCode()
-            // Origins are normalized before any call, so an argument error is a bug or the typed client's own refusal
-            // (its message is readable): shown as is, never disguised as a network failure.
-            // Only the exact type: engines throw subclasses such as UnresolvedAddressException for network failures.
-            error::class == IllegalArgumentException::class -> error
-            // Connection refused, unknown host, TLS failure, timeout: the engines throw their own types.
-            else -> CompanionException.Unreachable()
-        }
-    }
+        translateFailures(credentialsFailure) { clients.detached(origin, token).use { call(it) } }
 }
-
-// A JSON body that is not TeamCode's, or a body that is not JSON at all (an HTML portal page answering 200).
-private const val REQUEST_TIMEOUT_MILLIS = 30_000L
-
-private fun Throwable.isDecodingFailure(): Boolean =
-    generateSequence(this) { it.cause }.take(8).any { it is SerializationException || it is NoTransformationFoundException }
 
 internal fun MemberView.domain() = Member(id, username, role, passwordChangeRequired)
 internal fun LoginResponse.domain() = LoginSession(accessToken, expiresAt, member.domain())
