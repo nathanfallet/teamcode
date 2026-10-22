@@ -39,6 +39,9 @@ class ChangePasswordUseCase(
         }
     }
 
+    /** The member left before changing the password: the temporary session is revoked rather than left valid. */
+    fun abandon(pending: SignInResult.PasswordChangeRequired) = auth.abandon(pending.server.origin, pending.temporaryToken)
+
     companion object {
         const val MIN_PASSWORD_LENGTH = 14
     }

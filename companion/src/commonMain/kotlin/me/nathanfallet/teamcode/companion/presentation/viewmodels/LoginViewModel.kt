@@ -55,6 +55,13 @@ class LoginViewModel(
         loadServer()
     }
 
+    override fun onCleared() {
+        // Back or closed on the password-change step: the temporary session is never stored, so it is revoked now.
+        // After a submitted change it is already revoked, and a second revocation is harmless.
+        val current = state.value
+        current.passwordChange?.takeIf { !current.signedIn }?.let(changePassword::abandon)
+    }
+
     fun loadServer() {
         state.update { it.copy(working = true, error = null) }
         viewModelScope.launch {

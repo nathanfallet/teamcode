@@ -89,6 +89,15 @@ class AuthUseCasesTest {
         assertEquals("token-2", store.read(signed.account.id))
     }
 
+    @Test fun leavingThePasswordChangeRevokesTheTemporarySession() = runTest {
+        auth.sessions.clear()
+        auth.sessions += LoginSession("temporary", 2_000_000L, member(passwordChangeRequired = true))
+        val pending = assertIs<SignInResult.PasswordChangeRequired>(signIn(server, "ada", "temporary-pw", "Phone"))
+        ChangePasswordUseCase(auth, signIn).abandon(pending)
+        assertEquals(listOf("https://team.example temporary"), auth.abandoned)
+        assertTrue(accounts.accounts.value.isEmpty())
+    }
+
     @Test fun aFailedSignInAfterTheChangeAsksToSignInWithTheNewPassword() = runTest {
         auth.sessions.clear()
         auth.sessions += LoginSession("temporary", 2_000_000L, member(passwordChangeRequired = true))

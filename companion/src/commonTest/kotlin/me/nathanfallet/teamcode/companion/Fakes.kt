@@ -42,7 +42,9 @@ class FakeAuthRepository : AuthRepository {
     override suspend fun logout(accountId: String) { calls += "logout $accountId"; logoutFailure?.let { throw it } }
     var renameFailure: Exception? = null
     override suspend fun renameCurrentDevice(accountId: String, name: String): String { calls += "rename $accountId $name"; renameFailure?.let { throw it }; return name }
-    override fun release(accountId: String) { released += accountId }
+    override suspend fun release(accountId: String) { released += accountId }
+    val abandoned = mutableListOf<String>()
+    override fun abandon(origin: String, token: String) { abandoned += "$origin $token" }
 }
 
 class InMemoryAccountRepository(initial: List<Account> = emptyList()) : AccountRepository {

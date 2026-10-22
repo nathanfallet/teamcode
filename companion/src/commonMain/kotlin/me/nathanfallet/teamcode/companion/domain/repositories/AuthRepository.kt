@@ -18,5 +18,11 @@ interface AuthRepository {
     /** Renames this installation on the server's Devices page; returns the name the server kept. */
     suspend fun renameCurrentDevice(accountId: String, name: String): String
     /** Closes what was opened for the account (its HTTP client). */
-    fun release(accountId: String)
+    suspend fun release(accountId: String)
+
+    /**
+     * Revokes a session that was never stored (the temporary one a password change starts from), best-effort and in
+     * the background: the screen that held it is going away.
+     */
+    fun abandon(origin: String, token: String)
 }

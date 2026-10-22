@@ -60,8 +60,19 @@ class RemoteAuthRepository(
         client.renameDevice(current.id, name).name
     }
 
-    override fun release(accountId: String) {
-        scope.launch { clients.release(accountId) }
+    // Closed before returning: a later call for this account can never get the client being closed.
+    override suspend fun release(accountId: String) = clients.release(accountId)
+
+    override fun abandon(origin: String, token: String) {
+        scope.launch {
+            try {
+                detached(origin, token) { it.logout() }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Unreachable or already ended: the session expires on its own and is listed on the Devices page.
+            }
+        }
     }
 
     private suspend fun <T> withAccount(accountId: String, call: suspend (TeamCodeClient) -> T): T {
