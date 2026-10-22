@@ -27,4 +27,17 @@ class CloudToolsJvmTest {
         assertEquals(listOf("tracker"), tools.prepare("codex"))
         assertTrue("/api/v1/skill-delivery" in paths, "Skills are looked up too: $paths")
     }
+
+    @Test fun theArtifactToolsStartOnlyWhenTheExecutionsOwnerMayPublish() = runBlocking {
+        fun tools(answer: Pair<HttpStatusCode, String>, binary: String? = "/opt/teamcode/teamcode") =
+            RunnerAgentTools(client { path -> if (path == "/api/v1/artifacts/policy") answer else HttpStatusCode.NotFound to "{}" }, { throw IllegalStateException("no container") },
+                binary = binary, workspace = "/workspace/")
+        val started = assertNotNull(tools(HttpStatusCode.OK to """{"canPublish":true}""").artifacts())
+        assertEquals("/opt/teamcode/teamcode", started.command); assertEquals("/workspace", started.root)
+        assertEquals("/tmp/teamcode-artifacts", started.scratch); assertEquals(listOf("/workspace/.home"), started.refused, "The runner's home is never published")
+        for (reason in listOf("artifact_storage_missing", "artifact_storage_unverified", "artifacts_disabled", "artifact_publish_forbidden"))
+            assertNull(tools(HttpStatusCode.OK to """{"canPublish":false,"reason":"$reason"}""").artifacts(), reason)
+        assertNull(tools(HttpStatusCode.NotFound to "{}").artifacts(), "An older server without the policy")
+        assertNull(tools(HttpStatusCode.OK to """{"canPublish":true}""", binary = null).artifacts())
+    }
 }

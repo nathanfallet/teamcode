@@ -232,4 +232,24 @@ class CloudToolsTest {
         assertNotNull(started("claude", null, none))
         assertEquals(1, prepared)
     }
+
+    @Test fun cloudAgentsStartTheArtifactToolsWithTheRelayAndTheLocalTokenOnly() = runTest {
+        val local = "l".repeat(64)
+        val tools = object : AgentTools {
+            override suspend fun prepare(agent: String) = emptyList<String>()
+            override suspend fun artifacts() = me.nathanfallet.teamcode.cli.launch.ArtifactsMcp("/opt/teamcode/teamcode", "/workspace", "/tmp/teamcode-artifacts", listOf("/workspace/.home"))
+        }
+        val (claude, environment) = assertNotNull(started("claude", AgentInferenceEndpoint(41234, local), tools))
+        val server = Json.parseToJsonElement(claude.arguments[claude.arguments.indexOf("--mcp-config") + 1]).jsonObject["mcpServers"]!!.jsonObject["teamcode_artifacts"]!!.jsonObject
+        assertEquals("/opt/teamcode/teamcode", server["command"]!!.jsonPrimitive.content)
+        assertEquals(listOf("mcp", "artifacts", "--root", "/workspace", "--scratch", "/tmp/teamcode-artifacts", "--refuse", "/workspace/.home"),
+            server["args"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals("http://127.0.0.1:41234", server["env"]!!.jsonObject["TEAMCODE_ARTIFACTS_URL"]!!.jsonPrimitive.content)
+        assertEquals(local, environment["TEAMCODE_MCP_TOKEN"])
+        assertFalse(claude.arguments.joinToString().contains(local), "The token is not on the command line")
+        assertFalse(environment.values.any { it?.startsWith("tcex_") == true } || claude.arguments.any { "tcex_" in it || "TOKEN_FILE" in it },
+            "Neither the execution credential nor its file reaches the artifact server")
+        val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, local), tools))
+        assertTrue(codex.arguments.any { it.startsWith("mcp_servers.teamcode_artifacts={command=\"/opt/teamcode/teamcode\"") }, codex.arguments.toString())
+    }
 }

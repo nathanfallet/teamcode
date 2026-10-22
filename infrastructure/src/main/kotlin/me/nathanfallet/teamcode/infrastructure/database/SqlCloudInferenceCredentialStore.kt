@@ -109,7 +109,8 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
 
 /**
  * What a cloud execution may do as its owner: inference, the owner's MCP servers through the gateway (the runner
- * relays the agent's messages) and the owner's effective skills and team hooks (the runner installs them). Nothing else: no usage,
- * no publication, no cloud or interactive route.
+ * relays the agent's messages), the owner's effective skills and team hooks (the runner installs them), and artifacts
+ * (the agent's `teamcode mcp artifacts`, through the runner's relay; never making public or deleting, which stay
+ * interactive). Nothing else: no usage, no skill or hook publication, no cloud or interactive route.
  */
-val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ)
+val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE)

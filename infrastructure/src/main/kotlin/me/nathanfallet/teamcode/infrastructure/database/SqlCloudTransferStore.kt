@@ -125,6 +125,8 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
         // The pause already revoked the former owner's inference credentials with their execution; nothing issued
         // for them may survive the change of owner.
         revokeInferenceCredentials(expected.id)
+        // The session's artifacts stay their owners'; the recipient becomes an editor of each, to continue them.
+        grantSessionArtifacts(expected.teamId, expected.id, transfer.toMemberId, transfer.initiatedBy.initiatorId, now)
         val event = buildJsonObject {
             put("transferId", transfer.id); put("fromMemberId", transfer.fromMemberId); put("toMemberId", transfer.toMemberId); put("atEpoch", expected.currentEpoch)
         }
