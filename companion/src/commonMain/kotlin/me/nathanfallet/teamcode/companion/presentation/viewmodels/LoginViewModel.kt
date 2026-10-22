@@ -91,6 +91,12 @@ class LoginViewModel(
                 }
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionException.InvalidCredentials) {
+                // During a password change, the temporary session expired or was revoked: back to signing in.
+                state.update {
+                    if (it.passwordChange == null) it.copy(working = false, error = error.userMessage())
+                    else it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = "The temporary session ended. Sign in again with the temporary password.")
+                }
             } catch (error: CompanionException.PasswordChanged) {
                 // Back to the sign-in form: the temporary password and its session no longer exist.
                 state.update { it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = error.userMessage()) }

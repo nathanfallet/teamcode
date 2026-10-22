@@ -36,6 +36,8 @@ class AuthUseCasesTest {
         assertEquals("http://[::1]:8080", normalizeOrigin("http://[::1]:8080"))
         // Mobile keyboards capitalize the first letter.
         assertEquals("https://team.example", normalizeOrigin("Https://Team.example"))
+        assertEquals("https://team.example", normalizeOrigin("https://team.example:443"))
+        assertEquals("https://team.example:8443", normalizeOrigin("https://team.example:08443"))
         for (invalid in listOf("http://team.example", "https://team.example/path", "https://user:pw@team.example", "https://team.example?x=1",
             "https://team.example#x", "ftp://team.example", "https://", "https://team..example", "https://team.example:70000", ""))
             assertFailsWith<CompanionException.InvalidOrigin>(invalid) { normalizeOrigin(invalid) }
@@ -129,6 +131,16 @@ class AuthUseCasesTest {
         accounts.save(account("a2", memberId = "m2", expiresAt = 500L)); store.write("a2", "t2")
         assertFalse(refresh("a2")!!.signedIn)
         assertTrue(auth.calls.isEmpty())
+    }
+
+    @Test fun aLate401DoesNotSignOutAnAccountSignedInAgainMeanwhile() = runTest {
+        accounts.save(account("a1")); store.write("a1", "new")
+        // While the refresh with the old token waits, the member signs in again (new session, new expiry), then the
+        // old token's 401 arrives.
+        auth.meResult = { accounts.update(account("a1", expiresAt = 3_000_000L)); unauthorized() }
+        val refreshed = RefreshAccountUseCase(auth, accounts, store, FixedClock())("a1")!!
+        assertTrue(refreshed.signedIn)
+        assertEquals("new", store.read("a1"))
     }
 
     @Test fun aLockedSecureStoreKeepsTheAccountSignedIn() = runTest {

@@ -33,7 +33,7 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
     }
 
     override suspend fun write(accountId: String, token: String) {
-        if (keyring { it.set(service, accountId, token); Unit } != null) { memory.delete(accountId); return }
+        if (keyring { it.set(service, accountId, token); Unit } != null) { memory.delete(accountId); writeFailed = false; return }
         // A locked or broken keyring: keep the token in memory for this run instead of failing the sign-in.
         if (backend != null) writeFailed = true
         memory.write(accountId, token)
@@ -63,7 +63,12 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
 
 private class JavaKeyringBackend(private val keyring: Keyring) : KeyringBackend {
     override fun get(service: String, account: String): String? =
-        try { keyring.getPassword(service, account) } catch (_: PasswordAccessException) { null }
+        try { keyring.getPassword(service, account) } catch (error: PasswordAccessException) {
+            // java-keyring uses one exception for a missing entry and a refused access (a locked keyring). Only the
+            // first is "no token"; the backends say it as "not found" (Windows, the macOS Keychain status text) or
+            // "No stored credentials match" (Secret Service).
+            if (error.message.orEmpty().let { "found" in it.lowercase() || "no stored credentials" in it.lowercase() }) null else throw error
+        }
     override fun set(service: String, account: String, secret: String) = keyring.setPassword(service, account, secret)
     override fun delete(service: String, account: String) {
         try { keyring.deletePassword(service, account) } catch (_: PasswordAccessException) { /* Already absent. */ }

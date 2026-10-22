@@ -18,7 +18,10 @@ fun normalizeOrigin(input: String): String {
     val host = match.groupValues[2].lowercase()
     val port = match.groupValues[3]
     if (host.isEmpty() || host.startsWith('.') || host.endsWith('.') || ".." in host) throw CompanionException.InvalidOrigin()
-    if (port.isNotEmpty() && port.drop(1).toInt() !in 1..65535) throw CompanionException.InvalidOrigin()
+    val portNumber = port.drop(1).takeIf { it.isNotEmpty() }?.toInt()
+    if (portNumber != null && portNumber !in 1..65535) throw CompanionException.InvalidOrigin()
     if (scheme == "http" && host !in LOOPBACK) throw CompanionException.InvalidOrigin()
-    return "$scheme://$host$port"
+    // One spelling per server: the scheme's default port dropped, leading zeros gone.
+    val canonicalPort = portNumber?.takeUnless { (scheme == "https" && it == 443) || (scheme == "http" && it == 80) }?.let { ":$it" }.orEmpty()
+    return "$scheme://$host$canonicalPort"
 }

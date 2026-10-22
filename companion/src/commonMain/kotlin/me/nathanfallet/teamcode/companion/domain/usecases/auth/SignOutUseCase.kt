@@ -30,8 +30,9 @@ class SignOutUseCase(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // The account is removed anyway: its server session is revoked (or expires), so a token left behind in a
-            // refusing secure store no longer opens anything, and it is overwritten at the next sign-in.
+            // The account is removed anyway, as the member asked. A token left behind in a refusing secure store is
+            // revoked when the server confirmed the logout; otherwise it lasts until its expiry, like an offline
+            // sign-out's session.
         }
         auth.release(accountId)
         accounts.remove(accountId)

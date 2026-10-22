@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
+import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.companion.domain.models.Account
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LoginSession
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
 import me.nathanfallet.teamcode.companion.domain.models.SignInResult
@@ -43,7 +45,14 @@ class SignInUseCase(
             serverVersion = server.serverVersion,
         )
         // The token first: an account is never listed as signed in without its credential.
-        credentials.write(account.id, session.accessToken)
+        try {
+            credentials.write(account.id, session.accessToken)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // The session exists on the server but cannot be kept: it shows on the Devices page until it expires.
+            throw CompanionException.CredentialStorage()
+        }
         accounts.save(account)
         return account
     }

@@ -34,7 +34,9 @@ class RefreshAccountUseCase(
         val member = try {
             auth.me(accountId)
         } catch (_: CompanionException.Unauthorized) {
-            return signOutLocally(account)
+            // Only if nothing signed the account in again while the call was in flight (its session would be new).
+            val current = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return null
+            return if (current.signedIn && current.expiresAt == account.expiresAt) signOutLocally(current) else current
         }
         // Read after the call: the account may have been renamed, signed out or removed meanwhile.
         val current = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return null
@@ -45,7 +47,8 @@ class RefreshAccountUseCase(
     }
 
     private suspend fun signOutLocally(account: Account): Account {
-        credentials.delete(account.id)
+        // The token is dead on the server either way; a store refusing the delete must not keep the account signed in.
+        try { credentials.delete(account.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
         auth.release(account.id)
         val signedOut = account.copy(signedIn = false)
         accounts.update(signedOut)

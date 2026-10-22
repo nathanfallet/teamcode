@@ -13,6 +13,6 @@ sealed class CompanionException(message: String) : Exception(message) {
     class PasswordRejected(val code: String?) : CompanionException("The server refused this password.")
     /** The password was changed but the sign-in that follows failed: the temporary session is gone, sign in again. */
     class PasswordChanged : CompanionException("Your password was changed. Sign in with the new one.")
-    class CredentialStorage : CompanionException("This device's secure storage refused to give the token. Unlock the device and try again.")
+    class CredentialStorage : CompanionException("This device's secure storage refused to read or keep the sign-in. Unlock the device and try again.")
     class Server(val statusCode: Int, val code: String?) : CompanionException("The server returned HTTP $statusCode.")
 }
