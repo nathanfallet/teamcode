@@ -87,7 +87,8 @@ compose.desktop {
             packageVersion = project.version.toString().substringBefore('-').let { if (it.startsWith("0.")) "1.0.0" else it }
             // The JDK modules the bundled runtime needs (from `suggestRuntimeModules`): preferences, the Java HTTP
             // engine and the keyring's native access.
-            modules("java.instrument", "java.management", "java.net.http", "java.prefs", "jdk.security.auth", "jdk.unsupported")
+            // jdk.crypto.ec is a service module the scan cannot see: without it, TLS to ECDSA servers fails.
+            modules("java.instrument", "java.management", "java.net.http", "java.prefs", "jdk.crypto.ec", "jdk.security.auth", "jdk.unsupported")
         }
     }
 }

@@ -9,24 +9,14 @@ import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.KeychainCredentialStore
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.system.IosPlatformInfo
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
-import kotlinx.coroutines.launch
 import org.koin.dsl.module
 import platform.Foundation.NSUserDefaults
 
 /** iOS: the Keychain, the standard user defaults (metadata only) and the Darwin HTTP engine. */
 fun platformModule() = module {
     single<Settings> { NSUserDefaultsSettings(NSUserDefaults.standardUserDefaults) }
-    single<CredentialStore> {
-        KeychainCredentialStore().also { store ->
-            // No accounts in the settings (a first launch, or a reinstall that wiped them): Keychain items left by a
-            // previous installation are orphans, removed so they do not outlive it.
-            // Off the main thread, like every Keychain call.
-            if (!get<Settings>().hasKey(SettingsAccountRepository.ACCOUNTS_KEY)) CoroutineScope(Dispatchers.IO).launch { runCatching { store.deleteAll() } }
-        }
-    }
+    // No accounts in the settings: a first launch, or a reinstall that wiped them, so Keychain items are orphans.
+    single<CredentialStore> { KeychainCredentialStore(purgeOrphans = !get<Settings>().hasKey(SettingsAccountRepository.ACCOUNTS_KEY)) }
     single<HttpClientEngineFactory<*>> { Darwin }
     single<PlatformInfo> { IosPlatformInfo }
 }

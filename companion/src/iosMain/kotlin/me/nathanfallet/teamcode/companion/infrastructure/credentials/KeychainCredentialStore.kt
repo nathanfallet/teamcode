@@ -48,11 +48,17 @@ import platform.Security.kSecValueData
  * readable after the first unlock and on this device only (no iCloud Keychain sync, no restore to another device).
  */
 @OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
-class KeychainCredentialStore(private val service: String = SERVICE) : CredentialStore {
+class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphans: Boolean = false) : CredentialStore {
     override val persistent = true
 
+    /**
+     * Keychain items survive the app's removal while its settings do not: on a fresh installation, items left by a
+     * previous one are removed once, before the first read or write, so the purge can never race a new token.
+     */
+    private val purge = if (purgeOrphans) lazy { runCatching { deleteAll() } } else null
+
     // Keychain calls can block (after a reboot, while locked): never on the main thread.
-    override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) { readNow(accountId) }
+    override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) { purge?.value; readNow(accountId) }
 
     private fun readNow(accountId: String): String? = withQuery(accountId, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne) { query ->
         memScoped {
@@ -66,7 +72,7 @@ class KeychainCredentialStore(private val service: String = SERVICE) : Credentia
         }
     }
 
-    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { writeNow(accountId, token) }
+    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { purge?.value; writeNow(accountId, token) }
 
     private fun writeNow(accountId: String, token: String) {
         val data = CFBridgingRetain(token.nsData())
@@ -85,17 +91,14 @@ class KeychainCredentialStore(private val service: String = SERVICE) : Credentia
         }
     }
 
-    override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) { deleteNow(accountId) }
+    override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) { purge?.value; deleteNow(accountId) }
 
     private fun deleteNow(accountId: String) {
         val status = withQuery(accountId) { SecItemDelete(it) }
         check(status == errSecSuccess || status == errSecItemNotFound) { "The Keychain refused to delete the token ($status)." }
     }
 
-    /**
-     * Removes every token of the service. Keychain items survive the app's removal while its settings do not: on a
-     * reinstall, the old items belong to accounts nothing refers to any more.
-     */
+    /** Removes every token of the service. */
     fun deleteAll() {
         val serviceRef = CFBridgingRetain(service.nsString())
         try {

@@ -47,14 +47,14 @@ class RefreshAccountUseCase(
     }
 
     private suspend fun signOutLocally(account: Account): Account {
-        // The token is dead on the server either way; a store refusing the delete must not keep the account signed in.
-        try { credentials.delete(account.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
-        auth.release(account.id)
-        // Read again after the delete: a sign-in that completed meanwhile (new session) is not undone.
+        // Checked before anything is deleted: a sign-in that completed meanwhile (new session) keeps its token.
         val current = accounts.accounts.value.firstOrNull { it.id == account.id } ?: return account.copy(signedIn = false)
-        if (current.expiresAt != account.expiresAt) return current
+        if (current.expiresAt != account.expiresAt || !current.signedIn) return current
         val signedOut = current.copy(signedIn = false)
         accounts.update(signedOut)
+        auth.release(account.id)
+        // The token is dead on the server either way; a store refusing the delete must not keep the account signed in.
+        try { credentials.delete(account.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
         return signedOut
     }
 }

@@ -29,7 +29,7 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch {
-            accounts.activeAccountId.collectLatest { id -> if (id != null) refresh(id) }
+            accounts.activeAccountId.collectLatest { id -> if (id != null) refresh(id) else status.value = HomeUiState() }
         }
     }
 
@@ -40,6 +40,8 @@ class HomeViewModel(
             refreshAccount(id)
             HomeUiState()
         } catch (error: CancellationException) {
+            // A newer account replaced this refresh, or its client was closed by a sign-out: no spinner left behind.
+            status.value = HomeUiState()
             throw error
         } catch (error: Exception) {
             HomeUiState(error = error.userMessage())
