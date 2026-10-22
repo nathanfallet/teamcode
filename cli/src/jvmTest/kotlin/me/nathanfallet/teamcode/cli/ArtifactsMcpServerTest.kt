@@ -170,6 +170,10 @@ class ArtifactsMcpServerTest {
         val server = Server()
         val (badMember, badText) = server.tool("share", buildJsonObject { put("artifact", id); put("member", "two words"); put("remove", true) })
         assertTrue(badMember); assertTrue(badText.startsWith("invalid_argument"), badText)
+        assertTrue(server.tool("share", buildJsonObject { put("artifact", id); put("member", "bob"); put("remove", "maybe") }).second.contains("remove must be true or false"))
+        assertTrue("version is 1 or more" in server.tool("read", buildJsonObject { put("artifact", id); put("version", 0) }).second)
+        val unknown = Json.parseToJsonElement(server.mcp.handle(request("tools/call", buildJsonObject { put("name", "delete"); putJsonObject("arguments") {} }))!!).jsonObject
+        assertEquals(-32602, unknown["error"]!!.jsonObject["code"]!!.jsonPrimitive.int, "An unknown tool is a protocol error")
         val team = Server().apply { relation = "team" }
         assertTrue("untrusted" in Json.parseToJsonElement(team.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"]!!.jsonPrimitive.content)
         assertNull(Json.parseToJsonElement(server.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"], "Only one's own artifacts: no warning")

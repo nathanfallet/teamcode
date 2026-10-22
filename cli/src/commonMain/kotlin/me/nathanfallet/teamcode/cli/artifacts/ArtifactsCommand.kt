@@ -105,7 +105,8 @@ private class ArtifactPublish : SuspendingCliktCommand(name = "publish") {
     override fun help(context: Context) = "Publish a page and its files as a new artifact, or as a new version of one. Files are read from the current directory, " +
         "without following symbolic links; credentials and key files are refused."
     override suspend fun run() {
-        val sources = ArtifactSources(listOf("."))
+        // The configuration directory holds the stored login: never published, as for `teamcode mcp artifacts`.
+        val sources = ArtifactSources(listOf("."), listOfNotNull(me.nathanfallet.teamcode.cli.config.configPath().toPath().parent?.toString()))
         val entry = sources.read(page, page.replace('\\', '/').substringAfterLast('/'))
         val others = files.map { spec ->
             val published = if ('=' in spec) spec.substringBefore('=').replace('\\', '/').removePrefix("./") else publishedBesidePage(page, spec)

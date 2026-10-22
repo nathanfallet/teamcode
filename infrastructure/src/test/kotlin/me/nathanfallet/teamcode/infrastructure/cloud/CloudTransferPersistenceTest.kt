@@ -203,7 +203,7 @@ class CloudTransferPersistenceTest {
             ArtifactMembers.selectAll().where { ArtifactMembers.memberId eq to }.associate { it[ArtifactMembers.artifactId] to (it[ArtifactMembers.role] to it[ArtifactMembers.reason]) }
         }
         assertEquals(mapOf(shared.created to ("editor" to "session_transfer"), shared.updated to ("editor" to "session_transfer"),
-            shared.viewer to ("editor" to "session_transfer"), shared.editor to ("editor" to "invited")), members)
+            shared.viewer to ("editor" to "invited"), shared.editor to ("editor" to "invited")), members)
         assertEquals(setOf(from), ra.database.query { Artifacts.select(Artifacts.ownerId).where { Artifacts.id inList shared.all }.map { it[Artifacts.ownerId] }.toSet() })
         assertEquals(3L, ra.database.query { AuditEvents.selectAll().where { AuditEvents.action eq "artifact.member_added" }.count() })
         // A later transfer of the same session passes on what the recipient received from it and their own artifacts from it,
@@ -211,7 +211,7 @@ class CloudTransferPersistenceTest {
         val next = t.outsider.member.id
         val later = ra.store.now()
         ra.database.query { grantSessionArtifacts(teamId, s.id, to, next, to, later) }
-        assertEquals(setOf(shared.created, shared.updated, shared.viewer, shared.recipients), ra.database.query {
+        assertEquals(setOf(shared.created, shared.updated, shared.recipients), ra.database.query {
             ArtifactMembers.selectAll().where { ArtifactMembers.memberId eq next }.map { it[ArtifactMembers.artifactId] }.toSet()
         })
         ra.database.query { ArtifactMembers.deleteWhere { ArtifactMembers.memberId eq next } }

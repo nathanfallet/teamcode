@@ -41,8 +41,9 @@ internal fun JdbcTransaction.grantSessionArtifacts(teamId: String, sessionId: St
         this[ArtifactMembers.reason] = "session_transfer"; this[ArtifactMembers.addedBy] = actorId; this[ArtifactMembers.originSessionId] = sessionId; this[ArtifactMembers.addedAt] = now
     }
     val upgraded = granted.keys - fresh.toSet()
+    // An invitation keeps its provenance (who invited, why): only its role changes, so it is never passed on later.
     if (upgraded.isNotEmpty()) ArtifactMembers.update({ (ArtifactMembers.memberId eq recipientId) and (ArtifactMembers.artifactId inList upgraded) }) {
-        it[role] = "editor"; it[reason] = "session_transfer"; it[addedBy] = actorId; it[originSessionId] = sessionId; it[addedAt] = now
+        it[role] = "editor"
     }
     AuditEvents.batchInsert(granted.entries, shouldReturnGeneratedValues = false) { (artifactId, ownerId) ->
         this[AuditEvents.teamId] = teamId; this[AuditEvents.actorId] = actorId; this[AuditEvents.action] = "artifact.member_added"

@@ -150,6 +150,13 @@ class ArtifactRoutesTest {
         assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/artifacts", "unknown").status)
     }
 
+    @Test fun aKeyNeverReachesTheArtifactThroughADotMemberSegment() {
+        val id = "00000000-0000-4000-8000-0000000000aa"
+        assertEquals(CredentialAction.ARTIFACTS_WRITE, credentialAction("DELETE", "/api/v1/artifacts/$id/members/bob", emptySet()))
+        for (member in listOf("..", ".", ".bob"))
+            assertEquals(CredentialAction.INTERACTIVE, credentialAction("DELETE", "/api/v1/artifacts/$id/members/$member", emptySet()), member)
+    }
+
     @Test fun policyAnswersInEveryAvailabilityStateAndUploadsCarryTheRun() = testApplication {
         val store = Store()
         application { configureGateway(gateway, team = team(), artifacts = ArtifactService(store, Admin(), Bucket())) }

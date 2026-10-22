@@ -42,7 +42,10 @@ class ArtifactsMcpServer(
             "initialize" -> result(id, initialize(params))
             "ping" -> result(id, JsonObject(emptyMap()))
             "tools/list" -> result(id, buildJsonObject { put("tools", TOOLS) })
-            "tools/call" -> result(id, call(params))
+            "tools/call" -> (params["name"] as? JsonPrimitive)?.contentOrNull.let { name ->
+                if (name == null || TOOLS.none { (it as JsonObject)["name"] == JsonPrimitive(name) }) error(id, -32602, "Unknown tool: ${name ?: "no name"}")
+                else result(id, call(params))
+            }
             null -> error(id, -32600, "Invalid request")
             else -> error(id, -32601, "Method not found")
         }.toString()
@@ -162,8 +165,10 @@ class ArtifactsMcpServer(
 
     private suspend fun read(arguments: JsonObject): String {
         val id = artifactReference(arguments.string("artifact") ?: throw CliUserException("artifact (an id or URL) is required."))
+        val asked = arguments.int("version")
+        if (asked != null && asked < 1) throw CliUserException("version is 1 or more; omit it for the current version.")
         val view = client.artifact(id)
-        val number = arguments.int("version") ?: view.currentVersion
+        val number = asked ?: view.currentVersion
         if (number < 1) throw CliUserException("This artifact has no published version yet.")
         val version = client.artifactVersion(id, number)
         val directory = download(id, version)
@@ -218,7 +223,12 @@ class ArtifactsMcpServer(
         return primitive?.content?.trim()?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.takeIf { d -> d % 1.0 == 0.0 && d in -1e9..1e9 }?.toInt() }
             ?: throw CliUserException("$name must be a whole number.")
     }
-    private fun JsonObject.boolean(name: String) = (this[name] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+    /** Absent or null is null; `true`/`false`, also written as strings, are themselves; anything else is refused. */
+    private fun JsonObject.boolean(name: String): Boolean? {
+        val value = this[name] ?: return null
+        if (value is JsonNull) return null
+        return when ((value as? JsonPrimitive)?.content?.trim()?.lowercase()) { "true" -> true; "false" -> false; else -> throw CliUserException("$name must be true or false.") }
+    }
     private fun JsonObject?.orEmpty() = this ?: JsonObject(emptyMap())
 
     companion object {
