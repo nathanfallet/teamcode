@@ -174,6 +174,9 @@ fun main() {
     val artifactAdmin = artifactAdminStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(it, artifactObjects) }
     val artifactStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactStore(it) }
     val artifacts = artifactStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactService(it, artifactAdminStore!!, artifactObjects) }
+    // View tickets are signed with a key derived from the credential key (HKDF, label artifact-view), never with it.
+    val artifactViewing = artifacts?.let { service -> me.nathanfallet.teamcode.domain.artifacts.ArtifactViewing(service, artifactStore!!, artifactAdminStore!!, artifactObjects,
+        me.nathanfallet.teamcode.domain.artifacts.ArtifactTickets(Base64.getDecoder().decode(System.getenv("TEAMCODE_ENCRYPTION_KEY")!!))) }
     if (artifactStore != null) {
         // Drafts, retention, expired uploads, unused blobs and the proven removal of deleted folders: one replica every ten minutes.
         val work = SqlScheduledWork(database!!)
@@ -210,7 +213,7 @@ fun main() {
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
-            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts) }.start(wait = true)
+            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); artifactHttp.close(); database?.close() }
 }
 

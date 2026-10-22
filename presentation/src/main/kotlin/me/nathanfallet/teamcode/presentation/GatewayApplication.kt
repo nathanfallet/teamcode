@@ -30,7 +30,7 @@ import me.nathanfallet.teamcode.presentation.docs.apiDocsRoutes
 internal const val CACHE_CONTROL = "no-store, no-transform"
 private const val MAX_BODY_BYTES = 2 * 1024 * 1024
 
-fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, hooks: me.nathanfallet.teamcode.domain.hooks.HookCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null, webhooks: me.nathanfallet.teamcode.domain.webhooks.WebhookService? = null, apiPrices: me.nathanfallet.teamcode.domain.capacity.ApiPriceStore? = null, poolSizing: me.nathanfallet.teamcode.domain.capacity.PoolSizingService? = null, artifactAdmin: me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService? = null, artifacts: me.nathanfallet.teamcode.domain.artifacts.ArtifactService? = null) {
+fun Application.configureGateway(gateway: GatewayService, accessToken: String = "", team: TeamService? = null, publicOrigin: String = "http://localhost:8080", accounts: AccountManagement? = null, admission: AdmissionStore? = null, directives: DirectiveService? = null, modelPolicies: ModelPolicyStore? = null, readiness: suspend () -> Boolean = { true }, routes: me.nathanfallet.teamcode.domain.routing.RoutingStore? = null, inboundProtocols: List<InboundProtocol> = listOf(MessagesInboundProtocol(), ResponsesInboundProtocol()), cancellation: RequestCancellationService? = null, devices: DeviceService? = null, serviceKeys: ServiceKeyService? = null, audit: AuditService? = null, pacingSettings: me.nathanfallet.teamcode.domain.capacity.PacingSettingsStore? = null, forecasts: me.nathanfallet.teamcode.domain.capacity.ForecastService? = null, forecastLivePolicy: ForecastLivePolicy = ForecastLivePolicy(), groups: GroupService? = null, runs: AgentRunService? = null, budgetOverrides: me.nathanfallet.teamcode.domain.capacity.BudgetOverrideService? = null, reconciliation: me.nathanfallet.teamcode.domain.capacity.UsageReconciliationService? = null, variants: me.nathanfallet.teamcode.domain.variants.VariantService? = null, skills: me.nathanfallet.teamcode.domain.skills.SkillCatalog? = null, hooks: me.nathanfallet.teamcode.domain.hooks.HookCatalog? = null, mcp: me.nathanfallet.teamcode.domain.mcp.McpGateway? = null, mcpAccess: me.nathanfallet.teamcode.domain.mcp.McpAccessStore? = null, cloudRuntime: me.nathanfallet.teamcode.domain.cloud.CloudRuntimeService? = null, cloudSessions: me.nathanfallet.teamcode.domain.cloud.CloudSessionService? = null, cloudAdmin: me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService? = null, cloudRunner: CloudRunnerChannel? = null, github: me.nathanfallet.teamcode.domain.github.GitHubLinkService? = null, cloudConversation: CloudConversation? = null, cloudTransfers: me.nathanfallet.teamcode.domain.cloud.CloudTransferService? = null, webhooks: me.nathanfallet.teamcode.domain.webhooks.WebhookService? = null, apiPrices: me.nathanfallet.teamcode.domain.capacity.ApiPriceStore? = null, poolSizing: me.nathanfallet.teamcode.domain.capacity.PoolSizingService? = null, artifactAdmin: me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService? = null, artifacts: me.nathanfallet.teamcode.domain.artifacts.ArtifactService? = null, artifactViewing: me.nathanfallet.teamcode.domain.artifacts.ArtifactViewing? = null) {
     require(team != null || accessToken.length >= 32) { "The development access token must contain at least 32 characters." }
     val expected = MessageDigest.getInstance("SHA-256").digest(accessToken.toByteArray())
     // Without a runtime service (tests and older wiring), mounted cloud routes are on, as before.
@@ -38,6 +38,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     attributes.put(CLOUD_ENABLED, cloudOn)
     install(io.ktor.server.resources.Resources)
     install(ContentNegotiation) { json(Serialization.json) }
+    // Artifact content is cached by its own route (a ticket fixes the version); any other answer there is not stored.
+    install(createApplicationPlugin("ArtifactContentCaching") {
+        onCallRespond { call, _ -> if (isArtifactContent(call.request.path()) && call.response.headers[HttpHeaders.CacheControl] == null) call.response.header(HttpHeaders.CacheControl, "no-store") }
+    })
     fun inference(call: ApplicationCall) = inboundProtocols.firstOrNull { it.path == call.request.path() }?.protocol
     install(StatusPages) {
         exception<TeamFailure> { call, error ->
@@ -46,7 +50,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             if (protocol != null) return@exception call.respondInferenceError(protocol, error.status, error.code,
                 error.message ?: "Request failed.", error.retryAfterSeconds, error.retryable)
             (error.retryAfterSeconds ?: if (error.status == 429) 60L else null)?.let { call.response.header(HttpHeaders.RetryAfter, it.toString()) }
-            if (call.request.path().startsWith("/dashboard")) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>", lede = ""), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
+            // Content: plain text under the sandbox the interceptor already set, never the dashboard's markup.
+            if (isArtifactContent(call.request.path())) return@exception call.respondText(if (error.status == 404) "Not found." else error.message ?: "Request failed.", ContentType.Text.Plain, HttpStatusCode.fromValue(error.status))
+            if (call.request.path().startsWith("/dashboard") || isArtifactViewer(call.request.path())) call.respondText(call.page("Request failed", "<p>${escape(error.message ?: "Request failed.")}</p><a href='/dashboard'>Back to dashboard</a>", lede = ""), ContentType.Text.Html, HttpStatusCode.fromValue(error.status))
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }
         exception<CancellationException> { _, error -> throw error }
@@ -62,14 +68,31 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         }
     }
     intercept(ApplicationCallPipeline.Plugins) {
-        // Set once for every response (dashboard HTML, JSON API, streams) so no handler re-adds or weakens it.
-        // no-transform stops proxies such as Cloudflare from rewriting content (e-mail obfuscation, minification).
-        call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL)
-        call.response.header("X-Content-Type-Options", "nosniff")
-        // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
-        call.response.header("Referrer-Policy", "same-origin")
         val path = call.request.path()
-        if (team != null) {
+        if (isArtifactContent(path)) {
+            // Artifact content, on this same host: the sandbox and its companions go on every answer under the prefix,
+            // whatever route, status or error produces it. Caching is the content route's (see ArtifactContentCaching).
+            ARTIFACT_CONTENT_HEADERS.forEach { (name, value) -> call.response.header(name, value) }
+        } else {
+            // Set once for every response (dashboard HTML, JSON API, streams) so no handler re-adds or weakens it.
+            // no-transform stops proxies such as Cloudflare from rewriting content (e-mail obfuscation, minification).
+            call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL)
+            call.response.header("X-Content-Type-Options", "nosniff")
+            // Not no-referrer: browsers would then send `Origin: null` on dashboard forms, which the origin check rejects.
+            call.response.header("Referrer-Policy", "same-origin")
+        }
+        if (isArtifactViewer(path)) {
+            call.response.header("Content-Security-Policy", ARTIFACT_VIEWER_CSP)
+            call.response.header("X-Robots-Tag", "noindex, nofollow")
+        }
+        // A second barrier around artifacts: no dashboard page or viewer is ever loaded in a frame with the session cookie.
+        if ((path.startsWith("/dashboard") || isArtifactViewer(path)) && call.request.header("Sec-Fetch-Dest") == "iframe") {
+            call.respondText("This page cannot be shown in a frame.", ContentType.Text.Plain, HttpStatusCode.Forbidden)
+            return@intercept finish()
+        }
+        // The viewer and the content authenticate themselves: a cookie (optional, for a public artifact) and a ticket.
+        val artifactCall = artifactViewing != null && artifacts != null && path.startsWith("/artifact/")
+        if (team != null && !artifactCall) {
             if (path.startsWith("/dashboard")) {
                 val live = when {
                     path == "/dashboard/forecasts" -> " script-src 'self'; connect-src 'self';"
@@ -95,6 +118,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 } else {
                     AuthorizeCredentialUseCase().check(principal, credentialAction(call.request.httpMethod.value, path, inboundProtocols.map { it.path }.toSet()))
                     call.attributes.put(PRINCIPAL, principal)
+                    // The menu shows Artifacts to members only while they are active, so it is read for every dashboard page.
+                    if (artifactViewing != null && artifacts != null && path.startsWith("/dashboard") && principal.serviceScopes == null)
+                        call.attributes.put(ARTIFACTS_ACTIVE, artifactViewing.availability(principal.teamId).active)
                     if (path !in setOf("/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/auth/logout", "/dashboard/password", "/dashboard/logout")) {
                         if (principal.member.passwordChangeRequired && path.startsWith("/dashboard")) {
                             call.respondRedirect("/dashboard/password"); finish()
@@ -102,7 +128,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     }
                 }
             }
-        } else if (path !in setOf("/health", "/ready", API_OPENAPI_PATH, API_DOCS_PATH)) {
+        } else if (team == null && path !in setOf("/health", "/ready", API_OPENAPI_PATH, API_DOCS_PATH)) {
             val presented = call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer ") ?: ""
             val actual = MessageDigest.getInstance("SHA-256").digest(presented.toByteArray())
             if (!MessageDigest.isEqual(expected, actual)) {
@@ -139,6 +165,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (github != null) add(DashboardFeature.GITHUB)
         if (webhooks != null) add(DashboardFeature.WEBHOOKS)
         if (artifactAdmin != null) add(DashboardFeature.ARTIFACT_SETTINGS)
+        if (artifacts != null && artifactViewing != null) add(DashboardFeature.ARTIFACTS)
     })
     routing {
         if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null, OverviewSources(admission, runs, accounts)) }
@@ -174,6 +201,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (webhooks != null && team != null) { webhookRoutes(webhooks); webhookDashboardRoutes(webhooks, publicOrigin) }
         if (artifactAdmin != null && team != null) artifactSettingsRoutes(artifactAdmin, publicOrigin)
         if (artifacts != null && team != null) artifactRoutes(artifacts, publicOrigin)
+        if (artifacts != null && artifactViewing != null && team != null) artifactViewerRoutes(artifactViewing, artifacts, team, publicOrigin)
         if (cancellation != null && team != null) {
             post("/api/v1/requests/{id}/cancel") {
                 cancellation.cancel(call.principal, call.parameters["id"].orEmpty())
@@ -219,7 +247,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     ).flatten() else emptyList()) +
                     (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
-                    (if (team != null && github != null) listOf("github.link.v1") else emptyList())))
+                    (if (team != null && github != null) listOf("github.link.v1") else emptyList()) +
+                    // Published, served and viewed: whether a team can use them right now is its settings' business.
+                    (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()

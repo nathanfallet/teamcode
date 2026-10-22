@@ -8,13 +8,17 @@ import java.util.Locale
 import me.nathanfallet.teamcode.domain.team.Principal
 
 /** Dashboard areas whose routes are installed; the menu never links to a page this server does not serve. */
-internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS, ARTIFACT_SETTINGS,
+internal enum class DashboardFeature { GROUPS, RUNS, ACCOUNTS, CAPACITY, USAGE_REVIEW, GUIDANCE, FORECASTS, MODEL_POLICY, ROUTES, DEVICES, SERVICE_KEYS, AUDIT, SKILLS, HOOKS, VARIANTS, MCP, CLOUD, GITHUB, WEBHOOKS, ARTIFACT_SETTINGS, ARTIFACTS,
     /** Not a route set: cloud sessions are enabled in the stored runtime right now. */
-    CLOUD_RUNNING }
+    CLOUD_RUNNING,
+    /** Not a route set: artifacts are active for the signed-in member's team right now (a tested bucket and the switch on). */
+    ARTIFACTS_ACTIVE }
 
 internal val DASHBOARD_FEATURES = AttributeKey<Set<DashboardFeature>>("teamcode.dashboard.features")
 /** Whether cloud sessions are enabled, read on every page so a dashboard change shows at once. */
 internal val CLOUD_ENABLED = AttributeKey<() -> Boolean>("teamcode.cloud.enabled")
+/** Whether artifacts are active for this call's member, read once per dashboard request. */
+internal val ARTIFACTS_ACTIVE = AttributeKey<Boolean>("teamcode.artifacts.active")
 
 /**
  * One menu entry. [description] is the one-sentence purpose shown under the page title. Administrator-only entries mirror
@@ -47,6 +51,8 @@ internal val DASHBOARD_MENU = listOf(
     )),
     DashboardSection("Agents and MCP", listOf(
         DashboardLink("/dashboard/sessions", "Agent sessions", "Agent launches, their activity and their optional per-launch limits.", DashboardFeature.RUNS),
+        // Members see it once artifacts are active; administrators always, and are sent to Settings → Artifacts until then.
+        DashboardLink(ARTIFACT_GALLERY_PATH, "Artifacts", "Pages and reports agents and members published, with who can see them.", DashboardFeature.ARTIFACTS, memberFeature = DashboardFeature.ARTIFACTS_ACTIVE),
         DashboardLink("/dashboard/agent-guidance", "Agent guidance", "The pacing advice the server currently gives agents, and the controller mode.", DashboardFeature.GUIDANCE),
         DashboardLink("/dashboard/skills", "Skills", "Published skills, pinned versions and who receives them.", DashboardFeature.SKILLS),
         DashboardLink("/dashboard/hooks", "Team hooks", "Scripts agents run on events, the approved version and who receives them.", DashboardFeature.HOOKS),
@@ -70,7 +76,8 @@ internal fun DashboardLink.visibleTo(principal: Principal, features: Set<Dashboa
 
 internal fun ApplicationCall.dashboardFeatures(): Set<DashboardFeature> {
     val installed = application.attributes.getOrNull(DASHBOARD_FEATURES).orEmpty()
-    return if (cloudEnabled()) installed + DashboardFeature.CLOUD_RUNNING else installed
+    val running = if (cloudEnabled()) installed + DashboardFeature.CLOUD_RUNNING else installed
+    return if (attributes.getOrNull(ARTIFACTS_ACTIVE) == true) running + DashboardFeature.ARTIFACTS_ACTIVE else running
 }
 internal fun ApplicationCall.cloudEnabled(): Boolean = application.attributes.getOrNull(CLOUD_ENABLED)?.invoke() != false
 
@@ -234,6 +241,25 @@ private fun pageShell(title: String, content: String, sidebar: String = "", lede
     return if (sidebar.isEmpty()) "$head<main class=\"solo\"><div class=\"solo-brand\"><span class=\"brand\"><span class=\"glyph\" aria-hidden=\"true\"></span><span class=\"brand-name\">TeamCode</span></span></div>$heading$content</main></body></html>"
     else "$head<div class=\"shell\">$sidebar<main>$heading$content</main></div></body></html>"
 }
+
+private const val VIEWER_STYLE = """
+body.viewer{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.viewer-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.viewer-title{min-width:0;flex:1}.viewer-title h1{font-size:18px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.viewer-panels{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+.viewer-panels details{position:relative}.viewer-panels summary{cursor:pointer;list-style:none;font-size:13px;font-weight:600;padding:6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.viewer-panels summary::-webkit-details-marker{display:none}
+.viewer-panels details[open]>.panel{position:absolute;right:0;z-index:2;width:min(560px,calc(100vw - 32px));max-height:70vh;overflow:auto;margin-top:6px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.4)}
+.panel form{padding:0;border:0;background:none;margin:0 0 14px}.panel table{margin:0}.panel ul{padding-left:18px;margin:0 0 12px}
+form.inline{display:inline;padding:0;margin:0;background:none;border:0}
+body.viewer>.notice{margin:8px 16px}
+.viewer-frame{flex:1;width:100%;border:0;background:#fff}
+.tabs{margin:0 0 18px}
+"""
+
+/** The viewer page: the artifact's bar and its frame, full height, without the member menu. */
+internal fun viewerShell(title: String, body: String): String =
+    """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · TeamCode</title><style>$STYLE$VIEWER_STYLE</style></head><body class="viewer">$body</body></html>"""
 
 /** A collapsed explanation: the rules stay one click away instead of pushing the controls down. */
 internal fun help(summary: String, body: String) = """<details class="help"><summary>${escape(summary)}</summary>$body</details>"""

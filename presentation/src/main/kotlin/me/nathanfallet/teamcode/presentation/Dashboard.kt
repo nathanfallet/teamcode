@@ -17,20 +17,34 @@ internal suspend fun ApplicationCall.form(origin: String, authenticated: Boolean
     if (authenticated && !MessageDigest.isEqual((fields["csrf"] ?: "").toByteArray(), principal.tokenId.toByteArray())) throw TeamFailure("csrf_rejected", 403, "This form has expired. Reload the dashboard.")
     return fields
 }
+/**
+ * The session cookie, host-only, HttpOnly and SameSite=Strict, set twice: for `/dashboard`, and for `/artifact`, where
+ * the viewer page reads it (the content below it ignores it and authorizes with its ticket only).
+ */
 internal fun ApplicationCall.sessionCookie(value: String, origin: String, maxAge: Int = 28_800) {
-    response.cookies.append(Cookie("teamcode_session", value, path = "/dashboard", httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to "Strict")))
+    for (path in SESSION_COOKIE_PATHS)
+        response.cookies.append(Cookie("teamcode_session", value, path = path, httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to "Strict")))
 }
+internal val SESSION_COOKIE_PATHS = listOf("/dashboard", "/artifact")
 internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false, overview: OverviewSources = OverviewSources()) {
     val origin = publicOrigin.trimEnd('/')
     get("/") { call.respondRedirect("/dashboard") }
     get("/dashboard/login") {
+        // Signed in already (the /dashboard cookie) and on the way to an artifact: the /artifact cookie is set again
+        // from the same session, for a session that started before it existed.
+        loginNext(call.request.queryParameters["next"])?.let { next ->
+            call.request.cookies["teamcode_session"]?.let { token -> team.authenticate(token)?.takeIf { it.serviceScopes == null && !it.member.passwordChangeRequired } }?.let {
+                call.sessionCookie(call.request.cookies["teamcode_session"]!!, origin)
+                return@get call.respondRedirect(next)
+            }
+        }
         call.respondText(call.page("Sign in", """<p class="lede">Use the account created by your administrator.</p><form method="post"><label>Username <input name="username" autocomplete="username" required maxlength="64"></label><label>Password <input name="password" type="password" autocomplete="current-password" required maxlength="1024"></label><button>Sign in</button></form>"""), ContentType.Text.Html)
     }
     post("/dashboard/login") {
         val input = call.form(origin, authenticated = false)
         val session = team.login(input["username"].orEmpty(), input["password"].orEmpty(), "Web dashboard")
         call.sessionCookie(session.token, origin)
-        call.respondRedirect(if (session.principal.member.passwordChangeRequired) "/dashboard/password" else "/dashboard")
+        call.respondRedirect(if (session.principal.member.passwordChangeRequired) "/dashboard/password" else loginNext(call.request.queryParameters["next"]) ?: "/dashboard")
     }
     get("/dashboard") {
         val member = call.principal.member
