@@ -87,6 +87,11 @@ interface ArtifactStore {
     suspend fun assemble(actor: Principal, uploadId: String, sha256: String): Pair<UploadBlob, ByteArray>
     /** Records the blob as stored in the bucket for this upload and drops its chunks. */
     suspend fun recordBlob(actor: Principal, uploadId: String, sha256: String)
+    /**
+     * A blob put in the bucket whose upload could not record it (expired or removed meanwhile): marked for collection
+     * unless the artifact holds it or another live upload announced it, so it never sits uncounted in the folder.
+     */
+    suspend fun abandonBlob(blob: UploadBlob)
     /** Drops the chunks of a refused blob and records the refusal (`artifact.publish_refused`, code only). */
     suspend fun refuseBlob(actor: Principal, uploadId: String, sha256: String, code: String)
     /**
@@ -163,7 +168,12 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         try { objects.put(connection, ArtifactKeys.blob(connection.prefix, blob.teamId, blob.artifactId, sha256), content) }
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { throw TeamFailure("artifact_storage_unavailable", 503, "The artifact storage did not accept the file. Send the last chunk again.", retryAfterSeconds = 5) }
-        store.recordBlob(actor, uploadId, sha256)
+        try { store.recordBlob(actor, uploadId, sha256) }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            try { store.abandonBlob(blob) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+            throw error
+        }
         return receipt.copy(stored = true)
     }
 
@@ -235,7 +245,9 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
     suspend fun setAccess(actor: Principal, artifactId: String, access: String, followLatest: Boolean, pinnedVersion: Int?): Artifact {
         actor.requireInteractive(); actor.requireReady(); requireId(artifactId)
         val target = ArtifactAccess.parse(access) ?: throw ArtifactRules.failure("invalid_artifact_access", "Access is personal, team or public.")
-        if (pinnedVersion != null && (followLatest || pinnedVersion < 1)) throw ArtifactRules.failure("invalid_artifact_access", "Either follow the latest version or pin one version.")
+        // Exactly one of the two: not following the latest version without naming one would silently follow it.
+        if (followLatest == (pinnedVersion != null) || (pinnedVersion != null && pinnedVersion < 1))
+            throw ArtifactRules.failure("invalid_artifact_access", "Either follow the latest version or pin one version.")
         return store.setAccess(actor, artifactId, target, followLatest, pinnedVersion)
     }
 

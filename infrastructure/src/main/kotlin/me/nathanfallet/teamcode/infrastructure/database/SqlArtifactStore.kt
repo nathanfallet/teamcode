@@ -63,6 +63,9 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
 
     override suspend fun putChunk(actor: Principal, uploadId: String, sha256: String, number: Int, bytes: ByteArray): ChunkReceipt = database.query {
         requireCurrent(this, actor); requireActive(actor.teamId)
+        // The upload row alone is locked (never the artifact's, which a commit holds while it removes the upload): chunks
+        // of one upload sent in parallel are counted one after the other, so the last one sees all the others.
+        ArtifactUploads.select(ArtifactUploads.id).where { ArtifactUploads.id eq uploadId }.forUpdate().singleOrNull()
         val upload = uploadRow(actor, uploadId)
         val announced = decodeFiles(upload[ArtifactUploads.files])
         val size = announced[sha256] ?: throw TeamFailure("invalid_artifact_upload", 400, "This file was not announced in the upload.")
@@ -103,11 +106,36 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         Unit
     }
 
+    override suspend fun abandonBlob(blob: UploadBlob) = database.query {
+        // Under the artifact lock, like an upload's expiry; a deleted artifact's folder goes as a whole.
+        val state = Artifacts.select(Artifacts.state).where { (Artifacts.id eq blob.artifactId) and (Artifacts.teamId eq blob.teamId) }.forUpdate().singleOrNull()?.get(Artifacts.state)
+        if (state == null || state == DELETED) return@query
+        val now = nowMillis()
+        val held = !ArtifactBlobs.select(ArtifactBlobs.sha256).where { (ArtifactBlobs.artifactId eq blob.artifactId) and (ArtifactBlobs.sha256 eq blob.sha256) }.empty()
+        if (held || blob.sha256 in liveAnnouncements(blob.artifactId, "", now)) return@query
+        ArtifactBlobs.insert {
+            it[artifactId] = blob.artifactId; it[sha256] = blob.sha256; it[size] = blob.size; it[storedAt] = now; it[lastReferencedVersion] = null; it[collectingSince] = now
+        }
+        Unit
+    }
+
     override suspend fun refuseBlob(actor: Principal, uploadId: String, sha256: String, code: String) = database.query {
         requireCurrent(this, actor)
         val upload = uploadRow(actor, uploadId)
         ArtifactUploadChunks.deleteWhere { (ArtifactUploadChunks.uploadId eq uploadId) and (ArtifactUploadChunks.sha256 eq sha256) }
-        audit(actor.teamId, actor.member.id, "artifact.publish_refused", "${upload[ArtifactUploads.artifactId]}:$code".take(100), credential = actor.tokenId)
+        val artifactId = upload[ArtifactUploads.artifactId]
+        audit(actor.teamId, actor.member.id, "artifact.publish_refused", "$artifactId:$code".take(100), credential = actor.tokenId)
+        // A mismatch is sent again in the same upload. Any other refusal ends the publication: its upload stops counting
+        // at once (the next run collects what it stored), and so does a new artifact's draft that nothing else uses,
+        // so retries never use up the open uploads and drafts a member may hold.
+        if (code != "artifact_blob_mismatch") {
+            val now = nowMillis()
+            // The artifact before the upload, in the order a commit takes them.
+            val draft = Artifacts.select(Artifacts.state).where { Artifacts.id eq artifactId }.forUpdate().singleOrNull()?.get(Artifacts.state) == DRAFT
+            ArtifactUploads.update({ ArtifactUploads.id eq uploadId }) { it[expiresAt] = now }
+            if (draft && ArtifactUploads.select(ArtifactUploads.id).where { (ArtifactUploads.artifactId eq artifactId) and (ArtifactUploads.expiresAt greater now) }.empty())
+                Artifacts.update({ (Artifacts.id eq artifactId) and (Artifacts.state eq DRAFT) }) { it[state] = DELETED; it[deletedAt] = now; it[updatedAt] = now }
+        }
         Unit
     }
 
@@ -528,12 +556,18 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         })
     }
 
-    /** A member of the team by id, username or linked GitHub login. */
+    /**
+     * A member of the team by id, then username, then linked GitHub login, in that order: a username that spells another
+     * member's id never captures them. A GitHub login linked to more than one member is ambiguous and refused.
+     */
     private fun resolveMember(teamId: String, reference: String, activeOnly: Boolean): String? {
         val team = (Members.teamId eq teamId) and (if (activeOnly) (Members.disabled eq false) and (Members.mustChangePassword eq false) else Op.TRUE)
-        Members.select(Members.id).where { team and ((Members.id eq reference) or (Members.username eq reference)) }.firstOrNull()?.let { return it[Members.id] }
-        return (GitHubLinks innerJoin Members).select(Members.id).where { team and (GitHubLinks.teamId eq teamId) and (GitHubLinks.githubLogin.lowerCase() eq reference.lowercase()) }
-            .firstOrNull()?.get(Members.id)
+        Members.select(Members.id).where { team and (Members.id eq reference) }.singleOrNull()?.let { return it[Members.id] }
+        Members.select(Members.id).where { team and (Members.username eq reference) }.singleOrNull()?.let { return it[Members.id] }
+        val linked = (GitHubLinks innerJoin Members).select(Members.id).where { team and (GitHubLinks.teamId eq teamId) and (GitHubLinks.githubLogin.lowerCase() eq reference.lowercase()) }
+            .map { it[Members.id] }.distinct()
+        if (linked.size > 1) throw TeamFailure("invalid_artifact_member", 400, "This GitHub login is linked to several members. Name the member by id or username.")
+        return linked.singleOrNull()
     }
 
     /** Blobs announced by the artifact's other live uploads: their clients may send or rely on them. */

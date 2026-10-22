@@ -32,4 +32,13 @@ class ArtifactRulesCliTest {
         assertEquals(id, artifactReference("https://teamcode.example.org/artifact/$id?v=2"))
         assertFailsWith<CliUserException> { artifactReference("https://teamcode.example.org/dashboard") }
     }
+
+    @Test fun filesArePublishedBesideTheirPage() {
+        assertEquals("app.js", publishedBesidePage("dist/index.html", "dist/app.js"))
+        assertEquals("css/site.css", publishedBesidePage("./dist/index.html", "dist/css/site.css"))
+        assertEquals("img/a.png", publishedBesidePage("index.html", "./img/a.png"))
+        assertEquals("app.js", publishedBesidePage("dist\\index.html", "dist\\app.js"))
+        assertFailsWith<CliUserException> { publishedBesidePage("dist/index.html", "shared/logo.png") }
+        assertFailsWith<CliUserException> { publishedBesidePage("dist/index.html", "distribution/app.js") }
+    }
 }

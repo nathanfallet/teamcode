@@ -134,6 +134,27 @@ class ArtifactPublicationPersistenceTest {
             assertFalse(bucket.objects.keys.any { it.endsWith(ArtifactRules.sha256(leak)) })
             val refusals = f.a.query { AuditEvents.selectAll().where { AuditEvents.action eq "artifact.publish_refused" }.map { it[AuditEvents.subjectId] } }
             assertEquals(setOf("$id:artifact_secret_detected", "$id:artifact_blob_mismatch"), refusals.toSet())
+            // The refusal ended that upload at once; a mismatch did not end its own.
+            assertEquals("artifact_upload_not_found", assertFailsWith<TeamFailure> { a.service.putChunk(owner, leaking.uploadId, ArtifactRules.sha256(leak), 0, leak) }.code)
+            assertEquals("artifact_blob_mismatch", assertFailsWith<TeamFailure> { a.service.putChunk(owner, check.uploadId, ArtifactRules.sha256(bytes("abc")), 0, bytes("abc").copyOf(4)) }.code)
+            // A new artifact refused for a secret leaves no draft behind: retries never use up the drafts a member may hold.
+            val fresh = a.service.startUpload(owner, null, listOf(ref(leak)))
+            assertFailsWith<ArtifactSecretFailure> { b.service.putChunk(owner, fresh.uploadId, ArtifactRules.sha256(leak), 0, leak) }
+            assertEquals("deleted", f.a.query { Artifacts.selectAll().where { Artifacts.id eq fresh.artifactId }.single()[Artifacts.state] })
+
+            // The last two chunks of a file sent at once from two replicas: exactly one of them completes and stores it.
+            val split = ByteArray(ArtifactRules.CHUNK_BYTES + 5) { (it % 7).toByte() }
+            val parallel = a.service.startUpload(owner, id, listOf(ref(split)))
+            val receipts = coroutineScope { listOf(a to 0, b to 1).map { (replica, n) -> async(Dispatchers.IO) {
+                replica.service.putChunk(owner, parallel.uploadId, ArtifactRules.sha256(split), n, split.copyOfRange(n * ArtifactRules.CHUNK_BYTES, minOf(split.size, (n + 1) * ArtifactRules.CHUNK_BYTES)))
+            } }.awaitAll() }
+            assertEquals(1, receipts.count { it.complete }, "The chunk counted last sees the other one")
+            assertTrue(bucket.objects.keys.any { it.endsWith(ArtifactRules.sha256(split)) })
+
+            // A blob put in the bucket after its upload vanished is marked for collection, never left uncounted.
+            val orphan = bytes("orphaned after the put")
+            a.store.abandonBlob(UploadBlob(f.member.principal.teamId, id, ArtifactRules.sha256(orphan), orphan.size.toLong()))
+            assertNotNull(f.a.query { ArtifactBlobs.selectAll().where { (ArtifactBlobs.artifactId eq id) and (ArtifactBlobs.sha256 eq ArtifactRules.sha256(orphan)) }.single()[ArtifactBlobs.collectingSince] })
 
             val actions = f.a.query { AuditEvents.selectAll().where { AuditEvents.action like "artifact.%" }.map { it[AuditEvents.action] to it[AuditEvents.subjectId] } }
             assertEquals(1, actions.count { it.first == "artifact.created" })
@@ -169,6 +190,9 @@ class ArtifactPublicationPersistenceTest {
             assertEquals(listOf(id), b.service.list(reviewer, ArtifactQuery(ArtifactScope.SHARED)).artifacts.map { it.id })
             assertEquals("artifact_not_writable", assertFailsWith<TeamFailure> { publish(b.service, reviewer, id, mapOf("index.html" to bytes("<p>edit</p>")), 1) }.code)
             assertEquals("artifact_not_writable", assertFailsWith<TeamFailure> { b.service.share(reviewer, id, "admin", "viewer") }.code)
+            // A member whose username spells the reviewer's id never captures an invitation by id.
+            val impostor = f.team.createMember(admin, reviewer.member.id, Role.MEMBER)
+            f.team.changePassword(f.team.login(reviewer.member.id, impostor.temporaryPassword, "artifact-test").principal, impostor.temporaryPassword, "artifact impostor replacement password")
             val members = a.service.share(owner, id, reviewer.member.id, "editor")
             assertEquals(listOf("reviewer" to ArtifactMemberRole.EDITOR), members.members.map { it.username to it.role })
             assertEquals(2, publish(b.service, reviewer, id, mapOf("index.html" to bytes("<p>edit</p>")), 1).version.number)

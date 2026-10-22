@@ -98,6 +98,8 @@ class ArtifactRulesTest {
         assertEquals("artifact_capabilities_unsupported", assertFailsWith<TeamFailure> { service.commit(owner, id, id, "index.html", files, 0, null, null, null, null, mapOf("db" to "on")) }.code)
         val key = owner.copy(serviceScopes = setOf(ServiceScope.ARTIFACTS_WRITE))
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { service.setAccess(key, id, "public", true, null) }.code)
+        assertEquals("invalid_artifact_access", assertFailsWith<TeamFailure> { service.setAccess(owner, id, "public", false, null) }.code, "Not following the latest version needs a pinned one")
+        assertEquals("invalid_artifact_access", assertFailsWith<TeamFailure> { service.setAccess(owner, id, "public", true, 2) }.code)
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { service.delete(key, id) }.code)
         val reader = owner.copy(serviceScopes = setOf(ServiceScope.ARTIFACTS_READ))
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { service.startUpload(reader, null, listOf(file("a"))) }.code)
@@ -112,11 +114,18 @@ class ArtifactRulesTest {
     } as T
 
     @Test fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
-        for (prose in listOf("Basic cross-browser support for every page", "Token\n----------------\nexplained below", "Basic\n================", "basic setup-instructions-here"))
+        for (prose in listOf("Basic cross-browser support for every page", "Token\n----------------\nexplained below", "Basic\n================", "basic setup-instructions-here",
+                "Basic input/output", "Token usage/limits", "token refresh_interval", "basic /api/v1/artifacts", "token getAccessToken", "Bearer /api/v1/artifacts/uploads",
+                "token refresh_interval_v2_settings"))
             assertNull(CloudConversationRules.detect(prose), prose)
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer abc123def456ghi789"))
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Basic dXNlcjpwYXNzd29yZA=="))
         assertEquals("url_credentials", CloudConversationRules.detect("postgres://app:hunter2secret@db.internal/app"))
+        assertEquals("authorization_header", CloudConversationRules.detect("curl -H 'Authorization: token tok_4f8a9b1c2d3e5f6a7b8c'"))
+        // The transcript mask keeps its wider patterns: the scanner's word-start anchors never narrow what it hides.
+        val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
+        assertFalse(jwt in CloudConversationRules.mask("Bearer-$jwt"))
+        assertFalse("hunter2" in CloudConversationRules.mask("--url-https://u:hunter2@host"))
         val started = System.nanoTime()
         for (crafted in listOf("a-".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "tc_".repeat(700_000)))
             assertNull(CloudConversationRules.detect(crafted))

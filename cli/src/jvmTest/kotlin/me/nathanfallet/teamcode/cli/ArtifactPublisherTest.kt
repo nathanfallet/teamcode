@@ -18,7 +18,7 @@ class ArtifactPublisherTest {
     private val upload = "1f8fad5b-d9cb-469f-a165-70867728950e"
     private fun sha(bytes: ByteArray) = bytes.toByteString().sha256().hex()
 
-    @Test fun onlyMissingFilesAreSentInChunksAndKeptFilesStay() = runBlocking {
+    @Test fun onlyMissingFilesAreSentInChunksAndKeptFilesStay(): Unit = runBlocking {
         val page = "<html><title>Report</title></html>".encodeToByteArray()
         val large = ByteArray(1024 * 1024 + 10) { 3 }
         val kept = "body{}".encodeToByteArray()
@@ -56,7 +56,7 @@ class ArtifactPublisherTest {
         val result = ArtifactPublisher(client).publish(ArtifactPublication(ArtifactSource("index.html", "index.html", page), listOf(ArtifactSource("img/big.bin", "big.bin", large)),
             removed = setOf("old.js"), artifactId = id))
         assertEquals(setOf("index.html", "site.css", "img/big.bin"), commit!!.files.keys, "The base version's other files are kept, the removed one dropped")
-        assertEquals(4, commit!!.baseVersion); assertEquals("Report", commit!!.title, "The title comes from the page")
+        assertEquals(4, commit!!.baseVersion); assertNull(commit!!.title, "A new version keeps the artifact's title: the page's <title> is not sent")
         assertEquals(3, announced!!.files.size)
         assertEquals(listOf(sha(page) to page.size, sha(large) to 1024 * 1024, sha(large) to 10), chunks, "Missing files only, in chunks of 1 MiB")
         assertEquals(2, result.filesUploaded); assertEquals(1, result.filesReused)

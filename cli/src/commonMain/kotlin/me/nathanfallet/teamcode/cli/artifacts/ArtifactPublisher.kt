@@ -45,7 +45,8 @@ class ArtifactPublisher(private val client: TeamCodeClient) {
             send(upload, source, sources)
         }
         val published = client.commitArtifactVersion(upload.artifactId, CommitArtifactVersionRequest(upload.uploadId, publication.page.publishedPath, manifest, base,
-            publication.title ?: artifactTitle(publication.page), publication.description, publication.icon, publication.access))
+            // A new version keeps the artifact's title unless one is given; only a new artifact takes the page's.
+            publication.title ?: if (publication.artifactId == null) artifactTitle(publication.page) else null, publication.description, publication.icon, publication.access))
         return ArtifactPublishResult(published, upload.missing.size, manifest.values.map { it.sha256 }.distinct().size - upload.missing.size)
     }
 

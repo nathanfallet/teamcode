@@ -346,10 +346,11 @@ static inline int teamcode_windows_user_path_write(const wchar_t *value, int exp
  * Artifact sources: opens every level below the root (prefixes[i] is root\c1\...\ci) with FILE_FLAG_OPEN_REPARSE_POINT
  * and refuses any reparse point (symbolic link, junction, mount point), keeping each level open without delete sharing
  * until the read ends so it cannot be swapped meanwhile. Reads the regular file at the end into buffer (at most
- * capacity bytes). Returns the size read, or a negative code with *failed the refused level: -2 reparse point or not a
- * directory, -3 missing, -4 not a regular file, -5 access denied, -6 other.
+ * capacity bytes). *size receives the file's size once it is opened. Returns the size read, or a negative code with
+ * *failed the refused level: -2 reparse point or not a directory, -3 missing, -4 not a regular file, -5 access denied,
+ * -6 other, -7 the buffer cannot hold the file and one more byte (nothing read: call again with *size + 1).
  */
-static inline long long teamcode_windows_read_nofollow(const wchar_t *const *prefixes, int count, unsigned char *buffer, long long capacity, int *failed) {
+static inline long long teamcode_windows_read_nofollow(const wchar_t *const *prefixes, int count, unsigned char *buffer, long long capacity, int *failed, long long *size) {
     HANDLE handles[64];
     long long result = -6;
     int opened = 0;
@@ -372,6 +373,10 @@ static inline long long teamcode_windows_read_nofollow(const wchar_t *const *pre
         int directory = (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         if (!last && !directory) { result = -2; goto done; }
         if (last && (directory || GetFileType(handle) != FILE_TYPE_DISK)) { result = -4; goto done; }
+        if (last) {
+            *size = ((long long)information.nFileSizeHigh << 32) | (long long)information.nFileSizeLow;
+            if (*size >= capacity) { result = -7; goto done; }
+        }
     }
     {
         long long total = 0;
