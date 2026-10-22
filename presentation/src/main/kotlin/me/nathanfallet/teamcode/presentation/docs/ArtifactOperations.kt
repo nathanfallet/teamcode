@@ -93,7 +93,7 @@ internal fun ApiCatalog.artifactMemberOperations() {
         summary = "Read the publication policy"
         description = "Whether the caller may publish now. `teamcode run` and the cloud runner read it before they offer the artifact tools to an agent. " +
             "Answers even while artifacts are inactive: `canPublish` is then false and `reason` is `artifact_storage_missing`, `artifact_storage_unverified` " +
-            "or `artifacts_disabled`; `artifact_publish_forbidden` when only administrators publish."
+            "or `artifacts_disabled`; `artifact_publish_forbidden` when only administrators publish; `credential_scope` for a key without `artifacts:write`."
         responses { ok<ArtifactPolicyView>("The policy.") }
     }
     post("/api/v1/artifacts/uploads") {

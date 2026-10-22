@@ -47,7 +47,12 @@ class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<Str
         val (root, components) = locate(localPath, path)
         refusal(components)?.let { refuse(localPath, it) }
         val absolute = components.fold(root) { parent, name -> parent / name }.toString()
-        fun under(prefix: String) = absolute == prefix || absolute.startsWith(prefix.trimEnd('/', '\\') + "/") || absolute.startsWith(prefix.trimEnd('/', '\\') + "\\")
+        // Ignoring case: on macOS and Windows `.CONFIG/teamcode` opens the refused `.config/teamcode`. Refusing a
+        // differently cased directory on a case-sensitive disk only refuses more.
+        fun under(prefix: String): Boolean {
+            val base = prefix.trimEnd('/', '\\')
+            return absolute.equals(prefix, ignoreCase = true) || absolute.startsWith("$base/", ignoreCase = true) || absolute.startsWith("$base\\", ignoreCase = true)
+        }
         (refused.firstOrNull(::under) ?: refusedExceptCanonical.firstOrNull { (refused, kept) -> under(refused) && !under(kept) }?.first)
             ?.let { refuse(localPath, "files under $it are never published") }
         val bytes = try { readWithoutLinks(root.toString(), components, ArtifactLimits.MAX_TEXT_FILE_BYTES) }

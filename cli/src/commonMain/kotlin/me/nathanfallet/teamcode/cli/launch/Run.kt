@@ -109,6 +109,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         when (policy.reason) {
             "artifact_storage_unverified" -> echo("Artifacts are paused: their storage has not passed its connection test (Dashboard → Settings → Artifacts). The artifact tools are not connected.", err = true)
             "artifact_publish_forbidden" -> echo("Only administrators publish artifacts in this team; the artifact tools are not connected.", err = true)
+            "credential_scope" -> echo("This service key cannot publish artifacts (it needs artifacts:write); the artifact tools are not connected.", err = true)
         }
         return policy.canPublish
     }

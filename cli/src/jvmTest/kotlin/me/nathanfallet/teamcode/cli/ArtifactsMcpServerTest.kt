@@ -130,8 +130,12 @@ class ArtifactsMcpServerTest {
         Files.writeString(root.resolve("index.html"), "<html>mine</html>")
         val (failed, text) = server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id) })
         assertTrue(failed, "Version 2 is never overwritten by changes made on version 1"); assertTrue("Version 2 was published meanwhile" in text, text)
-        // The conflict showed version 2: publishing again starts from it.
-        assertFalse(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id) }).first)
+        // Seeing version 2 in a conflict is not merging it: only naming it as the base publishes over it.
+        assertTrue(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id) }).first)
+        assertFalse(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", 2) }).first)
+        // Arguments of the wrong type are refused, never dropped: a list of files would publish the page alone.
+        assertTrue("files is an object" in server.tool("publish", buildJsonObject { put("file_path", "index.html"); putJsonArray("files") { add("a.png") } }).second)
+        assertTrue("title must be a string" in server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("title", 3) }).second)
     }
 
     @Test fun aConflictNamingNoArtifactIdWritesNothing() = runBlocking {

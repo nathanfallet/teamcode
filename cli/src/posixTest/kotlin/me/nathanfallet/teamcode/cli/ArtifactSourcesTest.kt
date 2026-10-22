@@ -51,6 +51,7 @@ class ArtifactSourcesTest {
         assertTrue(".git" in refusal(sources, ".git/config"))
         assertTrue(".env" in refusal(sources, ".env.local"))
         assertTrue("never published" in refusal(sources, ".home/notes.txt"))
+        assertTrue("never published" in refusal(sources, ".HOME/notes.txt"), "Another case opens the same directory on macOS and Windows")
         assertTrue("16 MiB" in refusal(sources, "huge.bin"))
         assertFalse(refusal(sources, ".env.local").contains("TOKEN"), "A refusal names the path and the rule, never the content")
 
@@ -63,6 +64,7 @@ class ArtifactSourcesTest {
         val configured = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / "config" / "artifacts" / "run" / "kept").toString()),
             refusedExcept = listOf((root / "config").toString() to (root / "config" / "artifacts" / "run").toString()))
         assertTrue("never published" in refusal(configured, "config/config.json"))
+        assertTrue("never published" in refusal(configured, "CONFIG/config.json"))
         assertEquals("<html>merged</html>", configured.read("config/artifacts/run/page.html", "page.html").bytes.decodeToString())
         assertTrue("never published" in refusal(configured, "config/artifacts/run/kept/notes.txt"), "The exception never lifts another refusal")
 
