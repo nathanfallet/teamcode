@@ -1,5 +1,5 @@
 # All server replicas share MySQL and the same encryption key; no sticky sessions or Redis required.
-replicaCount: 2
+replicaCount: 3
 image:
   repository: nathanfallet/teamcode
   tag: latest

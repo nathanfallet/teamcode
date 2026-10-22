@@ -59,6 +59,9 @@ class ArtifactRoutesTest {
         override suspend fun artifact(actor: Principal, artifactId: String) = artifact().also { call("artifact") }
         override suspend fun list(actor: Principal, query: ArtifactQuery) = ArtifactPage(listOf(artifact()), null).also { call("list:${query.scope.wire}") }
         override suspend fun versions(actor: Principal, artifactId: String) = listOf(version(2), version(1)).also { call("versions") }
+        override suspend fun availability(teamId: String) = ArtifactAvailability(inactive == null, inactive)
+        override suspend fun publicArtifact(artifactId: String): PublicArtifact? = null
+        override suspend fun viewable(artifactId: String, number: Int, memberId: String?, tokenId: String?): ViewableVersion? = null
         override suspend fun version(actor: Principal, artifactId: String, number: Int) = version(number).also { call("version") }
         override suspend fun setAccess(actor: Principal, artifactId: String, access: ArtifactAccess, followLatest: Boolean, pinnedVersion: Int?) = artifact().copy(access = access).also { call("access") }
         override suspend fun members(actor: Principal, artifactId: String) = ArtifactSharing("admin-id", emptyList()).also { call("members") }

@@ -55,6 +55,8 @@ interface AdmissionStore {
     /** Best available provider correlation, recorded before streaming; never a usage estimate. */
     suspend fun recordProviderRequest(reservation: Reservation, requestId: String) = Unit
     suspend fun capacity(actor: Principal, memberId: String = actor.member.id): MemberCapacity
+    /** Several members at once, in order; implementations may share what the members have in common (one transaction, group and pool aggregates). */
+    suspend fun capacities(actor: Principal, memberIds: List<String>): List<MemberCapacity> = memberIds.map { capacity(actor, it) }
     suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy
     suspend fun poolBudgets(actor: Principal): List<PoolBudget>
     suspend fun configurePool(actor: Principal, budget: PoolBudget): PoolBudget

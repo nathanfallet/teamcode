@@ -65,28 +65,34 @@ internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
                 cursor = page.events.lastOrNull()?.seq ?: cursor
                 if (page.nextAfter == null) break
             }
-            if (follow) followEvents(client, id, cursor, print) { echo(it, err = true) }
+            if (follow && !followEvents(client, id, cursor, print) { echo(it, err = true) }) SystemExit.exit(1)
         }
     }
 }
 
 /**
  * Follows the event stream from [after], reconnecting with backoff and resuming from the last printed sequence, so
- * no event is printed twice or skipped. Returns when the session ended; exits when access was revoked.
+ * no event is printed twice or skipped. Returns `true` when the session ended and `false` when an event cannot be read
+ * (reconnecting would replay it), so `attach` still detaches; exits when access was revoked.
  */
-internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Long, print: (CloudEventView) -> Unit, notice: (String) -> Unit): Long {
+internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Long, print: (CloudEventView) -> Unit, notice: (String) -> Unit): Boolean {
     var cursor = after
     var wait = 1_000L
     while (true) {
         try {
             val end = client.followCloudEvents(id, cursor) { event -> if (event.seq > cursor) { print(event); cursor = event.seq; wait = 1_000L } }
             when (end) {
-                CloudStreamEnd.ENDED -> { notice("The session has ended."); return cursor }
+                CloudStreamEnd.ENDED -> { notice("The session has ended."); return true }
                 CloudStreamEnd.DENIED -> { notice("Access to this session was revoked."); SystemExit.exit(1) }
             }
         } catch (error: CancellationException) { throw error }
         catch (error: TeamCodeException) {
             if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
+            // Reconnecting would replay the same event from the same cursor.
+            if (error.statusCode == 0 && error.code == TeamCodeClient.MALFORMED_EVENT) {
+                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or follow from a later event with `teamcode cloud logs $id --follow --after <sequence>`.")
+                return false
+            }
             notice("Disconnected; reconnecting from event $cursor.")
         } catch (_: Exception) { notice("Disconnected; reconnecting from event $cursor.") }
         delay(wait)
@@ -161,6 +167,8 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                 page.events.forEach { echo(it.render()) }
                 cursor = page.events.lastOrNull()?.seq ?: break
             }
+            // False when the transcript stopped on an event this version cannot read: detach, then exit 1.
+            var readable = true
             coroutineScope {
                 val renew = launch {
                     while (isActive) {
@@ -177,7 +185,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                             catch (_: Exception) { lease }
                     }
                 }
-                val follow = launch { followEvents(client, id, cursor, { echo(it.render()) }, notice) }
+                val follow = launch { readable = followEvents(client, id, cursor, { echo(it.render()) }, notice) }
                 // Not a child of this scope: a blocked stdin read cannot be cancelled and must not hold the detach.
                 val input = CoroutineScope(Dispatchers.Default).launch {
                     while (isActive) {
@@ -201,6 +209,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
             }
             try { client.detachCloudSession(id, lease.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
             echo("Detached; the session keeps running.", err = true)
+            if (!readable) SystemExit.exit(1)
         }
         // A blocked stdin read cannot be cancelled; leave without waiting for it.
         SystemExit.exit(0)

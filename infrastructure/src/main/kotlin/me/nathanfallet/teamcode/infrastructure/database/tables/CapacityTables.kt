@@ -42,6 +42,7 @@ object Reservations : Table("reservations") {
     override val primaryKey = PrimaryKey(id)
     init {
         index("member_daily", false, memberId, dayNumber)
+        index("member_active", false, memberId, state, expiresAt)
         index("active_account", false, accountId, state, expiresAt)
         index("pool_daily", false, teamId, poolId, dayNumber)
         index("source_pool_daily", false, teamId, sourcePoolId, dayNumber)

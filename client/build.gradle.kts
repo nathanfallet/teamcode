@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.multiplatform)
     alias(libs.plugins.serialization)
     alias(libs.plugins.maven)
+    alias(libs.plugins.android.kmp.library)
 }
 mavenPublishing {
     // Empty javadoc jars, as in kourier: sources are published, API docs live in the repository.
@@ -40,6 +41,16 @@ kotlin {
     jvmToolchain(21)
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
     macosArm64(); macosX64(); linuxX64(); linuxArm64(); mingwX64()
+    // Mobile targets for the companion app; published with the others.
+    iosArm64(); iosSimulatorArm64()
+    androidLibrary {
+        namespace = "me.nathanfallet.teamcode.client"
+        compileSdk = libs.versions.android.compileSdk.get().toInt()
+        minSdk = libs.versions.android.minSdk.get().toInt()
+        // D8 and minSdk 26 read Java 17 bytecode; the shared toolchain stays on 21.
+        compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 }
+        withHostTest {}
+    }
     sourceSets {
         commonMain.dependencies {
             api(projects.api)
@@ -49,7 +60,7 @@ kotlin {
             implementation(libs.ktor.client.json)
             implementation(libs.ktor.json)
         }
-        commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test) }
-        jvmTest.dependencies { runtimeOnly(libs.junit); implementation(libs.ktor.client.mock) }
+        commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test); implementation(libs.ktor.client.mock) }
+        jvmTest.dependencies { runtimeOnly(libs.junit) }
     }
 }

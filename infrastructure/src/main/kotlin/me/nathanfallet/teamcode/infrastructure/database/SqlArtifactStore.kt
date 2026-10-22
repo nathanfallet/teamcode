@@ -358,6 +358,44 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         Unit
     }
 
+    override suspend fun availability(teamId: String): ArtifactAvailability = database.query { ArtifactAvailability.of(readSettings(teamId), readStorage(teamId)) }
+
+    override suspend fun publicArtifact(artifactId: String): PublicArtifact? = database.query {
+        val row = Artifacts.selectAll().where { (Artifacts.id eq artifactId) and (Artifacts.state eq ACTIVE) and (Artifacts.access eq ArtifactAccess.PUBLIC.wire) }.singleOrNull()
+            ?: return@query null
+        val teamId = row[Artifacts.teamId]
+        val settings = readSettings(teamId)
+        if (!ArtifactAvailability.of(settings, readStorage(teamId)).active || settings.publicSharing == PublicSharing.OFF) return@query null
+        val version = versionRow(artifactId, servedPublicVersion(row)) ?: return@query null
+        PublicArtifact(toArtifact(row, "public"), readVersion(version, withFiles = true))
+    }
+
+    private fun servedPublicVersion(row: ResultRow) =
+        if (row[Artifacts.publicFollowsLatest]) row[Artifacts.currentVersion] else row[Artifacts.publicVersion] ?: row[Artifacts.currentVersion]
+
+    override suspend fun viewable(artifactId: String, number: Int, memberId: String?, tokenId: String?): ViewableVersion? = database.query {
+        val row = Artifacts.selectAll().where { (Artifacts.id eq artifactId) and (Artifacts.state eq ACTIVE) }.singleOrNull() ?: return@query null
+        val teamId = row[Artifacts.teamId]
+        val settings = readSettings(teamId)
+        if (!ArtifactAvailability.of(settings, readStorage(teamId)).active) return@query null
+        if (memberId == null || tokenId == null) {
+            if (row[Artifacts.access] != ArtifactAccess.PUBLIC.wire || settings.publicSharing == PublicSharing.OFF) return@query null
+            // Only the version the link serves now: pinning another one stops the previous version's anonymous tickets.
+            if (number != servedPublicVersion(row)) return@query null
+        } else {
+            // The login session the ticket was minted for: alive, interactive (never a key), its member enabled and ready.
+            val session = (Tokens innerJoin Members).select(Members.id, Members.username, Members.role, Members.isOwner).where {
+                (Tokens.id eq tokenId) and (Members.id eq memberId) and (Members.teamId eq teamId) and Tokens.serviceScopes.isNull() and
+                    (Members.disabled eq false) and (Members.mustChangePassword eq false) and (Tokens.expiresAt greater nowMillis())
+            }.singleOrNull() ?: return@query null
+            val viewer = Principal(Member(memberId, session[Members.username], readMemberRole(session), false, false), tokenId, teamId)
+            val invited = ArtifactMembers.select(ArtifactMembers.role).where { (ArtifactMembers.artifactId eq artifactId) and (ArtifactMembers.memberId eq memberId) }.singleOrNull()?.get(ArtifactMembers.role)
+            relation(viewer, row, invited) ?: return@query null
+        }
+        val version = versionRow(artifactId, number) ?: return@query null
+        ViewableVersion(teamId, readVersion(version, withFiles = true))
+    }
+
     override suspend fun expireDrafts(limit: Int): Int = database.query {
         val cutoff = nowMillis() - ArtifactRules.DRAFT_TTL_MILLIS
         val ids = Artifacts.select(Artifacts.id).where { (Artifacts.state eq DRAFT) and (Artifacts.updatedAt less cutoff) }.limit(limit).map { it[Artifacts.id] }

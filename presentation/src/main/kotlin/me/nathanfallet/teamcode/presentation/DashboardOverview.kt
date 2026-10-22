@@ -22,7 +22,7 @@ internal suspend fun overviewContent(actor: Principal, team: TeamService, source
     val admin = actor.member.role.isAdministrator
     val admission = sources.admission
     val people = if (admission == null) emptyList() else if (admin) team.members(actor) else listOf(actor.member)
-    val capacities = people.map { it to admission!!.capacity(actor, it.id) }
+    val capacities = if (admission == null) emptyList() else people.zip(admission.capacities(actor, people.map { it.id }))
     // The newest page of launches is the bounded read; a session running since before it is listed on the sessions page.
     val launches = sources.runs?.list(actor, null, all = admin)
     val runs = launches?.runs?.filter { it.state == RunState.RUNNING }

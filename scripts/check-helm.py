@@ -34,7 +34,12 @@ for external in (False, True):
     if external:
         ingress = next(doc for doc in documents if doc['kind'] == 'Ingress')
         assert ingress['metadata']['annotations']['nginx.ingress.kubernetes.io/proxy-buffering'] == 'off'
+        # Artifact content relies on the application's Content-Security-Policy sandbox on every response: the ingress
+        # must pass response headers through, never hide or rewrite them.
+        annotations = ingress['metadata']['annotations']
+        assert not any('snippet' in key or 'hide-headers' in key or 'custom-headers' in key for key in annotations), annotations
+        assert 'content-security-policy' not in yaml.safe_dump(ingress).lower()
 # Misconfigured installations must fail at render time.
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0
-print('Helm contracts passed for bundled/external MySQL, HPA, ingress, secrets, probes and draining.')
+print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes and draining.')
