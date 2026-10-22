@@ -1,8 +1,29 @@
 # Implementation status
 
+## Dashboard overview and capacity pages: one transaction for all members (2026-10-22)
+
+Both pages called `AdmissionStore.capacity` once per member: one transaction of about a dozen queries each, N sequential connection checkouts, and the same group aggregates recomputed for every member. On a 400,000-row `reservations`/`reservation_groups` fixture, the per-group daily spend (`readGroupUsage`) alone took 24.8 ms for a group-day of 4,445 rows, and was repeated per member and per group. `AdmissionStore.capacities` now reads all members in one transaction and computes each group's usage and each pool's total weight once (`CapacityReadCache`); the default implementation keeps other stores working. Checked by `FairSchedulingHttpTest` (batch equals one-by-one). Other findings of this audit: all other list/detail queries examined use an index matching their filter order (agent runs, audit events, quota history, cloud sessions, token usage); `AGENTS.md` now states the N+1 and index-order rules.
+
+## Query audit of the admission and dashboard paths (2026-10-22)
+
+Production symptoms: dashboard pages taking seconds, `503 queue_timeout` after 90 s even in observation-only mode. Logs of the two production replicas over 3 h: 538 admissions, p50 wait 5.6 s, p90 68.6 s, max 92 s; every 503 was `queue_timeout`. Observation-only only disables pacing directives; it does not skip the admission queue.
+
+Measured with `EXPLAIN ANALYZE` on MySQL 8.4 seeded with 400,000 `reservations` rows (20 members, 90 days):
+
+- Fixed here: the member "active requests" count in `readMemberCapacity` (and the same filter elsewhere) matched `member_daily (member_id)` and filtered `state`/`expires_at` afterwards, reading all 37,104 rows of the member (68 ms). New index `member_active (member_id, state, expires_at)` turns it into a range scan.
+- Not fixed, needs a decision: every queued request polls every 500 ms (`AwaitAdmissionUseCase.POLL_MILLIS`) and each poll runs `reserveQueued` (about 20 queries under `lockTeam`) plus `renew` (`lockTeam` and `accountPlacement` again). With up to 128 waiters per team that is hundreds of team-serialized transactions per second against a pool of 8 connections (`Database.kt`, `connectionTimeout` 5 s). Dashboard reads and settlements queue for a connection behind them. Candidates: backoff with jitter on the poll, waking waiters when a reservation settles, a cheap pre-check before taking the team lock, a configurable pool size.
+- Also changed here: the connection pool per replica is `TEAMCODE_DATABASE_POOL_SIZE` (default 16, was a fixed 8 since the first commit) and the chart defaults to 3 replicas (was 2): 48 connections against MySQL's 151, with room for a rolling-update surge. More connections let dashboard reads stop queueing behind admission transactions; they do not remove the team lock, so the polling change above is still the real fix.
+- `poolSpends` (11.5 ms for 7,680 rows of one pool-day) runs on every poll; keep an eye on it as traffic grows.
+
 ## Cost and tokens of each turn in cloud transcripts (2026-10-22)
 
 The Claude Code adapter of the cloud runner keeps what the stream-json `result` line reports: a finished `turn` event carries `totalCostMicros` (Claude Code's running estimate of the conversation's cost, `total_cost_usd`, in micro-dollars), `costMicros` (this turn's share, the difference with the previous `result` of the same process) and the turn's `inputTokens`, `outputTokens`, `cacheCreationInputTokens` and `cacheReadInputTokens`. Claude Code keeps its total across `--resume`, so after a restart in a new pod the first turn has the total but no `costMicros`, rather than a turn cost that would include every earlier turn. `teamcode cloud logs` and `attach` show the turn's cost. Codex turns and the team event feed are unchanged. Evidence: `CloudAgentTest.claudeTurnsCarryTheirCostAndTokens` (CLI JVM tests). The semantics were checked against Claude Code 2.1.308 `-p --input-format stream-json`: `total_cost_usd` grew from 0.0145 to 0.0177 over two turns of one process and continued from 0.0177 in a new process with `--resume`, while `usage` held the turn's own tokens; the fixtures are synthetic. No pod was run.
+
+## Artifact serving, viewer and gallery (2026-10-22)
+
+Third step of [artifacts](artifacts.md#serving-and-access): `<server>/artifact/<id>` is the viewer and the one link people share; content is served on the same host under `/artifact/<id>/<ticket>/<path>`, authorized by a signed view ticket in the path (HKDF-derived key, 8 hours for members, 1 hour for public links, checked again against MySQL at most every 30 seconds per replica), with a CSP sandbox and companion headers on every response of the prefix, errors included. The viewer shows versions, files, sharing and deletion as the member's rights allow, and public links to anyone with a banner; signing in continues to the artifact. **Dashboard → Artifacts** is the gallery. While artifacts are inactive, `/artifact/*` answers `404` and only administrators see the menu, which leads to Settings → Artifacts. `artifacts.v1` is advertised.
+
+Evidence: `ArtifactViewingTest`, `ArtifactViewerRoutesTest`, `ArtifactPublicationPersistenceTest` (MySQL 8.4); details in [artifacts](artifacts.md#evidence).
 
 ## Artifact publication API and CLI (2026-10-22)
 

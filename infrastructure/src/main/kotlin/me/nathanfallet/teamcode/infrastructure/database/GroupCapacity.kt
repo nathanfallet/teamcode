@@ -7,6 +7,18 @@ import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
 /** Read under the caller's team transaction; dated/leased associations bound aggregate index ranges. */
+/** Aggregates read once per transaction when several members are read together; a member alone uses a fresh one. */
+internal class CapacityReadCache {
+    val groupUsage = mutableMapOf<String, GroupUsage>()
+    val totalWeight = mutableMapOf<String?, Long>()
+}
+
+internal fun readGroupUsage(teamId: String, ids: List<String>, now: Long, cache: CapacityReadCache): Map<String, GroupUsage> {
+    val missing = ids.filterNot { it in cache.groupUsage }
+    if (missing.isNotEmpty()) cache.groupUsage += readGroupUsage(teamId, missing, now)
+    return ids.associateWith { cache.groupUsage.getValue(it) }
+}
+
 internal fun readGroupUsage(teamId: String, ids: List<String>, now: Long): Map<String, GroupUsage> {
     if (ids.isEmpty()) return emptyMap()
     val units = Reservations.units.sum()
@@ -21,12 +33,12 @@ internal fun readGroupUsage(teamId: String, ids: List<String>, now: Long): Map<S
     return ids.associateWith { GroupUsage(spent[it] ?: 0, active[it] ?: 0) }
 }
 
-internal fun readGroupAllowances(teamId: String, memberId: String, now: Long): List<GroupAllowance> {
+internal fun readGroupAllowances(teamId: String, memberId: String, now: Long, cache: CapacityReadCache = CapacityReadCache()): List<GroupAllowance> {
     val memberships = (GroupMembers innerJoin TeamGroups).select(TeamGroups.columns + GroupMembers.paused).where {
         (TeamGroups.teamId eq teamId) and (TeamGroups.archived eq false) and (GroupMembers.memberId eq memberId)
     }.orderBy(TeamGroups.id).limit(17).toList()
     if (memberships.size > 16) throw TeamFailure("group_limit", 503, "Too many active group assignments. Ask an administrator to review them.")
-    val usage = readGroupUsage(teamId, memberships.map { it[TeamGroups.id] }, now)
+    val usage = readGroupUsage(teamId, memberships.map { it[TeamGroups.id] }, now, cache)
     return memberships.map { GroupAllowance(groupRecord(it), it[GroupMembers.paused], usage.getValue(it[TeamGroups.id])) }
 }
 

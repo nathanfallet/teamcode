@@ -109,6 +109,22 @@ interface ArtifactStore {
     /** Marks the artifact deleted (404 at once); its folder is removed by [pendingDeletions] and [markStorageDeleted]. */
     suspend fun delete(actor: Principal, artifactId: String)
 
+    // Serving (PR 3): no caller principal, the viewer is checked from what the ticket names.
+    /** Whether artifacts are active for [teamId]: settings and storage read together. */
+    suspend fun availability(teamId: String): ArtifactAvailability
+    /**
+     * The version a public link serves (the pinned one, or the current one), for anyone: null unless artifacts are
+     * active, the artifact is active and public, and `publicSharing` is not `off`. Its relation is `public`.
+     */
+    suspend fun publicArtifact(artifactId: String): PublicArtifact?
+    /**
+     * Version [number] if a ticket for it still grants access, never audited: for a member ([memberId] with its login
+     * session [tokenId]), the session is alive and interactive, the member enabled and ready, and still allowed to read
+     * the artifact; for an anonymous ticket (both null), the artifact is still public with sharing on. Artifacts must
+     * be active and the artifact not deleted. Null otherwise.
+     */
+    suspend fun viewable(artifactId: String, number: Int, memberId: String?, tokenId: String?): ViewableVersion?
+
     // Maintenance, run by one replica at a time.
     /** Drafts never committed after a day become deletions. Returns how many. */
     suspend fun expireDrafts(limit: Int): Int

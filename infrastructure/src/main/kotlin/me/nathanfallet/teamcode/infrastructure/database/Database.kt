@@ -16,13 +16,14 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.Database as ExposedDatabase
 
 /** Exposed transactions over a bounded HikariCP pool; schema changes belong to Flyway. */
-class Database(url: String, username: String, password: String) : AutoCloseable {
+class Database(url: String, username: String, password: String, poolSize: Int = DEFAULT_POOL_SIZE) : AutoCloseable {
+    init { require(poolSize in 2..64) { "The database pool size must be between 2 and 64." } }
     private val source = HikariDataSource(HikariConfig().apply {
         jdbcUrl = url; this.username = username; this.password = password
         addDataSourceProperty("connectTimeout", "5000")
         addDataSourceProperty("socketTimeout", "10000")
         addDataSourceProperty("sessionVariables", "innodb_lock_wait_timeout=5")
-        maximumPoolSize = 8; connectionTimeout = 5_000; transactionIsolation = "TRANSACTION_READ_COMMITTED"
+        maximumPoolSize = poolSize; connectionTimeout = 5_000; transactionIsolation = "TRANSACTION_READ_COMMITTED"
     })
     private val exposed = ExposedDatabase.connect(source, databaseConfig = DatabaseConfig {
         defaultIsolationLevel = Connection.TRANSACTION_READ_COMMITTED
@@ -42,4 +43,5 @@ class Database(url: String, username: String, password: String) : AutoCloseable 
         TransactionManager.closeAndUnregister(exposed)
         source.close()
     }
+    companion object { const val DEFAULT_POOL_SIZE = 16 }
 }

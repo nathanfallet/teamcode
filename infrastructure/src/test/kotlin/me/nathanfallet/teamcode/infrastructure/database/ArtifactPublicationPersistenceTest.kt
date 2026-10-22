@@ -346,6 +346,61 @@ class ArtifactPublicationPersistenceTest {
         }
     }
 
+    @Test @Timeout(240)
+    fun viewingFollowsTheSessionTheAccessAndTheAvailability() = runBlocking {
+        fixture { f ->
+            val a = Replica(f.a, cipher, Bucket())
+            activate(a, f)
+            val owner = f.member.principal; val admin = f.admin.principal
+            val id = publish(a.service, owner, null, mapOf("index.html" to bytes("<p>one</p>")), 0).artifact.id
+            publish(a.service, owner, id, mapOf("index.html" to bytes("<p>two</p>")), 1)
+            fun ViewableVersion?.number() = this?.version?.number
+            // A member's ticket holds while their login session and their access hold.
+            assertEquals(2, a.store.viewable(id, 2, owner.member.id, owner.tokenId).number())
+            assertEquals("<p>two</p>".length.toLong(), a.store.viewable(id, 2, owner.member.id, owner.tokenId)!!.version.files.single().size)
+            assertNull(a.store.viewable(id, 2, admin.member.id, owner.tokenId), "A ticket's session belongs to its member")
+            assertNull(a.store.viewable(id, 9, owner.member.id, owner.tokenId))
+            assertNull(a.store.viewable(id, 2, null, null), "A personal artifact has no anonymous viewer")
+            assertNull(a.store.publicArtifact(id))
+
+            // Public, pinned to version 1: anyone sees version 1 only; following the latest moves the link to version 2.
+            a.service.setAccess(owner, id, "public", false, 1)
+            assertEquals(1, a.store.publicArtifact(id)!!.version.number)
+            assertEquals(1, a.store.viewable(id, 1, null, null).number())
+            assertNull(a.store.viewable(id, 2, null, null), "Only the version the link serves")
+            a.service.setAccess(owner, id, "public", true, null)
+            assertNull(a.store.viewable(id, 1, null, null), "Pinning moved: the previous version's anonymous tickets stop")
+            assertEquals(2, a.store.publicArtifact(id)!!.version.number)
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(publicSharing = PublicSharing.OFF))
+            assertNull(a.store.publicArtifact(id), "Public sharing turned off hides every public link")
+            assertNull(a.store.viewable(id, 2, null, null))
+            assertEquals(2, a.store.viewable(id, 2, owner.member.id, owner.tokenId).number(), "Its members still read it")
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(publicSharing = PublicSharing.OWNERS))
+            a.service.setAccess(owner, id, "personal", true, null)
+            assertNull(a.store.publicArtifact(id))
+
+            // An administrator reads a personal artifact; artifacts turned off stop every ticket, then come back.
+            assertEquals(2, a.store.viewable(id, 2, admin.member.id, admin.tokenId).number())
+            assertEquals(ArtifactAvailability(true, null), a.store.availability(admin.teamId))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(enabled = false))
+            assertFalse(a.store.availability(admin.teamId).active)
+            assertNull(a.store.viewable(id, 2, owner.member.id, owner.tokenId))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(enabled = true))
+            assertEquals(2, a.store.viewable(id, 2, owner.member.id, owner.tokenId).number())
+
+            // Signing out, being disabled, or the artifact deleted: no ticket shows anything any more.
+            val second = f.team.login("developer", "artifact member replacement password", "artifact-test").principal
+            f.team.logout(owner)
+            assertNull(a.store.viewable(id, 2, owner.member.id, owner.tokenId), "Signed out")
+            assertEquals(2, a.store.viewable(id, 2, second.member.id, second.tokenId).number())
+            f.team.updateMember(admin, second.member.id, Role.MEMBER, true)
+            assertNull(a.store.viewable(id, 2, second.member.id, second.tokenId), "Disabled")
+            f.team.updateMember(admin, second.member.id, Role.MEMBER, false)
+            a.service.delete(f.team.login("developer", "artifact member replacement password", "artifact-test").principal, id)
+            assertNull(a.store.viewable(id, 2, admin.member.id, admin.tokenId), "Deleted")
+        }
+    }
+
     private suspend fun activate(replica: Replica, f: Fixture) {
         replica.admin.saveStorage(f.admin.principal, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
         replica.admin.recordTest(f.admin.principal, 1, passed = true)

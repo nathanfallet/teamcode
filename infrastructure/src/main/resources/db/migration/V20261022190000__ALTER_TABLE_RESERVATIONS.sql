@@ -1,0 +1,1 @@
+CREATE INDEX member_active ON reservations (member_id, state, expires_at);

@@ -35,7 +35,7 @@ internal fun Route.capacityRoutes(admission: AdmissionStore, team: TeamService, 
         val actor = call.principal
         val admin = actor.member.role.isAdministrator
         val people = if (admin) team.members(actor) else listOf(actor.member)
-        val current = people.map { it to admission.capacity(actor, it.id) }
+        val current = people.zip(admission.capacities(actor, people.map { it.id }))
         val rows = current.joinToString("") { (member, capacity) -> memberRow(actor, member, capacity, budgetOverrides) }
         val members = """<h2>Members</h2><table class="stack"><thead><tr><th class="col-member">Member</th><th class="col-today">Today</th><th>${if (admin) "Settings" else "Policy"}</th></tr></thead><tbody>$rows</tbody></table>"""
         val pools = if (admin) {
