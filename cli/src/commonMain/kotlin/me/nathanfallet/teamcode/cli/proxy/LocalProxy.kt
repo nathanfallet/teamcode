@@ -236,6 +236,9 @@ private fun Routing.mcpRelay(client: TeamCodeClient, localToken: String, maximum
     }
 }
 
+/** The relay's answer when the server refuses the proxy's own credential. */
+internal const val RELAY_SIGN_IN_REFUSED = "relay_sign_in_refused"
+
 private const val ARTIFACT_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
 /**
@@ -296,7 +299,11 @@ private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, ma
             }
             call.response.header(HttpHeaders.CacheControl, "no-store")
             if (relayed.status == 401) {
-                call.respondText("TeamCode refused the sign-in; run `teamcode login`.", status = HttpStatusCode.BadGateway)
+                // Not retryable: the member's login is gone, or, in a cloud session, the execution's credential ended.
+                call.response.header("x-teamcode-error", RELAY_SIGN_IN_REFUSED)
+                call.respondText(buildJsonObject { putJsonObject("error") { put("type", RELAY_SIGN_IN_REFUSED)
+                    put("message", "TeamCode refused the sign-in; run `teamcode login` (in a cloud session, the execution has ended).") } }.toString(),
+                    ContentType.Application.Json, HttpStatusCode.BadGateway)
                 return@handle
             }
             relayed.headers.forEach { (name, value) -> call.response.header(name, value) }

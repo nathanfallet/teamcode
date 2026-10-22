@@ -53,5 +53,13 @@ class ArtifactSourcesTest {
         assertTrue("never published" in refusal(sources, ".home/notes.txt"))
         assertTrue("16 MiB" in refusal(sources, "huge.bin"))
         assertFalse(refusal(sources, ".env.local").contains("TOKEN"), "A refusal names the path and the rule, never the content")
+
+        // The configuration directory is refused, except the scratch directory inside it.
+        fs.createDirectories(root / "config" / "artifacts" / "run")
+        fs.write(root / "config" / "config.json") { writeUtf8("{}") }
+        fs.write(root / "config" / "artifacts" / "run" / "page.html") { writeUtf8("<html>merged</html>") }
+        val configured = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / "config").toString()), exemptPrefixes = listOf((root / "config" / "artifacts" / "run").toString()))
+        assertTrue("never published" in refusal(configured, "config/config.json"))
+        assertEquals("<html>merged</html>", configured.read("config/artifacts/run/page.html", "page.html").bytes.decodeToString())
     }
 }

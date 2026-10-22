@@ -426,10 +426,12 @@ internal class RunnerAgentTools(
     /** This binary in the agent's container and the session's working directory, for `teamcode mcp artifacts`. */
     private val binary: String? = null,
     private val workspace: String = "/workspace",
+    /** The agent's home, with its sign-ins: never published, wherever it is. */
+    private val home: String? = null,
 ) : AgentTools {
     /**
      * `teamcode mcp artifacts` in the agent's container, under the agent's UID, rooted at the workspace, with its
-     * scratch directory in the container's own `/tmp` and the runner's home (`<workspace>/.home`) never published.
+     * scratch directory in the container's own `/tmp` and the agent's home (`HOME`, by default `<workspace>/.home`) never published.
      * Only when the execution's owner may publish now; the agent reaches the runner's relay with the local token.
      */
     override suspend fun artifacts(): me.nathanfallet.teamcode.cli.launch.ArtifactsMcp? {
@@ -440,7 +442,7 @@ internal class RunnerAgentTools(
             catch (_: Exception) { false }
         if (!allowed) return null
         val root = workspace.trimEnd('/')
-        return me.nathanfallet.teamcode.cli.launch.ArtifactsMcp(command, root, CLOUD_ARTIFACTS_SCRATCH, listOf("$root/.home"))
+        return me.nathanfallet.teamcode.cli.launch.ArtifactsMcp(command, root, CLOUD_ARTIFACTS_SCRATCH, listOfNotNull("$root/.home", home?.trimEnd('/')?.takeIf { it.isNotEmpty() }).distinct())
     }
 
     override suspend fun prepare(agent: String): List<String> {

@@ -21,7 +21,6 @@ private fun ArtifactSharing.view() = ArtifactMembersView(ownerId, members.map { 
  * Publication and reading of artifacts for members, their agents and keys (`artifacts:read`, `artifacts:write`).
  * Making public and deleting stay interactive (the credential classifier sends every other route to that rule).
  */
-private val RUN_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
@@ -44,7 +43,7 @@ internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: Stri
             val run = call.request.headers.getAll("x-teamcode-run-id")
             val origin = when {
                 run.isNullOrEmpty() -> ArtifactOrigin()
-                run.size == 1 && RUN_ID.matches(run.single()) -> ArtifactOrigin("local_run", run.single())
+                run.size == 1 && me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(run.single()) -> ArtifactOrigin("local_run", run.single())
                 else -> throw TeamFailure("invalid_run", 400, "Name one canonical run UUID in x-teamcode-run-id.")
             }
             val upload = artifacts.startUpload(call.principal, input.artifactId, input.files.map { UploadFile(it.sha256, it.size) }, origin)

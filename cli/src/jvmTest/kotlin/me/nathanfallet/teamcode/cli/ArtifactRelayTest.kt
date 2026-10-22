@@ -55,6 +55,7 @@ class ArtifactRelayTest {
             assertEquals(HttpStatusCode.Forbidden, refused.status); assertTrue("artifact_not_writable" in refused.bodyAsText())
             val signIn = call(HttpMethod.Get, "/api/v1/artifacts/policy")
             assertEquals(HttpStatusCode.BadGateway, signIn.status); assertTrue("teamcode login" in signIn.bodyAsText())
+            assertEquals("relay_sign_in_refused", signIn.headers["x-teamcode-error"]); assertTrue("\"relay_sign_in_refused\"" in signIn.bodyAsText())
             val relayed = seen.size
 
             // Making public and deleting are not relayed, nor anything off the list; neither are callers without the token.

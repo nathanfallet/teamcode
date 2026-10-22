@@ -39,5 +39,8 @@ class CloudToolsJvmTest {
             assertNull(tools(HttpStatusCode.OK to """{"canPublish":false,"reason":"$reason"}""").artifacts(), reason)
         assertNull(tools(HttpStatusCode.NotFound to "{}").artifacts(), "An older server without the policy")
         assertNull(tools(HttpStatusCode.OK to """{"canPublish":true}""", binary = null).artifacts())
+        val elsewhere = RunnerAgentTools(client { path -> if (path == "/api/v1/artifacts/policy") HttpStatusCode.OK to """{"canPublish":true}""" else HttpStatusCode.NotFound to "{}" },
+            { throw IllegalStateException("no container") }, binary = "/opt/teamcode/teamcode", home = "/workspace/agent-home/").artifacts()
+        assertEquals(listOf("/workspace/.home", "/workspace/agent-home"), elsewhere?.refused, "The agent's real home is refused wherever HOME points")
     }
 }

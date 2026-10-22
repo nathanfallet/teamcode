@@ -29,7 +29,9 @@ class ArtifactSource(val publishedPath: String, val localPath: String, val bytes
  * the first root, an absolute one must lie inside one of them. No `..`, no symbolic link, regular files only, and the
  * places credentials live are refused by name; a refusal names the path and the rule, never the content.
  */
-class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<String> = emptyList(), private val fileSystem: FileSystem = FileSystem.SYSTEM) {
+class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<String> = emptyList(), private val fileSystem: FileSystem = FileSystem.SYSTEM,
+    /** Directories inside a refused one whose files may still be published (the scratch directory inside the configuration directory). */
+    private val exemptPrefixes: List<String> = emptyList()) {
     private val roots: List<Path> = roots.map { fileSystem.canonicalize(it.toPath()) }.also { require(it.isNotEmpty()) }
 
     fun read(localPath: String, publishedPath: String): ArtifactSource {
@@ -38,8 +40,8 @@ class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<Str
         val (root, components) = locate(localPath, path)
         refusal(components)?.let { refuse(localPath, it) }
         val absolute = components.fold(root) { parent, name -> parent / name }.toString()
-        refusedPrefixes.firstOrNull { prefix -> absolute == prefix || absolute.startsWith(prefix.trimEnd('/', '\\') + "/") || absolute.startsWith(prefix.trimEnd('/', '\\') + "\\") }
-            ?.let { refuse(localPath, "files under $it are never published") }
+        fun under(prefix: String) = absolute == prefix || absolute.startsWith(prefix.trimEnd('/', '\\') + "/") || absolute.startsWith(prefix.trimEnd('/', '\\') + "\\")
+        if (exemptPrefixes.none(::under)) refusedPrefixes.firstOrNull(::under)?.let { refuse(localPath, "files under $it are never published") }
         val bytes = try { readWithoutLinks(root.toString(), components, ArtifactLimits.MAX_TEXT_FILE_BYTES) }
         catch (failure: SourceReadFailure) {
             val at = if (failure.component in components.indices) components.take(failure.component + 1).joinToString("/") else root.toString()

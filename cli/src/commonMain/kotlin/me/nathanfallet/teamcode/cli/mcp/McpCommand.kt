@@ -45,9 +45,13 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
             privateDirectory(parent)
         }
         privateDirectory(directory)
+        val scratchPath = FileSystem.SYSTEM.canonicalize(directory)
+        // The TeamCode configuration directory holds the member's login: never published, even when the root contains it.
+        val configuration = configPath().toPath().parent!!.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
         val client = client()
         client.use {
-            val server = ArtifactsMcpServer(it, ArtifactSources(listOf(root, directory.toString()), refuse), FileSystem.SYSTEM.canonicalize(directory))
+            val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse + configuration.toString(), exemptPrefixes = listOf(scratchPath.toString()))
+            val server = ArtifactsMcpServer(it, sources, scratchPath)
             while (true) {
                 val line = readlnOrNull() ?: break
                 if (line.isBlank()) continue

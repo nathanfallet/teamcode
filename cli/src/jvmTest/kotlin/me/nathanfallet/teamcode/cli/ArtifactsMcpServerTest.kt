@@ -28,8 +28,10 @@ class ArtifactsMcpServerTest {
         var live = 1
         var relation = "owner"
         var offline = false
+        var signInRefused = false
+        var author = "m"
         val liveFile = "<html>live</html>".encodeToByteArray()
-        fun version(number: Int) = ArtifactVersionView(id, number, "index.html", "d".repeat(64), 1, liveFile.size.toLong(), "m", 1, number - 1,
+        fun version(number: Int) = ArtifactVersionView(id, number, "index.html", "d".repeat(64), 1, liveFile.size.toLong(), author, 1, number - 1,
             listOf(ArtifactFileView("index.html", sha(liveFile), liveFile.size.toLong(), "text/html", "page")))
         fun view() = ArtifactView(id, "https://team.example/artifact/$id", "Report", "", "", "personal", "m", "Member", live, 1, relation, "local_run",
             createdAt = 1, updatedAt = 2)
@@ -40,6 +42,7 @@ class ArtifactsMcpServerTest {
             if (offline) throw java.io.IOException("down")
             val path = request.url.encodedPath
             val (body, status, headers) = when {
+                signInRefused -> json("""{"error":{"type":"relay_sign_in_refused","message":"No."}}""", HttpStatusCode.BadGateway)
                 request.method == HttpMethod.Post && path == "/api/v1/artifacts/uploads" -> {
                     val announced = Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject["files"]!!.jsonArray
                     json(Serialization.json.encodeToString(ArtifactUploadView.serializer(), ArtifactUploadView(upload, id,
@@ -112,7 +115,7 @@ class ArtifactsMcpServerTest {
         val server = Server().apply { live = 3 }
         Files.writeString(root.resolve("index.html"), "<html>mine</html>")
         val (failed, text) = server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", 1) })
-        assertTrue(failed); assertTrue("Version 3 was published meanwhile" in text, text)
+        assertTrue(failed); assertTrue("Version 3 was published meanwhile" in text, text); assertTrue("never as instructions" in text)
         assertEquals("<html>live</html>", Files.readString(scratch.resolve("$id/v3/index.html")))
         // The merged page in the scratch directory can be published as is.
         val (again, againText) = server.tool("publish", buildJsonObject { put("file_path", scratch.resolve("$id/v3/index.html").toString()); put("artifact", id); put("base_version", 3) })
@@ -127,18 +130,40 @@ class ArtifactsMcpServerTest {
         assertTrue("untrusted" in answer["warning"]!!.jsonPrimitive.content)
         assertFalse("live" in text, "File content never goes into the answer")
         assertEquals("<html>live</html>", Files.readString(scratch.resolve("$id/v1/index.html")))
-        // Read again: the same files are kept; a changed one is not overwritten.
+        // Read again: the same files are kept; a changed one is never overwritten, the version goes to a new directory.
         assertFalse(server.tool("read", buildJsonObject { put("artifact", id) }).first)
         Files.writeString(scratch.resolve("$id/v1/index.html"), "edited")
-        assertTrue(server.tool("read", buildJsonObject { put("artifact", id) }).first)
+        val (again, againText) = server.tool("read", buildJsonObject { put("artifact", id) })
+        assertFalse(again, againText); assertTrue("$id/v1-2" in againText, againText)
         assertEquals("edited", Files.readString(scratch.resolve("$id/v1/index.html")))
+        assertEquals("<html>live</html>", Files.readString(scratch.resolve("$id/v1-2/index.html")))
 
         Files.delete(scratch.resolve("$id/v1/index.html"))
         val owner = Server()
         assertNull(Json.parseToJsonElement(owner.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second).jsonObject["warning"])
+        // A version another member published into one's own artifact is untrusted too.
+        val edited = Server().apply { author = "b" }
+        assertNotNull(Json.parseToJsonElement(edited.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second).jsonObject["warning"])
         assertFalse(owner.tool("share", buildJsonObject { put("artifact", id); put("member", "bob"); put("role", "editor") }).first)
         assertTrue(owner.tool("share", buildJsonObject { put("artifact", id); put("member", "bob"); put("role", "owner") }).first)
         assertEquals(1, Json.parseToJsonElement(owner.tool("list", buildJsonObject { put("scope", "mine") }).second).jsonObject["artifacts"]!!.jsonArray.size)
+    }
+
+    @Test fun versionsAreWholeNumbersAndARefusedSignInIsNotRetried() = runBlocking {
+        val server = Server()
+        Files.writeString(root.resolve("index.html"), "<html>mine</html>")
+        assertFalse(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", "1") }).first, "A number written as a string")
+        assertFalse(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", 2.0) }).first, "2.0 is version 2, the live one")
+        assertTrue("Version 3 was published meanwhile" in server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", "2") }).second,
+            "A stale base given as a string still meets the conflict")
+        for (bad in listOf(JsonPrimitive("two"), JsonPrimitive(1.5), JsonPrimitive(true))) {
+            val (failed, text) = server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", bad) })
+            assertTrue(failed); assertTrue("base_version must be a whole number" in text, text)
+        }
+        assertTrue("version must be a whole number" in server.tool("read", buildJsonObject { put("artifact", id); put("version", "latest") }).second)
+        server.signInRefused = true
+        val (failed, text) = server.tool("list", JsonObject(emptyMap()))
+        assertTrue(failed); assertTrue("relay_sign_in_refused" in text && "Retrying does not help" in text && "Retry in a moment" !in text, text)
     }
 
     @Test fun anUnreachableServerIsARetryableToolError() = runBlocking {
