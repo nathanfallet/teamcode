@@ -23,7 +23,7 @@ class CloudProfilesTest {
         assertEquals(toolchain.id, resolveProfile(toolchain.id, listOf(named, toolchain)))
     }
 
-    @Test fun `a name is the fallback with an exact match before ignoring case`() {
+    @Test fun `a name is the fallback and exact beats ignoring case`() {
         assertEquals(gpu.id, resolveProfile("gpu", listOf(toolchain, gpu)))
         assertEquals(toolchain.id, resolveProfile("default", listOf(toolchain, gpu)), "teamcode cloud create --profile default")
         val lower = profile("4f1c2d3e-0000-4000-8000-000000000004", "default")
@@ -38,7 +38,7 @@ class CloudProfilesTest {
         assertContains(text, "--profile")
     }
 
-    @Test fun `an unknown value goes to the server which tells missing from unassigned`() {
+    @Test fun `an unknown value goes to the server that tells missing from unassigned`() {
         assertEquals("other", resolveProfile("other", listOf(toolchain)))
         assertEquals("other", resolveProfile("other", emptyList()), "A key that cannot list profiles still passes an id")
     }
@@ -48,7 +48,7 @@ class CloudProfilesTest {
         assertFalse(PROFILE_ID.matches("default"))
     }
 
-    @Test fun `a line shows id name version cluster and namespace image and agent`() {
+    @Test fun `a line shows id name version cluster namespace image and agent`() {
         assertEquals("${toolchain.id}\tDefault\tv3\tlab/teamcode\tregistry.example/toolchain:1\tclaude 2.1.0", toolchain.line())
         assertEquals("${gpu.id}\tgpu\tv3\tcluster-id/teamcode\tregistry.example/toolchain:1\tclaude", profile(gpu.id, "gpu", null).copy(spec = gpu.spec.copy(agentVersion = null)).line(),
             "An older server sends no cluster name")
