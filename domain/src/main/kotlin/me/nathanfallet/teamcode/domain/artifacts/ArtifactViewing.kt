@@ -197,6 +197,7 @@ class ArtifactViewing(
         const val MEMBER_TICKET_MILLIS = 8 * 3_600_000L
         const val PUBLIC_TICKET_MILLIS = 3_600_000L
         private const val MAX_CACHED_TICKETS = 10_000
+        private val RANGE = Regex("(\\d{0,19})-(\\d{0,19})")
 
         /**
          * One `bytes=a-b`, `bytes=a-` or `bytes=-n` range. Several ranges are refused (`416`, multipart is not
@@ -208,7 +209,7 @@ class ArtifactViewing(
             if (!spec.startsWith("bytes=")) return ByteRange.Whole
             val value = spec.removePrefix("bytes=").trim()
             if (',' in value) return ByteRange.Unsatisfiable
-            val match = Regex("(\\d{0,19})-(\\d{0,19})").matchEntire(value) ?: return ByteRange.Whole
+            val match = RANGE.matchEntire(value) ?: return ByteRange.Whole
             val (first, last) = match.destructured
             if (first.isEmpty() && last.isEmpty()) return ByteRange.Whole
             if (size == 0L) return ByteRange.Unsatisfiable

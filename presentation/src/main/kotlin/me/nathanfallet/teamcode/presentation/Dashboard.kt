@@ -18,12 +18,14 @@ internal suspend fun ApplicationCall.form(origin: String, authenticated: Boolean
     return fields
 }
 /**
- * The session cookie, host-only, HttpOnly and SameSite=Strict, set twice: for `/dashboard`, and for `/artifact`, where
- * the viewer page reads it (the content below it ignores it and authorizes with its ticket only).
+ * The session cookie, host-only and HttpOnly, set twice: for `/dashboard` with SameSite=Strict, and for `/artifact` with
+ * SameSite=Lax, where the viewer page reads it, so a shared link opened from another site still finds the member signed
+ * in. That path only answers GETs (forms post to `/dashboard`), and the content below it ignores the cookie and
+ * authorizes with its ticket only.
  */
 internal fun ApplicationCall.sessionCookie(value: String, origin: String, maxAge: Int = 28_800) {
     for (path in SESSION_COOKIE_PATHS)
-        response.cookies.append(Cookie("teamcode_session", value, path = path, httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to "Strict")))
+        response.cookies.append(Cookie("teamcode_session", value, path = path, httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to if (path == "/artifact") "Lax" else "Strict")))
 }
 internal val SESSION_COOKIE_PATHS = listOf("/dashboard", "/artifact")
 internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false, overview: OverviewSources = OverviewSources()) {

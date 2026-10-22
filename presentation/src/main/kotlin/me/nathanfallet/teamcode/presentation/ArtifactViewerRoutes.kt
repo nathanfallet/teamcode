@@ -82,15 +82,18 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         val ticket = call.parameters["ticket"]!!
         val head = viewing.content(id, ticket, path, null, readBytes = false)
         val etag = "\"${head.file.sha256}${if (head.entry) "-page" else ""}\""
-        val cache = if (head.anonymous) "private, max-age=60" else "private, max-age=3600, immutable"
-        call.response.header(HttpHeaders.CacheControl, cache)
-        call.response.header(HttpHeaders.ETag, etag)
+        // Cache headers go only on a file that is sent: an error after this point stays `no-store`.
+        fun cacheable() {
+            call.response.header(HttpHeaders.CacheControl, if (head.anonymous) "private, max-age=60" else "private, max-age=3600, immutable")
+            call.response.header(HttpHeaders.ETag, etag)
+        }
         if (call.request.headers.getAll(HttpHeaders.IfNoneMatch).orEmpty().flatMap { it.split(',') }.any { it.trim() == etag || it.trim() == "*" })
-            return@get call.respond(HttpStatusCode.NotModified)
+            return@get cacheable().also { call.respond(HttpStatusCode.NotModified) }
         val content = try { viewing.content(id, ticket, path, call.request.headers[HttpHeaders.Range]) } catch (error: ArtifactRangeFailure) {
             call.response.header(HttpHeaders.ContentRange, "bytes */${error.size}")
             return@get call.respondText("The requested range cannot be served.", ContentType.Text.Plain, HttpStatusCode.RequestedRangeNotSatisfiable)
         }
+        cacheable()
         val bytes = content.bytes!!
         if (content.entry) {
             val text = bytes.decodeToString()
@@ -160,7 +163,7 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         val input = call.form(origin)
         val id = call.parameters["id"]!!
         val artifact = artifacts.artifact(call.principal, id)
-        if (input["confirm"]?.trim() != artifact.title) throw TeamFailure("artifact_delete_unconfirmed", 400, "Type the artifact's title exactly to delete it.")
+        if (input["confirm"]?.trim() != artifact.title.ifEmpty { "Untitled" }) throw TeamFailure("artifact_delete_unconfirmed", 400, "Type the artifact's title exactly to delete it.")
         artifacts.delete(call.principal, id)
         call.respondRedirect(ARTIFACT_GALLERY_PATH)
     }
@@ -207,7 +210,7 @@ private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean
             version.files.joinToString("") { """<tr><td>${escape(it.path)}${if (it.role == "page") " <span class=\"chip\">page</span>" else ""}</td><td class="num">${byteSize(it.size)}</td><td>${escape(it.contentType)}</td></tr>""" } +
             "</tbody></table></div></details>")
         if (shell.member && viewer != null && (manageAccess || invite)) add(sharingPanel(shell, viewer, manageAccess, invite))
-        if (shell.member && viewer != null && (owner || administrator)) add("""<details><summary>Delete</summary><div class="panel"><form method="post" action="$ARTIFACT_GALLERY_PATH/$id/delete">${csrf(viewer)}<p>Deleting removes every version and its files for everyone, at once and for good. Type the title to confirm.</p><label>Title <input name="confirm" required autocomplete="off"></label><button class="danger">Delete this artifact</button></form></div></details>""")
+        if (shell.member && viewer != null && (owner || administrator)) add("""<details><summary>Delete</summary><div class="panel"><form method="post" action="$ARTIFACT_GALLERY_PATH/$id/delete">${csrf(viewer)}<p>Deleting removes every version and its files for everyone, at once and for good. Type the title (${escape(title)}) to confirm.</p><label>Title <input name="confirm" required autocomplete="off"></label><button class="danger">Delete this artifact</button></form></div></details>""")
     }
     val banner = if (!shell.member) """<p class="notice warn" role="note">Content published by a member of a TeamCode team. It is not verified; be careful with what it asks you to do.</p>""" else ""
     val live = if (shell.member && !pinned) """<p id="artifact-newer" class="notice" hidden>A newer version is published. <a href="/artifact/$id">Show it</a></p><script src="/dashboard/assets/artifact-viewer.js" defer></script>""" else ""

@@ -20,7 +20,7 @@ internal object ArtifactPages {
         "h1,h2,h3{line-height:1.25}hr{border:0;border-top:1px solid #d0d7de}" +
         "@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre,:not(pre)>code{background:#161b22}blockquote{color:#8b949e;border-color:#30363d}a{color:#58a6ff}}"
 
-    /** A Markdown page as a whole HTML document; [title] is the artifact's. */
+    /** A Markdown page as a whole HTML document; [title] is the file's name (the content route knows only the file). */
     fun markdown(source: String, title: String): String =
         """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><style>$RESET$MARKDOWN_STYLE</style></head><body>""" +
             Markdown.render(source) + "</body></html>"
@@ -32,7 +32,10 @@ internal object ArtifactPages {
  * escaped first; only the markup produced here is HTML, and links keep `http`, `https`, `mailto` and relative targets.
  */
 internal object Markdown {
-    fun render(source: String): String {
+    fun render(source: String): String = render(source.replace("\u0000", "\uFFFD"), 0)
+
+    /** [depth] bounds nested block quotes, so a line of `>` characters cannot exhaust the stack. */
+    private fun render(source: String, depth: Int): String {
         val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
         val out = StringBuilder()
         var i = 0
@@ -41,7 +44,7 @@ internal object Markdown {
         while (i < lines.size) {
             val line = lines[i]
             val trimmed = line.trim()
-            val fence = Regex("^(```+|~~~+)").find(trimmed)
+            val fence = FENCE.find(trimmed)
             when {
                 fence != null -> {
                     flush()
@@ -52,17 +55,17 @@ internal object Markdown {
                     out.append("<pre><code>").append(escape(code.joinToString("\n"))).append("</code></pre>\n")
                 }
                 trimmed.isEmpty() -> flush()
-                Regex("^#{1,6}\\s").containsMatchIn(trimmed) || Regex("^#{1,6}$").matches(trimmed) -> {
+                HEADING.matches(trimmed) -> {
                     flush()
                     val level = trimmed.takeWhile { it == '#' }.length
                     out.append("<h$level>").append(inline(trimmed.drop(level).trim().trimEnd('#').trim())).append("</h$level>\n")
                 }
-                Regex("^(\\*\\s*){3,}$|^(-\\s*){3,}$|^(_\\s*){3,}$").matches(trimmed) && paragraph.isEmpty() -> { out.append("<hr>\n") }
-                trimmed.startsWith(">") -> {
+                RULE.matches(trimmed) && paragraph.isEmpty() -> { out.append("<hr>\n") }
+                trimmed.startsWith(">") && depth < MAX_QUOTE_DEPTH -> {
                     flush()
                     val quoted = mutableListOf<String>()
                     while (i < lines.size && lines[i].trim().startsWith(">")) { quoted += lines[i].trim().removePrefix(">").removePrefix(" "); i++ }
-                    out.append("<blockquote>").append(render(quoted.joinToString("\n"))).append("</blockquote>\n")
+                    out.append("<blockquote>").append(render(quoted.joinToString("\n"), depth + 1)).append("</blockquote>\n")
                     continue
                 }
                 LIST_ITEM.matches(line) -> {
@@ -91,26 +94,36 @@ internal object Markdown {
         return out.toString()
     }
 
+    private const val MAX_QUOTE_DEPTH = 8
+    private val FENCE = Regex("^(```+|~~~+)")
+    private val HEADING = Regex("^#{1,6}(\\s.*)?$")
+    private val RULE = Regex("^(\\*\\s*){3,}$|^(-\\s*){3,}$|^(_\\s*){3,}$")
+    private val PLACEHOLDER = Regex("\u0000(\\d+)\u0000")
     private val LIST_ITEM = Regex("^\\s{0,3}([-*+]|\\d{1,9}[.)])\\s+(.*)$")
     private val CODE = Regex("`([^`]+)`")
     private val LINK = Regex("\\[([^\\]]+)]\\(([^)\\s]+)\\)")
     private val STRONG = Regex("\\*\\*([^*]+)\\*\\*|__([^_]+)__")
     private val EMPHASIS = Regex("(?<![*\\w])\\*([^*\\s][^*]*)\\*(?!\\*)|(?<![_\\w])_([^_\\s][^_]*)_(?![_\\w])")
 
-    /** Inline markup over escaped text. Code spans are set aside first so nothing inside them is interpreted. */
+    /**
+     * Inline markup over escaped text. Code spans are set aside first so nothing inside them is interpreted, and link
+     * targets are set aside before emphasis, so `__init__.py` in a URL stays as written. The source holds no NUL
+     * ([render] replaced them), so a placeholder is always one of ours.
+     */
     fun inline(text: String): String {
         val spans = mutableListOf<String>()
-        var value = CODE.replace(text) { spans += "<code>${escape(it.groupValues[1])}</code>"; "\u0000${spans.size - 1}\u0000" }
+        fun hold(html: String): String { spans += html; return "\u0000${spans.size - 1}\u0000" }
+        var value = CODE.replace(text.replace("\u0000", "\uFFFD")) { hold("<code>${escape(it.groupValues[1])}</code>") }
         value = escape(value)
         value = LINK.replace(value) { match ->
             val target = match.groupValues[2]
             val decoded = target.replace("&amp;", "&")
             val safe = SAFE_TARGET.matches(decoded) && !decoded.trimStart().lowercase().let { it.startsWith("javascript:") || it.startsWith("data:") || it.startsWith("vbscript:") }
-            if (safe) """<a href="$target" target="_blank" rel="noopener noreferrer">${match.groupValues[1]}</a>""" else match.groupValues[1]
+            if (safe) hold("""<a href="$target" target="_blank" rel="noopener noreferrer">""") + match.groupValues[1] + hold("</a>") else match.groupValues[1]
         }
         value = STRONG.replace(value) { "<strong>${it.groupValues[1].ifEmpty { it.groupValues[2] }}</strong>" }
         value = EMPHASIS.replace(value) { "<em>${it.groupValues[1].ifEmpty { it.groupValues[2] }}</em>" }
-        value = Regex("\u0000(\\d+)\u0000").replace(value) { m -> spans[m.groupValues[1].toInt()] }
+        value = PLACEHOLDER.replace(value) { m -> spans.getOrNull(m.groupValues[1].toInt()) ?: "" }
         return value
     }
 

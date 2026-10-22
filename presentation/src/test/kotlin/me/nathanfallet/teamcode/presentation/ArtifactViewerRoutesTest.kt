@@ -33,8 +33,9 @@ class ArtifactViewerRoutesTest {
         var granted = true
         var explode = false
         var entry = "index.html"
+        var title = "Report"
         val calls = mutableListOf<String>()
-        fun artifact(relation: String) = Artifact(id, "default", "admin-id", "alice", "Report", "", "chart", access, true, null, 2, "active", 19, ArtifactOrigin(), 1, 2, 2, null, relation)
+        fun artifact(relation: String) = Artifact(id, "default", "admin-id", "alice", title, "", "chart", access, true, null, 2, "active", 19, ArtifactOrigin(), 1, 2, 2, null, relation)
         fun version(number: Int) = ArtifactVersion(id, number, entry, "d".repeat(64), 3, 30, "admin-id", 1_700_000_000_000, number - 1, null, null, listOf(
             ArtifactFile("index.html", sha(page), page.size.toLong(), "text/html; charset=utf-8", if (entry == "index.html") "page" else "html"),
             ArtifactFile("notes.md", sha(notes), notes.size.toLong(), "text/markdown; charset=utf-8", if (entry == "notes.md") "page" else "asset"),
@@ -127,6 +128,7 @@ class ArtifactViewerRoutesTest {
             val refused = client.get("$base/site.css") { header(HttpHeaders.Range, range) }
             assertEquals(HttpStatusCode.RequestedRangeNotSatisfiable, refused.status, range); assertSandboxed(refused, "416")
             assertEquals("bytes */${css.size}", refused.headers[HttpHeaders.ContentRange])
+            assertEquals("no-store", refused.headers[HttpHeaders.CacheControl], "A refusal is never cached as the file")
         }
         // 404: a missing file, a forged ticket, a ticket of another artifact, dot segments.
         val other = "00000000-0000-4000-8000-0000000000bb"
@@ -134,6 +136,7 @@ class ArtifactViewerRoutesTest {
             val missing = client.get(path) { header(HttpHeaders.Cookie, "teamcode_session=admin") }
             assertEquals(HttpStatusCode.NotFound, missing.status, path); assertSandboxed(missing, "404 $path")
             assertEquals("no-store", missing.headers[HttpHeaders.CacheControl]); assertFalse("<nav" in missing.bodyAsText(), "The dashboard is never served under the prefix")
+            assertNull(missing.headers[HttpHeaders.ETag])
         }
         // 405 from the framework, and 500 from an unexpected failure.
         val post = client.post("$base/index.html")
@@ -142,7 +145,7 @@ class ArtifactViewerRoutesTest {
         store.explode = true
         now += 31_000
         val failed = client.get("$base/site.css")
-        assertEquals(HttpStatusCode.InternalServerError, failed.status); assertSandboxed(failed, "500")
+        assertEquals(HttpStatusCode.InternalServerError, failed.status); assertSandboxed(failed, "500"); assertEquals("no-store", failed.headers[HttpHeaders.CacheControl])
         store.explode = false
         // Markdown that is not the entry page is text, never HTML.
         val text = client.get("$base/notes.md")
@@ -262,7 +265,9 @@ class ArtifactViewerRoutesTest {
         assertEquals(next, login.headers[HttpHeaders.Location])
         val cookies = login.headers.getAll(HttpHeaders.SetCookie).orEmpty()
         assertEquals(setOf("/dashboard", "/artifact"), cookies.map { Regex("Path=([^;]+)").find(it)!!.groupValues[1] }.toSet())
-        assertTrue(cookies.all { "HttpOnly" in it && "SameSite=Strict" in it })
+        assertTrue(cookies.all { "HttpOnly" in it })
+        // Strict for the dashboard; Lax for the viewer, so a link opened from another site finds the member signed in.
+        assertTrue(cookies.single { "Path=/dashboard" in it }.contains("SameSite=Strict")); assertTrue(cookies.single { "Path=/artifact" in it }.contains("SameSite=Lax"))
         for (target in listOf("https://evil.example/", "//evil.example/artifact/$id", "/dashboard/members", "/artifact/$id/ticket/x")) {
             val elsewhere = noRedirect.post("/dashboard/login?next=${target.encodeURLParameter()}") {
                 header(HttpHeaders.Origin, origin); contentType(ContentType.Application.FormUrlEncoded); setBody("username=admin&password=secret")
@@ -283,6 +288,23 @@ class ArtifactViewerRoutesTest {
         assertTrue("<h1>Notes &lt;script&gt;alert(1)&lt;/script&gt;</h1>" in html, html)
         assertTrue("""<a href="https://example.com" target="_blank" rel="noopener noreferrer">the docs</a>""" in html)
         assertFalse("javascript:" in html.substringAfter("<body>").let { Regex("href=\"[^\"]*\"").findAll(it).joinToString { m -> m.value } }, "No script link survives")
+    }
+
+    @Test fun markdownKeepsLinkTargetsAndSurvivesCraftedInput() {
+        val html = Markdown.render("[init](https://example.com/__init__.py) and **bold** in _a_ `code` \u00005\u0000\n\n" + ">".repeat(100_000) + " deep")
+        assertTrue("""href="https://example.com/__init__.py"""" in html, html)
+        assertTrue("<strong>bold</strong>" in html && "<em>a</em>" in html && "<code>code</code>" in html)
+        assertFalse('\u0000' in html)
+    }
+
+    @Test fun anUntitledArtifactIsDeletedByTypingUntitled() = testApplication {
+        val store = Store().apply { title = "" }; install(store)
+        val csrf = FakeTeam().authenticate("admin")!!.tokenId
+        val deleted = client.config { followRedirects = false }.post("$ARTIFACT_GALLERY_PATH/$id/delete") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, origin)
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=$csrf&confirm=Untitled")
+        }
+        assertEquals(HttpStatusCode.Found, deleted.status); assertTrue("delete" in store.calls)
     }
 }
 

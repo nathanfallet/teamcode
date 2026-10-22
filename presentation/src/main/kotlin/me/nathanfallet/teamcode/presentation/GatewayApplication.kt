@@ -56,6 +56,12 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             else call.respond(HttpStatusCode.fromValue(error.status), ApiError(ErrorDetail(error.code, error.message ?: "Request failed.")))
         }
         exception<CancellationException> { _, error -> throw error }
+        // An unexpected failure under the content prefix still answers through the pipeline, so it keeps `no-store`.
+        exception<Throwable> { call, error ->
+            if (!isArtifactContent(call.request.path()) || call.response.isCommitted) throw error
+            call.application.environment.log.error("Artifact content failed", error)
+            call.respondText("Request failed.", ContentType.Text.Plain, HttpStatusCode.InternalServerError)
+        }
         exception<InvalidRequest> { call, error ->
             val protocol = inference(call)
             if (protocol != null) call.respondInferenceError(protocol, 400, "invalid_request", error.message ?: "Invalid request.")
@@ -118,8 +124,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                 } else {
                     AuthorizeCredentialUseCase().check(principal, credentialAction(call.request.httpMethod.value, path, inboundProtocols.map { it.path }.toSet()))
                     call.attributes.put(PRINCIPAL, principal)
-                    // The menu shows Artifacts to members only while they are active, so it is read for every dashboard page.
-                    if (artifactViewing != null && artifacts != null && path.startsWith("/dashboard") && principal.serviceScopes == null)
+                    // The menu shows Artifacts to members only while they are active, so it is read for dashboard pages (not
+                    // assets, live polls or form posts, which render no menu).
+                    if (artifactViewing != null && artifacts != null && path.startsWith("/dashboard") && principal.serviceScopes == null &&
+                        call.request.httpMethod == HttpMethod.Get && !path.startsWith("/dashboard/assets/") && !path.endsWith("/live"))
                         call.attributes.put(ARTIFACTS_ACTIVE, artifactViewing.availability(principal.teamId).active)
                     if (path !in setOf("/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/auth/logout", "/dashboard/password", "/dashboard/logout")) {
                         if (principal.member.passwordChangeRequired && path.startsWith("/dashboard")) {
