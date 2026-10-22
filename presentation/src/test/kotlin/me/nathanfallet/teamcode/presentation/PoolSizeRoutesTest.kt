@@ -65,6 +65,7 @@ class PoolSizeRoutesTest {
             val weekly = size.accounts.first().usage.single()
             assertEquals(.2, weekly.outsideUtilization); assertEquals(40_000_000, weekly.outsideApiMicros); assertEquals(100_000_000, weekly.remainingApiMicros)
             assertEquals(40_000_000, size.outsideWeeklyApiMicros)
+            assertEquals(1, size.outsideUnknownAccounts, "account-2 has no split: the outside figure is a floor")
             assertEquals(20_000_000, size.models.single().cacheReadApiMicros, "Cache reads are priced apart")
             assertEquals(49_000_000, size.models.single().apiEquivalentMicros)
             assertEquals(true, sdk.savePacingSettings(PacingSettingsView(observationOnly = true)).autoPoolSize, "Omitting autoPoolSize keeps it")
@@ -93,7 +94,7 @@ class PoolSizeRoutesTest {
             assertTrue(page.contains("bound by seven_day")); assertTrue(page.contains("fewer than three samples"))
             assertTrue(page.contains("Subscription capacity: $28.57 a day in API-equivalent"), "The capacity leads the page")
             assertTrue(page.contains("1 account that can serve is not learned yet"))
-            assertTrue(page.contains("outside 20% ($40.00)")); assertTrue(page.contains("$40.00 in API-equivalent"))
+            assertTrue(page.contains("outside 20% ($40.00)")); assertTrue(page.contains("$40.00 in API-equivalent")); assertTrue(page.contains("unknown on 1 of 2 accounts"))
             assertTrue(page.contains("Last seven days by model"))
             assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/capacity/pool-size") { header(HttpHeaders.Cookie, "teamcode_session=member") }.status)
             suspend fun form(path: String, body: String) = client.post(path) {

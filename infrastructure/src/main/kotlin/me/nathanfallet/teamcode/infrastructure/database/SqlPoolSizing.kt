@@ -85,7 +85,7 @@ internal fun readPoolSizingInputs(teamId: String, now: Long): PoolSizingInputs {
                 .orderBy(QuotaHistory.observedAt to SortOrder.DESC).limit(HISTORY_ROWS) // past the bound, keep the newest readings
                 .map { QuotaSample(it[QuotaHistory.utilization], it[QuotaHistory.observedAt], it[QuotaHistory.resetsAt]) }.asReversed()
             val capacity = estimator.estimate(window, history, costs, now)
-            capacity to splitter.split(window, history, costs, capacity.fullWindowMicros, now)
+            capacity to splitter.split(window, history, costs, capacity.capacityMicros, now)
         }
     }
     val capacities = learned.mapValues { (_, windows) -> windows.map { it.first } }

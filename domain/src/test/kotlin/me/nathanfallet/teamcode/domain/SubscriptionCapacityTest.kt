@@ -71,8 +71,8 @@ class SubscriptionCapacityTest {
         val costs = hours(weekStart, 12_000_000)
         val capacity = EstimateWindowCapacityUseCase().estimate("seven_day", readings, costs, now)
         assertEquals(11, capacity.samples)
-        assertEquals(1_000_000_000, capacity.fullWindowMicros, "The upper quartile keeps the clean pairs")
-        val split = SplitWindowUsageUseCase().split("seven_day", readings, costs, capacity.fullWindowMicros, now)!!
+        assertEquals(1_000_000_000, capacity.capacityMicros, "The upper quartile keeps the clean pairs")
+        val split = SplitWindowUsageUseCase().split("seven_day", readings, costs, capacity.capacityMicros, now)!!
         assertEquals(.66, split.teamCodeShare!!, 1e-9)
         assertEquals(.24, split.outsideShare!!, 1e-9)
         assertEquals(240_000_000, split.outsideMicros)
@@ -131,6 +131,12 @@ class SubscriptionCapacityTest {
         assertEquals(PricedCost(4_000_000L, 5_000_000L, 20_000_000L, 20_000_000L), priced.cost)
         assertEquals(103_000_000L, priced.tokens.allTokens)
         assertNull(mix.models.single { it.provider == "codex" }.cost, "An unpriced model has no cost, and no part in the conversion")
+        assertEquals(1_000_000L, mix.models.single { it.provider == "codex" }.unpricedTokens)
+        // A price that starts on day 2 prices day 2 only: the model keeps a cost, and day 1's tokens are counted apart.
+        val late = TokenMix.of(ApiPriceTable(listOf(opus.copy(effectiveFromDay = 2))), usage)
+        assertEquals(PricedCost(2_000_000L, 2_500_000L, 10_000_000L, 10_000_000L), late.models.first().cost)
+        assertEquals(51_500_000L, late.models.first().unpricedTokens)
+        assertEquals(51.5 / 24.5, late.tokensPerMicro!!, 1e-9, "Only priced days convert")
         assertEquals(103.0 / 49, mix.tokensPerMicro!!, 1e-9)
         val report = PoolSizeReport(false, 0, null, null, 0, false,
             PoolSizeEstimate(0, null, emptyList(), null, capacityDailyMicros = 300_000_000), null, emptyList(), emptyMap(), mix = mix)
@@ -140,9 +146,11 @@ class SubscriptionCapacityTest {
 
     @Test fun outsideUseAddsUpOverTheWeeklyWindowsThatKnowIt() {
         fun split(window: String, outside: Long?) = WindowUsageSplit(window, 0, now, weekReset, .5, 1, .1, outside?.let { .1 }, outside, 1)
-        val report = PoolSizeReport(false, 0, null, null, 0, false, PoolSizeEstimate(0, null, emptyList(), null), null, emptyList(), emptyMap(),
+        val shares = listOf("a", "b", "c", "d").map { AccountPoolShare(it, PoolContribution.COUNTED, 0) }
+        val report = PoolSizeReport(false, 0, null, null, 0, false, PoolSizeEstimate(0, null, shares, null), null, emptyList(), emptyMap(),
             usage = mapOf("a" to listOf(split("five_hour", 7), split("seven_day", 100)), "b" to listOf(split("seven_day", 50)), "c" to listOf(split("seven_day", null))))
         assertEquals(150L, report.outsideWeeklyMicros, "Weekly windows only; unknown ones are left out")
+        assertEquals(2, report.outsideUnknownAccounts, "c is not learned and d has no reading: the sum is a floor")
         assertNull(report.copy(usage = mapOf("c" to listOf(split("seven_day", null)))).outsideWeeklyMicros)
     }
 }

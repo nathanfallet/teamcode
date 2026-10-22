@@ -120,32 +120,38 @@ data class PricedCost(val inputMicros: Long = 0, val cacheWriteMicros: Long = 0,
 /** Every token of [this] usage, cached or not: what "tokens" means when a capacity is converted from dollars. */
 val TokenUsage.allTokens: Long get() = input + cacheRead + cacheCreation + output
 
-/** One model's tokens over the look-back and, when every day of it is priced, their API-equivalent by token type. */
-data class ModelUsage(val provider: String, val model: String, val tokens: TokenUsage, val cost: PricedCost?)
+/**
+ * One model's tokens over the look-back and the API-equivalent of its priced days by token type; [cost] is null when no
+ * day is priced, and [unpricedTokens] counts the tokens of the days without a price.
+ */
+data class ModelUsage(val provider: String, val model: String, val tokens: TokenUsage, val cost: PricedCost?, val unpricedTokens: Long = 0)
 
 /**
  * The team's model mix over the last seven days of the ledger. [tokensPerMicro] converts a capacity in API-equivalent
- * into tokens at that mix (every token type, cache reads included, over priced models only); null without priced traffic.
+ * into tokens at that mix (every token type, cache reads included, over priced days only); null without priced traffic.
  * A capacity in tokens therefore moves with the mix: the same window holds about 20 times more cache reads than
  * uncached input tokens, which is why the capacity is learned in API-equivalent and only shown in tokens.
  */
 data class TokenMix(val models: List<ModelUsage>, val tokensPerMicro: Double?) {
     companion object {
         fun of(prices: ApiPriceTable, usage: List<PricedTokens>): TokenMix {
+            var pricedTokens = 0L
+            var pricedMicros = 0L
             val models = usage.groupBy { it.provider to it.model }.map { (key, rows) ->
                 var tokens = TokenUsage()
-                var cost: PricedCost? = PricedCost()
+                var cost: PricedCost? = null
+                var unpriced = 0L
                 for (row in rows) {
                     tokens = TokenUsage(tokens.input + row.tokens.input, tokens.output + row.tokens.output,
                         tokens.cacheRead + row.tokens.cacheRead, tokens.cacheCreation + row.tokens.cacheCreation)
                     val priced = prices.costOf(row.provider, row.model, row.day, row.tokens)
-                    cost = if (priced == null) { if (row.tokens.allTokens > 0) null else cost } else cost?.plus(priced)
+                    if (priced == null) { unpriced += row.tokens.allTokens; continue }
+                    cost = (cost ?: PricedCost()) + priced
+                    pricedTokens += row.tokens.allTokens; pricedMicros += priced.totalMicros
                 }
-                ModelUsage(key.first, key.second, tokens, cost)
+                ModelUsage(key.first, key.second, tokens, cost, unpriced)
             }.sortedWith(compareByDescending<ModelUsage> { it.cost?.totalMicros ?: -1L }.thenBy { it.provider }.thenBy { it.model })
-            val priced = models.filter { it.cost != null }
-            val micros = priced.sumOf { it.cost!!.totalMicros }
-            return TokenMix(models, if (micros > 0) priced.sumOf { it.tokens.allTokens }.toDouble() / micros else null)
+            return TokenMix(models, if (pricedMicros > 0) pricedTokens.toDouble() / pricedMicros else null)
         }
     }
 }

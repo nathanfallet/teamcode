@@ -12,8 +12,10 @@ data class HourCost(val hourNumber: Long, val micros: Long, val unpriced: Boolea
 /**
  * The learned full capacity of one shared window of one account, in API-equivalent micro-dollars: what the whole
  * window (0 to 100%) is worth at API prices. Null below [MIN_CAPACITY_SAMPLES] samples; [samples] says how many exist.
+ * [fullWindowMicros] is the median of the samples, what the automatic pool budget (admission) multiplies;
+ * [capacityMicros] their upper quartile ([CAPACITY_QUANTILE]), what the capacity and the outside-use split report.
  */
-data class WindowCapacity(val window: String, val fullWindowMicros: Long?, val samples: Int)
+data class WindowCapacity(val window: String, val fullWindowMicros: Long?, val samples: Int, val capacityMicros: Long? = fullWindowMicros)
 
 const val MIN_CAPACITY_SAMPLES = 3
 /** A utilization rise smaller than this is mostly rounding (providers report whole points). */
@@ -34,9 +36,11 @@ private const val HOUR_MILLIS = 3_600_000L
  * covers an unpriced model, or no traffic at all (the subscription was used outside TeamCode), is no sample.
  *
  * The provider meters every use of the subscription, TeamCode's or not, while the cost only counts TeamCode's: traffic
- * outside TeamCode adds points without cost, so each sample is a **lower bound** of the window's capacity. The estimate
- * is therefore the upper quartile of the samples of the last seven days ([CAPACITY_QUANTILE]), not their median: a
- * median is pulled down as soon as half the pairs overlap outside use, the upper quartile only when three quarters do.
+ * outside TeamCode adds points without cost, so a sample is mostly a **lower bound** of the window's capacity (whole
+ * points and hourly buckets also move it either way). Two figures come out of the last seven days' samples: the median
+ * ([WindowCapacity.fullWindowMicros]), unchanged for admission, which stays conservative against noise that inflates a
+ * sample; and the upper quartile ([WindowCapacity.capacityMicros], [CAPACITY_QUANTILE]) for the reported capacity, which
+ * a median would pull down as soon as half the pairs overlap outside use, the upper quartile only when three quarters do.
  */
 class EstimateWindowCapacityUseCase {
     fun estimate(window: String, history: List<QuotaSample>, hours: List<HourCost>, now: Long): WindowCapacity {
@@ -54,15 +58,16 @@ class EstimateWindowCapacityUseCase {
                     anchor = reading
                 }
             }
-        val estimate = if (samples.size < MIN_CAPACITY_SAMPLES) null else samples.sorted().let { sorted ->
-            // Nearest rank: with three samples this is the largest, with eight the sixth.
-            sorted[(kotlin.math.ceil(CAPACITY_QUANTILE * sorted.size).toInt() - 1).coerceIn(0, sorted.size - 1)]
-        }
-        return WindowCapacity(window, estimate?.roundToLong(), samples.size)
+        if (samples.size < MIN_CAPACITY_SAMPLES) return WindowCapacity(window, null, samples.size, null)
+        val sorted = samples.sorted()
+        val median = if (sorted.size % 2 == 1) sorted[sorted.size / 2] else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2
+        // Nearest rank: with three samples this is the largest, with eight the sixth.
+        val upper = sorted[(kotlin.math.ceil(CAPACITY_QUANTILE * sorted.size).toInt() - 1).coerceIn(0, sorted.size - 1)]
+        return WindowCapacity(window, median.roundToLong(), samples.size, upper.roundToLong())
     }
 }
 
-/** The quantile of the samples kept as a window's capacity: samples are lower bounds (see [EstimateWindowCapacityUseCase]). */
+/** The quantile of the samples reported as a window's capacity: samples are mostly lower bounds (see [EstimateWindowCapacityUseCase]). */
 const val CAPACITY_QUANTILE = .75
 
 /** The API-equivalent of TeamCode's traffic between [from] and [to], hours prorated; null when an hour holds an unpriced model. */
@@ -82,7 +87,9 @@ internal fun pricedBetween(costs: Map<Long, HourCost>, from: Long, to: Long): Do
 /**
  * What one account's current window has consumed since it opened, split between TeamCode and everything else.
  * [observedShare] is the provider's reading (0.0 to 1.0), [teamCodeMicros] the API-equivalent TeamCode settled on this
- * account since [sinceMillis] (the window's opening: its reset minus its length). With a learned capacity,
+ * account since [sinceMillis] (the window's opening: its reset minus its length), up to the reading at [observedAtMillis]
+ * (hours prorated, so accurate to the hour; tokens settled after the reading and hours before the raw ledger existed
+ * count as outside). With a learned capacity ([WindowCapacity.capacityMicros]),
  * [teamCodeShare] = [teamCodeMicros] ÷ capacity, [outsideShare] = observed − TeamCode (never negative) is the use of the
  * subscription outside TeamCode, worth [outsideMicros], and [remainingMicros] = (1 − observed) × capacity is what is left
  * of the window. Without a capacity, or with an unpriced model in the window, those are null: unknown, never guessed.
@@ -132,14 +139,14 @@ data class AccountPoolShare(
 )
 
 /**
- * An account's full daily capacity in API-equivalent micro-dollars, independent of what it has used: the smaller of a
+ * An account's full daily capacity in API-equivalent micro-dollars ([WindowCapacity.capacityMicros]), independent of what it has used: the smaller of a
  * day of five-hour windows (C5 × 24 / 5) and a seventh of its weekly window (C7 / 7), over the shared windows it
  * reports ([reported]). Null when it reports none or one of them has no estimate: unknown, never guessed.
  */
 fun dailyCapacity(reported: Collection<String>, capacities: Map<String, WindowCapacity>): Long? {
     val windows = reported.filter { it in SHARED_CAPACITY_WINDOWS }.distinct().ifEmpty { return null }
     return windows.minOf { window ->
-        val full = capacities[window]?.fullWindowMicros ?: return null
+        val full = capacities[window]?.capacityMicros ?: return null
         if (window == "five_hour") full * 24.0 / 5 else full / 7.0
     }.roundToLong()
 }
@@ -280,9 +287,13 @@ data class PoolSizeReport(
 ) {
     /** [PoolSizeEstimate.capacityDailyMicros] in tokens at the team's mix; null without priced traffic. */
     val capacityDailyTokens: Long? get() = mix.tokensPerMicro?.let { (estimate.capacityDailyMicros * it).roundToLong() }
-    /** What the accounts' current weekly windows used outside TeamCode, in API-equivalent; null when no account knows it. */
-    val outsideWeeklyMicros: Long? get() = usage.values.flatten().filter { it.window == "seven_day" }.mapNotNull { it.outsideMicros }
-        .takeIf { it.isNotEmpty() }?.sum()
+    /**
+     * What the accounts' current weekly windows used outside TeamCode, in API-equivalent, over the accounts that know it;
+     * null when none does. [outsideUnknownAccounts] counts the home pool accounts left out, so with a non-zero count it is a floor.
+     */
+    val outsideWeeklyMicros: Long? get() = weeklyOutside().mapNotNull { it }.takeIf { it.isNotEmpty() }?.sum()
+    val outsideUnknownAccounts: Int get() = estimate.accounts.count { usage[it.accountId].orEmpty().firstOrNull { split -> split.window == "seven_day" }?.outsideMicros == null }
+    private fun weeklyOutside() = estimate.accounts.map { usage[it.accountId].orEmpty().firstOrNull { split -> split.window == "seven_day" }?.outsideMicros }
 }
 
 interface PoolSizingService {

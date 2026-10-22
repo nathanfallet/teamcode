@@ -39,7 +39,7 @@ data class TokenUsageRowView(
     val day: String, val memberId: String, val username: String, val runId: String? = null, val provider: String, val model: String,
     val requests: Long, val unmeteredRequests: Long, val inputTokens: Long, val cacheCreationTokens: Long, val cacheReadTokens: Long, val outputTokens: Long,
     /** The four sums priced with the team's API price table for that day, in micro-dollars; null when no price covers the model. */
-    val apiEquivalentMicros: Long? = null,
+    val apiEquivalentMicros: Long? = null, val unpricedTokens: Long = 0,
 )
 
 @Serializable
@@ -60,9 +60,13 @@ data class ApiPriceView(
 @Serializable
 data class ApiPriceTableView(val prices: List<ApiPriceView>)
 
-/** A window's learned full capacity in API-equivalent micro-dollars; null below three samples. */
+/**
+ * A window's learned full capacity in API-equivalent micro-dollars; null below three samples. [fullWindowApiMicros] is
+ * the median of the samples (what the automatic pool budget uses), [capacityApiMicros] their upper quartile (the
+ * reported capacity: use outside TeamCode only lowers a sample).
+ */
 @Serializable
-data class WindowCapacityView(val window: String, val fullWindowApiMicros: Long? = null, val samples: Int)
+data class WindowCapacityView(val window: String, val fullWindowApiMicros: Long? = null, val samples: Int, val capacityApiMicros: Long? = null)
 
 /**
  * One current window of an account, split between TeamCode and outside use since it opened ([sinceMillis]).
@@ -99,7 +103,7 @@ data class PoolSizeAccountView(
 data class ModelUsageView(
     val provider: String, val model: String, val inputTokens: Long, val cacheCreationTokens: Long, val cacheReadTokens: Long, val outputTokens: Long,
     val inputApiMicros: Long? = null, val cacheWriteApiMicros: Long? = null, val cacheReadApiMicros: Long? = null, val outputApiMicros: Long? = null,
-    val apiEquivalentMicros: Long? = null,
+    val apiEquivalentMicros: Long? = null, val unpricedTokens: Long = 0,
 )
 
 /**
@@ -111,8 +115,9 @@ data class ModelUsageView(
  * Capacity, independent of current use: [capacityDailyApiMicros] sums the full daily capacity of the accounts that can
  * serve and whose capacity is known; [capacityUnknownAccounts] counts those left out, so with a non-zero count it is a
  * floor. [capacityDailyTokens] converts it at the team's seven-day mix ([tokensPerApiMicro], cache reads included).
- * [outsideWeeklyApiMicros] is what the accounts' current weekly windows used outside TeamCode. [models] is the
- * seven-day mix by model, priced by token type.
+ * [outsideWeeklyApiMicros] is what the accounts' current weekly windows used outside TeamCode, over the accounts that know
+ * it; [outsideUnknownAccounts] counts the others. [models] is the seven-day mix by model, priced by token type (costs
+ * over the priced days, [ModelUsageView.unpricedTokens] the tokens of days without a price).
  */
 @Serializable
 data class PoolSizeView(
@@ -121,5 +126,6 @@ data class PoolSizeView(
     val reason: String? = null, val creditsPerApiMicro: Double? = null, val unpricedModels: List<String> = emptyList(),
     val accounts: List<PoolSizeAccountView> = emptyList(),
     val capacityDailyApiMicros: Long = 0, val capacityUnknownAccounts: Int = 0, val capacityDailyTokens: Long? = null,
-    val tokensPerApiMicro: Double? = null, val outsideWeeklyApiMicros: Long? = null, val models: List<ModelUsageView> = emptyList(),
+    val tokensPerApiMicro: Double? = null, val outsideWeeklyApiMicros: Long? = null, val outsideUnknownAccounts: Int = 0,
+    val models: List<ModelUsageView> = emptyList(),
 )
