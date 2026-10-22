@@ -22,4 +22,6 @@ allprojects {
     project.ext.set("developer.email", "contact@nathanfallet.me")
     project.ext.set("developer.url", "https://www.nathanfallet.me")
     project.ext.set("scm.url", "https://github.com/nathanfallet/teamcode.git")
+    // Two test JVMs per module; with org.gradle.parallel, modules also test side by side.
+    tasks.withType<Test>().configureEach { maxParallelForks = 2 }
 }
