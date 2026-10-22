@@ -9,7 +9,9 @@ import kotlin.time.Clock
 
 /** One bounded scheduled attempt. Active agent sessions defer only the service restart, never the selection or an agent. */
 internal class AutomaticUpdateRunner(private val policy: AutomaticUpdateStore, private val platform: ServicePlatform,
-    private val disabled: Boolean = false, private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() }) {
+    private val disabled: Boolean = false, private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    /** Runs inside an enabled attempt, under the worker lock and deadline, before the release check. */
+    private val prepare: suspend () -> Unit = {}) {
     suspend fun run(fetch: suspend () -> ReleaseCheck?, install: suspend (ReleaseCheck, AutomaticUpdateSettings) -> InstalledVersion?): AutomaticUpdateResult? {
         if (disabled || platform.userId == "0") return null
         val settings = policy.settings()?.takeIf { it.enabled } ?: return null
@@ -21,6 +23,7 @@ internal class AutomaticUpdateRunner(private val policy: AutomaticUpdateStore, p
             policy.record(AutomaticUpdateResult(attemptedAtMillis = started, outcome = "STARTED"))
             val result = try {
                 withTimeoutOrNull(15 * 60_000L) {
+                    prepare()
                     val candidate = fetch()
                     if (candidate == null || !candidate.updateAvailable || '-' in candidate.release.manifest.version)
                         AutomaticUpdateResult(attemptedAtMillis = started, outcome = "NO_UPDATE")

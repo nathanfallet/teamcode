@@ -39,7 +39,10 @@ internal class InstallationOperations(private val store: InstallationStore, priv
                 val verified = verifier.verify(metadata.manifest, metadata.signature)
                 if (candidate != null && verified.manifest.version != candidate) throw CliOperationException("release_version_mismatch")
                 val before = store.state()
-                if (!allowDowngrade && before != null && ReleaseVersion.parse(verified.manifest.version) <= ReleaseVersion.parse(before.current.version)) return null
+                if (!allowDowngrade && before != null && ReleaseVersion.parse(verified.manifest.version) <= ReleaseVersion.parse(before.current.version)) {
+                    applyPendingRestart()
+                    return null
+                }
                 val apiVersion = serverApiVersion()
                 val asset = verified.manifest.assets[store.paths.target] ?: throw CliOperationException("release_target_missing")
                 val selected = store.stage(metadata.manifest, metadata.signature) { destination ->
@@ -88,13 +91,17 @@ internal class InstallationOperations(private val store: InstallationStore, priv
             if (pending.restartService) store.lock(exclusive = true).use { store.recoverInterrupted { recoverInstallationService(store, it) } }
             else awaitInstallationLock(store, exclusive = false).use { store.recoverInterrupted() }
         }
-        applyPendingServiceRestartLocked(store, systemServiceControls(store), report)
+    }
+
+    /** Nothing new to select: still apply a restart an earlier selection deferred, if its sessions have ended. */
+    private suspend fun applyPendingRestart() {
+        reportingRestartFailure(store, report) { applyPendingServiceRestartLocked(store, systemServiceControls(store), report) }
     }
 
     private suspend fun activate(version: InstalledVersion, rollback: Boolean): Activation {
         val service = installationService(store, firstInstall = store.state() == null, configuration = configuration)
             ?.takeIf { it.running }?.let { ActivationService(it.settings.config, SystemServiceControl(it.settings)) }
-        return activateInstallation(store, version, rollback, service, systemServiceControls(store))
+        return activateInstallation(store, version, rollback, service, systemServiceControls(store), report = report)
     }
 
     private suspend fun serverApiVersion(): Int {

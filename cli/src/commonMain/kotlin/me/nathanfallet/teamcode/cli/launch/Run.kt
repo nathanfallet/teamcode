@@ -51,9 +51,10 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(report) }
             try { runAgent() } finally {
                 try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally {
-                    lease?.close()
-                    // The last session to end restarts the service on the version selected while it ran.
-                    lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
+                    try { lease?.close() } finally {
+                        // The last session to end restarts the service on the version selected while it ran.
+                        lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
+                    }
                 }
             }
         }

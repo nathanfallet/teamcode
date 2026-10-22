@@ -21,12 +21,14 @@ class DeferredActivationTest {
         val events = mutableListOf<String>()
         var running = true
         var failStartOn: String? = null
+        var timeOutOn: String? = null
         override suspend fun running() = running
         override suspend fun serving(version: String) = serving == version
         override suspend fun stop() { events += "stop" }
         override suspend fun start() { events += "start" }
         override suspend fun await(version: String) {
             if (version == failStartOn) { events += "failed $version"; error("fixture startup failure") }
+            if (version == timeOutOn) { events += "timeout $version"; kotlinx.coroutines.withTimeout(1) { delay(1_000) } }
             serving = version; events += "serving $version"
         }
     }
@@ -176,11 +178,26 @@ class DeferredActivationTest {
             service.events.clear()
             service.failStartOn = second.version
             val messages = mutableListOf<String>()
-            assertEquals(PendingRestart.WAITING, applyPendingServiceRestart(store, controls(service)) { messages += it })
+            assertEquals(PendingRestart.FAILED, applyPendingServiceRestart(store, controls(service)) { messages += it })
             assertEquals(listOf("stop", "start", "failed ${second.version}", "stop", "start", "serving ${first.version}"), service.events)
-            assertEquals(InstallationState(current = first, previous = second), store.state())
+            assertEquals(InstallationState(current = first), store.state(), "The failed newer payload must not become the rollback target")
             assertNull(store.journal())
-            assertTrue(messages.any { "could not restart" in it }, messages.toString())
+            assertNull(store.pendingServiceRestart())
+            assertTrue(messages.any { "could not restart" in it && "TeamCode ${first.version} is selected again" in it }, messages.toString())
+        }
+    }
+
+    @Test fun aServiceStartTimeoutIsReportedInsteadOfCancellingTheSessionExit() = runTest {
+        scratch { store, first, second ->
+            val service = FakeService(first.version)
+            select(store, first, service)
+            store.lock(exclusive = false).use { select(store, second, service) }
+            service.timeOutOn = second.version
+            val messages = mutableListOf<String>()
+            assertEquals(PendingRestart.FAILED, applyPendingServiceRestart(store, controls(service)) { messages += it })
+            assertEquals(first, store.state()?.current)
+            assertEquals(first.version, service.serving)
+            assertTrue(messages.any { "release_service_start_timeout" in it }, messages.toString())
         }
     }
 
@@ -191,14 +208,14 @@ class DeferredActivationTest {
             store.lock(exclusive = false).use { select(store, second, service) }
             service.events.clear()
             service.serving = second.version // e.g. teamcode service restart while the sessions ran
-            assertEquals(PendingRestart.RESTARTED, applyPendingServiceRestart(store, controls(service)) { })
+            assertEquals(PendingRestart.NONE, applyPendingServiceRestart(store, controls(service)) { })
             assertEquals(emptyList(), service.events)
             assertEquals(second, store.serviceRecord()?.version)
             select(store, first, service, rollback = true)
             store.lock(exclusive = false).use { select(store, second, service) }
             service.events.clear()
             service.running = false
-            assertEquals(PendingRestart.RESTARTED, applyPendingServiceRestart(store, controls(service)) { })
+            assertEquals(PendingRestart.NONE, applyPendingServiceRestart(store, controls(service)) { })
             assertEquals(emptyList(), service.events, "A stopped service starts on the selection whenever it starts again")
             assertNull(store.serviceRecord())
         }

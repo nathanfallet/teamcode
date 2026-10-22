@@ -18,9 +18,9 @@ internal suspend fun automaticUpdateCommand(store: InstallationStore, operation:
     val platform = servicePlatform()
     val schedule = AutomaticUpdateScheduleImpl()
     if (execute) {
-        // A selection made while agent sessions ran restarts the service once they have all ended.
-        applyPendingServiceRestart(store) { echo(it) }
-        val result = AutomaticUpdateRunner(policy, platform, !environment("TEAMCODE_DISABLE_AUTOUPDATE").isNullOrEmpty()).run(
+        val result = AutomaticUpdateRunner(policy, platform, !environment("TEAMCODE_DISABLE_AUTOUPDATE").isNullOrEmpty(),
+            // A selection made while agent sessions ran restarts the service once they have all ended.
+            prepare = { applyPendingServiceRestart(store) { echo(it) } }).run(
             fetch = {
                 PeriodicReleaseCheck(store.paths, VERSION).check(forInstallation = true) {
                     ReleaseClient { configure -> HttpClient { configure(this) } }.use { CheckRelease(it, currentVersion = VERSION)() }

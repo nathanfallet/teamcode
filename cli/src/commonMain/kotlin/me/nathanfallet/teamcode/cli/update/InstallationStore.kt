@@ -178,8 +178,10 @@ internal class InstallationStore(val paths: InstallationPaths, private val fs: F
         validateFile(paths.binary(version), version)
     }
 
-    fun serviceRecord(): ServiceRecord? = if (fs.metadataOrNull(paths.serviceRecord) == null) null else
-        decode<ServiceRecord>(paths.serviceRecord).also { if (it.version.target != paths.target) throw failure("release_installation_invalid") }
+    /** Informational: an unreadable record is treated as absent and rewritten by the next service (re)start. */
+    fun serviceRecord(): ServiceRecord? = if (fs.metadataOrNull(paths.serviceRecord) == null) null else try {
+        decode<ServiceRecord>(paths.serviceRecord).takeIf { it.version.target == paths.target }
+    } catch (_: CliOperationException) { null }
 
     fun saveServiceRecord(record: ServiceRecord) {
         writePrivateFile(paths.serviceRecord.toString(), Serialization.json.encodeToString(ServiceRecord.serializer(), record))
@@ -248,7 +250,8 @@ internal class InstallationStore(val paths: InstallationPaths, private val fs: F
         validate(after.current)
         val fallback = if (record.version == after.current) after else try {
             validate(record.version)
-            InstallationState(current = record.version, previous = after.current)
+            // The newer payload just failed to serve: never offer it as the rollback target.
+            InstallationState(current = record.version, previous = after.previous?.takeIf { it != record.version })
         } catch (_: CliOperationException) { after }
         writePrivateFile(paths.journal.toString(), Serialization.json.encodeToString(InstallationJournal.serializer(),
             InstallationJournal(before = fallback, after = after, serviceConfig = record.serviceConfig, restartService = true)))
@@ -273,7 +276,7 @@ internal class InstallationStore(val paths: InstallationPaths, private val fs: F
     }
 
     /**
-     * Delete payloads that are neither selected, the rollback target nor the service's payload. Caller holds the writer
+     * Delete payloads that are neither selected, the rollback target nor the service's payload. Caller MUST hold the writer
      * lock and the exclusive activity lock: no agent session of any version is running, so no session executes a payload
      * removed here. A directory is first renamed aside, so a failure never leaves a half-deleted `versions/` entry
      * (Windows refuses to rename a directory whose executable still runs; that payload is then simply kept).
@@ -295,7 +298,8 @@ internal class InstallationStore(val paths: InstallationPaths, private val fs: F
             try { fs.deleteRecursively(entry) } catch (_: Exception) { /* Retried by the next collection. */ }
         }
         if (fs.metadataOrNull(paths.sessions) != null) for (file in fs.list(paths.sessions)) {
-            if (SESSION_FILE.matches(file.name)) try { fs.delete(file) } catch (_: Exception) { /* Still open: kept. */ }
+            // Only stale records remain under the exclusive activity lock (POSIX would unlink even a live one).
+            if (SESSION_FILE.matches(file.name)) try { fs.delete(file) } catch (_: Exception) { /* Windows: still open, kept. */ }
         }
         return removed
     }

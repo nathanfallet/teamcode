@@ -1,7 +1,10 @@
 package me.nathanfallet.teamcode.cli.update
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.config.ConfigStore
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
@@ -53,7 +56,7 @@ internal fun systemServiceControls(store: InstallationStore): ServiceControls = 
 /** The running managed service an activation must keep consistent with the selection. */
 internal class ActivationService(val config: String, val control: ManagedServiceControl)
 
-internal enum class ServiceOutcome { NONE, RESTARTED, DEFERRED }
+internal enum class ServiceOutcome { NONE, RESTARTED, DEFERRED, FAILED }
 
 internal data class Activation(
     val version: InstalledVersion,
@@ -65,7 +68,7 @@ internal data class Activation(
     val serviceVersion: InstalledVersion? = null,
 )
 
-internal enum class PendingRestart { NONE, RESTARTED, WAITING }
+internal enum class PendingRestart { NONE, RESTARTED, WAITING, FAILED }
 
 internal const val INSTALLATION_LOCK_WAIT_MILLIS = 60_000L
 
@@ -86,7 +89,8 @@ internal suspend fun awaitInstallationLock(store: InstallationStore, exclusive: 
  * service, which those sessions depend on, restarts when the last lease is released ([applyPendingServiceRestart]).
  */
 internal suspend fun activateInstallation(store: InstallationStore, version: InstalledVersion, rollback: Boolean,
-    service: ActivationService?, controls: ServiceControls, waitMillis: Long = INSTALLATION_LOCK_WAIT_MILLIS): Activation {
+    service: ActivationService?, controls: ServiceControls, waitMillis: Long = INSTALLATION_LOCK_WAIT_MILLIS,
+    report: (String) -> Unit = {}): Activation {
     val before = store.state()
     if (before?.current == version) {
         // Nothing to select or restart; still say whether an earlier selection waits for sessions to end.
@@ -106,9 +110,11 @@ internal suspend fun activateInstallation(store: InstallationStore, version: Ins
                     control.await(before?.current?.version ?: throw CliOperationException("release_service_recovery_failed"))
                 }
             })
-        if (service != null) store.saveServiceRecord(ServiceRecord(serviceConfig = service.config, version = version))
-        else store.clearServiceRecord()
-        store.collectGarbage()
+        try {
+            if (service != null) store.saveServiceRecord(ServiceRecord(serviceConfig = service.config, version = version))
+            else store.clearServiceRecord()
+        } catch (_: Exception) { /* A stale record only causes a needless check later: serving() finds the version. */ }
+        collectGarbageQuietly(store)
         return Activation(version, before?.current, if (service != null) ServiceOutcome.RESTARTED else ServiceOutcome.NONE)
     }
     val sessions = store.liveSessions()
@@ -120,12 +126,14 @@ internal suspend fun activateInstallation(store: InstallationStore, version: Ins
     }
     if (service == null) return Activation(version, before?.current, ServiceOutcome.NONE, sessions)
     // The last session may have ended meanwhile; its exit then found no pending restart yet.
-    val outcome = applyPendingServiceRestartLocked(store, controls)
+    val outcome = reportingRestartFailure(store, report) { applyPendingServiceRestartLocked(store, controls, report) }
     return when (outcome) {
         PendingRestart.WAITING -> Activation(version, before?.current, ServiceOutcome.DEFERRED, sessions, store.serviceRecord()?.version)
         PendingRestart.RESTARTED -> Activation(version, before?.current, ServiceOutcome.RESTARTED, sessions)
         // For example a rollback, while sessions run, to the payload the service never left.
         PendingRestart.NONE -> Activation(version, before?.current, ServiceOutcome.NONE, sessions)
+        // The service's payload is selected again; the failure was reported.
+        PendingRestart.FAILED -> Activation(store.state()?.current ?: version, before?.current, ServiceOutcome.FAILED, sessions)
     }
 }
 
@@ -138,18 +146,21 @@ internal suspend fun applyPendingServiceRestartLocked(store: InstallationStore, 
         val record = store.pendingServiceRestart() ?: return PendingRestart.NONE
         val current = store.state()?.current ?: return PendingRestart.NONE
         val control = controls(record.serviceConfig)
-        if (control == null || !control.running()) {
+        val outcome = if (control == null || !control.running()) {
             // A stopped or removed service starts on the selection whenever it starts again.
             store.clearServiceRecord()
+            PendingRestart.NONE
         } else if (control.serving(current.version)) {
             store.saveServiceRecord(record.copy(version = current))
+            PendingRestart.NONE
         } else {
             report("Restarting the local TeamCode service on ${current.version}: no agent session uses ${record.version.version} any more.")
             store.restartService(record, prepare = { control.stop() }, start = { control.start(); control.await(current.version) },
                 recover = { fallback -> control.stop(); control.start(); control.await(fallback.version) })
+            PendingRestart.RESTARTED
         }
-        store.collectGarbage()
-        return PendingRestart.RESTARTED
+        collectGarbageQuietly(store)
+        return outcome
     }
 }
 
@@ -158,16 +169,36 @@ internal suspend fun applyPendingServiceRestartLocked(store: InstallationStore, 
  * either: an active installer applies it itself, and the last session to end retries. Failures are reported, not thrown.
  */
 internal suspend fun applyPendingServiceRestart(store: InstallationStore, controls: ServiceControls = systemServiceControls(store),
-    report: (String) -> Unit): PendingRestart = try {
+    report: (String) -> Unit): PendingRestart = reportingRestartFailure(store, report) {
     if (store.journal() == null && store.pendingServiceRestart() == null) PendingRestart.NONE
     else acquireInstallationLock(store.paths.writerLock.toString(), exclusive = true)?.use {
         applyPendingServiceRestartLocked(store, controls, report)
     } ?: PendingRestart.WAITING
-} catch (error: CancellationException) { throw error }
-catch (error: Exception) {
-    val code = (error as? CliOperationException)?.code ?: "release_service_restart_failed"
-    report("The local TeamCode service could not restart on the selected version ($code); it keeps its previous version. Run $COMMAND_NAME update to retry.")
-    PendingRestart.WAITING
+}
+
+/** A failed deferred restart already restored the service's payload; say so instead of failing the caller (an agent's exit). */
+internal suspend fun reportingRestartFailure(store: InstallationStore, report: (String) -> Unit, block: suspend () -> PendingRestart): PendingRestart = try {
+    block()
+} catch (error: CancellationException) {
+    // A service start timeout is a failure of this attempt, not cancellation of the caller.
+    if (error !is TimeoutCancellationException) throw error
+    currentCoroutineContext().ensureActive()
+    restartFailure(store, "release_service_start_timeout", report)
+} catch (error: Exception) {
+    restartFailure(store, (error as? CliOperationException)?.code ?: "release_service_restart_failed", report)
+}
+
+private fun restartFailure(store: InstallationStore, code: String, report: (String) -> Unit): PendingRestart {
+    val selected = try { store.state()?.current?.version } catch (_: Exception) { null }
+    report("The local TeamCode service could not restart on the newly selected version ($code). " +
+        (selected?.let { "TeamCode $it is selected again for the service and new sessions. " } ?: "") +
+        "Run $COMMAND_NAME update to retry.")
+    return PendingRestart.FAILED
+}
+
+/** Collection is a cleanup: it never fails an activation or a restart that already happened. */
+internal fun collectGarbageQuietly(store: InstallationStore) {
+    try { store.collectGarbage() } catch (_: Exception) { /* Retried by the next collection. */ }
 }
 
 /** Held for the complete agent lifetime, including quiet gaps between inference requests. */
@@ -219,6 +250,7 @@ internal fun activationReport(activation: Activation, store: InstallationStore):
             lines += "New sessions and commands use $selected. The local TeamCode service keeps running $running and restarts on $selected when they end."
         }
         ServiceOutcome.NONE -> if (total > 0) { lines += sessions; lines += "New sessions and commands use $selected." }
+        ServiceOutcome.FAILED -> lines[0] = "TeamCode $selected remains selected. Launcher: ${store.paths.launcher}"
     }
     return lines
 }
