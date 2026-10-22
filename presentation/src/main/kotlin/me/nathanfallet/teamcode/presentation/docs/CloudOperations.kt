@@ -94,6 +94,24 @@ private fun ApiCatalog.cloudAdministration() {
             conflict("The cluster changed since it was read, or the name is used (`cluster_conflict`).")
         }
     }
+    get("/api/v1/cloud/clusters/{id}/choices") {
+        operationId = "getCloudClusterChoices"; tag(ApiTags.CLOUD_ADMIN)
+        summary = "What a profile on a cluster can choose from"
+        description = "Read from the cluster's API with its service account: the allowed namespaces (`found` or " +
+            "`missing` with the optional `get` right on `namespaces`, `unknown` without it), the storage classes with " +
+            "their reclaim policy and the default marked, and the names of the `kubernetes.io/dockerconfigjson` secrets " +
+            "of the namespace, read as metadata only (the optional `list` right on `secrets`); secret contents are never " +
+            "read. A list the service account may not read is `forbidden`, one the cluster could not answer " +
+            "`unavailable`; neither is an error. Creating or publishing a profile still checks every value. Administrators only."
+        parameters {
+            pathId("id", "The cluster's identifier.")
+            queryText("namespace", "An allowed namespace to read storage classes and secrets for; the first allowed one otherwise.")
+        }
+        responses {
+            ok<CloudClusterChoicesView>("The choices.")
+            notFound("No such cluster (`cluster_not_found`).")
+        }
+    }
     get("/api/v1/cloud/profiles") {
         operationId = "listCloudProfiles"; tag(ApiTags.CLOUD_ADMIN)
         summary = "List the session profiles"

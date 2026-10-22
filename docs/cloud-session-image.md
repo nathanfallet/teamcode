@@ -4,7 +4,7 @@ A [cloud session](cloud-sessions.md) runs in a pod built from two images:
 
 | Setting | Where | What it is |
 | --- | --- | --- |
-| Session image | The profile's `image` (`/api/v1/cloud/profiles`), or a session override allowed by `allowedImageOverrides` | The image of the pod's two containers: the runner (`session`) and the agent (`agent`). Your toolchain lives here. |
+| Session image | The profile's `image` (**Dashboard → Cloud sessions → Profiles**, or `/api/v1/cloud/profiles`), or a session override allowed by `allowedImageOverrides` | The image of the pod's two containers: the runner (`session`) and the agent (`agent`). Your toolchain lives here. |
 | Runner image and runner binary | **Dashboard → Cloud sessions** | An image holding the `teamcode` Linux binary. An init container copies the binary out of it into the pod before the other containers start. |
 
 [`cloud-session-image/Dockerfile`](cloud-session-image/Dockerfile) is a template for the session image. It installs what TeamCode needs, and leaves one block for your tools. It also puts the `teamcode` binary at `/usr/local/bin/teamcode`, so the same image can serve as the runner image: there is then one image to build, pin and pull.

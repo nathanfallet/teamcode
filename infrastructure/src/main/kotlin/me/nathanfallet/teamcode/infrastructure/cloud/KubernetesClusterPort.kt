@@ -74,7 +74,7 @@ class KubernetesClusterPort(
     private val resolver: (String) -> List<java.net.InetAddress> = { host -> java.net.InetAddress.getAllByName(host).toList() },
     /** Read for every claim; a claim needs neither the runner image nor the callback origin. */
     private val workspaceAccessMode: () -> String = { options().workspaceAccessMode },
-) : ClusterPort, AutoCloseable {
+) : ClusterPort, ClusterDiscoveryPort, AutoCloseable {
 
     private class Client(val fingerprint: String, val connection: ClusterConnection, val http: HttpClient, val loadedAt: Long)
     private val clients = ConcurrentHashMap<String, Client>()
@@ -90,6 +90,31 @@ class KubernetesClusterPort(
             it.obj("metadata")?.obj("annotations")?.str("storageclass.kubernetes.io/is-default-class") == "true"
         }?.let(::storageClass)
     }
+
+    override suspend fun storageClasses(clusterId: String): List<StorageClassChoice> = discovery {
+        list(clusterId, "/apis/storage.k8s.io/v1/storageclasses", null).map { json ->
+            val annotations = json.obj("metadata")?.obj("annotations")
+            StorageClassChoice(json.obj("metadata")?.str("name") ?: "", json.str("reclaimPolicy") ?: "Delete",
+                isDefault = DEFAULT_CLASS_ANNOTATIONS.any { annotations?.str(it) == "true" }, provisioner = json.str("provisioner"))
+        }.filter { it.name.isNotEmpty() }
+    }
+
+    override suspend fun namespaceExists(clusterId: String, namespace: String): Boolean =
+        discovery { get(clusterId, "/api/v1/namespaces/${segment(namespace)}") != null }
+
+    /**
+     * Secrets are listed as `PartialObjectMetadataList`: the API server sends metadata only, never `data`. A server
+     * that cannot answer in that form fails the read (`406`) instead of sending whole secrets. Only names are kept:
+     * annotations may hold a copy of the data (`kubectl.kubernetes.io/last-applied-configuration`) and are dropped.
+     */
+    override suspend fun imagePullSecrets(clusterId: String, namespace: String): List<String> = discovery {
+        list(clusterId, "/api/v1/namespaces/${segment(namespace)}/secrets", null, fieldSelector = "type=kubernetes.io/dockerconfigjson",
+            accept = METADATA_ONLY, expectedKind = "PartialObjectMetadataList").mapNotNull { it.obj("metadata")?.str("name") }
+    }
+
+    /** A refused read is an optional right the service account lacks, not a failure. */
+    private suspend fun <T> discovery(read: suspend () -> T): T = try { read() }
+        catch (error: ClusterApiException) { if (error.status == 401 || error.status == 403) throw ClusterAccessDeniedException() else throw error }
 
     override suspend fun ensureClaim(clusterId: String, request: WorkspaceRequest) {
         val accessMode = workspaceAccessMode()
@@ -284,8 +309,8 @@ class KubernetesClusterPort(
             session?.str("imageID")?.takeIf { it.length <= 512 }, metadata?.get("deletionTimestamp")?.let { it !is JsonNull } == true, reason)
     }
 
-    private suspend fun get(clusterId: String, path: String): JsonObject? {
-        val response = call(clusterId, HttpMethod.Get, path, null)
+    private suspend fun get(clusterId: String, path: String, accept: String = JSON): JsonObject? {
+        val response = call(clusterId, HttpMethod.Get, path, null, accept)
         if (response.status == HttpStatusCode.NotFound) return null
         if (!response.status.isSuccess()) throw ClusterApiException(response.status.value)
         return parse(response)
@@ -300,27 +325,30 @@ class KubernetesClusterPort(
         if (!response.status.isSuccess() && response.status != HttpStatusCode.NotFound) throw ClusterApiException(response.status.value)
     }
     /** Every page of a list, at most [MAX_PAGES] pages of [PAGE_SIZE]. */
-    private suspend fun list(clusterId: String, path: String, labelSelector: String?, maxPages: Int = MAX_PAGES): List<JsonObject> {
+    private suspend fun list(clusterId: String, path: String, labelSelector: String?, maxPages: Int = MAX_PAGES, fieldSelector: String? = null,
+                             accept: String = JSON, expectedKind: String? = null): List<JsonObject> {
         val items = mutableListOf<JsonObject>()
         var next: String? = null
         repeat(maxPages) {
             val query = Parameters.build {
-                append("limit", PAGE_SIZE.toString()); labelSelector?.let { append("labelSelector", it) }; next?.let { append("continue", it) }
+                append("limit", PAGE_SIZE.toString()); labelSelector?.let { append("labelSelector", it) }; fieldSelector?.let { append("fieldSelector", it) }
+                next?.let { append("continue", it) }
             }.formUrlEncode()
             // A missing namespace lists nothing; a page vanishing mid-list must not pass for a complete list.
-            val page = get(clusterId, "$path?$query") ?: if (next == null) return items else throw ClusterApiException(404)
+            val page = get(clusterId, "$path?$query", accept) ?: if (next == null) return items else throw ClusterApiException(404)
+            if (expectedKind != null && page.str("kind") != expectedKind) throw ClusterApiException(406)
             page["items"]?.jsonArray?.forEach { items += it.jsonObject }
             next = page.obj("metadata")?.str("continue")?.takeIf { it.isNotEmpty() } ?: return items
         }
         throw ClusterApiException(507) // More objects than one pass may read; refuse rather than act on a partial list.
     }
 
-    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?): HttpResponse {
+    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?, accept: String = JSON): HttpResponse {
         val client = client(clusterId)
         return client.http.request(client.connection.apiUrl.trimEnd('/') + path) {
             this.method = method
             bearerAuth(client.connection.token)
-            accept(ContentType.Application.Json)
+            header(HttpHeaders.Accept, accept)
             if (body != null) { contentType(ContentType.Application.Json); setBody(body.toString()) }
         }
     }
@@ -396,6 +424,10 @@ class KubernetesClusterPort(
         private const val MAX_PAGES = 20
         private const val MAX_RESPONSE_CHARS = 16 * 1024 * 1024
         private val safeReason = Regex("[A-Za-z]{1,64}")
+        private const val JSON = "application/json"
+        /** Metadata only, with no fallback to a full list: the API server answers `406` rather than send secret data. */
+        internal const val METADATA_ONLY = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
+        private val DEFAULT_CLASS_ANNOTATIONS = listOf("storageclass.kubernetes.io/is-default-class", "storageclass.beta.kubernetes.io/is-default-class")
 
         /** A trust manager that accepts only certificates chaining to the given PEM bundle. */
         fun trustManager(pem: String): X509TrustManager {

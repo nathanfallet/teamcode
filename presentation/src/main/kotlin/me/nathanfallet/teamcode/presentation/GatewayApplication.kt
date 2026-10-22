@@ -71,9 +71,10 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         val path = call.request.path()
         if (team != null) {
             if (path.startsWith("/dashboard")) {
-                val live = when (path) {
-                    "/dashboard/forecasts" -> " script-src 'self'; connect-src 'self';"
-                    "/dashboard/cloud" -> " script-src 'self';" // The kubeconfig drop zone only reads a chosen file in the page.
+                val live = when {
+                    path == "/dashboard/forecasts" -> " script-src 'self'; connect-src 'self';"
+                    path == "/dashboard/cloud" -> " script-src 'self';" // The kubeconfig drop zone only reads a chosen file in the page.
+                    path.startsWith("/dashboard/cloud/profiles/") -> " script-src 'self';" // The profile form reloads its cluster's choices on a change.
                     else -> ""
                 }
                 call.response.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none';" + live)
@@ -161,7 +162,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (variants != null && team != null) variantRoutes(variants, publicOrigin)
         if (mcp != null && team != null) mcpGatewayRoutes(mcp, publicOrigin)
         if (mcpAccess != null && team != null) mcpAdminRoutes(mcpAccess, variants, publicOrigin)
-        if (cloudSessions != null && cloudAdmin != null && team != null) cloudRoutes(cloudSessions, cloudAdmin, publicOrigin, cloudRuntime)
+        if (cloudSessions != null && cloudAdmin != null && team != null) cloudRoutes(cloudSessions, cloudAdmin, publicOrigin, cloudRuntime, team)
         if (cloudRunner != null && cloudSessions != null && team != null) cloudRunnerRoutes(cloudRunner)
         if (github != null && team != null) githubRoutes(github, team, publicOrigin)
         if (cloudConversation != null && cloudSessions != null && team != null) {

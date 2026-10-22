@@ -191,4 +191,46 @@ class KubernetesClusterPortTest {
         val port = port { json(responses.removeFirst(), HttpStatusCode.Created) }
         repeat(3) { assertNull(port.reviewToken("c1", "pod-token-0123456789", "teamcode")) }
     }
+
+    @Test fun profileChoicesReadStorageClassesNamespacesAndPullSecretNamesOnly(): Unit = runBlocking {
+        val port = port { request ->
+            when (request.url.encodedPath) {
+                "/apis/storage.k8s.io/v1/storageclasses" -> json("""{"metadata":{},"items":[
+                    {"metadata":{"name":"keep"},"provisioner":"csi.example","reclaimPolicy":"Retain"},
+                    {"metadata":{"name":"standard","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}},"provisioner":"rancher.io/local-path"},
+                    {"metadata":{"name":"legacy","annotations":{"storageclass.beta.kubernetes.io/is-default-class":"true"}},"reclaimPolicy":"Delete"}]}""")
+                "/api/v1/namespaces/teamcode" -> json("""{"metadata":{"name":"teamcode"}}""")
+                "/api/v1/namespaces/teamcode/secrets" -> json("""{"kind":"PartialObjectMetadataList","apiVersion":"meta.k8s.io/v1","metadata":{},"items":[
+                    {"kind":"PartialObjectMetadata","metadata":{"name":"registry","annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{\"data\":{\".dockerconfigjson\":\"c2VjcmV0\"}}"}}},
+                    {"kind":"PartialObjectMetadata","metadata":{"name":"mirror"}}]}""")
+                else -> json("{}", HttpStatusCode.NotFound)
+            }
+        }
+        assertEquals(listOf(StorageClassChoice("keep", "Retain", false, "csi.example"), StorageClassChoice("standard", "Delete", true, "rancher.io/local-path"),
+            StorageClassChoice("legacy", "Delete", true)), port.storageClasses("c1"), "An absent reclaimPolicy is the API default, Delete; both default annotations count")
+        assertTrue(port.namespaceExists("c1", "teamcode"))
+        assertFalse(port.namespaceExists("c1", "gone"))
+        requests.clear()
+        assertEquals(listOf("registry", "mirror"), port.imagePullSecrets("c1", "teamcode"))
+        val request = requests.single()
+        assertEquals(KubernetesClusterPort.METADATA_ONLY, request.headers[HttpHeaders.Accept], "Metadata only, with no fallback to whole secrets")
+        assertEquals("type=kubernetes.io/dockerconfigjson", request.url.parameters["fieldSelector"])
+        assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+    }
+
+    @Test fun pullSecretsAreNeverReadAsWholeSecretsAndAMissingRightIsNotAFailure(): Unit = runBlocking {
+        // A server that ignored the metadata-only request would send data: the list is refused, not parsed.
+        val full = port { json("""{"kind":"SecretList","items":[{"metadata":{"name":"registry"},"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"c2VjcmV0"}}]}""") }
+        assertEquals(406, assertFailsWith<ClusterApiException> { full.imagePullSecrets("c1", "teamcode") }.status)
+        val unsupported = port { json("""{"kind":"Status","code":406}""", HttpStatusCode.NotAcceptable) }
+        assertEquals(406, assertFailsWith<ClusterApiException> { unsupported.imagePullSecrets("c1", "teamcode") }.status)
+        for (status in listOf(HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized)) {
+            val refused = port { json("""{"kind":"Status","message":"secrets is forbidden: User cannot list resource"}""", status) }
+            assertFailsWith<ClusterAccessDeniedException>(status.toString()) { refused.imagePullSecrets("c1", "teamcode") }
+            assertFailsWith<ClusterAccessDeniedException>(status.toString()) { refused.namespaceExists("c1", "teamcode") }
+            assertFailsWith<ClusterAccessDeniedException>(status.toString()) { refused.storageClasses("c1") }
+        }
+        assertEquals(500, assertFailsWith<ClusterApiException> { port { json("{}", HttpStatusCode.InternalServerError) }.storageClasses("c1") }.status)
+        assertFailsWith<IllegalArgumentException> { port { json("{}") }.imagePullSecrets("c1", "../kube-system") }
+    }
 }

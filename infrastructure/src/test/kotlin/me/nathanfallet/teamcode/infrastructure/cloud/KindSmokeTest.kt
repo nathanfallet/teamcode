@@ -51,6 +51,11 @@ class KindSmokeTest {
                 assertEquals(Role.OWNER, principal.member.role, "The bootstrap member is the owner")
 
                 val cluster = admin.saveCluster(principal, null, null, CloudClusterInput("kind", read("api-url"), read("ca.pem") + "\n", read("token"), listOf(namespace), 2, "standard"))
+                // The profile form's choices, read from the real API server with the optional rights of the smoke roles.
+                val choices = admin.choices(principal, cluster.id, namespace)
+                assertEquals(listOf(NamespaceChoice(namespace, NamespaceStatus.FOUND)), choices.namespaces)
+                assertEquals(ClusterListing.Listed(listOf("smoke-registry")), choices.imagePullSecrets, "Registry secrets only, by name, listed as metadata")
+                assertTrue((choices.storageClasses as ClusterListing.Listed).items.any { it.name == "standard" && it.isDefault && !it.keepsVolumes })
                 val profile = admin.saveProfile(principal, null, 0, "smoke", CloudProfileSpec(cluster.id, namespace, read("image"),
                     resources = CloudResources(100, 128), workspaceSizeGibibytes = 1), emptySet())
                 val created = (sessions.create(principal, null, CloudSessionDraft("Smoke", profile.id, null, null, null, mapOf("smoke" to "kind"), null), null) as CloudCreateOutcome.Created).session

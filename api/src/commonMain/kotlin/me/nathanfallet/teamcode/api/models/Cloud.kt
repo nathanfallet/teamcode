@@ -175,6 +175,31 @@ class SaveCloudClusterRequest(
     override fun toString() = "SaveCloudClusterRequest(name=$name, apiUrl=$apiUrl, serviceAccountToken=[REDACTED])"
 }
 
+/** `found` or `missing` when the service account may read the namespace, `unknown` otherwise. */
+@Serializable
+data class CloudNamespaceChoiceView(val name: String, val status: String)
+/** `keepsVolumes` is true for any reclaim policy but `Delete`: a profile on such a class is refused. */
+@Serializable
+data class CloudStorageClassChoiceView(val name: String, val reclaimPolicy: String, val default: Boolean, val keepsVolumes: Boolean, val provisioner: String? = null)
+/** `status` is `listed`, `forbidden` (the service account lacks the optional right) or `unavailable` (the cluster could not be read). */
+@Serializable
+data class CloudStorageClassChoicesView(val status: String, val items: List<CloudStorageClassChoiceView> = emptyList())
+/** Names only, of `kubernetes.io/dockerconfigjson` secrets; `status` as for storage classes. */
+@Serializable
+data class CloudImagePullSecretChoicesView(val status: String, val names: List<String> = emptyList())
+/** What a profile on a cluster can choose from, read from the cluster's API. Publishing still checks every value. */
+@Serializable
+data class CloudClusterChoicesView(
+    val clusterId: String,
+    /** The namespace the storage classes and secrets were read for. */
+    val namespace: String,
+    val namespaces: List<CloudNamespaceChoiceView>,
+    /** The cluster record's default class, used when a profile names none. */
+    val defaultStorageClass: String? = null,
+    val storageClasses: CloudStorageClassChoicesView,
+    val imagePullSecrets: CloudImagePullSecretChoicesView,
+)
+
 /**
  * Persistent administrator settings; the retention and limit fields are required so a partial update cannot reset the others.
  * `pausedRetentionDays = null` keeps paused workspaces indefinitely. The transfer fields are always present in responses;

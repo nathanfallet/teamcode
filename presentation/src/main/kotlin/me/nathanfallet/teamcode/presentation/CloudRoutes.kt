@@ -93,7 +93,15 @@ private val WORK_ROUTES = listOf(
 private fun CloudRuntime.view(runtime: CloudRuntimeService) = CloudRuntimeView(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode, runtime.serverUrl(this), updatedAt)
 private fun CloudRuntimeView.domain() = CloudRuntime(enabled, runnerImage, runnerBinary, serverUrl, workspaceAccessMode)
 
-internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String, runtime: CloudRuntimeService? = null) {
+private fun ClusterListing<*>.wire() = when (this) { is ClusterListing.Listed -> "listed"; ClusterListing.Forbidden -> "forbidden"; ClusterListing.Unavailable -> "unavailable" }
+internal fun ClusterChoices.view() = CloudClusterChoicesView(cluster.id, namespace, namespaces.map { CloudNamespaceChoiceView(it.name, it.status.wire) }, cluster.defaultStorageClass,
+    CloudStorageClassChoicesView(storageClasses.wire(), (storageClasses as? ClusterListing.Listed)?.items.orEmpty().map {
+        CloudStorageClassChoiceView(it.name, it.reclaimPolicy, it.isDefault, it.keepsVolumes, it.provisioner)
+    }),
+    CloudImagePullSecretChoicesView(imagePullSecrets.wire(), (imagePullSecrets as? ClusterListing.Listed)?.items.orEmpty()))
+
+/** [team] lists the members a profile can be assigned to on the dashboard. */
+internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdministrationService, origin: String, runtime: CloudRuntimeService? = null, team: TeamService? = null) {
     route("/api/v1/cloud") {
         if (runtime != null) {
             get("/runtime") { call.respond(runtime.get(call.principal).view(runtime)) }
@@ -117,6 +125,8 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val input = call.jsonBody<SaveCloudClusterRequest>()
             call.respond(admin.saveCluster(call.principal, call.id(), input.version ?: throw TeamFailure("invalid_cluster", 400, "Send the current cluster version."), input.domain()).view())
         }
+
+        get("/clusters/{id}/choices") { call.respond(admin.choices(call.principal, call.id(), call.request.queryParameters["namespace"]).view()) }
 
         get("/profiles") { call.respond(admin.profiles(call.principal).map { it.view() }) }
         post("/profiles") {
@@ -171,9 +181,47 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         val settings = admin.settings(actor)
         val clusters = admin.clusters(actor)
         val sections = runtime?.let { runtimeForm(actor, it.get(actor), it.publicOrigin) }.orEmpty() +
-            clustersSection(actor, clusters, admin.kubeconfigImports != null) + profilesSection(admin.profiles(actor), clusters) +
+            clustersSection(actor, clusters, admin.kubeconfigImports != null) + profilesSection(admin.profiles(actor), clusters,
+                call.request.queryParameters["published"]?.toIntOrNull()) +
             """<h2>GitHub</h2><p>The team's GitHub App, which gives each member's cloud sessions their own Git access, is configured on <a href="/dashboard/github">GitHub</a>.</p><h2>Retention, limits and transfers</h2>"""
         call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
+    }
+    get("/dashboard/assets/profile-editor.js") {
+        call.principal.requireAdmin()
+        call.respondText(PROFILE_SCRIPT, ContentType.parse("application/javascript"))
+    }
+    get("/dashboard/cloud/profiles/new") {
+        val clusters = admin.clusters(call.principal)
+        call.respondProfileEditor(admin, team, ProfileDraft.new(clusters.firstOrNull { it.id == call.request.queryParameters["cluster"] } ?: clusters.firstOrNull()), clusters, null)
+    }
+    get("/dashboard/cloud/profiles/{id}") {
+        val profile = admin.profiles(call.principal).singleOrNull { it.id == call.id() } ?: throw TeamFailure("not_found", 404, "Profile not found.")
+        call.respondProfileEditor(admin, team, ProfileDraft.of(profile), admin.clusters(call.principal), null)
+    }
+    // Every step of a draft posts the whole form: reloading the cluster's choices, checking, publishing. A refused
+    // check or publication shows the form again with the reason, so nothing typed is lost.
+    post("/dashboard/cloud/profiles/draft") {
+        val actor = call.principal
+        val input = call.form(origin.trimEnd('/'), limit = PROFILE_FORM_BYTES)
+        val draft = ProfileDraft.parse(input)
+        val members = draft.members
+        val outcome = try {
+            when (input["intent"]) {
+                "publish" -> {
+                    val published = admin.saveProfile(actor, draft.id, draft.version, draft.name, draft.spec, members)
+                    return@post call.respondRedirect("/dashboard/cloud?published=${published.version}#profiles")
+                }
+                "check" -> {
+                    admin.checkProfile(actor, draft.id, draft.version, draft.name, draft.spec, members)
+                    DraftOutcome("The draft passes every check. Publishing creates version ${draft.version + 1}.", problem = false)
+                }
+                else -> null
+            }
+        } catch (failure: TeamFailure) {
+            if (failure.status == 401 || failure.status == 403) throw failure
+            DraftOutcome(failure.message ?: "The draft was refused.", problem = true)
+        }
+        call.respondProfileEditor(admin, team, draft, admin.clusters(actor), outcome)
     }
     if (runtime != null) post("/dashboard/cloud/runtime") {
         val input = call.form(origin.trimEnd('/'))
@@ -231,6 +279,8 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
 private fun option(value: String, label: String, selected: String) = """<option value="$value"${if (value == selected) " selected" else ""}>$label</option>"""
 private fun SaveCloudClusterRequest.domain() = CloudClusterInput(name, apiUrl, caCertificate, serviceAccountToken, allowedNamespaces, maxRunningPods, defaultStorageClass)
 
+/** Two lists of 16 setup commands of 4,096 characters, percent-encoded, and the rest of a profile. */
+private const val PROFILE_FORM_BYTES = 512 * 1024
 /** A CA bundle (up to 64 KiB) and a token (up to 16 KiB), form-encoded. */
 private const val CLUSTER_FORM_BYTES = 256 * 1024
 /** A kubeconfig of 128 K characters, percent-encoded (up to three bytes per character), or its sealed copy. */
@@ -285,17 +335,31 @@ private fun clustersSection(actor: Principal, clusters: List<CloudCluster>, canI
     }
     val table = if (clusters.isEmpty()) "<div class='empty'><strong>No cluster is connected.</strong></div>"
         else "<table><thead><tr><th>Cluster</th><th>Namespaces</th><th>Pods</th><th>Credentials</th><th></th></tr></thead><tbody>$rows</tbody></table>"
-    return "<h2>Kubernetes clusters</h2>" + help("What the service account needs", "<p>In each allowed namespace: <code>get</code>, <code>list</code>, <code>create</code> and <code>delete</code> on <code>pods</code> and <code>persistentvolumeclaims</code>; cluster-wide <code>get</code> and <code>list</code> on <code>persistentvolumes</code> and <code>storageclasses</code>; and <code>system:auth-delegator</code> for <code>TokenReview</code>. The token is stored encrypted; neither it nor the CA bundle is shown again.</p>") +
+    return "<h2>Kubernetes clusters</h2>" + help("What the service account needs", "<p>In each allowed namespace: <code>get</code>, <code>list</code>, <code>create</code> and <code>delete</code> on <code>pods</code> and <code>persistentvolumeclaims</code>; cluster-wide <code>get</code> and <code>list</code> on <code>persistentvolumes</code> and <code>storageclasses</code>; and <code>system:auth-delegator</code> for <code>TokenReview</code>. The token is stored encrypted; neither it nor the CA bundle is shown again.</p><p>Optional, to choose from lists in the profile form: <code>get</code> on the allowed <code>namespaces</code>, and <code>list</code> on <code>secrets</code> in each allowed namespace for the image pull secrets. Listing secrets lets the service account read them; TeamCode asks for their names only. Without these rights the form asks for the names.</p>") +
         table + """<details><summary>Connect a cluster</summary><form action="/dashboard/cloud/clusters" method="post">${csrf(actor)}${clusterFields(null)}<button>Connect cluster</button></form></details>""" + (if (canImport) importSection(actor) else "")
 }
 
-private fun profilesSection(profiles: List<CloudProfile>, clusters: List<CloudCluster>): String {
+private fun profilesSection(profiles: List<CloudProfile>, clusters: List<CloudCluster>, published: Int?): String {
     val names = clusters.associate { it.id to it.name }
     val rows = profiles.joinToString("") { profile ->
-        """<tr><td><strong>${escape(profile.name)}</strong> <small>v${profile.version}</small></td><td>${escape(names[profile.spec.clusterId] ?: profile.spec.clusterId)} / ${escape(profile.spec.namespace)}</td><td><code>${escape(profile.spec.image)}</code></td><td>${profile.assignedMemberIds.size}</td></tr>"""
+        """<tr><td><strong>${escape(profile.name)}</strong> <small>v${profile.version}</small></td><td>${escape(names[profile.spec.clusterId] ?: profile.spec.clusterId)} / ${escape(profile.spec.namespace)}</td><td><code>${escape(profile.spec.image)}</code></td><td>${profile.assignedMemberIds.size}</td><td><a href="/dashboard/cloud/profiles/${escape(profile.id)}">Edit (draft of v${profile.version + 1})</a></td></tr>"""
     }
-    return "<h2>Profiles</h2><p>A profile says where and how a session runs: cluster, namespace, image, resources and environment. Profiles are versioned and edited with <code>POST</code> and <code>PUT /api/v1/cloud/profiles</code>.</p>" +
-        (if (profiles.isEmpty()) "<div class='empty'><strong>No profile yet.</strong></div>" else "<table><thead><tr><th>Profile</th><th>Cluster / namespace</th><th>Image</th><th>Members</th></tr></thead><tbody>$rows</tbody></table>")
+    val create = if (clusters.isEmpty()) "<p class=\"muted\">Connect a cluster to create a profile.</p>" else """<p><a href="/dashboard/cloud/profiles/new">New profile</a></p>"""
+    return "<h2 id=\"profiles\">Profiles</h2>" + (published?.let { "<div class=\"notice\" role=\"status\">Version $it published.</div>" }.orEmpty()) + "<p>A profile says where and how a session runs: cluster, namespace, image, resources, agent, environment and the members who may use it. Each publication is a new immutable version; sessions keep the version they were created with. The form offers the namespaces, storage classes and image pull secrets read from the chosen cluster. The API (<code>POST</code> and <code>PUT /api/v1/cloud/profiles</code>) accepts the same fields.</p>" +
+        (if (profiles.isEmpty()) "<div class='empty'><strong>No profile yet.</strong></div>" else "<table><thead><tr><th>Profile</th><th>Cluster / namespace</th><th>Image</th><th>Members</th><th></th></tr></thead><tbody>$rows</tbody></table>") + create
+}
+
+/** A draft with choices read from its cluster; a cluster that no longer exists is replaced by the first one. */
+private suspend fun ApplicationCall.respondProfileEditor(admin: CloudAdministrationService, team: TeamService?, start: ProfileDraft, clusters: List<CloudCluster>, outcome: DraftOutcome?) {
+    val actor = principal
+    val cluster = clusters.firstOrNull { it.id == start.spec.clusterId } ?: clusters.firstOrNull()
+    val choices = cluster?.let { admin.choices(actor, it.id, start.spec.namespace.takeIf(String::isNotEmpty)) }
+    val draft = if (choices == null) start else start.copy(spec = start.spec.copy(clusterId = choices.cluster.id, namespace = choices.namespace))
+    val profiles = admin.profiles(actor)
+    val images = profiles.flatMap { listOf(it.spec.image) + it.spec.allowedImageOverrides }
+    val title = if (draft.id == null) "New cloud profile" else "Profile ${profiles.firstOrNull { it.id == draft.id }?.name ?: draft.name}"
+    respondText(page(title, profileEditor(actor, draft, clusters, choices, team?.members(actor).orEmpty(), images, outcome)), ContentType.Text.Html,
+        if (outcome?.problem == true) HttpStatusCode.UnprocessableEntity else HttpStatusCode.OK)
 }
 
 /** Empty credential fields keep the stored ones; on an import they take the kubeconfig context's. */
@@ -304,5 +368,7 @@ private fun clusterInput(input: Parameters, imported: KubeconfigContext? = null)
     input["allowedNamespaces"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }, input["maxRunningPods"]?.trim()?.toIntOrNull() ?: -1,
     input["defaultStorageClass"]?.trim()?.takeIf { it.isNotEmpty() })
 
+private val PROFILE_SCRIPT = requireNotNull(object {}.javaClass.getResourceAsStream("/me/nathanfallet/teamcode/presentation/profile-editor.js")) { "Missing profile editor resource" }
+    .bufferedReader().use { it.readText() }
 private val KUBECONFIG_SCRIPT = requireNotNull(object {}.javaClass.getResourceAsStream("/me/nathanfallet/teamcode/presentation/kubeconfig-import.js")) { "Missing kubeconfig import resource" }
     .bufferedReader().use { it.readText() }

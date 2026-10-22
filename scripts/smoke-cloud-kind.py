@@ -66,6 +66,51 @@ metadata: {{name: teamcode-volumes}}
 roleRef: {{apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: teamcode-volumes}}
 subjects: [{{kind: ServiceAccount, name: teamcode-server, namespace: teamcode-system}}]
 ---
+# Optional: the profile form marks allowed namespaces that do not exist. Limited to the allowed namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {{name: teamcode-namespaces}}
+rules:
+- apiGroups: [""]
+  resources: [namespaces]
+  resourceNames: [{NAMESPACE}]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {{name: teamcode-namespaces}}
+roleRef: {{apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: teamcode-namespaces}}
+subjects: [{{kind: ServiceAccount, name: teamcode-server, namespace: teamcode-system}}]
+---
+# Optional: the profile form offers the namespace's image pull secrets. Listing lets the account read secrets;
+# TeamCode lists them as metadata only and keeps their names.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {{name: teamcode-pull-secrets, namespace: {NAMESPACE}}}
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {{name: teamcode-pull-secrets, namespace: {NAMESPACE}}}
+roleRef: {{apiGroup: rbac.authorization.k8s.io, kind: Role, name: teamcode-pull-secrets}}
+subjects: [{{kind: ServiceAccount, name: teamcode-server, namespace: teamcode-system}}]
+---
+# What the profile form must offer (the registry secret) and must not (an opaque one).
+apiVersion: v1
+kind: Secret
+metadata: {{name: smoke-registry, namespace: {NAMESPACE}}}
+type: kubernetes.io/dockerconfigjson
+stringData: {{.dockerconfigjson: '{{"auths":{{}}}}'}}
+---
+apiVersion: v1
+kind: Secret
+metadata: {{name: smoke-opaque, namespace: {NAMESPACE}}}
+type: Opaque
+stringData: {{value: not-a-registry}}
+---
 # TokenReview for runner authentication.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -121,7 +166,7 @@ def main():
                 os.chmod(path, 0o600)
             env = dict(os.environ, TEAMCODE_KIND_SMOKE_DIR=work)
             run(os.path.join(root, "gradlew"), "--no-daemon", "-p", root, ":infrastructure:test", "--tests", "*KindSmokeTest*", "--rerun", env=env)
-            print("Kind smoke passed: claim, pod, TokenReview, pause and proven deletion on a real cluster.")
+            print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause and proven deletion on a real cluster.")
         finally:
             if not args.keep:
                 run("kind", "delete", "cluster", "--name", CLUSTER, "--kubeconfig", kubeconfig)
