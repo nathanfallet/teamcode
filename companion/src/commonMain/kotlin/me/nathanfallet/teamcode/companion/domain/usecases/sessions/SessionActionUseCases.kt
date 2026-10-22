@@ -133,15 +133,16 @@ class LoadProfilesUseCase(private val sessions: SessionRepository, private val f
  */
 class CreateSessionUseCase(private val sessions: SessionRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
     suspend operator fun invoke(accountId: String, form: NewSession, idempotencyKey: String): CloudSession = guard(accountId) {
-        val name = form.name.trim()
+        val sent = form.normalized()
+        val name = sent.name
         require(name.isNotEmpty() && name.length <= MAX_NAME && name.none(Char::isISOControl)) { "Name the session (up to $MAX_NAME characters)." }
         require(form.profileId.isNotBlank()) { "Choose a profile." }
-        val message = form.initialMessage?.takeIf { it.isNotBlank() }
+        val message = sent.initialMessage
         if (message != null) {
             require(MessageRules.valid(message)) { "Write a first message of up to ${MessageRules.MAX_CHARS} characters." }
             if (Features.INITIAL_MESSAGE !in features.features(accountId)) throw CompanionException.Unsupported(Features.INITIAL_MESSAGE)
         }
-        sessions.create(accountId, NewSession(name, form.profileId, form.model?.trim()?.ifEmpty { null }, form.effort?.trim()?.ifEmpty { null }, message), idempotencyKey)
+        sessions.create(accountId, sent, idempotencyKey)
     }
 
     private companion object {

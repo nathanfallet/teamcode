@@ -35,7 +35,7 @@ data class NewSessionUiState(
 
 /**
  * The new-session form. Its idempotency key is drawn once for the form and kept while the fields stay the same, so
- * a retry after a network failure returns the session the first attempt created; changing a field draws a new one
+ * a retry after a network failure returns the session the first attempt created; changing what is sent draws a new one
  * (the server refuses a replayed key with another body).
  */
 class NewSessionViewModel(
@@ -51,6 +51,8 @@ class NewSessionViewModel(
     init { reload() }
 
     fun reload() {
+        // A creation in flight keeps its form and key: what it sent is what a retry sends again.
+        if (state.value.creating) return
         state.update { it.copy(loadingProfiles = true, error = null) }
         viewModelScope.launch {
             try {
@@ -97,5 +99,6 @@ class NewSessionViewModel(
         }
     }
 
-    private fun NewSessionUiState.form() = NewSession(name, profileId.orEmpty(), model, effort, message.takeIf { acceptsMessage })
+    /** The form as sent: an edit that changes nothing sent (a trailing space) keeps the key, so a retry never creates twice. */
+    private fun NewSessionUiState.form() = NewSession(name, profileId.orEmpty(), model, effort, message.takeIf { acceptsMessage }).normalized()
 }

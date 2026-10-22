@@ -107,7 +107,7 @@ platform :android do
       google_play_track_version_codes(json_key: PLAY_KEY, track: track)
     rescue StandardError => error
       # Only a track that holds no release yet is empty; anything else stops the lane.
-      raise unless error.message.match?(/track|not found|no releases/i)
+      raise unless error.message.match?(/trackEmpty|track not found|no releases/i)
       []
     end
     build = next_build(version, uploaded)

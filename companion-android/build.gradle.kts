@@ -39,12 +39,14 @@ android {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1,INDEX.LIST,io.netty.versions.properties}" }
     }
     signingConfigs {
-        if (uploadKeystore.exists()) {
+        // The key and its passwords together: a keystore alone leaves the release build unsigned, as documented.
+        val signing = listOf("SIGNING_STORE_PASSWORD", "SIGNING_KEY_ALIAS", "SIGNING_KEY_PASSWORD").map { System.getenv(it) }
+        if (uploadKeystore.exists() && signing.none { it.isNullOrEmpty() }) {
             create("release") {
                 storeFile = uploadKeystore
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+                storePassword = signing[0]
+                keyAlias = signing[1]
+                keyPassword = signing[2]
             }
         }
     }

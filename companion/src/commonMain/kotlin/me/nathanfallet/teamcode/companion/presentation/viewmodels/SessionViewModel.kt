@@ -57,9 +57,18 @@ data class SessionUiState(
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
     val notice: SessionNotice? = null,
 ) {
-    /** A turn is running: its last `turn` event is `started` and the session is working (not paused or ended since). */
-    val running: Boolean get() = (session == null || session.state == SessionState.ACTIVE) &&
-        transcript.events.lastOrNull { it is TranscriptEvent.Turn }.let { it is TranscriptEvent.Turn && it.phase == TurnPhase.STARTED }
+    /**
+     * A turn is running: the session is working (not paused or ended since) and its last loaded `turn` event is
+     * `started`. A turn longer than the loaded page has its start outside it: a working session counts as running then.
+     */
+    val running: Boolean get() {
+        val lastTurn = transcript.events.lastOrNull { it is TranscriptEvent.Turn } as TranscriptEvent.Turn?
+        return when (session?.state) {
+            null -> lastTurn?.phase == TurnPhase.STARTED
+            SessionState.ACTIVE -> lastTurn == null || lastTurn.phase == TurnPhase.STARTED
+            else -> false
+        }
+    }
 }
 
 /**

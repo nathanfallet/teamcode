@@ -25,7 +25,9 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
+import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptPage
+import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.domain.repositories.TranscriptRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
@@ -34,8 +36,10 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUse
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.transcript.Transcript
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import kotlin.test.*
 
@@ -62,6 +66,15 @@ class SessionViewModelTest {
             SessionRoute("a1", "s1"), GetSessionUseCase(sessions, guard), LoadTranscriptUseCase(transcripts, features, guard), FollowTranscriptUseCase(transcripts, guard),
             SendMessageUseCase(sessions, features, guard, SequenceIds()), ControlSessionUseCase(sessions, guard, SequenceIds()), accounts,
         )
+    }
+
+    @Test fun aWorkingSessionWhoseTurnStartedBeforeTheLoadedPageIsRunning() {
+        val noTurn = Transcript(listOf(TranscriptEvent.Status(5, 0, "claude", "opus", null)))
+        assertTrue(SessionUiState(session = cloudSession("s", state = SessionState.ACTIVE), transcript = noTurn).running)
+        assertFalse(SessionUiState(session = cloudSession("s", state = SessionState.READY), transcript = noTurn).running)
+        val ended = Transcript(listOf(TranscriptEvent.Turn(6, 0, TurnPhase.COMPLETED, 10, 1)))
+        assertFalse(SessionUiState(session = cloudSession("s", state = SessionState.ACTIVE), transcript = ended).running)
+        assertFalse(SessionUiState(transcript = noTurn).running)
     }
 
     @Test fun aSentMessageWaitsUntilTheTranscriptRecordsItAndAFailedOneRetriesWithItsId() = runTest(dispatcher) {

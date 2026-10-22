@@ -17,7 +17,10 @@ data class NewSession(
     val model: String?,
     val effort: String?,
     val initialMessage: String?,
-)
+) {
+    /** What the server receives: the name, model and effort trimmed, empty fields and a blank first message left out. */
+    fun normalized(): NewSession = NewSession(name.trim(), profileId, model?.trim()?.ifEmpty { null }, effort?.trim()?.ifEmpty { null }, initialMessage?.takeIf { it.isNotBlank() })
+}
 
 /**
  * A message the member sent, shown at once and kept until the transcript records it (its `message.user` event carries

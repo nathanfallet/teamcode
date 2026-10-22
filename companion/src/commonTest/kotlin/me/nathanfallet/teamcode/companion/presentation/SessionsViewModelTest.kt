@@ -128,6 +128,22 @@ class SessionsViewModelTest {
         assertFalse(model.uiState.value.loading)
         model.stop()
     }
+
+    @Test fun loadMoreAsksForOnePageAtATime() = runTest(dispatcher) {
+        sessions.pages = { _, before -> if (before == null) SessionPage(listOf(cloudSession("a")), "c1") else SessionPage(listOf(cloudSession("b", createdAt = 500)), "c2") }
+        val model = viewModel()
+        model.start()
+        feed.send(LiveUpdate.Opened(false))
+        settle()
+        val gate = CompletableDeferred<Unit>().also { sessions.gate = it }
+        // The button and the end of the scroll ask together while the page loads.
+        model.loadMore(); model.loadMore(); settle(); model.loadMore()
+        gate.complete(Unit)
+        settle()
+        assertEquals(listOf("list MINE ACTIVE c1"), sessions.calls.filter { it.endsWith(" c1") || it.endsWith(" c2") })
+        assertEquals(listOf("a", "b"), model.uiState.value.list!!.sessions.map { it.id })
+        model.stop()
+    }
 }
 
 /** Runs what is due within a second of virtual time; the screens' periodic refreshes never let the scheduler go idle. */

@@ -46,10 +46,17 @@ class NewSessionViewModelTest {
         sessions.createResult = { throw CompanionException.Unreachable() }
         model.create(); settle()
         assertNotNull(model.uiState.value.error)
+        // A trailing space changes nothing sent: the retry keeps the key, so the server returns what it may have created.
+        model.onName("Fix ")
+        model.create(); settle()
+        var creates = sessions.calls.filter { it.startsWith("create") }
+        assertEquals(2, creates.size); assertEquals(creates[0], creates[1])
+        // Another name is another session: a new key.
+        model.onName("Fix it")
         sessions.createResult = { cloudSession("new") }
         model.create(); settle()
-        val creates = sessions.calls.filter { it.startsWith("create") }
-        assertEquals(2, creates.size); assertEquals(creates[0], creates[1])
+        creates = sessions.calls.filter { it.startsWith("create") }
+        assertEquals(3, creates.size); assertNotEquals(creates[1].substringAfterLast(' '), creates[2].substringAfterLast(' '))
         assertEquals("new", model.uiState.value.created?.id)
         assertFalse(model.uiState.value.canCreate)
     }

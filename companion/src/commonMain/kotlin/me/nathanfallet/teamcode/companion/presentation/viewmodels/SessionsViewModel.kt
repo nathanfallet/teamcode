@@ -65,6 +65,8 @@ class SessionsViewModel(
     private var follow: Job? = null
     /** Where the next settling round starts in the unsettled rows. */
     private var settleTurn = 0
+    /** A "load more" is queued or running. */
+    private var moreQueued = false
 
     init {
         viewModelScope.launch {
@@ -93,7 +95,11 @@ class SessionsViewModel(
 
     fun setGroup(group: SessionGroup) = changeFilter(state.value.scope, group)
     fun setScope(scope: SessionScope) = changeFilter(scope, state.value.group)
-    fun loadMore() { if (state.value.list?.nextBefore != null && follow?.isActive == true) commands.trySend(Command.LoadMore) }
+    fun loadMore() {
+        // One page at a time: the button and the scroll's end ask together, and a queued request would load the page after.
+        if (state.value.list?.nextBefore == null || follow?.isActive != true || moreQueued) return
+        moreQueued = commands.trySend(Command.LoadMore).isSuccess
+    }
     fun opened(sessionId: String) = state.update { it.copy(list = it.list?.opened(sessionId)) }
 
     private fun changeFilter(scope: SessionScope, group: SessionGroup) {
@@ -110,6 +116,9 @@ class SessionsViewModel(
 
     private fun restart() {
         follow?.cancel(); follow = null
+        // What the stopped loop left unread belongs to it: the new one loads the list when its feed opens.
+        while (commands.tryReceive().isSuccess) Unit
+        moreQueued = false
         val account = state.value.account
         if (!started || account == null || !account.signedIn) return
         state.update { it.copy(following = true, reconnecting = false, error = null) }
@@ -128,7 +137,7 @@ class SessionsViewModel(
     private suspend fun handle(accountId: String, signal: Any) {
         when (signal) {
             Command.Reload, SessionListSignal.Reload -> reload(accountId)
-            Command.LoadMore -> more(accountId)
+            Command.LoadMore -> try { more(accountId) } finally { moreQueued = false }
             // Read again the rows whose state changes without an event (at most a few per tick).
             Command.Settle -> {
                 // In turns, so a few rows that never settle do not hide the others.
