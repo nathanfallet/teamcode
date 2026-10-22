@@ -168,8 +168,8 @@ class EventStreamTest {
     }
 
     @Test fun theTeamFeedHasNoEndEvent() = runTest {
-        // `end` belongs to a session's stream; on the feed it is an ordinary (unknown) type without data, skipped.
-        client("event: end\ndata: \n\n" + teamEvent(2) + "event: denied\ndata: {}\n\n").use { client ->
+        // `end` belongs to a session's stream; on the feed it is an ordinary type without data, and an unnamed frame is skipped.
+        client("event: end\ndata: \n\n" + "data: {\"unnamed\":true}\n\n" + teamEvent(2) + "event: denied\ndata: {}\n\n").use { client ->
             val seen = mutableListOf<Long>()
             assertEquals(CloudStreamEnd.DENIED, client.followTeamEvents(after = 1) { seen += it.seq })
             assertEquals(listOf(2L), seen)

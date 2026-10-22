@@ -381,10 +381,11 @@ class TeamCodeClient(
             if (!response.status.isSuccess()) throw failure(response)
             var end: CloudStreamEnd? = null
             readServerSentEvents(response.bodyAsChannel()) { frame ->
-                when (frame.event) {
-                    "denied" -> end = CloudStreamEnd.DENIED
-                    endEvent -> end = CloudStreamEnd.ENDED
-                    null -> Unit
+                val name = frame.event
+                when {
+                    name == null -> Unit
+                    name == "denied" -> end = CloudStreamEnd.DENIED
+                    name == endEvent -> end = CloudStreamEnd.ENDED
                     else -> onFrame(frame)
                 }
                 end == null
@@ -394,9 +395,8 @@ class TeamCodeClient(
 
     private inline fun <reified T> decodeFrame(frame: ServerSentEvent): T = try {
         Serialization.json.decodeFromString<T>(frame.data)
-    } catch (_: kotlinx.serialization.SerializationException) {
-        throw TeamCodeException(0, "The event stream sent a malformed event.")
     } catch (_: IllegalArgumentException) {
+        // SerializationException is an IllegalArgumentException.
         throw TeamCodeException(0, "The event stream sent a malformed event.")
     }
 
