@@ -1,5 +1,9 @@
 # Implementation status
 
+## Queue turns only apply when someone is limited (2026-10-22)
+
+Production (0.6.6, `(last wait: queue_turn)` on all 62 `queue_timeout`): 35 waiters in `admission_waiters`, about 20 from one session, every member at `max_concurrent = 0`, pool budget 20 billion. Every waiter had a free account but only the ticket holding the turn could take it, and the next turn was taken only when that ticket polled again (0.5 to 2 s), so a burst of parallel requests drained one per round and the tail hit the 90 s limit. `consumeQueueTurn` now enforces the turn only when a waiter in the scope has a member concurrency limit (`max_concurrent > 0`); without any limit a free account admits every ready waiter in the same round, while the turn counter still rotates. Run and group concurrency keep working as before: such waiters are marked blocked and are not candidates. Test: `QueueTurnWithoutLimitPersistenceTest` (no limit: four waiters admitted in one round; one limited member: the turn order is back).
+
 ## `queue_timeout` names what the request was waiting for (2026-10-22)
 
 On the 0.6.4 replicas (5 pods, 5 minutes up) 29 requests timed out after 90 s with no way to tell why: waiting hides the refusal that caused it (`member_concurrency`, `queue_turn`, `pacing_delay`...). 194 of 201 dispatches went to one account. The 503 message and the server log line now end with `(last wait: <code>)`, so the next errors say whether a member's concurrency limit, another member's turn or pacing holds the queue.

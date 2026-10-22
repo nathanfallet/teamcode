@@ -76,7 +76,10 @@ internal fun JdbcTransaction.consumeQueueTurn(actor: Principal, ticket: Admissio
     val turns = AdmissionTurns.selectAll().where { turnScope and (AdmissionTurns.memberId inList members) }
         .associate { it[AdmissionTurns.memberId] to it[AdmissionTurns.turn] }
     val candidates = waiters.map { QueueCandidate(it[AdmissionWaiters.id], it[AdmissionWaiters.memberId], it[AdmissionWaiters.createdAt], Workload.valueOf(it[AdmissionWaiters.workload]), turns[it[AdmissionWaiters.memberId]] ?: 0) }
-    if (SelectQueueTurnUseCase().select(candidates, now) != ticket.id) throw TeamFailure("queue_turn", 429, "Another queued member has the next admission turn.")
+    // Turns exist to order members who queue behind a concurrency limit. Without any limit among the waiters, a free account
+    // admits everyone, and serializing them lets only one waiter per polling round through while the others time out.
+    val limited = MemberPolicies.select(MemberPolicies.memberId).where { (MemberPolicies.memberId inList members) and (MemberPolicies.maxConcurrent greater 0) }.limit(1).any()
+    if (limited && SelectQueueTurnUseCase().select(candidates, now) != ticket.id) throw TeamFailure("queue_turn", 429, "Another queued member has the next admission turn.")
     val maximum = AdmissionTurns.turn.max()
     val nextTurn = (AdmissionTurns.select(maximum).where { turnScope }.single()[maximum] ?: 0L) + 1
     AdmissionTurns.upsert {
