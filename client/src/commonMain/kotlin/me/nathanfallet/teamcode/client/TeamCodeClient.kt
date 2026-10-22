@@ -417,7 +417,10 @@ class TeamCodeClient(
     /**
      * Follows the session's event stream after [after], calling [onEvent] for each event in order. Returns
      * [CloudStreamEnd.ENDED] when the session ended and every event was sent, [CloudStreamEnd.DENIED] when the server
-     * revoked access mid-stream; throws on a network failure, so the caller reconnects from its last sequence.
+     * revoked access mid-stream. Throws when the stream closes ([TeamCodeException] with status `0`) or on a network
+     * failure (the engine's exception), so the caller reconnects from its last sequence; and on an unreadable event
+     * ([TeamCodeException] with status `0` and code [MALFORMED_EVENT]), which a reconnection would replay, so the caller
+     * stops instead.
      */
     suspend fun followCloudEvents(id: String, after: Long, onEvent: suspend (CloudEventView) -> Unit): CloudStreamEnd {
         identifier(id)
