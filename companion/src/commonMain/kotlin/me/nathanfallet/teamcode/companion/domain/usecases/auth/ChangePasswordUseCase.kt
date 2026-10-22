@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
+import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SignInResult
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
@@ -25,7 +26,9 @@ class ChangePasswordUseCase(
         // The change revoked the temporary session: a failed sign-in now cannot be retried with it.
         val result = try {
             signIn(pending.server, pending.username, replacement, pending.deviceName)
-        } catch (error: CompanionException) {
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
             throw CompanionException.PasswordChanged()
         }
         return when (result) {

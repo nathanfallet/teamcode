@@ -82,8 +82,12 @@ compose.desktop {
             // Packaging, signing and notarization come with the distribution work; this only names the bundles.
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "TeamCode"
-            // Installers take MAJOR.MINOR.PATCH only: the TeamCode version without its pre-release suffix.
-            packageVersion = project.version.toString().substringBefore('-')
+            // Installers take MAJOR.MINOR.PATCH only, and macOS refuses a major version of 0: the TeamCode version
+            // without its pre-release suffix, with 0.x packaged as 1.0.0 until the distribution work sets the scheme.
+            packageVersion = project.version.toString().substringBefore('-').let { if (it.startsWith("0.")) "1.0.0" else it }
+            // The JDK modules the bundled runtime needs (from `suggestRuntimeModules`): preferences, the Java HTTP
+            // engine and the keyring's native access.
+            modules("java.instrument", "java.management", "java.net.http", "java.prefs", "jdk.security.auth", "jdk.unsupported")
         }
     }
 }

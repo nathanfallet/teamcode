@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
 import me.nathanfallet.teamcode.companion.domain.models.Account
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 
@@ -10,8 +11,9 @@ class RenameDeviceUseCase(
     private val accounts: AccountRepository,
 ) {
     suspend operator fun invoke(accountId: String, name: String): Account {
-        val account = accounts.accounts.value.first { it.id == accountId }
         val kept = auth.renameCurrentDevice(accountId, validDeviceName(name))
+        // Read after the call: a refresh may have changed the account meanwhile (signed out, new role).
+        val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: throw CompanionException.Unauthorized()
         return account.copy(deviceName = kept).also(accounts::update)
     }
 }

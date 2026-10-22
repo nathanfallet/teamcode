@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
+import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
@@ -21,14 +22,25 @@ class RefreshAccountUseCase(
     suspend operator fun invoke(accountId: String): Account? {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return null
         if (!account.signedIn) return account
-        if (account.expiresAt <= clock.nowMillis() || credentials.read(accountId) == null) return signOutLocally(account)
+        val token = try {
+            credentials.read(accountId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // A locked or refusing secure store: the token may well be there, so the account stays signed in.
+            throw CompanionException.CredentialStorage()
+        }
+        if (account.expiresAt <= clock.nowMillis() || token == null) return signOutLocally(account)
         val member = try {
             auth.me(accountId)
         } catch (_: CompanionException.Unauthorized) {
             return signOutLocally(account)
         }
-        val updated = account.copy(username = member.username, role = member.role)
-        if (updated != account) accounts.update(updated)
+        // Read after the call: the account may have been renamed, signed out or removed meanwhile.
+        val current = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return null
+        if (!current.signedIn) return current
+        val updated = current.copy(username = member.username, role = member.role)
+        if (updated != current) accounts.update(updated)
         return updated
     }
 

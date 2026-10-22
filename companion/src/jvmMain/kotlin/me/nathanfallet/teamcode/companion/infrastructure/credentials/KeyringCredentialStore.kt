@@ -26,7 +26,11 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
     override val persistent: Boolean get() = backend != null && !writeFailed
 
     // Memory first: a token kept there after a failed keyring write is newer than any entry the keyring still holds.
-    override suspend fun read(accountId: String): String? = memory.read(accountId) ?: keyring { it.get(service, accountId) }
+    // A keyring that fails to answer throws (the caller reports it) rather than reading as "no token", which would sign
+    // the account out for a keyring that is only locked.
+    override suspend fun read(accountId: String): String? = memory.read(accountId) ?: backend?.let { keyring ->
+        withContext(Dispatchers.IO) { keyring.get(service, accountId) }
+    }
 
     override suspend fun write(accountId: String, token: String) {
         if (keyring { it.set(service, accountId, token); Unit } != null) { memory.delete(accountId); return }

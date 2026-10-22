@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import kotlinx.coroutines.flow.collectLatest
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -28,7 +29,7 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch {
-            accounts.activeAccountId.collect { id -> if (id != null) refresh(id) }
+            accounts.activeAccountId.collectLatest { id -> if (id != null) refresh(id) }
         }
     }
 

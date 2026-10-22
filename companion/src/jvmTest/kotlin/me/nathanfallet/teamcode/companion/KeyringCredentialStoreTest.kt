@@ -41,6 +41,7 @@ class KeyringCredentialStoreTest {
         assertEquals("token", store.read("a1"))
         assertTrue(keyring.entries.isEmpty())
         store.delete("a1")
+        keyring.broken = false
         assertNull(store.read("a1"))
     }
 
@@ -49,9 +50,10 @@ class KeyringCredentialStoreTest {
         val store = KeyringCredentialStore(keyring)
         store.write("a1", "token")
         keyring.broken = true
-        assertNull(store.read("a1"))
+        // A locked keyring is an error, not a missing token: the account must not be signed out for it.
+        assertFailsWith<IllegalStateException> { store.read("a1") }
         keyring.broken = false
-        // The keyring is asked again once it answers: the account is not signed out for good.
+        // The keyring is asked again once it answers.
         assertEquals("token", store.read("a1"))
         keyring.broken = true
         store.write("a1", "newer")

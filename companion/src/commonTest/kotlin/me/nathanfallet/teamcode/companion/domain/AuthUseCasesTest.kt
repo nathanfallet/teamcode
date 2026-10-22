@@ -131,6 +131,18 @@ class AuthUseCasesTest {
         assertTrue(auth.calls.isEmpty())
     }
 
+    @Test fun aLockedSecureStoreKeepsTheAccountSignedIn() = runTest {
+        accounts.save(account("a1"))
+        val locked = object : me.nathanfallet.teamcode.companion.domain.services.CredentialStore {
+            override val persistent = true
+            override suspend fun read(accountId: String): String? = throw IllegalStateException("locked")
+            override suspend fun write(accountId: String, token: String) = Unit
+            override suspend fun delete(accountId: String) = Unit
+        }
+        assertFailsWith<CompanionException.CredentialStorage> { RefreshAccountUseCase(auth, accounts, locked, FixedClock())("a1") }
+        assertTrue(accounts.accounts.value.single().signedIn)
+    }
+
     @Test fun anOfflineRefreshKeepsTheAccountSignedIn() = runTest {
         accounts.save(account("a1")); store.write("a1", "t1")
         auth.meResult = { throw CompanionException.Unreachable() }

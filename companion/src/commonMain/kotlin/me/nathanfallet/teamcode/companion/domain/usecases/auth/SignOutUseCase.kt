@@ -25,7 +25,14 @@ class SignOutUseCase(
         } catch (_: Exception) {
             false
         }
-        credentials.delete(accountId)
+        try {
+            credentials.delete(accountId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // The account is removed anyway: its server session is revoked (or expires), so a token left behind in a
+            // refusing secure store no longer opens anything, and it is overwritten at the next sign-in.
+        }
         auth.release(accountId)
         accounts.remove(accountId)
         return revoked

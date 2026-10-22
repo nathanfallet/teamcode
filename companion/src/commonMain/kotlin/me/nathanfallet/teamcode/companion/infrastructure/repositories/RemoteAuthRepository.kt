@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.infrastructure.repositories
 
+import io.ktor.client.call.NoTransformationFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -87,16 +88,18 @@ class RemoteAuthRepository(
     } catch (error: Exception) {
         throw when {
             error.isDecodingFailure() -> CompanionException.NotTeamCode()
-            // Origins are normalized before any call, so an argument or state error is a bug or the typed client's own
-            // refusal (its message is readable): shown as is, never disguised as a network failure.
-            error is IllegalArgumentException || error is IllegalStateException -> error
+            // Origins are normalized before any call, so an argument error is a bug or the typed client's own refusal
+            // (its message is readable): shown as is, never disguised as a network failure.
+            error is IllegalArgumentException -> error
             // Connection refused, unknown host, TLS failure, timeout: the engines throw their own types.
             else -> CompanionException.Unreachable()
         }
     }
 }
 
-private fun Throwable.isDecodingFailure(): Boolean = generateSequence(this) { it.cause }.take(8).any { it is SerializationException }
+// A JSON body that is not TeamCode's, or a body that is not JSON at all (an HTML portal page answering 200).
+private fun Throwable.isDecodingFailure(): Boolean =
+    generateSequence(this) { it.cause }.take(8).any { it is SerializationException || it is NoTransformationFoundException }
 
 internal fun MemberView.domain() = Member(id, username, role, passwordChangeRequired)
 internal fun LoginResponse.domain() = LoginSession(accessToken, expiresAt, member.domain())
