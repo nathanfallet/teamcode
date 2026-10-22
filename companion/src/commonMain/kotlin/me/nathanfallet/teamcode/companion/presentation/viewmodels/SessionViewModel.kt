@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +18,7 @@ import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
@@ -48,8 +50,9 @@ data class SessionUiState(
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
     val notice: String? = null,
 ) {
-    /** A turn is running: its last `turn` event is `started`. */
-    val running: Boolean get() = transcript.events.lastOrNull { it is TranscriptEvent.Turn }.let { it is TranscriptEvent.Turn && it.phase == TurnPhase.STARTED }
+    /** A turn is running: its last `turn` event is `started` and the session is working (not paused or ended since). */
+    val running: Boolean get() = (session == null || session.state == SessionState.ACTIVE) &&
+        transcript.events.lastOrNull { it is TranscriptEvent.Turn }.let { it is TranscriptEvent.Turn && it.phase == TurnPhase.STARTED }
 }
 
 /**
@@ -69,10 +72,18 @@ class SessionViewModel(
     val uiState: StateFlow<SessionUiState> = state.asStateFlow()
     private val loading = Mutex()
     private var follow: Job? = null
+    private var header: Job? = null
     private var started = false
 
     fun start() {
         started = true
+        // The transcript does not carry pauses, resumes or a failed pod: the header is read again while visible.
+        if (header?.isActive != true) header = viewModelScope.launch {
+            while (true) {
+                delay(HEADER_MILLIS)
+                if (!state.value.gone) refreshSessionQuietly()
+            }
+        }
         // An ended session sent everything: nothing more to follow.
         if (follow?.isActive == true || state.value.gone || state.value.live == LiveState.ENDED) return
         state.update { it.copy(live = LiveState.CONNECTING, error = null) }
@@ -94,7 +105,7 @@ class SessionViewModel(
                             // Back after a cut: the session may have been paused or resumed meanwhile.
                             if (reconnected) { reconnected = false; refreshSessionQuietly() }
                         }
-                        is LiveUpdate.Item -> state.update { it.withTranscript(it.transcript.withLive(update.value)).copy(live = LiveState.LIVE) }
+                        is LiveUpdate.Item -> state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).copy(live = LiveState.LIVE) }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
                         LiveUpdate.Gap -> Unit
                         LiveUpdate.Ended -> {
@@ -106,7 +117,8 @@ class SessionViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                state.update { it.copy(live = LiveState.STOPPED, error = error.userMessage(), gone = error is CompanionException.NotFound || error is CompanionException.AccessRevoked) }
+                // Withdrawn access may come back (or was an expired token, which the guard signed out): retry stays offered.
+                state.update { it.copy(live = LiveState.STOPPED, error = error.userMessage(), gone = error is CompanionException.NotFound) }
             }
         }
     }
@@ -114,6 +126,7 @@ class SessionViewModel(
     fun stop() {
         started = false
         follow?.cancel(); follow = null
+        header?.cancel(); header = null
         state.update { if (it.live == LiveState.ENDED) it else it.copy(live = LiveState.STOPPED) }
     }
 
@@ -199,6 +212,18 @@ class SessionViewModel(
         }
     }
 
+    /** A live `turn` moves a ready session to working and back, as the server does. */
+    private fun SessionUiState.withTurn(event: TranscriptEvent): SessionUiState {
+        val session = session ?: return this
+        if (event !is TranscriptEvent.Turn) return this
+        val next = when {
+            event.phase == TurnPhase.STARTED && session.state == SessionState.READY -> SessionState.ACTIVE
+            event.phase != TurnPhase.STARTED && session.state == SessionState.ACTIVE -> SessionState.READY
+            else -> return this
+        }
+        return copy(session = session.copy(state = next))
+    }
+
     private fun SessionUiState.withTranscript(transcript: Transcript) = copy(transcript = transcript, pending = pending.reconciled(transcript.events))
 
     private suspend fun refreshSessionQuietly() {
@@ -211,6 +236,10 @@ class SessionViewModel(
         } catch (_: Exception) {
             // The header stays as it was; the transcript goes on.
         }
+    }
+
+    private companion object {
+        const val HEADER_MILLIS = 30_000L
     }
 
     private suspend fun refreshSession() {

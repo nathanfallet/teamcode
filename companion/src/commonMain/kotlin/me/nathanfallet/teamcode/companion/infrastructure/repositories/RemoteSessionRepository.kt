@@ -56,8 +56,9 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
             val resumed = cursor != null
             client.followTeamEvents(
                 after = cursor,
+                types = SESSION_EVENT_TYPES,
                 onGap = { send(LiveUpdate.Gap) },
-                onOpen = { send(LiveUpdate.Opened(resumed)) },
+                onOpen = { itemSent(); send(LiveUpdate.Opened(resumed)) },
             ) { event ->
                 event.sessionChange()?.let { send(LiveUpdate.Item(it)) }
                 cursor = event.seq
@@ -66,5 +67,11 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         })
     }
 }
+
+/**
+ * The session events of the feed's first version (`cloud.events.v1`): naming a type an older server does not know would
+ * be refused, and runs (`run.*`) are not shown.
+ */
+private val SESSION_EVENT_TYPES = setOf("cloud.session.created", "cloud.session.paused", "cloud.session.woken", "cloud.session.resumed", "cloud.session.ended", "cloud.turn")
 
 private fun CloudInputView.receipt() = InputReceipt(id, status, woke, reason)

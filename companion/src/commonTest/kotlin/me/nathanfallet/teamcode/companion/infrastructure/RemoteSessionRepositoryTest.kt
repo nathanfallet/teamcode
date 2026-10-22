@@ -86,6 +86,8 @@ class RemoteSessionRepositoryTest {
         assertNotNull(failure, seen.toString())
         assertNull(requests[0].headers["Last-Event-ID"])
         assertEquals("2", requests[1].headers["Last-Event-ID"])
+        // Only the session types of the feed's first version are asked for.
+        assertEquals("cloud.session.created,cloud.session.ended,cloud.session.paused,cloud.session.resumed,cloud.session.woken,cloud.turn", requests[0].url.parameters["types"])
         val items = seen.filterIsInstance<LiveUpdate.Item<*>>().map { (it.value as me.nathanfallet.teamcode.companion.domain.models.SessionChange) }
         assertEquals(listOf(1L, 3, 9), items.map { it.seq })
         assertEquals("started", items[0].turnPhase); assertEquals(SessionState.PAUSED, items[1].state); assertEquals("unknown", items[2].turnPhase)
@@ -104,6 +106,15 @@ class RemoteSessionRepositoryTest {
         assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { seen += it } }
         assertEquals(listOf(2_000L, 4_000, 20_000), seen.filterIsInstance<LiveUpdate.Reconnecting>().map { it.delayMillis })
         assertEquals(4, requests.size)
+    }
+
+    @Test fun anAcceptedConnectionRestartsTheBackOffOfAQuietStream() = runTest {
+        // Three quiet connections, each accepted then cut: every reconnection waits the first delay.
+        repeat(3) { sse(": keep-alive\n\n") }
+        sse("event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<*>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { seen += it } }
+        assertEquals(listOf(2_000L, 2_000, 2_000), seen.filterIsInstance<LiveUpdate.Reconnecting>().map { it.delayMillis })
     }
 
     @Test fun aRefusalOrAnUnreadableEventStopsWithoutReconnecting() = runTest {

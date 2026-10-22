@@ -36,7 +36,7 @@ class RemoteAuthRepositoryTest {
     private val store = credentials()
     private val accounts = InMemoryAccountRepository(listOf(account("a1")))
     private fun repository(scope: kotlinx.coroutines.CoroutineScope) =
-        RemoteAuthRepository(TeamCodeClientProvider(engine, store, FakePlatform), accounts, scope)
+        TeamCodeClientProvider(engine, store, FakePlatform).let { RemoteAuthRepository(it, me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls(it, accounts), scope) }
 
     @Test fun capabilitiesAreMappedAndTheAppNamesItself() = runTest {
         answer = { HttpStatusCode.OK to """{"apiVersion":1,"serverVersion":"0.7.0","mode":"team","features":["cloud.events.v1"],"future":true}""" }
@@ -98,7 +98,7 @@ class RemoteAuthRepositoryTest {
             override suspend fun write(accountId: String, token: String) = Unit
             override suspend fun delete(accountId: String) = Unit
         }
-        val repository = RemoteAuthRepository(TeamCodeClientProvider(engine, locked, FakePlatform), accounts, backgroundScope)
+        val repository = TeamCodeClientProvider(engine, locked, FakePlatform).let { RemoteAuthRepository(it, me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls(it, accounts), backgroundScope) }
         assertFailsWith<CompanionException.CredentialStorage> { repository.me("a1") }
         assertTrue(requests.isEmpty())
     }

@@ -18,7 +18,7 @@ import kotlin.random.Random
 /**
  * When to reconnect a stream: [firstDelayMillis] after the first failure (the server's `retry:`), then doubling up to
  * [maxDelayMillis], each delay shortened by up to a fifth at random so clients cut together do not return together.
- * The count restarts once an item arrives. A `429` waits at least its `Retry-After`, bounded by [maxRetryAfterMillis].
+ * The count restarts once a connection is accepted or an item arrives. A `429` waits at least its `Retry-After`, bounded by [maxRetryAfterMillis].
  */
 class ReconnectPolicy(
     private val firstDelayMillis: Long = 2_000,
@@ -39,7 +39,8 @@ class ReconnectPolicy(
  * reconnect after the policy's delay ([LiveUpdate.Reconnecting] says when); `ENDED` emits [LiveUpdate.Ended] and
  * completes; `DENIED` and every other refusal end the flow with a [CompanionException] (a `401` is
  * [CompanionException.Unauthorized], an unreadable event [CompanionException.UnreadableEvent], which a reconnection
- * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent.
+ * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent, and calls `itemSent` once
+ * accepted and after each item.
  */
 internal fun <T> reconnecting(
     policy: ReconnectPolicy,

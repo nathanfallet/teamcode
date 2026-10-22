@@ -17,8 +17,9 @@ class AccountGuard(private val refreshAccount: RefreshAccountUseCase) {
         throw error
     }
 
+    /** A stream ended with `401`, or with `denied` (the server also says so when the token expired): check the account. */
     fun <T> flow(accountId: String, flow: Flow<T>): Flow<T> = flow.catch { error ->
-        if (error is CompanionException.Unauthorized) check(accountId)
+        if (error is CompanionException.Unauthorized || error is CompanionException.AccessRevoked) check(accountId)
         throw error
     }
 

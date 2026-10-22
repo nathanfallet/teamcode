@@ -81,6 +81,21 @@ class SessionUseCasesTest {
         assertEquals(listOf("newer", "new"), list.upserted(cloudSession("newer", createdAt = 20)).sessions.map { it.id })
     }
 
+    @Test fun aRefreshKeepsThePagesLoadedAfterTheFirstAndUnsettledRowsAreReadAgain() {
+        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1")
+            .loaded(SessionPage(listOf(cloudSession("c", createdAt = 30), cloudSession("b", createdAt = 20)), "b"))
+            .appended(SessionPage(listOf(cloudSession("a", createdAt = 10)), null))
+        // "d" appeared and pushed "b" past the first page: page 1 is replaced, the older rows stay, and so does "everything is loaded".
+        val refreshed = list.refreshed(SessionPage(listOf(cloudSession("d", createdAt = 40), cloudSession("c", SessionState.CREATING, createdAt = 30)), "c"))
+        assertEquals(listOf("d", "c", "b", "a"), refreshed.sessions.map { it.id })
+        assertNull(refreshed.nextBefore)
+        assertEquals(listOf("c"), refreshed.unsettled)
+        // A complete first page replaces everything.
+        assertEquals(listOf("d"), list.refreshed(SessionPage(listOf(cloudSession("d", createdAt = 40)), null)).sessions.map { it.id })
+        // A turn of a row still shown as creating reads it instead of guessing.
+        assertEquals("c", refreshed.applied(change(1, "c", phase = "started")).second)
+    }
+
     @Test fun theListReloadsWhenTheFeedOpensFromNowAndOnAGapButNotOnAResume() = runTest {
         val sessions = FakeSessionRepository()
         val c = change(1, "a")

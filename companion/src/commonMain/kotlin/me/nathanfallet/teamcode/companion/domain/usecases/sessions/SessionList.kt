@@ -22,6 +22,23 @@ data class SessionList(
 ) {
     fun loaded(page: SessionPage): SessionList = copy(sessions = page.sessions.filter(::belongs).sortedWith(NEWEST_FIRST), nextBefore = page.nextBefore)
 
+    /**
+     * The first page read again (a reload, a gap, a poll): it replaces the rows it covers, and the rows of the pages
+     * loaded after it stay, so a refresh never collapses a list scrolled further down.
+     */
+    fun refreshed(page: SessionPage): SessionList {
+        val fresh = loaded(page)
+        // The oldest session of the page: the rows after it come from the pages loaded later.
+        val boundary = page.sessions.maxWithOrNull(NEWEST_FIRST)
+        if (page.nextBefore == null || boundary == null) return fresh
+        val deeper = sessions.filter { NEWEST_FIRST.compare(it, boundary) > 0 }
+        if (deeper.isEmpty()) return fresh
+        return fresh.copy(sessions = fresh.sessions + deeper, nextBefore = nextBefore)
+    }
+
+    /** Rows whose state changes without a feed event (creation, a pause or resume in progress): read them again now and then. */
+    val unsettled: List<String> get() = sessions.filter { it.state in UNSETTLED }.map { it.id }
+
     fun appended(page: SessionPage): SessionList {
         val known = sessions.map { it.id }.toSet()
         return copy(sessions = (sessions + page.sessions.filter { it.id !in known && belongs(it) }).sortedWith(NEWEST_FIRST), nextBefore = page.nextBefore)
@@ -40,6 +57,8 @@ data class SessionList(
             val mayBelong = change.state == null || change.state.group == group
             return copy(finishedTurns = marks) to change.sessionId.takeIf { mayBelong }
         }
+        // A turn of a session the list still shows as preparing, pausing...: its state moved without an event, read it.
+        if (change.state == null && current.state !in SETTLED) return copy(finishedTurns = marks) to change.sessionId
         val state = change.state ?: when {
             change.turnPhase == "started" && current.state == SessionState.READY -> SessionState.ACTIVE
             finished && current.state == SessionState.ACTIVE -> SessionState.READY
@@ -66,5 +85,7 @@ data class SessionList(
 
     private companion object {
         val NEWEST_FIRST = compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id }
+        val SETTLED = setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.TERMINATED, SessionState.FAILED)
+        val UNSETTLED = SessionState.entries.toSet() - SETTLED
     }
 }

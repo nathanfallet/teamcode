@@ -6,7 +6,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -63,31 +65,35 @@ class SessionViewModelTest {
 
     @Test fun aSentMessageWaitsUntilTheTranscriptRecordsItAndAFailedOneRetriesWithItsId() = runTest(dispatcher) {
         val model = viewModel()
-        model.start(); advanceUntilIdle()
+        model.start(); settle()
         assertEquals(listOf(4L), follows)
         assertTrue(model.uiState.value.canControl)
         sessions.sendResult = { throw CompanionException.Unreachable() }
-        model.onDraftChange("Run the tests"); model.send(); advanceUntilIdle()
+        model.onDraftChange("Run the tests"); model.send(); settle()
         val failed = model.uiState.value.pending.single()
         assertEquals(PendingMessage.State.FAILED, failed.state)
         assertEquals("", model.uiState.value.draft)
         sessions.sendResult = { id -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt("in-$id", "queued", false, null) }
-        model.retry(failed.clientMessageId); advanceUntilIdle()
+        model.retry(failed.clientMessageId); settle()
         assertEquals(PendingMessage.State.SENT, model.uiState.value.pending.single().state)
         assertEquals(2, sessions.calls.count { it == "send s1 Run the tests ${failed.clientMessageId}" })
-        live.send(LiveUpdate.Item(TranscriptEvent.UserMessage(5, 5, "Run the tests", "in-${failed.clientMessageId}", "m1"))); advanceUntilIdle()
+        live.send(LiveUpdate.Item(TranscriptEvent.UserMessage(5, 5, "Run the tests", "in-${failed.clientMessageId}", "m1"))); settle()
         assertTrue(model.uiState.value.pending.isEmpty())
         model.stop()
     }
 
     @Test fun pauseShowsTheNewStateAndNothingToInterruptIsANotice() = runTest(dispatcher) {
         val model = viewModel()
-        model.start(); advanceUntilIdle()
-        model.pause(); advanceUntilIdle()
+        model.start(); settle()
+        model.pause(); settle()
         assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING, model.uiState.value.session?.state)
         sessions.interruptResult = { throw CompanionException.Server(409, "nothing_to_interrupt") }
-        model.interrupt(); advanceUntilIdle()
+        model.interrupt(); settle()
         assertEquals("Nothing is running.", model.uiState.value.notice)
         model.stop()
     }
 }
+
+/** Runs what is due within a second of virtual time; the screens' periodic refreshes never let the scheduler go idle. */
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun TestScope.settle() { advanceTimeBy(1_000); runCurrent() }

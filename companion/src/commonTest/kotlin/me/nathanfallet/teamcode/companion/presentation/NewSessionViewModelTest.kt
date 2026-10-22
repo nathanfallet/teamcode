@@ -3,7 +3,9 @@ package me.nathanfallet.teamcode.companion.presentation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -36,19 +38,23 @@ class NewSessionViewModelTest {
         val features = FakeFeatures()
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))
         val model = NewSessionViewModel(NewSessionRoute("a1"), LoadProfilesUseCase(sessions, features, guard), CreateSessionUseCase(sessions, features, guard), SequenceIds())
-        advanceUntilIdle()
+        settle()
         // The only profile is chosen; the server without the first-message capability hides the field.
         assertEquals("p1", model.uiState.value.profileId)
         assertFalse(model.uiState.value.acceptsMessage)
         model.onName("Fix"); model.onMessage("ignored")
         sessions.createResult = { throw CompanionException.Unreachable() }
-        model.create(); advanceUntilIdle()
+        model.create(); settle()
         assertNotNull(model.uiState.value.error)
         sessions.createResult = { cloudSession("new") }
-        model.create(); advanceUntilIdle()
+        model.create(); settle()
         val creates = sessions.calls.filter { it.startsWith("create") }
         assertEquals(2, creates.size); assertEquals(creates[0], creates[1])
         assertEquals("new", model.uiState.value.created?.id)
         assertFalse(model.uiState.value.canCreate)
     }
 }
+
+/** Runs what is due within a second of virtual time; the screens' periodic refreshes never let the scheduler go idle. */
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun TestScope.settle() { advanceTimeBy(1_000); runCurrent() }

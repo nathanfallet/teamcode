@@ -19,7 +19,7 @@ class RemoteTranscriptRepository(private val calls: AccountCalls, private val po
         var cursor = after
         emitAll(reconnecting(policy) { send, itemSent ->
             val client = calls.client(accountId)
-            client.followCloudEvents(sessionId, cursor, onOpen = { send(LiveUpdate.Opened(resumed = true)) }) { event ->
+            client.followCloudEvents(sessionId, cursor, onOpen = { itemSent(); send(LiveUpdate.Opened(resumed = true)) }) { event ->
                 send(LiveUpdate.Item(event.domain()))
                 cursor = event.seq
                 itemSent()

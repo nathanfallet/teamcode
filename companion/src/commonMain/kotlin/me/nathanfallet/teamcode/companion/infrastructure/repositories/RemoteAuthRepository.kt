@@ -11,18 +11,15 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LoginSession
 import me.nathanfallet.teamcode.companion.domain.models.Member
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
-import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientProvider
 
 /** [AuthRepository] over the typed client; maps its DTOs and failures to the domain's, never forwarding a server message. */
 class RemoteAuthRepository(
     private val clients: TeamCodeClientProvider,
-    accounts: AccountRepository,
+    private val calls: AccountCalls,
     private val scope: CoroutineScope,
 ) : AuthRepository {
-    private val calls = AccountCalls(clients, accounts)
-
     override suspend fun serverInfo(origin: String): ServerInfo = detached(origin) { client ->
         val capabilities = try {
             client.capabilities()

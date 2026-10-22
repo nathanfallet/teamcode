@@ -6,7 +6,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -52,14 +54,14 @@ class SessionsViewModelTest {
         val gate = CompletableDeferred<Unit>().also { sessions.gate = it }
         val model = viewModel()
         model.start()
-        advanceUntilIdle()
+        settle()
         assertEquals(listOf("feed"), sessions.calls)
         feed.send(LiveUpdate.Opened(false))
         feed.send(LiveUpdate.Item(SessionChange(1, "cloud.turn", "a", "m1", 9, null, "started")))
-        advanceUntilIdle()
+        settle()
         assertTrue(model.uiState.value.loading)
         gate.complete(Unit)
-        advanceUntilIdle()
+        settle()
         // The answer was read before the turn started: the change applies on top of it.
         assertEquals(SessionState.ACTIVE, model.uiState.value.list!!.sessions.single().state)
         assertEquals(listOf("feed", "list MINE ACTIVE null"), sessions.calls)
@@ -72,19 +74,23 @@ class SessionsViewModelTest {
         model.start()
         feed.send(LiveUpdate.Opened(false))
         feed.send(LiveUpdate.Item(SessionChange(1, "cloud.session.created", "n", "m1", 9, SessionState.CREATING, null)))
-        advanceUntilIdle()
+        settle()
         assertEquals(listOf("n"), model.uiState.value.list!!.sessions.map { it.id })
         assertEquals(1, sessions.calls.count { it == "get n" })
         model.setGroup(SessionGroup.PAUSED)
-        advanceUntilIdle()
+        settle()
         assertEquals("list MINE PAUSED null", sessions.calls.last())
         assertTrue(model.uiState.value.list!!.sessions.isEmpty())
         model.stop()
         // Stopped: the feed is closed and nothing more is read.
         val before = sessions.calls.size
         feed.send(LiveUpdate.Opened(false))
-        advanceUntilIdle()
+        settle()
         assertEquals(before, sessions.calls.size)
         assertFalse(model.uiState.value.following)
     }
 }
+
+/** Runs what is due within a second of virtual time; the screens' periodic refreshes never let the scheduler go idle. */
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun TestScope.settle() { advanceTimeBy(1_000); runCurrent() }

@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -56,6 +58,7 @@ class SessionsViewModel(
     private sealed interface Command {
         data object Reload : Command
         data object LoadMore : Command
+        data object Settle : Command
     }
     private val commands = Channel<Command>(capacity = 16)
     private var started = false
@@ -105,7 +108,8 @@ class SessionsViewModel(
         state.update { it.copy(following = true, reconnecting = false, error = null) }
         follow = viewModelScope.launch {
             try {
-                merge(followList(account.id), commands.receiveAsFlow()).collect { handle(account.id, it) }
+                val ticks = flow { while (true) { delay(SETTLE_MILLIS); emit(Command.Settle) } }
+                merge(followList(account.id), commands.receiveAsFlow(), ticks).collect { handle(account.id, it) }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -118,6 +122,8 @@ class SessionsViewModel(
         when (signal) {
             Command.Reload, SessionListSignal.Reload -> reload(accountId)
             Command.LoadMore -> more(accountId)
+            // Read again the rows whose state changes without an event (at most a few per tick).
+            Command.Settle -> state.value.list?.unsettled?.take(MAX_SETTLE)?.forEach { fetchOne(accountId, it) }
             is SessionListSignal.Connection -> state.update { it.copy(reconnecting = signal.reconnecting) }
             is SessionListSignal.Changed -> {
                 val list = state.value.list ?: return
@@ -130,12 +136,13 @@ class SessionsViewModel(
 
     private suspend fun reload(accountId: String) {
         val list = state.value.list ?: return
-        state.update { it.copy(loading = true) }
+        // The spinner only for a list with nothing to show yet: a refresh of a shown list stays quiet.
+        state.update { it.copy(loading = list.sessions.isEmpty()) }
         val outcome = attempt { loadSessions(accountId, list.scope, list.group) }
         state.update { current ->
             // A filter changed while loading: that change queued its own reload.
             val target = current.list?.takeIf { it.scope == list.scope && it.group == list.group }
-            current.copy(loading = false, list = outcome.getOrNull()?.let { page -> target?.loaded(page) } ?: current.list, error = outcome.exceptionOrNull()?.userMessage())
+            current.copy(loading = false, list = outcome.getOrNull()?.let { page -> target?.refreshed(page) } ?: current.list, error = outcome.exceptionOrNull()?.userMessage())
         }
     }
 
@@ -161,6 +168,11 @@ class SessionsViewModel(
             }
             // Unreachable for a moment: the next event or reload brings it.
         }
+    }
+
+    private companion object {
+        const val SETTLE_MILLIS = 15_000L
+        const val MAX_SETTLE = 5
     }
 
     /** Runs [call], keeping its failure as a value; cancellation and a signed-out account still end the loop. */
