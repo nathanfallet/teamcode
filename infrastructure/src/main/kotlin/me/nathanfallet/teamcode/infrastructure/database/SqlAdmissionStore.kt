@@ -139,6 +139,16 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         ensureMember(actor.teamId, memberId)
         readMemberCapacity(this, readMemberPolicy(this, memberId), nowMillis(), actor.teamId)
     }
+    override suspend fun capacities(actor: Principal, memberIds: List<String>): List<MemberCapacity> = database.query {
+        actor.requireUsageRead(); requireCurrent(this, actor)
+        if (memberIds.any { it != actor.member.id }) actor.requireTeamRead()
+        val now = nowMillis()
+        val cache = CapacityReadCache()
+        memberIds.map { memberId ->
+            ensureMember(actor.teamId, memberId)
+            readMemberCapacity(this, readMemberPolicy(this, memberId), now, actor.teamId, cache)
+        }
+    }
     override suspend fun configure(actor: Principal, policy: MemberPolicy): MemberPolicy = database.query {
         actor.requireAdmin()
         if (policy.dailyUnits !in 0..100_000_000_000 || policy.weight !in 0..1000 || policy.maxConcurrent !in 0..MAX_MEMBER_CONCURRENCY || policy.poolId?.let { !Regex("[a-zA-Z0-9_-]{1,36}").matches(it) } == true) throw TeamFailure("invalid_policy", 400, "Invalid daily allowance, concurrency limit or pool identifier.")

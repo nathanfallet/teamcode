@@ -65,6 +65,9 @@ class FairSchedulingHttpTest {
                         admission.configure(heavy.principal, MemberPolicy(session.principal.member.id, maxConcurrent = if (session == heavy) 2 else 0, weight = weight))
                     }
                     assertEquals(listOf(500_000L, 500_000L, 100_000L), listOf(heavy, developer, support).map { admission.capacity(it.principal).dailyAllowanceUnits })
+                    // The batch read the dashboard uses must match reading each member alone.
+                    val everyone = listOf(heavy, developer, support).map { it.principal.member.id }
+                    assertEquals(everyone.map { admission.capacity(heavy.principal, it) }, admission.capacities(heavy.principal, everyone))
                     val cipher = CredentialCipher(ByteArray(32) { 39 })
                     val accounts = SqlAccountStore(a, cipher)
                     val enrolled = accounts.upsert(AccountMutationActor.System,

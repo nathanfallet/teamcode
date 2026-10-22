@@ -1,5 +1,9 @@
 # Implementation status
 
+## Dashboard overview and capacity pages: one transaction for all members (2026-10-22)
+
+Both pages called `AdmissionStore.capacity` once per member: one transaction of about a dozen queries each, N sequential connection checkouts, and the same group aggregates recomputed for every member. On a 400,000-row `reservations`/`reservation_groups` fixture, the per-group daily spend (`readGroupUsage`) alone took 24.8 ms for a group-day of 4,445 rows, and was repeated per member and per group. `AdmissionStore.capacities` now reads all members in one transaction and computes each group's usage and each pool's total weight once (`CapacityReadCache`); the default implementation keeps other stores working. Checked by `FairSchedulingHttpTest` (batch equals one-by-one). Other findings of this audit: all other list/detail queries examined use an index matching their filter order (agent runs, audit events, quota history, cloud sessions, token usage); `AGENTS.md` now states the N+1 and index-order rules.
+
 ## Query audit of the admission and dashboard paths (2026-10-22)
 
 Production symptoms: dashboard pages taking seconds, `503 queue_timeout` after 90 s even in observation-only mode. Logs of the two production replicas over 3 h: 538 admissions, p50 wait 5.6 s, p90 68.6 s, max 92 s; every 503 was `queue_timeout`. Observation-only only disables pacing directives; it does not skip the admission queue.
