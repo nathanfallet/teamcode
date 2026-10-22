@@ -65,19 +65,54 @@ data class ApiPriceTableView(val prices: List<ApiPriceView>)
 data class WindowCapacityView(val window: String, val fullWindowApiMicros: Long? = null, val samples: Int)
 
 /**
+ * One current window of an account, split between TeamCode and outside use since it opened ([sinceMillis]).
+ * [observedUtilization] is the provider's reading (0.0 to 1.0) and [teamCodeApiMicros] the API-equivalent TeamCode
+ * settled on the account since then. With a learned capacity: [teamCodeUtilization] is TeamCode's part of the reading,
+ * [outsideUtilization] the rest (use of the subscription outside TeamCode, never negative) worth [outsideApiMicros], and
+ * [remainingApiMicros] what is left of the window. Null means unknown (no capacity yet, or an unpriced model).
+ */
+@Serializable
+data class WindowUsageView(
+    val window: String, val sinceMillis: Long, val observedAtMillis: Long, val resetsAtMillis: Long, val observedUtilization: Double,
+    val teamCodeApiMicros: Long? = null, val teamCodeUtilization: Double? = null, val outsideUtilization: Double? = null,
+    val outsideApiMicros: Long? = null, val remainingApiMicros: Long? = null,
+)
+
+/**
  * One home pool account in the estimate. [status]: `counted`, `unavailable` (disabled, pending, reconnect required or
  * cooling down), `no_fresh_observation` or `no_estimate`. [binding] is the window that gives the smaller daily figure.
+ * [dailyApiMicros] is what is left for today; [capacityDailyApiMicros] the account's full daily capacity whatever it has
+ * used (min of five-hour capacity × 24 / 5 and weekly capacity / 7), null when unknown.
  */
 @Serializable
 data class PoolSizeAccountView(
     val accountId: String, val status: String, val dailyApiMicros: Long, val binding: String? = null,
     val windows: List<WindowCapacityView> = emptyList(),
+    val capacityDailyApiMicros: Long? = null, val usage: List<WindowUsageView> = emptyList(),
+)
+
+/**
+ * Seven days of one model's tokens and their API-equivalent by token type (micro-dollars, cache writes and reads
+ * apart); the costs are null when a day of that model has no price.
+ */
+@Serializable
+data class ModelUsageView(
+    val provider: String, val model: String, val inputTokens: Long, val cacheCreationTokens: Long, val cacheReadTokens: Long, val outputTokens: Long,
+    val inputApiMicros: Long? = null, val cacheWriteApiMicros: Long? = null, val cacheReadApiMicros: Long? = null, val outputApiMicros: Long? = null,
+    val apiEquivalentMicros: Long? = null,
 )
 
 /**
  * The automatic home pool size. [effectiveDailyUnits] is what admission uses now ([source] `automatic` or `manual`).
  * [estimatedDailyUnits] is the current estimate before smoothing, null with [reason] (`no_accounts`, `no_estimate`,
- * `no_priced_usage`); [automaticDailyUnits] the stored, smoothed value written every ten minutes.
+ * `no_priced_usage`); [automaticDailyUnits] the stored, smoothed value written every ten minutes. [estimatedDailyApiMicros]
+ * is what the accounts have **left** for today.
+ *
+ * Capacity, independent of current use: [capacityDailyApiMicros] sums the full daily capacity of the accounts that can
+ * serve and whose capacity is known; [capacityUnknownAccounts] counts those left out, so with a non-zero count it is a
+ * floor. [capacityDailyTokens] converts it at the team's seven-day mix ([tokensPerApiMicro], cache reads included).
+ * [outsideWeeklyApiMicros] is what the accounts' current weekly windows used outside TeamCode. [models] is the
+ * seven-day mix by model, priced by token type.
  */
 @Serializable
 data class PoolSizeView(
@@ -85,4 +120,6 @@ data class PoolSizeView(
     val effectiveDailyUnits: Long, val source: String, val estimatedDailyApiMicros: Long, val estimatedDailyUnits: Long? = null,
     val reason: String? = null, val creditsPerApiMicro: Double? = null, val unpricedModels: List<String> = emptyList(),
     val accounts: List<PoolSizeAccountView> = emptyList(),
+    val capacityDailyApiMicros: Long = 0, val capacityUnknownAccounts: Int = 0, val capacityDailyTokens: Long? = null,
+    val tokensPerApiMicro: Double? = null, val outsideWeeklyApiMicros: Long? = null, val models: List<ModelUsageView> = emptyList(),
 )

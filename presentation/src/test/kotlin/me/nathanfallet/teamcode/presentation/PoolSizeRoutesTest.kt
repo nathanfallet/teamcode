@@ -10,6 +10,7 @@ import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.routing.TokenUsage
 import kotlin.test.*
 
 /** API and dashboard parity for the automatic home pool size and the API price table. */
@@ -28,10 +29,13 @@ class PoolSizeRoutesTest {
         val sizing = object : PoolSizingService {
             override suspend fun report(actor: Principal): PoolSizeReport {
                 actor.requireTeamRead()
-                val estimate = PoolSizeEstimate(40_000_000, 80_000_000, listOf(AccountPoolShare("account-1", PoolContribution.COUNTED, 40_000_000, "seven_day"),
-                    AccountPoolShare("account-2", PoolContribution.NO_ESTIMATE, 0)), null)
+                val estimate = PoolSizeEstimate(40_000_000, 80_000_000, listOf(AccountPoolShare("account-1", PoolContribution.COUNTED, 40_000_000, "seven_day", 28_571_429),
+                    AccountPoolShare("account-2", PoolContribution.NO_ESTIMATE, 0)), null, capacityDailyMicros = 28_571_429, capacityUnknownAccounts = 1)
+                val mix = TokenMix(listOf(ModelUsage("anthropic", "claude-opus-5-5", TokenUsage(1_000_000, 1_000_000, 100_000_000, 1_000_000),
+                    PricedCost(4_000_000, 5_000_000, 20_000_000, 20_000_000))), 103.0 / 49)
                 return PoolSizeReport(stored.autoPoolSize, 1_000_000, 80_000_000, 1_000, if (stored.autoPoolSize) 80_000_000 else 1_000_000, stored.autoPoolSize,
-                    estimate, 2.0, listOf("anthropic/unpriced"), mapOf("account-1" to listOf(WindowCapacity("seven_day", 200_000_000, 4))))
+                    estimate, 2.0, listOf("anthropic/unpriced"), mapOf("account-1" to listOf(WindowCapacity("seven_day", 200_000_000, 4))),
+                    mapOf("account-1" to listOf(WindowUsageSplit("seven_day", 0, 1_000, 2_000, .5, 60_000_000, .3, .2, 40_000_000, 100_000_000))), mix)
             }
             override suspend fun refresh() = Unit
         }
@@ -53,6 +57,16 @@ class PoolSizeRoutesTest {
             assertEquals(1_000_000, size.manualDailyUnits, "The manual budget is reported unchanged")
             assertEquals(listOf("counted", "no_estimate"), size.accounts.map { it.status })
             assertEquals(200_000_000, size.accounts.first().windows.single().fullWindowApiMicros)
+            assertEquals(28_571_429, size.capacityDailyApiMicros, "The capacity is reported apart from what is left today")
+            assertEquals(1, size.capacityUnknownAccounts)
+            assertEquals(Math.round(28_571_429 * 103.0 / 49), size.capacityDailyTokens)
+            assertEquals(28_571_429, size.accounts.first().capacityDailyApiMicros)
+            assertNull(size.accounts.last().capacityDailyApiMicros, "Unknown, not zero")
+            val weekly = size.accounts.first().usage.single()
+            assertEquals(.2, weekly.outsideUtilization); assertEquals(40_000_000, weekly.outsideApiMicros); assertEquals(100_000_000, weekly.remainingApiMicros)
+            assertEquals(40_000_000, size.outsideWeeklyApiMicros)
+            assertEquals(20_000_000, size.models.single().cacheReadApiMicros, "Cache reads are priced apart")
+            assertEquals(49_000_000, size.models.single().apiEquivalentMicros)
             assertEquals(true, sdk.savePacingSettings(PacingSettingsView(observationOnly = true)).autoPoolSize, "Omitting autoPoolSize keeps it")
             assertEquals(false, sdk.savePacingSettings(PacingSettingsView(observationOnly = true, autoPoolSize = false)).autoPoolSize)
             assertEquals(HttpStatusCode.Forbidden, client.put("/api/v1/policy/pacing") {
@@ -77,6 +91,10 @@ class PoolSizeRoutesTest {
             assertTrue(page.contains("name=\"autoPoolSize\" >"), "Unchecked after the last save")
             assertTrue(page.contains("<code>claude-sonnet-4</code>")); assertTrue(page.contains("<code>anthropic/unpriced</code>"))
             assertTrue(page.contains("bound by seven_day")); assertTrue(page.contains("fewer than three samples"))
+            assertTrue(page.contains("Subscription capacity: $28.57 a day in API-equivalent"), "The capacity leads the page")
+            assertTrue(page.contains("1 account that can serve is not learned yet"))
+            assertTrue(page.contains("outside 20% ($40.00)")); assertTrue(page.contains("$40.00 in API-equivalent"))
+            assertTrue(page.contains("Last seven days by model"))
             assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/capacity/pool-size") { header(HttpHeaders.Cookie, "teamcode_session=member") }.status)
             suspend fun form(path: String, body: String) = client.post(path) {
                 header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")

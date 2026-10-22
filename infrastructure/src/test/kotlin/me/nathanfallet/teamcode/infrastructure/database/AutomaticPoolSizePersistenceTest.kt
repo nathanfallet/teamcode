@@ -99,6 +99,20 @@ class AutomaticPoolSizePersistenceTest {
                 // Weekly: 0.67 × $10 / 3.5 days; five-hour: $5 × 0.95 × 24 / 5. The weekly term binds.
                 assertEquals((.67 * 10_000_000 / 3.5).roundToLong().toDouble(), share.dailyMicros.toDouble(), 2_000.0)
                 assertEquals(1.0 / 3, report.creditsPerMicro!!, 1e-9, "600,000 credits for $1.80")
+                // Capacity whatever is used: min($5 × 24 / 5, $10 / 7) a day, and the same in tokens at the mix (600,000 tokens for $1.80).
+                assertEquals(1_428_571, share.capacityDailyMicros)
+                assertEquals(1_428_571, report.estimate.capacityDailyMicros); assertEquals(0, report.estimate.capacityUnknownAccounts)
+                assertEquals(476_190, report.capacityDailyTokens)
+                assertEquals(PricedCost(inputMicros = 1_800_000), report.mix.models.single().cost)
+                // The weekly window opened 3.5 days ago and read 28% at the last sample; TeamCode's $1.80 explains 18 points,
+                // so the 10 points it already showed before TeamCode's first request were used elsewhere.
+                val weekly = report.usage.getValue(account).single { it.window == "seven_day" }
+                assertEquals(weeklyReset - 7 * DAY, weekly.sinceMillis)
+                assertEquals(1_800_000, weekly.teamCodeMicros)
+                assertEquals(.10, weekly.outsideShare!!, 1e-9)
+                assertEquals(1_000_000, weekly.outsideMicros)
+                assertEquals(7_200_000, weekly.remainingMicros)
+                assertEquals(1_000_000, report.outsideWeeklyMicros)
                 val automatic = assertNotNull(report.automaticDailyUnits)
                 assertEquals(report.estimate.dailyUnits!!.toDouble(), automatic.toDouble(), 1_000.0, "The first value is the estimate")
                 assertEquals(2_000_000, admission.capacity(admin, member.member.id).poolDailyUnits, "Computed but unchecked: still the manual budget")

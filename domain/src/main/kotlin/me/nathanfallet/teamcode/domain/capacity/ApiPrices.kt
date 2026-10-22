@@ -32,6 +32,12 @@ class ApiPriceTable(private val prices: List<ApiPrice>) {
             .maxWithOrNull(compareBy<ApiPrice>({ it.model == served }, { it.model.length }, { it.effectiveFromDay }))
     }
 
+    /** The API-equivalent of [tokens] by token type (cache reads and writes apart), null when no row prices the model on that day. */
+    fun costOf(provider: String, model: String, day: Long, tokens: TokenUsage): PricedCost? = priceFor(provider, model, day)?.let { price ->
+        fun of(count: Long, perMillion: Long) = (count.toDouble() * perMillion / 1_000_000).roundToLong()
+        PricedCost(of(tokens.input, price.inputMicros), of(tokens.cacheCreation, price.cacheWriteMicros), of(tokens.cacheRead, price.cacheReadMicros), of(tokens.output, price.outputMicros))
+    }
+
     /** The API-equivalent of [tokens] in micro-dollars, null when no row prices the model on that day. */
     fun microsOf(provider: String, model: String, day: Long, tokens: TokenUsage): Long? = priceFor(provider, model, day)?.let { price ->
         (tokens.input.toDouble() * price.inputMicros + tokens.cacheCreation.toDouble() * price.cacheWriteMicros +
@@ -102,6 +108,46 @@ object AnthropicListPrices {
         row("claude-haiku-5-5", 100_000, 125_000, 10_000, 500_000),
         row("claude-haiku-4-5", 1_000_000, 1_250_000, 100_000, 5_000_000),
     )
+}
+
+/** An API-equivalent split by token type, in micro-dollars. */
+data class PricedCost(val inputMicros: Long = 0, val cacheWriteMicros: Long = 0, val cacheReadMicros: Long = 0, val outputMicros: Long = 0) {
+    val totalMicros: Long get() = inputMicros + cacheWriteMicros + cacheReadMicros + outputMicros
+    operator fun plus(other: PricedCost) = PricedCost(inputMicros + other.inputMicros, cacheWriteMicros + other.cacheWriteMicros,
+        cacheReadMicros + other.cacheReadMicros, outputMicros + other.outputMicros)
+}
+
+/** Every token of [this] usage, cached or not: what "tokens" means when a capacity is converted from dollars. */
+val TokenUsage.allTokens: Long get() = input + cacheRead + cacheCreation + output
+
+/** One model's tokens over the look-back and, when every day of it is priced, their API-equivalent by token type. */
+data class ModelUsage(val provider: String, val model: String, val tokens: TokenUsage, val cost: PricedCost?)
+
+/**
+ * The team's model mix over the last seven days of the ledger. [tokensPerMicro] converts a capacity in API-equivalent
+ * into tokens at that mix (every token type, cache reads included, over priced models only); null without priced traffic.
+ * A capacity in tokens therefore moves with the mix: the same window holds about 20 times more cache reads than
+ * uncached input tokens, which is why the capacity is learned in API-equivalent and only shown in tokens.
+ */
+data class TokenMix(val models: List<ModelUsage>, val tokensPerMicro: Double?) {
+    companion object {
+        fun of(prices: ApiPriceTable, usage: List<PricedTokens>): TokenMix {
+            val models = usage.groupBy { it.provider to it.model }.map { (key, rows) ->
+                var tokens = TokenUsage()
+                var cost: PricedCost? = PricedCost()
+                for (row in rows) {
+                    tokens = TokenUsage(tokens.input + row.tokens.input, tokens.output + row.tokens.output,
+                        tokens.cacheRead + row.tokens.cacheRead, tokens.cacheCreation + row.tokens.cacheCreation)
+                    val priced = prices.costOf(row.provider, row.model, row.day, row.tokens)
+                    cost = if (priced == null) { if (row.tokens.allTokens > 0) null else cost } else cost?.plus(priced)
+                }
+                ModelUsage(key.first, key.second, tokens, cost)
+            }.sortedWith(compareByDescending<ModelUsage> { it.cost?.totalMicros ?: -1L }.thenBy { it.provider }.thenBy { it.model })
+            val priced = models.filter { it.cost != null }
+            val micros = priced.sumOf { it.cost!!.totalMicros }
+            return TokenMix(models, if (micros > 0) priced.sumOf { it.tokens.allTokens }.toDouble() / micros else null)
+        }
+    }
 }
 
 /** Tokens of one provider, model and UTC day, as the raw ledger stores them. */

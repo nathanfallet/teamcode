@@ -22,7 +22,7 @@ class SqlPoolSizing(private val database: Database) : PoolSizingService {
         PoolSizeReport(settings.autoPoolSize, budget.manual, budget.automatic, budget.computedAt,
             AutomaticPoolSize.effectiveBudget("", budget.manual, budget.automatic, budget.computedAt, settings.autoPoolSize, now),
             AutomaticPoolSize.usesAutomatic("", budget.automatic, budget.computedAt, settings.autoPoolSize, now),
-            inputs.estimate, inputs.ratio.creditsPerMicro, inputs.ratio.unpricedModels, inputs.capacities)
+            inputs.estimate, inputs.ratio.creditsPerMicro, inputs.ratio.unpricedModels, inputs.capacities, inputs.usage, inputs.mix)
     }
 
     /** Teams without any price cannot be estimated; their automatic value, if any, ages out and the manual budget applies. */
@@ -55,7 +55,10 @@ internal fun readHomeBudget(teamId: String): HomeBudget = PoolBudgets.select(Poo
     .where { (PoolBudgets.teamId eq teamId) and (PoolBudgets.poolId eq "") }.singleOrNull()
     ?.let { HomeBudget(it[PoolBudgets.dailyUnits], it[PoolBudgets.autoDailyUnits], it[PoolBudgets.autoComputedAt]) } ?: HomeBudget(DEFAULT_POOL_DAILY_UNITS, null, null)
 
-internal data class PoolSizingInputs(val estimate: PoolSizeEstimate, val ratio: CreditRatio, val capacities: Map<String, List<WindowCapacity>>)
+internal data class PoolSizingInputs(
+    val estimate: PoolSizeEstimate, val ratio: CreditRatio, val capacities: Map<String, List<WindowCapacity>>,
+    val usage: Map<String, List<WindowUsageSplit>>, val mix: TokenMix,
+)
 
 /**
  * Everything the estimate reads, inside the caller's transaction: the home pool's accounts and current windows, seven
@@ -73,16 +76,20 @@ internal fun readPoolSizingInputs(teamId: String, now: Long): PoolSizingInputs {
     val observations = rows.map { (account, cooldown) -> PoolAccountObservation(account, cooldown, windows.filter { it.accountId == account.id }) }
     val since = now - CAPACITY_HISTORY_MILLIS
     val estimator = EstimateWindowCapacityUseCase()
-    val capacities = ids.associateWith { id ->
+    val splitter = SplitWindowUsageUseCase()
+    val learned = ids.associateWith { id ->
         val costs = hourCosts(prices, id, since / HOUR)
         SHARED_POOL_WINDOWS.map { window ->
             val history = QuotaHistory.select(QuotaHistory.utilization, QuotaHistory.observedAt, QuotaHistory.resetsAt)
                 .where { (QuotaHistory.accountId eq id) and (QuotaHistory.windowName eq window) and (QuotaHistory.observedAt greaterEq since) }
                 .orderBy(QuotaHistory.observedAt to SortOrder.DESC).limit(HISTORY_ROWS) // past the bound, keep the newest readings
                 .map { QuotaSample(it[QuotaHistory.utilization], it[QuotaHistory.observedAt], it[QuotaHistory.resetsAt]) }.asReversed()
-            estimator.estimate(window, history, costs, now)
+            val capacity = estimator.estimate(window, history, costs, now)
+            capacity to splitter.split(window, history, costs, capacity.fullWindowMicros, now)
         }
     }
+    val capacities = learned.mapValues { (_, windows) -> windows.map { it.first } }
+    val splits = learned.mapValues { (_, windows) -> windows.mapNotNull { it.second } }
     val today = now / DAY_MILLIS
     val t = TokenUsageTable
     val input = t.inputTokens.sum(); val cacheWrite = t.cacheCreationTokens.sum(); val cacheRead = t.cacheReadTokens.sum(); val output = t.outputTokens.sum()
@@ -92,7 +99,8 @@ internal fun readPoolSizingInputs(teamId: String, now: Long): PoolSizingInputs {
             PricedTokens(it[t.provider], it[t.model], it[t.dayNumber], TokenUsage(it[input] ?: 0, it[output] ?: 0, it[cacheRead] ?: 0, it[cacheWrite] ?: 0))
         }
     val ratio = CreditRatio.of(prices, usage)
-    return PoolSizingInputs(SizeSharedPoolUseCase().size(observations, capacities, ratio.creditsPerMicro, now, threshold), ratio, capacities)
+    return PoolSizingInputs(SizeSharedPoolUseCase().size(observations, capacities, ratio.creditsPerMicro, now, threshold), ratio, capacities,
+        splits, TokenMix.of(prices, usage))
 }
 
 /** One account's hours since [fromHour], each priced at its own day's prices; an hour with an unpriced model is marked. */

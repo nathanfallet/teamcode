@@ -74,8 +74,17 @@ internal fun PoolSizeReport.view() = PoolSizeView(enabled, manualDailyUnits, aut
     estimate.dailyMicros, estimate.dailyUnits, estimate.reason, creditsPerMicro, unpricedModels,
     estimate.accounts.map { share ->
         PoolSizeAccountView(share.accountId, share.status.name.lowercase(), share.dailyMicros, share.binding,
-            capacities[share.accountId].orEmpty().map { WindowCapacityView(it.window, it.fullWindowMicros, it.samples) })
+            capacities[share.accountId].orEmpty().map { WindowCapacityView(it.window, it.fullWindowMicros, it.samples) },
+            share.capacityDailyMicros, usage[share.accountId].orEmpty().map { it.view() })
+    },
+    estimate.capacityDailyMicros, estimate.capacityUnknownAccounts, capacityDailyTokens, mix.tokensPerMicro, outsideWeeklyMicros,
+    mix.models.map { m ->
+        ModelUsageView(m.provider, m.model, m.tokens.input, m.tokens.cacheCreation, m.tokens.cacheRead, m.tokens.output,
+            m.cost?.inputMicros, m.cost?.cacheWriteMicros, m.cost?.cacheReadMicros, m.cost?.outputMicros, m.cost?.totalMicros)
     })
+
+private fun WindowUsageSplit.view() = WindowUsageView(window, sinceMillis, observedAtMillis, resetsAtMillis, observedShare,
+    teamCodeMicros, teamCodeShare, outsideShare, outsideMicros, remainingMicros)
 
 private fun money(micros: Long?): String = micros?.let { "$" + BigDecimal(it).movePointLeft(6).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() } ?: "unknown"
 private fun perMillion(micros: Long): String = BigDecimal(micros).movePointLeft(6).stripTrailingZeros().toPlainString()
@@ -88,25 +97,43 @@ private fun poolSizeContent(actor: Principal, report: PoolSizeReport, prices: Li
         PoolSizeEstimate.NO_PRICED_USAGE -> "No priced traffic in the last seven days, so capacity cannot be converted to credits. Add prices for the models in use."
         else -> null
     }
+    val estimate = report.estimate
+    val capacityText = if (estimate.accounts.none { it.capacityDailyMicros != null }) "unknown: no account has learned its windows yet"
+        else money(estimate.capacityDailyMicros) + " a day in API-equivalent" + (report.capacityDailyTokens?.let { ", about ${formatUnits(it)} tokens a day at your last seven days' model mix (cache reads included)" }.orEmpty()) +
+            (if (estimate.capacityUnknownAccounts > 0) ". At least: ${estimate.capacityUnknownAccounts} account${if (estimate.capacityUnknownAccounts == 1) "" else "s"} that can serve ${if (estimate.capacityUnknownAccounts == 1) "is" else "are"} not learned yet and not included" else "")
+    val outsideText = report.outsideWeeklyMicros?.let { "Used outside TeamCode in the accounts' current weekly windows: ${money(it)} in API-equivalent (the provider's percentage minus TeamCode's own traffic)." }
+        ?: "Use outside TeamCode: unknown until a weekly window is learned."
+    val capacity = """<div class="notice"><strong>Subscription capacity: ${escape(capacityText)}.</strong>
+        <p>The full daily capacity of the accounts that can serve, whatever they have used this week: for each account the smaller of a day of five-hour windows and a seventh of its weekly window. Today's budget below is what is left of it before the resets.</p><p>${escape(outsideText)}</p></div>"""
     val status = """<div class="notice"><strong>Today's home pool budget: ${formatUnits(report.effectiveDailyUnits)} credits (${if (automatic) "automatic" else "manual"})</strong>
         <p>Manual budget: ${formatUnits(report.manualDailyUnits)} credits. Automatic value: ${report.automaticDailyUnits?.let { "${formatUnits(it)} credits, computed ${java.time.Instant.ofEpochMilli(report.automaticComputedAtMillis!!)}" } ?: "none yet"}.
-        Current estimate: ${report.estimate.dailyUnits?.let { formatUnits(it) + " credits" } ?: "none"} (${money(report.estimate.dailyMicros)} a day in API-equivalent${report.creditsPerMicro?.let { ", " + BigDecimal(it).round(java.math.MathContext(4)).toPlainString() + " credits per micro-dollar" }.orEmpty()}).</p>
+        Current estimate: ${report.estimate.dailyUnits?.let { formatUnits(it) + " credits" } ?: "none"} (${money(report.estimate.dailyMicros)} left today in API-equivalent${report.creditsPerMicro?.let { ", " + BigDecimal(it).round(java.math.MathContext(4)).toPlainString() + " credits per micro-dollar" }.orEmpty()}).</p>
         ${reasonText?.let { "<p>${escape(it)} The manual budget applies.</p>" }.orEmpty()}
         ${if (report.enabled && !automatic && reasonText == null) "<p>The automatic value is missing or older than an hour; the manual budget applies until the next computation.</p>" else ""}</div>"""
     val toggle = """<form method="post" action="/dashboard/capacity/pool-size">${csrf(actor)}<label><input type="checkbox" name="autoPoolSize" ${if (report.enabled) "checked" else ""}> Automatic shared pool size</label>
         <p>Computes the home pool's daily budget from the remaining capacity of its subscription accounts every ten minutes, moving at most 20% an hour. Each member still receives the pool budget × their weight / the total weight, capped by their personal cap. Unchecked, the hand-typed budget on the Capacity page applies, unchanged. Named pools and shared overflow reserves stay manual.</p><button>Save</button></form>"""
     val rows = report.estimate.accounts.joinToString("") { share ->
         val windows = report.capacities[share.accountId].orEmpty().joinToString("<br>") { "${escape(it.window)}: ${money(it.fullWindowMicros)} per full window · ${it.samples} sample${if (it.samples == 1) "" else "s"}" }
+        val usage = report.usage[share.accountId].orEmpty().joinToString("<br>") { split ->
+            "${escape(split.window)}: ${percent(split.observedShare)} used" + (split.outsideShare?.let { outside ->
+                " · TeamCode ${percent(split.teamCodeShare!!)}, outside ${percent(outside)} (${money(split.outsideMicros)})" } ?: " · split unknown")
+        }.ifEmpty { "unknown" }
         val label = when (share.status) {
             PoolContribution.COUNTED -> "${money(share.dailyMicros)} a day" + (share.binding?.let { " · bound by ${escape(it)}" }.orEmpty())
             PoolContribution.UNAVAILABLE -> "Nothing: disabled, pending handover, reconnect required or cooling down"
             PoolContribution.NO_FRESH_OBSERVATION -> "Left out: no fresh five-hour or weekly observation"
             PoolContribution.NO_ESTIMATE -> "Left out until estimated: an observed window has fewer than three samples"
         }
-        "<tr><td>${names[share.accountId] ?: "<code>${escape(share.accountId)}</code>"}</td><td>$label</td><td><small>$windows</small></td></tr>"
+        "<tr><td>${names[share.accountId] ?: "<code>${escape(share.accountId)}</code>"}</td><td>${share.capacityDailyMicros?.let { money(it) + " a day" } ?: "unknown"}</td><td>$label</td><td><small>$usage</small></td><td><small>$windows</small></td></tr>"
     }
     val accountsTable = "<h2>Accounts</h2>" + if (rows.isEmpty()) empty("No account in the home pool") else
-        "<table><thead><tr><th>Account</th><th>Daily capacity</th><th>Learned windows</th></tr></thead><tbody>$rows</tbody></table>"
+        "<table><thead><tr><th>Account</th><th>Capacity</th><th>Left today</th><th>Current windows: TeamCode and outside</th><th>Learned windows</th></tr></thead><tbody>$rows</tbody></table>"
+    val mixRows = report.mix.models.joinToString("") { m ->
+        "<tr><td>${escape(m.provider)}</td><td><code>${escape(m.model)}</code></td><td class=\"num\">${formatUnits(m.tokens.allTokens)}</td><td class=\"num\">${formatUnits(m.tokens.cacheRead)}</td>" +
+            "<td class=\"num\">${money(m.cost?.inputMicros)}</td><td class=\"num\">${money(m.cost?.cacheWriteMicros)}</td><td class=\"num\">${money(m.cost?.cacheReadMicros)}</td><td class=\"num\">${money(m.cost?.outputMicros)}</td><td class=\"num\">${money(m.cost?.totalMicros)}</td></tr>"
+    }
+    val mixTable = if (mixRows.isEmpty()) "" else "<h2>Last seven days by model</h2><p>TeamCode's own traffic, priced at the table below; cache writes and cache reads are priced apart.</p>" +
+        "<table><thead><tr><th>Provider</th><th>Model</th><th class=\"num\">Tokens</th><th class=\"num\">of which cache reads</th><th class=\"num\">Input</th><th class=\"num\">Cache write</th><th class=\"num\">Cache read</th><th class=\"num\">Output</th><th class=\"num\">API-equivalent</th></tr></thead><tbody>$mixRows</tbody></table>"
     val unpriced = if (report.unpricedModels.isEmpty()) "" else "<p class=\"notice\">Models without a price (excluded from the ratio and from samples): ${report.unpricedModels.joinToString(", ") { "<code>${escape(it)}</code>" }}</p>"
     val priceRows = prices.joinToString("") { p ->
         """<tr><td>${escape(p.provider)}</td><td><code>${escape(p.model)}</code></td><td>${LocalDate.ofEpochDay(p.effectiveFromDay)}</td><td class="num">${perMillion(p.inputMicros)}</td><td class="num">${perMillion(p.cacheWriteMicros)}</td><td class="num">${perMillion(p.cacheReadMicros)}</td><td class="num">${perMillion(p.outputMicros)}</td>
@@ -121,7 +148,7 @@ private fun poolSizeContent(actor: Principal, report: PoolSizeReport, prices: Li
         <label>Cache read $ / million <input name="cacheRead" inputmode="decimal" required></label><label>Output $ / million <input name="output" inputmode="decimal" required></label><button>Save price</button></form>"""
     val loadForm = """<form method="post" action="/dashboard/capacity/api-prices/load-defaults">${csrf(actor)}<p class="card-title">Load current Anthropic prices</p>
         <p>Adds Anthropic's API list prices for the current Claude models, read on ${LocalDate.ofEpochDay(AnthropicListPrices.CHECKED_ON_DAY)} from <a href="${AnthropicListPrices.SOURCE}">${AnthropicListPrices.SOURCE}</a>, dated that day (cache writes at the five-minute rate). Rows you already have for the same model and date are kept. Check them against the current list before relying on them.</p><button>Load current Anthropic prices</button></form>"""
-    val explanation = help("How the automatic size is computed", """<p>Each account's windows are learned in <strong>API-equivalent</strong>: the dollars the provider's pay-as-you-go API would charge for the same tokens, priced with the table below. A sample pairs two readings of the same window at least five points apart and divides the priced tokens settled between them by the rise; the median of the last seven days, with at least three samples, is the window's full capacity.</p>
+    val explanation = help("How the automatic size is computed", """<p>Each account's windows are learned in <strong>API-equivalent</strong>: the dollars the provider's pay-as-you-go API would charge for the same tokens, priced with the table below. A sample pairs two readings of the same window at least five points apart and divides the priced tokens TeamCode settled between them by the rise. The provider's percentage also counts use of the subscription outside TeamCode, which only lowers a sample, so the upper quartile of the last seven days' samples, with at least three samples, is the window's full capacity. Without three samples a capacity is unknown, never guessed. The part of a window's percentage that TeamCode's own traffic does not explain is shown as use outside TeamCode.</p>
         <p>An account's daily capacity is the smaller of its five-hour rate (five-hour capacity × quota pressure threshold × 24 / 5) and its weekly allowance (weekly points left before the threshold × weekly capacity / days left before the reset). Accounts that cannot serve (disabled, reconnect required, cooling down) count for nothing, and accounts without an estimate yet are left out of the sum (with no estimate at all, the manual budget applies); an account whose weekly window is at the threshold counts for nothing until its reset comes within the day. The pool total in credits is that sum × the credits charged per API-equivalent micro-dollar over the last seven days.</p>""")
-    return explanation + status + toggle + accountsTable + unpriced + "<h2 id=\"prices\">API prices</h2><p>Dollars per million tokens. A model row applies from its date until a later row for the same model; an exact model wins over the longest prefix.</p>" + priceTable + addForm + loadForm
+    return explanation + capacity + status + toggle + accountsTable + mixTable + unpriced + "<h2 id=\"prices\">API prices</h2><p>Dollars per million tokens. A model row applies from its date until a later row for the same model; an exact model wins over the longest prefix.</p>" + priceTable + addForm + loadForm
 }

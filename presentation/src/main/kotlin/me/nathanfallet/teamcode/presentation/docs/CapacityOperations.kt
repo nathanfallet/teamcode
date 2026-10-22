@@ -160,8 +160,11 @@ private fun ApiCatalog.allowanceOperations() {
         operationId = "getPoolSize"; tag(ApiTags.CAPACITY)
         summary = "The automatic home pool size"
         description = "Whether the home pool is sized from the subscriptions (`autoPoolSize` on `PUT /api/v1/policy/pacing`), " +
-            "the manual and automatic budgets, the one admission uses now, and the estimate behind it: each home pool account's " +
-            "daily capacity in API-equivalent micro-dollars and its learned windows. Administrators and `team:read` keys only."
+            "the manual and automatic budgets, the one admission uses now, and the estimate behind it: what each home pool account " +
+            "has left today in API-equivalent micro-dollars and its learned windows; each account's full daily capacity (null when " +
+            "unknown) and the pool's, with the count of unknown accounts and its conversion into tokens at the team's seven-day mix; " +
+            "each current window split between TeamCode and use outside TeamCode; and the seven-day cost by model and token type. " +
+            "Administrators and `team:read` keys only."
         responses { ok<PoolSizeView>("The sizing.") }
     }
     get("/api/v1/policy/api-prices") {
