@@ -2,7 +2,9 @@ package me.nathanfallet.teamcode.domain.artifacts
 
 import java.security.MessageDigest
 import java.util.Base64
+import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.domain.team.*
@@ -16,20 +18,27 @@ data class ViewTicket(val artifactId: String, val version: Int, val memberId: St
 }
 
 /**
- * Signed view tickets, carried in the content path `/artifact/<id>/<ticket>/<path>`. The key is derived with HKDF-SHA256
- * from the server's credential key under the label `artifact-view`, so it is never the key that seals secrets.
- * A ticket is `<payload>.<mac>`, both base64url: the payload is `<version>:<member>:<token>:<expiry>`, the MAC an
- * HMAC-SHA256 over the artifact id and the payload. Only characters that are safe in a path segment are used.
+ * Sealed view tickets, carried in the content path `/artifact/<id>/<ticket>/<path>`, where the artifact's own page can
+ * read them: they must say nothing of the viewer's login session. A ticket is `<ciphertext>.<mac>`, both base64url.
+ * The payload `<version>:<member>:<token>:<expiry>` is authenticated by an HMAC-SHA256 over the artifact id and the
+ * payload, then encrypted with AES-CTR whose IV is the MAC's first 16 bytes (a synthetic IV: the same ticket always
+ * gives the same URL, and nothing is learned beyond equality). Both keys are derived with HKDF-SHA256 from the server's
+ * credential key under their own labels, so neither is the key that seals secrets.
  */
 class ArtifactTickets(serverKey: ByteArray, private val clock: () -> Long = System::currentTimeMillis) {
     private val key = hkdf(serverKey, "teamcode artifact-view".encodeToByteArray())
+    private val encryptionKey = hkdf(serverKey, "teamcode artifact-view encryption".encodeToByteArray())
 
     fun issue(ticket: ViewTicket): String {
         require(ticket.memberId == null == (ticket.tokenId == null))
         val payload = listOf(ticket.version.toString(), ticket.memberId.orEmpty(), ticket.tokenId.orEmpty(), ticket.expiresAt.toString()).joinToString(":")
         require(payload.count { it == ':' } == 3) { "Ticket fields never contain a colon." }
-        return encoder.encodeToString(payload.encodeToByteArray()) + "." + encoder.encodeToString(mac(ticket.artifactId, payload))
+        val mac = mac(ticket.artifactId, payload)
+        return encoder.encodeToString(crypt(mac, payload.encodeToByteArray())) + "." + encoder.encodeToString(mac)
     }
+
+    private fun crypt(mac: ByteArray, input: ByteArray): ByteArray =
+        Cipher.getInstance("AES/CTR/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(encryptionKey, "AES"), IvParameterSpec(mac.copyOf(16))) }.doFinal(input)
 
     /** The ticket's content when its MAC matches [artifactId] and it has not expired; null otherwise, whatever is wrong. */
     fun verify(artifactId: String, value: String): ViewTicket? {
@@ -39,7 +48,8 @@ class ArtifactTickets(serverKey: ByteArray, private val clock: () -> Long = Syst
         val presented = try { decoder.decode(signature) } catch (_: IllegalArgumentException) { return null }
         // Only the canonical encoding: a ticket has one spelling, so it is cached and compared as one string.
         if (encoder.encodeToString(decoded) != encoded || encoder.encodeToString(presented) != signature) return null
-        val payload = decoded.decodeToString()
+        if (presented.size != 32) return null
+        val payload = crypt(presented, decoded).decodeToString()
         if (!MessageDigest.isEqual(presented, mac(artifactId, payload))) return null
         val fields = payload.split(':').takeIf { it.size == 4 } ?: return null
         val version = fields[0].toIntOrNull()?.takeIf { it >= 1 } ?: return null

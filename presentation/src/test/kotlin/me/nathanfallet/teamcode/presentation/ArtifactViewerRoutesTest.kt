@@ -113,7 +113,7 @@ class ArtifactViewerRoutesTest {
         val entry = client.get("$base/index.html")
         assertEquals(HttpStatusCode.OK, entry.status); assertSandboxed(entry, "200")
         assertTrue(entry.bodyAsText().startsWith("<!doctype html><meta charset=\"utf-8\">")); assertEquals(ContentType.Text.Html, entry.contentType()?.withoutParameters())
-        assertEquals("private, max-age=30", entry.headers[HttpHeaders.CacheControl])
+        assertEquals("private, max-age=30, no-transform", entry.headers[HttpHeaders.CacheControl])
         assertEquals(HttpStatusCode.OK, client.get("$base/").status, "The bare prefix is the entry page")
         // 206: a single range of another file.
         val part = client.get("$base/site.css") { header(HttpHeaders.Range, "bytes=0-3") }
@@ -128,14 +128,14 @@ class ArtifactViewerRoutesTest {
             val refused = client.get("$base/site.css") { header(HttpHeaders.Range, range) }
             assertEquals(HttpStatusCode.RequestedRangeNotSatisfiable, refused.status, range); assertSandboxed(refused, "416")
             assertEquals("bytes */${css.size}", refused.headers[HttpHeaders.ContentRange])
-            assertEquals("no-store", refused.headers[HttpHeaders.CacheControl], "A refusal is never cached as the file")
+            assertEquals(CACHE_CONTROL, refused.headers[HttpHeaders.CacheControl], "A refusal is never cached as the file")
         }
         // 404: a missing file, a forged ticket, a ticket of another artifact, dot segments.
         val other = "00000000-0000-4000-8000-0000000000bb"
         for (path in listOf("$base/missing.js", "/artifact/$id/${ticket.dropLast(2)}xx/index.html", "/artifact/$other/$ticket/index.html", "/artifact/$id/not-a-ticket/index.html", "$base/a/../index.html")) {
             val missing = client.get(path) { header(HttpHeaders.Cookie, "teamcode_session=admin") }
             assertEquals(HttpStatusCode.NotFound, missing.status, path); assertSandboxed(missing, "404 $path")
-            assertEquals("no-store", missing.headers[HttpHeaders.CacheControl]); assertFalse("<nav" in missing.bodyAsText(), "The dashboard is never served under the prefix")
+            assertEquals(CACHE_CONTROL, missing.headers[HttpHeaders.CacheControl]); assertFalse("<nav" in missing.bodyAsText(), "The dashboard is never served under the prefix")
             assertNull(missing.headers[HttpHeaders.ETag])
         }
         // 405 from the framework, and 500 from an unexpected failure.
@@ -145,7 +145,7 @@ class ArtifactViewerRoutesTest {
         store.explode = true
         now += 31_000
         val failed = client.get("$base/site.css")
-        assertEquals(HttpStatusCode.InternalServerError, failed.status); assertSandboxed(failed, "500"); assertEquals("no-store", failed.headers[HttpHeaders.CacheControl])
+        assertEquals(HttpStatusCode.InternalServerError, failed.status); assertSandboxed(failed, "500"); assertEquals(CACHE_CONTROL, failed.headers[HttpHeaders.CacheControl])
         store.explode = false
         // Markdown that is not the entry page is text, never HTML.
         val text = client.get("$base/notes.md")
@@ -189,7 +189,7 @@ class ArtifactViewerRoutesTest {
         assertEquals(HttpStatusCode.Found, noRedirect.get("/artifact/$id?v=1").status, "A visitor sees only the version the link serves; any other asks to sign in")
         val ticket = ticketOf(body)
         val content = client.get("/artifact/$id/$ticket/index.html")
-        assertEquals(HttpStatusCode.OK, content.status); assertEquals("private, max-age=30", content.headers[HttpHeaders.CacheControl])
+        assertEquals(HttpStatusCode.OK, content.status); assertEquals("private, max-age=30, no-transform", content.headers[HttpHeaders.CacheControl])
         assertTrue("viewable:anonymous" in store.calls)
         // Back to personal: the link asks to sign in, and the anonymous ticket stops at its next check.
         store.access = ArtifactAccess.PERSONAL
@@ -303,6 +303,10 @@ class ArtifactViewerRoutesTest {
         val bare = ArtifactPages.html("<p>x</p>".encodeToByteArray())
         assertTrue(bare.second && bare.first.decodeToString().startsWith("<!doctype html><meta charset=\"utf-8\">"))
         assertFalse("charset" in ArtifactPages.html(byteArrayOf(0xE9.toByte())).first.decodeToString(), "A page in another encoding is not declared UTF-8")
+        val commented = "<!-- built by an agent -->\n<!DOCTYPE html><p>x</p>".encodeToByteArray()
+        assertEquals(commented.toList(), ArtifactPages.html(commented).first.toList(), "A doctype after a comment is still the page's own")
+        val linked = Markdown.render("[x](a`b`) and `c`")
+        assertFalse('\u0000' in linked || "href" in linked, linked); assertTrue("<code>c</code>" in linked)
         assertTrue("<h1>Learning C#</h1>" in Markdown.render("# Learning C#"))
         assertTrue("<h2>Issue</h2>" in Markdown.render("## Issue ##"))
         val started = System.nanoTime()

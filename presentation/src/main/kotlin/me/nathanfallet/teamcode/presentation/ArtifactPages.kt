@@ -17,9 +17,18 @@ internal object ArtifactPages {
      */
     fun html(source: ByteArray): Pair<ByteArray, Boolean> {
         val utf8 = isUtf8(source)
-        val head = source.copyOfRange(0, minOf(source.size, 64)).decodeToString().trimStart('\uFEFF', ' ', '\t', '\r', '\n')
-        if (head.regionMatches(0, "<!doctype", 0, 9, ignoreCase = true)) return source to utf8
+        if (hasDoctype(source.copyOfRange(0, minOf(source.size, 64 * 1024)).decodeToString())) return source to utf8
         return ((if (utf8) SKELETON else BARE_SKELETON).encodeToByteArray() + source) to utf8
+    }
+
+    /** A doctype first, after whitespace and comments (`<!-- built by … -->`), as browsers read it. */
+    private fun hasDoctype(head: String): Boolean {
+        var rest = head.trimStart('\uFEFF', ' ', '\t', '\r', '\n', '\u000C')
+        while (rest.startsWith("<!--")) {
+            val end = rest.indexOf("-->", 4).takeIf { it >= 0 } ?: return false
+            rest = rest.substring(end + 3).trimStart(' ', '\t', '\r', '\n', '\u000C')
+        }
+        return rest.regionMatches(0, "<!doctype", 0, 9, ignoreCase = true)
     }
 
     private fun isUtf8(bytes: ByteArray) = try {
@@ -133,7 +142,8 @@ internal object Markdown {
         value = LINK.replace(value) { match ->
             val target = match.groupValues[2]
             val decoded = target.replace("&amp;", "&")
-            val safe = SAFE_TARGET.matches(decoded) && !decoded.trimStart().lowercase().let { it.startsWith("javascript:") || it.startsWith("data:") || it.startsWith("vbscript:") }
+            // A target holding a code span (`[x](a`b`)`) is not a plain URL: the text stays, without a link.
+            val safe = '\u0000' !in target && SAFE_TARGET.matches(decoded) && !decoded.trimStart().lowercase().let { it.startsWith("javascript:") || it.startsWith("data:") || it.startsWith("vbscript:") }
             if (safe) hold("""<a href="$target" target="_blank" rel="noopener noreferrer">""") + match.groupValues[1] + hold("</a>") else match.groupValues[1]
         }
         value = STRONG.replace(value) { "<strong>${it.groupValues[1].ifEmpty { it.groupValues[2] }}</strong>" }

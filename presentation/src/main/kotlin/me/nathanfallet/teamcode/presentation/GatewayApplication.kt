@@ -40,7 +40,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     install(ContentNegotiation) { json(Serialization.json) }
     // Artifact content is cached by its own route (a ticket fixes the version); any other answer there is not stored.
     install(createApplicationPlugin("ArtifactContentCaching") {
-        onCallRespond { call, _ -> if (isArtifactContent(call.request.path()) && call.response.headers[HttpHeaders.CacheControl] == null) call.response.header(HttpHeaders.CacheControl, "no-store") }
+        onCallRespond { call, _ -> if (isArtifactContent(call.request.path()) && call.response.headers[HttpHeaders.CacheControl] == null) call.response.header(HttpHeaders.CacheControl, CACHE_CONTROL) }
     })
     fun inference(call: ApplicationCall) = inboundProtocols.firstOrNull { it.path == call.request.path() }?.protocol
     install(StatusPages) {

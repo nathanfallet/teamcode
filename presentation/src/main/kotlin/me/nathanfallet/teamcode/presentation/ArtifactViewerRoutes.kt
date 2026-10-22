@@ -85,7 +85,7 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         // Cache headers go only on a file that is sent: an error after this point stays `no-store`.
         fun cacheable() {
             // No longer than the grant's recheck, so a revoked viewer's browser stops showing the content as soon as the server does.
-            call.response.header(HttpHeaders.CacheControl, "private, max-age=30")
+            call.response.header(HttpHeaders.CacheControl, "private, max-age=30, no-transform")
             call.response.header(HttpHeaders.ETag, etag)
         }
         if (call.request.headers.getAll(HttpHeaders.IfNoneMatch).orEmpty().flatMap { it.split(',') }.any { it.trim() == etag || it.trim() == "*" })
