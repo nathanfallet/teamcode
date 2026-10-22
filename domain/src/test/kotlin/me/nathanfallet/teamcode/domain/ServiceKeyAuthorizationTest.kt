@@ -23,6 +23,19 @@ class ServiceKeyAuthorizationTest {
         }
         for (action in CredentialAction.entries) authorize.check(admin, action)
     }
+    @Test fun artifactScopesNestReadUnderWriteAndNeverReachAccessOrDeletion() {
+        val authorize = AuthorizeCredentialUseCase()
+        for (scope in ServiceScope.entries) {
+            val key = admin.copy(serviceScopes = setOf(scope))
+            val reads = scope in setOf(ServiceScope.ARTIFACTS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.TEAM_READ)
+            if (reads) authorize.check(key, CredentialAction.ARTIFACTS_READ)
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.ARTIFACTS_READ) }.code)
+            if (scope == ServiceScope.ARTIFACTS_WRITE) authorize.check(key, CredentialAction.ARTIFACTS_WRITE)
+            else assertEquals("credential_scope", assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.ARTIFACTS_WRITE) }.code)
+            // Making public and deleting are interactive: the routes are classified INTERACTIVE, which no key passes.
+            assertFailsWith<TeamFailure> { authorize.check(key, CredentialAction.INTERACTIVE) }
+        }
+    }
     @Test fun cloudScopesNestReadUnderWriteAndOnlyAdminCloudCarriesAdministratorRights() {
         val authorize = AuthorizeCredentialUseCase()
         val member = admin.copy(member = admin.member.copy(id = "member", role = Role.MEMBER))

@@ -148,6 +148,13 @@ class EventStreamTest {
         assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
+    @Test fun invalidUtf8IsDecodedWithAReplacementCharacter() = runTest {
+        val body = "event: message.agent\ndata: ".encodeToByteArray() + byteArrayOf(0xC3.toByte(), 0x28) + "\n\n".encodeToByteArray()
+        val frames = mutableListOf<ServerSentEvent>()
+        readServerSentEvents(ByteReadChannel(body)) { frames += it; false }
+        assertEquals("\uFFFD(", frames.single().data)
+    }
+
     @Test fun theReaderParsesFieldsWithoutASpaceOrAValue() = runTest {
         val frames = mutableListOf<ServerSentEvent>()
         readServerSentEvents(ByteReadChannel("id:7\nevent:gap\ndata\ndata:{}\n\nevent:\ndata: unnamed\n\nevent: stop\n\n")) { frames += it; it.event != "stop" }
@@ -164,7 +171,7 @@ class EventStreamTest {
         assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
-    @Test fun aMalformedGapOrEventThrowsSoTheCallerReconnects() = runTest {
+    @Test fun aMalformedGapOrEventIsReportedAsMalformedEvent() = runTest {
         client("event: gap\ndata: {}\n\n", "event: cloud.turn\ndata: not json\n\n").use { client ->
             // A distinct code: reconnecting would replay the same event, so the caller must not retry blindly.
             assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)

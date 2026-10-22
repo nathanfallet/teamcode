@@ -22,7 +22,13 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 private fun JsonObject.text(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
 private fun String.preview(limit: Int) = replace('\n', ' ').let { if (it.length > limit) it.take(limit - 1) + "…" else it }
 
-/** One readable line (or block) per event; unknown types are shown by name so newer servers stay readable. */
+/** Micro-dollars as `$0.003253`; null for a negative amount, which no runner reports. */
+internal fun dollars(micros: Long): String? = if (micros < 0) null else "$" + "${micros / 1_000_000}.${(micros % 1_000_000).toString().padStart(6, '0')}"
+
+/**
+ * One readable line (or block) per event; unknown types are shown by name so newer servers stay readable. A subagent's
+ * events (`parentToolUseId`) are indented under the tool call that started it.
+ */
 internal fun CloudEventView.render(): String {
     val time = Instant.fromEpochMilliseconds(at).toString().substring(11, 19)
     val body = when (type) {
@@ -30,13 +36,13 @@ internal fun CloudEventView.render(): String {
         CloudEventTypes.AGENT_MESSAGE -> data.text("text") ?: ""
         CloudEventTypes.TOOL_CALL -> "[tool] ${data.text("name") ?: "tool"} ${data["input"]?.toString()?.preview(160) ?: ""}".trimEnd()
         CloudEventTypes.TOOL_RESULT -> "[result${if ((data["isError"] as? JsonPrimitive)?.booleanOrNull == true) ", error" else ""}] ${(data.text("output") ?: "").preview(300)}"
-        CloudEventTypes.TURN -> "-- turn ${data.text("phase") ?: "update"} --"
+        CloudEventTypes.TURN -> "-- turn ${data.text("phase") ?: "update"}${(data["costMicros"] as? JsonPrimitive)?.longOrNull?.let(::dollars)?.let { ", $it" } ?: ""} --"
         CloudEventTypes.STATUS -> "[status] " + data.entries.joinToString(", ") { (key, value) -> "$key=${(value as? JsonPrimitive)?.contentOrNull ?: value}" }
         CloudEventTypes.ERROR -> "[error] ${data.text("code") ?: "error"}: ${data.text("message") ?: ""}".trimEnd(' ', ':')
         CloudEventTypes.INPUT -> "[${data.text("kind") ?: "message"} ${data.text("inputId")?.take(8) ?: ""} ${data.text("status") ?: ""}${data.text("reason")?.let { ": $it" } ?: ""}]"
         else -> "[$type] $data"
     }
-    return "$time #$seq $body"
+    return "$time #$seq ${if (data.text("parentToolUseId") != null) "  ↳ " else ""}$body"
 }
 
 private fun CloudInputView.line() = listOfNotNull(id, kind, status, reason, if (woke) "woke the session" else null).joinToString("\t")
@@ -59,30 +65,34 @@ internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
                 cursor = page.events.lastOrNull()?.seq ?: cursor
                 if (page.nextAfter == null) break
             }
-            if (follow) followEvents(client, id, cursor, print) { echo(it, err = true) }
+            if (follow && !followEvents(client, id, cursor, print) { echo(it, err = true) }) SystemExit.exit(1)
         }
     }
 }
 
 /**
  * Follows the event stream from [after], reconnecting with backoff and resuming from the last printed sequence, so
- * no event is printed twice or skipped. Returns when the session ended; exits when access was revoked.
+ * no event is printed twice or skipped. Returns `true` when the session ended and `false` when an event cannot be read
+ * (reconnecting would replay it), so `attach` still detaches; exits when access was revoked.
  */
-internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Long, print: (CloudEventView) -> Unit, notice: (String) -> Unit): Long {
+internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Long, print: (CloudEventView) -> Unit, notice: (String) -> Unit): Boolean {
     var cursor = after
     var wait = 1_000L
     while (true) {
         try {
             val end = client.followCloudEvents(id, cursor) { event -> if (event.seq > cursor) { print(event); cursor = event.seq; wait = 1_000L } }
             when (end) {
-                CloudStreamEnd.ENDED -> { notice("The session has ended."); return cursor }
+                CloudStreamEnd.ENDED -> { notice("The session has ended."); return true }
                 CloudStreamEnd.DENIED -> { notice("Access to this session was revoked."); SystemExit.exit(1) }
             }
         } catch (error: CancellationException) { throw error }
         catch (error: TeamCodeException) {
             if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
             // Reconnecting would replay the same event from the same cursor.
-            if (error.code == TeamCodeClient.MALFORMED_EVENT) { notice("The event after $cursor cannot be read by this version of teamcode; update it and run the command again."); SystemExit.exit(1) }
+            if (error.code == TeamCodeClient.MALFORMED_EVENT) {
+                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or skip the event with `teamcode cloud events $id --follow --after ${cursor + 1}`.")
+                return false
+            }
             notice("Disconnected; reconnecting from event $cursor.")
         } catch (_: Exception) { notice("Disconnected; reconnecting from event $cursor.") }
         delay(wait)

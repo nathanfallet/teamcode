@@ -9,6 +9,8 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.cloud.RunnerCalls
 import me.nathanfallet.teamcode.cli.cloud.RunnerInference
 import me.nathanfallet.teamcode.cli.cloud.RunnerLoop
+import me.nathanfallet.teamcode.cli.cloud.dollars
+import me.nathanfallet.teamcode.cli.cloud.render
 import me.nathanfallet.teamcode.cli.cloud.agent.*
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
 import me.nathanfallet.teamcode.client.TeamCodeException
@@ -46,6 +48,68 @@ class CloudAgentTest {
         adapter.parse("""{"type":"result","subtype":"success","is_error":false}""")
         assertFalse(adapter.turnActive)
         assertTrue(adapter.parse("not json").events.isEmpty(), "Stray output is ignored")
+    }
+
+    @Test fun claudeTurnsCarryTheirCostAndTokens() {
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        adapter.startup(null, "/workspace")
+        fun turn(line: String) = adapter.parse(line).events.single().also { assertEquals(CloudEventTypes.TURN, it.type) }.data
+        fun JsonObject.long(name: String) = (this[name] as? JsonPrimitive)?.longOrNull
+        adapter.message("One")
+        val first = turn("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0144917,"usage":{"input_tokens":2,"cache_creation_input_tokens":72450,"cache_read_input_tokens":0,"output_tokens":3,"server_tool_use":{"web_search_requests":0}}}""")
+        assertEquals(14_492, first.long("costMicros")); assertEquals(14_492, first.long("totalCostMicros"))
+        assertEquals(2, first.long("inputTokens")); assertEquals(3, first.long("outputTokens"))
+        assertEquals(72_450, first.long("cacheCreationInputTokens")); assertEquals(0, first.long("cacheReadInputTokens"))
+        assertNull(first["usage"], "Only the four token counts are kept")
+        adapter.message("Two")
+        val second = turn("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01774523,"usage":{"input_tokens":4,"cache_creation_input_tokens":13300,"cache_read_input_tokens":59163,"output_tokens":3}}""")
+        assertEquals(3_254, second.long("costMicros"), "The running total becomes the turn's own cost")
+        assertEquals("00:00:00 #1 -- turn completed, \$0.003254 --", CloudEventView(1, CloudEventTypes.TURN, 0, 1, second).render())
+        assertEquals(17_745, second.long("totalCostMicros")); assertEquals(59_163, second.long("cacheReadInputTokens"))
+        adapter.message("Three")
+        val interrupted = turn("""{"type":"result","subtype":"error_during_execution","is_error":true,"total_cost_usd":0.01800523,"usage":{"input_tokens":1,"output_tokens":0}}""")
+        assertEquals("interrupted", interrupted.str("phase")); assertEquals(260, interrupted.long("costMicros")); assertEquals(1, interrupted.long("inputTokens"))
+        adapter.message("Four")
+        val unpriced = turn("""{"type":"result","subtype":"error_during_execution","is_error":true}""")
+        assertNull(unpriced["costMicros"]); assertNull(unpriced["totalCostMicros"]); assertNull(unpriced["inputTokens"])
+        assertEquals("00:00:00 #1 -- turn interrupted --", CloudEventView(1, CloudEventTypes.TURN, 0, 1, unpriced).render())
+        adapter.message("Five")
+        assertEquals(1_000, turn("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01900523}""").long("costMicros"),
+            "A turn without a reported cost is counted in the next priced one")
+        adapter.message("Six")
+        val restarted = turn("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0001}""")
+        assertNull(restarted["costMicros"], "A total that went down gives no turn cost rather than a wrong one"); assertEquals(100, restarted.long("totalCostMicros"))
+        assertNull(ClaudeStreamJsonAdapter(claude).parse("""{"type":"result","subtype":"success","total_cost_usd":0.5}""").events.single().data["costMicros"],
+            "Before startup the baseline is unknown")
+        assertNull(dollars(-5)); assertEquals("\$12.000001", dollars(12_000_001))
+
+        val resumed = ClaudeStreamJsonAdapter(claude)
+        resumed.startup("c1", "/workspace")
+        resumed.message("Four")
+        val afterResume = resumed.parse("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01847456,"usage":{"input_tokens":4,"output_tokens":3}}""").events.single().data
+        assertNull(afterResume["costMicros"], "The previous process's total is unknown, so the first resumed turn has no cost of its own")
+        assertEquals(18_475, afterResume.long("totalCostMicros"))
+        resumed.message("Five")
+        assertEquals(1_000, resumed.parse("""{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01947456}""").events.single().data.long("costMicros"))
+    }
+
+    @Test fun claudeSubagentEventsKeepTheirParentToolCall() {
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        adapter.message("Delegate it")
+        val spawn = adapter.parse("""{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"prompt":"List files"}}]}}""").events.single()
+        assertNull(spawn.data["parentToolUseId"], "The main agent's events have no parent")
+        val call = adapter.parse("""{"type":"assistant","parent_tool_use_id":"a1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""").events.single()
+        assertEquals(CloudEventTypes.TOOL_CALL, call.type); assertEquals("a1", call.data.str("parentToolUseId"))
+        val result = adapter.parse("""{"type":"user","parent_tool_use_id":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a.txt"}]}}""").events.single()
+        assertEquals(CloudEventTypes.TOOL_RESULT, result.type); assertEquals("a1", result.data.str("parentToolUseId"))
+        val text = adapter.parse("""{"type":"assistant","parent_tool_use_id":"a1","message":{"content":[{"type":"text","text":"Found a.txt"}]}}""").events.single()
+        assertEquals(CloudEventTypes.AGENT_MESSAGE, text.type); assertEquals("a1", text.data.str("parentToolUseId"))
+        val done = adapter.parse("""{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":"Found a.txt"}]}}""").events.single()
+        assertNull(done.data["parentToolUseId"])
+
+        fun rendered(event: AgentEvent) = CloudEventView(1, event.type, 0, 1, event.data).render()
+        assertEquals("00:00:00 #1   ↳ [tool] Bash {\"command\":\"ls\"}", rendered(call), "teamcode cloud logs indents a subagent's steps")
+        assertEquals("00:00:00 #1 [result] Found a.txt", rendered(done))
     }
 
     @Test fun codexAppServerHoldsSteersRetriesAndFallsBack() {

@@ -42,6 +42,8 @@ internal val apiOperations: List<ApiOperation> by lazy {
         variantOperations()
         cloudOperations()
         webhookOperations()
+        artifactOperations()
+        artifactMemberOperations()
     }.operations
 }
 
@@ -75,6 +77,8 @@ internal object ApiTags {
     const val CLOUD_TRANSFERS = "Cloud transfers"
     const val GITHUB = "GitHub"
     const val WEBHOOKS = "Webhooks"
+    const val ARTIFACTS_ADMIN = "Artifact administration"
+    const val ARTIFACTS = "Artifacts"
 
     val descriptions = linkedMapOf(
         SERVER to "Server discovery and gateway status.",
@@ -105,6 +109,8 @@ internal object ApiTags {
         CLOUD_TRANSFERS to "Changes of owner of cloud sessions.",
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
+        ARTIFACTS_ADMIN to "The S3-compatible bucket artifacts are stored in, and the artifact settings (administrators).",
+        ARTIFACTS to "Pages agents publish for people to read: uploads, versions, sharing with members, access and deletion.",
     )
 }
 
@@ -137,6 +143,8 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.MCP -> listOf("mcp")
                 CredentialAction.CLOUD_READ -> listOf("cloud:read", "cloud:write", "admin:cloud", "team:read")
                 CredentialAction.CLOUD_WRITE -> listOf("cloud:write", "admin:cloud")
+                CredentialAction.ARTIFACTS_READ -> listOf("artifacts:read", "artifacts:write", "team:read")
+                CredentialAction.ARTIFACTS_WRITE -> listOf("artifacts:write")
                 CredentialAction.INTERACTIVE -> null
             }
             return ApiAccess(public = false, keyScopes = scopes)

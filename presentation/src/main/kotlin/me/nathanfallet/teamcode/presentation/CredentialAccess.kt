@@ -16,6 +16,13 @@ private val cloudReadPath = Regex("/api/v1/cloud/(profiles|sessions|sessions/$CL
 private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(pause|resume|transfer|messages|interrupt|attachments|attachments/$CLOUD_ID/renew)|transfers/$CLOUD_ID/(accept|decline|cancel))")
 private val webhookRead = Regex("/api/v1/webhooks(/$CLOUD_ID(/deliveries)?)?")
 private val webhookWrite = Regex("/api/v1/webhooks(/$CLOUD_ID(/test|/rotate-secret)?)?")
+private const val ARTIFACT_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+/** Listing and reading artifacts; the storage and settings routes are not listed (they stay interactive). */
+private val artifactRead = Regex("/api/v1/artifacts(/$ARTIFACT_ID(/versions(/[0-9]{1,9}(/file)?)?|/members)?)?")
+/** Publishing and inviting; making public (`/access`) and deleting are not listed, so no key can do either. */
+private val artifactWritePost = Regex("/api/v1/artifacts/(uploads|$ARTIFACT_ID/(versions|members))")
+private val artifactChunk = Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")
+private val artifactUnshare = Regex("/api/v1/artifacts/$ARTIFACT_ID/members/[A-Za-z0-9._@-]{1,64}")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
@@ -53,5 +60,9 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE
+    method == "GET" && artifactRead.matches(path) -> CredentialAction.ARTIFACTS_READ
+    method == "POST" && artifactWritePost.matches(path) -> CredentialAction.ARTIFACTS_WRITE
+    method == "PUT" && artifactChunk.matches(path) -> CredentialAction.ARTIFACTS_WRITE
+    method == "DELETE" && artifactUnshare.matches(path) -> CredentialAction.ARTIFACTS_WRITE
     else -> CredentialAction.INTERACTIVE
 }

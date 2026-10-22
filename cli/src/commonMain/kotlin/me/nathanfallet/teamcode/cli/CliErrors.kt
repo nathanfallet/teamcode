@@ -59,6 +59,22 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "provider_verification_failed" -> return "The provider did not accept the new sign-in ($tag). Run `teamcode accounts add` again."
         "profile_not_found" -> return "No cloud profile you can use has this id or name ($tag). Run `teamcode cloud profiles` to list them; " +
             "an administrator adds --member <id> to list another member's."
+        "artifact_storage_missing" -> return "Artifacts are not available on this server ($tag): no storage is configured. An administrator sets it up in Dashboard → Settings → Artifacts."
+        "artifact_storage_unverified" -> return "Artifacts are not available on this server ($tag): the storage has not passed its connection test since it changed. " +
+            "An administrator tests it in Dashboard → Settings → Artifacts."
+        "artifacts_disabled" -> return "Artifacts are turned off on this server ($tag). An administrator turns them on in Dashboard → Settings → Artifacts."
+        "artifact_rate_limited" -> return "You have published the team's hourly maximum of artifact versions ($tag).$retry"
+        "artifact_uploads_busy" -> return "Too many artifact publications are in progress or unfinished ($tag). Finish them or wait for them to expire.$retry"
+        "artifact_quota_exceeded" -> return "This publication would exceed an artifact quota of the team ($tag). Delete older artifacts (teamcode artifacts delete), or ask an administrator."
+        "artifact_busy" -> return "A file of this publication is being cleaned up from the artifact storage ($tag). Publish again in a minute."
+        "artifact_upload_not_found", "artifact_blob_missing" -> return "The upload expired or is incomplete ($tag). Publish again."
+        "artifact_publish_forbidden" -> return "Only administrators publish artifacts in this team ($tag)."
+        "artifact_not_writable" -> return "Only the owner and invited editors can publish or invite on this artifact ($tag). Ask its owner to share it with you as an editor."
+        "artifact_access_forbidden", "artifact_delete_forbidden" -> return "Only the artifact's owner or an administrator can do this ($tag)."
+        "artifact_public_sharing_off" -> return "Public links are turned off for this team ($tag). An administrator can allow them in Dashboard → Settings → Artifacts."
+        "artifact_public_forbidden" -> return "The team's settings do not let you make this artifact public ($tag). Ask an administrator."
+        "artifact_public_interactive" -> return "A publication never makes an artifact public ($tag). Use teamcode artifacts access ARTIFACT public, signed in as its owner."
+        "artifact_member_not_found" -> return "No active member matches, or the member is not invited ($tag). Use a member id, username or linked GitHub login."
         "profile_unassigned" -> return "The session owner is not assigned to this cloud profile ($tag). Run `teamcode cloud profiles` to list your usable profiles " +
             "(an administrator adds --member <owner id> for another member's), or ask a team administrator to assign it."
     }

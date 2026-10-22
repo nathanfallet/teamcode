@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS artifact_upload_blobs (upload_id VARCHAR(36), sha256 VARCHAR(64), `size` BIGINT NOT NULL, stored_at BIGINT NOT NULL, CONSTRAINT pk_artifact_upload_blobs PRIMARY KEY (upload_id, sha256), CONSTRAINT artifact_upload_blobs_upload FOREIGN KEY (upload_id) REFERENCES artifact_uploads(id) ON DELETE CASCADE);

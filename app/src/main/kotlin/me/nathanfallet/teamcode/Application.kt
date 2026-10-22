@@ -164,6 +164,30 @@ fun main() {
         me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!), it,
             me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpLimits)
     }
+    // Artifacts: the bucket and its settings live in the database, configured on the dashboard; no deployment variable.
+    val artifactHttp = HttpClient(CIO) {
+        followRedirects = false; expectSuccess = false
+        install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 60_000; socketTimeoutMillis = 30_000 }
+    }
+    val artifactAdminStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore(it, cipher!!) }
+    val artifactObjects = me.nathanfallet.teamcode.infrastructure.artifacts.S3ObjectStore(artifactHttp)
+    val artifactAdmin = artifactAdminStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(it, artifactObjects) }
+    val artifactStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactStore(it) }
+    val artifacts = artifactStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactService(it, artifactAdminStore!!, artifactObjects) }
+    if (artifactStore != null) {
+        // Drafts, retention, expired uploads, unused blobs and the proven removal of deleted folders: one replica every ten minutes.
+        val work = SqlScheduledWork(database!!)
+        val maintenance = me.nathanfallet.teamcode.domain.artifacts.ArtifactMaintenance(artifactStore, artifactAdminStore!!, artifactObjects)
+        workers.launch {
+            while (isActive) {
+                try { work.runDue("artifacts/maintain", intervalMillis = 600_000, timeoutMillis = 240_000) { maintenance.run() } }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode artifact maintenance deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode artifact maintenance is temporarily unavailable.") }
+                delay(60_000)
+            }
+        }
+    }
     val initialPassword = runBlocking { team?.bootstrap() }
     if (initialPassword != null) {
         // The sole logging exception: explicitly requested, only after first-admin creation commits.
@@ -186,8 +210,8 @@ fun main() {
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
-            apiPrices = apiPrices, poolSizing = poolSizing) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); database?.close() }
+            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts) }.start(wait = true)
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); artifactHttp.close(); database?.close() }
 }
 
 /**
