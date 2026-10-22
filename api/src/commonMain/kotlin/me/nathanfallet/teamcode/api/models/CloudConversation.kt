@@ -151,3 +151,6 @@ data class RunnerInputAckRequest(val teamId: String, val sessionId: String, val 
  */
 @Serializable
 data class TeamEventView(val seq: Long, val type: String, val subject: String, val subjectId: String, val memberId: String, val at: Long, val data: JsonObject)
+/** The `data` of the feed's `event: gap`: events after the requested cursor were purged; the stream resumes at [oldestSeq]. */
+@Serializable
+data class TeamEventGapView(val oldestSeq: Long)

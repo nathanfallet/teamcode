@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.serialization) apply false
     alias(libs.plugins.ktor) apply false
     alias(libs.plugins.maven) apply false
+    alias(libs.plugins.android.kmp.library) apply false
 }
 val teamcodeVersion = providers.gradleProperty("teamcodeVersion").orElse("0.1.0-SNAPSHOT").get()
 val versionNumber = "(?:0|[1-9][0-9]*)"

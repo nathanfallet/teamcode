@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.multiplatform)
     alias(libs.plugins.serialization)
     alias(libs.plugins.maven)
+    alias(libs.plugins.android.kmp.library)
 }
 
 mavenPublishing {
@@ -51,6 +52,15 @@ kotlin {
     jvmToolchain(21)
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
     macosArm64(); macosX64(); linuxX64(); linuxArm64(); mingwX64()
+    // Mobile targets for the companion app; published with the others.
+    iosArm64(); iosSimulatorArm64()
+    androidLibrary {
+        namespace = "me.nathanfallet.teamcode.api"
+        compileSdk = libs.versions.android.compileSdk.get().toInt()
+        minSdk = libs.versions.android.minSdk.get().toInt()
+        // D8 and minSdk 26 read Java 17 bytecode; the shared toolchain stays on 21.
+        compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 }
+    }
     sourceSets {
         commonMain { kotlin.srcDir(generateBuildInfo) }
         commonMain.dependencies {

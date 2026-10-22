@@ -1,9 +1,12 @@
 [versions]
 kotlin = "2.4.20"
+agp = "9.4.1"
+android-compileSdk = "36"
+android-minSdk = "26"
 ktor = "3.6.0"
 serialization = "1.9.0"
 coroutines = "1.9.0"
-koin = "4.1.0"
+koin = "4.2.1"
 clikt = "5.1.0"
 mordant = "3.0.2"
 okio = "3.18.2"
@@ -19,6 +22,7 @@ mysql = "8.0.33"
 testcontainers = "2.0.5"
 
 [plugins]
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 exposed = { id = "org.jetbrains.exposed.plugin", version.ref = "exposed" }
 jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
