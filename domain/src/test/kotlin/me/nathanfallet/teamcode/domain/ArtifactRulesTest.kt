@@ -135,6 +135,9 @@ class ArtifactRulesTest {
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer AbCdEfGhIjKlMnOpQrStUvWxYz"))
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Token 4815162342108151623"))
         assertNull(CloudConversationRules.detect("token 2024102212"), "A short number is not a token")
+        for (name in listOf("Token RefreshTokenSchedulerService", "token handleOAuth2Callback", "Bearer getAccessToken2", "Bearer /api/v1/items", "Bearer ./dist/app.js"))
+            assertNull(CloudConversationRules.detect(name), name)
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer /9j4AAQSkZJRgABAQEAYABgAAD"), "Base64 starting with a slash is not a path")
         // The transcript mask finds what the scanner finds.
         val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
         assertFalse(jwt in CloudConversationRules.mask("jwt=$jwt"))
