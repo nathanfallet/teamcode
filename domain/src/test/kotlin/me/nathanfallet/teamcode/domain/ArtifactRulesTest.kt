@@ -122,13 +122,22 @@ class ArtifactRulesTest {
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Basic dXNlcjpwYXNzd29yZA=="))
         assertEquals("url_credentials", CloudConversationRules.detect("postgres://app:hunter2secret@db.internal/app"))
         assertEquals("authorization_header", CloudConversationRules.detect("curl -H 'Authorization: token tok_4f8a9b1c2d3e5f6a7b8c'"))
-        // The transcript mask keeps its wider patterns: the scanner's word-start anchors never narrow what it hides.
+        // Unpadded Basic values, long tokens without a digit, and credentials glued to a word are still found.
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Basic dXNlcjpwYXNzd29yZA"))
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIj_kLmN"))
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer Ab//Cd3fGhIjKlMnOpQrSt"))
+        assertEquals("url_credentials", CloudConversationRules.detect("--url-https://u:hunter2pw@host"))
+        assertEquals("jwt", CloudConversationRules.detect("Bearer-eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"))
+        assertNull(CloudConversationRules.detect("token getAccessTokenForCurrentUser"), "A camel-case identifier is not a token")
+        // The transcript mask finds what the scanner finds, glued to a word or not.
         val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
         assertFalse(jwt in CloudConversationRules.mask("Bearer-$jwt"))
         assertFalse("hunter2" in CloudConversationRules.mask("--url-https://u:hunter2@host"))
         val started = System.nanoTime()
         for (crafted in listOf("a-".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "tc_".repeat(700_000)))
             assertNull(CloudConversationRules.detect(crafted))
-        assertTrue(System.nanoTime() - started < 10_000_000_000, "Each 2 MiB crafted file is scanned in linear time")
+        for (crafted in listOf("a.".repeat(1_000_000), "sk-".repeat(700_000), "a".repeat(2_000_000), "x://a:".repeat(300_000)))
+            CloudConversationRules.mask(crafted)
+        assertTrue(System.nanoTime() - started < 10_000_000_000, "Each 2 MiB crafted file is scanned and masked in linear time")
     }
 }

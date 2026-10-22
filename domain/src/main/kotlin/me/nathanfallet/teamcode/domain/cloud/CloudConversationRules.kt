@@ -28,36 +28,21 @@ object CloudConversationRules {
      */
     private val secrets = listOf(
         // Prefixed shapes start at a word boundary and contain a digit, so `task-management-…` or `etc_…` stay readable.
-        Regex("(?<![A-Za-z0-9_-])sk-(?:ant-)?(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
-        Regex("(?<![A-Za-z0-9_])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
-        Regex("github_pat_[A-Za-z0-9_]{20,}"),
-        Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
-        Regex("(?:AKIA|ASIA)[A-Z0-9]{16}"),
-        Regex("xox[abprs]-[A-Za-z0-9-]{10,}"),
-        Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
-        Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
-    )
-
-    /**
-     * The shapes [detect] refuses a published file for. They follow [secrets] but are bounded (a crafted file cannot make
-     * a lookahead scan backtrack) and anchored at a word start, since a hit refuses a whole file instead of masking a
-     * few characters. [mask] keeps its own, wider patterns: narrowing them would leave credentials in transcripts.
-     */
-    private val scanned = listOf(
+        // Lookaheads are bounded, so a crafted string (`sk-sk-sk-…`) never makes a scan backtrack quadratically.
         Regex("(?<![A-Za-z0-9_-])sk-(?:ant-)?(?=[A-Za-z0-9_-]{0,256}[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?<![A-Za-z0-9_])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
         Regex("github_pat_[A-Za-z0-9_]{20,}"),
         Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]{0,256}[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?:AKIA|ASIA)[A-Z0-9]{16}"),
         Regex("xox[abprs]-[A-Za-z0-9-]{10,}"),
-        Regex("(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
+        Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
         Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     )
     private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+([A-Za-z0-9._~+/=-]{12,})")
     /** A name ending in a secret word (`GITHUB_TOKEN`, `"api_key"`, not `max_tokens`) assigned a value of 8 characters or more. */
     private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIALS?))(\"?\\s*[=:]\\s*)(\"[^\"]{8,}\"|'[^']{8,}'|[^\\s\"',;]{8,})")
-    private val urlCredentials = Regex("(?i)(\\b[a-z][a-z0-9+.-]*://)[^\\s/@:]+:[^\\s/@]+@")
-    private val scannedUrlCredentials = Regex("(?i)((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}://)[^\\s/@:]+:[^\\s/@]+@")
+    /** The scheme is bounded, so a long run of scheme characters without `://` is scanned in linear time. */
+    private val urlCredentials = Regex("(?i)([a-z][a-z0-9+.-]{0,31}://)[^\\s/@:]+:[^\\s/@]+@")
 
     /**
      * A plain word (`configuration`, `Authentication.`) after `token`, `basic` or `bearer` is prose. Anything else is
@@ -69,7 +54,7 @@ object CloudConversationRules {
     }
     private const val MAX_WORD = 16
 
-    /** The kind of each pattern of [scanned], in order, as [detect] names it. */
+    /** The kind of each pattern of [secrets], in order, as [detect] names it. */
     private val secretKinds = listOf("provider_api_key", "github_token", "github_token", "teamcode_credential", "aws_access_key", "slack_token", "jwt", "private_key")
 
     /**
@@ -78,9 +63,9 @@ object CloudConversationRules {
      * page and say nothing about the value. Used to refuse publishing a file rather than to rewrite it.
      */
     fun detect(text: String): String? {
-        scanned.forEachIndexed { index, pattern -> if (pattern.containsMatchIn(text)) return secretKinds[index] }
+        secrets.forEachIndexed { index, pattern -> if (pattern.containsMatchIn(text)) return secretKinds[index] }
         if (authorizationValue.findAll(text).any { looksLikeSecretValue(it.groupValues[1], it.groupValues[2]) }) return "authorization_header"
-        if (scannedUrlCredentials.containsMatchIn(text)) return "url_credentials"
+        if (urlCredentials.containsMatchIn(text)) return "url_credentials"
         return null
     }
 
@@ -89,24 +74,26 @@ object CloudConversationRules {
 
     /**
      * Stricter than [looksLikeCredential], since a hit refuses a whole file. A `Basic` value counts only when it is
-     * base64 of a `user:password` pair. A `Bearer` or `Token` value counts when it is at least 16 characters with
-     * letters and digits, and is neither a path (`/api/v1/items`, `input/output`) nor an identifier made of lowercase
-     * words (`refresh_interval_v2`, `getAccessToken` has no digit), which pages legitimately contain.
+     * base64 (padded or not) of a `user:password` pair. A `Bearer` or `Token` value counts when it is at least 16
+     * characters with letters and digits, or at least 32 with both cases, and is neither a path (`/api/v1/items`,
+     * `https://…`) nor an identifier made of lowercase words (`refresh_interval_v2`), which pages legitimately contain.
      */
     private fun looksLikeSecretValue(scheme: String, value: String): Boolean {
         val word = value.trimEnd('.')
-        if (word.startsWith('/') || word.startsWith('.') || "//" in word) return false
         if (scheme.equals("basic", ignoreCase = true)) return basicPair(word)
-        if (word.length < 16 || word.none { it.isDigit() } || word.none { it.isLetter() }) return false
+        if (word.startsWith('/') || word.startsWith('.') || "://" in word) return false
+        if (word.length < 16 || word.none { it.isLetter() }) return false
+        if (word.none { it.isDigit() } && (word.length < 32 || word.none { it.isUpperCase() } || word.none { it.isLowerCase() })) return false
         val segments = word.split('.', '_', '-', '/', '~', '+', '=').filter { it.isNotEmpty() }
         val wordy = segments.size > 1 && segments.all { segment -> segment.all { it.isLowerCase() || it.isDigit() } && segment.count { it.isDigit() } <= 2 }
         return !wordy
     }
 
-    /** Base64 (with its padding) of printable text holding a colon: what `Authorization: Basic` carries. */
+    /** Base64, padded or not, of printable text holding a colon: what `Authorization: Basic` carries. */
     private fun basicPair(word: String): Boolean {
-        if (word.length % 4 != 0 || word.any { !(it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it in "+/=") }) return false
-        val decoded = try { java.util.Base64.getDecoder().decode(word) } catch (_: IllegalArgumentException) { return false }
+        val bare = word.trimEnd('=')
+        if (bare.length % 4 == 1 || word.length - bare.length > 2 || bare.any { !(it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it in "+/") }) return false
+        val decoded = try { java.util.Base64.getDecoder().decode(bare + "=".repeat((4 - bare.length % 4) % 4)) } catch (_: IllegalArgumentException) { return false }
         val text = try { java.nio.charset.StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(decoded)).toString() }
             catch (_: java.nio.charset.CharacterCodingException) { return false }
         return ':' in text && text.none { it.isISOControl() }

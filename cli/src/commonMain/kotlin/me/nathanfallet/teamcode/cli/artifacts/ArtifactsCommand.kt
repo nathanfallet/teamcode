@@ -203,10 +203,25 @@ private class ArtifactDelete : SuspendingCliktCommand(name = "delete") {
  * an explicit `PUBLISHED=PATH`.
  */
 internal fun publishedBesidePage(page: String, file: String): String {
-    fun normal(path: String) = path.replace('\\', '/').removePrefix("./")
-    val directory = normal(page).substringBeforeLast('/', "")
-    val path = normal(file)
-    if (directory.isEmpty()) return path
-    if (!path.startsWith("$directory/")) throw CliUserException("$file is outside the page's directory $directory. Say where it is published with PUBLISHED=$file.")
-    return path.removePrefix("$directory/")
+    val directory = lexical(page).dropLast(1)
+    val path = lexical(file)
+    // Compared without case, as published paths are: `Dist\\index.html` and `dist\\app.js` are beside each other on Windows.
+    val beside = path.size > directory.size && path.take(directory.size).zip(directory).all { (a, b) -> a.equals(b, ignoreCase = true) }
+    val published = path.drop(directory.size)
+    if (!beside || ".." in published || published.first() == "/" || published.first().endsWith(':'))
+        throw CliUserException("$file is outside the page's directory ${directory.joinToString("/").ifEmpty { "." }}. Say where it is published with PUBLISHED=$file.")
+    return published.joinToString("/")
+}
+
+/** A path's segments with `.`, empty segments and resolvable `..` removed; an absolute path keeps its root (`/`, `C:`) as its first segment. */
+private fun lexical(path: String): List<String> {
+    val slashed = path.replace('\\', '/')
+    val segments = mutableListOf<String>()
+    if (slashed.startsWith('/')) segments += "/"
+    for (segment in slashed.split('/')) when {
+        segment.isEmpty() || segment == "." -> Unit
+        segment == ".." && segments.isNotEmpty() && segments.last() != ".." && segments.last() != "/" && !segments.last().endsWith(':') -> segments.removeAt(segments.lastIndex)
+        else -> segments += segment
+    }
+    return segments
 }

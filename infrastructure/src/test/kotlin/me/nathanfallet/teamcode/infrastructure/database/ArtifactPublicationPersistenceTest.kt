@@ -195,6 +195,12 @@ class ArtifactPublicationPersistenceTest {
             f.team.changePassword(f.team.login(reviewer.member.id, impostor.temporaryPassword, "artifact-test").principal, impostor.temporaryPassword, "artifact impostor replacement password")
             val members = a.service.share(owner, id, reviewer.member.id, "editor")
             assertEquals(listOf("reviewer" to ArtifactMemberRole.EDITOR), members.members.map { it.username to it.role })
+            // Nor while the member named by id is disabled: the invitation is refused instead of going to the impostor.
+            val dormant = f.team.createMember(admin, "dormant", Role.MEMBER).member
+            val lookalike = f.team.createMember(admin, dormant.id, Role.MEMBER)
+            f.team.changePassword(f.team.login(dormant.id, lookalike.temporaryPassword, "artifact-test").principal, lookalike.temporaryPassword, "artifact lookalike replacement password")
+            f.team.updateMember(admin, dormant.id, Role.MEMBER, true)
+            assertEquals("artifact_member_not_found", assertFailsWith<TeamFailure> { a.service.share(owner, id, dormant.id, "viewer") }.code)
             assertEquals(2, publish(b.service, reviewer, id, mapOf("index.html" to bytes("<p>edit</p>")), 1).version.number)
             assertEquals(f.member.principal.member.id, a.service.artifact(owner, id).ownerId, "An editor's version stays the owner's artifact")
             assertEquals("artifact_access_forbidden", assertFailsWith<TeamFailure> { b.service.setAccess(reviewer, id, "team", true, null) }.code)

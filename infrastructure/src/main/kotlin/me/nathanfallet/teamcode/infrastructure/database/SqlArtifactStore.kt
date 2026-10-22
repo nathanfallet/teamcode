@@ -63,9 +63,6 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
 
     override suspend fun putChunk(actor: Principal, uploadId: String, sha256: String, number: Int, bytes: ByteArray): ChunkReceipt = database.query {
         requireCurrent(this, actor); requireActive(actor.teamId)
-        // The upload row alone is locked (never the artifact's, which a commit holds while it removes the upload): chunks
-        // of one upload sent in parallel are counted one after the other, so the last one sees all the others.
-        ArtifactUploads.select(ArtifactUploads.id).where { ArtifactUploads.id eq uploadId }.forUpdate().singleOrNull()
         val upload = uploadRow(actor, uploadId)
         val announced = decodeFiles(upload[ArtifactUploads.files])
         val size = announced[sha256] ?: throw TeamFailure("invalid_artifact_upload", 400, "This file was not announced in the upload.")
@@ -74,6 +71,10 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
             return@query ChunkReceipt(true, total, total, stored = true)
         if (number !in 0 until total || bytes.size != ArtifactRules.chunkSize(size, number))
             throw TeamFailure("invalid_artifact_chunk", 400, "Send chunk 0–${total - 1} of this file, each of 1 MiB except the last.")
+        // The upload row alone is locked (never the artifact's, which a commit holds while it removes the upload), and only
+        // around the insert and the count: chunks of one upload sent in parallel are counted one after the other, so the
+        // last one sees all the others, while the checks above run concurrently.
+        ArtifactUploads.select(ArtifactUploads.id).where { ArtifactUploads.id eq uploadId }.forUpdate().singleOrNull()
         // One row per (upload, file, chunk number) at its exact size: what an upload holds is bounded by what it announced.
         ArtifactUploadChunks.insertIgnore {
             it[ArtifactUploadChunks.uploadId] = uploadId; it[ArtifactUploadChunks.sha256] = sha256; it[ArtifactUploadChunks.number] = number
@@ -561,8 +562,12 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
      * member's id never captures them. A GitHub login linked to more than one member is ambiguous and refused.
      */
     private fun resolveMember(teamId: String, reference: String, activeOnly: Boolean): String? {
-        val team = (Members.teamId eq teamId) and (if (activeOnly) (Members.disabled eq false) and (Members.mustChangePassword eq false) else Op.TRUE)
-        Members.select(Members.id).where { team and (Members.id eq reference) }.singleOrNull()?.let { return it[Members.id] }
+        val active = if (activeOnly) (Members.disabled eq false) and (Members.mustChangePassword eq false) else Op.TRUE
+        val team = (Members.teamId eq teamId) and active
+        // An id is matched whatever the member's state, so a username equal to a disabled member's id never captures it.
+        Members.select(Members.id, Members.disabled, Members.mustChangePassword).where { (Members.teamId eq teamId) and (Members.id eq reference) }.singleOrNull()?.let {
+            return it[Members.id].takeIf { _ -> !activeOnly || (!it[Members.disabled] && !it[Members.mustChangePassword]) }
+        }
         Members.select(Members.id).where { team and (Members.username eq reference) }.singleOrNull()?.let { return it[Members.id] }
         val linked = (GitHubLinks innerJoin Members).select(Members.id).where { team and (GitHubLinks.teamId eq teamId) and (GitHubLinks.githubLogin.lowerCase() eq reference.lowercase()) }
             .map { it[Members.id] }.distinct()
