@@ -114,8 +114,8 @@ Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/v1/artifacts/uploads` `{artifactId?, files:[{sha256,size}]}` | Announce the distinct files of the next version → `201 {uploadId, artifactId, missing, chunkBytes, expiresAt}`. Without `artifactId` a draft artifact is created (counted in `quotaArtifactsPerMember`). `missing` lists what the artifact's folder does not hold yet |
-| `PUT /api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{n}` | One chunk (`application/octet-stream`, at most 1 MiB, under the chart's 2 MiB ingress limit) → `{complete, received, total}`. Chunks wait in MySQL, the only bus between replicas; the last one assembles the file, checks its size and SHA-256 (`409 artifact_blob_mismatch`), scans it, and sends it to the bucket |
+| `POST /api/v1/artifacts/uploads` `{artifactId?, files:[{sha256,size}]}` | Announce the distinct files of the next version → `201 {uploadId, artifactId, missing, chunkBytes, expiresAt}`. Without `artifactId` a draft artifact is created; `quotaArtifactsPerMember` counts published artifacts and is checked here and at the first commit. A member holds at most 16 open uploads and 20 unpublished drafts (`429 artifact_uploads_busy`). `missing` lists what the artifact's folder does not hold yet |
+| `PUT /api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{n}` | One chunk (`application/octet-stream`, at most 1 MiB, under the chart's 2 MiB ingress limit) → `{complete, received, total}`. Chunks wait in MySQL, the only bus between replicas; the last one assembles the file, checks its size and SHA-256 (`422 artifact_blob_mismatch`; the client sends the file again), scans it, and sends it to the bucket |
 | `POST /api/v1/artifacts/{id}/versions` `{uploadId, entry, files:{path:{sha256,size}}, baseVersion, title?, description?, icon?, access?}` | Commit → `201 {artifact, version, replayed:false}`; the same commit within 10 minutes (same credential, base version and manifest digest) answers `200` with the same version and `replayed:true` |
 | `GET /api/v1/artifacts?scope=&member=&session=&run=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue |
 | `GET /api/v1/artifacts/{id}`, `GET …/versions`, `GET …/versions/{n}` | The artifact (with the caller's `relation`: `owner`, `editor`, `viewer`, `team` or `admin`), its kept versions, one version's manifest |
@@ -131,10 +131,11 @@ Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes
 - Content types come from a fixed list by extension; anything else is `application/octet-stream`. `capabilities` is refused (`400 artifact_capabilities_unsupported`) until serving exists, and so is `access: public` (`403 artifact_public_interactive`).
 - `whoCanPublish: admins` refuses members (`403 artifact_publish_forbidden`); only the owner and invited editors publish (`403 artifact_not_writable`); `quotaPublishesPerHour` is counted from the audit log, so pruned versions still count (`429 artifact_rate_limited`, `Retry-After`); `quotaMemberBytes` and `quotaTeamBytes` are checked on what the folder would hold (`409 artifact_quota_exceeded`).
 - Versions beyond `maxVersionsPerArtifact` are pruned, never the version a public link is pinned to; blobs no kept version uses are marked for collection.
-- `expires_at` is set from the publication time and the retention that applies (`personalRetentionDays` or `sharedRetentionDays`), and again when the access level changes. A retention change therefore applies to artifacts published afterwards.
+- `expires_at` is set from the publication time and the retention that applies (`personalRetentionDays` or `sharedRetentionDays`), and when the access level changes, from the time of the change (so a change never expires an artifact at once). A retention change therefore applies to artifacts published afterwards.
+- Blobs the upload stored that the version does not use are marked for collection, so they never sit uncounted in the folder.
 - A copy of the manifest is written to `versions/<n>.json` next to the blobs, best effort.
 
-**Secret scan.** Every file that decodes as UTF-8 without a NUL byte is a text file and is scanned at assembly with the detectors of the transcript mask (provider API keys, GitHub, TeamCode, AWS and Slack tokens, JWTs, private keys, `Authorization` headers, credentials in URLs; not the name-based assignment pattern, which pages legitimately contain). A hit refuses the file before it reaches the bucket: `422 artifact_secret_detected` with `{error, sha256, kind}`, never the value, and an audit event `artifact.publish_refused`. Other files are binary and limited to 15 MiB (`413 artifact_file_too_large`); text files to 16 MiB.
+**Secret scan.** Every file that decodes as UTF-8 without a NUL byte is a text file and is scanned at assembly with the detectors of the transcript mask (provider API keys, GitHub, TeamCode, AWS and Slack tokens, JWTs, private keys, credentials in URLs; not the name-based assignment pattern, which pages legitimately contain). `Bearer`, `Basic` and `Token` values count only on the same line and only when they look like a credential (a digit, `+/=_~`, or mixed case without separators), so prose such as `Basic cross-browser support` or a Markdown heading underlined below `Token` is not refused. The patterns are bounded so a crafted file cannot make the scan backtrack. A hit refuses the file before it reaches the bucket: `422 artifact_secret_detected` with `{error, sha256, kind}`, never the value, and an audit event `artifact.publish_refused`. Other files are binary and limited to 15 MiB (`413 artifact_file_too_large`); text files to 16 MiB.
 
 **Who may do what.**
 
@@ -147,7 +148,7 @@ Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes
 
 A version published by an invited editor stays the owner's artifact and counts in the owner's quota.
 
-**Deletion and garbage collection.** A worker (`artifacts/maintain`, every 10 minutes, one replica at a time) does all of it:
+**Deletion and garbage collection.** A worker (`artifacts/maintain`, every 10 minutes, one replica at a time) does all of it, each step and each team on its own: a bucket that fails is retried at the next run, behind the work that succeeds.
 
 - An upload expires after an hour; blobs it sent that no version uses are marked for collection, unless another live upload announced them.
 - A draft (never committed) older than 24 hours is deleted.

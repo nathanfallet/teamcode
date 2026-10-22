@@ -110,4 +110,16 @@ class ArtifactRulesTest {
     private inline fun <reified T : Any> stub(): T = java.lang.reflect.Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, _ ->
         if (method.name == "toString") "stub" else error("Unexpected call to ${method.name}.")
     } as T
+
+    @Test fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
+        for (prose in listOf("Basic cross-browser support for every page", "Token\n----------------\nexplained below", "Basic\n================", "basic setup-instructions-here"))
+            assertNull(CloudConversationRules.detect(prose), prose)
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer abc123def456ghi789"))
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Basic dXNlcjpwYXNzd29yZA=="))
+        assertEquals("url_credentials", CloudConversationRules.detect("postgres://app:hunter2secret@db.internal/app"))
+        val started = System.nanoTime()
+        for (crafted in listOf("a-".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "tc_".repeat(700_000)))
+            assertNull(CloudConversationRules.detect(crafted))
+        assertTrue(System.nanoTime() - started < 10_000_000_000, "Each 2 MiB crafted file is scanned in linear time")
+    }
 }

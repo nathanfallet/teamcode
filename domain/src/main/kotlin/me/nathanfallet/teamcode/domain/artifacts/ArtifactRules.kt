@@ -39,6 +39,10 @@ object ArtifactRules {
     const val DELETION_GRACE_MILLIS = 5 * 60_000L
     const val MAX_TITLE = 200
     const val MAX_DESCRIPTION = 300
+    /** Uploads a member may hold open at once; their chunks wait in MySQL. */
+    const val MAX_OPEN_UPLOADS = 16L
+    /** Unpublished new artifacts a member may hold before they expire. */
+    const val MAX_DRAFTS = 20L
     const val MAX_LIST = 50
 
     private val sha256Pattern = Regex("[0-9a-f]{64}")

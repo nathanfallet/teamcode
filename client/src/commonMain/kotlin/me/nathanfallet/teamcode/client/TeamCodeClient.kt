@@ -333,11 +333,14 @@ class TeamCodeClient(
         val response = http.request("$origin/api/v1/artifacts/uploads/$uploadId/blobs/$sha256/$number") {
             method = HttpMethod.Put; authenticate(); contentType(ContentType.Application.OctetStream); setBody(bytes); timeout { requestTimeoutMillis = 120_000 }
         }
-        if (response.status.value == 422) artifactDetail(response, ArtifactSecretView.serializer())?.takeIf { it.error.type == "artifact_secret_detected" }?.let {
-            if (Regex("[0-9a-f]{64}").matches(it.sha256) && ERROR_CODE.matches(it.kind)) throw ArtifactSecretException(it.sha256, it.kind)
-            throw TeamCodeException(422, "TeamCode returned HTTP 422.", "artifact_secret_detected")
+        if (!response.status.isSuccess()) {
+            val body = artifactErrorBody(response)
+            val code = body?.let { decodeOrNull(ApiError.serializer(), it) }?.error?.type?.takeIf { ERROR_CODE.matches(it) }
+            if (code == "artifact_secret_detected") body?.let { decodeOrNull(ArtifactSecretView.serializer(), it) }?.let {
+                if (Regex("[0-9a-f]{64}").matches(it.sha256) && ERROR_CODE.matches(it.kind)) throw ArtifactSecretException(it.sha256, it.kind)
+            }
+            throw failure(response, code)
         }
-        checkResponse(response)
         return response.body()
     }
     /** Publishes a version; a stale base version fails with [ArtifactConflictException] carrying the live version. */
@@ -346,9 +349,13 @@ class TeamCodeClient(
         val response = http.request("$origin/api/v1/artifacts/$id/versions") {
             method = HttpMethod.Post; authenticate(); contentType(ContentType.Application.Json); setBody(input); timeout { requestTimeoutMillis = 60_000 }
         }
-        if (response.status.value == 409) artifactDetail(response, ArtifactConflictView.serializer())?.takeIf { it.error.type == "artifact_conflict" }?.let { throw ArtifactConflictException(it.current) }
-            ?: throw TeamCodeException(409, "TeamCode returned HTTP 409.", null)
-        checkResponse(response)
+        if (!response.status.isSuccess()) {
+            // Read once: a conflict carries the live version, every other error keeps its code, Retry-After and request id.
+            val body = artifactErrorBody(response)
+            val code = body?.let { decodeOrNull(ApiError.serializer(), it) }?.error?.type?.takeIf { ERROR_CODE.matches(it) }
+            if (code == "artifact_conflict") throw ArtifactConflictException(body?.let { decodeOrNull(ArtifactConflictView.serializer(), it) }?.current)
+            throw failure(response, code)
+        }
         return response.body()
     }
     /** Interactive only: personal, team or public (as the team's public sharing allows). */
@@ -364,11 +371,13 @@ class TeamCodeClient(
         identifier(id)
         checkResponse(http.delete("$origin/api/v1/artifacts/$id") { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
     }
-    /** The structured body of a 409 or 422 artifact answer, bounded; null when it is not one. */
-    private suspend fun <T> artifactDetail(response: HttpResponse, serializer: kotlinx.serialization.KSerializer<T>): T? = try {
+    /** The body of an artifact error answer, bounded (a conflict carries a manifest); null when larger or unreadable. */
+    private suspend fun artifactErrorBody(response: HttpResponse): String? = try {
         val bytes = response.bodyAsChannel().readRemaining(MAX_ARTIFACT_DETAIL + 1L).readByteArray()
-        if (bytes.size > MAX_ARTIFACT_DETAIL) null else Serialization.json.decodeFromString(serializer, bytes.decodeToString())
+        if (bytes.size > MAX_ARTIFACT_DETAIL) null else bytes.decodeToString()
     } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+    private fun <T> decodeOrNull(serializer: kotlinx.serialization.KSerializer<T>, body: String): T? =
+        try { Serialization.json.decodeFromString(serializer, body) } catch (_: Exception) { null }
 
     /** Runner channel; construct the client with the pod's projected token as its credential. */
     suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
@@ -542,6 +551,11 @@ class TeamCodeClient(
             if (bytes.size > MAX_ERROR_BODY) null
             else Serialization.json.decodeFromString(ApiError.serializer(), bytes.decodeToString()).error.type.takeIf { ERROR_CODE.matches(it) }
         } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        return failure(response, code)
+    }
+
+    /** The failure of [response] whose body was already read for its [code]. */
+    private fun failure(response: HttpResponse, code: String?): TeamCodeException {
         return TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code,
             retryAfterSeconds(response.headers[HttpHeaders.RetryAfter]),
             REQUEST_ID_HEADERS.flatMap { response.headers.getAll(it).orEmpty() }.firstOrNull { REQUEST_ID.matches(it) })

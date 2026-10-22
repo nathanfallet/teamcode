@@ -197,8 +197,14 @@ class ArtifactPublicationPersistenceTest {
             a.admin.saveSettings(admin, settings.copy(quotas = settings.quotas.copy(memberBytes = 1024L * 1024, artifactsPerMember = 2)))
             val heavy = ByteArray(1024 * 1024) { 7 }
             assertEquals("artifact_quota_exceeded", assertFailsWith<TeamFailure> { publish(a.service, owner, null, mapOf("index.html" to bytes("<p>h</p>"), "a.bin" to heavy), 0) }.code)
-            // The draft that failed counts as one of the member's artifacts until it is cleaned: the per-member count is reached.
+            // The draft that failed does not count: only published artifacts do, at a new upload and at the first commit.
+            val retry = a.service.startUpload(owner, null, listOf(ref(bytes("n"))))
+            publish(a.service, owner, null, mapOf("index.html" to bytes("<p>second</p>")), 0)
             assertEquals("artifact_quota_exceeded", assertFailsWith<TeamFailure> { a.service.startUpload(owner, null, listOf(ref(bytes("n")))) }.code)
+            send(a.service, owner, retry, listOf(bytes("n")))
+            assertEquals("artifact_quota_exceeded", assertFailsWith<TeamFailure> {
+                a.service.commit(owner, retry.artifactId, retry.uploadId, "index.html", mapOf("index.html" to ref(bytes("n"))), 0, null, null, null, null, null)
+            }.code, "A draft started before the limit was reached is checked again when published")
 
             // The hourly rate counts the member's own publications (one here; the editor's version is the editor's): a limit of 1 refuses the next.
             val current = a.admin.settings(admin)
@@ -279,6 +285,64 @@ class ArtifactPublicationPersistenceTest {
             assertTrue(Triple("artifact.retention_expired", kept, "system") in audit, audit.toString())
             assertTrue(Triple("artifact.deleted", id, owner.member.id) in audit)
             assertEquals(setOf(id, draftUpload.artifactId), audit.filter { it.first == "artifact.storage_deleted" }.map { it.second }.toSet())
+        }
+    }
+
+    @Test @Timeout(240)
+    fun retriesUnusedBlobsAccessChangesAndFailingBucketsStayBounded() = runBlocking {
+        fixture { f ->
+            val bucket = Bucket()
+            val a = Replica(f.a, cipher, bucket); val b = Replica(f.b, cipher, bucket)
+            activate(a, f)
+            val owner = f.member.principal; val admin = f.admin.principal
+
+            // A refused file is sent again in the same upload, even when larger than a chunk.
+            val large = ByteArray(ArtifactRules.CHUNK_BYTES * 2 + 5) { (it % 13).toByte() }
+            val page = bytes("<p>page</p>"); val unused = bytes("sent but not in the version")
+            val upload = a.service.startUpload(owner, null, listOf(ref(page), ref(large), ref(unused)))
+            val sha = ArtifactRules.sha256(large)
+            val wrong = large.copyOf().also { it[it.size - 1] = 99 }
+            for (n in 0 until 2) a.service.putChunk(owner, upload.uploadId, sha, n, wrong.copyOfRange(n * ArtifactRules.CHUNK_BYTES, (n + 1) * ArtifactRules.CHUNK_BYTES))
+            assertEquals("artifact_blob_mismatch", assertFailsWith<TeamFailure> { a.service.putChunk(owner, upload.uploadId, sha, 2, wrong.copyOfRange(2 * ArtifactRules.CHUNK_BYTES, wrong.size)) }.code)
+            send(b.service, owner, upload, listOf(page, large, unused))
+
+            // A blob the upload stored but the version does not use is marked and collected, never left uncounted.
+            val published = b.service.commit(owner, upload.artifactId, upload.uploadId, "index.html", mapOf("index.html" to ref(page), "big.bin" to ref(large)), 0, null, null, null, null, null)
+            assertEquals((page.size + large.size).toLong(), published.artifact.storedBytes)
+            assertTrue(bucket.objects.keys.any { it.endsWith(ArtifactRules.sha256(unused)) })
+            a.maintenance.run()
+            assertFalse(bucket.objects.keys.any { it.endsWith(ArtifactRules.sha256(unused)) })
+            val id = published.artifact.id
+
+            // An access change counts the retention from the change, never expiring the artifact at once.
+            val settings = a.admin.settings(admin)
+            a.admin.saveSettings(admin, settings.copy(retention = settings.retention.copy(personalDays = null, sharedDays = 30)))
+            f.a.query { Artifacts.update({ Artifacts.id eq id }) { it[publishedAt] = System.currentTimeMillis() - 90L * 86_400_000 } }
+            val team = a.service.setAccess(owner, id, "team", true, null)
+            assertTrue(team.expiresAt!! > System.currentTimeMillis() + 29L * 86_400_000)
+            b.maintenance.run()
+            assertEquals("team", a.service.artifact(owner, id).access.wire)
+
+            // Open uploads are bounded per member.
+            repeat(ArtifactRules.MAX_OPEN_UPLOADS.toInt()) { a.service.startUpload(owner, id, listOf(ref(page))) }
+            val busy = assertFailsWith<TeamFailure> { a.service.startUpload(owner, id, listOf(ref(page))) }
+            assertEquals("artifact_uploads_busy" to 429, busy.code to busy.status)
+            f.a.query { ArtifactUploads.deleteAll() }
+
+            // A failing bucket: the steps before it still run, and its deletion is retried later, behind the others.
+            val expiring = publish(a.service, owner, null, mapOf("index.html" to bytes("<p>expiring</p>")), 0).artifact.id
+            f.a.query { Artifacts.update({ Artifacts.id eq expiring }) { it[expiresAt] = 1 } }
+            a.service.delete(owner, id)
+            f.a.query { Artifacts.update({ Artifacts.id eq id }) { it[updatedAt] = 1 } }
+            val failing = object : ArtifactObjectStore by bucket {
+                override suspend fun list(connection: ArtifactStorageConnection, prefix: String, continuationToken: String?, maxKeys: Int): ObjectListing = error("unreachable")
+                override suspend fun delete(connection: ArtifactStorageConnection, keys: List<String>): List<String> = error("unreachable")
+            }
+            ArtifactMaintenance(a.store, a.admin, failing).run()
+            assertEquals("deleted", f.a.query { Artifacts.selectAll().where { Artifacts.id eq expiring }.single()[Artifacts.state] }, "Retention ran despite the bucket")
+            val deferred = f.a.query { Artifacts.selectAll().where { Artifacts.id eq id }.single() }
+            assertNull(deferred[Artifacts.storageDeletedAt]); assertTrue(deferred[Artifacts.updatedAt] > 1, "The failed removal moved behind the others")
+            assertTrue(bucket.under(id).isNotEmpty())
         }
     }
 

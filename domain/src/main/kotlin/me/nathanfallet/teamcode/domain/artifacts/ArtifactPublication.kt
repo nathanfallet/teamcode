@@ -119,6 +119,10 @@ interface ArtifactStore {
     suspend fun collectableBlobs(limit: Int): List<CollectedBlob>
     /** Forgets blobs removed from the bucket, if they are still marked for collection. */
     suspend fun forgetBlobs(blobs: List<CollectedBlob>)
+    /** Moves blobs whose removal failed behind the others, so one failing bucket does not hold up the rest. */
+    suspend fun deferBlobs(blobs: List<CollectedBlob>)
+    /** Retries a folder removal later, behind the others. */
+    suspend fun deferDeletion(target: StorageTarget)
     /** Deleted artifacts whose folder may still hold files, deleted long enough ago that no upload is still in flight. */
     suspend fun pendingDeletions(limit: Int): List<StorageTarget>
     /** Records the proof that the folder is empty: `storage_deleted_at`, the rows of its content, `artifact.storage_deleted`. */
@@ -202,7 +206,8 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         actor.requireArtifactRead()
         if (query.limit !in 1..ArtifactRules.MAX_LIST) throw ArtifactRules.failure("invalid_artifact_query", "Use a limit of 1–${ArtifactRules.MAX_LIST}.")
         if (query.scope == ArtifactScope.ALL && !actor.canReadTeam) throw TeamFailure("forbidden", 403, "Only administrators list every artifact.")
-        listOfNotNull(query.ownerId, query.sessionId, query.runId).forEach(::requireId)
+        if (listOfNotNull(query.ownerId, query.sessionId, query.runId).any { !FILTER.matches(it) })
+            throw ArtifactRules.failure("invalid_artifact_query", "Filter by a member, session or run id: up to 36 letters, digits and dashes.")
         return store.list(actor, query)
     }
 
@@ -255,7 +260,10 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
 
     private fun requireId(id: String) { if (!ID.matches(id)) throw TeamFailure("not_found", 404, "Artifact not found.") }
 
-    companion object { val ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}") }
+    companion object {
+        val ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        private val FILTER = Regex("[A-Za-z0-9-]{1,36}")
+    }
 }
 
 /**
@@ -263,36 +271,52 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
  * uploads, blobs no version uses, and the proven removal of deleted artifacts' folders (deleted, listed again, empty).
  */
 class ArtifactMaintenance(private val store: ArtifactStore, private val admin: ArtifactAdminStore, private val objects: ArtifactObjectStore) {
+    /** Each step and each team on its own: a failure is retried at the next run, behind the work that succeeds. */
     suspend fun run(batch: Int = 100) {
-        store.expireDrafts(batch)
-        store.expireRetention(batch)
-        store.expireUploads(batch)
-        collect(batch)
-        removeDeleted(batch / 10 + 1)
+        step { store.expireDrafts(batch) }
+        step { store.expireRetention(batch) }
+        step { store.expireUploads(batch) }
+        step { collect(batch) }
+        step { removeDeleted(batch / 10 + 1) }
+    }
+
+    private suspend fun step(work: suspend () -> Unit) {
+        try { work() } catch (error: CancellationException) { throw error } catch (_: Exception) { }
     }
 
     private suspend fun collect(limit: Int) {
         val blobs = store.collectableBlobs(limit)
         for ((teamId, team) in blobs.groupBy { it.teamId }) {
-            val connection = admin.connection(teamId) ?: continue
-            val keys = team.associateBy { ArtifactKeys.blob(connection.prefix, teamId, it.artifactId, it.sha256) }
-            val failed = objects.delete(connection, keys.keys.toList()).toSet()
-            store.forgetBlobs(keys.filterKeys { it !in failed }.values.toList())
+            val failed = try {
+                val connection = admin.connection(teamId)
+                if (connection == null) team else {
+                    val keys = team.associateBy { ArtifactKeys.blob(connection.prefix, teamId, it.artifactId, it.sha256) }
+                    val refused = objects.delete(connection, keys.keys.toList()).toSet()
+                    store.forgetBlobs(keys.filterKeys { it !in refused }.values.toList())
+                    keys.filterKeys { it in refused }.values.toList()
+                }
+            } catch (error: CancellationException) { throw error } catch (_: Exception) { team }
+            if (failed.isNotEmpty()) store.deferBlobs(failed)
         }
     }
 
     private suspend fun removeDeleted(limit: Int) {
         for (target in store.pendingDeletions(limit)) {
-            val connection = admin.connection(target.teamId) ?: continue
-            val root = ArtifactKeys.artifactRoot(connection.prefix, target.teamId, target.artifactId)
-            var token: String? = null
-            do {
-                val page = objects.list(connection, root, token)
-                if (page.keys.isNotEmpty()) objects.delete(connection, page.keys.map { it.key })
-                token = page.nextContinuationToken
-            } while (token != null)
-            // The proof: listed again after the deletion, and empty.
-            if (objects.list(connection, root, maxKeys = 1).keys.isEmpty()) store.markStorageDeleted(target)
+            val proven = try {
+                val connection = admin.connection(target.teamId)
+                if (connection == null) false else {
+                    val root = ArtifactKeys.artifactRoot(connection.prefix, target.teamId, target.artifactId)
+                    var token: String? = null
+                    do {
+                        val page = objects.list(connection, root, token)
+                        if (page.keys.isNotEmpty()) objects.delete(connection, page.keys.map { it.key })
+                        token = page.nextContinuationToken
+                    } while (token != null)
+                    // The proof: listed again after the deletion, and empty.
+                    objects.list(connection, root, maxKeys = 1).keys.isEmpty()
+                }
+            } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+            if (proven) store.markStorageDeleted(target) else store.deferDeletion(target)
         }
     }
 }

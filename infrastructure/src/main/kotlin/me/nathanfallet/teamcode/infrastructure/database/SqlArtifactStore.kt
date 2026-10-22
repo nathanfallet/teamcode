@@ -19,11 +19,18 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         requirePublisher(actor, settings)
         val now = nowMillis()
         requireRate(actor, settings, now)
+        // Chunks wait in MySQL: a member holds a few uploads at a time, each bounded by the publication limits.
+        val open = ArtifactUploads.select(ArtifactUploads.id).where { (ArtifactUploads.memberId eq actor.member.id) and (ArtifactUploads.expiresAt greater now) }.count()
+        if (open >= ArtifactRules.MAX_OPEN_UPLOADS)
+            throw TeamFailure("artifact_uploads_busy", 429, "You have ${ArtifactRules.MAX_OPEN_UPLOADS} publications in progress. Finish them or wait for them to expire.", retryAfterSeconds = 60, retryable = true)
         val id = if (artifactId == null) {
-            val owned = Artifacts.select(Artifacts.id).where {
-                (Artifacts.teamId eq actor.teamId) and (Artifacts.ownerId eq actor.member.id) and (Artifacts.state inList listOf(DRAFT, ACTIVE))
+            requireArtifactSlot(actor, settings)
+            // Drafts do not count in the quota; abandoned ones are bounded per day until they expire.
+            val drafts = Artifacts.select(Artifacts.id).where {
+                (Artifacts.teamId eq actor.teamId) and (Artifacts.ownerId eq actor.member.id) and (Artifacts.state eq DRAFT)
             }.count()
-            if (owned >= settings.quotas.artifactsPerMember) throw TeamFailure("artifact_quota_exceeded", 409, "You have reached the team's limit of ${settings.quotas.artifactsPerMember} artifacts. Delete some before publishing a new one.")
+            if (drafts >= ArtifactRules.MAX_DRAFTS)
+                throw TeamFailure("artifact_uploads_busy", 429, "Too many unfinished new artifacts. Publish them, or wait a day for them to expire.", retryAfterSeconds = 3600, retryable = true)
             UUID.randomUUID().toString().also { id ->
                 Artifacts.insert {
                     it[Artifacts.id] = id; it[teamId] = actor.teamId; it[ownerId] = actor.member.id; it[createdBy] = actor.member.id; it[credentialId] = actor.tokenId
@@ -64,15 +71,10 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
             return@query ChunkReceipt(true, total, total, stored = true)
         if (number !in 0 until total || bytes.size != ArtifactRules.chunkSize(size, number))
             throw TeamFailure("invalid_artifact_chunk", 400, "Send chunk 0–${total - 1} of this file, each of 1 MiB except the last.")
-        val inserted = ArtifactUploadChunks.insertIgnore {
+        // One row per (upload, file, chunk number) at its exact size: what an upload holds is bounded by what it announced.
+        ArtifactUploadChunks.insertIgnore {
             it[ArtifactUploadChunks.uploadId] = uploadId; it[ArtifactUploadChunks.sha256] = sha256; it[ArtifactUploadChunks.number] = number
             it[ArtifactUploadChunks.bytes] = bytes; it[createdAt] = nowMillis()
-        }.insertedCount
-        if (inserted == 1) {
-            // Bounded by what was announced: a client cannot store more than its files in chunks.
-            if (upload[ArtifactUploads.receivedBytes] + bytes.size > announced.values.sum() + ArtifactRules.CHUNK_BYTES)
-                throw TeamFailure("invalid_artifact_upload", 400, "More bytes were sent than announced.")
-            ArtifactUploads.update({ ArtifactUploads.id eq uploadId }) { it[receivedBytes] = upload[ArtifactUploads.receivedBytes] + bytes.size }
         }
         val received = ArtifactUploadChunks.select(ArtifactUploadChunks.number).where { (ArtifactUploadChunks.uploadId eq uploadId) and (ArtifactUploadChunks.sha256 eq sha256) }.count().toInt()
         ChunkReceipt(received == total, received, total)
@@ -138,6 +140,7 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         val unknown = plan.files.count { (held[it.sha256] ?: uploaded[it.sha256]) != it.size }
         if (unknown > 0) throw TeamFailure("artifact_blob_missing", 409, "$unknown file(s) of this version were not received in this upload. Send them, then commit again.")
         requireRate(actor, settings, now)
+        if (row[Artifacts.state] == DRAFT) requireArtifactSlot(actor, settings, owner = row[Artifacts.ownerId])
         val added = plan.files.filter { it.sha256 !in held }.associate { it.sha256 to it.size }
         val addedBytes = added.values.sum()
         val owner = row[Artifacts.ownerId]
@@ -169,6 +172,15 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         val pinned = row[Artifacts.publicVersion]
         val pruned = if (oldest < 1) 0 else ArtifactVersions.deleteWhere {
             (ArtifactVersions.artifactId eq artifactId) and (ArtifactVersions.number lessEq oldest) and (if (pinned != null) ArtifactVersions.number neq pinned else Op.TRUE)
+        }
+        // Blobs this upload stored that the version does not use are marked like those of an expired upload.
+        val unused = uploaded.keys - plan.files.map { it.sha256 }.toSet() - held.keys
+        if (unused.isNotEmpty()) {
+            val announced = liveAnnouncements(artifactId, plan.uploadId, now)
+            val collectingHeld = ArtifactBlobs.select(ArtifactBlobs.sha256).where { (ArtifactBlobs.artifactId eq artifactId) and (ArtifactBlobs.sha256 inList unused) }.map { it[ArtifactBlobs.sha256] }.toSet()
+            for (sha in unused - announced - collectingHeld) ArtifactBlobs.insert {
+                it[ArtifactBlobs.artifactId] = artifactId; it[sha256] = sha; it[size] = uploaded.getValue(sha); it[storedAt] = now; it[lastReferencedVersion] = null; it[collectingSince] = now
+            }
         }
         ArtifactUploads.deleteWhere { ArtifactUploads.id eq plan.uploadId }
         val collected = if (pruned > 0) markUnreferenced(artifactId, now) else 0L
@@ -257,7 +269,8 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         val now = nowMillis()
         Artifacts.update({ Artifacts.id eq artifactId }) {
             it[Artifacts.access] = access.wire; it[publicFollowsLatest] = pinnedVersion == null; it[publicVersion] = pinnedVersion
-            it[expiresAt] = row[Artifacts.publishedAt]?.let { published -> expiry(settings, access, published) }
+            // Counted from the change: a new access level never puts an artifact past its retention at once.
+            it[expiresAt] = row[Artifacts.publishedAt]?.let { expiry(settings, access, now) }
             it[updatedAt] = now; it[generation] = row[Artifacts.generation] + 1
         }
         audit(actor.teamId, actor.member.id, "artifact.access_changed", "$artifactId:$previous->${access.wire}", row[Artifacts.ownerId], actor.tokenId)
@@ -330,7 +343,8 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         val rows = Artifacts.select(Artifacts.id, Artifacts.teamId, Artifacts.ownerId).where { (Artifacts.expiresAt less now) and (Artifacts.state eq ACTIVE) }.limit(limit).toList()
         for (row in rows) {
             val id = row[Artifacts.id]
-            if (Artifacts.update({ (Artifacts.id eq id) and (Artifacts.state eq ACTIVE) }) { it[state] = DELETED; it[deletedAt] = now; it[updatedAt] = now; it[expiresAt] = null } == 1) {
+            // Checked again in the update: a publication since the read moved expires_at forward.
+            if (Artifacts.update({ (Artifacts.id eq id) and (Artifacts.state eq ACTIVE) and (Artifacts.expiresAt less now) }) { it[state] = DELETED; it[deletedAt] = now; it[updatedAt] = now; it[expiresAt] = null } == 1) {
                 ArtifactUploads.deleteWhere { ArtifactUploads.artifactId eq id }
                 audit(row[Artifacts.teamId], SYSTEM, "artifact.retention_expired", id, row[Artifacts.ownerId])
             }
@@ -369,6 +383,16 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
 
     override suspend fun forgetBlobs(blobs: List<CollectedBlob>) = database.query {
         for (blob in blobs) ArtifactBlobs.deleteWhere { (ArtifactBlobs.artifactId eq blob.artifactId) and (ArtifactBlobs.sha256 eq blob.sha256) and ArtifactBlobs.collectingSince.isNotNull() }
+    }
+
+    override suspend fun deferBlobs(blobs: List<CollectedBlob>) = database.query {
+        val now = nowMillis()
+        for (blob in blobs) ArtifactBlobs.update({ (ArtifactBlobs.artifactId eq blob.artifactId) and (ArtifactBlobs.sha256 eq blob.sha256) and ArtifactBlobs.collectingSince.isNotNull() }) { it[collectingSince] = now }
+    }
+
+    override suspend fun deferDeletion(target: StorageTarget) = database.query {
+        Artifacts.update({ (Artifacts.id eq target.artifactId) and (Artifacts.state eq DELETED) and Artifacts.storageDeletedAt.isNull() }) { it[updatedAt] = nowMillis() }
+        Unit
     }
 
     override suspend fun pendingDeletions(limit: Int): List<StorageTarget> = database.query {
@@ -417,6 +441,13 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
             val retry = maxOf(1, (times[times.size - settings.quotas.publishesPerHour] + 3_600_000 - now + 999) / 1000)
             throw TeamFailure("artifact_rate_limited", 429, "You have published ${settings.quotas.publishesPerHour} versions in the last hour, the team's limit.", retryAfterSeconds = retry)
         }
+    }
+
+    /** The per-member artifact quota counts published artifacts only; checked when a draft is created and when it is first published. */
+    private fun requireArtifactSlot(actor: Principal, settings: ArtifactSettings, owner: String = actor.member.id) {
+        val owned = Artifacts.select(Artifacts.id).where { (Artifacts.teamId eq actor.teamId) and (Artifacts.ownerId eq owner) and (Artifacts.state eq ACTIVE) }.count()
+        if (owned >= settings.quotas.artifactsPerMember)
+            throw TeamFailure("artifact_quota_exceeded", 409, "The team's limit of ${settings.quotas.artifactsPerMember} artifacts per member is reached. Delete some before publishing a new one.")
     }
 
     /** The artifact if the caller may know it exists: active, or a draft of their own. Anything else is 404. */

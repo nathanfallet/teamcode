@@ -70,6 +70,8 @@ class ArtifactRoutesTest {
         override suspend fun expireUploads(limit: Int) = 0
         override suspend fun collectableBlobs(limit: Int) = emptyList<CollectedBlob>()
         override suspend fun forgetBlobs(blobs: List<CollectedBlob>) = Unit
+        override suspend fun deferBlobs(blobs: List<CollectedBlob>) = Unit
+        override suspend fun deferDeletion(target: StorageTarget) = Unit
         override suspend fun pendingDeletions(limit: Int) = emptyList<StorageTarget>()
         override suspend fun markStorageDeleted(target: StorageTarget) = Unit
     }

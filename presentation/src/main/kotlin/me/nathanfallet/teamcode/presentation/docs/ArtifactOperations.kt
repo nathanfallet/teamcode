@@ -96,9 +96,9 @@ internal fun ApiCatalog.artifactMemberOperations() {
         responses {
             ok<ArtifactUploadView>("The upload and the missing files.", HttpStatusCode.Created)
             notFound(UNKNOWN)
-            conflict("Artifacts are not active (see above), the member owns the maximum number of artifacts (`artifact_quota_exceeded`), or a file is being cleaned up from the bucket (`artifact_busy`, retry after `Retry-After`).")
+            conflict("Artifacts are not active (see above), the member owns the maximum number of published artifacts (`artifact_quota_exceeded`), or a file is being cleaned up from the bucket (`artifact_busy`, retry after `Retry-After`).")
             error(HttpStatusCode.PayloadTooLarge, "A file, the version or what must be sent is too large (`artifact_file_too_large`, `artifact_version_too_large`, `artifact_publication_too_large`).")
-            error(HttpStatusCode.TooManyRequests, "The member published the hourly maximum of versions (`artifact_rate_limited`, with `Retry-After`).")
+            error(HttpStatusCode.TooManyRequests, "The member published the hourly maximum of versions (`artifact_rate_limited`), or holds 16 open uploads or 20 unpublished drafts (`artifact_uploads_busy`); both with `Retry-After`.")
         }
     }
     put("/api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{number}") {

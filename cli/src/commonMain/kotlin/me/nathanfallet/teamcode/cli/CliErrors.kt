@@ -64,6 +64,7 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
             "An administrator tests it in Dashboard → Settings → Artifacts."
         "artifacts_disabled" -> return "Artifacts are turned off on this server ($tag). An administrator turns them on in Dashboard → Settings → Artifacts."
         "artifact_rate_limited" -> return "You have published the team's hourly maximum of artifact versions ($tag).$retry"
+        "artifact_uploads_busy" -> return "Too many artifact publications are in progress or unfinished ($tag). Finish them or wait for them to expire.$retry"
         "artifact_quota_exceeded" -> return "This publication would exceed an artifact quota of the team ($tag). Delete older artifacts (teamcode artifacts delete), or ask an administrator."
         "artifact_busy" -> return "A file of this publication is being cleaned up from the artifact storage ($tag). Publish again in a minute."
         "artifact_upload_not_found", "artifact_blob_missing" -> return "The upload expired or is incomplete ($tag). Publish again."
