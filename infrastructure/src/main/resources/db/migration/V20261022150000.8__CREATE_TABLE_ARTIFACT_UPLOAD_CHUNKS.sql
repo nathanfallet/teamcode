@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS artifact_upload_chunks (upload_id VARCHAR(36), sha256 VARCHAR(64), `number` INT, bytes MEDIUMBLOB NOT NULL, created_at BIGINT NOT NULL, CONSTRAINT pk_artifact_upload_chunks PRIMARY KEY (upload_id, sha256, `number`), CONSTRAINT artifact_upload_chunks_upload FOREIGN KEY (upload_id) REFERENCES artifact_uploads(id) ON DELETE CASCADE);

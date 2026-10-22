@@ -19,6 +19,8 @@ Select only the required scopes:
 | `cloud:read` | Read the owner's [cloud sessions](cloud-sessions.md), executions, transcripts, inputs and transfers, and the profiles the owner can use (`GET` only, V2) |
 | `cloud:write` | `cloud:read`, plus creating and managing the owner's cloud sessions: pause, resume, delete, messages, interrupts, attachments and transfers (V2) |
 | `admin:cloud` | `cloud:write` with an administrator's rights over every team cloud session and transfer, including `TeamCode-On-Behalf-Of` (V2). Only an administrator's key can receive it. It also sees every member's sessions in the [event feed](cloud-conversations.md#event-feed) |
+| `artifacts:read` | List and read the [artifacts](artifacts.md#publication-api) the owner can read: details, versions, files (as attachments) and invited members (V2) |
+| `artifacts:write` | `artifacts:read`, plus uploading and committing versions, inviting and removing members (V2). Never changes an access level or deletes an artifact: those need an interactive sign-in |
 | `team:read` | Read-only operational view of the whole team, as an interactive administrator sees it, with no write and no `TeamCode-On-Behalf-Of`. Only an administrator's key can receive it. See [Team-wide read access](#team-wide-read-access) |
 
 Inference also permits registering, heartbeating and ending the key's own [agent launches](agent-sessions.md); narrow lifecycle replies contain no usage totals. Another login cannot renew or dispatch under that launch ID. Cross-member/all-team registry reads need a `team:read` key (below) or an interactive administrator; run policy changes remain interactive administration.

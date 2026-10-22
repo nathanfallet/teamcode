@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS artifact_members (artifact_id VARCHAR(36), member_id VARCHAR(36), `role` VARCHAR(16) NOT NULL, reason VARCHAR(24) NOT NULL, added_by VARCHAR(36) NOT NULL, origin_session_id VARCHAR(36) NULL, added_at BIGINT NOT NULL, CONSTRAINT pk_artifact_members PRIMARY KEY (artifact_id, member_id), CONSTRAINT artifact_members_artifact FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE);
+CREATE INDEX artifact_members_member ON artifact_members (member_id);

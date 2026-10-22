@@ -28,19 +28,19 @@ object CloudConversationRules {
      */
     private val secrets = listOf(
         // Prefixed shapes start at a word boundary and contain a digit, so `task-management-…` or `etc_…` stay readable.
-        Regex("(?<![A-Za-z0-9_-])sk-(?:ant-)?(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
+        Regex("(?<![A-Za-z0-9_-])sk-(?:ant-)?(?=[A-Za-z0-9_-]{0,256}[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?<![A-Za-z0-9_])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
         Regex("github_pat_[A-Za-z0-9_]{20,}"),
-        Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}"),
+        Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]{0,256}[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?:AKIA|ASIA)[A-Z0-9]{16}"),
         Regex("xox[abprs]-[A-Za-z0-9-]{10,}"),
-        Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
+        Regex("(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
         Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     )
     private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+([A-Za-z0-9._~+/=-]{12,})")
     /** A name ending in a secret word (`GITHUB_TOKEN`, `"api_key"`, not `max_tokens`) assigned a value of 8 characters or more. */
     private val assignment = Regex("(?i)\\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_KEY|CREDENTIALS?))(\"?\\s*[=:]\\s*)(\"[^\"]{8,}\"|'[^']{8,}'|[^\\s\"',;]{8,})")
-    private val urlCredentials = Regex("(?i)(\\b[a-z][a-z0-9+.-]*://)[^\\s/@:]+:[^\\s/@]+@")
+    private val urlCredentials = Regex("(?i)((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}://)[^\\s/@:]+:[^\\s/@]+@")
 
     /**
      * A plain word (`configuration`, `Authentication.`) after `token`, `basic` or `bearer` is prose. Anything else is
@@ -51,6 +51,34 @@ object CloudConversationRules {
         return word.length > MAX_WORD || word.any { !it.isLetter() } || word.drop(1).any { it.isUpperCase() }
     }
     private const val MAX_WORD = 16
+
+    /** The kind of each pattern of [secrets], in order, as [detect] names it. */
+    private val secretKinds = listOf("provider_api_key", "github_token", "github_token", "teamcode_credential", "aws_access_key", "slack_token", "jwt", "private_key")
+
+    /**
+     * The kind of the first credential found in [text], or null: the shapes [mask] hides, plus authorization values
+     * and URLs with credentials. Name-based assignments (`API_KEY = "…"`) are not reported: they are ordinary code in a
+     * page and say nothing about the value. Used to refuse publishing a file rather than to rewrite it.
+     */
+    fun detect(text: String): String? {
+        secrets.forEachIndexed { index, pattern -> if (pattern.containsMatchIn(text)) return secretKinds[index] }
+        if (authorizationValue.findAll(text).any { looksLikeSecretValue(it.groupValues[2]) }) return "authorization_header"
+        if (urlCredentials.containsMatchIn(text)) return "url_credentials"
+        return null
+    }
+
+    /** On one line only: a whole page holds prose (`Basic cross-browser support`) and Markdown headings (`Token` over `-----`). */
+    private val authorizationValue = Regex("(?i)\\b(bearer|basic|token)[ \\t]+([A-Za-z0-9._~+/=-]{12,})")
+
+    /**
+     * Stricter than [looksLikeCredential], since a hit refuses a whole file: a digit or a base64 or token symbol
+     * (`+/=_~`), or mixed case with no word separator (`dXNlcjpwYXNzd29yZA`); hyphenated or dotted words are prose.
+     */
+    private fun looksLikeSecretValue(value: String): Boolean {
+        val word = value.trimEnd('.')
+        if (word.any { it.isDigit() || it in "+/=_~" }) return true
+        return '-' !in word && '.' !in word && word.any { it.isLowerCase() } && word.drop(1).any { it.isUpperCase() }
+    }
 
     fun mask(text: String): String {
         var masked = text

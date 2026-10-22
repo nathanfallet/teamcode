@@ -289,6 +289,95 @@ class TeamCodeClient(
         checkResponse(http.delete("$origin/api/v1/github/" + (memberId?.let { "links/$it" } ?: "link")) { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
     }
 
+    /** The team's artifact bucket (administrators); never contains the secret access key. */
+    suspend fun artifactStorage(): ArtifactStorageView = request("/api/v1/artifacts/storage", HttpMethod.Get)
+    suspend fun saveArtifactStorage(input: SaveArtifactStorageRequest): ArtifactStorageView = request("/api/v1/artifacts/storage", HttpMethod.Put, input)
+    /** Removes the bucket configuration while no artifact exists; artifacts are then off. */
+    suspend fun deleteArtifactStorage() {
+        checkResponse(http.delete("$origin/api/v1/artifacts/storage") { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
+    }
+    /** Writes, reads, lists and deletes a probe object; the server bounds the whole test to 80 seconds. */
+    suspend fun testArtifactStorage(): ArtifactStorageTestView = request("/api/v1/artifacts/storage/test", HttpMethod.Post, 120_000)
+    suspend fun artifactSettings(): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Get)
+    suspend fun saveArtifactSettings(input: SaveArtifactSettingsRequest): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Put, input)
+
+    /** Artifacts the caller can read; `scope` is `mine`, `shared`, `team` (default) or `all` (administrators). */
+    suspend fun artifacts(scope: String? = null, memberId: String? = null, sessionId: String? = null, runId: String? = null, limit: Int? = null, before: String? = null): ArtifactListView {
+        listOfNotNull(memberId, sessionId, runId).forEach(::identifier)
+        val response = http.get("$origin/api/v1/artifacts") {
+            authenticate(); timeout { requestTimeoutMillis = 30_000 }
+            scope?.let { parameter("scope", it) }; memberId?.let { parameter("member", it) }; sessionId?.let { parameter("session", it) }
+            runId?.let { parameter("run", it) }; limit?.let { parameter("limit", it) }; before?.let { parameter("before", it) }
+        }
+        checkResponse(response)
+        return response.body()
+    }
+    suspend fun artifact(id: String): ArtifactView { identifier(id); return request("/api/v1/artifacts/$id", HttpMethod.Get) }
+    suspend fun artifactVersions(id: String): List<ArtifactVersionView> { identifier(id); return request("/api/v1/artifacts/$id/versions", HttpMethod.Get) }
+    suspend fun artifactVersion(id: String, number: Int): ArtifactVersionView { identifier(id); return request("/api/v1/artifacts/$id/versions/$number", HttpMethod.Get) }
+    /** The bytes of one file of a version, at most [maxBytes]. */
+    suspend fun artifactFile(id: String, number: Int, path: String, maxBytes: Long = 16L * 1024 * 1024): ByteArray {
+        identifier(id)
+        val response = http.get("$origin/api/v1/artifacts/$id/versions/$number/file") { authenticate(); parameter("path", path); timeout { requestTimeoutMillis = 120_000 } }
+        checkResponse(response)
+        val bytes = response.bodyAsChannel().readRemaining(maxBytes + 1).readByteArray()
+        if (bytes.size > maxBytes) throw TeamCodeException(413, "The artifact file is larger than expected.", "artifact_file_too_large")
+        return bytes
+    }
+    /** Announces a version's distinct files; the answer lists the ones to send. */
+    suspend fun startArtifactUpload(input: CreateArtifactUploadRequest): ArtifactUploadView = coded(HttpMethod.Post, "/api/v1/artifacts/uploads", input)
+    /** One chunk of at most `chunkBytes`; a file holding a credential is refused with [ArtifactSecretException]. */
+    suspend fun putArtifactChunk(uploadId: String, sha256: String, number: Int, bytes: ByteArray): ArtifactChunkView {
+        identifier(uploadId); require(Regex("[0-9a-f]{64}").matches(sha256) && number >= 0) { "Invalid chunk." }
+        val response = http.request("$origin/api/v1/artifacts/uploads/$uploadId/blobs/$sha256/$number") {
+            method = HttpMethod.Put; authenticate(); contentType(ContentType.Application.OctetStream); setBody(bytes); timeout { requestTimeoutMillis = 120_000 }
+        }
+        if (!response.status.isSuccess()) {
+            val body = artifactErrorBody(response)
+            val code = body?.let { decodeOrNull(ApiError.serializer(), it) }?.error?.type?.takeIf { ERROR_CODE.matches(it) }
+            if (code == "artifact_secret_detected") body?.let { decodeOrNull(ArtifactSecretView.serializer(), it) }?.let {
+                if (Regex("[0-9a-f]{64}").matches(it.sha256) && ERROR_CODE.matches(it.kind)) throw ArtifactSecretException(it.sha256, it.kind)
+            }
+            throw failure(response, code)
+        }
+        return response.body()
+    }
+    /** Publishes a version; a stale base version fails with [ArtifactConflictException] carrying the live version. */
+    suspend fun commitArtifactVersion(id: String, input: CommitArtifactVersionRequest): ArtifactPublishedView {
+        identifier(id)
+        val response = http.request("$origin/api/v1/artifacts/$id/versions") {
+            method = HttpMethod.Post; authenticate(); contentType(ContentType.Application.Json); setBody(input); timeout { requestTimeoutMillis = 60_000 }
+        }
+        if (!response.status.isSuccess()) {
+            // Read once: a conflict carries the live version, every other error keeps its code, Retry-After and request id.
+            val body = artifactErrorBody(response)
+            val code = body?.let { decodeOrNull(ApiError.serializer(), it) }?.error?.type?.takeIf { ERROR_CODE.matches(it) }
+            if (code == "artifact_conflict") throw ArtifactConflictException(body?.let { decodeOrNull(ArtifactConflictView.serializer(), it) }?.current)
+            throw failure(response, code)
+        }
+        return response.body()
+    }
+    /** Interactive only: personal, team or public (as the team's public sharing allows). */
+    suspend fun setArtifactAccess(id: String, input: SetArtifactAccessRequest): ArtifactView { identifier(id); return request("/api/v1/artifacts/$id/access", HttpMethod.Put, input) }
+    suspend fun artifactMembers(id: String): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Get) }
+    suspend fun shareArtifact(id: String, input: ShareArtifactRequest): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Post, input) }
+    suspend fun unshareArtifact(id: String, member: String): ArtifactMembersView {
+        identifier(id); require(Regex("[A-Za-z0-9._@-]{1,64}").matches(member)) { "Invalid member." }
+        return request("/api/v1/artifacts/$id/members/$member", HttpMethod.Delete)
+    }
+    /** Irreversible; interactive only. */
+    suspend fun deleteArtifact(id: String) {
+        identifier(id)
+        checkResponse(http.delete("$origin/api/v1/artifacts/$id") { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
+    }
+    /** The body of an artifact error answer, bounded (a conflict carries a manifest); null when larger or unreadable. */
+    private suspend fun artifactErrorBody(response: HttpResponse): String? = try {
+        val bytes = response.bodyAsChannel().readRemaining(MAX_ARTIFACT_DETAIL + 1L).readByteArray()
+        if (bytes.size > MAX_ARTIFACT_DETAIL) null else bytes.decodeToString()
+    } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+    private fun <T> decodeOrNull(serializer: kotlinx.serialization.KSerializer<T>, body: String): T? =
+        try { Serialization.json.decodeFromString(serializer, body) } catch (_: Exception) { null }
+
     /** Runner channel; construct the client with the pod's projected token as its credential. */
     suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
     suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = runnerRequest("heartbeat", input)
@@ -497,6 +586,11 @@ class TeamCodeClient(
             if (bytes.size > MAX_ERROR_BODY) null
             else Serialization.json.decodeFromString(ApiError.serializer(), bytes.decodeToString()).error.type.takeIf { ERROR_CODE.matches(it) }
         } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        return failure(response, code)
+    }
+
+    /** The failure of [response] whose body was already read for its [code]. */
+    private fun failure(response: HttpResponse, code: String?): TeamCodeException {
         return TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code,
             retryAfterSeconds(response.headers[HttpHeaders.RetryAfter]),
             REQUEST_ID_HEADERS.flatMap { response.headers.getAll(it).orEmpty() }.firstOrNull { REQUEST_ID.matches(it) })
@@ -657,6 +751,8 @@ class TeamCodeClient(
         private const val MAX_TEAM_EVENT_TYPES = 64
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
         private const val MAX_ERROR_BODY = 16 * 1024
+        /** A conflict carries the live manifest: up to 511 files. */
+        private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
@@ -678,6 +774,11 @@ class TeamCodeException(
     val retryAfterSeconds: Long? = null,
     val requestId: String? = null,
 ) : Exception(message)
+
+/** `409 artifact_conflict`: the artifact changed; [current] is the live version to merge before publishing again. */
+class ArtifactConflictException(val current: ArtifactVersionView?) : Exception("The artifact changed: version ${current?.number ?: 0} is live.")
+/** `422 artifact_secret_detected`: the file [sha256] holds a credential of [kind]; the value is never returned. */
+class ArtifactSecretException(val sha256: String, val kind: String) : Exception("A file holds a credential ($kind).")
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
 internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all { c -> c in '0'..'9' } }?.toLong()

@@ -33,8 +33,12 @@ enum class ServiceScope(val wire: String) {
      * `TeamCode-On-Behalf-Of`. Only valid for a key owned by an administrator.
      */
     TEAM_READ("team:read"),
+    /** List and read the artifacts the owner can see. */
+    ARTIFACTS_READ("artifacts:read"),
+    /** Everything in `artifacts:read`, plus publishing versions and inviting members; never making public or deleting. */
+    ARTIFACTS_WRITE("artifacts:write"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, TEAM_READ, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -68,6 +72,14 @@ fun Principal.requireCloudRead() {
     if (serviceScopes != null && serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ })
         throw TeamFailure("credential_scope", 403, "This service key does not grant cloud:read access.")
 }
+/** Artifact reads: an interactive login, or a key with `artifacts:read`, `artifacts:write` or `team:read`. */
+fun Principal.requireArtifactRead() {
+    requireReady()
+    if (serviceScopes != null && serviceScopes.none { it == ServiceScope.ARTIFACTS_READ || it == ServiceScope.ARTIFACTS_WRITE || it == ServiceScope.TEAM_READ })
+        throw TeamFailure("credential_scope", 403, "This service key does not grant artifacts:read access.")
+}
+/** Artifact publication and invitations: an interactive login, or a key with `artifacts:write`. */
+fun Principal.requireArtifactWrite() = requireScope(ServiceScope.ARTIFACTS_WRITE)
 /** Cloud writes: an interactive login, or a key with `cloud:write` or `admin:cloud`. */
 fun Principal.requireCloudWrite() {
     requireReady()
@@ -106,6 +118,8 @@ class AuthorizeCredentialUseCase {
             CredentialAction.MCP -> actor.requireScope(ServiceScope.MCP)
             CredentialAction.CLOUD_READ -> actor.requireCloudRead()
             CredentialAction.CLOUD_WRITE -> actor.requireCloudWrite()
+            CredentialAction.ARTIFACTS_READ -> actor.requireArtifactRead()
+            CredentialAction.ARTIFACTS_WRITE -> actor.requireArtifactWrite()
             CredentialAction.INTERACTIVE -> actor.requireInteractive()
         }
     }

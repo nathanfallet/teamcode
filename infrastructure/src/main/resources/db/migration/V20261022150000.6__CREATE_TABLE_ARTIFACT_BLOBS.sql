@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS artifact_blobs (artifact_id VARCHAR(36), sha256 VARCHAR(64), `size` BIGINT NOT NULL, stored_at BIGINT NOT NULL, last_referenced_version INT NULL, CONSTRAINT pk_artifact_blobs PRIMARY KEY (artifact_id, sha256), CONSTRAINT artifact_blobs_artifact FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE);
