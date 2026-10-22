@@ -46,10 +46,11 @@ class ArtifactStoragePersistenceTest {
             assertEquals("artifact_storage_secret_required", assertFailsWith<TeamFailure> { a.saveStorage(f.admin.principal, 2, input(bucket = "other", secret = null)) }.code)
 
             // A passed test marks this version verified; a later save or a failed test clears it.
-            assertNotNull(a.recordTest(f.admin.principal, 2, passed = true)!!.verifiedAt)
-            assertNotNull(a.recordTest(f.admin.principal, 1, passed = false)!!.verifiedAt, "A test of an older version changes nothing")
-            assertNull(b.recordTest(f.admin.principal, 2, passed = false)!!.verifiedAt)
-            assertNotNull(a.recordTest(f.admin.principal, 2, passed = true)!!.verifiedAt)
+            assertTrue(a.recordTest(f.admin.principal, 2, passed = true)); assertNotNull(a.storage(f.admin.principal)!!.verifiedAt)
+            assertFalse(a.recordTest(f.admin.principal, 1, passed = false), "A test of an older version is not recorded")
+            assertNotNull(a.storage(f.admin.principal)!!.verifiedAt, "and changes nothing")
+            assertTrue(b.recordTest(f.admin.principal, 2, passed = false)); assertNull(a.storage(f.admin.principal)!!.verifiedAt)
+            assertTrue(a.recordTest(f.admin.principal, 2, passed = true))
             val moved = a.saveStorage(f.admin.principal, 2, input(bucket = "other-bucket", secret = "second-secret-access-key"))
             assertNull(moved.verifiedAt); assertEquals("other-bucket", moved.bucket)
 
@@ -61,12 +62,17 @@ class ArtifactStoragePersistenceTest {
                 assertEquals("artifact_storage_in_use", assertFailsWith<TeamFailure> { a.saveStorage(f.admin.principal, 3, change) }.code)
             assertEquals(4, a.saveStorage(f.admin.principal, 3, input(bucket = "other-bucket", secret = "third-secret-access-key")).version)
             assertEquals("artifact_storage_in_use", assertFailsWith<TeamFailure> { a.deleteStorage(f.admin.principal) }.code)
+            // A deleted artifact whose folder was proven empty no longer holds the bucket; one still being deleted does.
+            f.a.query { Artifacts.update({ Artifacts.teamId eq f.team }) { it[state] = "deleted" } }
+            assertTrue(a.inUse(f.admin.principal))
+            f.a.query { Artifacts.update({ Artifacts.teamId eq f.team }) { it[storageDeletedAt] = 2 } }
+            assertFalse(a.inUse(f.admin.principal)); assertFalse(a.overview(f.admin.principal).inUse)
 
             // A member and a key never pass the store's revalidation as someone else.
             assertEquals("authentication_required", assertFailsWith<TeamFailure> { a.storage(f.admin.principal.copy(tokenId = "revoked")) }.code)
 
             val actions = f.a.query { AuditEvents.selectAll().where { AuditEvents.action like "artifacts.%" }.map { it[AuditEvents.action] } }
-            assertEquals(4, actions.count { it == "artifacts.storage_saved" }); assertEquals(4, actions.count { it == "artifacts.storage_tested" })
+            assertEquals(4, actions.count { it == "artifacts.storage_saved" }); assertEquals(3, actions.count { it == "artifacts.storage_tested" }, "The stale test left no record")
         }
     }
 
@@ -94,16 +100,18 @@ class ArtifactStoragePersistenceTest {
             a.recordTest(f.admin.principal, 2, passed = true)
             assertTrue(ArtifactAvailability.of(a.settings(f.admin.principal), a.storage(f.admin.principal)).active)
 
-            // Removing the storage turns the switch off.
+            // Removing the storage turns the switch off as a new settings version, so a form loaded before is stale.
+            val before = a.settings(f.admin.principal)
             b.deleteStorage(f.admin.principal)
             assertNull(a.storage(f.admin.principal)); assertNull(a.connection(f.team))
-            assertFalse(a.settings(f.admin.principal).enabled)
+            assertFalse(a.settings(f.admin.principal).enabled); assertEquals(before.version + 1, a.settings(f.admin.principal).version)
+            assertEquals("artifact_settings_conflict", assertFailsWith<TeamFailure> { a.saveSettings(f.admin.principal, before.copy(enabled = false)) }.code)
             assertEquals("artifact_storage_missing", assertFailsWith<TeamFailure> { a.deleteStorage(f.admin.principal) }.code)
 
             val actions = f.a.query { AuditEvents.selectAll().where { AuditEvents.action like "artifacts.%" }.map { it[AuditEvents.action] to it[AuditEvents.subjectId] } }
             assertTrue("artifacts.public_sharing_changed" to "owners_of_artifacts->admins" in actions, actions.toString())
             assertEquals(1, actions.count { it.first == "artifacts.public_sharing_changed" }, "Only a change of public sharing is recorded as one")
-            assertEquals(2, actions.count { it.first == "artifacts.settings_updated" }); assertEquals(1, actions.count { it.first == "artifacts.storage_deleted" })
+            assertEquals(3, actions.count { it.first == "artifacts.settings_updated" }, "Two saves and the switch turned off by the removal"); assertEquals(1, actions.count { it.first == "artifacts.storage_deleted" })
         }
     }
 

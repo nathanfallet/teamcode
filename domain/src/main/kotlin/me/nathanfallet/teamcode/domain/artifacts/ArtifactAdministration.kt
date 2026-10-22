@@ -3,6 +3,9 @@ package me.nathanfallet.teamcode.domain.artifacts
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService
 import me.nathanfallet.teamcode.domain.team.*
 
@@ -44,6 +47,8 @@ class ArtifactStorageInput(
 class ArtifactStorageConnection(
     val endpoint: String, val region: String, val bucket: String, val prefix: String, val pathStyle: Boolean,
     val accessKeyId: String, val secretAccessKey: String, val serverSideEncryption: ServerSideEncryption,
+    /** The storage version this connection was read from, so a test records the version it actually used. */
+    val version: Int = 0,
 ) {
     override fun toString() = "ArtifactStorageConnection(endpoint=$endpoint, bucket=$bucket, secretAccessKey=[REDACTED])"
 }
@@ -80,6 +85,10 @@ data class ArtifactAvailability(val active: Boolean, val reason: String?) {
             else -> ArtifactAvailability(true, null)
         }
     }
+}
+
+data class ArtifactAdminOverview(val storage: ArtifactStorage?, val settings: ArtifactSettings, val inUse: Boolean) {
+    val availability get() = ArtifactAvailability.of(settings, storage)
 }
 
 /** One step of a connection test. [code] is the S3 error code (`AccessDenied`, `NoSuchBucket`, ...) or a short local code, never a response body. */
@@ -121,7 +130,9 @@ interface ArtifactAdminStore {
      * `verifiedAt`.
      */
     suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput): ArtifactStorage
-    /** Whether the team has any artifact, in any state, so the bucket cannot move under it. */
+    /** The storage, the settings and [inUse] read in one transaction, for the settings page and the admin API. */
+    suspend fun overview(actor: Principal): ArtifactAdminOverview
+    /** Whether any artifact may still have files in the bucket (every state but a deleted one whose folder was proven empty). */
     suspend fun inUse(actor: Principal): Boolean
     /**
      * Removes the bucket configuration and its secret; `409 artifact_storage_in_use` while artifacts exist,
@@ -129,10 +140,11 @@ interface ArtifactAdminStore {
      */
     suspend fun deleteStorage(actor: Principal)
     /**
-     * Records a test of storage [version] while it is still current: a pass sets `verifiedAt`, a failure clears it
-     * (so artifacts stop until a test passes again). Audited either way.
+     * Records a test of storage [version] while it is still current, under the team lock: a pass sets `verifiedAt`, a
+     * failure clears it (so artifacts stop until a test passes again), audited either way. Returns false, writing
+     * nothing, when the storage changed or was removed meanwhile.
      */
-    suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): ArtifactStorage?
+    suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean
     suspend fun settings(actor: Principal): ArtifactSettings
     /**
      * `409 artifact_settings_conflict` unless `settings.version` is current. Turning artifacts on is refused with
@@ -156,7 +168,10 @@ class ArtifactAdministrationService(
     suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput): ArtifactStorage {
         actor.requireAdmin()
         validate(input)
-        return store.saveStorage(actor, expectedVersion, input)
+        // One spelling of the endpoint, so a trailing slash never reads as a move to another endpoint.
+        val normalized = ArtifactStorageInput(input.endpoint.removeSuffix("/"), input.region, input.bucket, input.prefix, input.pathStyle,
+            input.accessKeyId, input.secretAccessKey, input.serverSideEncryption)
+        return store.saveStorage(actor, expectedVersion, normalized)
     }
 
     suspend fun deleteStorage(actor: Principal) { actor.requireAdmin(); store.deleteStorage(actor) }
@@ -164,7 +179,8 @@ class ArtifactAdministrationService(
     suspend fun settings(actor: Principal): ArtifactSettings { actor.requireAdmin(); return store.settings(actor) }
 
     /** For administrators: whether artifacts are active and why not. Members learn it from the publication policy (later). */
-    suspend fun availability(actor: Principal): ArtifactAvailability { actor.requireAdmin(); return ArtifactAvailability.of(store.settings(actor), store.storage(actor)) }
+    suspend fun availability(actor: Principal): ArtifactAvailability = overview(actor).availability
+    suspend fun overview(actor: Principal): ArtifactAdminOverview { actor.requireAdmin(); return store.overview(actor) }
 
     suspend fun saveSettings(actor: Principal, settings: ArtifactSettings): ArtifactSettings {
         actor.requireAdmin()
@@ -179,37 +195,57 @@ class ArtifactAdministrationService(
      */
     suspend fun testStorage(actor: Principal): StorageTestResult {
         actor.requireAdmin()
-        val stored = store.storage(actor) ?: throw TeamFailure("artifact_storage_missing", 404, "Save the artifact storage before testing it.")
-        val connection = store.connection(actor.teamId) ?: throw TeamFailure("artifact_storage_missing", 404, "Save the artifact storage before testing it.")
-        val key = ArtifactKeys.teamRoot(connection.prefix, actor.teamId) + ".teamcode-probe-" + probeId()
-        val body = "TeamCode artifact storage probe $key".encodeToByteArray()
-        val steps = mutableListOf<StorageTestStep>()
-        suspend fun step(name: String, block: suspend () -> String?): Boolean {
-            val failure = try { block() }
+        // One test at a time on this replica: a double click never runs two probe sequences side by side.
+        if (!testing.tryLock()) throw TeamFailure("artifact_storage_test_running", 409, "A connection test is already running. Wait for its result.")
+        try {
+            val connection = store.connection(actor.teamId) ?: throw TeamFailure("artifact_storage_missing", 404, "Save the artifact storage before testing it.")
+            val key = ArtifactKeys.teamRoot(connection.prefix, actor.teamId) + ".teamcode-probe-" + probeId()
+            val body = "TeamCode artifact storage probe $key".encodeToByteArray()
+            val steps = mutableListOf<StorageTestStep>()
+            suspend fun step(name: String, block: suspend () -> String?): Boolean {
+                val failure = try { block() }
+                    catch (error: TimeoutCancellationException) { steps += StorageTestStep(name, false, null, "timeout"); return false }
+                    catch (error: CancellationException) { throw error }
+                    catch (error: ObjectStoreException) { steps += StorageTestStep(name, false, error.status, error.code); return false }
+                    catch (_: Exception) { steps += StorageTestStep(name, false, null, "unreachable"); return false }
+                steps += if (failure == null) StorageTestStep(name, true) else StorageTestStep(name, false, null, failure)
+                return failure == null
+            }
+            val deadline = System.currentTimeMillis() + TEST_DEADLINE_MILLIS
+            suspend fun <T> bounded(block: suspend () -> T): T = withTimeout(maxOf(1, deadline - System.currentTimeMillis())) { block() }
+            val written = step("put") { bounded { objects.put(connection, key, body, "text/plain") }; null }
+            if (written) {
+                step("get") {
+                    val read = bounded { objects.get(connection, key) } ?: return@step "missing"
+                    if (MessageDigest.isEqual(sha256(read.bytes), sha256(body))) null else "digest_mismatch"
+                }
+                step("list") { if (bounded { objects.list(connection, key, maxKeys = 10) }.keys.any { it.key == key }) null else "not_listed" }
+                step("delete") {
+                    if (bounded { objects.delete(connection, listOf(key)) }.isNotEmpty()) "not_deleted"
+                    else if (bounded { objects.head(connection, key) } != null) "still_present" else null
+                }
+            } else if (steps.single().status == null) {
+                // A write that timed out or lost its answer may still have landed: remove it, quietly and briefly.
+                try { withTimeout(CLEANUP_MILLIS) { objects.delete(connection, listOf(key)) } }
+                catch (error: TimeoutCancellationException) { }
                 catch (error: CancellationException) { throw error }
-                catch (error: ObjectStoreException) { steps += StorageTestStep(name, false, error.status, error.code); return false }
-                catch (_: Exception) { steps += StorageTestStep(name, false, null, "unreachable"); return false }
-            steps += if (failure == null) StorageTestStep(name, true) else StorageTestStep(name, false, null, failure)
-            return failure == null
-        }
-        if (step("put") { objects.put(connection, key, body, "text/plain"); null }) {
-            step("get") {
-                val read = objects.get(connection, key) ?: return@step "missing"
-                if (MessageDigest.isEqual(sha256(read.bytes), sha256(body))) null else "digest_mismatch"
+                catch (_: Exception) { }
             }
-            step("list") { if (objects.list(connection, key, maxKeys = 10).keys.any { it.key == key }) null else "not_listed" }
-            step("delete") {
-                if (objects.delete(connection, listOf(key)).isNotEmpty()) "not_deleted"
-                else if (objects.head(connection, key) != null) "still_present" else null
-            }
-        }
-        val passed = steps.size == 4 && steps.all { it.ok }
-        store.recordTest(actor, stored.version, passed)
-        return StorageTestResult(passed, steps)
+            val passed = steps.size == 4 && steps.all { it.ok }
+            // The result belongs to the storage version that was tested; a save meanwhile makes it moot.
+            if (!store.recordTest(actor, connection.version, passed))
+                return StorageTestResult(false, steps + StorageTestStep("record", false, null, "storage_changed"))
+            return StorageTestResult(passed, steps)
+        } finally { testing.unlock() }
     }
+
+    private val testing = Mutex()
 
     companion object {
         const val GIB = 1024L * 1024 * 1024
+        /** The whole connection test; the typed client waits longer. */
+        const val TEST_DEADLINE_MILLIS = 80_000L
+        private const val CLEANUP_MILLIS = 10_000L
         private val region = Regex("[a-z0-9-]{1,64}")
         private val bucket = Regex("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
         private val prefixSegment = Regex("[a-z0-9._-]{1,64}")

@@ -46,7 +46,7 @@ The typed client has `artifactStorage`, `saveArtifactStorage`, `deleteArtifactSt
 
 | Field | Rule |
 | --- | --- |
-| Endpoint | `https://host[:port]`, no path, credentials, query or fragment. Link-local, unspecified and cloud metadata hosts are refused in every numeric spelling (`artifact_storage_host_not_allowed`); private and loopback addresses are allowed for MinIO. The host is resolved again before every request and refused if any answer is such an address. |
+| Endpoint | `https://host[:port]`, no path, credentials, query or fragment. Link-local, unspecified and cloud metadata hosts are refused in every numeric spelling (`artifact_storage_host_not_allowed`); private and loopback addresses are allowed for MinIO. The host each request goes to (`<bucket>.<host>` when virtual-hosted) is resolved again before every request and refused if any answer is such an address; as for clusters, the address the client dials afterwards is not pinned. |
 | Region | `[a-z0-9-]`: `auto` for R2, `gra`/`sbg` for OVH, `us-east-1` for MinIO. |
 | Bucket | 3–63 lowercase letters, digits, dots and dashes. TeamCode never creates a bucket. |
 | Prefix | Optional, up to 8 `[a-z0-9._-]` segments separated by `/`, no `.` or `..` segment. |
@@ -54,9 +54,9 @@ The typed client has `artifactStorage`, `saveArtifactStorage`, `deleteArtifactSt
 | Access key id, secret | The secret is sealed with the server's credential key (AES-256-GCM, context `artifact-storage:<teamId>`) and never returned or shown again: an empty field keeps it. Changing the endpoint or the bucket requires a new secret (`artifact_storage_secret_required`). |
 | Server-side encryption | `none` or `AES256` (`x-amz-server-side-encryption` on every write; R2 ignores it). |
 
-A save names the `version` it replaces (`409 artifact_storage_conflict` otherwise, 0 for the first save). Once any artifact exists, the endpoint, bucket and prefix cannot change (`409 artifact_storage_in_use`) and the storage cannot be removed; the keys can still be rotated. Moving artifacts to another bucket is not supported yet.
+A save names the `version` it replaces (`409 artifact_storage_conflict` otherwise, 0 for the first save). Once any artifact may have files in the bucket (any artifact except a deleted one whose folder was proven empty), the endpoint, bucket and prefix cannot change (`409 artifact_storage_in_use`) and the storage cannot be removed; the keys can still be rotated. Moving artifacts to another bucket is not supported yet.
 
-**Connection test.** Writes `<prefix>/<team>/.teamcode-probe-<uuid>`, reads it back and compares its SHA-256, lists the prefix, deletes it and checks it is gone. Each step reports its HTTP status and the S3 error code (`AccessDenied`, `NoSuchBucket`, `SignatureDoesNotMatch`, ...) or a short local code (`unreachable`, `timeout`, `dns`, `host_not_allowed`, `digest_mismatch`, `not_listed`, `not_deleted`), never a response body. The key needs `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:DeleteObject` on the prefix and nothing else.
+**Connection test.** Writes `<prefix>/<team>/.teamcode-probe-<uuid>`, reads it back and compares its SHA-256, lists the prefix, deletes it and checks it is gone. Each step reports its HTTP status and the S3 error code (`AccessDenied`, `NoSuchBucket`, `SignatureDoesNotMatch`, ...) or a short local code (`unreachable`, `timeout`, `dns`, `host_not_allowed`, `digest_mismatch`, `not_listed`, `not_deleted`), never a response body. The whole test is bounded to 80 seconds and runs once at a time (`409 artifact_storage_test_running`); a write that got no answer is deleted anyway. The result is recorded only for the storage version that was tested: if the storage was saved meanwhile, the test answers `ok: false` with a last step `record` / `storage_changed` and records nothing. The key needs `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:DeleteObject` on the prefix and nothing else.
 
 **Settings.**
 

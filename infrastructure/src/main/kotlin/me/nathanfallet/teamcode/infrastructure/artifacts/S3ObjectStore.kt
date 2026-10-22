@@ -25,8 +25,9 @@ import org.w3c.dom.Element
  * operations (PutObject, GetObject with Range, HeadObject, ListObjectsV2, DeleteObjects). Works with AWS S3, OVH,
  * Cloudflare R2 and MinIO, path-style or virtual-hosted.
  *
- * The endpoint host is resolved before every request and refused when any address is link-local, unspecified or a
- * cloud metadata address, as for Kubernetes API hosts. Error bodies are read only for their `<Code>`; nothing else of
+ * The host each request goes to (`<bucket>.<host>` when virtual-hosted) is resolved before every request and refused
+ * when any address is link-local, unspecified or a cloud metadata address, as for Kubernetes API hosts. As there, the
+ * check cannot pin the address the HTTP client dials afterwards (a DNS answer changed in between is not seen). Error bodies are read only for their `<Code>`; nothing else of
  * them is kept, logged or returned. Redirects are not followed (the client is built with `followRedirects = false`).
  */
 class S3ObjectStore(
@@ -47,13 +48,15 @@ class S3ObjectStore(
         val extra = buildMap { if (range != null) put("range", "bytes=${range.first}-${range.last}") }
         return send(connection, HttpMethod.Get, key, emptyList(), extra) { response ->
             when {
-                response.status == HttpStatusCode.NotFound -> { drain(response); null }
+                response.status == HttpStatusCode.NotFound -> missingOrFailure(response)
                 response.status == HttpStatusCode.RequestedRangeNotSatisfiable -> { drain(response); throw ObjectStoreException(416, "InvalidRange") }
                 !response.status.isSuccess() -> throw failure(response)
                 else -> {
                     val bytes = response.bodyAsChannel().readAtMost(maxBytes) ?: throw ObjectStoreException(response.status.value, "object_too_large")
-                    StoredObject(bytes, response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: bytes.size.toLong(),
-                        response.headers[HttpHeaders.ContentRange], response.headers[HttpHeaders.ETag])
+                    // A ranged answer's length is the range's; the object's size is the total of its Content-Range.
+                    val contentRange = response.headers[HttpHeaders.ContentRange]
+                    val size = contentRange?.substringAfterLast('/')?.toLongOrNull() ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: bytes.size.toLong()
+                    StoredObject(bytes, size, contentRange, response.headers[HttpHeaders.ETag])
                 }
             }
         }
@@ -108,8 +111,9 @@ class S3ObjectStore(
         body: ByteArray? = null, contentType: ContentType? = null, read: suspend (HttpResponse) -> T,
     ): T {
         val endpoint = try { Url(connection.endpoint) } catch (_: Exception) { throw ObjectStoreException(null, "invalid_endpoint") }
-        requireAllowedHost(endpoint.host)
         val authorityHost = if (connection.pathStyle) endpoint.host else "${connection.bucket}.${endpoint.host}"
+        // The host the request actually goes to: with virtual-hosted addressing that is <bucket>.<endpoint host>.
+        requireAllowedHost(authorityHost)
         val hostHeader = if (endpoint.specifiedPort == 0 || endpoint.specifiedPort == endpoint.protocol.defaultPort) authorityHost else "$authorityHost:${endpoint.port}"
         val rawPath = buildString {
             if (connection.pathStyle) append('/').append(connection.bucket)
@@ -151,6 +155,13 @@ class S3ObjectStore(
     }
 
     private suspend fun drain(response: HttpResponse) { response.bodyAsChannel().readAtMost(MAX_ERROR_BYTES) }
+
+    /** A 404 is a missing object only when S3 says `NoSuchKey`; `NoSuchBucket` and the rest are storage failures. */
+    private suspend fun missingOrFailure(response: HttpResponse): Nothing? {
+        val failure = failure(response)
+        if (failure.code == "NoSuchKey" || failure.code == "http_404") return null
+        throw failure
+    }
 
     companion object {
         private val AMZ_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")

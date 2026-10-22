@@ -24,8 +24,9 @@ class ArtifactSettingsRoutesTest {
                 .also { stored = it }
         }
         override suspend fun inUse(actor: Principal) = false
+        override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, settings, false)
         override suspend fun deleteStorage(actor: Principal) { stored ?: throw TeamFailure("artifact_storage_missing", 404, "None."); stored = null; settings = settings.copy(enabled = false) }
-        override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean) = stored?.copy(verifiedAt = if (passed) 9 else null).also { stored = it }
+        override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean { stored = stored?.copy(verifiedAt = if (passed) 9 else null); return stored != null }
         override suspend fun settings(actor: Principal) = settings
         override suspend fun saveSettings(actor: Principal, settings: ArtifactSettings): ArtifactSettings {
             if (settings.version != this.settings.version) throw TeamFailure("artifact_settings_conflict", 409, "Changed.")
@@ -33,7 +34,7 @@ class ArtifactSettingsRoutesTest {
             if (settings.enabled && stored?.verifiedAt == null) throw TeamFailure("artifact_storage_unverified", 409, "Not tested.")
             return settings.copy(version = settings.version + 1).also { this.settings = it }
         }
-        override suspend fun connection(teamId: String) = stored?.let { ArtifactStorageConnection(it.endpoint, it.region, it.bucket, it.prefix, it.pathStyle, it.accessKeyId, secret!!, it.serverSideEncryption) }
+        override suspend fun connection(teamId: String) = stored?.let { ArtifactStorageConnection(it.endpoint, it.region, it.bucket, it.prefix, it.pathStyle, it.accessKeyId, secret!!, it.serverSideEncryption, it.version) }
     }
     private class Objects : ArtifactObjectStore {
         val keys = mutableMapOf<String, ByteArray>()
@@ -144,6 +145,12 @@ class ArtifactSettingsRoutesTest {
         val on = form("$ARTIFACT_SETTINGS_PATH/settings", "version=0&enabled=on&whoCanPublish=admins&publicSharing=off&quotaMemberGib=1.5&quotaTeamGib=20&quotaArtifactsPerMember=100&quotaPublishesPerHour=30&personalRetentionDays=&sharedRetentionDays=60&maxVersionsPerArtifact=20")
         assertEquals(HttpStatusCode.Found, on.status, on.bodyAsText())
         assertEquals(ArtifactSettings(true, WhoCanPublish.ADMINS, PublicSharing.OFF, ArtifactQuotas(1_610_612_736, 20 * ArtifactAdministrationService.GIB, 100, 30), ArtifactRetention(null, 60, 20), 1), store.settings)
+        // A quota that is not a round number of GiB survives a save of another field.
+        store.settings = store.settings.copy(quotas = store.settings.quotas.copy(memberBytes = 1_572_864))
+        val shown = client.get(ARTIFACT_SETTINGS_PATH) { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        val typed = Regex("name=\"quotaMemberGib\"[^>]*value=\"([^\"]*)\"").find(shown)!!.groupValues[1]
+        form("$ARTIFACT_SETTINGS_PATH/settings", "version=1&enabled=on&whoCanPublish=admins&publicSharing=off&quotaMemberGib=$typed&quotaMemberBytes=1572864&quotaTeamGib=20&quotaTeamBytes=${20 * ArtifactAdministrationService.GIB}&quotaArtifactsPerMember=100&quotaPublishesPerHour=30&personalRetentionDays=&sharedRetentionDays=60&maxVersionsPerArtifact=21")
+        assertEquals(1_572_864, store.settings.quotas.memberBytes); assertEquals(21, store.settings.retention.maxVersionsPerArtifact)
         assertTrue("Artifacts are on" in client.get(ARTIFACT_SETTINGS_PATH) { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText())
         assertEquals(HttpStatusCode.Forbidden, client.post("$ARTIFACT_SETTINGS_PATH/storage/delete") {
             header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "https://evil.example"); contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=$csrf")

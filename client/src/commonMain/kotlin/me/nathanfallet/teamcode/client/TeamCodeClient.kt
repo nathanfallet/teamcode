@@ -297,8 +297,8 @@ class TeamCodeClient(
     suspend fun deleteArtifactStorage() {
         checkResponse(http.delete("$origin/api/v1/artifacts/storage") { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
     }
-    /** Writes, reads, lists and deletes a probe object; up to a minute against a slow bucket. */
-    suspend fun testArtifactStorage(): ArtifactStorageTestView = request("/api/v1/artifacts/storage/test", HttpMethod.Post, 90_000)
+    /** Writes, reads, lists and deletes a probe object; the server bounds the whole test to 80 seconds. */
+    suspend fun testArtifactStorage(): ArtifactStorageTestView = request("/api/v1/artifacts/storage/test", HttpMethod.Post, 120_000)
     suspend fun artifactSettings(): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Get)
     suspend fun saveArtifactSettings(input: SaveArtifactSettingsRequest): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Put, input)
 

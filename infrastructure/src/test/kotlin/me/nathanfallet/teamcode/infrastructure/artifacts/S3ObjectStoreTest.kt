@@ -60,11 +60,14 @@ class S3ObjectStoreTest {
         val s3 = store({ request ->
             when (request.url.encodedPath) {
                 "/k" -> respond("0123456789".substring(2, 6), HttpStatusCode.PartialContent, headersOf(HttpHeaders.ContentRange, "bytes 2-5/10"))
+                "/gone-bucket" -> respond("<Error><Code>NoSuchBucket</Code></Error>", HttpStatusCode.NotFound)
                 else -> respond("<Error><Code>NoSuchKey</Code></Error>", HttpStatusCode.NotFound)
             }
         })
         val partial = assertNotNull(s3.get(connection(), "k", 2L..5L))
         assertEquals("2345", partial.bytes.decodeToString()); assertEquals("bytes 2-5/10", partial.contentRange)
+        assertEquals(10, partial.size, "The object's size, not the range's")
+        assertEquals("NoSuchBucket", assertFailsWith<ObjectStoreException> { s3.get(connection(), "gone-bucket") }.code, "A missing bucket is a failure, not a missing object")
         assertNull(s3.get(connection(), "missing"))
         assertNull(s3.head(connection(), "missing"))
         val tooLarge = assertFailsWith<ObjectStoreException> { s3.get(connection(), "k", maxBytes = 2) }
@@ -89,6 +92,13 @@ class S3ObjectStoreTest {
         val unresolved = store({ sent++; respond("", HttpStatusCode.OK) }, { throw java.net.UnknownHostException(it) })
         assertEquals("dns", assertFailsWith<ObjectStoreException> { unresolved.head(connection(), "k") }.code)
         assertEquals(0, sent)
+        // Virtual-hosted requests go to <bucket>.<host>: that is the name checked, not the endpoint's.
+        val wildcard = store({ sent++; respond("", HttpStatusCode.OK) }, { host ->
+            if (host == "artifacts.s3.example.test") listOf(InetAddress.getByAddress(byteArrayOf(169.toByte(), 254.toByte(), 169.toByte(), 254.toByte()))) else public(host)
+        })
+        assertEquals("host_not_allowed", assertFailsWith<ObjectStoreException> { wildcard.put(connection(), "k", ByteArray(1)) }.code)
+        wildcard.put(connection(pathStyle = true), "k", ByteArray(1)); assertEquals(1, sent, "Path-style goes to the endpoint host itself")
+        sent = 0
         val loopback = store({ sent++; respond("", HttpStatusCode.OK) }, { listOf(InetAddress.getLoopbackAddress()) })
         loopback.put(connection(), "k", ByteArray(1)); assertEquals(1, sent, "Loopback (a local MinIO) is allowed")
     }

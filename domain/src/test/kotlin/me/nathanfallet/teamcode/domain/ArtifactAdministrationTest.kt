@@ -16,19 +16,26 @@ class MemoryArtifactAdminStore : ArtifactAdminStore {
     override suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput): ArtifactStorage {
         if ((stored?.version ?: 0) != expectedVersion) throw TeamFailure("artifact_storage_conflict", 409, "Changed.")
         secret = input.secretAccessKey ?: secret
+        savedEndpoints += input.endpoint
         return ArtifactStorage(actor.teamId, input.endpoint, input.region, input.bucket, input.prefix, input.pathStyle, input.accessKeyId, input.serverSideEncryption, null, expectedVersion + 1, 0)
             .also { stored = it }
     }
     override suspend fun inUse(actor: Principal) = artifacts
+    override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, settings, artifacts)
+    var savedEndpoints = mutableListOf<String>()
     override suspend fun deleteStorage(actor: Principal) { stored = null; settings = settings.copy(enabled = false) }
-    override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): ArtifactStorage? {
+    /** Runs between the test's reads and its record, standing for another administrator's save. */
+    var beforeRecord: () -> Unit = {}
+    override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean {
+        beforeRecord()
+        if (stored?.version != version) return false
         tests += version to passed
-        stored = stored?.takeIf { it.version == version }?.copy(verifiedAt = if (passed) 1 else null) ?: stored
-        return stored
+        stored = stored!!.copy(verifiedAt = if (passed) 1 else null)
+        return true
     }
     override suspend fun settings(actor: Principal) = settings
     override suspend fun saveSettings(actor: Principal, settings: ArtifactSettings) = settings.copy(version = settings.version + 1).also { this.settings = it }
-    override suspend fun connection(teamId: String) = stored?.let { ArtifactStorageConnection(it.endpoint, it.region, it.bucket, it.prefix, it.pathStyle, it.accessKeyId, secret!!, it.serverSideEncryption) }
+    override suspend fun connection(teamId: String) = stored?.let { ArtifactStorageConnection(it.endpoint, it.region, it.bucket, it.prefix, it.pathStyle, it.accessKeyId, secret!!, it.serverSideEncryption, it.version) }
 }
 
 /** A bucket in memory, with a switchable failure per operation. */
@@ -134,6 +141,31 @@ class ArtifactAdministrationTest {
         assertEquals(StorageTestStep("put", false, null, "unreachable"), artifacts.testStorage(admin).steps.single())
         assertEquals(listOf(false, false, false, false), store.tests.map { it.second })
         assertEquals(ArtifactAvailability(false, "artifact_storage_unverified"), artifacts.availability(admin))
+    }
+
+    @Test fun aTestOfAStorageSavedMeanwhileIsNotRecordedAsPassed() = runBlocking {
+        val store = MemoryArtifactAdminStore(); val objects = MemoryObjectStore()
+        val artifacts = service(store, objects)
+        artifacts.saveStorage(admin, 0, input())
+        store.beforeRecord = { store.stored = store.stored!!.copy(version = 2) }
+        val result = artifacts.testStorage(admin)
+        assertFalse(result.ok); assertEquals(StorageTestStep("record", false, null, "storage_changed"), result.steps.last())
+        assertTrue(store.tests.isEmpty(), "Nothing recorded for a version that is no longer current")
+    }
+
+    @Test fun aWriteWithoutAnAnswerIsCleanedUpAndATrailingSlashIsNotAnotherEndpoint() = runBlocking {
+        val store = MemoryArtifactAdminStore()
+        val objects = object : ArtifactObjectStore by MemoryObjectStore() {
+            val deleted = mutableListOf<String>()
+            override suspend fun put(connection: ArtifactStorageConnection, key: String, bytes: ByteArray, contentType: String) = throw ObjectStoreException(null, "timeout")
+            override suspend fun delete(connection: ArtifactStorageConnection, keys: List<String>): List<String> { deleted += keys; return emptyList() }
+        }
+        val artifacts = service(store, objects)
+        artifacts.saveStorage(admin, 0, input(endpoint = "https://s3.gra.io.cloud.ovh.net/"))
+        assertEquals("https://s3.gra.io.cloud.ovh.net", store.savedEndpoints.single(), "Stored without the slash, so a later save compares equal")
+        val result = artifacts.testStorage(admin)
+        assertEquals(listOf(StorageTestStep("put", false, null, "timeout")), result.steps)
+        assertEquals(listOf("teamcode/team/.teamcode-probe-probe"), objects.deleted, "A probe that may have landed is removed")
     }
 
     @Test fun availabilityNeedsAStorageATestAndTheSwitch() {

@@ -58,11 +58,12 @@ class S3GatewayTest {
                         override suspend fun storage(actor: Principal) = stored
                         override suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput) = error("unused")
                         override suspend fun inUse(actor: Principal) = false
+                        override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, ArtifactSettings(), false)
                         override suspend fun deleteStorage(actor: Principal) = error("unused")
-                        override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): ArtifactStorage? { assertEquals(3, version); tested += passed; return stored }
+                        override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean { assertEquals(3, version); tested += passed; return true }
                         override suspend fun settings(actor: Principal) = ArtifactSettings()
                         override suspend fun saveSettings(actor: Principal, settings: ArtifactSettings) = settings
-                        override suspend fun connection(teamId: String) = connection
+                        override suspend fun connection(teamId: String) = ArtifactStorageConnection(endpoint, "us-east-1", BUCKET, "teamcode/test", true, USER, PASSWORD, ServerSideEncryption.NONE, 3)
                     }
                     val result = ArtifactAdministrationService(store, s3).testStorage(admin)
                     assertTrue(result.ok, result.toString()); assertEquals(listOf("put", "get", "list", "delete"), result.steps.map { it.step })

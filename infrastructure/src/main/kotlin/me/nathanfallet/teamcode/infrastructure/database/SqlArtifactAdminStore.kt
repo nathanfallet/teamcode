@@ -17,6 +17,11 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
 
     override suspend fun inUse(actor: Principal): Boolean = database.query { requireCurrent(this, actor); hasArtifacts(actor.teamId) }
 
+    override suspend fun overview(actor: Principal): ArtifactAdminOverview = database.query {
+        requireCurrent(this, actor)
+        ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId))
+    }
+
     override suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput): ArtifactStorage = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val now = nowMillis()
@@ -50,19 +55,24 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
         if (hasArtifacts(actor.teamId)) throw TeamFailure("artifact_storage_in_use", 409, "Artifacts are stored in this bucket: delete them before removing the storage.")
         ArtifactStorageTable.deleteWhere { ArtifactStorageTable.teamId eq actor.teamId }
         // Without a bucket artifacts cannot run: the switch goes off, so a new bucket must be tested and turned on again.
-        ArtifactSettingsTable.update({ ArtifactSettingsTable.teamId eq actor.teamId }) { it[enabled] = false }
+        val settings = readSettings(actor.teamId)
+        if (settings.enabled) {
+            // A settings change like any other: a new version, so a form loaded before cannot turn them back on unnoticed.
+            ArtifactSettingsTable.update({ ArtifactSettingsTable.teamId eq actor.teamId }) { it[enabled] = false; it[version] = settings.version + 1; it[updatedAt] = nowMillis() }
+            audit(actor.teamId, actor.member.id, "artifacts.settings_updated", actor.teamId, null, actor.tokenId)
+        }
         audit(actor.teamId, actor.member.id, "artifacts.storage_deleted", actor.teamId, null, actor.tokenId)
         Unit
     }
 
-    override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): ArtifactStorage? = database.query {
-        requireCurrent(this, actor)
+    override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean = database.query {
+        lockTeam(actor.teamId); requireCurrent(this, actor)
         val now = nowMillis()
-        ArtifactStorageTable.update({ (ArtifactStorageTable.teamId eq actor.teamId) and (ArtifactStorageTable.version eq version) }) {
+        val updated = ArtifactStorageTable.update({ (ArtifactStorageTable.teamId eq actor.teamId) and (ArtifactStorageTable.version eq version) }) {
             it[verifiedAt] = if (passed) now else null
         }
-        audit(actor.teamId, actor.member.id, "artifacts.storage_tested", if (passed) "passed" else "failed", null, actor.tokenId)
-        readStorage(actor.teamId)
+        if (updated == 1) audit(actor.teamId, actor.member.id, "artifacts.storage_tested", if (passed) "passed" else "failed", null, actor.tokenId)
+        updated == 1
     }
 
     override suspend fun settings(actor: Principal): ArtifactSettings = database.query { requireCurrent(this, actor); readSettings(actor.teamId) }
@@ -95,7 +105,7 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
         ArtifactStorageTable.selectAll().where { ArtifactStorageTable.teamId eq teamId }.singleOrNull()?.let {
             ArtifactStorageConnection(it[ArtifactStorageTable.endpoint], it[ArtifactStorageTable.region], it[ArtifactStorageTable.bucket], it[ArtifactStorageTable.prefix],
                 it[ArtifactStorageTable.pathStyle], it[ArtifactStorageTable.accessKeyId], cipher.decrypt(it[ArtifactStorageTable.secret], context(teamId)).decodeToString(),
-                ServerSideEncryption.parse(it[ArtifactStorageTable.serverSideEncryption]) ?: ServerSideEncryption.NONE)
+                ServerSideEncryption.parse(it[ArtifactStorageTable.serverSideEncryption]) ?: ServerSideEncryption.NONE, it[ArtifactStorageTable.version])
         }
     }
 
@@ -106,7 +116,10 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
     }
     private fun seal(secret: String, teamId: String) = cipher.encrypt(secret.encodeToByteArray(), context(teamId))
     private fun context(teamId: String) = "artifact-storage:$teamId"
-    private fun hasArtifacts(teamId: String) = !Artifacts.select(Artifacts.id).where { Artifacts.teamId eq teamId }.limit(1).empty()
+    /** Every artifact but a deleted one whose folder was proven empty: drafts and deletions in progress may still hold files. */
+    private fun hasArtifacts(teamId: String) = !Artifacts.select(Artifacts.id).where {
+        (Artifacts.teamId eq teamId) and not((Artifacts.state eq "deleted") and Artifacts.storageDeletedAt.isNotNull())
+    }.limit(1).empty()
 }
 
 internal fun readStorage(teamId: String): ArtifactStorage? = ArtifactStorageTable.selectAll().where { ArtifactStorageTable.teamId eq teamId }.singleOrNull()?.let {
