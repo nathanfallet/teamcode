@@ -290,6 +290,18 @@ class TeamCodeClient(
         checkResponse(http.delete("$origin/api/v1/github/" + (memberId?.let { "links/$it" } ?: "link")) { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
     }
 
+    /** The team's artifact bucket (administrators); never contains the secret access key. */
+    suspend fun artifactStorage(): ArtifactStorageView = request("/api/v1/artifacts/storage", HttpMethod.Get)
+    suspend fun saveArtifactStorage(input: SaveArtifactStorageRequest): ArtifactStorageView = request("/api/v1/artifacts/storage", HttpMethod.Put, input)
+    /** Removes the bucket configuration while no artifact exists; artifacts are then off. */
+    suspend fun deleteArtifactStorage() {
+        checkResponse(http.delete("$origin/api/v1/artifacts/storage") { authenticate(); timeout { requestTimeoutMillis = 30_000 } })
+    }
+    /** Writes, reads, lists and deletes a probe object; up to a minute against a slow bucket. */
+    suspend fun testArtifactStorage(): ArtifactStorageTestView = request("/api/v1/artifacts/storage/test", HttpMethod.Post, 90_000)
+    suspend fun artifactSettings(): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Get)
+    suspend fun saveArtifactSettings(input: SaveArtifactSettingsRequest): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Put, input)
+
     /** Runner channel; construct the client with the pod's projected token as its credential. */
     suspend fun runnerRegister(input: RunnerRegisterRequest): RunnerInstructionView = runnerRequest("register", input)
     suspend fun runnerHeartbeat(input: RunnerHeartbeatRequest): RunnerInstructionView = runnerRequest("heartbeat", input)

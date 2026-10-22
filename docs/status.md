@@ -1,5 +1,11 @@
 # Implementation status
 
+## Artifact storage and settings (2026-10-22)
+
+First step of [artifacts](artifacts.md): the contract, every artifact table (migrations `V20261022150000*`), the `ArtifactObjectStore` port and its S3 adapter (SigV4 written on the Ktor client, no SDK: PutObject, GetObject with Range, HeadObject, ListObjectsV2, DeleteObjects; error bodies reduced to their `<Code>`; the endpoint host checked after DNS like a Kubernetes API host), and **Dashboard → Settings → Artifacts** with `GET/PUT/DELETE /api/v1/artifacts/storage`, `POST /api/v1/artifacts/storage/test` and `GET/PUT /api/v1/artifacts/settings` for interactive administrators. The secret access key is sealed (`artifact-storage:<team>`) and never returned. Artifacts are active only with a stored bucket whose current version passed the connection test and the switch on; a save, a failed test or removal stops them. Nothing is advertised: no capability until publication and serving exist.
+
+Evidence: `SigV4Test`, `S3ObjectStoreTest`, `S3GatewayTest` (Versity S3 Gateway in Testcontainers, since MinIO no longer publishes server images), `ArtifactAdministrationTest`, `ArtifactStoragePersistenceTest` (MySQL 8.4, two pools), `ArtifactSettingsRoutesTest`, `ApiDocsTest`; details in [artifacts](artifacts.md#evidence).
+
 ## Visual quotas in `teamcode status` (2026-10-22)
 
 `teamcode status` draws the remaining allowance and every account's 5-hour and weekly window as ten-cell bars, with green/yellow/red on a color terminal (mordant detection, so `NO_COLOR` and pipes stay plain). Evidence: `StatusRenderTest` (bar proportions, plain output without escape codes, colored output equal to the plain table once the codes are removed so columns stay aligned) and the CLI JVM status tests pass. Native macOS/Windows output was not run for this change.

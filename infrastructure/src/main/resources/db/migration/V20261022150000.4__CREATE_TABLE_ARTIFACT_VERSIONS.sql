@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS artifact_versions (id VARCHAR(36) PRIMARY KEY, artifact_id VARCHAR(36) NOT NULL, `number` INT NOT NULL, entry_path VARCHAR(255) NOT NULL, manifest_digest VARCHAR(64) NOT NULL, file_count INT NOT NULL, total_bytes BIGINT NOT NULL, created_by VARCHAR(36) NOT NULL, credential_id VARCHAR(36) NULL, base_version INT NOT NULL, origin_session_id VARCHAR(36) NULL, origin_epoch INT NULL, created_at BIGINT NOT NULL, CONSTRAINT artifact_versions_artifact FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE);
+ALTER TABLE artifact_versions ADD CONSTRAINT artifact_versions_number UNIQUE (artifact_id, `number`);
+CREATE INDEX artifact_versions_replay ON artifact_versions (artifact_id, base_version, manifest_digest);

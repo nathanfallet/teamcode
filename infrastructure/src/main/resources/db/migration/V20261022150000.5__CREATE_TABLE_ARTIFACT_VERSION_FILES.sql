@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS artifact_version_files (version_id VARCHAR(36), `path` VARCHAR(255), sha256 VARCHAR(64) NOT NULL, `size` BIGINT NOT NULL, content_type VARCHAR(100) NOT NULL, `role` VARCHAR(8) NOT NULL, CONSTRAINT pk_artifact_version_files PRIMARY KEY (version_id, `path`), CONSTRAINT artifact_version_files_version FOREIGN KEY (version_id) REFERENCES artifact_versions(id) ON DELETE CASCADE);
+CREATE INDEX artifact_version_files_blob ON artifact_version_files (sha256);

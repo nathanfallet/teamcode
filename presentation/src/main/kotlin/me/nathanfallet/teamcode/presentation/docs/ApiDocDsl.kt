@@ -42,6 +42,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         variantOperations()
         cloudOperations()
         webhookOperations()
+        artifactOperations()
     }.operations
 }
 
@@ -75,6 +76,7 @@ internal object ApiTags {
     const val CLOUD_TRANSFERS = "Cloud transfers"
     const val GITHUB = "GitHub"
     const val WEBHOOKS = "Webhooks"
+    const val ARTIFACTS_ADMIN = "Artifact administration"
 
     val descriptions = linkedMapOf(
         SERVER to "Server discovery and gateway status.",
@@ -105,6 +107,7 @@ internal object ApiTags {
         CLOUD_TRANSFERS to "Changes of owner of cloud sessions.",
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
+        ARTIFACTS_ADMIN to "The S3-compatible bucket artifacts are stored in, and the artifact settings (administrators).",
     )
 }
 

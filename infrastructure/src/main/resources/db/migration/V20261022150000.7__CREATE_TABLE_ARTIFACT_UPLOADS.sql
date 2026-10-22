@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS artifact_uploads (id VARCHAR(36) PRIMARY KEY, artifact_id VARCHAR(36) NOT NULL, team_id VARCHAR(36) NOT NULL, member_id VARCHAR(36) NOT NULL, credential_id VARCHAR(36) NOT NULL, files text NOT NULL, received_bytes BIGINT NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, CONSTRAINT artifact_uploads_artifact FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE);
+CREATE INDEX artifact_uploads_expiry ON artifact_uploads (expires_at);
