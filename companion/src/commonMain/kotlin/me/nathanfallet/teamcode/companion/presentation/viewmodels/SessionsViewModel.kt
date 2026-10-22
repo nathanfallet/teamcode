@@ -63,12 +63,16 @@ class SessionsViewModel(
     private val commands = Channel<Command>(capacity = 16)
     private var started = false
     private var follow: Job? = null
+    /** Where the next settling round starts in the unsettled rows. */
+    private var settleTurn = 0
 
     init {
         viewModelScope.launch {
             // The active account, or its signed-in flag, changed: a new list for it.
             combine(accounts.accounts, accounts.activeAccountId) { list, id -> list.firstOrNull { it.id == id } }
-                .distinctUntilChanged { old, new -> old?.id == new?.id && old?.signedIn == new?.signedIn && old?.memberId == new?.memberId }
+                .distinctUntilChanged { old, new ->
+                    old?.id == new?.id && old?.signedIn == new?.signedIn && old?.memberId == new?.memberId && old?.role == new?.role && old?.origin == new?.origin
+                }
                 .collect { account ->
                     val scope = if (account?.isAdministrator == true) state.value.scope else SessionScope.MINE
                     state.value = SessionsUiState(account = account, list = account?.let { SessionList(scope, state.value.group, it.memberId) })
@@ -89,7 +93,7 @@ class SessionsViewModel(
 
     fun setGroup(group: SessionGroup) = changeFilter(state.value.scope, group)
     fun setScope(scope: SessionScope) = changeFilter(scope, state.value.group)
-    fun loadMore() { if (state.value.list?.nextBefore != null) commands.trySend(Command.LoadMore) }
+    fun loadMore() { if (state.value.list?.nextBefore != null && follow?.isActive == true) commands.trySend(Command.LoadMore) }
     fun opened(sessionId: String) = state.update { it.copy(list = it.list?.opened(sessionId)) }
 
     private fun changeFilter(scope: SessionScope, group: SessionGroup) {
@@ -98,8 +102,10 @@ class SessionsViewModel(
         if (scope == current.scope && group == current.group) return
         if (scope == SessionScope.TEAM && !account.isAdministrator) return
         // Loading until the queued reload runs: an empty new list never reads as "no sessions" meanwhile.
-        state.update { it.copy(list = SessionList(scope, group, account.memberId, finishedTurns = it.list?.finishedTurns.orEmpty()), loading = true, error = null) }
-        commands.trySend(Command.Reload)
+        val running = follow?.isActive == true
+        state.update { it.copy(list = SessionList(scope, group, account.memberId, finishedTurns = it.list?.finishedTurns.orEmpty()), loading = running, error = null) }
+        // The loop reads the command; stopped after an error, it is started again, and the feed's opening loads the list.
+        if (running) commands.trySend(Command.Reload) else restart()
     }
 
     private fun restart() {
@@ -124,7 +130,14 @@ class SessionsViewModel(
             Command.Reload, SessionListSignal.Reload -> reload(accountId)
             Command.LoadMore -> more(accountId)
             // Read again the rows whose state changes without an event (at most a few per tick).
-            Command.Settle -> state.value.list?.unsettled?.take(MAX_SETTLE)?.forEach { fetchOne(accountId, it) }
+            Command.Settle -> {
+                // In turns, so a few rows that never settle do not hide the others.
+                val unsettled = state.value.list?.unsettled.orEmpty()
+                if (unsettled.isEmpty()) return
+                val first = settleTurn % unsettled.size
+                settleTurn = first + MAX_SETTLE
+                (unsettled.drop(first) + unsettled.take(first)).take(MAX_SETTLE).forEach { fetchOne(accountId, it) }
+            }
             is SessionListSignal.Connection -> state.update { it.copy(reconnecting = signal.reconnecting) }
             is SessionListSignal.Changed -> {
                 val list = state.value.list ?: return
