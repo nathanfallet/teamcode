@@ -348,7 +348,7 @@ class TeamCodeClient(
      * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
      * on a network failure ([TeamCodeException] with status `0` once the stream is open, the engine's exception before) or
      * on an unreadable event ([TeamCodeException] with code [MALFORMED_EVENT]). Event types are an open list; unknown ones reach
-     * [onEvent] like the others.
+     * [onEvent] like the others. `gap` and `denied` are the feed's control frames, never event types.
      */
     suspend fun followTeamEvents(
         after: Long?,
@@ -646,12 +646,12 @@ class TeamCodeClient(
 
     companion object {
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
-        // The server validates the names; this only keeps what would break the comma-separated query out.
         /**
          * The [TeamCodeException.code] of a stream event this client cannot read (undecodable or over the size bound).
          * Reconnecting replays the same event, so a caller stops (or updates) instead of retrying forever.
          */
         const val MALFORMED_EVENT = "malformed_event"
+        // The server validates the names; this only keeps what would break the comma-separated query out.
         private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
         private const val MAX_ERROR_BODY = 16 * 1024
@@ -669,20 +669,20 @@ class TeamCodeClient(
  * A refused or failed TeamCode call. [code] is the API error `type` when the server sent one, [retryAfterSeconds] the
  * `Retry-After` delay and [requestId] a request id set by the server or a proxy; all are validated and safe to print.
  */
-class TeamCodeException(
+class TeamCodeException private constructor(
     val statusCode: Int,
     message: String,
-    val code: String? = null,
-    val retryAfterSeconds: Long? = null,
-    val requestId: String? = null,
-) : Exception(message) {
-    // Kept out of the public constructor so callers compiled against earlier releases still link.
-    private var failure: Throwable? = null
+    val code: String?,
+    val retryAfterSeconds: Long?,
+    val requestId: String?,
+    cause: Throwable?,
+) : Exception(message, cause) {
+    // The public signature of earlier releases, so callers compiled against them still link.
+    constructor(statusCode: Int, message: String, code: String? = null, retryAfterSeconds: Long? = null, requestId: String? = null) :
+        this(statusCode, message, code, retryAfterSeconds, requestId, null)
 
-    /** The transport or decoding failure behind a status `0` stream failure, kept for diagnostics. */
-    override val cause: Throwable? get() = failure
-
-    internal constructor(statusCode: Int, message: String, code: String?, cause: Throwable) : this(statusCode, message, code) { failure = cause }
+    /** A status `0` stream failure; [cause] is the transport or decoding failure behind it, kept for diagnostics. */
+    internal constructor(statusCode: Int, message: String, code: String?, cause: Throwable) : this(statusCode, message, code, null, null, cause)
 }
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */

@@ -157,9 +157,10 @@ class EventStreamTest {
         assertEquals(3, frames.size)
     }
 
-    @Test fun anOverLongLineThrowsSoTheCallerReconnects() = runTest {
+    @Test fun anOverLongLineIsAMalformedEvent() = runTest {
         val error = assertFailsWith<TeamCodeException> { readServerSentEvents(ByteReadChannel("data: ${"x".repeat(200)}\n\n"), maxLine = 100) { true } }
         assertEquals(0, error.statusCode)
+        assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
     @Test fun aMalformedGapOrEventThrowsSoTheCallerReconnects() = runTest {
