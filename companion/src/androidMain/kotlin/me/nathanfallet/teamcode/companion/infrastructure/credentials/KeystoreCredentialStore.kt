@@ -43,6 +43,8 @@ class KeystoreCredentialStore(
         const val FILE = "teamcode_credentials"
         private const val ALIAS = "me.nathanfallet.teamcode.credentials"
 
+        // Reads and writes run concurrently on the IO dispatcher: two first uses must not each generate a key.
+        @Synchronized
         private fun keystoreKey(): SecretKey {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }

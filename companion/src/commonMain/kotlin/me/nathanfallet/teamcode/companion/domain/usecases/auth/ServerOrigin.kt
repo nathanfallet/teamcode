@@ -3,7 +3,7 @@ package me.nathanfallet.teamcode.companion.domain.usecases.auth
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 
 private val LOOPBACK = setOf("localhost", "127.0.0.1", "[::1]")
-private val ORIGIN = Regex("""(https?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?""")
+private val ORIGIN = Regex("""(https?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?""", RegexOption.IGNORE_CASE)
 
 /**
  * The server origin typed by the member, normalized: `https://` added when no scheme is given, host lower-cased, a

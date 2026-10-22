@@ -86,6 +86,18 @@ class RemoteAuthRepositoryTest {
         assertEquals(listOf("Bearer first", "Bearer second"), requests.map { it.headers[HttpHeaders.Authorization] })
     }
 
+    @Test fun aSecureStorageFailureIsNotReportedAsAnUnreachableServer() = runTest {
+        val locked = object : me.nathanfallet.teamcode.companion.domain.services.CredentialStore {
+            override val persistent = true
+            override suspend fun read(accountId: String): String? = throw IllegalStateException("The Keychain refused to read the token (-25308).")
+            override suspend fun write(accountId: String, token: String) = Unit
+            override suspend fun delete(accountId: String) = Unit
+        }
+        val repository = RemoteAuthRepository(TeamCodeClientProvider(engine, locked, FakePlatform), accounts, backgroundScope)
+        assertFailsWith<CompanionException.CredentialStorage> { repository.me("a1") }
+        assertTrue(requests.isEmpty())
+    }
+
     @Test fun renamingFindsTheCurrentDevice() = runTest {
         answer = { request ->
             if (request.url.encodedPath == "/api/v1/devices") HttpStatusCode.OK to """[{"id":"d0","memberId":"m1","name":"Laptop","createdAt":1,"lastLoginAt":1,"activeSessions":1,"current":false},{"id":"d1","memberId":"m1","name":"Phone","createdAt":1,"lastLoginAt":1,"activeSessions":1,"current":true}]"""

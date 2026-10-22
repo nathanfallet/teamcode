@@ -28,11 +28,13 @@ class FakeAuthRepository : AuthRepository {
     val sessions = ArrayDeque(listOf(LoginSession("token-1", 2_000_000L, member())))
     var meResult: () -> Member = { member() }
     var logoutFailure: Exception? = null
+    var loginFailure: Exception? = null
     val released = mutableListOf<String>()
 
     override suspend fun serverInfo(origin: String): ServerInfo { calls += "capabilities $origin"; return info.copy(origin = origin) }
     override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession {
         calls += "login $origin $username $password $deviceName $installationId"
+        loginFailure?.let { throw it }
         return if (sessions.size > 1) sessions.removeFirst() else sessions.first()
     }
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) { calls += "password $token $current $replacement" }

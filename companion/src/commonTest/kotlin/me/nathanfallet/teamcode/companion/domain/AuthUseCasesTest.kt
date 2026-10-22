@@ -34,6 +34,8 @@ class AuthUseCasesTest {
         assertEquals("https://team.example:8443", normalizeOrigin("https://team.example:8443"))
         assertEquals("http://localhost:8080", normalizeOrigin("http://localhost:8080"))
         assertEquals("http://[::1]:8080", normalizeOrigin("http://[::1]:8080"))
+        // Mobile keyboards capitalize the first letter.
+        assertEquals("https://team.example", normalizeOrigin("Https://Team.example"))
         for (invalid in listOf("http://team.example", "https://team.example/path", "https://user:pw@team.example", "https://team.example?x=1",
             "https://team.example#x", "ftp://team.example", "https://", "https://team..example", "https://team.example:70000", ""))
             assertFailsWith<CompanionException.InvalidOrigin>(invalid) { normalizeOrigin(invalid) }
@@ -84,6 +86,16 @@ class AuthUseCasesTest {
         assertEquals("password temporary temporary-pw a new long password", auth.calls[1])
         assertTrue(auth.calls[2].startsWith("login https://team.example ada a new long password "))
         assertEquals("token-2", store.read(signed.account.id))
+    }
+
+    @Test fun aFailedSignInAfterTheChangeAsksToSignInWithTheNewPassword() = runTest {
+        auth.sessions.clear()
+        auth.sessions += LoginSession("temporary", 2_000_000L, member(passwordChangeRequired = true))
+        val pending = assertIs<SignInResult.PasswordChangeRequired>(signIn(server, "ada", "temporary-pw", "Phone"))
+        auth.loginFailure = CompanionException.Unreachable()
+        // Retrying the change would reuse the revoked temporary session: the user signs in again instead.
+        assertFailsWith<CompanionException.PasswordChanged> { ChangePasswordUseCase(auth, signIn)(pending, "temporary-pw", "a new long password", "a new long password") }
+        assertTrue(accounts.accounts.value.isEmpty())
     }
 
     @Test fun signingOutRevokesThenForgetsEvenOffline() = runTest {

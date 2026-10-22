@@ -1,6 +1,5 @@
 package me.nathanfallet.teamcode.companion.infrastructure.system
 
-import java.net.InetAddress
 import me.nathanfallet.teamcode.api.BuildInfo
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 
@@ -13,10 +12,9 @@ object DesktopPlatformInfo : PlatformInfo {
         }
     }
     override val deviceModel: String by lazy {
-        // The host name, as a member recognizes the machine; never blocking the UI for long on a broken resolver.
-        System.getenv("COMPUTERNAME") ?: System.getenv("HOSTNAME")
-            ?: try { InetAddress.getLocalHost().hostName } catch (_: Exception) { null }
-            ?: "Desktop"
+        // The host name when the environment gives it, as a member recognizes the machine. No resolver lookup: it can
+        // block for seconds and this is read when the login screen opens. The member can edit the name there.
+        System.getenv("COMPUTERNAME") ?: System.getenv("HOSTNAME") ?: "$platform desktop"
     }
     override val appVersion: String = BuildInfo.VERSION
 }

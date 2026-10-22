@@ -87,8 +87,9 @@ class RemoteAuthRepository(
     } catch (error: Exception) {
         throw when {
             error.isDecodingFailure() -> CompanionException.NotTeamCode()
-            // The typed client refuses an origin it would not call (scheme, path or credentials in it).
-            error is IllegalArgumentException -> CompanionException.InvalidOrigin()
+            // Origins are normalized before any call, so an argument or state error is a bug or the typed client's own
+            // refusal (its message is readable): shown as is, never disguised as a network failure.
+            error is IllegalArgumentException || error is IllegalStateException -> error
             // Connection refused, unknown host, TLS failure, timeout: the engines throw their own types.
             else -> CompanionException.Unreachable()
         }

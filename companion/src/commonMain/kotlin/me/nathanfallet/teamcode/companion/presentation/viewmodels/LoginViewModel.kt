@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
 import me.nathanfallet.teamcode.companion.domain.models.SignInResult
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
@@ -90,6 +91,9 @@ class LoginViewModel(
                 }
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: CompanionException.PasswordChanged) {
+                // Back to the sign-in form: the temporary password and its session no longer exist.
+                state.update { it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = error.userMessage()) }
             } catch (error: Exception) {
                 state.update { it.copy(working = false, error = error.userMessage()) }
             }

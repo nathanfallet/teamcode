@@ -33,7 +33,7 @@ class KeyringCredentialStoreTest {
         assertNull(KeyringCredentialStore(null).read("a1"))
     }
 
-    @Test fun aBrokenKeyringFallsBackToMemoryForTheRun() = runTest {
+    @Test fun aBrokenKeyringFallsBackToMemory() = runTest {
         val keyring = FakeKeyring(broken = true)
         val store = KeyringCredentialStore(keyring)
         store.write("a1", "token")
@@ -41,6 +41,25 @@ class KeyringCredentialStoreTest {
         assertEquals("token", store.read("a1"))
         assertTrue(keyring.entries.isEmpty())
         store.delete("a1")
+        assertNull(store.read("a1"))
+    }
+
+    @Test fun aMomentaryFailureNeitherLosesTokensNorKeepsRevokedOnes() = runTest {
+        val keyring = FakeKeyring()
+        val store = KeyringCredentialStore(keyring)
+        store.write("a1", "token")
+        keyring.broken = true
+        assertNull(store.read("a1"))
+        keyring.broken = false
+        // The keyring is asked again once it answers: the account is not signed out for good.
+        assertEquals("token", store.read("a1"))
+        keyring.broken = true
+        store.write("a1", "newer")
+        keyring.broken = false
+        assertEquals("newer", store.read("a1"))
+        // Sign-out still reaches the keyring after a failure.
+        store.delete("a1")
+        assertTrue(keyring.entries.isEmpty())
         assertNull(store.read("a1"))
     }
 }

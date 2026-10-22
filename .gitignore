@@ -22,5 +22,5 @@ staged/
 *.p8
 *.p12
 *.mobileprovision
-fastlane/*.json
+**/fastlane/*.json
 companion-ios/**/xcuserdata/

@@ -59,7 +59,8 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Install the Android platform the app compiles against
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" > /dev/null
+        # `yes` ends on SIGPIPE once sdkmanager exits; that status must not fail the step under pipefail.
+        run: '{ yes || true; } | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" > /dev/null'
       - run: ./gradlew :companion:jvmTest :companion:testAndroidHostTest :companion-android:assembleDebug
   helm:
     timeout-minutes: 10

@@ -1,7 +1,7 @@
 package me.nathanfallet.teamcode.companion.infrastructure.credentials
 
 import java.util.Base64
-import java.security.GeneralSecurityException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -34,7 +34,9 @@ internal object TokenCipher {
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, bytes, 0, IV_BYTES))
             cipher.updateAAD(accountId.encodeToByteArray())
             cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES).decodeToString()
-        } catch (_: GeneralSecurityException) {
+        } catch (_: AEADBadTagException) {
+            // Another key (lost with a restore) or a damaged entry. Other failures (a busy Keystore) propagate: the
+            // entry is kept for the next read.
             null
         }
     }

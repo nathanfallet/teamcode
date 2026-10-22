@@ -22,7 +22,13 @@ class ChangePasswordUseCase(
         if (replacement.length < MIN_PASSWORD_LENGTH) throw IllegalArgumentException("Use at least $MIN_PASSWORD_LENGTH characters.")
         if (replacement == currentPassword) throw IllegalArgumentException("Choose a password different from the temporary one.")
         auth.changePassword(pending.server.origin, pending.temporaryToken, currentPassword, replacement)
-        return when (val result = signIn(pending.server, pending.username, replacement, pending.deviceName)) {
+        // The change revoked the temporary session: a failed sign-in now cannot be retried with it.
+        val result = try {
+            signIn(pending.server, pending.username, replacement, pending.deviceName)
+        } catch (error: CompanionException) {
+            throw CompanionException.PasswordChanged()
+        }
+        return when (result) {
             is SignInResult.SignedIn -> result
             // The server asked for another change right after one: nothing the app can do but report it.
             is SignInResult.PasswordChangeRequired -> throw CompanionException.PasswordRejected(null)

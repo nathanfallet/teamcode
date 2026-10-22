@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.infrastructure.client
 
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import kotlinx.coroutines.CancellationException
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.plugins.UserAgent
@@ -23,7 +25,7 @@ class TeamCodeClientProvider(
     private val clients = mutableMapOf<String, Pair<String, TeamCodeClient>>()
 
     suspend fun forAccount(accountId: String, origin: String): TeamCodeClient = lock.withLock {
-        clients[accountId]?.takeIf { it.first == origin }?.second ?: create(origin) { credentials.read(accountId) }.also {
+        clients[accountId]?.takeIf { it.first == origin }?.second ?: create(origin) { readToken(accountId) }.also {
             clients.remove(accountId)?.second?.close()
             clients[accountId] = origin to it
         }
@@ -41,5 +43,14 @@ class TeamCodeClientProvider(
             configure(this)
             install(UserAgent) { agent = "TeamCode-Companion/${platform.appVersion} (${platform.platform})" }
         }
+    }
+
+    /** A secure storage failure is reported as such, not mistaken for an unreachable server. */
+    private suspend fun readToken(accountId: String): String? = try {
+        credentials.read(accountId)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        throw CompanionException.CredentialStorage()
     }
 }

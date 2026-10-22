@@ -3,6 +3,9 @@ package me.nathanfallet.teamcode.companion.presentation.navigation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
@@ -20,7 +23,7 @@ import org.koin.compose.viewmodel.koinViewModel
 fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     val hasAccounts by rootViewModel.hasAccounts.collectAsStateWithLifecycle()
     val navController = rememberNavController()
-    // Captured once, as in nutrimaxing: the first sign-in navigates explicitly instead of rebuilding the graph.
+    // Captured once: the first sign-in navigates explicitly instead of rebuilding the graph.
     val startDestination = remember { if (rootViewModel.hasAccounts.value) HomeRoute else AddServerRoute }
 
     NavHost(navController = navController, startDestination = startDestination) {
@@ -55,8 +58,11 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
         }
     }
 
-    // The last account signed out: back to adding a server.
+    // The last account signed out: back to adding a server. Only on that change, not on every new composition (a
+    // rotation while signing in for the first time keeps the login screen).
+    var hadAccounts by rememberSaveable { mutableStateOf(hasAccounts) }
     LaunchedEffect(hasAccounts) {
-        if (!hasAccounts) navController.navigate(AddServerRoute) { popUpTo(0) { inclusive = true } }
+        if (hadAccounts && !hasAccounts) navController.navigate(AddServerRoute) { popUpTo(0) { inclusive = true } }
+        hadAccounts = hasAccounts
     }
 }

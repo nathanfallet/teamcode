@@ -18,17 +18,21 @@ interface KeyringBackend {
 /**
  * Tokens in the operating system's keyring (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux),
  * service `me.nathanfallet.teamcode`, one entry per account id. Without a keyring (a Linux desktop without Secret
- * Service), or when it fails, tokens stay in memory: the app signs in again at each launch and says so. Never a file.
+ * Service), or when a write fails, tokens stay in memory: the app signs in again at each launch and says so. Never a file.
  */
 class KeyringCredentialStore(private val backend: KeyringBackend?, private val service: String = SERVICE) : CredentialStore {
     private val memory = MemoryCredentialStore()
-    @Volatile private var usable = backend != null
-    override val persistent: Boolean get() = usable
+    @Volatile private var writeFailed = false
+    override val persistent: Boolean get() = backend != null && !writeFailed
 
-    override suspend fun read(accountId: String): String? = keyring { it.get(service, accountId) } ?: memory.read(accountId)
+    // Memory first: a token kept there after a failed keyring write is newer than any entry the keyring still holds.
+    override suspend fun read(accountId: String): String? = memory.read(accountId) ?: keyring { it.get(service, accountId) }
 
     override suspend fun write(accountId: String, token: String) {
-        if (keyring { it.set(service, accountId, token); Unit } == null) memory.write(accountId, token) else memory.delete(accountId)
+        if (keyring { it.set(service, accountId, token); Unit } != null) { memory.delete(accountId); return }
+        // A locked or broken keyring: keep the token in memory for this run instead of failing the sign-in.
+        if (backend != null) writeFailed = true
+        memory.write(accountId, token)
     }
 
     override suspend fun delete(accountId: String) {
@@ -36,16 +40,11 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
         memory.delete(accountId)
     }
 
+    /** One keyring call off the main thread; a failure is that call's alone (a locked keyring may open later). */
     private suspend fun <T : Any> keyring(call: (KeyringBackend) -> T?): T? {
-        val keyring = backend?.takeIf { usable } ?: return null
+        val keyring = backend ?: return null
         return withContext(Dispatchers.IO) {
-            try {
-                call(keyring)
-            } catch (_: Exception) {
-                // A locked or broken keyring: fall back to memory for the rest of this run instead of failing sign-in.
-                usable = false
-                null
-            }
+            try { call(keyring) } catch (_: Exception) { null }
         }
     }
 
