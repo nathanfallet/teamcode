@@ -106,7 +106,16 @@ class SessionViewModelTest {
         assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING, model.uiState.value.session?.state)
         sessions.interruptResult = { throw CompanionException.Server(409, "nothing_to_interrupt") }
         model.interrupt(); settle()
-        assertEquals("Nothing is running.", model.uiState.value.notice)
+        assertEquals(me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice.NothingRunning, model.uiState.value.notice)
+        // A lost answer: tapping again repeats the same interruption; once answered, the next tap is a new one.
+        sessions.interruptResult = { throw CompanionException.Unreachable() }
+        model.interrupt(); settle()
+        sessions.interruptResult = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("int", "queued", false, null) }
+        model.interrupt(); settle()
+        model.interrupt(); settle()
+        val keys = sessions.calls.filter { it.startsWith("interrupt s1") }.drop(1)
+        assertEquals(3, keys.size)
+        assertEquals(keys[0], keys[1]); assertNotEquals(keys[1], keys[2])
         model.stop()
     }
 }

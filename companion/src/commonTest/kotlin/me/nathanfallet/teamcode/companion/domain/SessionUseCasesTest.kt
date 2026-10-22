@@ -111,6 +111,7 @@ class SessionUseCasesTest {
         // A state this version does not know is not read again every tick.
         val unknown = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("u", SessionState.UNKNOWN)), null))
         assertTrue(unknown.unsettled.isEmpty())
+        assertNull(unknown.applied(change(5, "u")).second, "nor on each of its turns")
     }
 
     @Test fun anUnreachableServerAtStartIsAskedAgainInsteadOfEndingTheList() = runTest {

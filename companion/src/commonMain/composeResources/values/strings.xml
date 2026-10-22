@@ -78,6 +78,7 @@
     <string name="transcript_error_line">Error: %1$s</string>
     <string name="transcript_input_rejected">A message was not delivered (%1$s)</string>
     <string name="transcript_input_cancelled">A message was cancelled (%1$s)</string>
+    <string name="transcript_a_tool">a tool</string>
     <string name="transcript_permission">The agent waits for permission to use %1$s</string>
     <string name="transcript_question">The agent asks a question</string>
     <string name="transcript_permission_expired">A permission request expired and was denied</string>
@@ -103,6 +104,7 @@
     <string name="composer_unsupported">This server does not take messages from the app.</string>
     <string name="pending_sending">Sending…</string>
     <string name="pending_sent">Sent, waiting for the agent</string>
+    <string name="notice_nothing_running">Nothing is running.</string>
     <string name="pending_woke">Sent, the session is waking up</string>
     <string name="pending_failed">Not sent: %1$s</string>
     <string name="pending_refused">Refused: %1$s</string>

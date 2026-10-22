@@ -43,6 +43,7 @@ import me.nathanfallet.teamcode.companion.resources.transcript_input
 import me.nathanfallet.teamcode.companion.resources.transcript_input_cancelled
 import me.nathanfallet.teamcode.companion.resources.transcript_input_rejected
 import me.nathanfallet.teamcode.companion.resources.transcript_output
+import me.nathanfallet.teamcode.companion.resources.transcript_a_tool
 import me.nathanfallet.teamcode.companion.resources.transcript_permission
 import me.nathanfallet.teamcode.companion.resources.transcript_permission_expired
 import me.nathanfallet.teamcode.companion.resources.transcript_question
@@ -167,7 +168,7 @@ private fun SystemLine(event: TranscriptEvent) {
         is TranscriptEvent.Status -> event.exitCode?.let { stringResource(Res.string.transcript_agent_exited, it) } ?: stringResource(Res.string.transcript_agent_started)
         is TranscriptEvent.Error -> stringResource(Res.string.transcript_error_line, event.message ?: event.code ?: "")
         is TranscriptEvent.InputChanged -> stringResource(if (event.status == "cancelled") Res.string.transcript_input_cancelled else Res.string.transcript_input_rejected, event.reason ?: event.status ?: "")
-        is TranscriptEvent.PermissionRequest -> if (event.question) stringResource(Res.string.transcript_question) else stringResource(Res.string.transcript_permission, event.toolName ?: "a tool")
+        is TranscriptEvent.PermissionRequest -> if (event.question) stringResource(Res.string.transcript_question) else stringResource(Res.string.transcript_permission, event.toolName ?: stringResource(Res.string.transcript_a_tool))
         is TranscriptEvent.PermissionExpired -> stringResource(Res.string.transcript_permission_expired)
         is TranscriptEvent.Transferred -> stringResource(Res.string.transcript_transferred)
         is TranscriptEvent.Truncated -> stringResource(Res.string.transcript_truncated, event.type)

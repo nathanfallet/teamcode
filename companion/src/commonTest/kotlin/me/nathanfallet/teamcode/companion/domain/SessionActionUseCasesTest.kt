@@ -72,11 +72,11 @@ class SessionActionUseCasesTest {
 
     @Test fun nothingToInterruptIsNotAFailureAndControlsFollowTheRole() = runTest {
         val control = ControlSessionUseCase(sessions, guard, SequenceIds())
-        assertTrue(control.interrupt("a1", "s1"))
+        assertTrue(control.interrupt("a1", "s1", control.interruptKey()))
         sessions.interruptResult = { throw CompanionException.Server(409, "nothing_to_interrupt") }
-        assertFalse(control.interrupt("a1", "s1"))
+        assertFalse(control.interrupt("a1", "s1", control.interruptKey()))
         sessions.interruptResult = { throw CompanionException.Server(409, "session_not_running") }
-        assertFailsWith<CompanionException.Server> { control.interrupt("a1", "s1") }
+        assertFailsWith<CompanionException.Server> { control.interrupt("a1", "s1", control.interruptKey()) }
         assertEquals(SessionState.PAUSING, control.pause("a1", "s1").state)
         val mine = cloudSession("s", ownerId = "m1"); val theirs = cloudSession("s", ownerId = "m2")
         assertTrue(ControlSessionUseCase.canControl(account(memberId = "m1"), mine))

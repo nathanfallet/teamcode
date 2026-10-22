@@ -137,19 +137,14 @@ class ArtifactViewing(
         if (!ArtifactService.ID.matches(artifactId)) throw notFound()
         val now = clock()
         if (viewer != null && viewer.serviceScopes == null) {
-            val readable = try { artifacts.artifact(viewer, artifactId) } catch (error: TeamFailure) {
-                if (error.status != 404 && error.status != 409) throw error
-                null
-            }
+            val readable = readableByMember(viewer, artifactId)
             if (readable != null) {
                 if (readable.currentVersion < 1) throw notFound()
                 val number = requested ?: readable.currentVersion
                 val version = artifacts.version(viewer, artifactId, number)
                 val manager = readable.relation in setOf("owner", "editor", "admin") || viewer.member.role.isAdministrator
                 val sharing = if (manager) artifacts.members(viewer, artifactId) else null
-                // Every use is checked against the login session too, so signing out stops the content within the recheck.
-                val ticket = tickets.issue(ViewTicket(artifactId, number, viewer.member.id, viewer.tokenId, stable(now + MEMBER_TICKET_MILLIS, TICKET_STEP_MILLIS)))
-                return ArtifactShell(readable, version, artifacts.versions(viewer, artifactId), sharing, ticket, member = true)
+                return ArtifactShell(readable, version, artifacts.versions(viewer, artifactId), sharing, memberTicket(viewer, artifactId, number, now).ticket, member = true)
             }
         }
         val public = store.publicArtifact(artifactId) ?: throw notFound()
@@ -170,16 +165,25 @@ class ArtifactViewing(
         val now = clock()
         admitTicket(viewer.tokenId, now)
         if (!store.availability(viewer.teamId).active) throw notFound()
-        val readable = try { artifacts.artifact(viewer, artifactId) } catch (error: TeamFailure) {
-            if (error.status == 404 || error.status == 409) throw notFound()
-            throw error
-        }
+        val readable = readableByMember(viewer, artifactId) ?: throw notFound()
         if (readable.currentVersion < 1) throw notFound()
         val number = requested ?: readable.currentVersion
+        // The same version read as the viewer page's, which audits an administrator's look at a personal artifact.
         try { artifacts.version(viewer, artifactId, number) } catch (error: TeamFailure) {
             if (error.status == 404 || error.status == 409) throw notFound()
             throw error
         }
+        return memberTicket(viewer, artifactId, number, now)
+    }
+
+    /** The artifact as [viewer] reads it as a member, or null when they may not (or artifacts are off): never says which. */
+    private suspend fun readableByMember(viewer: Principal, artifactId: String): Artifact? = try { artifacts.artifact(viewer, artifactId) } catch (error: TeamFailure) {
+        if (error.status != 404 && error.status != 409) throw error
+        null
+    }
+
+    /** Every use is checked against the login session too, so signing out stops the content within the recheck. */
+    private fun memberTicket(viewer: Principal, artifactId: String, number: Int, now: Long): IssuedTicket {
         val expiresAt = stable(now + MEMBER_TICKET_MILLIS, TICKET_STEP_MILLIS)
         return IssuedTicket(number, tickets.issue(ViewTicket(artifactId, number, viewer.member.id, viewer.tokenId, expiresAt)), expiresAt)
     }

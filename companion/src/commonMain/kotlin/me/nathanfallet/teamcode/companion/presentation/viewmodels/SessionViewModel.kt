@@ -18,6 +18,7 @@ import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
@@ -30,6 +31,12 @@ import me.nathanfallet.teamcode.companion.domain.usecases.transcript.Transcript
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
 
 enum class LiveState { CONNECTING, LIVE, RECONNECTING, ENDED, STOPPED }
+
+/** A short message under the composer; the fixed ones are worded by the screen, from its string resources. */
+sealed interface SessionNotice {
+    data class Text(val text: String) : SessionNotice
+    data object NothingRunning : SessionNotice
+}
 
 data class SessionUiState(
     val session: CloudSession? = null,
@@ -48,7 +55,7 @@ data class SessionUiState(
     val canControl: Boolean = false,
     val acting: Boolean = false,
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
-    val notice: String? = null,
+    val notice: SessionNotice? = null,
 ) {
     /** A turn is running: its last `turn` event is `started` and the session is working (not paused or ended since). */
     val running: Boolean get() = (session == null || session.state == SessionState.ACTIVE) &&
@@ -81,7 +88,10 @@ class SessionViewModel(
         if (header?.isActive != true) header = viewModelScope.launch {
             while (true) {
                 delay(HEADER_MILLIS)
-                if (!state.value.gone) refreshSessionQuietly()
+                // An ended session no longer changes: nothing to read.
+                val current = state.value
+                if (current.gone || current.live == LiveState.ENDED || current.session?.state?.group == SessionGroup.ENDED) continue
+                refreshSessionQuietly()
             }
         }
         // An ended session sent everything: nothing more to follow.
@@ -89,8 +99,9 @@ class SessionViewModel(
         state.update { it.copy(live = LiveState.CONNECTING, error = null) }
         follow = viewModelScope.launch {
             try {
-                // The header first, then the newest page: following starts after its last sequence.
-                refreshSession()
+                // The header first, then the newest page: following starts after its last sequence. A header that cannot be
+                // read now (offline, a 5xx) is read again by the header loop; only a session that is gone stops here.
+                try { refreshSession() } catch (error: CancellationException) { throw error } catch (error: CompanionException.NotFound) { throw error } catch (_: Exception) { }
                 loading.withLock {
                     if (!state.value.loaded) {
                         val page = loadTranscript(route.accountId, route.sessionId)
@@ -163,7 +174,7 @@ class SessionViewModel(
         val message = try {
             sendMessage.draft(state.value.draft.trim())
         } catch (error: IllegalArgumentException) {
-            state.update { it.copy(notice = error.userMessage()) }
+            state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
             return
         }
         state.update { it.copy(draft = "", pending = it.pending + message) }
@@ -188,12 +199,24 @@ class SessionViewModel(
             state.update { current ->
                 current.copy(pending = current.pending.map { if (it.clientMessageId == message.clientMessageId) result else it }.reconciled(current.transcript.events))
             }
-            // A paused session woke for it: the header changes state.
-            if (result.woke) { state.update { it.copy(notice = "The session was paused: it is waking up for your message.") }; refreshSessionQuietly() }
+            // A paused session woke for it (the pending bubble says so): the header changes state.
+            if (result.woke) refreshSessionQuietly()
         }
     }
 
-    fun interrupt() = act { if (!control.interrupt(route.accountId, route.sessionId)) state.update { it.copy(notice = "Nothing is running.") } }
+    /** Kept from a tap until the server answers: tapping again after a lost answer repeats the same interruption. */
+    private var interruptKey: String? = null
+
+    fun interrupt() = act {
+        val key = interruptKey ?: control.interruptKey().also { interruptKey = it }
+        val interrupted = try { control.interrupt(route.accountId, route.sessionId, key) } catch (error: CompanionException) {
+            // Answered with a refusal: that interruption is over. Unreachable or a timeout: it may still be queued.
+            if (error !is CompanionException.Unreachable && !(error is CompanionException.Server && (error.statusCode >= 500 || error.statusCode == 408))) interruptKey = null
+            throw error
+        }
+        interruptKey = null
+        if (!interrupted) state.update { it.copy(notice = SessionNotice.NothingRunning) }
+    }
     fun pause() = act { val session = control.pause(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
     fun resume() = act { val session = control.resume(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
 
@@ -206,7 +229,7 @@ class SessionViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                state.update { it.copy(notice = error.userMessage()) }
+                state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
             } finally {
                 state.update { it.copy(acting = false) }
             }

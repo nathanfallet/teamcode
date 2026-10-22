@@ -142,7 +142,7 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "send $sessionId $text $clientMessageId"
         return sendResult(clientMessageId)
     }
-    override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String) = interruptResult().also { calls += "interrupt $sessionId" }
+    override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }

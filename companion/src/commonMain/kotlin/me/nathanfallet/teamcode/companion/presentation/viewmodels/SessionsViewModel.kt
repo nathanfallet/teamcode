@@ -97,7 +97,8 @@ class SessionsViewModel(
         val account = current.account ?: return
         if (scope == current.scope && group == current.group) return
         if (scope == SessionScope.TEAM && !account.isAdministrator) return
-        state.update { it.copy(list = SessionList(scope, group, account.memberId, finishedTurns = it.list?.finishedTurns.orEmpty()), error = null) }
+        // Loading until the queued reload runs: an empty new list never reads as "no sessions" meanwhile.
+        state.update { it.copy(list = SessionList(scope, group, account.memberId, finishedTurns = it.list?.finishedTurns.orEmpty()), loading = true, error = null) }
         commands.trySend(Command.Reload)
     }
 
@@ -113,7 +114,7 @@ class SessionsViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                state.update { it.copy(following = false, loading = false, loadingMore = false, error = error.userMessage()) }
+                state.update { it.copy(following = false, reconnecting = false, loading = false, loadingMore = false, error = error.userMessage()) }
             }
         }
     }

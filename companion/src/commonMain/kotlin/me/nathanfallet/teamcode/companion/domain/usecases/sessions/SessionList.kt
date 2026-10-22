@@ -63,7 +63,7 @@ data class SessionList(
             return copy(finishedTurns = marks) to change.sessionId.takeIf { mayBelong }
         }
         // A turn of a session the list still shows as preparing, pausing...: its state moved without an event, read it.
-        if (change.state == null && current.state !in SETTLED) return copy(finishedTurns = marks) to change.sessionId
+        if (change.state == null && current.state in UNSETTLED) return copy(finishedTurns = marks) to change.sessionId
         val state = change.state ?: when {
             change.turnPhase == "started" && current.state == SessionState.READY -> SessionState.ACTIVE
             finished && current.state == SessionState.ACTIVE -> SessionState.READY

@@ -89,10 +89,13 @@ fun List<PendingMessage>.reconciled(events: List<TranscriptEvent>): List<Pending
 
 /** Interrupt, pause and resume. An interrupt with nothing running is not a failure. */
 class ControlSessionUseCase(private val sessions: SessionRepository, private val guard: AccountGuard, private val ids: IdGenerator) {
+    /** A key for one interruption: the caller keeps it until the server answered, so a retry never interrupts a later turn. */
+    fun interruptKey(): String = ids.newId()
+
     /** Returns false when there was nothing to interrupt. */
-    suspend fun interrupt(accountId: String, sessionId: String): Boolean = guard(accountId) {
+    suspend fun interrupt(accountId: String, sessionId: String, key: String): Boolean = guard(accountId) {
         try {
-            sessions.interrupt(accountId, sessionId, ids.newId())
+            sessions.interrupt(accountId, sessionId, key)
             true
         } catch (error: CompanionException.Server) {
             if (error.statusCode == 409 && error.code == "nothing_to_interrupt") false else throw error

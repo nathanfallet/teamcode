@@ -33,6 +33,7 @@ import me.nathanfallet.teamcode.companion.resources.pending_refused
 import me.nathanfallet.teamcode.companion.resources.pending_retry
 import me.nathanfallet.teamcode.companion.resources.pending_sending
 import me.nathanfallet.teamcode.companion.resources.pending_sent
+import me.nathanfallet.teamcode.companion.resources.notice_nothing_running
 import me.nathanfallet.teamcode.companion.resources.pending_woke
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,6 +66,7 @@ import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
 import me.nathanfallet.teamcode.companion.presentation.transcript.transcriptItems
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
@@ -108,7 +110,13 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
                 state.session?.let { Actions(it, state, viewModel) }
                 ErrorText(state.error)
                 if (state.error != null && !state.gone) TextButton(onClick = viewModel::retry) { Text(stringResource(Res.string.action_retry)) }
-                state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.testTag("notice")) }
+                state.notice?.let { notice ->
+                    val text = when (notice) {
+                        is SessionNotice.Text -> notice.text
+                        SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
+                    }
+                    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.testTag("notice"))
+                }
             }
             ConfirmingLinks { Transcript(state, memberId, viewModel, Modifier.weight(1f)) }
             state.session?.let { Composer(it, state, viewModel) }

@@ -194,10 +194,10 @@ private fun card(artifact: Artifact): String {
         """<small>${escape(artifact.ownerName)} · v${artifact.currentVersion} · ${escape(originLabel(artifact))} · ${time(artifact.updatedAt)}</small></div>"""
 }
 
-/** The viewer: a bar with the title, version, sharing and files, and the content in a sandboxed frame below. */
 /** User agents of the platforms the app runs on as a phone or tablet app; the desktop app opens links itself. */
 private val MOBILE_AGENT = Regex("iPhone|iPad|Android")
 
+/** The viewer: a bar with the title, version, sharing and files, and the content in a sandboxed frame below. */
 private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean, appLink: String? = null): String {
     val artifact = shell.artifact
     val version = shell.version
