@@ -50,7 +50,10 @@ class RefreshAccountUseCase(
         // The token is dead on the server either way; a store refusing the delete must not keep the account signed in.
         try { credentials.delete(account.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
         auth.release(account.id)
-        val signedOut = account.copy(signedIn = false)
+        // Read again after the delete: a sign-in that completed meanwhile (new session) is not undone.
+        val current = accounts.accounts.value.firstOrNull { it.id == account.id } ?: return account.copy(signedIn = false)
+        if (current.expiresAt != account.expiresAt) return current
+        val signedOut = current.copy(signedIn = false)
         accounts.update(signedOut)
         return signedOut
     }

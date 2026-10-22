@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -56,7 +57,8 @@ fun FormScaffold(
         },
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
+            // imePadding: with edge-to-edge, the keyboard would otherwise cover the fields and the submit button.
+            modifier = Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(

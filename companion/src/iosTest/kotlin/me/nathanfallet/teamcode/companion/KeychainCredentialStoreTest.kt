@@ -6,7 +6,8 @@ import kotlin.test.*
 
 /**
  * The real Keychain of the simulator, under a test service so the app's entries are never touched. A bare test binary
- * has no application identifier, so the simulator may answer `errSecNotAvailable` (-25291): the test then says so and
+ * has no application identifier or entitlements, so the simulator may answer `errSecNotAvailable` (-25291) or
+ * `errSecMissingEntitlement` (-34018): the test then says so and
  * stops, and the Keychain is exercised by the app itself (sign in, quit, relaunch).
  */
 class KeychainCredentialStoreTest {
@@ -16,7 +17,7 @@ class KeychainCredentialStoreTest {
         try {
             store.delete("a1")
         } catch (error: IllegalStateException) {
-            if (error.message?.endsWith("(-25291).") == true) { println("No Keychain for this test binary; skipped."); return@runTest }
+            if (listOf("(-25291).", "(-34018).").any { error.message?.endsWith(it) == true }) { println("No Keychain for this test binary; skipped."); return@runTest }
             throw error
         }
         assertNull(store.read("a1"))

@@ -9,6 +9,10 @@ import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.KeychainCredentialStore
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.system.IosPlatformInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.launch
 import org.koin.dsl.module
 import platform.Foundation.NSUserDefaults
 
@@ -19,7 +23,8 @@ fun platformModule() = module {
         KeychainCredentialStore().also { store ->
             // No accounts in the settings (a first launch, or a reinstall that wiped them): Keychain items left by a
             // previous installation are orphans, removed so they do not outlive it.
-            if (!get<Settings>().hasKey(SettingsAccountRepository.ACCOUNTS_KEY)) runCatching { store.deleteAll() }
+            // Off the main thread, like every Keychain call.
+            if (!get<Settings>().hasKey(SettingsAccountRepository.ACCOUNTS_KEY)) CoroutineScope(Dispatchers.IO).launch { runCatching { store.deleteAll() } }
         }
     }
     single<HttpClientEngineFactory<*>> { Darwin }

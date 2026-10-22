@@ -1,6 +1,9 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -44,7 +47,7 @@ import org.koin.core.parameter.parametersOf
 
 /**
  * A native form, never a web page: the origin stays visible the whole time, and the password goes only to it.
- * Field types let the system's password manager fill the username and password.
+ * Autofill content types let the system's password manager fill the username and password, and save a new one.
  */
 @Composable
 fun LoginScreen(
@@ -71,9 +74,9 @@ fun LoginScreen(
                 value = state.username, onValueChange = viewModel::onUsernameChange,
                 label = { Text(stringResource(Res.string.login_username)) }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next, autoCorrectEnabled = false),
-                modifier = Modifier.fillMaxWidth().testTag("username"),
+                modifier = Modifier.fillMaxWidth().testTag("username").semantics { contentType = ContentType.Username },
             )
-            PasswordField(state.password, viewModel::onPasswordChange, stringResource(Res.string.login_password), "password")
+            PasswordField(state.password, viewModel::onPasswordChange, stringResource(Res.string.login_password), "password", ContentType.Password)
             OutlinedTextField(
                 value = state.deviceName, onValueChange = viewModel::onDeviceNameChange,
                 label = { Text(stringResource(Res.string.login_device_name)) },
@@ -83,8 +86,8 @@ fun LoginScreen(
             Text(stringResource(Res.string.login_password_only_here), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             Text(stringResource(Res.string.password_change_intro), style = MaterialTheme.typography.bodyMedium)
-            PasswordField(state.newPassword, viewModel::onNewPasswordChange, stringResource(Res.string.password_change_new), "new-password")
-            PasswordField(state.confirmation, viewModel::onConfirmationChange, stringResource(Res.string.password_change_confirm), "confirm-password")
+            PasswordField(state.newPassword, viewModel::onNewPasswordChange, stringResource(Res.string.password_change_new), "new-password", ContentType.NewPassword)
+            PasswordField(state.confirmation, viewModel::onConfirmationChange, stringResource(Res.string.password_change_confirm), "confirm-password", ContentType.NewPassword)
         }
         ErrorText(state.error)
         BusyRow(state.working)
@@ -95,11 +98,11 @@ fun LoginScreen(
 }
 
 @Composable
-private fun PasswordField(value: String, onChange: (String) -> Unit, label: String, tag: String) {
+private fun PasswordField(value: String, onChange: (String) -> Unit, label: String, tag: String, type: ContentType) {
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-        modifier = Modifier.fillMaxWidth().testTag(tag),
+        modifier = Modifier.fillMaxWidth().testTag(tag).semantics { contentType = type },
     )
 }

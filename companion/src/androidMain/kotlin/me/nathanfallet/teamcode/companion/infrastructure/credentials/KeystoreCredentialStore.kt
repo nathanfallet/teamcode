@@ -3,8 +3,8 @@ package me.nathanfallet.teamcode.companion.infrastructure.credentials
 import android.content.SharedPreferences
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import java.security.InvalidKeyException
 import java.security.KeyStore
 import java.security.ProviderException
 import java.security.UnrecoverableKeyException
@@ -29,17 +29,17 @@ class KeystoreCredentialStore(
         val stored = preferences.getString(accountId, null) ?: return@withContext null
         // A key lost with a device restore, a key the system invalidated, or a damaged entry: the token is gone, the
         // member signs in again.
-        val token = try { TokenCipher.open(key(), accountId, stored) } catch (_: InvalidKeyException) { resetKey(); null }
+        val token = try { TokenCipher.open(key(), accountId, stored) } catch (_: KeyPermanentlyInvalidatedException) { resetKey(); null }
         token ?: run { preferences.edit().remove(accountId).commit(); null }
     }
 
     override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) {
-        val sealed = try { TokenCipher.seal(key(), accountId, token) } catch (_: InvalidKeyException) { resetKey(); TokenCipher.seal(key(), accountId, token) }
+        val sealed = try { TokenCipher.seal(key(), accountId, token) } catch (_: KeyPermanentlyInvalidatedException) { resetKey(); TokenCipher.seal(key(), accountId, token) }
         check(preferences.edit().putString(accountId, sealed).commit()) { "The token could not be saved." }
     }
 
     /**
-     * The key exists but cannot be used any more (KeyPermanentlyInvalidatedException is an InvalidKeyException): every
+     * The key was permanently invalidated by the system (other InvalidKeyExceptions may be transient and propagate): every
      * token sealed with it is lost anyway, and the next use generates a new key.
      */
     private fun resetKey() = deleteKey()
