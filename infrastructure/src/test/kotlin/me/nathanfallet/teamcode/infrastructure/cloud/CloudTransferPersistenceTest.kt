@@ -356,7 +356,11 @@ class CloudTransferPersistenceTest {
         }
         failure("not_found") { ra.sessions.get(personal, s.id) }
 
-        // Revocation: an open transcript stream ends at its next check (every 15 s), and the key never authenticates again.
+        // Revocation: an open transcript stream ends at its next check, and the key never authenticates again. The stream
+        // first receives the transfer event, then stays idle until the check: a quiet stream is closed too. The check runs
+        // every RECHECK_MILLIS of database time, so this follower polls at the production interval rather than the
+        // replica's 1 ms test sleep, which would spin on SQL for the whole interval.
+        assertEquals(CloudEventType.TRANSFER, ra.conversation.events(t.recipient, s.id, 0, null, 10).events.last().type)
         val readerKey = keys.create(t.recipient, recipient, "transcript reader", setOf(ServiceScope.CLOUD_READ), 1)
         val reader = rb.team.authenticate(readerKey.accessToken)!!
         val stream = CloudConversationService(ra.conversations, ra.store, ra.access)
@@ -367,10 +371,11 @@ class CloudTransferPersistenceTest {
         }
         withTimeout(10_000) { opened.await() }
         keys.revoke(t.recipient, readerKey.metadata.id)
-        assertEquals("authentication_required", withTimeout(CloudConversationService.RECHECK_MILLIS + 10_000) { following.await() })
+        assertEquals("authentication_required", withTimeout(CloudConversationService.RECHECK_MILLIS + 15_000) { following.await() })
         assertNull(ra.team.authenticate(readerKey.accessToken), "The next request is unauthenticated: 401")
         failure("authentication_required") { rb.sessions.get(reader, s.id) }
-        failure("authentication_required") { orchestratorKey.let { keys.revoke(t.admin, it.metadata.id); rb.sessions.get(orchestrator, s.id) } }
+        keys.revoke(t.admin, orchestratorKey.metadata.id)
+        failure("authentication_required") { rb.sessions.get(orchestrator, s.id) }
         ra.sessions.delete(t.recipient, null, s.id); ra.sessions.delete(t.recipient, null, theirs.id)
     }
 

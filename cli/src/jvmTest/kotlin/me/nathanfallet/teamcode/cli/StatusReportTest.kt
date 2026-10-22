@@ -8,13 +8,17 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.nathanfallet.teamcode.cli.status.StatusReport
 import me.nathanfallet.teamcode.cli.status.readStatusReport
 import me.nathanfallet.teamcode.cli.status.renderStatus
 import me.nathanfallet.teamcode.cli.status.statusJson
-import kotlinx.serialization.json.*
-import me.nathanfallet.teamcode.api.Serialization
-import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import kotlin.test.*
@@ -117,37 +121,52 @@ class StatusReportTest {
         val down = "/api/v1/status" to (HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}""")
         assertEquals(500, assertFailsWith<TeamCodeException> { sdk(mapOf(down, capacity), mutableListOf()).use { readStatusReport(it) } }.statusCode)
     }
-    @Test fun theJsonViewCarriesTheApiValuesAndKeepsUnknownsUnknown() = runTest {
-        // The bodies as the server encodes them (the same DTOs and serializer as its content negotiation).
-        val gatewayBody = Serialization.json.encodeToString(GatewayStatus("pool", 1, 2, 3))
-        val capacityBody = Serialization.json.encodeToString(CapacityView("m", 100, 2, null, 10, 1, 5, reservedUnits = 4,
-            groups = listOf(GroupAllowanceView("g", "Support", 0, 0, false, 0, 0))))
-        val accountsBody = Serialization.json.encodeToString(listOf(
-            // Observed windows, one without a reported reset.
-            PoolAccountStatusView("Account 1", "anthropic", "READY", false, true, windows = listOf(
-                AccountWindowView("five_hour", .42, 1_000, 9_000), AccountWindowView("seven_day", .1, 1_000, null))),
-            // Nothing observed: no window at all, not a guessed 0%.
-            PoolAccountStatusView("Account 2", "openai", "READY", false, true),
-            PoolAccountStatusView("Account 3", "anthropic", "READY", false, false, "cooling_down", 7_000),
+
+    // Bodies written out as the server sends them: every DTO field present, nulls explicit (PoolAccountRoutesTest).
+    private val fullGateway = """{"mode":"pool","activeRequests":1,"completedRequests":2,"queuedRequests":3}"""
+    private val fullCapacity = """{"memberId":"m","dailyUnits":100,"maxConcurrent":2,"poolId":null,"chargedAndReservedUnits":10,"activeRequests":1,""" +
+        """"resetsAtMillis":5,"hardCapUnits":0,"weight":1,"poolTotalWeight":1,"poolDailyUnits":1000000,"queuedRequests":0,""" +
+        """"groups":[{"id":"g","name":"Support","dailyUnits":0,"maxConcurrent":0,"paused":false,"chargedAndReservedUnits":0,"activeRequests":0}],""" +
+        """"budgetOverride":null,"baseDailyUnits":100,"allowSharedOverflow":false,"reservedUnits":4}"""
+    private val fullAccounts = "[" + listOf(
+        // Observed windows, one whose reset the provider did not report.
+        """{"label":"Account 1","provider":"anthropic","state":"READY","disabled":false,"usable":true,"unavailableReason":null,"cooldownUntilMillis":null,""" +
+            """"windows":[{"window":"five_hour","utilization":0.42,"observedAtMillis":1000,"resetsAtMillis":9000},""" +
+            """{"window":"seven_day","utilization":0.1,"observedAtMillis":1000,"resetsAtMillis":null}],"poolId":null,"id":null,"name":null,"email":null}""",
+        // Nothing observed: no window, rather than a guessed 0%.
+        """{"label":"Account 2","provider":"openai","state":"READY","disabled":false,"usable":true,"unavailableReason":null,"cooldownUntilMillis":null,""" +
+            """"windows":[],"poolId":null,"id":null,"name":null,"email":null}""",
+        """{"label":"Account 3","provider":"anthropic","state":"READY","disabled":false,"usable":false,"unavailableReason":"cooling_down","cooldownUntilMillis":7000,""" +
+            """"windows":[],"poolId":null,"id":null,"name":null,"email":null}""",
+    ).joinToString(",") + "]"
+    private val fullDirective = """{"id":"d","pace":"SLOW","maxConcurrent":1,"minIntervalMillis":500,"message":"Slow down","createdAtMillis":1,"expiresAtMillis":9}"""
+    private suspend fun printedStatus(routes: Map<String, Pair<HttpStatusCode, String>>) =
+        Json.parseToJsonElement(statusJson(sdk(routes, java.util.Collections.synchronizedList(mutableListOf())).use { readStatusReport(it) })).jsonObject
+
+    @Test fun theJsonViewIsTheApiBodiesFieldForField() = runTest {
+        val printed = printedStatus(mapOf(
+            "/api/v1/status" to (HttpStatusCode.OK to fullGateway), "/api/v1/capacity" to (HttpStatusCode.OK to fullCapacity),
+            "/api/v1/pools/accounts" to (HttpStatusCode.OK to fullAccounts), "/api/v1/directives/current" to (HttpStatusCode.OK to """{"directive":$fullDirective}"""),
         ))
-        val directiveBody = Serialization.json.encodeToString(DirectiveResponse(DirectiveView("d", "SLOW", 1, 500, "Slow down", 1, 9)))
-        val routes = mapOf(
-            "/api/v1/status" to (HttpStatusCode.OK to gatewayBody), "/api/v1/capacity" to (HttpStatusCode.OK to capacityBody),
-            "/api/v1/pools/accounts" to (HttpStatusCode.OK to accountsBody), "/api/v1/directives/current" to (HttpStatusCode.OK to directiveBody),
-        )
-        val printed = Json.parseToJsonElement(statusJson(sdk(routes, java.util.Collections.synchronizedList(mutableListOf())).use { readStatusReport(it) })).jsonObject
-        assertEquals(Json.parseToJsonElement(gatewayBody), printed["gateway"])
-        assertEquals(Json.parseToJsonElement(capacityBody), printed["capacity"], "The allowance is the API's, field for field")
-        assertEquals(Json.parseToJsonElement(accountsBody), printed["accounts"], "The accounts are the API's, field for field")
-        assertEquals(Json.parseToJsonElement(directiveBody).jsonObject["directive"], printed["pacing"])
+        assertEquals(Json.parseToJsonElement(fullGateway), printed["gateway"])
+        assertEquals(Json.parseToJsonElement(fullCapacity), printed["capacity"], "The allowance is the API's, field for field")
+        assertEquals(Json.parseToJsonElement(fullAccounts), printed["accounts"], "The accounts are the API's, field for field")
+        assertEquals(Json.parseToJsonElement(fullDirective), printed["pacing"], "Pacing is the directive of /directives/current")
         assertEquals(JsonObject(emptyMap()), printed["unavailable"])
+    }
+
+    @Test fun theJsonViewKeepsUnknownValuesUnknown() = runTest {
+        val gateway = "/api/v1/status" to (HttpStatusCode.OK to fullGateway)
+        val printed = printedStatus(mapOf(gateway, "/api/v1/capacity" to (HttpStatusCode.OK to fullCapacity),
+            "/api/v1/pools/accounts" to (HttpStatusCode.OK to fullAccounts), "/api/v1/directives/current" to (HttpStatusCode.OK to """{"directive":null}""")))
         val accounts = printed.getValue("accounts").jsonArray.map { it.jsonObject }
-        assertEquals(JsonNull, accounts[0]["windows"]!!.jsonArray[1].jsonObject["resetsAtMillis"], "An unreported reset stays null")
+        assertEquals(JsonNull, accounts[0].getValue("windows").jsonArray[1].jsonObject["resetsAtMillis"], "An unreported reset stays null")
         assertEquals(JsonArray(emptyList()), accounts[1]["windows"], "An account without observation has no window")
         assertEquals(JsonNull, accounts[1]["cooldownUntilMillis"])
-        // A section the server could not serve is null with its reason, never a default value.
-        val narrow = Json.parseToJsonElement(statusJson(sdk(mapOf("/api/v1/status" to (HttpStatusCode.OK to gatewayBody)), mutableListOf()).use { readStatusReport(it) })).jsonObject
+        assertEquals(JsonNull, printed["pacing"]); assertFalse("pacing" in printed.getValue("unavailable").jsonObject, "No advice is not a failed read")
+        // A section the server or key does not serve is null with its reason, never a default value.
+        val narrow = printedStatus(mapOf(gateway))
         assertEquals(JsonNull, narrow["capacity"]); assertEquals(JsonNull, narrow["accounts"]); assertEquals(JsonNull, narrow["pacing"])
-        assertEquals("not_served", narrow.getValue("unavailable").jsonObject["capacity"]!!.jsonPrimitive.content)
+        assertEquals("not_served", narrow.getValue("unavailable").jsonObject.getValue("capacity").jsonPrimitive.content)
     }
 }
