@@ -46,15 +46,21 @@ class SettingsAccountRepository(private val settings: Settings) : AccountReposit
         if (id == null) settings.remove(ACTIVE_KEY) else settings.putString(ACTIVE_KEY, id)
     }
 
-    private fun load(): List<Account> = settings.getStringOrNull(ACCOUNTS_KEY)?.let {
-        // A preference written by a future version, or damaged, must not stop the app from starting.
-        runCatching { json.decodeFromString(serializer, it) }.getOrNull()
+    private fun load(): List<Account> = settings.getStringOrNull(ACCOUNTS_KEY)?.let { raw ->
+        // A preference written by a future version, or damaged, must not stop the app from starting; it is kept aside
+        // rather than overwritten by the next change, so a newer version can still read it.
+        runCatching { json.decodeFromString(serializer, raw) }.getOrElse {
+            settings.putString(UNREADABLE_KEY, raw)
+            null
+        }
     }.orEmpty()
 
     private fun persist() = settings.putString(ACCOUNTS_KEY, json.encodeToString(serializer, state.value))
 
-    private companion object {
+    companion object {
+        /** Present once an account was ever saved; its absence on iOS means a fresh installation. */
         const val ACCOUNTS_KEY = "accounts.v1"
-        const val ACTIVE_KEY = "accounts.active"
+        private const val ACTIVE_KEY = "accounts.active"
+        private const val UNREADABLE_KEY = "accounts.v1.unreadable"
     }
 }

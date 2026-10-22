@@ -95,7 +95,7 @@ class LoginViewModel(
                 // During a password change, the temporary session expired or was revoked: back to signing in.
                 state.update {
                     if (it.passwordChange == null) it.copy(working = false, error = error.userMessage())
-                    else it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = "The temporary session ended. Sign in again with the temporary password.")
+                    else it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = "The temporary session ended. Sign in again: with your new password if the change went through, otherwise with the temporary one.")
                 }
             } catch (error: CompanionException.PasswordChanged) {
                 // Back to the sign-in form: the temporary password and its session no longer exist.

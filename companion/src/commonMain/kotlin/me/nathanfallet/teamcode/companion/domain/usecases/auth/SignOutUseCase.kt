@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
 import kotlinx.coroutines.CancellationException
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
@@ -22,6 +23,8 @@ class SignOutUseCase(
             true
         } catch (error: CancellationException) {
             throw error
+        } catch (_: CompanionException.Unauthorized) {
+            true // The server no longer knows this session: nothing left to revoke.
         } catch (_: Exception) {
             false
         }

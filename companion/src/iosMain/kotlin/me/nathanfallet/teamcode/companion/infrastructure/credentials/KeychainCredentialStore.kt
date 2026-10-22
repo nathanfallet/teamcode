@@ -82,6 +82,20 @@ class KeychainCredentialStore(private val service: String = SERVICE) : Credentia
         check(status == errSecSuccess || status == errSecItemNotFound) { "The Keychain refused to delete the token ($status)." }
     }
 
+    /**
+     * Removes every token of the service. Keychain items survive the app's removal while its settings do not: on a
+     * reinstall, the old items belong to accounts nothing refers to any more.
+     */
+    fun deleteAll() {
+        val serviceRef = CFBridgingRetain(service.nsString())
+        try {
+            val status = withDictionary(kSecClass to kSecClassGenericPassword, kSecAttrService to serviceRef) { SecItemDelete(it) }
+            check(status == errSecSuccess || status == errSecItemNotFound) { "The Keychain refused to delete the tokens ($status)." }
+        } finally {
+            CFRelease(serviceRef)
+        }
+    }
+
     private fun <T> withQuery(accountId: String, vararg extra: Pair<CFTypeRef?, CFTypeRef?>, block: (CFMutableDictionaryRef?) -> T): T {
         val serviceRef = CFBridgingRetain(service.nsString())
         val accountRef = CFBridgingRetain(accountId.nsString())

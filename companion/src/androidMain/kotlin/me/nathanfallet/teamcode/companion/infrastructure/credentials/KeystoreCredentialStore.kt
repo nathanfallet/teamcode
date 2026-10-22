@@ -4,8 +4,10 @@ import android.content.SharedPreferences
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
+import java.security.InvalidKeyException
 import java.security.KeyStore
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import kotlinx.coroutines.Dispatchers
@@ -25,12 +27,20 @@ class KeystoreCredentialStore(
 
     override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) {
         val stored = preferences.getString(accountId, null) ?: return@withContext null
-        // A key lost with a device restore, or a damaged entry: the token is gone, the member signs in again.
-        TokenCipher.open(key(), accountId, stored) ?: run { preferences.edit().remove(accountId).commit(); null }
+        // A key lost with a device restore, a key the system invalidated, or a damaged entry: the token is gone, the
+        // member signs in again.
+        val token = try { TokenCipher.open(key(), accountId, stored) } catch (_: InvalidKeyException) { resetKey(); null }
+        token ?: run { preferences.edit().remove(accountId).commit(); null }
     }
 
     override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) {
-        check(preferences.edit().putString(accountId, TokenCipher.seal(key(), accountId, token)).commit()) { "The token could not be saved." }
+        val sealed = try { TokenCipher.seal(key(), accountId, token) } catch (_: InvalidKeyException) { resetKey(); TokenCipher.seal(key(), accountId, token) }
+        check(preferences.edit().putString(accountId, sealed).commit()) { "The token could not be saved." }
+    }
+
+    /** The key exists but cannot be used any more (KeyPermanentlyInvalidatedException is an InvalidKeyException). */
+    private fun resetKey() {
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)
     }
 
     override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) {
@@ -47,7 +57,11 @@ class KeystoreCredentialStore(
         @Synchronized
         private fun keystoreKey(): SecretKey {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+            try {
+                (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+            } catch (_: UnrecoverableKeyException) {
+                keyStore.deleteEntry(ALIAS) // Unusable after an OS update or a restore: replaced below.
+            }
             fun generate(strongBox: Boolean): SecretKey = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
                 init(
                     KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -60,9 +74,11 @@ class KeystoreCredentialStore(
                 )
                 generateKey()
             }
+            if (Build.VERSION.SDK_INT < 28) return generate(strongBox = false)
             return try {
-                generate(strongBox = Build.VERSION.SDK_INT >= 28)
-            } catch (_: StrongBoxUnavailableException) {
+                generate(strongBox = true)
+            } catch (_: ProviderException) {
+                // StrongBoxUnavailableException, or a StrongBox that fails to generate: the TEE key is still hardware-backed.
                 generate(strongBox = false)
             }
         }

@@ -33,9 +33,6 @@ class HomeViewModel(
         }
     }
 
-    fun refresh() {
-        accounts.activeAccountId.value?.let { id -> viewModelScope.launch { refresh(id) } }
-    }
 
     private suspend fun refresh(id: String) {
         status.value = HomeUiState(refreshing = true)
