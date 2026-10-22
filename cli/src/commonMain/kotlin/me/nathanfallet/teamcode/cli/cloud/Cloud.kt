@@ -94,9 +94,14 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
             // An older server ignores unknown fields: never let it drop the message silently.
             if (initial != null && INITIAL_MESSAGE_CAPABILITY !in it.capabilities().features)
                 throw CliktError("This server does not accept --message; create the session, then use teamcode cloud send.")
-            // The caller's list (every profile for an administrator): the server then says whether the owner may use it.
-            val profiles = try { it.cloudProfiles() } catch (error: TeamCodeException) { if (error.statusCode == 403) emptyList() else throw error }
-            val profileId = resolveProfile(profile, profiles)
+            // An id is sent as is: one request, and a retry with the same key keeps the same body. A name is looked up
+            // in the owner's list (`--member` where the server can list it, the caller's otherwise); a list that cannot
+            // be read sends the value as an id, and the server answers.
+            val profileId = if (PROFILE_ID.matches(profile)) profile else {
+                val forMember = onBehalfOf?.takeIf { _ -> PROFILES_MEMBER_CAPABILITY in it.capabilities().features }
+                val profiles = try { it.cloudProfiles(forMember) } catch (_: TeamCodeException) { emptyList() }
+                resolveProfile(profile, profiles)
+            }
             it.createCloudSession(CreateCloudSessionRequest(name, profileId, image, agent, parsed, idle, environment, initial), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
         }
         echo(if (json) Serialization.json.encodeToString(session) else session.line())
@@ -105,6 +110,8 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
 
 private const val INITIAL_MESSAGE_CAPABILITY = "cloud.sessions.initial-message.v1"
 private const val PROFILES_MEMBER_CAPABILITY = "cloud.profiles.member.v1"
+/** The shape of the profile ids the server generates (random UUIDs). */
+internal val PROFILE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 /**
  * `--profile`: an id first; a name only when no listed profile has that id, the exact name before the name ignoring

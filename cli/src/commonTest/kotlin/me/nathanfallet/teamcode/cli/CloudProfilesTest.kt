@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.cli
 
 import com.github.ajalt.clikt.core.CliktError
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.cloud.PROFILE_ID
 import me.nathanfallet.teamcode.cli.cloud.line
 import me.nathanfallet.teamcode.cli.cloud.resolveProfile
 import kotlin.test.*
@@ -40,6 +41,11 @@ class CloudProfilesTest {
     @Test fun `an unknown value goes to the server, which tells missing from unassigned`() {
         assertEquals("other", resolveProfile("other", listOf(toolchain)))
         assertEquals("other", resolveProfile("other", emptyList()), "A key that cannot list profiles still passes an id")
+    }
+
+    @Test fun `a generated id is recognised without a list`() {
+        assertTrue(PROFILE_ID.matches(toolchain.id))
+        assertFalse(PROFILE_ID.matches("default"))
     }
 
     @Test fun `a line shows id, name, version, cluster and namespace, image and agent`() {

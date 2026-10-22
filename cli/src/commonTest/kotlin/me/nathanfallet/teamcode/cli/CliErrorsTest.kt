@@ -45,7 +45,7 @@ class CliErrorsTest {
         val missing = message(http(404, "profile_not_found"))
         assertContains(missing, "No cloud profile you can use"); assertContains(missing, "teamcode cloud profiles"); assertContains(missing, "--member")
         val unassigned = message(http(403, "profile_unassigned"))
-        assertContains(unassigned, "not assigned to the session owner"); assertContains(unassigned, "teamcode cloud profiles")
+        assertContains(unassigned, "session owner is not assigned"); assertContains(unassigned, "teamcode cloud profiles"); assertContains(unassigned, "--member <owner id>")
         assertFalse("paused" in unassigned, "No longer read as a paused group")
         assertContains(message(http(403, "group_paused")), "paused")
     }

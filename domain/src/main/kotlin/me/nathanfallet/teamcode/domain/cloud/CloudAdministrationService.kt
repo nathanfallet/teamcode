@@ -37,10 +37,12 @@ class CloudAdministrationService(
         return store.profiles(actor).filter { target.role.isAdministrator || target.id in it.assignedMemberIds }
     }
 
-    /** The names of the team's clusters by id, shown next to the profiles that run on them; no other cluster field. */
-    suspend fun clusterNames(actor: Principal): Map<String, String> {
+    /** The names of the clusters [profiles] run on, by id, shown next to them; no other cluster, no other field. */
+    suspend fun clusterNames(actor: Principal, profiles: List<CloudProfile>): Map<String, String> {
         actor.requireCloudRead()
-        return store.clusters(actor).associate { it.id to it.name }
+        val ids = profiles.map { it.spec.clusterId }.toSet()
+        if (ids.isEmpty()) return emptyMap()
+        return store.clusters(actor).filter { it.id in ids }.associate { it.id to it.name }
     }
     /** Refuses a storage class that would keep provider volumes after a workspace is deleted. */
     suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile {

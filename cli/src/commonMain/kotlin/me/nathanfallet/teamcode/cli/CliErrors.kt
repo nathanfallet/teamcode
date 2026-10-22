@@ -59,8 +59,8 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "provider_verification_failed" -> return "The provider did not accept the new sign-in ($tag). Run `teamcode accounts add` again."
         "profile_not_found" -> return "No cloud profile you can use has this id or name ($tag). Run `teamcode cloud profiles` to list them; " +
             "an administrator adds --member <id> to list another member's."
-        "profile_unassigned" -> return "This cloud profile is not assigned to the session owner ($tag). Run `teamcode cloud profiles` to list the usable ones, " +
-            "or ask a team administrator to assign it."
+        "profile_unassigned" -> return "The session owner is not assigned to this cloud profile ($tag). Run `teamcode cloud profiles` to list your usable profiles " +
+            "(an administrator adds --member <owner id> for another member's), or ask a team administrator to assign it."
     }
     return when (error.statusCode) {
         0 -> "The connection to the $server closed before the answer was complete. Check your network, then try again."

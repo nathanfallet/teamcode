@@ -131,7 +131,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         get("/profiles") {
             val member = call.request.queryParameters.getAll("member")?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send member at most once.") }
             val profiles = admin.profiles(call.principal, member)
-            val clusters = admin.clusterNames(call.principal)
+            val clusters = admin.clusterNames(call.principal, profiles)
             call.respond(profiles.map { it.view(clusters[it.spec.clusterId]) })
         }
         post("/profiles") {

@@ -58,7 +58,8 @@ class CloudProfileAccessTest {
         failure("invalid_effective_member") { service.profiles(admin, "unknown-id") }
         failure("invalid_effective_member") { service.profiles(admin, disabledMember.id) }
         failure("credential_scope") { service.profiles(colleague.copy(serviceScopes = setOf(ServiceScope.INFERENCE))) }
-        assertEquals(mapOf("cluster-id" to "lab"), service.clusterNames(colleague))
+        assertEquals(mapOf("cluster-id" to "lab"), service.clusterNames(colleague, listOf(assigned)))
+        assertEquals(emptyMap(), service.clusterNames(colleague, emptyList()), "No profile, no cluster read")
     }
 
     @Test fun creationTellsAMissingProfileFromAnUnassignedOne() {

@@ -40,7 +40,8 @@ class CloudSessionService(
         // assigned reveals nothing a member could guess. Names are resolved by clients among the profiles listed to
         // the caller, so an unassigned profile is never found by its name.
         val profile = store.profile(principal.teamId, draft.profileId) ?: throw missingProfile()
-        val owner = store.member(principal.teamId, actor.effectiveMemberId) ?: throw missingProfile()
+        val owner = store.member(principal.teamId, actor.effectiveMemberId)
+            ?: throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
         if (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds) throw unassignedProfile(owner.id == principal.member.id)
         // The owner must hold `create` under the access policy, also when an administrator creates on their behalf.
         access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
