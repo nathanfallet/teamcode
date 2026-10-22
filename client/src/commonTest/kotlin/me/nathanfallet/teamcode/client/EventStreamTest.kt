@@ -148,6 +148,14 @@ class EventStreamTest {
         assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
+    @Test fun invalidUtf8IsAMalformedEvent() = runTest {
+        val body = "event: message.agent\ndata: ".encodeToByteArray() + byteArrayOf(0xC3.toByte(), 0x28) + "\n\n".encodeToByteArray()
+        val result = runCatching { readServerSentEvents(ByteReadChannel(body)) { false } }.exceptionOrNull()
+        // A platform may decode invalid bytes as U+FFFD and dispatch the frame; when it refuses them, the failure is not
+        // one to reconnect on, since a reconnection would replay the same bytes.
+        if (result != null) assertEquals(TeamCodeClient.MALFORMED_EVENT, (result as? TeamCodeException)?.code, result.toString())
+    }
+
     @Test fun theReaderParsesFieldsWithoutASpaceOrAValue() = runTest {
         val frames = mutableListOf<ServerSentEvent>()
         readServerSentEvents(ByteReadChannel("id:7\nevent:gap\ndata\ndata:{}\n\nevent:\ndata: unnamed\n\nevent: stop\n\n")) { frames += it; it.event != "stop" }
@@ -164,7 +172,7 @@ class EventStreamTest {
         assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
-    @Test fun aMalformedGapOrEventThrowsSoTheCallerReconnects() = runTest {
+    @Test fun aMalformedGapOrEventIsReportedAsMalformedEvent() = runTest {
         client("event: gap\ndata: {}\n\n", "event: cloud.turn\ndata: not json\n\n").use { client ->
             // A distinct code: reconnecting would replay the same event, so the caller must not retry blindly.
             assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)

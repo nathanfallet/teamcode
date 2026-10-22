@@ -346,7 +346,7 @@ class TeamCodeClient(
      * handled. [types] keeps only those event types (at most 64). [onGap] is called with the oldest retained sequence when events after
      * [after] were purged, before the stream continues from there, so the caller reloads what it shows. The feed never
      * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
-     * on a network failure ([TeamCodeException] with status `0` once the stream is open, the engine's exception before) or
+     * when the stream closes ([TeamCodeException] with status `0`), on a network failure (the engine's exception) or
      * on an unreadable event ([TeamCodeException] with code [MALFORMED_EVENT]). Event types are an open list; unknown ones reach
      * [onEvent] like the others. `gap` and `denied` are the feed's control frames, never event types.
      */

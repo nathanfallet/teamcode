@@ -1,9 +1,9 @@
 package me.nathanfallet.teamcode.client
 
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.charsets.MalformedInputException
 import io.ktor.utils.io.charsets.TooLongLineException
 import io.ktor.utils.io.readUTF8Line
-import kotlin.coroutines.cancellation.CancellationException
 
 /** One dispatched server-sent event: its `event:` name (null when absent or empty) and its joined `data:` lines. */
 internal class ServerSentEvent(val event: String?, val data: String)
@@ -12,9 +12,9 @@ internal class ServerSentEvent(val event: String?, val data: String)
  * Reads the SSE frames of [channel] and hands each dispatched event to [onEvent] until it returns `false`. Comment lines
  * (keep-alives), `id:` and `retry:` are skipped (callers resume from the sequence in the decoded data); a frame with
  * neither a name nor data is not dispatched. Lines are bounded by [maxLine] characters and the whole data of one event by
- * [maxData] characters. Throws [TeamCodeException] when the stream closes or fails, so the caller reconnects from the
- * last sequence it handled, and with code [TeamCodeClient.MALFORMED_EVENT] when it breaks a bound, which a reconnection
- * would replay.
+ * [maxData] characters. Throws [TeamCodeException] when the stream closes, so the caller reconnects from the last
+ * sequence it handled, and with code [TeamCodeClient.MALFORMED_EVENT] when it breaks a bound or is not UTF-8, which a
+ * reconnection would replay. Transport failures propagate as the engine reports them.
  */
 internal suspend fun readServerSentEvents(
     channel: ByteReadChannel,
@@ -28,14 +28,11 @@ internal suspend fun readServerSentEvents(
     while (true) {
         val line = try {
             channel.readUTF8Line(maxLine)
-        } catch (error: CancellationException) {
-            throw error
         } catch (error: TooLongLineException) {
             // Reconnecting replays the same line from the same cursor: as unreadable as an over-long event.
             throw TeamCodeException(0, "A line of the event stream exceeds the limit.", TeamCodeClient.MALFORMED_EVENT, error)
-        } catch (error: Exception) {
-            // A broken transport: reconnect like a closed stream.
-            throw TeamCodeException(0, "The event stream failed.", null, error)
+        } catch (error: MalformedInputException) {
+            throw TeamCodeException(0, "The event stream is not valid UTF-8.", TeamCodeClient.MALFORMED_EVENT, error)
         } ?: throw TeamCodeException(0, "The event stream closed.")
         val field = line.substringBefore(':')
         // "field: value" loses exactly one leading space after the colon; a line without a colon is a field with no value.
@@ -48,7 +45,7 @@ internal suspend fun readServerSentEvents(
                 event = null; data.clear(); hasData = false
             }
             line.startsWith(":") -> Unit
-            field == "event" -> event = value.ifEmpty { null }
+            field == "event" -> event = value.trim().ifEmpty { null }
             field == "data" -> {
                 if (hasData) data.append('\n')
                 data.append(value); hasData = true

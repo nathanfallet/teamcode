@@ -68,7 +68,14 @@ internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
  * Follows the event stream from [after], reconnecting with backoff and resuming from the last printed sequence, so
  * no event is printed twice or skipped. Returns when the session ended; exits when access was revoked.
  */
-internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Long, print: (CloudEventView) -> Unit, notice: (String) -> Unit): Long {
+internal suspend fun followEvents(
+    client: TeamCodeClient,
+    id: String,
+    after: Long,
+    print: (CloudEventView) -> Unit,
+    exit: (Int) -> Nothing = { SystemExit.exit(it) },
+    notice: (String) -> Unit,
+): Long {
     var cursor = after
     var wait = 1_000L
     while (true) {
@@ -76,13 +83,13 @@ internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Lon
             val end = client.followCloudEvents(id, cursor) { event -> if (event.seq > cursor) { print(event); cursor = event.seq; wait = 1_000L } }
             when (end) {
                 CloudStreamEnd.ENDED -> { notice("The session has ended."); return cursor }
-                CloudStreamEnd.DENIED -> { notice("Access to this session was revoked."); SystemExit.exit(1) }
+                CloudStreamEnd.DENIED -> { notice("Access to this session was revoked."); exit(1) }
             }
         } catch (error: CancellationException) { throw error }
         catch (error: TeamCodeException) {
-            if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
+            if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); exit(1) }
             // Reconnecting would replay the same event from the same cursor.
-            if (error.code == TeamCodeClient.MALFORMED_EVENT) { notice("The event after $cursor cannot be read by this version of teamcode; update it and run the command again."); SystemExit.exit(1) }
+            if (error.code == TeamCodeClient.MALFORMED_EVENT) { notice("The event after $cursor cannot be read by this version of teamcode; update it and run the command again."); exit(1) }
             notice("Disconnected; reconnecting from event $cursor.")
         } catch (_: Exception) { notice("Disconnected; reconnecting from event $cursor.") }
         delay(wait)
@@ -173,7 +180,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                             catch (_: Exception) { lease }
                     }
                 }
-                val follow = launch { followEvents(client, id, cursor, { echo(it.render()) }, notice) }
+                val follow = launch { followEvents(client, id, cursor, { echo(it.render()) }, notice = notice) }
                 // Not a child of this scope: a blocked stdin read cannot be cancelled and must not hold the detach.
                 val input = CoroutineScope(Dispatchers.Default).launch {
                     while (isActive) {
