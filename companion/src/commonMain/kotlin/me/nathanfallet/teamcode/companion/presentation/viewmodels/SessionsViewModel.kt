@@ -140,7 +140,9 @@ class SessionsViewModel(
             Command.LoadMore -> try { more(accountId) } finally { moreQueued = false }
             // Read again the rows whose state changes without an event (at most a few per tick).
             Command.Settle -> {
-                // In turns, so a few rows that never settle do not hide the others.
+                // In turns, so a few rows that never settle do not hide the others. Not while the server is out of reach:
+                // the reads would only hold the loop up, and the first tick after the reconnection reads them.
+                if (state.value.reconnecting) return
                 val unsettled = state.value.list?.unsettled.orEmpty()
                 if (unsettled.isEmpty()) return
                 val first = settleTurn % unsettled.size

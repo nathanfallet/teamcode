@@ -67,6 +67,13 @@ platform :ios do
 
     # Automatic signing with the App Store Connect key (cloud signing): no certificate needs to be in the keychain.
     asc = JSON.parse(File.read(fastlane_file("api_key.json")))
+    # The export needs a distribution profile too: it gets the same key and may create it.
+    authentication = [
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath #{fastlane_file('key.p8')}",
+      "-authenticationKeyID #{asc['key_id']}",
+      "-authenticationKeyIssuerID #{asc['issuer_id']}",
+    ]
     build_app(
       scheme: SCHEME,
       project: XCODEPROJ,
@@ -77,11 +84,9 @@ platform :ios do
         "MARKETING_VERSION=#{version}",
         "CURRENT_PROJECT_VERSION=#{build}",
         "ORG_GRADLE_PROJECT_teamcodeVersion=#{version}",
-        "-allowProvisioningUpdates",
-        "-authenticationKeyPath #{fastlane_file('key.p8')}",
-        "-authenticationKeyID #{asc['key_id']}",
-        "-authenticationKeyIssuerID #{asc['issuer_id']}",
+        *authentication,
       ].join(" "),
+      export_xcargs: authentication.join(" "),
     )
 
     upload_to_testflight(

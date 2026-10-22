@@ -54,7 +54,8 @@ data class SessionList(
     fun applied(change: SessionChange): Pair<SessionList, String?> {
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
-        val finished = change.turnPhase != null && change.turnPhase != "started"
+        // Only a known end: a phase this app does not know (a newer server) is not taken for one.
+        val finished = change.turnPhase in FINISHED_PHASES
         val marks = if (finished) finishedTurns + change.sessionId else finishedTurns
         if (current == null) {
             // A turn runs only in an active session; a session already read and found elsewhere is read again only when
@@ -99,5 +100,6 @@ data class SessionList(
         /** A state this version does not know is not read again and again: it may never settle into one it knows. */
         val UNSETTLED = SessionState.entries.toSet() - SETTLED - SessionState.UNKNOWN
         const val MAX_OUTSIDE = 500
+        val FINISHED_PHASES = setOf("completed", "interrupted", "failed")
     }
 }

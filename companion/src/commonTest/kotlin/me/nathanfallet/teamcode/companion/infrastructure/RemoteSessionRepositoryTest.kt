@@ -150,6 +150,9 @@ class RemoteSessionRepositoryTest {
         ],"firstSeq":1,"lastSeq":8,"nextBefore":null}""")
         val page = transcripts.page("a1", "s1", before = null)
         assertEquals("100", requests.single().url.parameters["limit"])
+        // The newest page: without a cursor the server would answer the oldest events.
+        assertEquals(Long.MAX_VALUE.toString(), requests.single().url.parameters["before"])
+        assertNull(requests.single().url.parameters["after"])
         val events = page.events
         assertEquals(TranscriptEvent.UserMessage(1, 1, "Hi", "i1", "m2"), events[0])
         val call = assertIs<TranscriptEvent.ToolCall>(events[1])

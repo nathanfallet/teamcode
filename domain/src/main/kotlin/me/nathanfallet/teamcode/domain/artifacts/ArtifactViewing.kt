@@ -164,7 +164,7 @@ class ArtifactViewing(
         if (!ArtifactService.ID.matches(artifactId) || (requested != null && requested < 1)) throw notFound()
         val now = clock()
         admitTicket(viewer.tokenId, now)
-        if (!store.availability(viewer.teamId).active) throw notFound()
+        // The artifact read refuses artifacts turned off too (409): no availability read of its own.
         val readable = readableByMember(viewer, artifactId) ?: throw notFound()
         if (readable.currentVersion < 1) throw notFound()
         val number = requested ?: readable.currentVersion

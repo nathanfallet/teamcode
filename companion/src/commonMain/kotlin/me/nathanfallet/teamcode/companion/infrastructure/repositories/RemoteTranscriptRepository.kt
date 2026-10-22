@@ -12,7 +12,8 @@ import me.nathanfallet.teamcode.companion.infrastructure.stream.reconnecting
 
 class RemoteTranscriptRepository(private val calls: AccountCalls, private val policy: ReconnectPolicy) : TranscriptRepository {
     override suspend fun page(accountId: String, sessionId: String, before: Long?): TranscriptPage =
-        calls.withAccount(accountId, resource = true) { it.cloudEvents(sessionId, before = before, limit = PAGE).domain() }
+        // Without a cursor the server pages from the oldest event: the newest page is the one before any sequence.
+        calls.withAccount(accountId, resource = true) { it.cloudEvents(sessionId, before = before ?: NEWEST, limit = PAGE).domain() }
 
     override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = flow {
         // One cursor per collection: each reconnection resumes after the last event delivered.
@@ -29,5 +30,6 @@ class RemoteTranscriptRepository(private val calls: AccountCalls, private val po
 
     private companion object {
         const val PAGE = 100
+        const val NEWEST = Long.MAX_VALUE
     }
 }

@@ -97,9 +97,10 @@ class SessionViewModel(
         if (header?.isActive != true) header = viewModelScope.launch {
             while (true) {
                 delay(HEADER_MILLIS)
-                // An ended session no longer changes: nothing to read.
+                // An ended session no longer changes: nothing to read. A stream that ended while the header still reads
+                // a live state (its last read failed) keeps reading until the header says it ended.
                 val current = state.value
-                if (current.gone || current.live == LiveState.ENDED || current.session?.state?.group == SessionGroup.ENDED) continue
+                if (current.gone || current.session?.state?.group == SessionGroup.ENDED) continue
                 refreshSessionQuietly()
             }
         }
