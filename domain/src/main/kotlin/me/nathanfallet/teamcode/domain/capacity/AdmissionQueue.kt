@@ -25,6 +25,7 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
         val ticket = queue.enqueue(actor, input)
         var admitted = false
         var attempt = 0
+        var lastWait: String? = null
         try {
             return withTimeoutOrNull(MAX_WAIT_MILLIS) {
                 while (true) {
@@ -32,6 +33,7 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
                     try { return@withTimeoutOrNull queue.reserveQueued(actor, ticket, input).also { admitted = true } }
                     catch (error: TeamFailure) {
                         if (error.code !in WAITABLE) throw error
+                        lastWait = error.code
                         val blocked = error.code in setOf("member_concurrency", "group_concurrency", "run_concurrency", "pacing_concurrency", "pacing_delay")
                         // Recomputing the physical queue scope reads every account under the team lock: refresh it on
                         // the first retry and then every few, the lease renewal alone is enough in between.
@@ -41,7 +43,7 @@ class AwaitAdmissionUseCase(private val queue: AdmissionQueueStore) {
                 }
                 @Suppress("UNREACHABLE_CODE")
                 error("unreachable")
-            } ?: throw TeamFailure("queue_timeout", 503, "TeamCode waited ${MAX_WAIT_MILLIS / 1000}s for free capacity in your pool without getting a turn. Retry shortly.", retryAfterSeconds = 15)
+            } ?: throw TeamFailure("queue_timeout", 503, "TeamCode waited ${MAX_WAIT_MILLIS / 1000}s for free capacity in your pool without getting a turn${lastWait?.let { " (last wait: $it)" }.orEmpty()}. Retry shortly.", retryAfterSeconds = 15)
         } finally {
             // A revoked session must still be able to remove its own pending row.
             // Lease expiry provides cleanup if the database is unreachable or the replica crashes.

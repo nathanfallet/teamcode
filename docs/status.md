@@ -1,5 +1,9 @@
 # Implementation status
 
+## `queue_timeout` names what the request was waiting for (2026-10-22)
+
+On the 0.6.4 replicas (5 pods, 5 minutes up) 29 requests timed out after 90 s with no way to tell why: waiting hides the refusal that caused it (`member_concurrency`, `queue_turn`, `pacing_delay`...). 194 of 201 dispatches went to one account. The 503 message and the server log line now end with `(last wait: <code>)`, so the next errors say whether a member's concurrency limit, another member's turn or pacing holds the queue.
+
 ## Admission queue polls less the longer it waits (2026-10-22)
 
 Every queued request polled every 500 ms, each poll a team-locked transaction (`reserveQueued`, about 20 queries) plus a `renew` that recomputed account placement. With up to 128 waiters this saturated the connection pool and starved dashboard reads; in production 3 h of logs showed p90 admission waits of 68.6 s and `queue_timeout` 503s. Now the first 4 polls stay at 500 ms (a freed slot is still taken quickly), then 1 s up to attempt 10, then 2 s, with +-20% jitter (`AwaitAdmissionUseCase.pollDelay`), and the queue scope (`renew` with placement) is refreshed every 4th attempt instead of every one; the lease is still renewed on each. A long-waiting request now costs about a quarter of the transactions. Not done: waking waiters when a reservation settles (a freed slot on another replica can wait up to 2 s) and a lock-free pre-check; measure the p90 wait and the `queue_timeout` count after release before going further.

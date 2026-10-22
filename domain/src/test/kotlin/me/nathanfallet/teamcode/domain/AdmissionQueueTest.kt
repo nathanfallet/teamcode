@@ -47,6 +47,11 @@ class AdmissionQueueTest {
         assertEquals(2, checked)
         assertFalse(queue.released, "The reservation transaction already consumed the ticket")
     }
+    @Test fun timeoutNamesTheLastThingTheRequestWasWaitingFor() = runTest {
+        val failure = assertFailsWith<TeamFailure> { AwaitAdmissionUseCase(Queue("member_concurrency")).reserve(actor, input) }
+        assertEquals("queue_timeout", failure.code)
+        assertTrue("(last wait: member_concurrency)" in failure.message.orEmpty())
+    }
     @Test fun longWaitsPollLessOftenAndStayInsideTheLease() {
         val random = kotlin.random.Random(7)
         repeat(4) { assertEquals(AwaitAdmissionUseCase.POLL_MILLIS, AwaitAdmissionUseCase.pollDelay(it, random)) }
