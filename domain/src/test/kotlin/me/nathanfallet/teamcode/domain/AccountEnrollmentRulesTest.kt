@@ -30,6 +30,8 @@ class AccountEnrollmentRulesTest {
         check(AccountState.READY, "ada")
         check(AccountState.RECONNECT_REQUIRED, "grace")
         check(AccountState.RECONNECT_REQUIRED, null)
+        // Their own account, once an administrator made it pending or access-only, is a handover decision a sign-in would undo.
+        for (state in listOf(AccountState.ACCESS_ONLY, AccountState.PENDING_HANDOVER)) assertEquals(AccountEnrollmentRules.ACCOUNT_IN_USE, code { check(state, "ada") }, "own $state")
         for (state in listOf(AccountState.READY, AccountState.ACCESS_ONLY, AccountState.PENDING_HANDOVER))
             for (by in listOf("grace", null)) assertEquals(AccountEnrollmentRules.ACCOUNT_IN_USE, code { check(state, by) }, "$state by $by")
     }

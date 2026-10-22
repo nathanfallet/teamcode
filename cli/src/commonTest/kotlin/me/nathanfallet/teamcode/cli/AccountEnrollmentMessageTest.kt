@@ -19,6 +19,8 @@ class AccountEnrollmentMessageTest {
         assertContains(refused.message, "Who can add accounts")
         assertEquals(0, listed, "The server's answer is enough; no administrator-only call")
         requireEnrollmentAllowed(features, { AccountEnrollmentPolicyView("members", true) }) { error("unused") }
+        assertContains(assertFailsWith<CliUserException> { requireEnrollmentAllowed(features, { AccountEnrollmentPolicyView("members", false) }) { error("unused") } }.message,
+            "This TeamCode session cannot add accounts", message = "With every member allowed, the setting is not the reason")
     }
 
     @Test fun anOlderServerOnlyAcceptsAdministratorsByRole() = runTest {
@@ -29,7 +31,7 @@ class AccountEnrollmentMessageTest {
 
     @Test fun serverRefusalsBecomeTeamCodesOwnWords() {
         assertTrue(enrollmentRefusal(TeamCodeException(403, "TeamCode returned HTTP 403.", "account_enrollment_forbidden"))!!.message.startsWith(expected))
-        assertContains(enrollmentRefusal(TeamCodeException(403, "TeamCode returned HTTP 403.", "account_in_use"))!!.message, "does not need reconnecting")
+        assertContains(enrollmentRefusal(TeamCodeException(403, "TeamCode returned HTTP 403.", "account_in_use"))!!.message, "not waiting to be reconnected")
         assertNull(enrollmentRefusal(TeamCodeException(403, "TeamCode returned HTTP 403.", "forbidden")), "Other failures keep the central handling")
         assertNull(enrollmentRefusal(TeamCodeException(500, "TeamCode returned HTTP 500.", "account_in_use")))
     }

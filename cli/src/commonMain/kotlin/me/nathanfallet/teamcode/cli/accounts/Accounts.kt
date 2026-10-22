@@ -62,7 +62,8 @@ internal const val ENROLLMENT_POLICY_FEATURE = "accounts.enrollment-policy.v1"
 /** TeamCode's own words for the refusals of `accounts add`, safe to print; keyed by the server's error code. */
 internal object EnrollmentMessages {
     const val ADMINISTRATORS_ONLY = "Only administrators can add accounts on this server. Ask an administrator, or ask them to allow every member to add accounts (setting \"Who can add accounts\" on the dashboard's Subscription accounts page, or PUT /api/v1/policy/account-enrollment)."
-    const val ACCOUNT_IN_USE = "This subscription account is already in the pool and does not need reconnecting. Only an administrator or the member who added it can replace its sign-in."
+    const val ACCOUNT_IN_USE = "This subscription account is already in the pool and is not waiting to be reconnected. Ask an administrator to replace its sign-in."
+    const val SESSION_CANNOT_ENROLL = "This TeamCode session cannot add accounts. Sign in with your own account (teamcode login) and finish any required password change, then try again."
     fun forCode(code: String?): String? = when (code) {
         "account_enrollment_forbidden" -> ADMINISTRATORS_ONLY
         "account_in_use" -> ACCOUNT_IN_USE
@@ -76,8 +77,14 @@ internal fun enrollmentRefusal(error: TeamCodeException): CliUserException? =
  * whether the caller may; an older one only accepts administrators, which the caller's own role tells.
  */
 internal suspend fun requireEnrollmentAllowed(features: List<String>, policy: suspend () -> AccountEnrollmentPolicyView, role: suspend () -> String) {
-    val allowed = if (ENROLLMENT_POLICY_FEATURE in features) policy().allowed == true else role() in setOf("OWNER", "ADMIN")
-    if (!allowed) throw CliUserException(EnrollmentMessages.ADMINISTRATORS_ONLY)
+    if (ENROLLMENT_POLICY_FEATURE !in features) {
+        if (role() !in setOf("OWNER", "ADMIN")) throw CliUserException(EnrollmentMessages.ADMINISTRATORS_ONLY)
+        return
+    }
+    val answer = policy()
+    if (answer.allowed == true) return
+    // Every member may add accounts, so the refusal is about this session (a service key, a pending password change).
+    throw CliUserException(if (answer.policy == "members") EnrollmentMessages.SESSION_CANNOT_ENROLL else EnrollmentMessages.ADMINISTRATORS_ONLY)
 }
 private class ImportAccounts : SuspendingCliktCommand(name = "import") {
     private val from by option("--from").required()

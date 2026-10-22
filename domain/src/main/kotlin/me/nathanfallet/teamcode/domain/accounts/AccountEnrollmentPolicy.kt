@@ -23,8 +23,7 @@ enum class AccountEnrollmentPolicy(val wire: String) {
 object AccountEnrollmentRules {
     /** Whether [actor] may start `accounts add` at all under [policy]; never throws. */
     fun mayEnroll(actor: Principal, policy: AccountEnrollmentPolicy): Boolean =
-        actor.serviceScopes == null && !actor.member.disabled && !actor.member.passwordChangeRequired &&
-            (actor.member.role.isAdministrator || policy == AccountEnrollmentPolicy.MEMBERS)
+        try { authorize(actor, policy, EnrollmentOrigin.SIGN_IN); true } catch (_: TeamFailure) { false }
 
     fun authorize(actor: Principal, policy: AccountEnrollmentPolicy, origin: EnrollmentOrigin, existing: AccountRecord? = null) {
         actor.requireInteractive()
@@ -35,10 +34,11 @@ object AccountEnrollmentRules {
         if (origin != EnrollmentOrigin.SIGN_IN) throw TeamFailure(IMPORT_FORBIDDEN, 403, "Only administrators can import accounts.")
         if (existing == null) return
         // The identity match already guarantees the same provider account; what is checked here is whose sign-in it replaces.
-        // A member may replace their own sign-in, or revive an account that serves nobody until someone reconnects it. A
-        // healthy, pending or access-only account added by someone else keeps its sign-in.
-        if (existing.enrolledBy == actor.member.id || existing.state == AccountState.RECONNECT_REQUIRED) return
-        throw TeamFailure(ACCOUNT_IN_USE, 403, "This subscription account is already in the pool and does not need reconnecting. Only an administrator or the member who added it can replace its sign-in.")
+        // A member may revive an account that serves nobody until someone reconnects it, or refresh their own sign-in of a
+        // READY account. A sign-in makes the account READY, so a pending or access-only account (an administrator's
+        // handover decision) and a healthy account added by someone else keep their sign-in.
+        if (existing.state == AccountState.RECONNECT_REQUIRED || (existing.enrolledBy == actor.member.id && existing.state == AccountState.READY)) return
+        throw TeamFailure(ACCOUNT_IN_USE, 403, "This subscription account is already in the pool and is not waiting to be reconnected. Ask an administrator to replace its sign-in.")
     }
 
     const val ENROLLMENT_FORBIDDEN = "account_enrollment_forbidden"
