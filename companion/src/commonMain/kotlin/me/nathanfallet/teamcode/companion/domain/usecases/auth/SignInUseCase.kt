@@ -15,7 +15,8 @@ import me.nathanfallet.teamcode.companion.domain.services.InstallationIdentity
 /**
  * Password login, as `teamcode login`: the installation id registers the app as a device. The password is never
  * stored; the token goes to the [CredentialStore] and the account metadata to the [AccountRepository]. Signing in
- * again as the same member on the same server replaces that account instead of adding a second one.
+ * again as the same member on the same server replaces that account instead of adding a second one, and revokes the
+ * session it replaces: the server keeps every session of a device until it is logged out or expires.
  */
 class SignInUseCase(
     private val auth: AuthRepository,
@@ -45,6 +46,9 @@ class SignInUseCase(
             expiresAt = session.expiresAt,
             serverVersion = server.serverVersion,
         )
+        val replaced = existing?.let {
+            try { credentials.read(it.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        }
         // The token first: an account is never listed as signed in without its credential.
         try {
             credentials.write(account.id, session.accessToken)
@@ -55,6 +59,7 @@ class SignInUseCase(
             throw CompanionException.CredentialStorage()
         }
         accounts.save(account)
+        replaced?.takeIf { it != session.accessToken }?.let { auth.abandon(server.origin, it) }
         return account
     }
 }

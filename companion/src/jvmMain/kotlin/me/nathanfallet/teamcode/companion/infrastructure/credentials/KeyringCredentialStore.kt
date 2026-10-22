@@ -40,7 +40,7 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
             return
         }
         // A locked or broken keyring: keep the token in memory for this run instead of failing the sign-in, and drop
-        // the older entry when the keyring allows it, so a restart never brings back a replaced token.
+        // the older entry when the keyring allows it, so a restart does not bring back a replaced token (if both refuse, the older one comes back after a restart).
         if (backend != null) memoryOnly.update { it + accountId }
         memory.write(accountId, token)
         keyring { it.delete(service, accountId) }

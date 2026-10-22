@@ -14,5 +14,9 @@ sealed class CompanionException(message: String) : Exception(message) {
     /** The password was changed but the sign-in that follows failed: the temporary session is gone, sign in again. */
     class PasswordChanged : CompanionException("Your password was changed. Sign in with the new one.")
     class CredentialStorage : CompanionException("This device's secure storage refused to read or keep the sign-in. Unlock the device and try again.")
-    class Server(val statusCode: Int, val code: String?) : CompanionException("The server returned HTTP $statusCode.")
+    class Server(val statusCode: Int, val code: String?) :
+        CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
 }
+
+/** Error codes are short snake_case identifiers; anything else from the server is not shown. */
+private val CODE = Regex("[a-z][a-z0-9_]{0,63}")

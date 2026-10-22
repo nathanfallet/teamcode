@@ -37,10 +37,10 @@ class SignOutUseCase(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            result = Result.STORAGE_REFUSED
             // The account is removed anyway, as the member asked. A token left behind in a refusing secure store is
-            // revoked when the server confirmed the logout; otherwise it lasts until its expiry, like an offline
-            // sign-out's session.
+            // harmless when the server confirmed the logout; otherwise it lasts until its expiry, like an offline
+            // sign-out's session, and the member is told to revoke it.
+            if (result != Result.REVOKED) result = Result.STORAGE_REFUSED
         }
         auth.release(accountId)
         accounts.remove(accountId)

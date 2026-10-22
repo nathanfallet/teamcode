@@ -61,16 +61,20 @@ class AuthUseCasesTest {
 
     @Test fun theSameMemberOnTheSameServerKeepsOneAccountAndAnotherUsernameAddsOne() = runTest {
         val first = assertIs<SignInResult.SignedIn>(signIn(server, "ada", "pw", "Phone")).account
+        val firstToken = store.read(first.id)
         auth.sessions.clear(); auth.sessions += LoginSession("token-2", 3_000_000L, member())
         val again = assertIs<SignInResult.SignedIn>(signIn(server, "ada", "pw", "Renamed")).account
         assertEquals(first.id, again.id)
         assertEquals("Phone", again.deviceName) // The server keeps the first name of a device; so does the app.
         assertEquals("token-2", store.read(first.id))
+        // The server keeps the replaced session: the app revokes it.
+        assertEquals(listOf("https://team.example $firstToken"), auth.abandoned)
         auth.sessions.clear(); auth.sessions += LoginSession("token-3", 3_000_000L, member(id = "m2", username = "grace"))
         val other = assertIs<SignInResult.SignedIn>(signIn(server, "grace", "pw", "Phone")).account
         assertNotEquals(first.id, other.id)
         assertEquals(2, accounts.accounts.value.size)
         assertEquals(other.id, accounts.activeAccountId.value)
+        assertEquals(1, auth.abandoned.size)
     }
 
     @Test fun aTemporaryPasswordAsksForANewOneAndSignsInAgainWithIt() = runTest {

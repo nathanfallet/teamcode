@@ -3,7 +3,11 @@ package me.nathanfallet.teamcode.companion.infrastructure.repositories
 import io.ktor.client.call.NoTransformationFoundException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerializationException
 import me.nathanfallet.teamcode.api.models.LoginResponse
 import me.nathanfallet.teamcode.api.models.MemberView
@@ -84,7 +88,14 @@ class RemoteAuthRepository(
         translate(credentialsFailure) { clients.detached(origin, token).use { call(it) } }
 
     private suspend fun <T> translate(credentialsFailure: Boolean, call: suspend () -> T): T = try {
-        call()
+        // Every call here is a short request and answer: a stalled server or a captive portal ends as unreachable
+        // instead of a spinner that lasts minutes.
+        // (Timed on the default dispatcher, in real time, whatever the caller's dispatcher.)
+        try {
+            withContext(Dispatchers.Default) { withTimeout(REQUEST_TIMEOUT_MILLIS) { call() } }
+        } catch (_: TimeoutCancellationException) {
+            throw CompanionException.Unreachable()
+        }
     } catch (error: CancellationException) {
         throw error
     } catch (error: CompanionException) {
@@ -103,7 +114,8 @@ class RemoteAuthRepository(
             error.isDecodingFailure() -> CompanionException.NotTeamCode()
             // Origins are normalized before any call, so an argument error is a bug or the typed client's own refusal
             // (its message is readable): shown as is, never disguised as a network failure.
-            error is IllegalArgumentException -> error
+            // Only the exact type: engines throw subclasses such as UnresolvedAddressException for network failures.
+            error::class == IllegalArgumentException::class -> error
             // Connection refused, unknown host, TLS failure, timeout: the engines throw their own types.
             else -> CompanionException.Unreachable()
         }
@@ -111,6 +123,8 @@ class RemoteAuthRepository(
 }
 
 // A JSON body that is not TeamCode's, or a body that is not JSON at all (an HTML portal page answering 200).
+private const val REQUEST_TIMEOUT_MILLIS = 30_000L
+
 private fun Throwable.isDecodingFailure(): Boolean =
     generateSequence(this) { it.cause }.take(8).any { it is SerializationException || it is NoTransformationFoundException }
 
