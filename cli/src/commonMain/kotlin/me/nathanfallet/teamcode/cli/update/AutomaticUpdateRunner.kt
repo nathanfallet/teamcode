@@ -7,7 +7,7 @@ import me.nathanfallet.teamcode.cli.platform.ServicePlatform
 import me.nathanfallet.teamcode.client.ReleaseDownloadException
 import kotlin.time.Clock
 
-/** One bounded scheduled attempt. Active-agent locks defer activation, rather than stopping an agent. */
+/** One bounded scheduled attempt. Active agent sessions defer only the service restart, never the selection or an agent. */
 internal class AutomaticUpdateRunner(private val policy: AutomaticUpdateStore, private val platform: ServicePlatform,
     private val disabled: Boolean = false, private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() }) {
     suspend fun run(fetch: suspend () -> ReleaseCheck?, install: suspend (ReleaseCheck, AutomaticUpdateSettings) -> InstalledVersion?): AutomaticUpdateResult? {

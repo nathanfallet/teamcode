@@ -10,8 +10,6 @@ import me.nathanfallet.teamcode.cli.config.ConfigStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.runInteractiveProcess
 import me.nathanfallet.teamcode.cli.sdk
-import me.nathanfallet.teamcode.cli.service.startManagedService
-import me.nathanfallet.teamcode.cli.service.stopManagedService
 import me.nathanfallet.teamcode.client.DownloadedReleaseMetadata
 import me.nathanfallet.teamcode.client.ReleaseClient
 import okio.FileSystem
@@ -20,11 +18,12 @@ import okio.Path.Companion.toPath
 import okio.buffer
 import okio.use
 
-internal class InstallationOperations(private val store: InstallationStore, private val configuration: String = configPath()) {
+internal class InstallationOperations(private val store: InstallationStore, private val configuration: String = configPath(),
+    private val report: (String) -> Unit = {}) {
     private val fs = FileSystem.SYSTEM
     private val verifier = VerifyReleaseManifest()
 
-    suspend fun install(version: String?, bundle: String?, allowDowngrade: Boolean, approvedMetadata: DownloadedReleaseMetadata? = null): InstalledVersion? {
+    suspend fun install(version: String?, bundle: String?, allowDowngrade: Boolean, approvedMetadata: DownloadedReleaseMetadata? = null): Activation? {
         require(approvedMetadata == null || (version != null && bundle == null && !allowDowngrade))
         store.initialize()
         store.writerLock().use {
@@ -66,45 +65,36 @@ internal class InstallationOperations(private val store: InstallationStore, priv
                 }
                 probe(selected, apiVersion)
                 store.ensureLauncher(selected)
-                activate(selected, rollback = false)
-                return selected
+                return activate(selected, rollback = false)
             }
         }
     }
 
-    suspend fun rollback(): InstalledVersion {
+    suspend fun rollback(): Activation {
         store.writerLock().use {
             recoverBeforeWriting()
             val selected = store.state()?.previous ?: throw CliOperationException("release_rollback_unavailable")
             store.validate(selected)
             // Previous payloads were already accepted for API v1; rollback remains available offline.
             probe(selected, 1)
-            activate(selected, rollback = true)
-            return selected
+            return activate(selected, rollback = true)
         }
     }
 
+    /** Caller holds the writer lock, so no other installer can own a pending journal. */
     private suspend fun recoverBeforeWriting() {
-        if (store.journal() == null) return
-        store.lock(exclusive = true).use { store.recoverInterrupted { recoverInstallationService(store, it) } }
+        store.journal()?.let { pending ->
+            // A selection-only journal never stopped the service; agent sessions may keep their shared leases meanwhile.
+            if (pending.restartService) store.lock(exclusive = true).use { store.recoverInterrupted { recoverInstallationService(store, it) } }
+            else awaitInstallationLock(store, exclusive = false).use { store.recoverInterrupted() }
+        }
+        applyPendingServiceRestartLocked(store, systemServiceControls(store), report)
     }
 
-    private suspend fun activate(version: InstalledVersion, rollback: Boolean) {
-        store.lock(exclusive = true).use {
-            val before = store.state()
-            val service = installationService(store, firstInstall = before == null, configuration = configuration)
-            store.activate(version, rollback = rollback,
-                serviceConfig = service?.settings?.config, restartService = service?.running == true,
-                prepare = { if (service?.running == true) stopManagedService(service.settings) },
-                start = { if (service?.running == true) { startManagedService(service.settings); awaitInstallationService(service, version.version) } },
-                recover = {
-                    if (service?.running == true) {
-                        stopManagedService(service.settings)
-                        startManagedService(service.settings)
-                        awaitInstallationService(service, before?.current?.version ?: throw CliOperationException("release_service_recovery_failed"))
-                    }
-                })
-        }
+    private suspend fun activate(version: InstalledVersion, rollback: Boolean): Activation {
+        val service = installationService(store, firstInstall = store.state() == null, configuration = configuration)
+            ?.takeIf { it.running }?.let { ActivationService(it.settings.config, SystemServiceControl(it.settings)) }
+        return activateInstallation(store, version, rollback, service, systemServiceControls(store))
     }
 
     private suspend fun serverApiVersion(): Int {

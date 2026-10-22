@@ -18,14 +18,17 @@ internal suspend fun automaticUpdateCommand(store: InstallationStore, operation:
     val platform = servicePlatform()
     val schedule = AutomaticUpdateScheduleImpl()
     if (execute) {
+        // A selection made while agent sessions ran restarts the service once they have all ended.
+        applyPendingServiceRestart(store) { echo(it) }
         val result = AutomaticUpdateRunner(policy, platform, !environment("TEAMCODE_DISABLE_AUTOUPDATE").isNullOrEmpty()).run(
             fetch = {
                 PeriodicReleaseCheck(store.paths, VERSION).check(forInstallation = true) {
                     ReleaseClient { configure -> HttpClient { configure(this) } }.use { CheckRelease(it, currentVersion = VERSION)() }
                 }
             },
-            install = { candidate, settings -> InstallationOperations(store, settings.configuration).install(
-                candidate.release.manifest.version, null, allowDowngrade = false, approvedMetadata = candidate.metadata) },
+            install = { candidate, settings -> InstallationOperations(store, settings.configuration) { echo(it) }.install(
+                candidate.release.manifest.version, null, allowDowngrade = false, approvedMetadata = candidate.metadata)
+                ?.also { activation -> activationReport(activation, store).drop(1).forEach(echo) }?.version },
         )
         echo("Automatic update: ${result?.outcome ?: "DISABLED"}${result?.version?.let { " ($it)" }.orEmpty()}.")
         if (result?.outcome == "FAILED") throw CliOperationException(result.diagnostic ?: "automatic_update_failed")

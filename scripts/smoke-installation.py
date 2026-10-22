@@ -340,16 +340,23 @@ def main():
                     assert agent.poll() is None, 'Synthetic quiet agent exited before taking its lease'
                     time.sleep(.05)
                 else: raise AssertionError('Synthetic quiet agent did not start')
-                run(launcher, ['update', '--bundle', str(second)], error='release_installation_busy')
-                selected(0); identity(manifests[0]['version'])
+                # The update selects the new payload at once; the quiet agent keeps its executable and the
+                # service it depends on, which restarts only when that last session ends.
+                deferred = run(launcher, ['update', '--bundle', str(second)])
+                assert '1 running agent session keeps running on ' + manifests[0]['version'] in deferred, deferred
+                assert 'restarts on ' + manifests[1]['version'] + ' when they end' in deferred, deferred
+                selected(1); identity(manifests[0]['version'])
                 assert agent.poll() is None, 'Update terminated an active agent'
-                assert start_marker() == first_start, 'Busy update restarted the service'
+                assert start_marker() == first_start, 'An update restarted the service under an active agent'
+                assert 'restarts on ' + manifests[1]['version'] in run(launcher, ['update', '--bundle', str(second)])
+                assert start_marker() == first_start, 'A repeated update restarted the service under an active agent'
                 release.touch()
-                agent.communicate(timeout=10)
+                agent.communicate(timeout=90)
                 assert agent.returncode == 0
-                run(launcher, ['update', '--bundle', str(second)])
-                selected(1); identity(manifests[1]['version'])
+                identity(manifests[1]['version'])
                 second_start = start_marker(first_start)
+                assert not list((install_root / 'sessions').glob('*.lock')), 'An ended session left its record'
+                assert json.loads((install_root / 'service.json').read_bytes())['version']['manifestSha256'] == digests[1]
                 online = False
                 before_offline = len(calls)
                 run(launcher, ['update', '--rollback'])

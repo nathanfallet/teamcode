@@ -67,7 +67,3 @@ internal suspend fun dispatchInstalled(arguments: Array<String>): Boolean {
     store.validate(selected)
     SystemExit.exit(executeInstalledPayload(store.paths.binary(selected).toString(), arguments.toList(), store.paths.root.toString()))
 }
-
-/** Held for the complete agent lifetime, including quiet gaps between inference requests. */
-internal fun agentInstallationLease(serviceExecutable: String?): InstallationLock? =
-    (managedInstallation() ?: serviceExecutable?.let { managedInstallation(it) })?.lock(exclusive = false)

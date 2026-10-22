@@ -46,10 +46,15 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     override suspend fun run() {
         val code = coroutineScope {
             val service = loadService(configPath())
-            val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(service?.executable)
-            val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates { echo(it, err = true) } }
+            val report: (String) -> Unit = { echo(it, err = true) }
+            val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(service?.executable, report)
+            val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(report) }
             try { runAgent() } finally {
-                try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally { lease?.close() }
+                try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally {
+                    lease?.close()
+                    // The last session to end restarts the service on the version selected while it ran.
+                    lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
+                }
             }
         }
         if (code != 0) SystemExit.exit(code)

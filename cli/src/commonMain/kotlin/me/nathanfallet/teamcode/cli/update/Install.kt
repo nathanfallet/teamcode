@@ -16,8 +16,12 @@ internal class Install : SuspendingCliktCommand(name = "install") {
     override suspend fun run() = releaseOperation {
         if (servicePlatform().userId == "0") throw CliOperationException("release_user_installation_required")
         val store = InstallationStore(defaultInstallationPaths(root))
-        val selected = InstallationOperations(store).install(version, bundle, allowDowngrade = version != null || bundle != null)
-        echo(if (selected == null) "TeamCode ${requireNotNull(store.state()).current.version} is already installed." else "Installed TeamCode ${selected.version}.")
+        val activation = InstallationOperations(store) { echo(it) }.install(version, bundle, allowDowngrade = version != null || bundle != null)
+        if (activation == null) echo("TeamCode ${requireNotNull(store.state()).current.version} is already installed.")
+        else {
+            echo("Installed TeamCode ${activation.version.version}.")
+            activationReport(activation, store).drop(1).forEach { echo(it) }
+        }
         echo("Launcher: ${store.paths.launcher}")
         if (noPath) echo("Not changing PATH. Invoke the launcher by its full path, or add ${store.paths.launcherDirectory} to PATH yourself.")
         else {

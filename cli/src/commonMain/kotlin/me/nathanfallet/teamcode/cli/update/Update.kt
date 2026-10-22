@@ -31,7 +31,7 @@ internal class Update : SuspendingCliktCommand(name = "update") {
     private val notifications by option("--notifications", help = "Configure background signed release notifications for this managed installation.").choice("on", "off", "status")
     private val automatic by option("--automatic", help = "Opt into an hourly user update job, disable it, inspect it or remove its registration.").choice("on", "off", "status", "uninstall")
     private val automaticRun by option("--automatic-run", help = "Run one enabled automatic update attempt; supplied by the OS scheduler.").flag()
-    override fun help(context: Context) = "Check or update a managed native installation; preserve login and drain its owned service."
+    override fun help(context: Context) = "Check or update a managed native installation; preserve login. Running agent sessions keep their version; the owned service restarts when they end."
 
     override suspend fun run() = releaseOperation {
         if (listOf(notifications != null, automatic != null, automaticRun).count { it } > 1)
@@ -71,10 +71,13 @@ internal class Update : SuspendingCliktCommand(name = "update") {
                 ?: throw CliOperationException("release_not_managed")
             store.initialize()
             if (store.state() == null) throw CliOperationException("release_not_managed")
-            val selected = if (rollback) InstallationOperations(store).rollback() else
-                InstallationOperations(store).install(version, bundle, allowDowngrade = version != null || bundle != null)
-            echo(if (selected == null) "The managed installation is already up to date." else
-                "Selected TeamCode ${selected.version}. Launcher: ${store.paths.launcher}")
+            val operations = InstallationOperations(store) { echo(it) }
+            val activation = if (rollback) operations.rollback() else
+                operations.install(version, bundle, allowDowngrade = version != null || bundle != null)
+            if (activation == null) {
+                echo("The managed installation is already up to date.")
+                pendingRestartReport(store)?.let { echo(it) }
+            } else activationReport(activation, store).forEach { echo(it) }
         }
     }
 }

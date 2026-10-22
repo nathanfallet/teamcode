@@ -21,17 +21,29 @@ import urllib.request
 @contextmanager
 def activity_lease(path):
     # The ordinary native installation smoke separately proves that a quiet
-    # teamcode run holds this same OS lock for the full agent lifetime.
+    # teamcode run holds this same shared OS lock for the full agent lifetime.
     with path.open('a+b') as stream:
         if os.name == 'nt':
+            import ctypes
             import msvcrt
-            stream.seek(0); msvcrt.locking(stream.fileno(), msvcrt.LK_NBRLCK, 1)
+            from ctypes import wintypes
+
+            class Overlapped(ctypes.Structure):
+                _fields_ = [('Internal', ctypes.c_void_p), ('InternalHigh', ctypes.c_void_p),
+                            ('Offset', wintypes.DWORD), ('OffsetHigh', wintypes.DWORD), ('hEvent', wintypes.HANDLE)]
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel32.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+            kernel32.UnlockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+            handle = wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno()))
+            region = Overlapped()
+            # LOCKFILE_FAIL_IMMEDIATELY without LOCKFILE_EXCLUSIVE_LOCK: the shared region lock of teamcode run.
+            if not kernel32.LockFileEx(handle, 0x1, 0, 1, 0, ctypes.byref(region)): raise ctypes.WinError(ctypes.get_last_error())
         else:
             import fcntl
             path.chmod(0o600); fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
         try: yield
         finally:
-            if os.name == 'nt': stream.seek(0); msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            if os.name == 'nt': kernel32.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(region))
             else: fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
@@ -127,13 +139,17 @@ def main():
         run([launcher, 'service', 'install', '--port', str(port)])
         until(lambda: service_version() == old['version'])
 
-        # Stage verified bytes through the real native installer while the
-        # activity lock prevents activation. No public release exists yet.
+        # Pre-stage verified bytes through the real native installer (no public release exists yet): select
+        # the candidate, then roll back offline, so it stays retained as the rollback target.
+        run([launcher, 'update', '--bundle', second])
+        until(lambda: service_version() == new['version'])
+        run([launcher, 'update', '--rollback'])
+        until(lambda: service_version() == old['version'])
+        digest = hashlib.sha256((second / 'manifest.json').read_bytes()).hexdigest()
+        assert (root / 'versions' / digest).is_dir()
+        expected = new['version'] if stable else old['version']
+        # A held agent lease defers only the proxy restart, never the selection.
         with activity_lease(root / 'installation.lock'):
-            staged = run([launcher, 'update', '--bundle', second], success=False)
-            assert staged.returncode != 0 and b'release_installation_busy' in staged.stdout + staged.stderr
-            digest = hashlib.sha256((second / 'manifest.json').read_bytes()).hexdigest()
-            assert (root / 'versions' / digest).is_dir()
             cache = dict(schemaVersion=1, checkedAtMillis=int(time.time() * 1000), successfulObservation=True,
                          manifest=base64.b64encode((second / 'manifest.json').read_bytes()).decode(),
                          signature=base64.b64encode((second / 'manifest.sig').read_bytes()).decode())
@@ -146,11 +162,10 @@ def main():
                 trigger_owned_job()
                 return result_after()
             first_result = until(first_attempt)
-            assert first_result['outcome'] == ('DEFERRED' if stable else 'NO_UPDATE'), first_result
+            assert first_result['outcome'] == ('UPDATED' if stable else 'NO_UPDATE'), first_result
             print('Owned automatic job first result: ' + first_result['outcome'], flush=True)
-            if stable: assert first_result['diagnostic'] == 'release_installation_busy'
-            assert service_version() == old['version'], 'A busy update interrupted the proxy'
-            assert run([launcher, 'version']).stdout.decode().strip() == 'TeamCode ' + old['version']
+            assert service_version() == old['version'], 'An update restarted the proxy under an active agent'
+            assert run([launcher, 'version']).stdout.decode().strip() == 'TeamCode ' + expected
 
         # Request the existing OS job without changing its policy, matching a
         # subsequent timer tick. The worker is outside the proxy service group.
@@ -163,8 +178,8 @@ def main():
             trigger_owned_job()
             return result_after(previous)
         final = until(trigger_until_finished)
-        expected = new['version'] if stable else old['version']
-        assert final['outcome'] == ('UPDATED' if stable else 'NO_UPDATE'), final
+        # The selection is already current; with the lease gone, this attempt restarts the proxy on it.
+        assert final['outcome'] == 'NO_UPDATE', final
         until(lambda: service_version() == expected)
         assert run([launcher, 'version']).stdout.decode().strip() == 'TeamCode ' + expected
         assert config_path.read_bytes() == before, 'Automatic update changed saved authentication'
@@ -209,7 +224,7 @@ def main():
             server.shutdown(); server.server_close(); thread.join(timeout=5)
             if cleanup_complete: shutil.rmtree(workspace)
             else: print('Owned fixture retained for safe recovery: ' + str(workspace), flush=True)
-    print('PASS: actual owned OS updater, independent notifications, busy deferral, preserved authentication, verified OS registration removal, '
+    print('PASS: actual owned OS updater, independent notifications, restart deferred by an agent lease, preserved authentication, verified OS registration removal, '
           + ('stable automatic activation and proxy restart.' if stable else 'automatic prerelease refusal (stable activation still needs a stable candidate).'), flush=True)
 
 

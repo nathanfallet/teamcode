@@ -87,7 +87,7 @@ After login, `teamcode service install` starts a local proxy automatically at us
 
 ## Native updates
 
-Managed installations support signed `teamcode update` and offline `teamcode update --rollback`. Automatic installation is off by default; opt in with `teamcode update --automatic on`, inspect it with `--automatic status`, or disable it with `--automatic off`. A separate current-user job uses the existing installer and defers activation while an agent holds its activity lease. Notifications are configured independently with `--notifications on/off/status`. See [automatic behavior and platform evidence](docs/automatic-updates.md). Versioned publication is gated by the release workflow.
+Managed installations support signed `teamcode update` and offline `teamcode update --rollback`. Automatic installation is off by default; opt in with `teamcode update --automatic on`, inspect it with `--automatic status`, or disable it with `--automatic off`. A separate current-user job uses the existing installer. Updates no longer wait for running agent sessions: they keep their version, new sessions use the new one, and the local service restarts when the last session ends ([details](docs/distribution.md#updating-while-agent-sessions-run)). Notifications are configured independently with `--notifications on/off/status`. See [automatic behavior and platform evidence](docs/automatic-updates.md). Versioned publication is gated by the release workflow.
 
 ## Try the transport fixture
 
