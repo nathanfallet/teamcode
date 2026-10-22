@@ -395,9 +395,9 @@ class TeamCodeClient(
 
     private inline fun <reified T> decodeFrame(frame: ServerSentEvent): T = try {
         Serialization.json.decodeFromString<T>(frame.data)
-    } catch (_: IllegalArgumentException) {
+    } catch (error: IllegalArgumentException) {
         // SerializationException is an IllegalArgumentException.
-        throw TeamCodeException(0, "The event stream sent a malformed event.")
+        throw TeamCodeException(0, "The event stream sent a malformed event.", cause = error)
     }
 
     /** [idempotencyKey] makes a retry return the first acknowledgement instead of sending the message twice. */
@@ -645,7 +645,8 @@ class TeamCodeClient(
 
     companion object {
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
-        private val TEAM_EVENT_TYPE = Regex("[a-z][a-z0-9_.-]{0,63}")
+        // The server validates the names; this only keeps what would break the comma-separated query out.
+        private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
         private const val MAX_ERROR_BODY = 16 * 1024
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
@@ -668,7 +669,9 @@ class TeamCodeException(
     val code: String? = null,
     val retryAfterSeconds: Long? = null,
     val requestId: String? = null,
-) : Exception(message)
+    /** The transport or decoding failure behind a status `0` stream failure, kept for diagnostics. */
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
 internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all { c -> c in '0'..'9' } }?.toLong()
