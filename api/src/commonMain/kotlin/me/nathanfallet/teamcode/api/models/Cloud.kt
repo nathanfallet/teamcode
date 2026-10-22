@@ -272,10 +272,10 @@ data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long,
 data class RunnerEnvironmentRequest(val teamId: String, val sessionId: String, val epoch: Int)
 @Serializable
 data class RunnerGitIdentityView(val name: String, val email: String)
-/** `status`: `linked` (with a GitHub App user token), `not_linked` or `unavailable`. */
+/** `status`: `linked` (with a GitHub App user token, its expiry and the linked account's `login`), `not_linked` or `unavailable`. */
 @Serializable
-class RunnerGitHubView(val status: String, val token: String? = null, val expiresAt: Long? = null) {
-    override fun toString() = "RunnerGitHubView(status=$status, token=[REDACTED])"
+class RunnerGitHubView(val status: String, val token: String? = null, val expiresAt: Long? = null, val login: String? = null) {
+    override fun toString() = "RunnerGitHubView(status=$status, login=$login, token=[REDACTED])"
 }
 /** Holds the owner's variable values and GitHub token: never log, persist or echo it. */
 @Serializable

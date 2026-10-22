@@ -150,9 +150,10 @@ internal class RunnerLoop(
 /**
  * The token sources the runner serves to the agent's git helper: the execution owner's GitHub token, renewed through
  * the runner channel. This is the only place a source is plugged in. A server that does not advertise GitHub
- * answers an error, which the source treats as no credential.
+ * answers an error, which the source treats as no credential. The same GitHub source also feeds the agent's `gh`
+ * configuration, so `git` and `gh` always hold the same token.
  */
-internal fun credentialSources(github: suspend () -> RunnerGitHubView): List<CredentialSource> = listOf(GitHubCredentialSource(github))
+internal fun credentialSources(github: GitHubCredentialSource): List<CredentialSource> = listOf(github)
 
 /** `teamcode cloud runner`: started inside the session pod; reads its coordinates from the pod environment. */
 internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
@@ -204,9 +205,14 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 // supervisor there, and the helper in that container fetches git credentials from this process.
                 val processes = environment("TEAMCODE_AGENT_SOCKET")?.takeIf { it.isNotBlank() }?.let { RemoteProcesses(it, scope, log = { message -> echo(message, err = true) }) }
                 lifeline = processes?.let { try { it.hold() } catch (error: CancellationException) { throw error } catch (_: Exception) { echo("The agent container is not reachable.", err = true); null } }
+                val github = GitHubCredentialSource({ client.runnerGitHub(RunnerGitHubRequest(team, session, epoch)) })
                 environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { socket ->
-                    val broker = CredentialBroker(listenUnix(socket), credentialSources { client.runnerGitHub(RunnerGitHubRequest(team, session, epoch)) }, log = { message -> echo(message, err = true) })
+                    val broker = CredentialBroker(listenUnix(socket), credentialSources(github), log = { message -> echo(message, err = true) })
                     scope.launch { broker.serve() }
+                }
+                // The agent's `gh` reads the owner's token from a memory volume only this container writes.
+                environment("TEAMCODE_GH_CONFIG_DIR")?.takeIf { it.isNotBlank() }?.let { directory ->
+                    scope.launch { GitHubCliRenewal(github, GitHubCliConfig(directory), log = { message -> echo(message, err = true) }).run() }
                 }
                 val startProcess: suspend (AgentCommand, Map<String, String?>, String) -> AgentProcess = { command, overrides, directory ->
                     processes?.start(command.command, command.arguments, overrides, directory) ?: startAgentProcess(command.command, command.arguments, overrides, directory)

@@ -41,7 +41,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
         val prepared = channel.runner.environment(pod.teamId, pod.sessionId, pod.epoch)
         val github = when (val access = prepared.github) {
-            is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt)
+            is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt, access.token.login)
             GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
             GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
         }
@@ -67,7 +67,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val body = call.jsonBody<RunnerGitHubRequest>()
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
             val view = when (val access = github.access(pod.teamId, pod.sessionId, pod.epoch)) {
-                is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt)
+                is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt, access.token.login)
                 GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
                 GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
             }

@@ -186,11 +186,13 @@ class KubernetesClusterPort(
 
     /**
      * The session pod: bare (`restartPolicy: Never`), non-root, no API token mounted. Two containers share the
-     * workspace and a memory-backed volume holding two sockets, and nothing else:
+     * workspace and a memory-backed volume holding two sockets, plus a memory-backed `gh` configuration volume that
+     * the runner writes and the agent reads, and nothing else:
      *
      * - `session` is the runner. It alone mounts the projected token, and it holds the server credentials.
      * - `agent` is the same image under another UID with no token. It runs the exec supervisor, which starts the
-     *   agent and the preparation commands for the runner, and the git helper reaches the runner's credential socket.
+     *   agent and the preparation commands for the runner, the git helper reaches the runner's credential socket, and
+     *   `gh` reads the owner's token from `GH_CONFIG_DIR`, mounted read-only.
      *
      * The containers do not share a process namespace, so the agent cannot read the runner's memory or environment.
      */
@@ -229,6 +231,7 @@ class KubernetesClusterPort(
                         env("TEAMCODE_CLOUD_TOKEN_FILE", "$TOKEN_DIR/token")
                         env("TEAMCODE_AGENT_SOCKET", AGENT_SOCKET)
                         env("TEAMCODE_CREDENTIAL_SOCKET", CREDENTIAL_SOCKET)
+                        env("TEAMCODE_GH_CONFIG_DIR", GH_CONFIG_DIR)
                         env("HOME", "$WORKSPACE_DIR/.home")
                         request.env.toSortedMap().forEach { (name, value) -> env(name, value) }
                     }
@@ -243,6 +246,7 @@ class KubernetesClusterPort(
                         addJsonObject { put("name", "runner"); put("mountPath", RUNNER_DIR); put("readOnly", true) }
                         addJsonObject { put("name", "runner-token"); put("mountPath", TOKEN_DIR); put("readOnly", true) }
                         addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
+                        addJsonObject { put("name", GH_CONFIG_VOLUME); put("mountPath", GH_CONFIG_DIR) }
                     }
                 }
                 addJsonObject {
@@ -258,6 +262,8 @@ class KubernetesClusterPort(
                         env("GIT_CONFIG_COUNT", "1")
                         env("GIT_CONFIG_KEY_0", "credential.helper")
                         env("GIT_CONFIG_VALUE_0", "!$RUNNER_DIR/teamcode cloud credential")
+                        // A path, not a token: every `gh` (by name or path, from any shell) reads the owner's token there.
+                        env("GH_CONFIG_DIR", GH_CONFIG_DIR)
                     }
                     put("securityContext", containerSecurity(pods.agentRunAsUser))
                     putJsonObject("resources") {
@@ -269,6 +275,7 @@ class KubernetesClusterPort(
                         addJsonObject { put("name", "workspace"); put("mountPath", WORKSPACE_DIR) }
                         addJsonObject { put("name", "runner"); put("mountPath", RUNNER_DIR); put("readOnly", true) }
                         addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
+                        addJsonObject { put("name", GH_CONFIG_VOLUME); put("mountPath", GH_CONFIG_DIR); put("readOnly", true) }
                     }
                 }
             }
@@ -276,6 +283,8 @@ class KubernetesClusterPort(
                 addJsonObject { put("name", "workspace"); putJsonObject("persistentVolumeClaim") { put("claimName", request.claimName) } }
                 addJsonObject { put("name", "runner"); putJsonObject("emptyDir") { put("sizeLimit", "256Mi") } }
                 addJsonObject { put("name", "sockets"); putJsonObject("emptyDir") { put("medium", "Memory"); put("sizeLimit", "1Mi") } }
+                // The agent's `gh` configuration: in memory, written by the runner only, gone with the pod.
+                addJsonObject { put("name", GH_CONFIG_VOLUME); putJsonObject("emptyDir") { put("medium", "Memory"); put("sizeLimit", "1Mi") } }
                 addJsonObject {
                     put("name", "runner-token")
                     putJsonObject("projected") { putJsonArray("sources") { addJsonObject { putJsonObject("serviceAccountToken") {
@@ -416,6 +425,12 @@ class KubernetesClusterPort(
         const val SOCKET_DIR = "/run/teamcode"
         const val AGENT_SOCKET = "$SOCKET_DIR/agent.sock"
         const val CREDENTIAL_SOCKET = "$SOCKET_DIR/credential.sock"
+        /**
+         * The agent's `GH_CONFIG_DIR`: a memory volume of its own, written by the runner (the owner's token, renewed)
+         * and mounted read-only in the agent's container, so the agent can read the token but never replace it.
+         */
+        const val GH_CONFIG_DIR = "/run/teamcode-gh"
+        const val GH_CONFIG_VOLUME = "gh-config"
         /** The agent's `HOME`, created by the agent's UID on the workspace volume (the runner's lives in `.home`). */
         const val AGENT_HOME = "$WORKSPACE_DIR/.agent-home"
         private const val RUNNER_CPU = "250m"

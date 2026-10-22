@@ -25,6 +25,7 @@ The template installs all of this before your block and checks it after:
 - Linux with glibc, `/bin/sh` and the POSIX commands the runner uses (`mkdir`, `rm`, `mv`, `rmdir`, `dirname`, `touch`, `test`).
 - The libraries the `teamcode` binary loads, since both containers run it: `libcrypt.so.1`, OpenSSL `libcrypto` 3, libcurl and zlib.
 - `git` 2.31 or later. Git and GitHub credentials are set by the pod (`GIT_CONFIG_*` and a credential helper backed by the runner), not by the image.
+- `gh` (GitHub CLI) is optional, anywhere on the image's `PATH`. When it is there, the pod authenticates it as the session owner with `GH_CONFIG_DIR`, a read-only directory the runner keeps up to date (see [GitHub CLI](cloud-sessions.md#github-cli)): do not wrap or replace it, and do not bake a `gh` configuration or `GH_TOKEN` into the image. The template does not install it; add it in your block if your agents use it.
 - The agent CLIs, found by name on `PATH`: `claude` (Claude Code) and `codex` (Codex), as the profile's agent kind requires. They are installed system-wide with Node.js; Claude Code's self-update is turned off, so the image's version is the one that runs.
 - Named accounts for the pod's UIDs: `runner` (1000) and `agent` (1001) in group `teamcode` (1000). The pod sets the UIDs itself; the names keep tools that look up the current user working. A base image's own user or group 1000 (the `ubuntu` user of `ubuntu:24.04`) is removed first.
 

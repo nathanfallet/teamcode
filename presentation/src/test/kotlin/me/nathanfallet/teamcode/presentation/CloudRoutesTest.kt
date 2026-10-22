@@ -475,10 +475,12 @@ class CloudRoutesTest {
             assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
             val view = runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))
             assertEquals("linked", view.status); assertEquals("ghu_colleague_token", view.token); assertEquals(99, view.expiresAt)
+            assertEquals("octo", view.login, "The linked account's login, for the agent's gh configuration")
             assertFalse("ghu_colleague_token" in view.toString())
             // After a transfer the execution runs for the recipient: the former owner's token is never served again.
             store.runs["s1" to 1] = store.runs.getValue("s1" to 1).copy(ownerId = admin.id)
-            assertEquals("not_linked", runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1)).status)
+            val transferred = runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))
+            assertEquals("not_linked", transferred.status); assertNull(transferred.token); assertNull(transferred.login)
             store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED)
             assertEquals("github_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
                 runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))

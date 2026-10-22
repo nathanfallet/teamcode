@@ -43,6 +43,18 @@ class GitHubCredentialSourceTest {
         assertEquals(3, calls)
     }
 
+    @Test fun theSameTokenAndTheLinkedLoginServeGh() = runTest {
+        var calls = 0
+        val source = GitHubCredentialSource({ calls++; RunnerGitHubView("linked", "ghu_token", 10_000_000, "octo") }, now = { 0 })
+        assertEquals(0, source.renewsAt())
+        val token = source.token()!!
+        assertEquals("ghu_token", token.token); assertEquals("octo", token.login)
+        assertFalse("ghu_token" in token.toString())
+        assertEquals(10_000_000 - GitHubCredentialSource.RENEW_MARGIN_MILLIS, source.renewsAt())
+        assertEquals("ghu_token", source.credential(github)?.password)
+        assertEquals(1, calls, "git and gh share one cached token")
+    }
+
     @Test fun aFailingServerCallSurfacesToTheBrokerWhichTreatsItAsNoCredential() = runTest {
         val source = GitHubCredentialSource({ throw IllegalStateException("boom") }, now = { 0 })
         assertFailsWith<IllegalStateException> { source.credential(github) }

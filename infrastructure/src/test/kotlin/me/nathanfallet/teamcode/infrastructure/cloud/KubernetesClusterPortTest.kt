@@ -112,10 +112,22 @@ class KubernetesClusterPortTest {
 
         assertNotEquals(runner.uid(), agent.uid(), "Two UIDs: the agent cannot read the runner's files")
         assertTrue(agent["securityContext"]!!.jsonObject["runAsNonRoot"]!!.jsonPrimitive.boolean)
-        assertEquals(setOf("workspace", "runner", "runner-token", "sockets"), runner.mounts().keys)
-        assertEquals(setOf("workspace", "runner", "sockets"), agent.mounts().keys, "The agent never mounts the projected token")
+        assertEquals(setOf("workspace", "runner", "runner-token", "sockets", "gh-config"), runner.mounts().keys)
+        assertEquals(setOf("workspace", "runner", "sockets", "gh-config"), agent.mounts().keys, "The agent never mounts the projected token")
         val volumes = spec["volumes"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
         assertEquals("Memory", volumes.getValue("sockets")["emptyDir"]!!.jsonObject["medium"]!!.jsonPrimitive.content)
+        // gh: the runner writes the owner's token to a memory volume the agent only reads, found through GH_CONFIG_DIR.
+        assertEquals("Memory", volumes.getValue("gh-config")["emptyDir"]!!.jsonObject["medium"]!!.jsonPrimitive.content, "The gh token never reaches a disk")
+        fun JsonObject.mount(name: String) = this["volumeMounts"]!!.jsonArray.map { it.jsonObject }.single { it["name"]!!.jsonPrimitive.content == name }
+        assertEquals("/run/teamcode-gh", runner.mounts()["gh-config"]); assertEquals("/run/teamcode-gh", agent.mounts()["gh-config"])
+        assertNull(runner.mount("gh-config")["readOnly"], "The runner writes the gh configuration")
+        assertTrue(agent.mount("gh-config")["readOnly"]!!.jsonPrimitive.boolean, "The agent cannot replace the gh configuration")
+        assertEquals("/run/teamcode-gh", runner.env()["TEAMCODE_GH_CONFIG_DIR"]); assertEquals("/run/teamcode-gh", agent.env()["GH_CONFIG_DIR"])
+        // No GitHub token in either container's environment, and no PATH change: gh is found wherever the image puts it.
+        for (container in listOf(runner, agent)) {
+            assertTrue(container.env().keys.none { it in setOf("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "TEAMCODE_GITHUB_TOKEN", "PATH") }, "${container.env().keys}")
+        }
+        assertNull(agent.env()["TEAMCODE_GH_CONFIG_DIR"], "Only the runner learns where to write")
         assertEquals("/run/teamcode/agent.sock", runner.env()["TEAMCODE_AGENT_SOCKET"]); assertEquals(runner.env()["TEAMCODE_AGENT_SOCKET"], agent.env()["TEAMCODE_AGENT_SOCKET"])
         assertEquals("/run/teamcode/credential.sock", agent.env()["TEAMCODE_CREDENTIAL_SOCKET"])
         assertEquals("credential.helper", agent.env()["GIT_CONFIG_KEY_0"]); assertEquals("!/opt/teamcode/teamcode cloud credential", agent.env()["GIT_CONFIG_VALUE_0"])
