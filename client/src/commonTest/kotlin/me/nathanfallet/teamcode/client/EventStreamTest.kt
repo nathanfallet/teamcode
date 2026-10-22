@@ -107,6 +107,8 @@ class EventStreamTest {
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = -1) { } }
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = setOf("cloud.turn&after=0")) { } }
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = (1..65).map { "type$it" }.toSet()) { } }
+            // Control frames, never event types.
+            assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = setOf("gap")) { } }
         }
         assertTrue(requests.isEmpty())
     }
