@@ -38,10 +38,17 @@ class Status : SuspendingCliktCommand(name = "status") {
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
             val report = readStatusReport(client)
-            echo(if (json) Serialization.json.encodeToString(report) else renderStatus(report, Clock.System.now().toEpochMilliseconds()))
+            echo(if (json) statusJson(report) else renderStatus(report, Clock.System.now().toEpochMilliseconds()))
         }
     }
 }
+
+/**
+ * The `--json` view: each section is the API's DTO as the server encoded it, with the same serializer, so its values are
+ * the API's. Nothing is derived here; a value the server does not know (no observation, an unreported reset) stays null
+ * or absent.
+ */
+internal fun statusJson(report: StatusReport): String = Serialization.json.encodeToString(report)
 
 internal suspend fun readStatusReport(client: TeamCodeClient): StatusReport = coroutineScope {
     val gateway = client.status()

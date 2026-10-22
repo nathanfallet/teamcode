@@ -13,6 +13,8 @@ import me.nathanfallet.teamcode.domain.capacity.*
 import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.routing.*
 import me.nathanfallet.teamcode.domain.team.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlin.test.*
 
 class PoolAccountRoutesTest {
@@ -74,6 +76,13 @@ class PoolAccountRoutesTest {
         assertTrue(windows.contains("<code>deleted-id</code>"), windows)
         val serialized = Serialization.json.decodeFromString<List<PoolAccountStatusView>>(client.get("/api/v1/pools/accounts") { bearerAuth("member") }.bodyAsText())
         assertEquals(2, serialized.size)
+        // Each body is exactly its DTO's encoding: `teamcode status --json` prints these DTOs unchanged (StatusReportTest).
+        for (token in listOf("admin", "member")) {
+            val accounts = client.get("/api/v1/pools/accounts") { bearerAuth(token) }.bodyAsText()
+            assertEquals(Json.parseToJsonElement(accounts), Serialization.json.encodeToJsonElement(Serialization.json.decodeFromString<List<PoolAccountStatusView>>(accounts)), token)
+            val capacity = client.get("/api/v1/capacity") { bearerAuth(token) }.bodyAsText()
+            assertEquals(Json.parseToJsonElement(capacity), Serialization.json.encodeToJsonElement(Serialization.json.decodeFromString<CapacityView>(capacity)), token)
+        }
     }
 }
 

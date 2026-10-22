@@ -11,6 +11,10 @@ import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.cli.status.StatusReport
 import me.nathanfallet.teamcode.cli.status.readStatusReport
 import me.nathanfallet.teamcode.cli.status.renderStatus
+import me.nathanfallet.teamcode.cli.status.statusJson
+import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.api.Serialization
+import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import kotlin.test.*
@@ -112,5 +116,38 @@ class StatusReportTest {
     @Test fun theGatewayReadStillFailsStatus() = runTest {
         val down = "/api/v1/status" to (HttpStatusCode.InternalServerError to """{"error":{"type":"internal","message":"Boom."}}""")
         assertEquals(500, assertFailsWith<TeamCodeException> { sdk(mapOf(down, capacity), mutableListOf()).use { readStatusReport(it) } }.statusCode)
+    }
+    @Test fun theJsonViewCarriesTheApiValuesAndKeepsUnknownsUnknown() = runTest {
+        // The bodies as the server encodes them (the same DTOs and serializer as its content negotiation).
+        val gatewayBody = Serialization.json.encodeToString(GatewayStatus("pool", 1, 2, 3))
+        val capacityBody = Serialization.json.encodeToString(CapacityView("m", 100, 2, null, 10, 1, 5, reservedUnits = 4,
+            groups = listOf(GroupAllowanceView("g", "Support", 0, 0, false, 0, 0))))
+        val accountsBody = Serialization.json.encodeToString(listOf(
+            // Observed windows, one without a reported reset.
+            PoolAccountStatusView("Account 1", "anthropic", "READY", false, true, windows = listOf(
+                AccountWindowView("five_hour", .42, 1_000, 9_000), AccountWindowView("seven_day", .1, 1_000, null))),
+            // Nothing observed: no window at all, not a guessed 0%.
+            PoolAccountStatusView("Account 2", "openai", "READY", false, true),
+            PoolAccountStatusView("Account 3", "anthropic", "READY", false, false, "cooling_down", 7_000),
+        ))
+        val directiveBody = Serialization.json.encodeToString(DirectiveResponse(DirectiveView("d", "SLOW", 1, 500, "Slow down", 1, 9)))
+        val routes = mapOf(
+            "/api/v1/status" to (HttpStatusCode.OK to gatewayBody), "/api/v1/capacity" to (HttpStatusCode.OK to capacityBody),
+            "/api/v1/pools/accounts" to (HttpStatusCode.OK to accountsBody), "/api/v1/directives/current" to (HttpStatusCode.OK to directiveBody),
+        )
+        val printed = Json.parseToJsonElement(statusJson(sdk(routes, java.util.Collections.synchronizedList(mutableListOf())).use { readStatusReport(it) })).jsonObject
+        assertEquals(Json.parseToJsonElement(gatewayBody), printed["gateway"])
+        assertEquals(Json.parseToJsonElement(capacityBody), printed["capacity"], "The allowance is the API's, field for field")
+        assertEquals(Json.parseToJsonElement(accountsBody), printed["accounts"], "The accounts are the API's, field for field")
+        assertEquals(Json.parseToJsonElement(directiveBody).jsonObject["directive"], printed["pacing"])
+        assertEquals(JsonObject(emptyMap()), printed["unavailable"])
+        val accounts = printed.getValue("accounts").jsonArray.map { it.jsonObject }
+        assertEquals(JsonNull, accounts[0]["windows"]!!.jsonArray[1].jsonObject["resetsAtMillis"], "An unreported reset stays null")
+        assertEquals(JsonArray(emptyList()), accounts[1]["windows"], "An account without observation has no window")
+        assertEquals(JsonNull, accounts[1]["cooldownUntilMillis"])
+        // A section the server could not serve is null with its reason, never a default value.
+        val narrow = Json.parseToJsonElement(statusJson(sdk(mapOf("/api/v1/status" to (HttpStatusCode.OK to gatewayBody)), mutableListOf()).use { readStatusReport(it) })).jsonObject
+        assertEquals(JsonNull, narrow["capacity"]); assertEquals(JsonNull, narrow["accounts"]); assertEquals(JsonNull, narrow["pacing"])
+        assertEquals("not_served", narrow.getValue("unavailable").jsonObject["capacity"]!!.jsonPrimitive.content)
     }
 }

@@ -56,6 +56,7 @@ class CloudTransferPersistenceTest {
                 recheckAtTheBoundary(ra, rb, team, profile)
                 endedSessions(ra, rb, team, profile)
                 stalledBoundary(ra, rb, team, profile)
+                serviceKeys(ra, rb, team, profile)
             } }
         }
     }
@@ -298,6 +299,79 @@ class CloudTransferPersistenceTest {
         val current = ra.store.find(teamId, s.id)!!
         assertEquals(Triple(PAUSED, t.owner.member.id, null), Triple(current.state, current.ownerId, current.transferId))
         ra.sessions.delete(t.admin, null, s.id)
+    }
+
+    /**
+     * Service keys end to end, on SQL: a member's key never reaches another member's session, transcript, transfer or
+     * quota; an `admin:cloud` key creates a session for a member and transfers it with the key recorded as initiator,
+     * distinct from the members; a revoked key loses an open transcript stream at its next check and every later call.
+     */
+    private suspend fun serviceKeys(ra: Replica, rb: Replica, t: Team, profile: CloudProfile): Unit = coroutineScope {
+        val teamId = t.admin.teamId
+        val owner = t.owner.member.id; val recipient = t.recipient.member.id
+        val keys = SqlServiceKeyService(ra.database)
+        val theirs = ready(ra, rb, t.recipient, profile, "Recipient's own")
+        val personal = rb.team.authenticate(keys.create(t.owner, owner, "owner automation", setOf(ServiceScope.CLOUD_WRITE, ServiceScope.USAGE_READ), 1).accessToken)!!
+        val draft = CloudSessionDraft("Orchestrated", profile.id, null, null, null, mapOf("orchestrator.task" to "42"), null)
+        failure("not_found") { ra.sessions.get(personal, theirs.id) }
+        failure("forbidden") { ra.sessions.list(personal, CloudSessionQuery(owner = recipient)) }
+        failure("on_behalf_forbidden") { ra.sessions.create(personal, recipient, draft, null) }
+        failure("not_found") { ra.sessions.pause(personal, null, theirs.id, false) }
+        failure("not_found") { ra.conversation.events(personal, theirs.id, 0, null, 10) }
+        failure("not_found") { ra.conversation.send(personal, theirs.id, InputRequest("Not yours", false, null, null, null)) }
+        failure("not_found") { ra.transfers.request(personal, null, theirs.id, CloudTransferRequest(owner, false, false), key("seize", "e1")) }
+        failure("on_behalf_forbidden") { ra.transfers.request(personal, recipient, theirs.id, CloudTransferRequest(owner, false, false), key("seize-obo", "e2")) }
+        failure("forbidden") { ra.transfers.list(personal, CloudTransferQuery(team = true)) }
+        val admission = SqlAdmissionStore(rb.database)
+        failure("credential_scope") { admission.capacity(personal, recipient) }
+        failure("credential_scope") { admission.quotas(personal) }
+        assertEquals(owner, admission.capacity(personal).policy.memberId, "The key reads its own member's allowance only")
+
+        // admin:cloud: a session created for the owner and moved to the recipient, attributed to the orchestrator's key.
+        val orchestratorKey = keys.create(t.admin, t.admin.member.id, "orchestrator", setOf(ServiceScope.ADMIN_CLOUD), 1)
+        val orchestrator = rb.team.authenticate(orchestratorKey.accessToken)!!
+        val attribution = Attribution(t.admin.member.id, orchestratorKey.metadata.id, owner)
+        val s = (rb.sessions.create(orchestrator, owner, draft, IdempotencyRequest("POST /cloud/sessions", "task-42", "f".repeat(64))) as CloudCreateOutcome.Created).session
+        assertEquals(owner, s.ownerId); assertEquals(attribution, s.createdBy)
+        pass(ra); pass(ra)
+        val pod = CloudSessionService.podName(s.id, 1)
+        ra.cluster.start(pod); pass(ra)
+        ra.runner.register(teamId, s.id, 1, pod); rb.runner.heartbeat(teamId, s.id, 1, ready = true)
+        assertEquals(READY, ra.store.find(teamId, s.id)!!.state)
+        ra.sessions.pause(orchestrator, owner, s.id, false); pass(ra); rb.runner.checkpoint(teamId, s.id, 1, completed = true); pass(ra)
+        assertEquals(PAUSED, ra.store.find(teamId, s.id)!!.state)
+        val moved = rb.transfers.request(orchestrator, owner, s.id, CloudTransferRequest(recipient, false, false), key("orchestrated", "e3")).transfer
+        assertEquals(CloudTransferState.ACCEPTED, moved.state, "An admin:cloud transfer is immediate")
+        assertEquals(attribution, moved.initiatedBy)
+        pass(ra); pass(rb)
+        assertEquals(recipient, ra.store.find(teamId, s.id)!!.ownerId)
+        assertEquals(CloudTransferState.COMPLETED, ra.transfers.get(t.recipient, moved.id).state)
+        ra.database.query {
+            fun row(action: String, subject: String) = AuditEvents.selectAll().where { (AuditEvents.action eq action) and (AuditEvents.subjectId eq subject) }.single()
+                .let { listOf(it[AuditEvents.actorId], it[AuditEvents.credentialId], it[AuditEvents.effectiveMemberId], it[AuditEvents.relatedMemberId]) }
+            assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, owner, null), row("cloud.session.created", s.id), "Created by the key, for the owner")
+            assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, owner, null), row("cloud.transfer.requested", moved.id))
+            assertEquals(listOf(t.admin.member.id, orchestratorKey.metadata.id, recipient, owner), row("cloud.session.transferred", s.id),
+                "The initiator stays the key's owner, distinct from both members")
+        }
+        failure("not_found") { ra.sessions.get(personal, s.id) }
+
+        // Revocation: an open transcript stream ends at its next check (every 15 s), and the key never authenticates again.
+        val readerKey = keys.create(t.recipient, recipient, "transcript reader", setOf(ServiceScope.CLOUD_READ), 1)
+        val reader = rb.team.authenticate(readerKey.accessToken)!!
+        val stream = CloudConversationService(ra.conversations, ra.store, ra.access)
+        val opened = CompletableDeferred<Unit>()
+        val following = async {
+            try { stream.follow(reader, s.id, 0, emit = { opened.complete(Unit) }, idle = {}); "ended" }
+            catch (error: TeamFailure) { error.code }
+        }
+        withTimeout(10_000) { opened.await() }
+        keys.revoke(t.recipient, readerKey.metadata.id)
+        assertEquals("authentication_required", withTimeout(CloudConversationService.RECHECK_MILLIS + 10_000) { following.await() })
+        assertNull(ra.team.authenticate(readerKey.accessToken), "The next request is unauthenticated: 401")
+        failure("authentication_required") { rb.sessions.get(reader, s.id) }
+        failure("authentication_required") { orchestratorKey.let { keys.revoke(t.admin, it.metadata.id); rb.sessions.get(orchestrator, s.id) } }
+        ra.sessions.delete(t.recipient, null, s.id); ra.sessions.delete(t.recipient, null, theirs.id)
     }
 
     private fun cluster(r: Replica) = r.cluster
