@@ -45,7 +45,12 @@ class ArtifactRoutesTest {
         val calls = mutableListOf<String>()
         var inactive: String? = null
         private fun call(name: String) { inactive?.let { throw TeamFailure(it, 409, "Inactive.") }; calls += name }
-        override suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin): ArtifactUpload { call("startUpload"); return ArtifactUpload(upload, id, files.map { it.sha256 }, 9) }
+        var policy = ArtifactPolicy(true, null)
+        var origin: ArtifactOrigin? = null
+        override suspend fun policy(actor: Principal): ArtifactPolicy { calls += "policy"; return policy }
+        override suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin): ArtifactUpload {
+            call("startUpload"); this.origin = origin; return ArtifactUpload(upload, id, files.map { it.sha256 }, 9)
+        }
         override suspend fun putChunk(actor: Principal, uploadId: String, sha256: String, number: Int, bytes: ByteArray): ChunkReceipt { call("putChunk"); return ChunkReceipt(true, 1, 1) }
         override suspend fun assemble(actor: Principal, uploadId: String, sha256: String) = (if (sha256 == pageSha) page else leakContent).let { UploadBlob("default", id, sha256, it.size.toLong()) to it }
         override suspend fun recordBlob(actor: Principal, uploadId: String, sha256: String) { calls += "recordBlob" }
@@ -143,6 +148,33 @@ class ArtifactRoutesTest {
         assertEquals(HttpStatusCode.NoContent, call(HttpMethod.Delete, "/api/v1/artifacts/$id", "member").status)
         assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/artifacts?scope=everything", "member").status)
         assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/artifacts", "unknown").status)
+    }
+
+    @Test fun policyAnswersInEveryAvailabilityStateAndUploadsCarryTheRun() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), artifacts = ArtifactService(store, Admin(), Bucket())) }
+        suspend fun policy(token: String) = client.get("/api/v1/artifacts/policy") { bearerAuth(token) }
+        assertEquals(ArtifactPolicyView(true, null), Serialization.json.decodeFromString<ArtifactPolicyView>(policy("reader-key").bodyAsText()))
+        // Every reason the store gives reaches the launcher, which then leaves the artifact tools out.
+        for (reason in listOf("artifact_storage_missing", "artifact_storage_unverified", "artifacts_disabled", "artifact_publish_forbidden")) {
+            store.policy = ArtifactPolicy(false, reason)
+            val answer = policy("writer-key")
+            assertEquals(HttpStatusCode.OK, answer.status)
+            assertEquals(ArtifactPolicyView(false, reason), Serialization.json.decodeFromString<ArtifactPolicyView>(answer.bodyAsText()))
+        }
+        assertEquals(HttpStatusCode.Forbidden, policy("cloud-key").status, "A key without an artifacts scope does not read the policy")
+
+        val run = "11111111-2222-4333-8444-555555555555"
+        val announce = """{"files":[{"sha256":"$pageSha","size":${page.size}}]}"""
+        suspend fun start(vararg runs: String) = client.post("/api/v1/artifacts/uploads") {
+            bearerAuth("writer-key"); runs.forEach { header("x-teamcode-run-id", it) }; contentType(ContentType.Application.Json); setBody(announce)
+        }
+        assertEquals(HttpStatusCode.Created, start(run).status); assertEquals(ArtifactOrigin("local_run", run), store.origin)
+        assertEquals(HttpStatusCode.Created, start().status); assertEquals(ArtifactOrigin(), store.origin)
+        store.origin = null
+        assertEquals(HttpStatusCode.BadRequest, start("not-a-run").status)
+        assertEquals(HttpStatusCode.BadRequest, start(run, run).status)
+        assertNull(store.origin, "An invalid run never reaches the store")
     }
 
     @Test fun filesDownloadAsAttachmentsAndInactiveArtifactsSayWhy() = testApplication {

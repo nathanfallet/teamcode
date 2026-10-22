@@ -17,8 +17,8 @@ private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(
 private val webhookRead = Regex("/api/v1/webhooks(/$CLOUD_ID(/deliveries)?)?")
 private val webhookWrite = Regex("/api/v1/webhooks(/$CLOUD_ID(/test|/rotate-secret)?)?")
 private const val ARTIFACT_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-/** Listing and reading artifacts; the storage and settings routes are not listed (they stay interactive). */
-private val artifactRead = Regex("/api/v1/artifacts(/$ARTIFACT_ID(/versions(/[0-9]{1,9}(/file)?)?|/members)?)?")
+/** The publication policy, listing and reading artifacts; the storage and settings routes are not listed (they stay interactive). */
+private val artifactRead = Regex("/api/v1/artifacts(/policy|/$ARTIFACT_ID(/versions(/[0-9]{1,9}(/file)?)?|/members)?)?")
 /** Publishing and inviting; making public (`/access`) and deleting are not listed, so no key can do either. */
 private val artifactWritePost = Regex("/api/v1/artifacts/(uploads|$ARTIFACT_ID/(versions|members))")
 private val artifactChunk = Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")

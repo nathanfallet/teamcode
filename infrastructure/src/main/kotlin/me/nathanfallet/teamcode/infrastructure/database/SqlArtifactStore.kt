@@ -13,6 +13,17 @@ import org.jetbrains.exposed.v1.jdbc.*
  * a blob is only trusted once it was checked and stored, and only within its upload or its artifact.
  */
 class SqlArtifactStore(private val database: Database) : ArtifactStore {
+    override suspend fun policy(actor: Principal): ArtifactPolicy = database.query {
+        requireCurrent(this, actor)
+        val settings = readSettings(actor.teamId)
+        val availability = ArtifactAvailability.of(settings, readStorage(actor.teamId))
+        when {
+            !availability.active -> ArtifactPolicy(false, availability.reason)
+            settings.whoCanPublish == WhoCanPublish.ADMINS && !actor.member.role.isAdministrator -> ArtifactPolicy(false, "artifact_publish_forbidden")
+            else -> ArtifactPolicy(true, null)
+        }
+    }
+
     override suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin): ArtifactUpload = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val settings = requireActive(actor.teamId)
@@ -24,6 +35,11 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         if (open >= ArtifactRules.MAX_OPEN_UPLOADS)
             throw TeamFailure("artifact_uploads_busy", 429, "You have ${ArtifactRules.MAX_OPEN_UPLOADS} publications in progress. Finish them or wait for them to expire.", retryAfterSeconds = 60, retryable = true)
         val id = if (artifactId == null) {
+            // A run named as the origin must be one of the caller's own (by primary key, one row at most).
+            origin.runId?.let { run ->
+                val owned = AgentRuns.select(AgentRuns.id).where { (AgentRuns.id eq run) and (AgentRuns.teamId eq actor.teamId) and (AgentRuns.memberId eq actor.member.id) }.limit(1).any()
+                if (!owned) throw TeamFailure("artifact_run_forbidden", 403, "This run is not one of yours; publish from your own teamcode run.")
+            }
             requireArtifactSlot(actor, settings)
             // Drafts do not count in the quota; abandoned ones are bounded per day until they expire.
             val drafts = Artifacts.select(Artifacts.id).where {

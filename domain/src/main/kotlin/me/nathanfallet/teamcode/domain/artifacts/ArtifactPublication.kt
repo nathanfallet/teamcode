@@ -10,6 +10,12 @@ data class ArtifactOrigin(val kind: String = "api", val runId: String? = null, v
 
 data class UploadFile(val sha256: String, val size: Long)
 
+/**
+ * Whether a member may publish right now: false with the inactive reason (`artifact_storage_missing`,
+ * `artifact_storage_unverified`, `artifacts_disabled`) or `artifact_publish_forbidden` when only administrators publish.
+ */
+data class ArtifactPolicy(val canPublish: Boolean, val reason: String?)
+
 data class ArtifactFile(val path: String, val sha256: String, val size: Long, val contentType: String, val role: String)
 
 /**
@@ -77,6 +83,8 @@ data class CollectedBlob(val teamId: String, val artifactId: String, val sha256:
  * `artifacts_disabled`). Writes that count against quotas run under the team lock.
  */
 interface ArtifactStore {
+    /** The caller's [ArtifactPolicy], read in one transaction; never refused while artifacts are inactive. */
+    suspend fun policy(actor: Principal): ArtifactPolicy
     /**
      * Reserves a draft id (refused `409 artifact_quota_exceeded` past the per-member count) or checks that the caller may
      * publish to [artifactId], then records an upload bound to the caller's credential for an hour. `missing` are the
@@ -160,6 +168,9 @@ interface ArtifactStore {
  * interactive gestures; no key and no agent can do either.
  */
 class ArtifactService(private val store: ArtifactStore, private val admin: ArtifactAdminStore, private val objects: ArtifactObjectStore) {
+    /** Whether [actor] may publish now, for `teamcode run` and the runner before they offer the artifact tools to an agent. */
+    suspend fun policy(actor: Principal): ArtifactPolicy { actor.requireArtifactRead(); return store.policy(actor) }
+
     suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin = ArtifactOrigin()): ArtifactUpload {
         actor.requireArtifactWrite()
         ArtifactRules.validateAnnouncement(files)

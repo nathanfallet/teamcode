@@ -37,11 +37,12 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
                     put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
         mcpRelay(client, localToken, maximumBodyBytes)
+        artifactRelay(client, localToken, maximumBodyBytes)
         for (path in listOf("/v1/messages", "/v1/responses")) {
             for (mode in listOf("interactive", "background", "run")) {
                 val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
@@ -232,6 +233,75 @@ private fun Routing.mcpRelay(client: TeamCodeClient, localToken: String, maximum
         // The gateway is stateless: no server-initiated stream and no session to delete.
         get { call.response.header(HttpHeaders.Allow, "POST"); call.respond(HttpStatusCode.MethodNotAllowed) }
         delete { call.response.header(HttpHeaders.Allow, "POST"); call.respond(HttpStatusCode.MethodNotAllowed) }
+    }
+}
+
+private const val ARTIFACT_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+/**
+ * The artifact API calls `teamcode mcp artifacts` makes, and nothing else: reading, uploading, committing and inviting.
+ * Changing an artifact's access and deleting it are absent, so an agent can never make an artifact public or delete it
+ * through the relay, whatever the credential the relay holds would allow.
+ */
+internal val ARTIFACT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
+    HttpMethod.Get to listOf(Regex("/api/v1/artifacts"), Regex("/api/v1/artifacts/policy"),
+        Regex("/api/v1/artifacts/$ARTIFACT_ID(/versions(/[0-9]{1,9}(/file)?)?|/members)?")),
+    HttpMethod.Post to listOf(Regex("/api/v1/artifacts/uploads"), Regex("/api/v1/artifacts/$ARTIFACT_ID/(versions|members)")),
+    HttpMethod.Put to listOf(Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")),
+    HttpMethod.Delete to listOf(Regex("/api/v1/artifacts/$ARTIFACT_ID/members/[A-Za-z0-9._@-]{1,64}")),
+)
+
+/**
+ * Relays the artifact calls of `teamcode mcp artifacts` with this proxy's TeamCode credential (the member's device
+ * login locally, the execution credential in a cloud session). The caller holds only the local token; the relay reads
+ * no file and keeps no state. Same guards as the MCP relay: the token compared in constant time, loopback only, no
+ * browser `Origin`, a bounded body, `no-store`, and a sign-in refusal turned into an explicit `502`.
+ */
+private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) {
+    for (pattern in listOf("/api/v1/artifacts", "/api/v1/artifacts/{rest...}")) route(pattern) {
+        install(io.ktor.server.http.HttpRequestLifecycle) { cancelCallOnClose = true }
+        handle {
+            if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
+                call.respondText("A local TeamCode capability is required.", status = HttpStatusCode.Unauthorized)
+                return@handle
+            }
+            if (call.request.local.serverHost !in setOf("localhost", "127.0.0.1", "::1") || call.request.header(HttpHeaders.Origin) != null) {
+                call.respondText("Browser or non-loopback destinations are not accepted.", status = HttpStatusCode.Forbidden)
+                return@handle
+            }
+            val method = call.request.httpMethod
+            val path = call.request.path()
+            if (ARTIFACT_RELAY_ROUTES[method].orEmpty().none { it.matches(path) }) {
+                call.respond(HttpStatusCode.NotFound)
+                return@handle
+            }
+            val runs = call.request.headers.getAll("x-teamcode-run-id").orEmpty()
+            if (runs.size > 1 || runs.any { !me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(it) }) {
+                call.respondText("Invalid launch identifier.", status = HttpStatusCode.BadRequest)
+                return@handle
+            }
+            val body = call.receiveChannel().readRemaining(maximumBodyBytes + 1L).readByteArray()
+            if (body.size > maximumBodyBytes) {
+                call.respondText("Request is too large.", status = HttpStatusCode.PayloadTooLarge)
+                return@handle
+            }
+            val relayed = try {
+                client.forwardArtifact(method, path, call.request.queryString(), body, call.request.contentType().takeIf { it != ContentType.Any }, runs.singleOrNull())
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                call.response.header(HttpHeaders.RetryAfter, "5")
+                call.respondText("The TeamCode server could not be reached.", status = HttpStatusCode.BadGateway)
+                return@handle
+            }
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            if (relayed.status == 401) {
+                call.respondText("TeamCode refused the sign-in; run `teamcode login`.", status = HttpStatusCode.BadGateway)
+                return@handle
+            }
+            relayed.headers.forEach { (name, value) -> call.response.header(name, value) }
+            call.respondBytes(relayed.body, relayed.contentType ?: ContentType.Application.OctetStream, HttpStatusCode.fromValue(relayed.status))
+        }
     }
 }
 

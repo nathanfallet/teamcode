@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.cli
 
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import kotlin.test.*
 
@@ -67,5 +68,40 @@ class AgentLaunchTest {
         assertEquals("http://127.0.0.1:4242", launch.environment["ANTHROPIC_BASE_URL"])
         for (name in listOf("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"))
             assertTrue(launch.environment.containsKey(name) && launch.environment[name] == null, "An inherited $name is removed")
+    }
+
+    @Test fun claudeStartsTheArtifactServerAsStdioWithTheTokenOnlyInItsEnvironment() {
+        val run = "11111111-2222-4333-8444-555555555555"
+        val launch = agentLaunch("claude", listOf("--", "prompt"), 4242, token, runId = run, mcpServers = listOf("artifacts"),
+            artifacts = ArtifactsMcp("/opt/teamcode/teamcode", "/work/repo", "/tmp/teamcode-artifacts", listOf("/work/repo/.home")))
+        val index = launch.arguments.indexOf("--mcp-config")
+        val servers = Json.parseToJsonElement(launch.arguments[index + 1]).jsonObject["mcpServers"]!!.jsonObject
+        assertEquals(setOf("teamcode-artifacts", "teamcode_artifacts"), servers.keys, "A team server named artifacts keeps its own label")
+        val server = servers["teamcode_artifacts"]!!.jsonObject
+        assertEquals("stdio", server["type"]!!.jsonPrimitive.content); assertEquals("/opt/teamcode/teamcode", server["command"]!!.jsonPrimitive.content)
+        assertEquals(listOf("mcp", "artifacts", "--root", "/work/repo", "--scratch", "/tmp/teamcode-artifacts", "--run", run, "--refuse", "/work/repo/.home"),
+            server["args"]!!.jsonArray.map { it.jsonPrimitive.content })
+        val env = server["env"]!!.jsonObject
+        assertEquals("http://127.0.0.1:4242", env["TEAMCODE_ARTIFACTS_URL"]!!.jsonPrimitive.content)
+        assertEquals("\${TEAMCODE_MCP_TOKEN}", env["TEAMCODE_ARTIFACTS_TOKEN"]!!.jsonPrimitive.content)
+        assertFalse(launch.arguments.any { it.contains(token) }, "The local token is on no command line")
+        assertEquals(token, launch.environment["TEAMCODE_MCP_TOKEN"])
+    }
+
+    @Test fun codexStartsTheArtifactServerWithTheTokenVariableNamedNotGiven() {
+        val launch = agentLaunch("codex", listOf("exec", "--", "prompt"), 4242, token, artifacts = ArtifactsMcp("C:\\Tools\\team\"code.exe", "C:\\repo"))
+        val overrides = launch.arguments.zipWithNext().filter { it.first == "-c" }.map { it.second }
+        val server = overrides.single { it.startsWith("mcp_servers.teamcode_artifacts=") }
+        assertEquals("mcp_servers.teamcode_artifacts={command=\"C:\\\\Tools\\\\team\\\"code.exe\",args=[\"mcp\",\"artifacts\",\"--root\",\"C:\\\\repo\"]," +
+            "env={TEAMCODE_ARTIFACTS_URL=\"http://127.0.0.1:4242\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}", server)
+        assertFalse(launch.arguments.any { it.contains(token) })
+        assertEquals(listOf("--", "prompt"), launch.arguments.takeLast(2))
+    }
+
+    @Test fun withoutTheArtifactServerNothingIsAdded() {
+        val claude = agentLaunch("claude", listOf("-p", "hi"), 4242, token)
+        assertFalse(claude.arguments.any { "teamcode_artifacts" in it }); assertNull(claude.environment["TEAMCODE_MCP_TOKEN"])
+        val codex = agentLaunch("codex", listOf("exec"), 4242, token)
+        assertFalse(codex.arguments.any { "teamcode_artifacts" in it })
     }
 }

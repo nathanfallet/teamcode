@@ -437,6 +437,41 @@ class ArtifactPublicationPersistenceTest {
         }
     }
 
+    @Test @Timeout(240)
+    fun thePolicyFollowsAvailabilityAndPublishersAndRunsMustBeTheCallers() = runBlocking {
+        fixture { f ->
+            val a = Replica(f.a, cipher, Bucket()); val b = Replica(f.b, cipher, Bucket())
+            val owner = f.member.principal; val admin = f.admin.principal
+            assertEquals(ArtifactPolicy(false, "artifact_storage_missing"), b.service.policy(owner))
+            a.admin.saveStorage(admin, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
+            assertEquals(ArtifactPolicy(false, "artifact_storage_unverified"), b.service.policy(owner))
+            a.admin.recordTest(admin, 1, passed = true)
+            assertEquals(ArtifactPolicy(false, "artifacts_disabled"), b.service.policy(owner))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(enabled = true))
+            assertEquals(ArtifactPolicy(true, null), b.service.policy(owner))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(whoCanPublish = WhoCanPublish.ADMINS))
+            assertEquals(ArtifactPolicy(false, "artifact_publish_forbidden"), b.service.policy(owner))
+            assertEquals(ArtifactPolicy(true, null), b.service.policy(admin))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(whoCanPublish = WhoCanPublish.EVERYONE))
+            // A failed test turns the policy off again.
+            a.admin.recordTest(admin, 1, passed = false)
+            assertEquals(ArtifactPolicy(false, "artifact_storage_unverified"), b.service.policy(owner))
+            a.admin.recordTest(admin, 1, passed = true)
+
+            // A new artifact records the caller's own run as its origin; another member's run is refused before any draft.
+            val runs = AgentRunServiceImpl(f.a)
+            val mine = "11111111-2222-4333-8444-555555555555"; val theirs = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+            runs.start(owner, mine, "claude", "interactive"); runs.start(admin, theirs, "codex", "interactive")
+            val page = bytes("<html>run</html>")
+            val upload = b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", mine))
+            assertEquals("local_run" to mine, f.a.query { Artifacts.selectAll().where { Artifacts.id eq upload.artifactId }.single().let { it[Artifacts.originKind] to it[Artifacts.originRunId] } })
+            val drafts = f.a.query { Artifacts.selectAll().count() }
+            assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", theirs)) }.code)
+            assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", "00000000-0000-4000-8000-000000000000")) }.code)
+            assertEquals(drafts, f.a.query { Artifacts.selectAll().count() })
+        }
+    }
+
     private suspend fun activate(replica: Replica, f: Fixture) {
         replica.admin.saveStorage(f.admin.principal, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
         replica.admin.recordTest(f.admin.principal, 1, passed = true)

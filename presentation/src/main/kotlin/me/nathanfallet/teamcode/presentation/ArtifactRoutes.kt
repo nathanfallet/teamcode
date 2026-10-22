@@ -21,6 +21,8 @@ private fun ArtifactSharing.view() = ArtifactMembersView(ownerId, members.map { 
  * Publication and reading of artifacts for members, their agents and keys (`artifacts:read`, `artifacts:write`).
  * Making public and deleting stay interactive (the credential classifier sends every other route to that rule).
  */
+private val RUN_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
 internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
     route("/api/v1/artifacts") {
@@ -31,9 +33,20 @@ internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: Stri
             val page = artifacts.list(call.principal, ArtifactQuery(scope, parameters["member"], parameters["session"], parameters["run"], limit, parameters["before"]))
             call.respond(ArtifactListView(page.artifacts.map { it.view(origin) }, page.nextBefore))
         }
+        get("/policy") {
+            val policy = artifacts.policy(call.principal)
+            call.respond(ArtifactPolicyView(policy.canPublish, policy.reason))
+        }
         post("/uploads") {
             val input = call.jsonBody<CreateArtifactUploadRequest>(131_072)
-            val upload = artifacts.startUpload(call.principal, input.artifactId, input.files.map { UploadFile(it.sha256, it.size) })
+            // `teamcode mcp artifacts` names the run it publishes from; the store checks the run is the caller's.
+            val run = call.request.headers.getAll("x-teamcode-run-id")
+            val origin = when {
+                run.isNullOrEmpty() -> ArtifactOrigin()
+                run.size == 1 && RUN_ID.matches(run.single()) -> ArtifactOrigin("local_run", run.single())
+                else -> throw TeamFailure("invalid_run", 400, "Name one canonical run UUID in x-teamcode-run-id.")
+            }
+            val upload = artifacts.startUpload(call.principal, input.artifactId, input.files.map { UploadFile(it.sha256, it.size) }, origin)
             call.respond(HttpStatusCode.Created, ArtifactUploadView(upload.uploadId, upload.artifactId, upload.missing, ArtifactRules.CHUNK_BYTES, upload.expiresAt))
         }
         put("/uploads/{upload}/blobs/{sha256}/{number}") {
