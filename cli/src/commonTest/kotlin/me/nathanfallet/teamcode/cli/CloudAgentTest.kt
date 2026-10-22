@@ -9,6 +9,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.cloud.RunnerCalls
 import me.nathanfallet.teamcode.cli.cloud.RunnerInference
 import me.nathanfallet.teamcode.cli.cloud.RunnerLoop
+import me.nathanfallet.teamcode.cli.cloud.render
 import me.nathanfallet.teamcode.cli.cloud.agent.*
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
 import me.nathanfallet.teamcode.client.TeamCodeException
@@ -46,6 +47,25 @@ class CloudAgentTest {
         adapter.parse("""{"type":"result","subtype":"success","is_error":false}""")
         assertFalse(adapter.turnActive)
         assertTrue(adapter.parse("not json").events.isEmpty(), "Stray output is ignored")
+    }
+
+    @Test fun claudeSubagentEventsKeepTheirParentToolCall() {
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        adapter.message("Delegate it")
+        val spawn = adapter.parse("""{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"prompt":"List files"}}]}}""").events.single()
+        assertNull(spawn.data["parentToolUseId"], "The main agent's events have no parent")
+        val call = adapter.parse("""{"type":"assistant","parent_tool_use_id":"a1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""").events.single()
+        assertEquals(CloudEventTypes.TOOL_CALL, call.type); assertEquals("a1", call.data.str("parentToolUseId"))
+        val result = adapter.parse("""{"type":"user","parent_tool_use_id":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a.txt"}]}}""").events.single()
+        assertEquals(CloudEventTypes.TOOL_RESULT, result.type); assertEquals("a1", result.data.str("parentToolUseId"))
+        val text = adapter.parse("""{"type":"assistant","parent_tool_use_id":"a1","message":{"content":[{"type":"text","text":"Found a.txt"}]}}""").events.single()
+        assertEquals(CloudEventTypes.AGENT_MESSAGE, text.type); assertEquals("a1", text.data.str("parentToolUseId"))
+        val done = adapter.parse("""{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":"Found a.txt"}]}}""").events.single()
+        assertNull(done.data["parentToolUseId"])
+
+        fun rendered(event: AgentEvent) = CloudEventView(1, event.type, 0, 1, event.data).render()
+        assertEquals("00:00:00 #1   ↳ [tool] Bash {\"command\":\"ls\"}", rendered(call), "teamcode cloud logs indents a subagent's steps")
+        assertEquals("00:00:00 #1 [result] Found a.txt", rendered(done))
     }
 
     @Test fun codexAppServerHoldsSteersRetriesAndFallsBack() {

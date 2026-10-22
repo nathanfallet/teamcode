@@ -53,16 +53,16 @@ Events, in `cloud_session_events`:
 | Type | `data` |
 | --- | --- |
 | `message.user` | `{text, inputId, authorId}`, written by the server when the agent consumed the message |
-| `message.agent` | `{text}` |
-| `tool.call` | `{id, name, input}` |
-| `tool.result` | `{id, output, isError, exitCode?}` |
+| `message.agent` | `{text, parentToolUseId?}` |
+| `tool.call` | `{id, name, input, parentToolUseId?}` |
+| `tool.result` | `{id, output, isError, exitCode?, parentToolUseId?}` |
 | `turn` | `{phase: started, completed, interrupted, failed, durationMs?, steps?}` |
 | `status` | `{agent, conversation?, conversationId?, model?, exitCode?}` |
 | `error` | `{code, message}` |
 | `input` | `{inputId, kind, status, reason}`, server-written when an input is cancelled or rejected |
 | `transfer` | `{transferId, fromMemberId, toMemberId, atEpoch}`, server-written when the session changed owner |
 
-Clients must tolerate unknown types and unknown fields. `seq` starts at 1 and increases by one per session; `epoch` is the producing execution (0 for server events).
+`parentToolUseId` is set on the events of a Claude Code subagent: it is the `id` of the parent's `tool.call` that started it (the `Agent` tool, `Task` in older Claude Code versions), so a client can show a subagent's steps under that call, as `teamcode cloud logs` and `attach` do by indenting them; it is absent for the main agent, for Codex, and when the agent does not report it. Clients must tolerate unknown types and unknown fields. `seq` starts at 1 and increases by one per session; `epoch` is the producing execution (0 for server events).
 
 **Bounds and masking.** The server, not only the runner, removes `thinking`, `signature`, `reasoning` and `redacted_thinking` keys, caps nesting at 16 levels and arrays at 200 items, cuts strings at 16,000 characters (marked), masks secrets (provider and GitHub tokens, TeamCode keys, AWS keys, Slack tokens, JWTs, private keys, `Authorization` values, secret-named assignments, URL credentials) and replaces an event larger than 60,000 bytes by `{truncated, originalBytes}`.
 
@@ -149,12 +149,13 @@ Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `clou
 - The event feed keeps seven days of history; a service that cannot hold a stream open uses [webhooks](webhooks.md).
 - Masking works on values that look like credentials and on secret-named assignments; a secret split across a name/value object (`{"name": "API_KEY", "value": ...}`) or of an unknown shape is not masked.
 - The SSE stream polls the database once a second per open stream (one primary-key read while nothing changes).
+- An event replaced by `{truncated, originalBytes}` (above 60,000 bytes) loses its other fields, `parentToolUseId` included, so a very large subagent result is shown at the top level.
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.
 
 ## Evidence
 
 - `CloudConversationPersistenceTest` (real MySQL 8.4, two connection pools): migration drift; idempotent messages and replay; interrupts delivered first; acknowledgements and transcript order; runner event deduplication and gaps; turn markers moving `ready` and `active`; conversation resumability; backward paging and `stale_view`; follow; masking; the access policy (default, member and group rules, creation denied including on behalf, audit); wake while pausing through the sweeper; redelivery on a new epoch and within the same execution; numbering kept after a full purge; `wake: false` and synchronous wake; the pending cap; cancellation of a terminated session's inputs and the end of the stream; retention purge and validation.
 - `CloudConversationRoutesTest` (a real local server for the stream): capabilities; service keys refused; another member's session invisible; on-behalf refused; idempotency header and body alias, replay header and conflict; the runner agent channel through the projected token (configuration, delivery, consumed acknowledgement, sanitized and deduplicated events, fencing, invalid types); SSE resume after `Last-Event-ID` with each event once and in order, ending with the session; access policy validation and administrator-only routes; read-only attachments from a group rule; renew, detach and expiry.
-- `CloudAgentTest`: Claude and Codex adapter lines (flags, bypass, resume, thinking dropped, steer retry, resume fallback, approvals refused); the host starting lazily, acknowledging (and re-acknowledging a redelivered input without writing it twice), uploading in order, storing and resuming the conversation, leaving messages unacknowledged while draining, interrupting a long turn before the deadline, never resuming another agent version, and stopping when fenced; the runner loop heartbeating during the drain and reporting an interrupted drain.
+- `CloudAgentTest`: Claude and Codex adapter lines (flags, bypass, resume, thinking dropped, subagent events keeping their parent tool call, steer retry, resume fallback, approvals refused); the host starting lazily, acknowledging (and re-acknowledging a redelivered input without writing it twice), uploading in order, storing and resuming the conversation, leaving messages unacknowledged while draining, interrupting a long turn before the deadline, never resuming another agent version, and stopping when fenced; the runner loop heartbeating during the drain and reporting an interrupted drain.
 - `CloudConversationRulesTest`: credential shapes masked; ordinary text (`task-management-…`, `max_tokens=4096`) kept; bounds.
 - `AgentProcessTest` (JVM and native macOS): line pipes to a real `/bin/sh` child, removed variables, bounded long lines that never eat the next line, exit code.

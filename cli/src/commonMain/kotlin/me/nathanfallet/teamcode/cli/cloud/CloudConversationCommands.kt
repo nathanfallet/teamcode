@@ -22,7 +22,10 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 private fun JsonObject.text(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
 private fun String.preview(limit: Int) = replace('\n', ' ').let { if (it.length > limit) it.take(limit - 1) + "…" else it }
 
-/** One readable line (or block) per event; unknown types are shown by name so newer servers stay readable. */
+/**
+ * One readable line (or block) per event; unknown types are shown by name so newer servers stay readable. A subagent's
+ * events (`parentToolUseId`) are indented under the tool call that started it.
+ */
 internal fun CloudEventView.render(): String {
     val time = Instant.fromEpochMilliseconds(at).toString().substring(11, 19)
     val body = when (type) {
@@ -36,7 +39,7 @@ internal fun CloudEventView.render(): String {
         CloudEventTypes.INPUT -> "[${data.text("kind") ?: "message"} ${data.text("inputId")?.take(8) ?: ""} ${data.text("status") ?: ""}${data.text("reason")?.let { ": $it" } ?: ""}]"
         else -> "[$type] $data"
     }
-    return "$time #$seq $body"
+    return "$time #$seq ${if (data.text("parentToolUseId") != null) "  ↳ " else ""}$body"
 }
 
 private fun CloudInputView.line() = listOfNotNull(id, kind, status, reason, if (woke) "woke the session" else null).joinToString("\t")
