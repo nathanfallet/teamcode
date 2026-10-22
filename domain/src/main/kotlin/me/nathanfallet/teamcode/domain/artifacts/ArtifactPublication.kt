@@ -65,6 +65,8 @@ enum class ArtifactScope(val wire: String) {
 data class ArtifactQuery(
     val scope: ArtifactScope = ArtifactScope.TEAM, val ownerId: String? = null, val sessionId: String? = null, val runId: String? = null,
     val limit: Int = ArtifactRules.MAX_LIST, val before: String? = null,
+    /** `local_run`, `cloud_session` or `api`. */
+    val originKind: String? = null, val access: ArtifactAccess? = null,
 )
 
 /** `409 artifact_conflict`: the base version is not the live one. [current] is the live version, for the publisher to merge. */
@@ -250,6 +252,7 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         if (query.scope == ArtifactScope.ALL && !actor.canReadTeam) throw TeamFailure("forbidden", 403, "Only administrators list every artifact.")
         if (listOfNotNull(query.ownerId, query.sessionId, query.runId).any { !FILTER.matches(it) })
             throw ArtifactRules.failure("invalid_artifact_query", "Filter by a member, session or run id: up to 36 letters, digits and dashes.")
+        if (query.originKind != null && query.originKind !in ORIGIN_KINDS) throw ArtifactRules.failure("invalid_artifact_query", "The origin is local_run, cloud_session or api.")
         return store.list(actor, query)
     }
 
@@ -307,6 +310,8 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
     companion object {
         val ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
         private val FILTER = Regex("[A-Za-z0-9-]{1,36}")
+        /** The origins an artifact records: a `teamcode run` launch, a cloud session, or a direct call. */
+        val ORIGIN_KINDS = listOf("local_run", "cloud_session", "api")
     }
 }
 

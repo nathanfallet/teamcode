@@ -30,7 +30,8 @@ internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: Stri
             val parameters = call.request.queryParameters
             val scope = parameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "The scope is mine, shared, team or all.") } ?: ArtifactScope.TEAM
             val limit = parameters["limit"]?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_artifact_query", 400, "Use a numeric limit.") } ?: ArtifactRules.MAX_LIST
-            val page = artifacts.list(call.principal, ArtifactQuery(scope, parameters["member"], parameters["session"], parameters["run"], limit, parameters["before"]))
+            val access = parameters["access"]?.let { ArtifactAccess.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "The access is personal, team or public.") }
+            val page = artifacts.list(call.principal, ArtifactQuery(scope, parameters["member"], parameters["session"], parameters["run"], limit, parameters["before"], parameters["origin"], access))
             call.respond(ArtifactListView(page.artifacts.map { it.view(origin) }, page.nextBefore))
         }
         get("/policy") {

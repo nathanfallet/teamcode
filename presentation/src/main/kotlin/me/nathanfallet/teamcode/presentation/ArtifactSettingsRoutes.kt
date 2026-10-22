@@ -101,7 +101,16 @@ internal fun Route.artifactSettingsRoutes(artifacts: ArtifactAdministrationServi
             """<label>Delete shared artifacts after (days, empty to keep) <input name="sharedRetentionDays" inputmode="numeric" value="${days(settings.retention.sharedDays)}"></label>""" +
             """<label>Versions kept per artifact <input name="maxVersionsPerArtifact" inputmode="numeric" required value="${settings.retention.maxVersionsPerArtifact}"></label>""" +
             """<button>Save settings</button></form>"""
-        respondText(page("Artifacts", state + testResult + storageForm + settingsForm), ContentType.Text.Html)
+        val used = overview.usage.sumOf { it.bytes }
+        val usage = """<h2>Usage</h2><p>${byteSize(used)} of ${byteSize(settings.quotas.teamBytes)} stored for the team, counting each file once per artifact; deleted artifacts are not counted.</p>""" +
+            (if (overview.usage.isEmpty()) "<div class='empty'><strong>No artifact is stored.</strong></div>"
+            else """<table><thead><tr><th>Member</th><th class="num">Artifacts</th><th class="num">Stored</th><th class="num">Of the member quota</th></tr></thead><tbody>""" +
+                overview.usage.joinToString("") { row ->
+                    val share = if (settings.quotas.memberBytes > 0) row.bytes * 100 / settings.quotas.memberBytes else 0
+                    """<tr><td>${escape(row.username.ifEmpty { row.memberId })}</td><td class="num">${row.artifacts}</td><td class="num">${byteSize(row.bytes)}</td><td class="num">$share %</td></tr>"""
+                } + "</tbody></table>" +
+                (if (overview.usage.size >= ArtifactAdministrationService.MAX_USAGE_ROWS) "<p><small>The ${ArtifactAdministrationService.MAX_USAGE_ROWS} largest owners are shown.</small></p>" else ""))
+        respondText(page("Artifacts", state + testResult + usage + storageForm + settingsForm), ContentType.Text.Html)
     }
 
     get(ARTIFACT_SETTINGS_PATH) { call.settingsPage() }

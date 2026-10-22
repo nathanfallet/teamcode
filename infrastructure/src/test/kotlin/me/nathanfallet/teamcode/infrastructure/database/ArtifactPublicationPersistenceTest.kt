@@ -469,6 +469,24 @@ class ArtifactPublicationPersistenceTest {
             assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", theirs)) }.code)
             assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", "00000000-0000-4000-8000-000000000000")) }.code)
             assertEquals(drafts, f.a.query { Artifacts.selectAll().count() })
+
+            // The gallery's filters and the usage per member.
+            send(b.service, owner, upload, listOf(page))
+            val fromRun = b.service.commit(owner, upload.artifactId, upload.uploadId, "index.html", mapOf("index.html" to ref(page)), 0, "Run", null, null, "team", null).artifact
+            val direct = publish(a.service, admin, null, mapOf("index.html" to bytes("<html>direct, a little longer</html>")), 0, title = "Direct").artifact
+            fun ids(actor: Principal, query: ArtifactQuery) = runBlocking { a.service.list(actor, query) }.artifacts.map { it.id }
+            assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(originKind = "local_run")))
+            assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(runId = mine)))
+            assertEquals(emptyList(), ids(owner, ArtifactQuery(originKind = "api")), "Another member's personal artifact stays out")
+            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, originKind = "api")))
+            assertEquals(listOf(fromRun.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, access = ArtifactAccess.TEAM)))
+            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.MINE, access = ArtifactAccess.PERSONAL)))
+            assertEquals("invalid_artifact_query", assertFailsWith<TeamFailure> { a.service.list(owner, ArtifactQuery(originKind = "elsewhere")) }.code)
+            val usage = b.admin.overview(admin).usage
+            assertEquals(listOf(ArtifactMemberUsage(admin.member.id, admin.member.username, 1, direct.storedBytes), ArtifactMemberUsage(owner.member.id, owner.member.username, 1, page.size.toLong())), usage,
+                "Largest first; the drafts left by the refused uploads hold nothing")
+            a.service.delete(admin, direct.id)
+            assertEquals(listOf(owner.member.id), b.admin.overview(admin).usage.map { it.memberId }, "A deleted artifact is no longer counted")
         }
     }
 

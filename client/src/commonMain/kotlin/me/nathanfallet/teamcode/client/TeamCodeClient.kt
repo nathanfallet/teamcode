@@ -302,7 +302,8 @@ class TeamCodeClient(
     suspend fun saveArtifactSettings(input: SaveArtifactSettingsRequest): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Put, input)
 
     /** Artifacts the caller can read; `scope` is `mine`, `shared`, `team` (default) or `all` (administrators). */
-    suspend fun artifacts(scope: String? = null, memberId: String? = null, sessionId: String? = null, runId: String? = null, limit: Int? = null, before: String? = null): ArtifactListView {
+    suspend fun artifacts(scope: String? = null, memberId: String? = null, sessionId: String? = null, runId: String? = null, limit: Int? = null, before: String? = null,
+        originKind: String? = null, access: String? = null): ArtifactListView {
         listOfNotNull(memberId, sessionId, runId).forEach(::identifier)
         // request, not get: the explicitly imported resources `get` would take the URL string for a resource to encode.
         val response = http.request("$origin/api/v1/artifacts") {
@@ -310,6 +311,7 @@ class TeamCodeClient(
             authenticate(); timeout { requestTimeoutMillis = 30_000 }
             scope?.let { parameter("scope", it) }; memberId?.let { parameter("member", it) }; sessionId?.let { parameter("session", it) }
             runId?.let { parameter("run", it) }; limit?.let { parameter("limit", it) }; before?.let { parameter("before", it) }
+            originKind?.let { parameter("origin", it) }; access?.let { parameter("access", it) }
         }
         checkResponse(response)
         return response.body()

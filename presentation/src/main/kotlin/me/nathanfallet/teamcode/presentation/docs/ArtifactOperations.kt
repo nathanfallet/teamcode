@@ -81,6 +81,8 @@ internal fun ApiCatalog.artifactMemberOperations() {
             queryText("member", "Only artifacts owned by this member id.")
             queryText("session", "Only artifacts published from this cloud session.")
             queryText("run", "Only artifacts published from this agent run.")
+            queryText("origin", "Only artifacts with this origin: `local_run`, `cloud_session` or `api`.")
+            queryText("access", "Only artifacts with this access level: `personal`, `team` or `public`.")
             queryNumber("limit", "1–50, default 50.")
             queryText("before", "The `nextBefore` of the previous page.")
         }

@@ -19,7 +19,18 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
 
     override suspend fun overview(actor: Principal): ArtifactAdminOverview = database.query {
         requireCurrent(this, actor)
-        ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId))
+        ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId), usage(actor.teamId))
+    }
+
+    /** One grouped read on `artifacts_owner` (team, owner), then the owners' names by primary key. */
+    private fun usage(teamId: String): List<ArtifactMemberUsage> {
+        val bytes = Artifacts.storedBytes.sum()
+        val count = Artifacts.id.count()
+        val rows = Artifacts.select(Artifacts.ownerId, bytes, count).where { (Artifacts.teamId eq teamId) and (Artifacts.state eq "active") }
+            .groupBy(Artifacts.ownerId).orderBy(bytes to SortOrder.DESC, Artifacts.ownerId to SortOrder.ASC).limit(ArtifactAdministrationService.MAX_USAGE_ROWS).toList()
+        if (rows.isEmpty()) return emptyList()
+        val names = Members.select(Members.id, Members.username).where { Members.id inList rows.map { it[Artifacts.ownerId] } }.associate { it[Members.id] to it[Members.username] }
+        return rows.map { ArtifactMemberUsage(it[Artifacts.ownerId], names[it[Artifacts.ownerId]].orEmpty(), it[count].toInt(), it[bytes] ?: 0) }
     }
 
     override suspend fun saveStorage(actor: Principal, expectedVersion: Int, input: ArtifactStorageInput): ArtifactStorage = database.query {

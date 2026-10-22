@@ -87,7 +87,11 @@ data class ArtifactAvailability(val active: Boolean, val reason: String?) {
     }
 }
 
-data class ArtifactAdminOverview(val storage: ArtifactStorage?, val settings: ArtifactSettings, val inUse: Boolean) {
+/** What one owner's published (active) artifacts hold, for the settings page; drafts hold nothing yet. */
+data class ArtifactMemberUsage(val memberId: String, val username: String, val artifacts: Int, val bytes: Long)
+
+/** [usage] lists owners by stored bytes, largest first, at most [ArtifactAdministrationService.MAX_USAGE_ROWS]. */
+data class ArtifactAdminOverview(val storage: ArtifactStorage?, val settings: ArtifactSettings, val inUse: Boolean, val usage: List<ArtifactMemberUsage> = emptyList()) {
     val availability get() = ArtifactAvailability.of(settings, storage)
 }
 
@@ -243,6 +247,7 @@ class ArtifactAdministrationService(
 
     companion object {
         const val GIB = 1024L * 1024 * 1024
+        const val MAX_USAGE_ROWS = 500
         /** The whole connection test; the typed client waits longer. */
         const val TEST_DEADLINE_MILLIS = 80_000L
         private const val CLEANUP_MILLIS = 10_000L

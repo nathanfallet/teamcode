@@ -185,6 +185,7 @@ th.col-member{width:190px}th.col-today{width:250px}
 .card .meter-label{white-space:normal}
 td.num{font-size:13px}
 .pool-forms{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin:0 0 18px}.pool-forms form{margin:0}
+form.filters{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-end;padding:12px 14px}form.filters label{margin:0}form.filters button{margin:0}
 td button{background:var(--panel-2);color:var(--text);border-color:var(--line);font-size:13px;padding:7px 12px}
 td button:hover{border-color:var(--muted);filter:none}
 details.help{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;margin:0 0 20px;padding:0 16px;color:var(--muted);font-size:14px}

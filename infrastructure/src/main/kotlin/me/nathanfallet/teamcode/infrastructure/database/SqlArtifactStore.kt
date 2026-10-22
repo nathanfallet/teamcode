@@ -281,6 +281,8 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         query.ownerId?.let { condition = condition and (Artifacts.ownerId eq it) }
         query.sessionId?.let { condition = condition and (Artifacts.originSessionId eq it) }
         query.runId?.let { condition = condition and (Artifacts.originRunId eq it) }
+        query.originKind?.let { condition = condition and (Artifacts.originKind eq it) }
+        query.access?.let { condition = condition and (Artifacts.access eq it.wire) }
         query.before?.let { cursor ->
             val updated = cursor.substringBefore(':').toLongOrNull()
             val id = cursor.substringAfter(':', "")

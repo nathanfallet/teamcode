@@ -57,7 +57,12 @@ class ArtifactViewerRoutesTest {
         }
         override suspend fun share(actor: Principal, artifactId: String, member: String, role: ArtifactMemberRole) = members(actor, artifactId).also { calls += "share:$member:${role.wire}" }
         override suspend fun delete(actor: Principal, artifactId: String) { calls += "delete" }
-        override suspend fun list(actor: Principal, query: ArtifactQuery) = ArtifactPage(listOf(artifact("owner")), null).also { inactive(); calls += "list:${query.scope.wire}" }
+        var listed: List<Artifact>? = null
+        var nextBefore: String? = null
+        var query: ArtifactQuery? = null
+        override suspend fun list(actor: Principal, query: ArtifactQuery) = ArtifactPage(listed ?: listOf(artifact("owner")), nextBefore).also {
+            inactive(); calls += "list:${query.scope.wire}"; this.query = query
+        }
         override suspend fun availability(teamId: String) = if (active) ArtifactAvailability(true, null) else ArtifactAvailability(false, "artifact_storage_unverified")
         override suspend fun publicArtifact(artifactId: String) = if (active && access == ArtifactAccess.PUBLIC && artifactId == id) PublicArtifact(artifact("public"), version(2)) else null
         override suspend fun viewable(artifactId: String, number: Int, memberId: String?, tokenId: String?): ViewableVersion? {
@@ -81,10 +86,10 @@ class ArtifactViewerRoutesTest {
     }
     private fun mapOf(vararg values: ByteArray) = values.toList()
 
-    private fun ApplicationTestBuilder.install(store: Store, clock: () -> Long = System::currentTimeMillis) {
+    private fun ApplicationTestBuilder.install(store: Store, runs: AgentRunService? = null, clock: () -> Long = System::currentTimeMillis) {
         val bucket = Bucket()
         val service = ArtifactService(store, Admin(), bucket)
-        application { configureGateway(gateway, team = FakeTeam(), publicOrigin = origin, artifacts = service,
+        application { configureGateway(gateway, team = FakeTeam(), publicOrigin = origin, artifacts = service, runs = runs,
             artifactViewing = ArtifactViewing(service, store, Admin(), bucket, ArtifactTickets(ByteArray(32) { 7 }, clock), clock)) }
     }
     private suspend fun ApplicationTestBuilder.viewer(cookie: String?, path: String = "/artifact/$id") = client.get(path) { cookie?.let { header(HttpHeaders.Cookie, "teamcode_session=$it") } }
@@ -222,6 +227,51 @@ class ArtifactViewerRoutesTest {
         val admin = noRedirect.get(ARTIFACT_GALLERY_PATH) { header(HttpHeaders.Cookie, "teamcode_session=admin") }
         assertEquals(HttpStatusCode.Found, admin.status); assertEquals(ARTIFACT_SETTINGS_PATH, admin.headers[HttpHeaders.Location], "and are sent to Settings → Artifacts")
         assertEquals(HttpStatusCode.NotFound, viewer("member", ARTIFACT_GALLERY_PATH).status)
+    }
+
+    @Test fun theGalleryFiltersByOriginAndAccessAndLinksRunsToWhatTheyPublished() = testApplication {
+        val run = "11111111-2222-4333-8444-555555555555"
+        val session = "22222222-3333-4444-8555-666666666666"
+        val runs = object : AgentRunService by stub() {
+            override suspend fun get(actor: Principal, id: String) = RunDetail(AgentRun(id, "admin-id", "alice", "claude", "interactive", null, 1000, 2000, null, null, null,
+                RunState.RUNNING, RunPolicy(), 0, 0, 0, 0, false), emptyList(), false)
+        }
+        val store = Store(); install(store, runs = runs)
+        val base = store.artifact("owner")
+        store.listed = listOf(
+            base.copy(title = "<script>alert(1)</script>", origin = ArtifactOrigin("local_run", run)),
+            base.copy(id = "00000000-0000-4000-8000-0000000000ab", title = "Cloud", origin = ArtifactOrigin("cloud_session", null, session, 2)),
+            base.copy(id = "00000000-0000-4000-8000-0000000000ac", title = "Direct", origin = ArtifactOrigin("api")))
+        store.nextBefore = "2:00000000-0000-4000-8000-0000000000ac"
+
+        val html = viewer("member", "$ARTIFACT_GALLERY_PATH?scope=mine&origin=cloud_session&access=team&session=$session").bodyAsText()
+        assertEquals(ArtifactQuery(ArtifactScope.MINE, sessionId = session, originKind = "cloud_session", access = ArtifactAccess.TEAM), store.query)
+        assertFalse("<script>alert(1)</script>" in html); assertTrue("&lt;script&gt;alert(1)&lt;/script&gt;" in html, "Titles are escaped")
+        assertTrue("""<option value="cloud_session" selected>""" in html && """<option value="team" selected>""" in html, "The form shows the filters in force")
+        assertTrue("""<input type="hidden" name="session" value="$session">""" in html)
+        assertTrue("""href="$ARTIFACT_GALLERY_PATH?scope=team&amp;origin=cloud_session&amp;access=team&amp;session=$session"""" in html, "Tabs keep the filters")
+        assertTrue("""href="$ARTIFACT_GALLERY_PATH?scope=mine&amp;origin=cloud_session&amp;access=team&amp;session=$session&amp;before=2%3A00000000-0000-4000-8000-0000000000ac"""" in html, "So does the next page")
+        assertTrue("""href="$ARTIFACT_GALLERY_PATH?scope=mine&amp;origin=cloud_session&amp;access=team">Show every origin""" in html)
+        // Each card links its origin to what the same run or session published.
+        assertTrue("""<a href="$ARTIFACT_GALLERY_PATH?scope=mine&amp;run=$run">local run 11111111</a>""" in html, html)
+        assertTrue("""<a href="$ARTIFACT_GALLERY_PATH?scope=mine&amp;session=$session">cloud session 22222222</a>""" in html)
+        assertTrue(" · API · " in html)
+
+        assertEquals(HttpStatusCode.BadRequest, viewer("member", "$ARTIFACT_GALLERY_PATH?origin=elsewhere").status)
+        assertEquals(HttpStatusCode.BadRequest, viewer("member", "$ARTIFACT_GALLERY_PATH?access=secret").status)
+        store.listed = emptyList(); store.nextBefore = null
+        assertTrue("Clear the filters" in viewer("member", "$ARTIFACT_GALLERY_PATH?origin=api").bodyAsText())
+        assertTrue("No artifact here yet" in viewer("member", ARTIFACT_GALLERY_PATH).bodyAsText())
+        // The API takes the same filters.
+        assertEquals(HttpStatusCode.OK, client.get("/api/v1/artifacts?origin=local_run&access=public") { bearerAuth("member") }.status)
+        assertEquals(ArtifactQuery(originKind = "local_run", access = ArtifactAccess.PUBLIC), store.query)
+        assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/artifacts?access=everyone") { bearerAuth("member") }.status)
+
+        // A launch's page links to its artifacts while they are on, and only then.
+        assertTrue("""href="$ARTIFACT_GALLERY_PATH?scope=team&amp;run=$run">Artifacts published from this launch""" in viewer("member", "/dashboard/sessions/$run").bodyAsText())
+        assertTrue("""scope=all&amp;run=$run""" in viewer("admin", "/dashboard/sessions/$run").bodyAsText(), "Administrators see every member's")
+        store.active = false
+        assertFalse("Artifacts published from this launch" in viewer("member", "/dashboard/sessions/$run").bodyAsText())
     }
 
     @Test fun theDashboardIsNeverFramedAndFormsManageTheArtifact() = testApplication {

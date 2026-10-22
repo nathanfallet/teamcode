@@ -180,7 +180,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     })
     routing {
         if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null, OverviewSources(admission, runs, accounts)) }
-        if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
+        if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin, artifactViewing?.let { viewing -> { teamId: String -> viewing.availability(teamId).active } }) }
         if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
         if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null, groups, accounts,

@@ -15,7 +15,7 @@ This page is the contract and the record of what is implemented. It builds on [a
 | [Serving](#serving-and-access) under `/artifact/<id>/<ticket>/<path>`, view tickets, CSP sandbox on every response, the viewer and the gallery on the dashboard, public links (`artifacts.v1`) | Implemented (PR 3) |
 | [`teamcode mcp artifacts`](#agents), the [loopback relay](#the-loopback-relay) of `teamcode run` and the user service (`artifact-relay-v1`), injection into Claude Code and Codex, [`GET /api/v1/artifacts/policy`](#publication-policy) (`artifacts.policy.v1`), runs recorded as origins | Implemented (PR 4) |
 | [Cloud sessions](#cloud-sessions): `artifacts:write` on the execution credential, injection by the runner, the session and epoch recorded as origins, [session transfer](#cloud-sessions) | Implemented (PR 5) |
-| Usage per member on the dashboard, filters by origin, links from session and run pages, operations guide | Planned (PR 6) |
+| [Usage per member](#setting-up-a-bucket) on Settings → Artifacts, gallery filters by origin and access, links from runs and origins, the [bucket guide](#setting-up-a-bucket) | Implemented (PR 6) |
 
 `artifacts.v1` appears in `GET /api/v1/capabilities` since PR 3, when artifacts can be published, read and served; `artifacts.policy.v1` since PR 4, with the policy route; the local proxy announces `artifact-relay-v1` in `/_teamcode/service`. Each is advertised only once its part is complete, as [a planned command must not be advertised as implemented](architecture.md).
 
@@ -72,6 +72,52 @@ A save names the `version` it replaces (`409 artifact_storage_conflict` otherwis
 | `maxVersionsPerArtifact` | 50 | 1–1000; older versions are pruned and their blobs collected |
 
 A retention change applies to artifacts published afterwards, as for paused cloud sessions.
+
+### Setting up a bucket
+
+TeamCode needs one private bucket (or a prefix in one) and a key limited to it. It never creates a bucket, never sets a lifecycle rule and never makes an object public: the server reads and writes every file itself, so the bucket needs no public access, no CORS rule and no website hosting. Do not add a lifecycle rule that expires objects under the prefix: TeamCode deletes what it no longer references (pruned versions, deleted artifacts, files no version uses), and an object removed behind its back makes the versions that use it fail to load. With bucket versioning on, deleted objects stay billed as noncurrent versions until a lifecycle rule for noncurrent versions removes them; that rule is safe.
+
+Files live under `<prefix>/<team>/artifacts/<id>/` (`blobs/<sha256>` and `versions/<n>.json`) and the connection test writes `<prefix>/<team>/.teamcode-probe-<uuid>`, so the key needs these actions on `<prefix>/*` (the whole bucket without a prefix) and nothing else:
+
+| Action | Used for |
+| --- | --- |
+| `s3:PutObject` | Storing a file and a version manifest, the connection test |
+| `s3:GetObject` | Serving files, the connection test |
+| `s3:ListBucket` (limited to the prefix) | Emptying a deleted artifact's folder, the connection test |
+| `s3:DeleteObject` | Pruned versions, deleted artifacts, the connection test |
+
+The minimal policy, for a bucket `teamcode-artifacts` and the prefix `teamcode` (AWS IAM; OVHcloud and MinIO accept the same document):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::teamcode-artifacts/teamcode/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::teamcode-artifacts",
+      "Condition": { "StringLike": { "s3:prefix": ["teamcode/*"] } }
+    }
+  ]
+}
+```
+
+| Provider | Endpoint | Region | Path-style | Key |
+| --- | --- | --- | --- | --- |
+| AWS S3 | `https://s3.<region>.amazonaws.com` | the bucket's region, such as `eu-west-3` | off | An IAM user (or role credentials) with the policy above. Block Public Access stays on. |
+| OVHcloud Object Storage | `https://s3.<region>.io.cloud.ovh.net` | `gra`, `sbg`, ... | off (on for older endpoints that need it) | An Object Storage user with S3 credentials and the policy above imported as its access policy. |
+| Cloudflare R2 | `https://<account id>.r2.cloudflarestorage.com` | `auto` | either | An R2 API token with Object Read & Write limited to this bucket; R2 has no prefix-level permissions, so give TeamCode a bucket of its own. Server-side encryption: `none` (R2 always encrypts). |
+| MinIO | `https://<host>:<port>` (TLS required; private addresses are allowed) | `us-east-1` unless the server sets another | on | `mc admin policy create <alias> teamcode-artifacts policy.json`, `mc admin user add <alias> <access key> <secret>`, `mc admin policy attach <alias> teamcode-artifacts --user <access key>`. |
+
+Then, on Settings → Artifacts: save the storage, run **Test the connection** (each step names the S3 error code when it fails: `AccessDenied` usually means the policy misses an action or the prefix, `SignatureDoesNotMatch` a wrong secret or region, `NoSuchBucket` a wrong bucket or path-style setting), and turn artifacts on. To rotate the key, create the new key, save it in the same form (the endpoint, bucket and prefix stay) and test again; artifacts are off between the save and a passed test, so do it when nobody is publishing, then revoke the old key.
+
+**Usage.** Settings → Artifacts shows, above the storage form, what the team stores against its quota and, per member, the published artifacts they own and the bytes they hold (each file counted once per artifact, as the quotas count it; drafts and deleted artifacts are not counted), largest first.
+
 
 ## Model and bucket layout
 
@@ -138,7 +184,7 @@ Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes
 | `POST /api/v1/artifacts/uploads` `{artifactId?, files:[{sha256,size}]}` | Announce the distinct files of the next version → `201 {uploadId, artifactId, missing, chunkBytes, expiresAt}`. Without `artifactId` a draft artifact is created; `quotaArtifactsPerMember` counts published artifacts and is checked here and at the first commit. A member holds at most 16 open uploads and 20 unpublished drafts (`429 artifact_uploads_busy`). `missing` lists what the artifact's folder does not hold yet |
 | `PUT /api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{n}` | One chunk (`application/octet-stream`, at most 1 MiB, under the chart's 2 MiB ingress limit) → `{complete, received, total}`. Chunks may be sent in any order and in parallel (they are counted under a lock on the upload) and wait in MySQL, the only bus between replicas; the last one assembles the file, checks its size and SHA-256 (`422 artifact_blob_mismatch`; the client sends the file again), scans it, and sends it to the bucket |
 | `POST /api/v1/artifacts/{id}/versions` `{uploadId, entry, files:{path:{sha256,size}}, baseVersion, title?, description?, icon?, access?}` | Commit → `201 {artifact, version, replayed:false}`; the same commit within 10 minutes (same credential, base version and manifest digest) answers `200` with the same version and `replayed:true` |
-| `GET /api/v1/artifacts?scope=&member=&session=&run=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue |
+| `GET /api/v1/artifacts?scope=&member=&session=&run=&origin=&access=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue; `origin` is `local_run`, `cloud_session` or `api`, `access` is `personal`, `team` or `public` (`400 invalid_artifact_query` otherwise); `session` and `run` select the artifacts created in that cloud session or launch |
 | `GET /api/v1/artifacts/{id}`, `GET …/versions`, `GET …/versions/{n}` | The artifact (with the caller's `relation`: `owner`, `editor`, `viewer`, `team` or `admin`), its kept versions, one version's manifest |
 | `GET …/versions/{n}/file?path=` | One file, as `application/octet-stream` with `Content-Disposition: attachment` and `X-TeamCode-Sha256`: the API never serves a page as HTML on the server's origin (that is the [content prefix](#serving-and-access)) |
 | `PUT /api/v1/artifacts/{id}/access` `{access, publicFollowsLatest, publicVersion?}` | Change the access level; interactive only. Either `publicFollowsLatest: true` without a version, or `false` with `publicVersion` (`400 invalid_artifact_access` otherwise) |
@@ -249,7 +295,7 @@ The sandbox gives the content an opaque origin even when opened directly: no coo
 
 **Entry page.** An HTML entry page with its own doctype (after whitespace and comments) is sent byte for byte; one without gets the skeleton agents expect (doctype, viewport, a small reset, and `utf-8` when the page is UTF-8). A Markdown entry page is rendered on the server into escaped HTML (headings, paragraphs, lists, quotes, code, emphasis, and links to `http`, `https`, `mailto` or relative targets); a Markdown file that is not the entry page is served as `text/plain`. Other files are served with the type recorded at publication.
 
-**Gallery.** **Dashboard → Artifacts** lists what the member can read, theirs, those shared with them, and for administrators every artifact of the team, newest first, with access, author, version, origin and date. While artifacts are inactive, `/artifact/*` answers `404` to everyone, the menu shows only to administrators and leads them to Settings → Artifacts, and members get `404` on the gallery.
+**Gallery.** **Dashboard → Artifacts** lists what the member can read, theirs, those shared with them, and for administrators every artifact of the team, newest first, with access, author, version, origin and date. A form filters by origin (local runs, cloud sessions, API and CLI) and access level; the tabs and the next page keep the filters. A card's origin links to everything the same launch or cloud session published (`?run=` or `?session=`), and a launch's page (**Agent sessions → launch**) links to its artifacts while artifacts are on. The dashboard has no page per cloud session yet, so a cloud session's artifacts are reached from the gallery. While artifacts are inactive, `/artifact/*` answers `404` to everyone, the menu shows only to administrators and leads them to Settings → Artifacts, and members get `404` on the gallery.
 
 | Access | Who reads | Who changes content | Who changes access or deletes |
 | --- | --- | --- | --- |
@@ -270,6 +316,8 @@ PR 2: `ArtifactRulesTest` (chunking, announcements, manifests and paths, digest,
 PR 3: `ArtifactViewingTest` (tickets bound to their artifact and key, forged, expired; the HKDF derivation against an independently computed value; byte ranges), `ArtifactViewerRoutesTest` (the content policy and companion headers on 200, 206, 304, 404, 416, 500 and a framework error; a ticket that is forged, of another artifact, expired, or whose grant was revoked, stopping within the 30-second recheck; the dashboard never served under the content prefix; `Sec-Fetch-Dest: iframe` refused; sign-in redirects, `next` limited to the viewer, both cookie paths; public links for visitors with the banner and without the author; `404` while inactive and the menu only for administrators, the gallery sending them to the settings; the forms with their origin check and the delete confirmation; `artifacts.v1`; Markdown escaped), `ArtifactPublicationPersistenceTest` (MySQL 8.4: a ticket's login session, access, public pin, public sharing off, availability, sign-out, a disabled member and deletion).
 
 PR 4: `ArtifactRoutesTest` (the policy in every availability state, from the store to the answer; the run header recorded as the origin, an invalid or repeated one refused before the store; a key without an artifacts scope refused), `ArtifactPublicationPersistenceTest` (MySQL 8.4, two pools: the policy through storage missing, untested, switched off, on, administrators only and a failed test; a run recorded as the origin, another member's or an unknown run refused before any draft), `ApiDocsTest`; in the CLI `ArtifactRelayTest` (the listed calls relayed with the proxy's credential, query, body, run and headers; access changes, deletion and unlisted paths `404` without reaching the server; no token, a wrong token, an `Origin`, an invalid or repeated run refused; a business refusal kept, a refused sign-in and an unreachable server turned into `502`; the service announcing `artifact-relay-v1` and an older one set aside), `AgentLaunchTest` (the Claude Code stdio entry and the Codex override, with the token on no command line, TOML escaping, a team server named `artifacts` kept apart, nothing added without the server), `ArtifactsMcpServerTest` (protocol negotiation, tools, notifications, parse and method errors; publishing from the root and refusing `.env`, a path outside the roots, a symbolic link and `public`; a conflict writing the live version to the scratch directory and the merged page published from there; reading into the scratch directory, untrusted content marked, files never overwritten; sharing and listing; an unreachable server as `server_unreachable` without the exception text). The native macOS ARM64 binary was run over stdio: initialize, tools, an unreachable relay answered as a tool error, the scratch directory created `0700`; the CLI compiles for macOS, Linux and Windows. Fixed on the way: the typed client's artifact list and file download called the resources `get` with a URL string, which failed at runtime; they now build plain requests.
+
+PR 6: `ArtifactViewerRoutesTest` (the filters passed to the store, shown in the form and kept by the tabs and the next page; origins linked to their run or session; titles escaped; an unknown origin or access refused, by the gallery and the API; the launch page linking to its artifacts only while they are on, with every member's for administrators), `ArtifactSettingsRoutesTest` (usage per member escaped, a removed member shown by id, the share of the member quota and the team total), `ArtifactPublicationPersistenceTest` (MySQL 8.4: the origin, access and run filters in each scope, another member's personal artifact left out; usage largest first, drafts and deleted artifacts not counted).
 
 PR 5: `CloudInferencePersistenceTest` (MySQL 8.4, two pools: the execution credential's scopes include `artifacts:write`; the policy for that credential; a publication with it records `cloud_session`, the session and epoch 1 whatever run the call claims, belongs to the session's member and records the session on its version; deleting is refused; after the execution ends the policy answers `authentication_required`), `CloudTransferPersistenceTest` (at the boundary the recipient becomes `editor` of the artifacts created in the session, updated in it and shared with them as viewer, an editor invitation is kept, a deleted artifact and the recipient's own are left out, owners unchanged, three audit events), `ArtifactStoragePersistenceTest` (the migration matches the tables with the new index); in the CLI `CloudToolsJvmTest` (the runner connects the artifact tools only when the policy says the owner may publish: not for any refusal reason, an older server without the policy, or without the runner's binary) and `CloudToolsTest` (the agent's configuration: the workspace root, the scratch directory, the refused home, the relay address and the local token only).
 
