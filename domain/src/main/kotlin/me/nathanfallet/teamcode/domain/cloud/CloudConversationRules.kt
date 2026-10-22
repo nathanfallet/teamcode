@@ -52,6 +52,21 @@ object CloudConversationRules {
     }
     private const val MAX_WORD = 16
 
+    /** The kind of each pattern of [secrets], in order, as [detect] names it. */
+    private val secretKinds = listOf("provider_api_key", "github_token", "github_token", "teamcode_credential", "aws_access_key", "slack_token", "jwt", "private_key")
+
+    /**
+     * The kind of the first credential found in [text], or null: the shapes [mask] hides, plus authorization values
+     * and URLs with credentials. Name-based assignments (`API_KEY = "…"`) are not reported: they are ordinary code in a
+     * page and say nothing about the value. Used to refuse publishing a file rather than to rewrite it.
+     */
+    fun detect(text: String): String? {
+        secrets.forEachIndexed { index, pattern -> if (pattern.containsMatchIn(text)) return secretKinds[index] }
+        if (authorization.findAll(text).any { looksLikeCredential(it.groupValues[2]) }) return "authorization_header"
+        if (urlCredentials.containsMatchIn(text)) return "url_credentials"
+        return null
+    }
+
     fun mask(text: String): String {
         var masked = text
         for (pattern in secrets) masked = pattern.replace(masked, MASK)

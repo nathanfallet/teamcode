@@ -216,4 +216,36 @@ static inline int teamcode_unix_connect(const char *path) {
     return teamcode_unix_prepare(fd);
 }
 static inline void teamcode_unix_remove(const char *path) { unlink(path); }
+
+/*
+ * Artifact sources: opens the root, then each component below it with O_NOFOLLOW, so no symbolic link anywhere under
+ * the root (in the path or as the file) can redirect the read. Returns the descriptor of a regular file and its size,
+ * or a negative code with *failed the index of the refused component (-1 for the root): -1 root, -2 symbolic link or
+ * not a directory, -3 missing, -4 not a regular file, -5 permission denied, -6 other.
+ */
+static inline int teamcode_open_nofollow(const char *root, const char *const *components, int count, int *failed, long long *size) {
+    *failed = -1;
+    if (count < 1) return -6;
+    int dir = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dir < 0) return -1;
+    for (int i = 0; i < count; i++) {
+        int last = i == count - 1;
+        /* O_NONBLOCK so a FIFO planted as the file never blocks the open; fstat then refuses it. */
+        int next = openat(dir, components[i], O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (last ? O_NONBLOCK : O_DIRECTORY));
+        int error = errno;
+        close(dir);
+        if (next < 0) {
+            *failed = i;
+            if (error == ELOOP || error == ENOTDIR || error == EMLINK) return -2;
+            if (error == ENOENT) return -3;
+            if (error == EACCES || error == EPERM) return -5;
+            return -6;
+        }
+        dir = next;
+    }
+    struct stat info;
+    if (fstat(dir, &info) != 0 || !S_ISREG(info.st_mode)) { close(dir); *failed = count - 1; return -4; }
+    *size = (long long)info.st_size;
+    return dir;
+}
 #endif

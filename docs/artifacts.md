@@ -11,13 +11,13 @@ This page is the contract and the record of what is implemented. It builds on [a
 | Contract (this page); tables and migrations `V20261022150000*` for the whole feature | Implemented (PR 1) |
 | `ArtifactObjectStore` port and its S3 adapter: SigV4 written in-house on the Ktor client, PutObject, GetObject with Range, HeadObject, ListObjectsV2, DeleteObjects; DNS check of the endpoint | Implemented (PR 1) |
 | [Storage and settings](#storage-and-settings): admin API, typed client, **Dashboard → Settings → Artifacts**, connection test, sealed secret, [availability](#when-artifacts-are-active), audit | Implemented (PR 1) |
-| Upload and publication API, versions, optimistic concurrency, quotas, secret scan, sharing, deletion with proof, retention and garbage collection, `artifacts:*` scopes, CLI `teamcode artifacts` | Planned (PR 2) |
+| [Upload and publication API](#publication-api), versions, optimistic concurrency, quotas, secret scan, sharing, deletion with proof, retention and garbage collection, `artifacts:*` scopes, [CLI `teamcode artifacts`](#cli) with the shared file reader; migrations `V20261022180000*` | Implemented (PR 2) |
 | Serving under `/artifact/<id>/<ticket>/<path>`, view tickets, CSP sandbox on every response, the viewer and the gallery on the dashboard, public links (`artifacts.v1`) | Planned (PR 3) |
 | `teamcode mcp artifacts`, the loopback relay of `teamcode run`, injection into Claude Code and Codex, `GET /api/v1/artifacts/policy` (`artifact-relay-v1`) | Planned (PR 4) |
 | Cloud sessions: `artifacts:write` on the execution credential, injection by the runner, session transfer | Planned (PR 5) |
 | Usage per member on the dashboard, filters by origin, links from session and run pages, operations guide | Planned (PR 6) |
 
-Nothing is advertised yet: `artifacts.v1` appears in `GET /api/v1/capabilities` only once artifacts can be published and served (PR 3), as [a planned command must not be advertised as implemented](architecture.md).
+Nothing is advertised yet: the publication API answers with explicit codes, but `artifacts.v1` appears in `GET /api/v1/capabilities` only once artifacts can be published and served (PR 3), as [a planned command must not be advertised as implemented](architecture.md).
 
 ## When artifacts are active
 
@@ -29,7 +29,7 @@ Artifacts work only while all three hold: a bucket is stored, its current versio
 | `artifact_storage_unverified` | The bucket changed since its last passed test, or its last test failed | Test the connection |
 | `artifacts_disabled` | The bucket works but the switch is off | Turn artifacts on |
 
-Turning them on is refused with `409 artifact_storage_missing` without a bucket and `409 artifact_storage_unverified` without a passed test. Saving the bucket again (even a key rotation) or a failed test makes them inactive until a test passes; removing the bucket turns the switch off. While artifacts are inactive, as each part lands: the publication policy answers `canPublish: false` with the reason (PR 4), `teamcode run` and the runner do not inject `teamcode mcp artifacts`, the CLI says the storage is not configured, `/artifact/*` answers `404`, and the dashboard shows the Artifacts menu only to administrators, pointing to Settings → Artifacts.
+Turning them on is refused with `409 artifact_storage_missing` without a bucket and `409 artifact_storage_unverified` without a passed test. Saving the bucket again (even a key rotation) or a failed test makes them inactive until a test passes; removing the bucket turns the switch off. While artifacts are inactive, every publication, read and sharing route of PR 2 answers `409` with the same reason as its error type (deletion still works, so an artifact can always be removed); as each later part lands: the publication policy answers `canPublish: false` with the reason (PR 4), `teamcode run` and the runner do not inject `teamcode mcp artifacts`, the CLI says the storage is not configured, `/artifact/*` answers `404`, and the dashboard shows the Artifacts menu only to administrators, pointing to Settings → Artifacts.
 
 ## Storage and settings
 
@@ -93,9 +93,11 @@ A retention change applies to artifacts published afterwards, as for paused clou
 
 One folder per artifact, content-addressed inside it: a republication sends only changed files, a version costs a manifest, deleting an artifact is deleting one prefix (listed again afterwards as proof), and no blob is shared between artifacts.
 
-## Publication (planned, PR 2 and 4)
+## Publication
 
-Agents call the stdio MCP server `teamcode mcp artifacts`, which `teamcode run` (Claude Code and Codex) and the cloud runner add next to the gateway's servers. It runs as the agent (in a cloud session, the agent's UID in the agent's container), reads the files itself and sends them through the launcher's loopback proxy with the local token only; the proxy adds the member's device credential locally, or the execution's `tcex_` credential in the cloud. It has no TeamCode credential of its own. Outside `teamcode run` it uses the member's stored CLI login (`origin_kind = api`); in a cloud container, which holds neither, it refuses to start without the proxy.
+### Agents (planned, PR 4)
+
+Agents call the stdio MCP server `teamcode mcp artifacts`, which `teamcode run` (Claude Code and Codex) and the cloud runner add next to the gateway's servers. It runs as the agent (in a cloud session, the agent's UID in the agent's container), reads the files itself with the [same reader as the CLI](#file-reader) and sends them through the launcher's loopback proxy with the local token only; the proxy adds the member's device credential locally, or the execution's `tcex_` credential in the cloud. It has no TeamCode credential of its own. Outside `teamcode run` it uses the member's stored CLI login (the CLI's `config.json`, readable by its owner only, see [devices](devices.md); `origin_kind = api`); in a cloud container, which holds neither, it refuses to start without the proxy.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
@@ -106,11 +108,87 @@ Agents call the stdio MCP server `teamcode mcp artifacts`, which `teamcode run` 
 
 An agent never makes an artifact public and never deletes one: a person does, on the dashboard or with `teamcode artifacts access … public` and `delete --yes`. The returned URL is always `<server>/artifact/<id>`.
 
-Upload API (also used by the CLI): `POST /api/v1/artifacts/uploads {artifactId?, files:[{sha256,size}]} → {uploadId, artifactId, missing}`; `PUT /api/v1/artifacts/uploads/{id}/blobs/{sha256}/{n}` in chunks of at most 1 MiB (under the chart's 2 MiB ingress limit), assembled at the last chunk, hash checked, sent to the bucket; `POST /api/v1/artifacts/{id}/versions {uploadId, entry, files, baseVersion, title?, description?, icon?, access?}` → the version, or `409 artifact_conflict` with the live manifest. A commit replayed within 10 minutes (same credential, artifact, base version and manifest) returns the same version.
+### Publication API
 
-Path rules: relative to the root (the working directory, and a scratch directory), or absolute inside one; no `..`, no NUL; every component opened with `O_NOFOLLOW` (`FILE_FLAG_OPEN_REPARSE_POINT` on Windows, reparse points refused); regular files only; `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.env*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `.claude/.credentials.json`, `.codex/auth.json` and, in a cloud session, `/workspace/.home` are refused by name. Published paths follow the [skill catalog](skills.md) rules. Limits, checked again by the server: 15 MiB per binary file, 16 MiB per page or text file, 255 files and 64 MiB per publication, 511 files and 256 MiB per version, 120 seconds for the whole.
+Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes) say which keys reach which route.
 
-The server scans every text file with the transcript mask's detectors and refuses a version holding a secret (`422 artifact_secret_detected`, with the path and kind, never the value).
+| Route | Purpose |
+| --- | --- |
+| `POST /api/v1/artifacts/uploads` `{artifactId?, files:[{sha256,size}]}` | Announce the distinct files of the next version → `201 {uploadId, artifactId, missing, chunkBytes, expiresAt}`. Without `artifactId` a draft artifact is created (counted in `quotaArtifactsPerMember`). `missing` lists what the artifact's folder does not hold yet |
+| `PUT /api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{n}` | One chunk (`application/octet-stream`, at most 1 MiB, under the chart's 2 MiB ingress limit) → `{complete, received, total}`. Chunks wait in MySQL, the only bus between replicas; the last one assembles the file, checks its size and SHA-256 (`409 artifact_blob_mismatch`), scans it, and sends it to the bucket |
+| `POST /api/v1/artifacts/{id}/versions` `{uploadId, entry, files:{path:{sha256,size}}, baseVersion, title?, description?, icon?, access?}` | Commit → `201 {artifact, version, replayed:false}`; the same commit within 10 minutes (same credential, base version and manifest digest) answers `200` with the same version and `replayed:true` |
+| `GET /api/v1/artifacts?scope=&member=&session=&run=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue |
+| `GET /api/v1/artifacts/{id}`, `GET …/versions`, `GET …/versions/{n}` | The artifact (with the caller's `relation`: `owner`, `editor`, `viewer`, `team` or `admin`), its kept versions, one version's manifest |
+| `GET …/versions/{n}/file?path=` | One file, as `application/octet-stream` with `Content-Disposition: attachment` and `X-TeamCode-Sha256`: the API never serves a page as HTML on the server's origin (that is [PR 3](#serving-and-access-planned-pr-3)) |
+| `PUT /api/v1/artifacts/{id}/access` `{access, publicFollowsLatest, publicVersion?}` | Change the access level; interactive only |
+| `GET/POST /api/v1/artifacts/{id}/members`, `DELETE …/members/{member}` | Who is invited; invite `{member, role}` (id, username or linked GitHub login; `viewer` or `editor`); remove |
+| `DELETE /api/v1/artifacts/{id}` | Delete; interactive only. `204` |
+
+**Commit.** Under the team's lock and a row lock on the artifact, so that replicas agree:
+
+- `baseVersion` must be the live version (0 for a draft): otherwise `409 artifact_conflict`, whose body `{error, current}` carries the live manifest for the publisher to merge.
+- Every file must be either sent by this upload or already in the artifact's folder (`409 artifact_blob_missing` otherwise). The entry is an `.html`, `.htm` or `.md` file of the manifest.
+- Content types come from a fixed list by extension; anything else is `application/octet-stream`. `capabilities` is refused (`400 artifact_capabilities_unsupported`) until serving exists, and so is `access: public` (`403 artifact_public_interactive`).
+- `whoCanPublish: admins` refuses members (`403 artifact_publish_forbidden`); only the owner and invited editors publish (`403 artifact_not_writable`); `quotaPublishesPerHour` is counted from the audit log, so pruned versions still count (`429 artifact_rate_limited`, `Retry-After`); `quotaMemberBytes` and `quotaTeamBytes` are checked on what the folder would hold (`409 artifact_quota_exceeded`).
+- Versions beyond `maxVersionsPerArtifact` are pruned, never the version a public link is pinned to; blobs no kept version uses are marked for collection.
+- `expires_at` is set from the publication time and the retention that applies (`personalRetentionDays` or `sharedRetentionDays`), and again when the access level changes. A retention change therefore applies to artifacts published afterwards.
+- A copy of the manifest is written to `versions/<n>.json` next to the blobs, best effort.
+
+**Secret scan.** Every file that decodes as UTF-8 without a NUL byte is a text file and is scanned at assembly with the detectors of the transcript mask (provider API keys, GitHub, TeamCode, AWS and Slack tokens, JWTs, private keys, `Authorization` headers, credentials in URLs; not the name-based assignment pattern, which pages legitimately contain). A hit refuses the file before it reaches the bucket: `422 artifact_secret_detected` with `{error, sha256, kind}`, never the value, and an audit event `artifact.publish_refused`. Other files are binary and limited to 15 MiB (`413 artifact_file_too_large`); text files to 16 MiB.
+
+**Who may do what.**
+
+| Action | Who |
+| --- | --- |
+| Read a personal artifact | The owner, invited members, administrators (each version read of another member's artifact audited `artifact.admin_viewed`). Others get `404`, as if it did not exist |
+| Read a team or public artifact | Every active member |
+| Publish a version, invite or remove members | The owner and invited editors |
+| Change access, delete | The owner or an administrator, interactively. Making public follows `publicSharing`: `owners_of_artifacts` the owner, `admins` an administrator, `off` nobody (`403 artifact_public_sharing_off`) |
+
+A version published by an invited editor stays the owner's artifact and counts in the owner's quota.
+
+**Deletion and garbage collection.** A worker (`artifacts/maintain`, every 10 minutes, one replica at a time) does all of it:
+
+- An upload expires after an hour; blobs it sent that no version uses are marked for collection, unless another live upload announced them.
+- A draft (never committed) older than 24 hours is deleted.
+- An artifact past its `expires_at` is deleted (`artifact.retention_expired`, actor `system`).
+- Marked blobs are deleted from the bucket, then forgotten. While an artifact has marked blobs, a new upload to it answers `409 artifact_busy` (retry after 60 seconds), so a blob is never collected under a publication that counts on it.
+- A deleted artifact's folder is deleted 5 minutes after the deletion, past any upload still in flight: the prefix is listed and deleted, then listed again; only an empty listing records `storage_deleted_at`, removes the artifact's rows and audits `artifact.storage_deleted`. Otherwise it is retried at the next pass. Until then the storage cannot be moved.
+
+### Scopes
+
+| Scope | Reaches |
+| --- | --- |
+| `artifacts:read` | List and read artifacts, versions, files and members |
+| `artifacts:write` | `artifacts:read`, plus uploads, commits, invitations and removals |
+
+`team:read` also reads every route of `artifacts:read`. No key changes an access level or deletes an artifact, whatever its scopes: those two routes need an interactive sign-in. The cloud execution credential gets `artifacts:write` in PR 5.
+
+### File reader
+
+One reader in the CLI (`ArtifactSources`) reads every file to publish, for `teamcode artifacts publish` now and for `teamcode mcp artifacts` in PR 4. It runs as the user (or agent) who launched it and reads only below its roots (the working directory, and a scratch directory for the MCP server):
+
+- A relative path resolves against the first root; an absolute path must lie inside one. `..`, an empty path and NUL bytes are refused.
+- Every component below the root is opened without following links: `openat` with `O_NOFOLLOW` component by component on macOS and Linux (`O_DIRECTORY` for directories, then `fstat` on the leaf), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows with reparse points refused and every handle kept open without delete sharing, `NOFOLLOW_LINKS` on the JVM. A link refuses the file even when it points inside the root.
+- Regular files only, at most 16 MiB read.
+- Refused by name: `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.gnupg/`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pypirc`, `.claude/.credentials.json`, `.codex/auth.json` and, in a cloud session, `/workspace/.home`.
+- A refusal names the path and the rule, never the content.
+
+Published paths follow the [skill catalog](skills.md) rules (up to 8 segments of letters, digits, `.`, `_`, `+` and `-`, no hidden or Windows-reserved segment). Limits, checked again by the server: 15 MiB per binary file, 16 MiB per page or text file, 255 files and 64 MiB per publication, 511 files and 256 MiB per version.
+
+### CLI
+
+| Command | Does |
+| --- | --- |
+| `teamcode artifacts list [--scope mine\|shared\|team\|all] [--member] [--session] [--run] [--limit] [--json]` | List |
+| `teamcode artifacts show <id or URL> [--versions] [--json]` | Details, files of the current version, invited members |
+| `teamcode artifacts publish <page> [--file PATH or PUBLISHED=PATH]… [--remove PUBLISHED]… [--artifact <id or URL>] [--base-version N] [--title] [--description] [--icon] [--access personal\|team] [--json]` | Publish a new artifact, or a new version of one: the base version's other files are kept without being sent again, and only files the server lacks are sent. The title defaults to the page's `<title>` or first `# ` heading. A conflict tells which version is live |
+| `teamcode artifacts pull <id or URL> [--version N] --out DIR` | Download a version into an empty or new directory, each file checked against its SHA-256 and created, never overwritten |
+| `teamcode artifacts access <id or URL> personal\|team\|public [--pin-version N]` | Change the access level (interactive sign-in) |
+| `teamcode artifacts share <id or URL> <member> [--role viewer\|editor] [--remove]` | Invite or remove a member |
+| `teamcode artifacts delete <id or URL> --yes` | Delete (interactive sign-in) |
+
+The CLI uses the login stored by `teamcode login` in its `config.json`, like every other command. The typed client has `artifacts`, `artifact`, `artifactVersions`, `artifactVersion`, `artifactFile`, `startArtifactUpload`, `putArtifactChunk`, `commitArtifactVersion` (throwing `ArtifactConflictException` with the live version), `setArtifactAccess`, `artifactMembers`, `shareArtifact`, `unshareArtifact` and `deleteArtifact`.
 
 **Session transfer.** An artifact belongs to the member who created it; a session is only its origin. When a cloud session changes owner, the recipient is added as an `editor` (reason `session_transfer`) of every artifact created or updated in that session, in the transaction that accepts the transfer, so its agent can read and republish them. Publications of the new epoch belong to the recipient.
 
@@ -140,10 +218,12 @@ The sandbox gives the content an opaque origin even when opened directly: no coo
 
 ## Audit
 
-Never any content. Implemented: `artifacts.storage_saved`, `artifacts.storage_tested` (subject `passed` or `failed`), `artifacts.storage_deleted`, `artifacts.settings_updated`, `artifacts.public_sharing_changed` (subject `old->new`). Planned: `artifact.created`, `.version_published`, `.access_changed`, `.member_added`, `.member_removed`, `.deleted`, `.storage_deleted`, `.retention_expired`, `.publish_refused`, `.admin_viewed`.
+Never any content. Storage and settings (PR 1): `artifacts.storage_saved`, `artifacts.storage_tested` (subject `passed` or `failed`), `artifacts.storage_deleted`, `artifacts.settings_updated`, `artifacts.public_sharing_changed` (subject `old->new`). Artifacts (PR 2), subject the artifact id unless said otherwise, target its owner: `artifact.created`, `artifact.version_published` (`<id>/<n>`), `artifact.access_changed` (`<id>:old->new`), `artifact.member_added` (`<id>:<role>:invited`), `artifact.member_removed`, `artifact.deleted`, `artifact.publish_refused` (`<id>:<code>`, never the content), `artifact.admin_viewed` (`<id>/<n>`), and with the actor `system`: `artifact.retention_expired` and `artifact.storage_deleted` (written only once the folder was listed empty).
 
 ## Evidence
 
 PR 1: `SigV4Test` (the four worked examples of the S3 SigV4 documentation, RFC 3986 encoding), `S3ObjectStoreTest` (mock engine: signed virtual-hosted and path-style requests recomputed from what was sent, encryption header, range, missing objects, error code kept without the body, link-local and metadata answers refused after DNS before any request, pagination, DeleteObjects body escaped with its Content-MD5, a listing with a DOCTYPE refused), `S3GatewayTest` (a real S3-compatible server, Versity S3 Gateway in Testcontainers: put, get, single range and 416, head, encoded keys, paginated listing, deletion leaving the prefix empty, `SignatureDoesNotMatch` and `NoSuchBucket` codes, and the dashboard's connection test end to end), `ArtifactAdministrationTest` (who may act, endpoint, bucket, prefix and region rules, settings bounds, the test's steps, failures and recording, availability), `ArtifactStoragePersistenceTest` (MySQL 8.4, two pools: the reviewed migrations match every artifact table, sealed secret bound to the team, versions across replicas, rotation, secret required to move, verification cleared by a save or a failed test, `artifact_storage_in_use`, enabling refused without a tested bucket, removal turning artifacts off, audit), `ArtifactSettingsRoutesTest` (API and dashboard for administrators only, the secret never returned or shown, test and switch, form origin check), `ApiDocsTest`.
+
+PR 2: `ArtifactRulesTest` (chunking, announcements, manifests and paths, digest, text detection and the secret kinds, details), `ServiceKeyAuthorizationTest` (`artifacts:read` nested in `artifacts:write` and `team:read`, neither reaching access or deletion), `ArtifactPublicationPersistenceTest` (MySQL 8.4, two pools, an in-memory bucket: two replicas committing on the same base where exactly one wins and the other gets the live manifest, replays, a blob trusted only from this upload or the folder, chunks out of order and duplicated, size and hash mismatches, a secret refused before the bucket, sharing and the 404 of a personal artifact, admin reads audited, access and `publicSharing`, `whoCanPublish`, byte quotas and the hourly limit, pruning that keeps the pinned public version, `artifact_busy` while blobs are collected, expired uploads, drafts, retention, deletion proven by an empty listing and retried otherwise), `ArtifactRoutesTest` (the HTTP contract, keys by scope, access and deletion refused to every key before reaching the store, files as attachments, inactive storage), `ApiDocsTest`; in the CLI `ArtifactRulesCliTest` (names refused, published paths, titles, references), `ArtifactSourcesTest` (native, real system calls: a link as the file, as a directory and inside the root, `..`, absolute paths outside, missing files, directories, credentials by name, refused prefixes, the 16 MiB bound) and `ArtifactPublisherTest` (only missing files sent, in 1 MiB chunks, base files kept and removed).
 
 MinIO no longer publishes server images, so the S3-compatible test server is the Versity S3 Gateway; real AWS, OVH and R2 buckets are not part of CI.

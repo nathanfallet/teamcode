@@ -341,4 +341,51 @@ static inline int teamcode_windows_user_path_write(const wchar_t *value, int exp
     SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 5000, (PDWORD_PTR)&ignored);
     return 1;
 }
+
+/*
+ * Artifact sources: opens every level below the root (prefixes[i] is root\c1\...\ci) with FILE_FLAG_OPEN_REPARSE_POINT
+ * and refuses any reparse point (symbolic link, junction, mount point), keeping each level open without delete sharing
+ * until the read ends so it cannot be swapped meanwhile. Reads the regular file at the end into buffer (at most
+ * capacity bytes). Returns the size read, or a negative code with *failed the refused level: -2 reparse point or not a
+ * directory, -3 missing, -4 not a regular file, -5 access denied, -6 other.
+ */
+static inline long long teamcode_windows_read_nofollow(const wchar_t *const *prefixes, int count, unsigned char *buffer, long long capacity, int *failed) {
+    HANDLE handles[64];
+    long long result = -6;
+    int opened = 0;
+    *failed = -1;
+    if (count < 1 || count > 64) return -6;
+    for (int i = 0; i < count; i++) {
+        int last = i == count - 1;
+        HANDLE handle = CreateFileW(prefixes[i], FILE_READ_ATTRIBUTES | (last ? GENERIC_READ : 0), FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        *failed = i;
+        if (handle == INVALID_HANDLE_VALUE) {
+            DWORD error = GetLastError();
+            result = (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? -3 : (error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION) ? -5 : -6;
+            goto done;
+        }
+        handles[opened++] = handle;
+        BY_HANDLE_FILE_INFORMATION information;
+        if (!GetFileInformationByHandle(handle, &information)) { result = -6; goto done; }
+        if (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) { result = -2; goto done; }
+        int directory = (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        if (!last && !directory) { result = -2; goto done; }
+        if (last && (directory || GetFileType(handle) != FILE_TYPE_DISK)) { result = -4; goto done; }
+    }
+    {
+        long long total = 0;
+        while (total < capacity) {
+            DWORD chunk = (DWORD)((capacity - total) > 1048576 ? 1048576 : (capacity - total));
+            DWORD read = 0;
+            if (!ReadFile(handles[opened - 1], buffer + total, chunk, &read, NULL)) { result = -6; goto done; }
+            if (read == 0) break;
+            total += read;
+        }
+        result = total;
+    }
+done:
+    for (int i = 0; i < opened; i++) CloseHandle(handles[i]);
+    return result;
+}
 #endif

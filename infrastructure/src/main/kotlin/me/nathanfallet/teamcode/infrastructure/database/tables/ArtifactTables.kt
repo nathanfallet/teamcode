@@ -68,8 +68,11 @@ object Artifacts : Table("artifacts") {
     val publishedAt = long("published_at").nullable()
     val deletedAt = long("deleted_at").nullable()
     val storageDeletedAt = long("storage_deleted_at").nullable()
+    /** When retention deletes it: the last publication plus the retention in force then; null keeps it. */
+    val expiresAt = long("expires_at").nullable()
     override val primaryKey = PrimaryKey(id)
     init {
+        index("artifacts_expiry", false, expiresAt)
         index("artifacts_owner", false, teamId, ownerId, updatedAt)
         index("artifacts_team", false, teamId, state, updatedAt)
         index("artifacts_session", false, originSessionId)
@@ -132,7 +135,10 @@ object ArtifactBlobs : Table("artifact_blobs") {
     val size = long("size")
     val storedAt = long("stored_at")
     val lastReferencedVersion = integer("last_referenced_version").nullable()
+    /** Set once no kept version uses the blob: it is no longer counted and is removed from the bucket, then forgotten. */
+    val collectingSince = long("collecting_since").nullable()
     override val primaryKey = PrimaryKey(artifactId, sha256)
+    init { index("artifact_blobs_collecting", false, collectingSince) }
 }
 
 /** An upload in progress, bound to the credential that started it, expired after an hour. */

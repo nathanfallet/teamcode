@@ -54,3 +54,91 @@ data class SaveArtifactSettingsRequest(
     val quotaMemberBytes: Long, val quotaTeamBytes: Long, val quotaArtifactsPerMember: Int, val quotaPublishesPerHour: Int,
     val personalRetentionDays: Int?, val sharedRetentionDays: Int?, val maxVersionsPerArtifact: Int,
 )
+
+/** A file of the version being published: its content hash (lowercase hex SHA-256) and size in bytes. */
+@Serializable
+data class ArtifactFileRef(val sha256: String, val size: Long)
+
+/**
+ * Starts an upload. [files] are the distinct blobs of the whole version to publish; the answer names the ones the
+ * server does not already hold for this artifact. Without [artifactId], a new artifact id is reserved.
+ */
+@Serializable
+data class CreateArtifactUploadRequest(val artifactId: String? = null, val files: List<ArtifactFileRef>)
+
+/** [missing] are the SHA-256 values to send, in chunks of at most [chunkBytes], before [expiresAt]. */
+@Serializable
+data class ArtifactUploadView(val uploadId: String, val artifactId: String, val missing: List<String>, val chunkBytes: Int, val expiresAt: Long)
+
+/** One chunk received; [complete] once every chunk of the blob arrived and the blob was checked and stored. */
+@Serializable
+data class ArtifactChunkView(val complete: Boolean, val received: Int, val total: Int)
+
+/**
+ * Commits a version. [entry] is the page (`.html`, `.htm` or `.md`) among [files] (published path to content).
+ * [baseVersion] is the version the publisher started from (0 for a new artifact). [access] is `personal` or `team`:
+ * no publication makes an artifact public. [capabilities] is reserved and must stay empty.
+ */
+@Serializable
+data class CommitArtifactVersionRequest(
+    val uploadId: String, val entry: String, val files: Map<String, ArtifactFileRef>, val baseVersion: Int,
+    val title: String? = null, val description: String? = null, val icon: String? = null, val access: String? = null,
+    val capabilities: Map<String, String>? = null,
+)
+
+/** A published file: [role] is `page` (the entry), `html` or `asset`. */
+@Serializable
+data class ArtifactFileView(val path: String, val sha256: String, val size: Long, val contentType: String, val role: String)
+
+/** An immutable version and its files. [digest] is the SHA-256 of the canonical manifest. */
+@Serializable
+data class ArtifactVersionView(
+    val artifactId: String, val number: Int, val entry: String, val digest: String, val fileCount: Int, val totalBytes: Long,
+    val createdBy: String, val createdAt: Long, val baseVersion: Int, val files: List<ArtifactFileView> = emptyList(),
+    val originSessionId: String? = null, val originEpoch: Int? = null,
+)
+
+/**
+ * An artifact as the caller may see it. [url] is the only link to share, whatever the access. [relation] is the
+ * caller's: `owner`, `editor`, `viewer` (invited), `team` (a team or public artifact) or `admin` (an administrator's
+ * read of another member's artifact). [originKind] is `local_run`, `cloud_session` or `api`.
+ */
+@Serializable
+data class ArtifactView(
+    val id: String, val url: String, val title: String, val description: String, val icon: String, val access: String,
+    val ownerId: String, val ownerName: String, val currentVersion: Int, val storedBytes: Long, val relation: String,
+    val originKind: String, val originRunId: String? = null, val originSessionId: String? = null, val originEpoch: Int? = null,
+    val publicFollowsLatest: Boolean = true, val publicVersion: Int? = null,
+    val createdAt: Long, val updatedAt: Long, val publishedAt: Long? = null, val expiresAt: Long? = null,
+)
+
+/** [nextBefore] continues the listing; null at its end. */
+@Serializable
+data class ArtifactListView(val artifacts: List<ArtifactView>, val nextBefore: String? = null)
+
+/** The answer of a commit: the artifact after it, the version, and whether this was a replay of the same commit. */
+@Serializable
+data class ArtifactPublishedView(val artifact: ArtifactView, val version: ArtifactVersionView, val replayed: Boolean = false)
+
+/** `409 artifact_conflict`: the version now live, for the publisher to merge before publishing again. */
+@Serializable
+data class ArtifactConflictView(val error: ErrorDetail, val current: ArtifactVersionView? = null)
+
+/** `422 artifact_secret_detected`: which blob holds what kind of secret, never the value. */
+@Serializable
+data class ArtifactSecretView(val error: ErrorDetail, val sha256: String, val kind: String)
+
+/** [access] is `personal`, `team` or `public`; for `public`, either follow the latest version or pin [publicVersion]. */
+@Serializable
+data class SetArtifactAccessRequest(val access: String, val publicFollowsLatest: Boolean = true, val publicVersion: Int? = null)
+
+/** An invited member: [role] is `viewer` or `editor`; [reason] is `invited` or `session_transfer`. */
+@Serializable
+data class ArtifactMemberView(val memberId: String, val username: String, val role: String, val reason: String, val addedBy: String, val addedAt: Long, val originSessionId: String? = null)
+
+@Serializable
+data class ArtifactMembersView(val ownerId: String, val members: List<ArtifactMemberView>)
+
+/** [member] is a member id, a username or a linked GitHub login. */
+@Serializable
+data class ShareArtifactRequest(val member: String, val role: String = "viewer")

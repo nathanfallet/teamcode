@@ -1,0 +1,57 @@
+package me.nathanfallet.teamcode.cli
+
+import me.nathanfallet.teamcode.cli.artifacts.ArtifactSources
+import okio.FileSystem
+import okio.Path.Companion.toPath
+import kotlin.random.Random
+import kotlin.test.*
+
+/** The native reader: every component below the root opened without following links, through the real system calls. */
+class ArtifactSourcesTest {
+    private val fs = FileSystem.SYSTEM
+    private val base = fs.canonicalize(FileSystem.SYSTEM_TEMPORARY_DIRECTORY) / "tc-artifacts-${Random.nextInt().toUInt().toString(16)}"
+    private val root = base / "workspace"
+    private val outside = base / "outside"
+    @AfterTest fun cleanup() { fs.deleteRecursively(base, mustExist = false) }
+
+    private fun refusal(sources: ArtifactSources, path: String) = assertFailsWith<CliUserException> { sources.read(path, "x.html") }.message.orEmpty()
+
+    @Test fun regularFilesBelowTheRootAreReadAndLinksNeverFollowed() {
+        fs.createDirectories(root / "site" / "img"); fs.createDirectories(outside)
+        fs.write(root / "site" / "index.html") { writeUtf8("<p>hello</p>") }
+        fs.write(root / "site" / "img" / "a.png") { write(ByteArray(3) { 1 }) }
+        fs.write(outside / "secret.txt") { writeUtf8("outside the root") }
+        fs.createSymlink(root / "leak.txt", outside / "secret.txt")
+        fs.createSymlink(root / "linked", outside)
+        fs.createSymlink(root / "site" / "self.html", "index.html".toPath())
+        val sources = ArtifactSources(listOf(root.toString()))
+
+        val page = sources.read("site/index.html", "index.html")
+        assertEquals("<p>hello</p>", page.bytes.decodeToString()); assertEquals(64, page.sha256.length)
+        assertEquals(3, sources.read("./site/img/a.png", "img/a.png").bytes.size)
+        assertEquals(3, sources.read((root / "site" / "img" / "a.png").toString(), "img/a.png").bytes.size, "An absolute path inside the root is accepted")
+
+        assertTrue("symbolic link" in refusal(sources, "leak.txt")!!, "A link as the file")
+        assertTrue("symbolic link" in refusal(sources, "linked/secret.txt")!!, "A link in the path")
+        assertTrue("symbolic link" in refusal(sources, "site/self.html")!!, "Even a link that stays inside the root")
+        assertTrue("contains .." in refusal(sources, "site/../../outside/secret.txt"))
+        assertTrue("outside" in refusal(sources, (outside / "secret.txt").toString()))
+        assertTrue("does not exist" in refusal(sources, "site/missing.css"))
+        assertTrue("not a regular file" in refusal(sources, "site/img"))
+        assertTrue("symbolic link or not a directory" in refusal(sources, "site/index.html/child"))
+    }
+
+    @Test fun credentialsOversizedFilesAndRefusedPrefixesAreNeverRead() {
+        fs.createDirectories(root / ".git"); fs.createDirectories(root / ".home")
+        fs.write(root / ".git" / "config") { writeUtf8("[core]") }
+        fs.write(root / ".env.local") { writeUtf8("TOKEN=1") }
+        fs.write(root / ".home" / "notes.txt") { writeUtf8("runner home") }
+        fs.write(root / "huge.bin") { write(ByteArray(16 * 1024 * 1024 + 1)) }
+        val sources = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / ".home").toString()))
+        assertTrue(".git" in refusal(sources, ".git/config"))
+        assertTrue(".env" in refusal(sources, ".env.local"))
+        assertTrue("never published" in refusal(sources, ".home/notes.txt"))
+        assertTrue("16 MiB" in refusal(sources, "huge.bin"))
+        assertFalse(refusal(sources, ".env.local").contains("TOKEN"), "A refusal names the path and the rule, never the content")
+    }
+}
