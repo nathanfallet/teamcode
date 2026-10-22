@@ -12,8 +12,6 @@ import kotlin.test.*
 private class CurlIllegalStateException(message: String) : IllegalStateException(message)
 private class WinHttpIllegalStateException(message: String) : IllegalStateException(message)
 private class DarwinHttpRequestException(message: String) : kotlinx.io.IOException(message)
-private class SSLHandshakeException(message: String) : kotlinx.io.IOException(message)
-private class UnknownHostException(message: String) : kotlinx.io.IOException(message)
 
 class CliErrorsTest {
     private val server = "https://team.example"
@@ -64,30 +62,32 @@ class CliErrorsTest {
 
     @Test fun `network failures name the server URL and the family`() {
         val cases = mapOf(
-            UnknownHostException("team.example") to NetworkFailure.DNS,
             CurlIllegalStateException("Connection failed for request. Reason: Could not resolve hostname") to NetworkFailure.DNS,
             DarwinHttpRequestException("Error Domain=NSURLErrorDomain Code=-1004 \"Could not connect to the server.\"") to NetworkFailure.REFUSED,
             WinHttpIllegalStateException("Error 12029: A connection with the server could not be established") to NetworkFailure.REFUSED,
+            WinHttpIllegalStateException("Error 12007") to NetworkFailure.DNS,
             ConnectTimeoutException("Connect timeout has expired", null) to NetworkFailure.TIMEOUT,
             CurlIllegalStateException("Timeout was reached") to NetworkFailure.TIMEOUT,
-            kotlinx.io.IOException("socket closed") to NetworkFailure.OTHER,
+            CurlIllegalStateException("Reason: Send failure") to NetworkFailure.OTHER,
         )
         for ((error, family) in cases) {
             assertEquals(family, networkFailure(error), error.toString())
             assertContains(message(error), server)
         }
-        assertContains(message(UnknownHostException("team.example")), "does not resolve")
+        assertContains(message(CurlIllegalStateException("Could not resolve hostname")), "does not resolve")
         assertContains(message(DarwinHttpRequestException("Code=-1004")), "Cannot reach the TeamCode server at $server")
-        assertContains(describeFailure(kotlinx.io.IOException("x"), null).message, "Cannot reach the TeamCode server.")
+        assertContains(describeFailure(CurlIllegalStateException("x"), null).message, "Cannot reach the TeamCode server.")
+        // A port number in another engine's message is not a WinHTTP code, and a plain I/O error is not a network failure.
+        assertEquals(NetworkFailure.OTHER, networkFailure(CurlIllegalStateException("https://team.example:12002/ failed")))
+        assertNull(networkFailure(kotlinx.io.IOException("No space left on device")))
     }
 
     @Test fun `TLS failures are reported as TLS and not as an unreachable server`() {
         for (error in listOf(
-            SSLHandshakeException("PKIX path building failed"),
             CurlIllegalStateException("SSL peer certificate or SSH remote key was not OK"),
             DarwinHttpRequestException("Error Domain=NSURLErrorDomain Code=-1202 \"The certificate for this server is invalid.\""),
             WinHttpIllegalStateException("Error 12175: A security error occurred"),
-            IllegalStateException("wrapper", SSLHandshakeException("handshake")),
+            IllegalStateException("wrapper", CurlIllegalStateException("SSL connect error")),
         )) {
             assertEquals(NetworkFailure.TLS, networkFailure(error), error.toString())
             assertContains(message(error), "TLS error")
@@ -106,6 +106,7 @@ class CliErrorsTest {
         assertContains(oauth(OAuthEnrollmentException.Reason.EXCHANGE_REJECTED, status = 400), "expired, was already used")
         assertContains(oauth(OAuthEnrollmentException.Reason.STATE_MISMATCH, "Codex"), "localhost:1455/auth/callback URL")
         assertContains(oauth(OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE), "Cannot reach the Claude sign-in service")
+        assertContains(oauth(OAuthEnrollmentException.Reason.EXCHANGE_UNAVAILABLE, status = 503), "Wait a moment")
     }
 
     @Test fun `private file failures point at the configuration directory`() {
@@ -143,7 +144,7 @@ class CliErrorsTest {
             OAuthEnrollmentException(OAuthEnrollmentException.Reason.INVALID_PASTE, "Claude", "pasted $secret#state"),
             CurlIllegalStateException("Connection failed for request: Authorization: Bearer $secret. Reason: Could not connect to server"),
             DarwinHttpRequestException("Code=-1202 NSErrorFailingURLStringKey=https://u:$secret@team.example"),
-            IllegalStateException("outer", IllegalArgumentException("refresh_token=$secret", SSLHandshakeException(secret))),
+            IllegalStateException("outer", IllegalArgumentException("refresh_token=$secret", CurlIllegalStateException("SSL $secret"))),
             SerializationException("""Unexpected JSON at {"accessToken":"$secret"}"""),
             okio.IOException("cannot open /tmp/$secret"),
             IllegalArgumentException("Fail to parse url: https://$secret"),

@@ -53,14 +53,16 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
     val tag = "HTTP ${error.statusCode}${code?.let { ", $it" } ?: ""}"
     val retry = error.retryAfterSeconds?.let { " Retry in ${duration(it)}." } ?: ""
     val request = error.requestId?.let { " Request id: $it." } ?: ""
+    when (code) {
+        "invalid_credentials" -> return "Sign-in failed ($tag): the username or password is incorrect."
+        "max_subscription_required" -> return "This account has no Claude Max subscription ($tag). Use --provider claude, or sign in with a Max account."
+        "provider_verification_failed" -> return "The provider did not accept the new sign-in ($tag). Run `teamcode accounts add` again."
+    }
     return when (error.statusCode) {
         0 -> "The connection to the $server closed before the answer was complete. Check your network, then try again."
         in 300..399 -> "The $server answered with a redirect ($tag), which TeamCode never follows so your credential stays on this origin. " +
             "Check the server URL: use the final https:// origin, then run `teamcode login --server <url>`."
-        401 -> when (code) {
-            "invalid_credentials" -> "Sign-in failed ($tag): the username or password is incorrect."
-            else -> "Your TeamCode session has expired or was revoked ($tag). Run `teamcode login` to sign in again."
-        }
+        401 -> "Your TeamCode session has expired or was revoked ($tag). Run `teamcode login` to sign in again."
         403 -> forbiddenMessage(code, tag)
         404 -> if (code == null)
             "The $server does not know this request ($tag): it may run an older TeamCode version than this CLI ($VERSION). Update the server, or use a CLI that matches it."
@@ -68,12 +70,7 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         408 -> "The $server timed out waiting for the request ($tag). Try again."
         409 -> "The request conflicts with the current state on the server ($tag). Check the current state, then try again.$retry"
         413 -> "The request is larger than the server accepts ($tag)."
-        400, 422 -> when (code) {
-            "invalid_credentials" -> "Sign-in failed ($tag): the username or password is incorrect."
-            "max_subscription_required" -> "This account has no Claude Max subscription ($tag). Use --provider claude, or sign in with a Max account."
-            "provider_verification_failed" -> "The provider did not accept the new sign-in ($tag). Run `teamcode accounts add` again."
-            else -> "The server rejected the request as invalid ($tag). Check the command's arguments with --help."
-        }
+        400, 422 -> "The server rejected the request as invalid ($tag). Check the command's arguments with --help."
         429 -> "The server refused the request for now: too many requests, or no allowance or capacity is available ($tag).${retry.ifEmpty { " Wait a moment, then try again." }}"
         in 500..599 -> "The $server is unavailable or failed ($tag).${retry.ifEmpty { " Try again in a moment." }}$request If it persists, contact your TeamCode administrator" +
             (if (error.requestId != null) " with the request id." else ".")
@@ -107,6 +104,8 @@ private fun oauthMessage(error: OAuthEnrollmentException): String {
         OAuthEnrollmentException.Reason.PROVIDER_REFUSED -> "$provider refused the sign-in in the browser. $again"
         OAuthEnrollmentException.Reason.EXCHANGE_REJECTED ->
             "$provider did not accept the sign-in code (HTTP ${error.status}): it expired, was already used or is incomplete. $again"
+        OAuthEnrollmentException.Reason.EXCHANGE_UNAVAILABLE ->
+            "The $provider sign-in service is busy or unavailable (HTTP ${error.status}). Wait a moment, then run `teamcode accounts add` again."
         OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE -> "Cannot reach the $provider sign-in service. Check your network, then run `teamcode accounts add` again."
         OAuthEnrollmentException.Reason.INVALID_TOKEN_RESPONSE -> "The $provider sign-in service returned an unexpected answer. Run `teamcode accounts add` again later."
     }
@@ -134,45 +133,49 @@ private fun networkMessage(failure: NetworkFailure, server: String): String = wh
 internal fun networkFailure(error: Throwable): NetworkFailure? {
     val chain = generateSequence(error) { it.cause }.take(8).toList()
     if (chain.any { it is TeamCodeException || it is CliUserException || it is OAuthEnrollmentException || it is ReleaseDownloadException }) return null
-    // Types first (JVM and ktor), then each native engine's error text. Names and messages are inspected, never printed.
+    // Only errors raised by the HTTP stack count: a local disk or permission failure (also an IOException on the JVM,
+    // where okio uses java.io) must not read as an unreachable server. Names and messages are inspected, never printed.
     val names = chain.map { it::class.simpleName.orEmpty() }
     fun named(vararg candidates: String) = names.any { name -> candidates.any(name::contains) }
-    val byType = when {
-        named("SSL", "Tls", "TLS", "Certificate") -> NetworkFailure.TLS
-        named("UnknownHost", "UnresolvedAddress") -> NetworkFailure.DNS
-        chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException } || named("Timeout") -> NetworkFailure.TIMEOUT
-        named("ConnectException", "NoRouteToHost", "PortUnreachable") -> NetworkFailure.REFUSED
-        named("EOFException", "ClosedReceiveChannel", "ClosedByteChannel") -> NetworkFailure.CLOSED
-        else -> null
+    val packages = chain.map { it::class.qualifiedName.orEmpty() }
+    val fromHttpStack = packages.any { name -> HTTP_PACKAGES.any(name::startsWith) } || named(*ENGINE_NAMES) ||
+        chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException }
+    if (!fromHttpStack) return null
+    when {
+        named("SSL", "Tls", "TLS", "Certificate") -> return NetworkFailure.TLS
+        named("UnknownHost", "UnresolvedAddress") -> return NetworkFailure.DNS
+        chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException } || named("Timeout") -> return NetworkFailure.TIMEOUT
+        named("ConnectException", "NoRouteToHost", "PortUnreachable") -> return NetworkFailure.REFUSED
+        named("EOFException", "ClosedReceiveChannel", "ClosedByteChannel") -> return NetworkFailure.CLOSED
     }
-    if (byType != null) return byType
-    val engine = chain.any { it is kotlinx.io.IOException } && !error.isFileError() || named(*ENGINE_NAMES)
-    if (!engine) return null
     val text = chain.joinToString("\n") { it.message.orEmpty() }
     fun mentions(fragments: List<String>) = fragments.any { text.contains(it) }
+    // Numeric engine codes only count for their own engine, so a port number elsewhere cannot match.
+    val darwin = named("Darwin"); val winHttp = named("WinHttp")
+    fun code(darwinCodes: List<Int>, winHttpCodes: List<Int>) =
+        darwin && darwinCodes.any { text.contains("Code=$it ") || text.contains("Code=$it\"") || text.endsWith("Code=$it") } ||
+            winHttp && winHttpCodes.any { Regex("(^|\\D)$it(\\D|$)").containsMatchIn(text) }
     return when {
-        mentions(TLS_TEXT) -> NetworkFailure.TLS
-        mentions(DNS_TEXT) -> NetworkFailure.DNS
-        mentions(TIMEOUT_TEXT) -> NetworkFailure.TIMEOUT
-        mentions(REFUSED_TEXT) -> NetworkFailure.REFUSED
+        mentions(TLS_TEXT) || code(listOf(-1200, -1201, -1202, -1203, -1204, -1205, -1206, -2000), listOf(12175, 12037, 12038, 12044, 12045, 12057, 12169)) -> NetworkFailure.TLS
+        mentions(DNS_TEXT) || code(listOf(-1003, -1006), listOf(12007)) -> NetworkFailure.DNS
+        mentions(TIMEOUT_TEXT) || code(listOf(-1001), listOf(12002)) -> NetworkFailure.TIMEOUT
+        mentions(REFUSED_TEXT) || code(listOf(-1004, -1009, -1005), listOf(12029, 12030)) -> NetworkFailure.REFUSED
         else -> NetworkFailure.OTHER
     }
 }
 
-private fun Throwable.isFileError() = isA("FileNotFoundException", "NoSuchFileException", "AccessDeniedException", "FileSystemException")
 private fun Throwable.isA(vararg names: String) =
     generateSequence(this) { it.cause }.take(8).any { it::class.simpleName in names }
 
 // Engines: OkHttp (JVM tests), Curl (Linux), Darwin/NSURLSession (macOS) and WinHTTP (Windows). Case-sensitive on purpose:
 // a lowercase host name such as `tls.example.com` in an engine message must not look like a TLS failure.
-private val ENGINE_NAMES = arrayOf("Curl", "Darwin", "WinHttp", "Socket", "Connect")
-private val TLS_TEXT = listOf("SSL", "TLS", "certificate", "Certificate", "security error", "Code=-1200", "Code=-1201", "Code=-1202", "Code=-1203",
-    "Code=-1204", "Code=-1205", "Code=-1206", "Code=-2000", "12175", "12037", "12038", "12044", "12045", "12057", "12169")
+private val HTTP_PACKAGES = listOf("io.ktor.", "java.net.", "javax.net.", "okhttp3.", "java.nio.channels.UnresolvedAddress")
+private val ENGINE_NAMES = arrayOf("Curl", "Darwin", "WinHttp")
+private val TLS_TEXT = listOf("SSL", "TLS", "certificate", "Certificate", "security error")
 private val DNS_TEXT = listOf("resolve host", "Could not resolve", "Couldn't resolve", "could not be resolved", "Unable to resolve", "nodename nor servname",
-    "Name or service not known", "Code=-1003", "Code=-1006", "12007")
-private val TIMEOUT_TEXT = listOf("timed out", "Timeout was reached", "Code=-1001", "12002")
-private val REFUSED_TEXT = listOf("Couldn't connect", "Could not connect", "Connection refused", "Failed to connect", "could not be established",
-    "Code=-1004", "Code=-1009", "12029")
+    "Name or service not known")
+private val TIMEOUT_TEXT = listOf("timed out", "Timeout was reached")
+private val REFUSED_TEXT = listOf("Couldn't connect", "Could not connect", "Connection refused", "Failed to connect", "could not be established")
 
 private fun diagnostic(error: Throwable, network: NetworkFailure?): String = buildString {
     append("Debug: type=").append(error::class.simpleName ?: "unknown")

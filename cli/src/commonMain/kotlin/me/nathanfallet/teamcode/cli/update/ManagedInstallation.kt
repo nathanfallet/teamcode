@@ -57,11 +57,13 @@ internal suspend fun recoverInstallation(store: InstallationStore, arguments: Li
 internal suspend fun dispatchInstalled(arguments: Array<String>): Boolean {
     val executable = servicePlatform().executable
     val store = managedInstallation(executable) ?: return false
-    recoverInstallation(store, arguments.toList())
+    // A leading global `--debug` does not change which command runs; the payload still receives it.
+    val command = arguments.toList().dropWhile { it == "--debug" }
+    recoverInstallation(store, command)
     if (!sameInstallationPath(executable.toPath(), store.paths.launcher, store.paths.target)) return false
     val selected = store.state()?.current
     if (selected == null) {
-        if (arguments.firstOrNull() in setOf("install", "update")) return false
+        if (command.firstOrNull() in setOf("install", "update")) return false
         throw CliOperationException("release_installation_missing")
     }
     store.validate(selected)

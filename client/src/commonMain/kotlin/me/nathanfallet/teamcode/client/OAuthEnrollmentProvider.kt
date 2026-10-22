@@ -18,9 +18,10 @@ interface OAuthEnrollmentProvider {
 
 /**
  * A provider sign-in that cannot complete. The message is written by TeamCode, never copied from the paste or the
- * provider's answer; [status] is the token endpoint's HTTP status for [Reason.EXCHANGE_REJECTED].
+ * provider's answer; [status] is the token endpoint's HTTP status. The [cause] of an unreachable endpoint is kept for
+ * its type only: its message may name the endpoint or the request and must never be printed.
  */
-class OAuthEnrollmentException(val reason: Reason, val provider: String, message: String, val status: Int? = null) : IllegalArgumentException(message) {
+class OAuthEnrollmentException(val reason: Reason, val provider: String, message: String, val status: Int? = null, cause: Throwable? = null) : IllegalArgumentException(message, cause) {
     enum class Reason {
         /** The paste is not the provider's complete code or callback URL. */
         INVALID_PASTE,
@@ -30,6 +31,8 @@ class OAuthEnrollmentException(val reason: Reason, val provider: String, message
         PROVIDER_REFUSED,
         /** The token endpoint rejected the code: expired, already used or not from this attempt. */
         EXCHANGE_REJECTED,
+        /** The token endpoint is busy or failing (408, 429 or 5xx); waiting and retrying can work. */
+        EXCHANGE_UNAVAILABLE,
         /** The token endpoint could not be reached. */
         EXCHANGE_UNREACHABLE,
         /** The token endpoint answered something that is not a usable token response. */

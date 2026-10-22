@@ -24,8 +24,10 @@ class OAuthEnrollmentClient(private val provider: OAuthEnrollmentProvider, creat
             contentType(ContentType.Application.Json)
             setBody(provider.exchangeBody(code, state, verifier).toString())
         }.execute { response ->
-            if (response.status.value != 200) throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.EXCHANGE_REJECTED, provider.displayName,
-                "${provider.displayName} sign-in failed. Start a new sign-in attempt.", response.status.value)
+            val status = response.status.value
+            if (status != 200) throw OAuthEnrollmentException(
+                if (status == 408 || status == 429 || status >= 500) OAuthEnrollmentException.Reason.EXCHANGE_UNAVAILABLE else OAuthEnrollmentException.Reason.EXCHANGE_REJECTED,
+                provider.displayName, "${provider.displayName} sign-in failed. Start a new sign-in attempt.", status)
             val bytes = response.bodyAsChannel().readRemaining(65_537).readByteArray()
             if (bytes.size > 65_536) invalidTokenResponse()
             val value = (try { Json.parseToJsonElement(bytes.decodeToString()) as? JsonObject }
@@ -39,7 +41,9 @@ class OAuthEnrollmentClient(private val provider: OAuthEnrollmentProvider, creat
     } catch (error: CancellationException) { throw error }
     catch (error: OAuthEnrollmentException) { throw error }
     // Network and TLS failures name the provider endpoint, not the TeamCode server; never keep their messages.
-    catch (_: Exception) { throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE, provider.displayName, "${provider.displayName} sign-in service is unreachable.") }
+    catch (error: Exception) {
+        throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE, provider.displayName, "${provider.displayName} sign-in service is unreachable.", cause = error)
+    }
 
     private fun invalidTokenResponse(): Nothing =
         throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.INVALID_TOKEN_RESPONSE, provider.displayName, "Invalid token response.")

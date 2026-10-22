@@ -84,7 +84,12 @@ private class Configure : SuspendingCliktCommand(name = "configure") {
         echo("TeamCode access token (stdin; do not pass secrets as command arguments):", err = true)
         val accessToken = readlnOrNull()?.trim().orEmpty()
         val config = CliConfig(normalized, accessToken)
-        sdk(config).use { client -> client.capabilities() } // Verify before saving a credential; main() explains a failure.
+        try {
+            sdk(config).use { client -> client.capabilities() } // Verify before saving a credential; main() explains other failures.
+        } catch (error: me.nathanfallet.teamcode.client.TeamCodeException) {
+            if (error.statusCode != 401) throw error
+            throw CliUserException("The server did not accept this access token (HTTP 401${error.code?.let { ", $it" } ?: ""}). Check the token, or sign in with teamcode login. Nothing was saved.")
+        }
         try { ConfigStore().save(config) }
         catch (error: CancellationException) { throw error }
         catch (error: CliOperationException) { throw error }

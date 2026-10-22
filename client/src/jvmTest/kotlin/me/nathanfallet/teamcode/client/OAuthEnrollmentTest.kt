@@ -98,6 +98,8 @@ class OAuthEnrollmentTest {
         assertEquals(OAuthEnrollmentException.Reason.INVALID_PASTE, reason { CodexOAuthEnrollment.parseCode("https://example.com/?code=c&state=state", "state") })
         for ((engine, expected) in listOf(
             MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.BadRequest) } to OAuthEnrollmentException.Reason.EXCHANGE_REJECTED,
+            MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.ServiceUnavailable) } to OAuthEnrollmentException.Reason.EXCHANGE_UNAVAILABLE,
+            MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.TooManyRequests) } to OAuthEnrollmentException.Reason.EXCHANGE_UNAVAILABLE,
             MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.OK) } to OAuthEnrollmentException.Reason.INVALID_TOKEN_RESPONSE,
             MockEngine { throw java.net.ConnectException("connect to provider-secret-host failed") } to OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE,
         )) {
@@ -106,7 +108,8 @@ class OAuthEnrollmentTest {
                 assertEquals(expected, error.reason)
                 assertEquals("Claude", error.provider)
                 assertFalse(error.message.orEmpty().contains("secret"))
-                assertNull(error.cause)
+                // Only an unreachable endpoint keeps its cause, for the --debug type; the message never copies it.
+                if (expected == OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE) assertIs<java.net.ConnectException>(error.cause) else assertNull(error.cause)
                 if (expected == OAuthEnrollmentException.Reason.EXCHANGE_REJECTED) assertEquals(400, error.status)
             }
         }

@@ -446,11 +446,15 @@ class TeamCodeClient(
      * proxy-assigned request id.
      */
     private suspend fun failure(response: HttpResponse): TeamCodeException {
-        val code = try { response.body<ApiError>().error.type.takeIf { ERROR_CODE.matches(it) } }
-            catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        val code = try {
+            // Bounded: an error envelope is small, and a proxy's large or slow body must not be buffered whole.
+            val bytes = response.bodyAsChannel().readRemaining(MAX_ERROR_BODY + 1L).readByteArray()
+            if (bytes.size > MAX_ERROR_BODY) null
+            else Serialization.json.decodeFromString(ApiError.serializer(), bytes.decodeToString()).error.type.takeIf { ERROR_CODE.matches(it) }
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
         return TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code,
             retryAfterSeconds(response.headers[HttpHeaders.RetryAfter]),
-            REQUEST_ID_HEADERS.firstNotNullOfOrNull { response.headers[it] }?.takeIf { REQUEST_ID.matches(it) })
+            REQUEST_ID_HEADERS.flatMap { response.headers.getAll(it).orEmpty() }.firstOrNull { REQUEST_ID.matches(it) })
     }
 
     private suspend inline fun <reified R> request(path: String, method: HttpMethod, timeoutMillis: Long = 10_000): R {
@@ -600,6 +604,7 @@ class TeamCodeClient(
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
         private const val MAX_SSE_LINE = 256 * 1024
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
+        private const val MAX_ERROR_BODY = 16 * 1024
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
@@ -623,7 +628,7 @@ class TeamCodeException(
 ) : Exception(message)
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
-internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all(Char::isDigit) }?.toLong()
+internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all { c -> c in '0'..'9' } }?.toLong()
 
 /** How a followed event stream ended without a network failure. */
 enum class CloudStreamEnd { ENDED, DENIED }

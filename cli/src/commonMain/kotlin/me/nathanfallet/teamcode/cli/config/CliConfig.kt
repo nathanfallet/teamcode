@@ -12,7 +12,7 @@ import okio.Path.Companion.toPath
 class CliConfig(val serverUrl: String, val accessToken: String) {
     init {
         validateServerUrl(serverUrl)
-        require(accessToken.isNotBlank()) { "An access token is required." }
+        if (accessToken.isBlank()) throw CliUserException("An access token is required. Run teamcode login, or pass a token on stdin to teamcode configure.")
     }
     override fun toString(): String = "CliConfig(serverUrl=$serverUrl, accessToken=[REDACTED])"
 }
@@ -32,10 +32,10 @@ fun validateServerUrl(value: String): String {
 
 fun configPath(env: (String) -> String? = ::environment): String {
     val root = env("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() } ?: run {
-        val home = env("HOME") ?: env("USERPROFILE") ?: error("Cannot locate the user home directory.")
+        val home = env("HOME") ?: env("USERPROFILE") ?: throw CliUserException("Cannot locate your home directory: set HOME (USERPROFILE on Windows) or XDG_CONFIG_HOME.")
         "$home/.config"
     }
-    require(root.toPath().isAbsolute) { "The configuration directory must be absolute." }
+    if (!root.toPath().isAbsolute) throw CliUserException("XDG_CONFIG_HOME must be an absolute path.")
     return "$root/teamcode/config.json"
 }
 
@@ -43,12 +43,14 @@ class ConfigStore(private val path: String = configPath()) {
     fun load(): CliConfig? {
         val file = path.toPath()
         val metadata = FileSystem.SYSTEM.metadataOrNull(file) ?: return null
-        require(metadata.symlinkTarget == null && metadata.isRegularFile && (metadata.size ?: 0) <= 65_536) {
-            "The configuration must be a small regular file, not a symbolic link."
-        }
+        if (metadata.symlinkTarget != null || !metadata.isRegularFile || (metadata.size ?: 0) > 65_536)
+            throw CliUserException("The TeamCode configuration $path must be a small regular file, not a symbolic link. Remove it, then run teamcode login.")
         return try { Serialization.json.decodeFromString<CliConfig>(FileSystem.SYSTEM.read(file) { readUtf8() }) }
-        catch (_: IllegalArgumentException) { throw me.nathanfallet.teamcode.cli.CliUserException("Cannot read TeamCode configuration. Run configure to replace it.") }
+        // The file may hold a token: never repeat its content or the refusal, only where it is and how to replace it.
+        catch (_: IllegalArgumentException) { unreadable() }
+        catch (_: CliUserException) { unreadable() }
     }
+    private fun unreadable(): Nothing = throw CliUserException("Cannot read the TeamCode configuration $path. Run teamcode login (or teamcode configure) to replace it.")
     fun delete() { FileSystem.SYSTEM.delete(path.toPath(), mustExist = false) }
     fun save(config: CliConfig) {
         writePrivateFile(path, Serialization.json.encodeToString(CliConfig.serializer(), config))
