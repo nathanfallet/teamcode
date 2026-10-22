@@ -11,4 +11,5 @@ object Features {
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
+    const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
 }

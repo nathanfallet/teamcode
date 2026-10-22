@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,6 +54,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
+import me.nathanfallet.teamcode.companion.resources.new_session_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
 import me.nathanfallet.teamcode.companion.resources.home_signed_out
 import me.nathanfallet.teamcode.companion.resources.sessions_active
@@ -83,6 +85,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     onSignInAgain: (Account) -> Unit,
     onOpenSession: (Account, CloudSession) -> Unit,
+    onNewSession: (Account) -> Unit = {},
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
     clock: Clock = koinInject(),
@@ -98,6 +101,11 @@ fun HomeScreen(
     val account = home.account
 
     Scaffold(
+        floatingActionButton = {
+            if (account?.signedIn == true) ExtendedFloatingActionButton(onClick = { onNewSession(account) }, modifier = Modifier.testTag("new-session")) {
+                Text(stringResource(Res.string.new_session_title))
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(Res.string.sessions_title)) },

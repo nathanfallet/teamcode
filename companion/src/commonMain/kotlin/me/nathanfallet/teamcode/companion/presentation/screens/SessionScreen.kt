@@ -11,7 +11,29 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
+import me.nathanfallet.teamcode.companion.resources.action_interrupt
+import me.nathanfallet.teamcode.companion.resources.action_pause
+import me.nathanfallet.teamcode.companion.resources.action_resume
+import me.nathanfallet.teamcode.companion.resources.composer_ended
+import me.nathanfallet.teamcode.companion.resources.composer_hint
+import me.nathanfallet.teamcode.companion.resources.composer_send
+import me.nathanfallet.teamcode.companion.resources.pending_discard
+import me.nathanfallet.teamcode.companion.resources.pending_failed
+import me.nathanfallet.teamcode.companion.resources.pending_refused
+import me.nathanfallet.teamcode.companion.resources.pending_retry
+import me.nathanfallet.teamcode.companion.resources.pending_sending
+import me.nathanfallet.teamcode.companion.resources.pending_sent
+import me.nathanfallet.teamcode.companion.resources.pending_woke
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -83,10 +105,13 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
         Column(Modifier.fillMaxSize().padding(padding), horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.widthIn(max = 820.dp).fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 state.session?.let { Header(it, state) }
+                state.session?.let { Actions(it, state, viewModel) }
                 ErrorText(state.error)
                 if (state.error != null && !state.gone) TextButton(onClick = viewModel::retry) { Text(stringResource(Res.string.action_retry)) }
+                state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.testTag("notice")) }
             }
-            ConfirmingLinks { Transcript(state, memberId, viewModel::loadOlder, Modifier.weight(1f)) }
+            ConfirmingLinks { Transcript(state, memberId, viewModel, Modifier.weight(1f)) }
+            state.session?.let { Composer(it, state, viewModel) }
         }
     }
 }
@@ -110,12 +135,13 @@ private fun Header(session: CloudSession, state: SessionUiState) {
 }
 
 @Composable
-private fun Transcript(state: SessionUiState, memberId: String?, onLoadOlder: () -> Unit, modifier: Modifier) {
+private fun Transcript(state: SessionUiState, memberId: String?, viewModel: SessionViewModel, modifier: Modifier) {
+    val onLoadOlder = viewModel::loadOlder
     val items = remember(state.transcript.events) { transcriptItems(state.transcript.events) }
     val listState = rememberLazyListState()
     // Follow the newest event while the member is at the bottom; leave the position alone when reading older ones.
     val atBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
-    LaunchedEffect(items.lastOrNull()?.key, state.running) {
+    LaunchedEffect(items.lastOrNull()?.key, state.running, state.pending.size) {
         if (atBottom && listState.layoutInfo.totalItemsCount > 0) listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
     }
     LazyColumn(modifier.widthIn(max = 820.dp).fillMaxWidth().testTag("transcript"), state = listState) {
@@ -130,7 +156,62 @@ private fun Transcript(state: SessionUiState, memberId: String?, onLoadOlder: ()
         items(items, key = { it.key }) { TranscriptItemView(it, memberId) }
         item(key = "bottom") {
             if (state.loaded && items.isEmpty()) Text(stringResource(Res.string.session_empty), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.pending.forEach { PendingBubble(it, viewModel) }
             if (state.running) Text(stringResource(Res.string.session_working), modifier = Modifier.padding(16.dp).testTag("running"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun Actions(session: CloudSession, state: SessionUiState, viewModel: SessionViewModel) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (state.running) OutlinedButton(onClick = viewModel::interrupt, enabled = !state.acting, modifier = Modifier.testTag("interrupt")) { Text(stringResource(Res.string.action_interrupt)) }
+        if (state.canControl && ControlSessionUseCase.canPause(session)) TextButton(onClick = viewModel::pause, enabled = !state.acting, modifier = Modifier.testTag("pause")) { Text(stringResource(Res.string.action_pause)) }
+        if (state.canControl && ControlSessionUseCase.canResume(session)) TextButton(onClick = viewModel::resume, enabled = !state.acting, modifier = Modifier.testTag("resume")) { Text(stringResource(Res.string.action_resume)) }
+        if (state.acting) CircularProgressIndicator(Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun Composer(session: CloudSession, state: SessionUiState, viewModel: SessionViewModel) {
+    Row(
+        Modifier.widthIn(max = 820.dp).fillMaxWidth().imePadding().padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (!ControlSessionUseCase.canMessage(session)) {
+            Text(stringResource(Res.string.composer_ended), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return@Row
+        }
+        OutlinedTextField(
+            state.draft, viewModel::onDraftChange,
+            placeholder = { Text(stringResource(Res.string.composer_hint)) },
+            maxLines = 6,
+            modifier = Modifier.weight(1f).testTag("composer"),
+        )
+        Button(onClick = viewModel::send, enabled = state.draft.isNotBlank(), modifier = Modifier.testTag("send")) { Text(stringResource(Res.string.composer_send)) }
+    }
+}
+
+@Composable
+private fun PendingBubble(message: PendingMessage, viewModel: SessionViewModel) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("pending-${message.clientMessageId}"), horizontalAlignment = Alignment.End) {
+        Text(
+            message.text,
+            modifier = Modifier.widthIn(max = 560.dp).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f), RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+        val failed = message.state == PendingMessage.State.FAILED || message.state == PendingMessage.State.REFUSED
+        val status = when (message.state) {
+            PendingMessage.State.SENDING -> stringResource(Res.string.pending_sending)
+            PendingMessage.State.SENT -> stringResource(if (message.woke) Res.string.pending_woke else Res.string.pending_sent)
+            PendingMessage.State.FAILED -> stringResource(Res.string.pending_failed, message.reason ?: "")
+            PendingMessage.State.REFUSED -> stringResource(Res.string.pending_refused, message.reason ?: "")
+        }
+        Text(status, style = MaterialTheme.typography.labelSmall, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (failed) Row {
+            if (message.state == PendingMessage.State.FAILED) TextButton(onClick = { viewModel.retry(message.clientMessageId) }, modifier = Modifier.testTag("retry-${message.clientMessageId}")) { Text(stringResource(Res.string.pending_retry)) }
+            TextButton(onClick = { viewModel.discard(message.clientMessageId) }) { Text(stringResource(Res.string.pending_discard)) }
         }
     }
 }

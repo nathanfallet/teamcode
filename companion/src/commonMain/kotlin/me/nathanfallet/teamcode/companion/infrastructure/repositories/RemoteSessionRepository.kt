@@ -1,6 +1,12 @@
 package me.nathanfallet.teamcode.companion.infrastructure.repositories
 
 import kotlinx.coroutines.flow.Flow
+import me.nathanfallet.teamcode.api.models.CloudAgentRequest
+import me.nathanfallet.teamcode.api.models.CloudInputView
+import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
+import me.nathanfallet.teamcode.api.models.SendCloudMessageRequest
+import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
+import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
@@ -25,6 +31,23 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
 
     override suspend fun profiles(accountId: String): List<Profile> = calls.withAccount(accountId) { client -> client.cloudProfiles().map { it.domain() } }
 
+    override suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession = calls.withAccount(accountId) { client ->
+        val agent = if (session.model != null || session.effort != null) CloudAgentRequest(session.model, session.effort) else null
+        client.createCloudSession(CreateCloudSessionRequest(name = session.name, profileId = session.profileId, agent = agent, initialMessage = session.initialMessage), idempotencyKey).domain()
+    }
+
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt =
+        calls.withAccount(accountId, resource = true) { it.sendCloudMessage(sessionId, SendCloudMessageRequest(text, wake = true), idempotencyKey = clientMessageId).receipt() }
+
+    override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt =
+        calls.withAccount(accountId, resource = true) { it.interruptCloudSession(sessionId, idempotencyKey).receipt() }
+
+    override suspend fun pause(accountId: String, sessionId: String): CloudSession =
+        calls.withAccount(accountId, resource = true) { it.pauseCloudSession(sessionId).domain() }
+
+    override suspend fun resume(accountId: String, sessionId: String): CloudSession =
+        calls.withAccount(accountId, resource = true) { it.resumeCloudSession(sessionId).domain() }
+
     override fun sessionChanges(accountId: String): Flow<LiveUpdate<SessionChange>> = flow {
         // One cursor per collection, shared by its attempts: a reconnection resumes after the last event seen, any subject.
         var cursor: Long? = null
@@ -43,3 +66,5 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         })
     }
 }
+
+private fun CloudInputView.receipt() = InputReceipt(id, status, woke, reason)

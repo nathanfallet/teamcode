@@ -126,6 +126,22 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "get $sessionId"
         return byId[sessionId] ?: throw CompanionException.NotFound()
     }
-    override suspend fun profiles(accountId: String) = emptyList<me.nathanfallet.teamcode.companion.domain.models.Profile>()
+    var profileList = emptyList<me.nathanfallet.teamcode.companion.domain.models.Profile>()
+    override suspend fun profiles(accountId: String) = profileList.also { calls += "profiles" }
+    /** Each action's answer; throw from it to fail. */
+    var sendResult: (String) -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("in-$it", "queued", false, null) }
+    var interruptResult: () -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("int", "queued", false, null) }
+    var createResult: (me.nathanfallet.teamcode.companion.domain.models.NewSession) -> me.nathanfallet.teamcode.companion.domain.models.CloudSession = { cloudSession("new") }
+    override suspend fun create(accountId: String, session: me.nathanfallet.teamcode.companion.domain.models.NewSession, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "create ${session.name} $idempotencyKey"
+        return createResult(session)
+    }
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
+        calls += "send $sessionId $text $clientMessageId"
+        return sendResult(clientMessageId)
+    }
+    override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String) = interruptResult().also { calls += "interrupt $sessionId" }
+    override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
+    override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }
 }

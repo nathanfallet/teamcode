@@ -1,7 +1,9 @@
 package me.nathanfallet.teamcode.companion.di
 
 import me.nathanfallet.teamcode.companion.presentation.navigation.LoginRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AddServerViewModel
@@ -20,5 +22,6 @@ val presentationModule = module {
     viewModelOf(::HomeViewModel)
     viewModelOf(::SettingsViewModel)
     viewModelOf(::SessionsViewModel)
-    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get()) }
+    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: NewSessionRoute) -> NewSessionViewModel(route, get(), get(), get()) }
 }

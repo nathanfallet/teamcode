@@ -1069,3 +1069,7 @@ Evidence: `MemberEnrollmentPersistenceTest` (MySQL 8.4, two pools: member refuse
 ## Companion app skeleton (2026-10-22)
 
 The [companion app](companion.md) exists on iOS, Android and the desktop: `:companion` (Compose Multiplatform, Koin, domain / infrastructure / presentation / di), `:companion-android`, the Xcode project `companion-ios/` and a desktop entry point. It adds a server after checking it is TeamCode, signs in with a password (temporary passwords changed in the app), keeps several accounts, stores tokens in the Keychain, the Android Keystore or the desktop keyring, and has a settings screen (theme, device name, sign-out). Sessions and artifacts come next. Evidence: the app tests listed in [companion.md](companion.md#evidence); the `companion` CI job runs them and assembles the Android app.
+
+## Companion app sessions (2026-10-22)
+
+The [companion app](companion.md) follows cloud sessions: a live list by state (and, for administrators, by owner) kept current by the caller-wide feed, and a session screen with its header, history pages and live transcript, reconnecting with back-off and closed in the background. It acts on them: messages sent idempotently with a pending bubble until the transcript records them, interrupt, pause and resume for the owner and administrators, and new sessions from an assigned profile. Evidence: the sessions and actions tests listed in [companion.md](companion.md#evidence).

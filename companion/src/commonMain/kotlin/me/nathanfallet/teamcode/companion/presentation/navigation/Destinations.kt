@@ -20,3 +20,7 @@ object SettingsRoute
 /** One cloud session of an account: header and live transcript. */
 @Serializable
 data class SessionRoute(val accountId: String, val sessionId: String)
+
+/** The new-session form of an account. */
+@Serializable
+data class NewSessionRoute(val accountId: String)

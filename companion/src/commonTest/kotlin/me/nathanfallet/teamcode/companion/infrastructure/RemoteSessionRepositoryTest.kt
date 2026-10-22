@@ -153,4 +153,38 @@ class RemoteSessionRepositoryTest {
         assertEquals(listOf(11L, 12), seen.filterIsInstance<LiveUpdate.Item<TranscriptEvent>>().map { it.value.seq })
         assertEquals(LiveUpdate.Ended, seen.last())
     }
+
+    private val inputJson = """{"id":"in1","kind":"message","status":"queued","authorId":"m1","text":"Go","woke":true,"createdAt":1}"""
+
+    @Test fun aMessageCarriesItsIdAsTheIdempotencyKeyAndWakesTheSession() = runTest {
+        json(inputJson)
+        val receipt = sessions.send("a1", "s1", "Go", "00000000-0000-4000-8000-000000000001")
+        assertEquals("in1", receipt.inputId); assertTrue(receipt.woke)
+        val request = requests.single()
+        assertEquals("/api/v1/cloud/sessions/s1/messages", request.url.encodedPath)
+        assertEquals("00000000-0000-4000-8000-000000000001", request.headers["Idempotency-Key"])
+        val body = (request.body as io.ktor.http.content.TextContent).text
+        assertTrue("\"wake\":true" in body || "\"wake\"" !in body, body)
+        assertTrue("\"text\":\"Go\"" in body)
+    }
+
+    @Test fun creationSendsTheKeyAndOnlyTheFieldsGiven() = runTest {
+        json(sessionJson); json(sessionJson)
+        sessions.create("a1", me.nathanfallet.teamcode.companion.domain.models.NewSession("Fix", "p1", null, null, null), "key-1")
+        sessions.create("a1", me.nathanfallet.teamcode.companion.domain.models.NewSession("Fix", "p1", "opus", null, "Start"), "key-2")
+        val (first, second) = requests.map { (it.body as io.ktor.http.content.TextContent).text }
+        assertEquals("key-1", requests[0].headers["Idempotency-Key"])
+        // Absent fields go as null, which the server reads as "not given".
+        assertTrue("\"agent\":null" in first && "\"initialMessage\":null" in first, first)
+        assertTrue("\"model\":\"opus\"" in second && "\"initialMessage\":\"Start\"" in second, second)
+    }
+
+    @Test fun pauseAndInterruptMapTheirAnswers() = runTest {
+        json(sessionJson.replace("\"state\":\"active\"", "\"state\":\"pausing\""))
+        assertEquals(SessionState.PAUSING, sessions.pause("a1", "s1").state)
+        json("""{"error":{"type":"nothing_to_interrupt","message":"No."}}""", HttpStatusCode.Conflict)
+        val error = assertFailsWith<CompanionException.Server> { sessions.interrupt("a1", "s1", "k1") }
+        assertEquals("nothing_to_interrupt", error.code)
+        assertEquals("k1", requests.last().headers["Idempotency-Key"])
+    }
 }

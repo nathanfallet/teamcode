@@ -16,7 +16,12 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.reconciled
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.Transcript
@@ -34,6 +39,14 @@ data class SessionUiState(
     val error: String? = null,
     /** True when the session is gone or no longer visible. */
     val gone: Boolean = false,
+    /** Messages sent from here that the transcript does not show yet, or that failed. */
+    val pending: List<PendingMessage> = emptyList(),
+    val draft: String = "",
+    /** The member may pause and resume (owner or administrator). */
+    val canControl: Boolean = false,
+    val acting: Boolean = false,
+    /** A short result of an action (woken, nothing to interrupt) or its failure. */
+    val notice: String? = null,
 ) {
     /** A turn is running: its last `turn` event is `started`. */
     val running: Boolean get() = transcript.events.lastOrNull { it is TranscriptEvent.Turn }.let { it is TranscriptEvent.Turn && it.phase == TurnPhase.STARTED }
@@ -48,6 +61,9 @@ class SessionViewModel(
     private val getSession: GetSessionUseCase,
     private val loadTranscript: LoadTranscriptUseCase,
     private val followTranscript: FollowTranscriptUseCase,
+    private val sendMessage: SendMessageUseCase,
+    private val control: ControlSessionUseCase,
+    private val accounts: AccountRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = state.asStateFlow()
@@ -67,7 +83,7 @@ class SessionViewModel(
                 loading.withLock {
                     if (!state.value.loaded) {
                         val page = loadTranscript(route.accountId, route.sessionId)
-                        state.update { it.copy(transcript = it.transcript.withLatest(page), loaded = true) }
+                        state.update { it.withTranscript(it.transcript.withLatest(page)).copy(loaded = true) }
                     }
                 }
                 var reconnected = false
@@ -78,7 +94,7 @@ class SessionViewModel(
                             // Back after a cut: the session may have been paused or resumed meanwhile.
                             if (reconnected) { reconnected = false; refreshSessionQuietly() }
                         }
-                        is LiveUpdate.Item -> state.update { it.copy(transcript = it.transcript.withLive(update.value), live = LiveState.LIVE) }
+                        is LiveUpdate.Item -> state.update { it.withTranscript(it.transcript.withLive(update.value)).copy(live = LiveState.LIVE) }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
                         LiveUpdate.Gap -> Unit
                         LiveUpdate.Ended -> {
@@ -125,6 +141,66 @@ class SessionViewModel(
         }
     }
 
+    fun onDraftChange(text: String) = state.update { it.copy(draft = text) }
+    fun dismissNotice() = state.update { it.copy(notice = null) }
+
+    /** Shows the message at once, then sends it; the draft is cleared only once it is queued for sending. */
+    fun send() {
+        val message = try {
+            sendMessage.draft(state.value.draft.trim())
+        } catch (error: IllegalArgumentException) {
+            state.update { it.copy(notice = error.userMessage()) }
+            return
+        }
+        state.update { it.copy(draft = "", pending = it.pending + message) }
+        deliver(message)
+    }
+
+    /** Sends a failed message again with the same id: the server never queues it twice. */
+    fun retry(clientMessageId: String) {
+        val message = state.value.pending.firstOrNull { it.clientMessageId == clientMessageId && it.state == PendingMessage.State.FAILED } ?: return
+        val sending = message.copy(state = PendingMessage.State.SENDING, reason = null)
+        state.update { current -> current.copy(pending = current.pending.map { if (it.clientMessageId == clientMessageId) sending else it }) }
+        deliver(sending)
+    }
+
+    fun discard(clientMessageId: String) = state.update { current ->
+        current.copy(pending = current.pending.filterNot { it.clientMessageId == clientMessageId && it.state != PendingMessage.State.SENDING })
+    }
+
+    private fun deliver(message: PendingMessage) {
+        viewModelScope.launch {
+            val result = sendMessage(route.accountId, route.sessionId, message)
+            state.update { current ->
+                current.copy(pending = current.pending.map { if (it.clientMessageId == message.clientMessageId) result else it }.reconciled(current.transcript.events))
+            }
+            // A paused session woke for it: the header changes state.
+            if (result.woke) { state.update { it.copy(notice = "The session was paused: it is waking up for your message.") }; refreshSessionQuietly() }
+        }
+    }
+
+    fun interrupt() = act { if (!control.interrupt(route.accountId, route.sessionId)) state.update { it.copy(notice = "Nothing is running.") } }
+    fun pause() = act { val session = control.pause(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
+    fun resume() = act { val session = control.resume(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
+
+    private fun act(action: suspend () -> Unit) {
+        if (state.value.acting) return
+        state.update { it.copy(acting = true, notice = null) }
+        viewModelScope.launch {
+            try {
+                action()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                state.update { it.copy(notice = error.userMessage()) }
+            } finally {
+                state.update { it.copy(acting = false) }
+            }
+        }
+    }
+
+    private fun SessionUiState.withTranscript(transcript: Transcript) = copy(transcript = transcript, pending = pending.reconciled(transcript.events))
+
     private suspend fun refreshSessionQuietly() {
         try {
             refreshSession()
@@ -139,6 +215,7 @@ class SessionViewModel(
 
     private suspend fun refreshSession() {
         val session = getSession(route.accountId, route.sessionId)
-        state.update { it.copy(session = session) }
+        val account = accounts.accounts.value.firstOrNull { it.id == route.accountId }
+        state.update { it.copy(session = session, canControl = account != null && ControlSessionUseCase.canControl(account, session)) }
     }
 }

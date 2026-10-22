@@ -15,7 +15,9 @@ import androidx.navigation.toRoute
 import me.nathanfallet.teamcode.companion.presentation.screens.AddServerScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.HomeScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.NewSessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionViewModel
 import me.nathanfallet.teamcode.companion.presentation.screens.SettingsScreen
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
@@ -53,7 +55,15 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenSettings = { navController.navigate(SettingsRoute) },
                 onSignInAgain = { account -> navController.navigate(LoginRoute(account.origin, account.username)) },
                 onOpenSession = { account, session -> navController.navigate(SessionRoute(account.id, session.id)) },
+                onNewSession = { account -> navController.navigate(NewSessionRoute(account.id)) },
             )
+        }
+        composable<NewSessionRoute> { entry ->
+            val route = entry.toRoute<NewSessionRoute>()
+            val viewModel: NewSessionViewModel = koinViewModel { parametersOf(route) }
+            NewSessionScreen(viewModel, onBack = { navController.popBackStack() }, onCreated = { session ->
+                navController.navigate(SessionRoute(route.accountId, session.id)) { popUpTo<NewSessionRoute> { inclusive = true } }
+            })
         }
         composable<SessionRoute> { entry ->
             val route = entry.toRoute<SessionRoute>()

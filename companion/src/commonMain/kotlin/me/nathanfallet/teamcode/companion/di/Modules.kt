@@ -26,7 +26,11 @@ import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TranscriptRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
@@ -68,4 +72,8 @@ val domainModule = module {
     single { FollowSessionListUseCase(get(), get(), get()) }
     single { LoadTranscriptUseCase(get(), get(), get()) }
     single { FollowTranscriptUseCase(get(), get()) }
+    single { SendMessageUseCase(get(), get(), get(), get()) }
+    single { ControlSessionUseCase(get(), get(), get()) }
+    single { LoadProfilesUseCase(get(), get(), get()) }
+    single { CreateSessionUseCase(get(), get(), get()) }
 }
