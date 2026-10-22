@@ -50,7 +50,7 @@ class ArtifactRoutesTest {
         override suspend fun assemble(actor: Principal, uploadId: String, sha256: String) = (if (sha256 == pageSha) page else leakContent).let { UploadBlob("default", id, sha256, it.size.toLong()) to it }
         override suspend fun recordBlob(actor: Principal, uploadId: String, sha256: String) { calls += "recordBlob" }
         override suspend fun refuseBlob(actor: Principal, uploadId: String, sha256: String, code: String) { calls += "refuse:$code" }
-        override suspend fun abandonBlob(blob: UploadBlob) { calls += "abandon" }
+        override suspend fun abandonBlob(blob: UploadBlob, uploadId: String) { calls += "abandon" }
         override suspend fun commit(actor: Principal, artifactId: String, plan: CommitPlan): Published {
             call("commit")
             if (plan.baseVersion != 2) throw ArtifactConflictFailure(version(2))

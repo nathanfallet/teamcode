@@ -90,10 +90,12 @@ interface ArtifactStore {
     /** Records the blob as stored in the bucket for this upload and drops its chunks. */
     suspend fun recordBlob(actor: Principal, uploadId: String, sha256: String)
     /**
-     * A blob put in the bucket whose upload could not record it (expired or removed meanwhile): marked for collection
-     * unless the artifact holds it or another live upload announced it, so it never sits uncounted in the folder.
+     * A blob put in the bucket that [uploadId] could not record (a failure, a cancelled request, or the upload expired
+     * or removed meanwhile), so it never sits uncounted in the folder: while the upload is live, it is recorded for it,
+     * and its expiry collects it unless a version uses it; otherwise it is marked for collection unless the artifact
+     * holds it or another live upload announced it.
      */
-    suspend fun abandonBlob(blob: UploadBlob)
+    suspend fun abandonBlob(blob: UploadBlob, uploadId: String)
     /** Drops the chunks of a refused blob and records the refusal (`artifact.publish_refused`, code only). */
     suspend fun refuseBlob(actor: Principal, uploadId: String, sha256: String, code: String)
     /**
@@ -190,7 +192,7 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         // marked for collection, without being cancelled itself, so it never sits uncounted in the folder.
         try { store.recordBlob(actor, uploadId, sha256) }
         catch (error: Throwable) {
-            withContext(NonCancellable) { try { store.abandonBlob(blob) } catch (_: Exception) { } }
+            withContext(NonCancellable) { try { store.abandonBlob(blob, uploadId) } catch (_: Exception) { } }
             throw error
         }
         return receipt.copy(stored = true)

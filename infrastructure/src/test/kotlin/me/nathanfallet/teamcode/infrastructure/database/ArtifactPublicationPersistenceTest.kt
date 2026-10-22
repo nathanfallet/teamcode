@@ -153,8 +153,13 @@ class ArtifactPublicationPersistenceTest {
 
             // A blob put in the bucket after its upload vanished is marked for collection, never left uncounted.
             val orphan = bytes("orphaned after the put")
-            a.store.abandonBlob(UploadBlob(f.member.principal.teamId, id, ArtifactRules.sha256(orphan), orphan.size.toLong()))
+            a.store.abandonBlob(UploadBlob(f.member.principal.teamId, id, ArtifactRules.sha256(orphan), orphan.size.toLong()), "00000000-0000-4000-8000-0000000000ff")
             assertNotNull(f.a.query { ArtifactBlobs.selectAll().where { (ArtifactBlobs.artifactId eq id) and (ArtifactBlobs.sha256 eq ArtifactRules.sha256(orphan)) }.single()[ArtifactBlobs.collectingSince] })
+            // While its own upload is live (a failed or cancelled request), it is recorded for that upload: a retry finds it stored.
+            val unrecorded = bytes("stored, then the request failed")
+            val live = a.service.startUpload(owner, id, listOf(ref(unrecorded)))
+            a.store.abandonBlob(UploadBlob(f.member.principal.teamId, id, ArtifactRules.sha256(unrecorded), unrecorded.size.toLong()), live.uploadId)
+            assertTrue(a.service.putChunk(owner, live.uploadId, ArtifactRules.sha256(unrecorded), 0, unrecorded).stored)
 
             val actions = f.a.query { AuditEvents.selectAll().where { AuditEvents.action like "artifact.%" }.map { it[AuditEvents.action] to it[AuditEvents.subjectId] } }
             assertEquals(1, actions.count { it.first == "artifact.created" })

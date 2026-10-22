@@ -111,11 +111,18 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         Unit
     }
 
-    override suspend fun abandonBlob(blob: UploadBlob) = database.query {
+    override suspend fun abandonBlob(blob: UploadBlob, uploadId: String) = database.query {
         // Under the artifact lock, like an upload's expiry; a deleted artifact's folder goes as a whole.
         val state = Artifacts.select(Artifacts.state).where { (Artifacts.id eq blob.artifactId) and (Artifacts.teamId eq blob.teamId) }.forUpdate().singleOrNull()?.get(Artifacts.state)
         if (state == null || state == DELETED) return@query
         val now = nowMillis()
+        // Its own upload still live (the request failed or was cancelled): recorded for it, as recordBlob would have,
+        // so a retry sees it stored and the upload's expiry collects it if no version uses it.
+        if (!ArtifactUploads.select(ArtifactUploads.id).where { (ArtifactUploads.id eq uploadId) and (ArtifactUploads.expiresAt greater now) }.forUpdate().empty()) {
+            ArtifactUploadBlobs.insertIgnore { it[ArtifactUploadBlobs.uploadId] = uploadId; it[ArtifactUploadBlobs.sha256] = blob.sha256; it[ArtifactUploadBlobs.size] = blob.size; it[ArtifactUploadBlobs.storedAt] = now }
+            ArtifactUploadChunks.deleteWhere { (ArtifactUploadChunks.uploadId eq uploadId) and (ArtifactUploadChunks.sha256 eq blob.sha256) }
+            return@query
+        }
         val held = !ArtifactBlobs.select(ArtifactBlobs.sha256).where { (ArtifactBlobs.artifactId eq blob.artifactId) and (ArtifactBlobs.sha256 eq blob.sha256) }.empty()
         if (held || blob.sha256 in liveAnnouncements(blob.artifactId, "", now)) return@query
         ArtifactBlobs.insert {
