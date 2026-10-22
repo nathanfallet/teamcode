@@ -203,7 +203,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
     post("/dashboard/cloud/profiles/draft") {
         val actor = call.principal
         val input = call.form(origin.trimEnd('/'), limit = PROFILE_FORM_BYTES)
-        val draft = ProfileDraft.parse(input)
+        val parsed = ProfileDraft.parse(input)
+        // A storage class and pull secrets chosen on another cluster are not carried over to this one.
+        val draft = if (input["choicesCluster"]?.let { it != parsed.spec.clusterId } == true)
+            parsed.copy(spec = parsed.spec.copy(storageClass = null, imagePullSecrets = emptyList())) else parsed
         val members = draft.members
         val outcome = try {
             when (input["intent"]) {
@@ -213,7 +216,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
                 }
                 "check" -> {
                     admin.checkProfile(actor, draft.id, draft.version, draft.name, draft.spec, members)
-                    DraftOutcome("The draft passes every check. Publishing creates version ${draft.version + 1}.", problem = false)
+                    DraftOutcome("The draft passes the profile checks (cluster, namespace, storage class, bounds, recipe). Publishing creates version ${draft.version + 1}.", problem = false)
                 }
                 else -> null
             }

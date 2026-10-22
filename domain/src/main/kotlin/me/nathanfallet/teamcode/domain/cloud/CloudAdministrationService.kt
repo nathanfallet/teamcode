@@ -4,6 +4,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import me.nathanfallet.teamcode.domain.team.*
 
 /** Validation for clusters, profiles and settings. Persistence revalidates the administrator in its transaction. */
@@ -32,7 +34,8 @@ class CloudAdministrationService(
     }
 
     /**
-     * Runs every check [saveProfile] runs, without publishing: a draft on the dashboard is checked before it becomes a
+     * Runs the validation [saveProfile] runs before writing, without publishing (the store's own checks, such as a name
+     * already used, are only met at publication): a draft on the dashboard is checked before it becomes a
      * version. A draft of an existing profile must still be based on its current version.
      */
     suspend fun checkProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) {
@@ -45,25 +48,28 @@ class CloudAdministrationService(
 
     /**
      * What the profile form offers on [clusterId]: the allowed namespaces, then the storage classes and the image pull
-     * secrets of [namespace] (the first allowed one when it is not allowed). A read the service account may not make,
+     * secrets of [namespace] (otherwise the first allowed one that is not known to be missing). A read the service account may not make,
      * or a cluster that cannot be reached, gives no list rather than an error: the form then asks for the name.
      */
     suspend fun choices(actor: Principal, clusterId: String, namespace: String?): ClusterChoices {
         admin(actor)
         val target = store.clusters(actor).singleOrNull { it.id == clusterId } ?: throw TeamFailure("cluster_not_found", 404, "Cluster not found.")
-        val chosen = namespace?.takeIf { it in target.allowedNamespaces } ?: target.allowedNamespaces.first()
-        val reads = discovery ?: return ClusterChoices(target, chosen, target.allowedNamespaces.map { NamespaceChoice(it, NamespaceStatus.UNKNOWN) },
-            ClusterListing.Unavailable, ClusterListing.Unavailable)
+        val reads = discovery ?: return ClusterChoices(target, namespace?.takeIf { it in target.allowedNamespaces } ?: target.allowedNamespaces.first(),
+            target.allowedNamespaces.map { NamespaceChoice(it, NamespaceStatus.UNKNOWN) }, ClusterListing.Unavailable, ClusterListing.Unavailable)
         return coroutineScope {
+            // Up to 32 namespaces: a few reads at a time, so one page load never fans out to the whole list at once.
+            val permits = Semaphore(PARALLEL_READS)
+            val classes = async { listing { reads.storageClasses(target.id).sortedWith(compareBy({ !it.isDefault }, { it.name })) } }
             val namespaces = target.allowedNamespaces.map { name ->
-                async { NamespaceChoice(name, when (val found = listing { listOf(reads.namespaceExists(target.id, name)) }) {
+                async { permits.withPermit { NamespaceChoice(name, when (val found = listing { listOf(reads.namespaceExists(target.id, name)) }) {
                     is ClusterListing.Listed -> if (found.items.single()) NamespaceStatus.FOUND else NamespaceStatus.MISSING
                     else -> NamespaceStatus.UNKNOWN
-                }) }
-            }
-            val classes = async { listing { reads.storageClasses(target.id).sortedWith(compareBy({ !it.isDefault }, { it.name })) } }
-            val secrets = async { listing { reads.imagePullSecrets(target.id, chosen).distinct().sorted().take(MAX_LISTED) } }
-            ClusterChoices(target, chosen, namespaces.awaitAll(), classes.await(), secrets.await())
+                }) } }
+            }.awaitAll()
+            val chosen = namespace?.takeIf { it in target.allowedNamespaces }
+                ?: namespaces.firstOrNull { it.status != NamespaceStatus.MISSING }?.name ?: target.allowedNamespaces.first()
+            val secrets = listing { reads.imagePullSecrets(target.id, chosen).distinct().sorted().take(MAX_LISTED) }
+            ClusterChoices(target, chosen, namespaces, classes.await(), secrets)
         }
     }
 
@@ -96,6 +102,7 @@ class CloudAdministrationService(
     companion object {
         /** Image pull secrets offered at most, the first by name; another one can still be typed in. */
         const val MAX_LISTED = 200
+        private const val PARALLEL_READS = 4
         private val dnsLabel = Regex("[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
         private val dnsSubdomain = Regex("[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
         fun validate(settings: CloudSettings) {

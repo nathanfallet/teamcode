@@ -131,6 +131,7 @@ class CloudProfileRoutesTest {
         assertContains(form, """name="member" value="colleague-id"""")
         assertFalse("former-id" in form, "Disabled members are not offered")
         assertContains(form, "Publish version 1")
+        assertTrue(form.indexOf("""name="intent" value="check"""") < form.indexOf("""name="intent" value="reload""""), "Enter in a field checks the draft, it does not reload")
         assertEquals(HttpStatusCode.OK, page("/dashboard/assets/profile-editor.js").status)
         assertEquals(HttpStatusCode.Forbidden, page("/dashboard/assets/profile-editor.js", "colleague").status)
         assertEquals(HttpStatusCode.Forbidden, page("/dashboard/cloud/profiles/new", "colleague").status)
@@ -153,7 +154,8 @@ class CloudProfileRoutesTest {
         val store = Admin(); val cluster = Cluster()
         server(store, cluster)
         // The namespace of the previous cluster is not allowed on the new one: the new cluster's first namespace is read.
-        val reloaded = draft(*valid("intent" to "reload", "clusterId" to "prod-id", "namespace" to "teamcode", "image" to "registry.example/kept:2"))
+        val reloaded = draft(*valid("intent" to "reload", "clusterId" to "prod-id", "namespace" to "teamcode", "image" to "registry.example/kept:2",
+            "choicesCluster" to "lab-id", "storageClass" to "keep", "imagePullSecret" to "registry"))
         assertEquals(HttpStatusCode.OK, reloaded.status)
         val form = reloaded.bodyAsText()
         assertContains(form, """<option value="prod-id" selected>prod</option>""")
@@ -161,6 +163,8 @@ class CloudProfileRoutesTest {
         assertContains(form, "Cluster default: fast")
         assertContains(form, """name="imagePullSecret" value="prod-registry"""")
         assertContains(form, """value="registry.example/kept:2"""")
+        assertFalse("keep" in form || "value=\"registry\"" in form, "The previous cluster's storage class and secrets are not carried over")
+        assertContains(form, """<input type="hidden" name="choicesCluster" value="prod-id">""")
         assertEquals("prod-id" to "agents", cluster.secretReads.last())
         assertTrue(store.saves.isEmpty())
         // Changing the namespace reads that namespace's secrets.
@@ -179,7 +183,7 @@ class CloudProfileRoutesTest {
         assertContains(refusedForm, """data-storage-warning="keep"><strong>""", message = "The warning shows for the chosen class")
         val checked = draft(*valid("intent" to "check"))
         assertEquals(HttpStatusCode.OK, checked.status)
-        assertContains(checked.bodyAsText(), "The draft passes every check. Publishing creates version 1.")
+        assertContains(checked.bodyAsText(), "The draft passes the profile checks (cluster, namespace, storage class, bounds, recipe). Publishing creates version 1.")
         assertTrue(store.saves.isEmpty(), "Checking never publishes")
         assertEquals(HttpStatusCode.Forbidden, draft(*valid("intent" to "publish"), csrf = "wrong").status)
 
@@ -187,6 +191,7 @@ class CloudProfileRoutesTest {
             "allowedImageOverrides" to "registry.example/toolchain:2\r\nregistry.example/toolchain:3\r\n", "agentKind" to "codex", "agentVersion" to "1.2.3",
             "requiredVariables" to "NPM_TOKEN, API_KEY", "requireGitHub" to "on", "gitEmailDomain" to "example.com", "workingDirectory" to "app",
             "repositoryHosts" to "github.com, gitlab.example.com"),
+            "member" to "departed-id",
             "repositoryUrl" to "https://github.com/org/app.git", "repositoryPath" to "app", "repositoryRef" to "main", "repositoryBranch" to "",
             "repositoryUrl" to "", "repositoryPath" to "", "repositoryRef" to "", "repositoryBranch" to "",
             "repositoryUrl" to "https://gitlab.example.com/org/lib.git", "repositoryPath" to "lib", "repositoryRef" to "", "repositoryBranch" to "task-1",
@@ -199,7 +204,7 @@ class CloudProfileRoutesTest {
             listOf("registry", "extra"), CloudResources(2000, 4096), 20, null, "codex", "1.2.3", 30, 5, 1440,
             CloudEnvironmentSpec(listOf(CloudRepository("https://github.com/org/app.git", "app", "main"), CloudRepository("https://gitlab.example.com/org/lib.git", "lib", null, "task-1")),
                 "app", CloudSetup(listOf("npm ci\nnpm run build"), listOf("npm start")), listOf("NPM_TOKEN", "API_KEY"), true, "example.com", listOf("github.com", "gitlab.example.com"))), spec)
-        assertEquals(setOf("colleague-id"), store.profiles.single().assignedMemberIds)
+        assertEquals(setOf("colleague-id", "departed-id"), store.profiles.single().assignedMemberIds)
         assertContains(page("/dashboard/cloud?published=1").bodyAsText(), "Version 1 published.")
 
         // Editing starts a draft of version 2 from the published version, prefilled.
@@ -211,6 +216,7 @@ class CloudProfileRoutesTest {
         assertContains(edit, "not found in teamcode")
         assertContains(edit, "npm ci\nnpm run build</textarea>")
         assertContains(edit, """name="member" value="colleague-id" checked""")
+        assertContains(edit, """<input type="hidden" name="member" value="departed-id">""", message = "An assignment the list cannot show is kept")
         assertContains(edit, "Publish version 2")
         assertEquals(HttpStatusCode.Found, draft(*valid("intent" to "publish", "id" to "profile-id", "version" to "1", "workspaceSizeGibibytes" to "50")).status)
         assertEquals(2, store.profiles.single().version)

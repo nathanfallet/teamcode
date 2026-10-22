@@ -80,7 +80,10 @@ internal fun profileEditor(
         else "<p>A draft of version $next, started from version ${draft.version}. Version ${draft.version} stays in use until you publish; sessions keep the version they were created with.</p>"
     val result = outcome?.let { """<div class="notice${if (it.problem) " danger" else ""}" role="status">${escape(it.message)}</div>""" }.orEmpty()
     if (clusters.isEmpty()) return intro + "<div class='empty'><strong>No cluster is connected.</strong> Connect one on <a href=\"/dashboard/cloud\">Cloud sessions</a> first.</div>"
+    // Enter in a field checks the draft: the first submit button of a form is the one implicit submission presses.
     val form = """<form id="profile-form" action="/dashboard/cloud/profiles/draft" method="post">${csrf(actor)}""" +
+        """<button name="intent" value="check" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px">Check draft</button>""" +
+        (choices?.let { """<input type="hidden" name="choicesCluster" value="${escape(it.cluster.id)}">""" }.orEmpty()) +
         (draft.id?.let { """<input type="hidden" name="id" value="${escape(it)}">""" }.orEmpty()) + """<input type="hidden" name="version" value="${draft.version}">""" +
         """<fieldset><legend>Profile</legend><label>Name <input name="name" maxlength="120" required value="${escape(draft.name)}"></label></fieldset>""" +
         placementFields(spec, clusters, choices) + imageFields(spec, choices, images) + resourceFields(spec) + agentFields(spec) +
@@ -211,8 +214,10 @@ private fun environmentFields(environment: CloudEnvironmentSpec): String {
 
 private fun memberFields(assigned: Set<String>, members: List<Member>): String {
     val shown = members.filter { !it.disabled || it.id in assigned }.sortedBy { it.username.lowercase() }
+    // An assignment the list cannot show is kept as it is, never dropped by a new version.
+    val kept = assigned.filter { id -> shown.none { it.id == id } }
     return """<fieldset><legend>Members</legend>""" + hint("Members who may create sessions from this profile. Administrators may use every profile.") +
         shown.joinToString("") { member ->
             """<label class="choice"><input type="checkbox" name="member" value="${escape(member.id)}"${if (member.id in assigned) " checked" else ""}><span>${escape(member.username)} <span class="chip">${escape(member.role.name.lowercase())}</span>${if (member.disabled) " <span class=\"chip danger\">disabled</span>" else ""}</span></label>"""
-        } + "</fieldset>"
+        } + kept.joinToString("") { """<input type="hidden" name="member" value="${escape(it)}">""" } + "</fieldset>"
 }

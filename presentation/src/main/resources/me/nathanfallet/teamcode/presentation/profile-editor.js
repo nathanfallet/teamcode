@@ -9,7 +9,8 @@
   const cluster = document.getElementById("profile-cluster");
   const namespace = document.getElementById("profile-namespace");
   if (cluster) cluster.addEventListener("change", () => {
-    // The namespaces of another cluster differ: the server then picks the new cluster's first allowed one.
+    // The namespaces of another cluster differ: the server then picks the new cluster's first allowed one. Its storage
+    // class and pull secrets are chosen again too (the server drops them as well).
     if (namespace) namespace.disabled = true;
     submitReload();
   });

@@ -72,6 +72,10 @@ class CloudProfileChoicesTest {
         val service = CloudAdministrationService(Store(listOf(lab)), cluster)
         assertEquals("teamcode", service.choices(admin, lab.id, "kube-system").namespace)
         assertEquals("teamcode", service.choices(admin, lab.id, null).namespace)
+        val first = lab.copy(id = "first-id", allowedNamespaces = listOf("gone", "sandbox"))
+        assertEquals("sandbox", CloudAdministrationService(Store(listOf(first)), cluster).choices(admin, first.id, null).namespace,
+            "Without a choice, the first allowed namespace that exists")
+        cluster.secretNamespaces.removeLast()
         assertEquals(listOf("teamcode", "teamcode"), cluster.secretNamespaces, "Never a namespace outside the cluster's allowed list")
     }
 

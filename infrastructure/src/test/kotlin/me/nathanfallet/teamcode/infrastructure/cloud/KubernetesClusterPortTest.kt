@@ -218,6 +218,18 @@ class KubernetesClusterPortTest {
         assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
     }
 
+    @Test fun theBetaDefaultAnnotationIsTheDefaultClassWhenPublishingToo(): Unit = runBlocking {
+        val port = port { json("""{"metadata":{},"items":[{"metadata":{"name":"legacy","annotations":{"storageclass.beta.kubernetes.io/is-default-class":"true"}},"reclaimPolicy":"Delete"}]}""") }
+        assertEquals(StorageClassObservation("legacy", "Delete"), port.storageClass("c1", null))
+    }
+
+    @Test fun pullSecretPagingStopsOnceEnoughNamesAreRead(): Unit = runBlocking {
+        val page = (1..500).joinToString(",") { """{"metadata":{"name":"registry-$it"}}""" }
+        val port = port { json("""{"kind":"PartialObjectMetadataList","metadata":{"continue":"more"},"items":[$page]}""") }
+        assertEquals(500, port.imagePullSecrets("c1", "teamcode").size)
+        assertEquals(1, requests.size, "No further page is read once the form has more names than it shows")
+    }
+
     @Test fun pullSecretsAreNeverReadAsWholeSecretsAndAMissingRightIsNotAFailure(): Unit = runBlocking {
         // A server that ignored the metadata-only request would send data: the list is refused, not parsed.
         val full = port { json("""{"kind":"SecretList","items":[{"metadata":{"name":"registry"},"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"c2VjcmV0"}}]}""") }

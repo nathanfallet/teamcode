@@ -86,8 +86,9 @@ class KubernetesClusterPort(
     override suspend fun storageClass(clusterId: String, name: String?): StorageClassObservation? {
         if (name != null) return get(clusterId, "/apis/storage.k8s.io/v1/storageclasses/${segment(name)}")?.let(::storageClass)
         // No class named: the cluster default, as the API server would pick it for the claim.
-        return list(clusterId, "/apis/storage.k8s.io/v1/storageclasses", null).firstOrNull {
-            it.obj("metadata")?.obj("annotations")?.str("storageclass.kubernetes.io/is-default-class") == "true"
+        // Either annotation marks the default, as for the profile form's choices.
+        return list(clusterId, "/apis/storage.k8s.io/v1/storageclasses", null).firstOrNull { json ->
+            DEFAULT_CLASS_ANNOTATIONS.any { json.obj("metadata")?.obj("annotations")?.str(it) == "true" }
         }?.let(::storageClass)
     }
 
@@ -109,7 +110,7 @@ class KubernetesClusterPort(
      */
     override suspend fun imagePullSecrets(clusterId: String, namespace: String): List<String> = discovery {
         list(clusterId, "/api/v1/namespaces/${segment(namespace)}/secrets", null, fieldSelector = "type=kubernetes.io/dockerconfigjson",
-            accept = METADATA_ONLY, expectedKind = "PartialObjectMetadataList").mapNotNull { it.obj("metadata")?.str("name") }
+            accept = METADATA_ONLY, expectedKind = "PartialObjectMetadataList", enough = CloudAdministrationService.MAX_LISTED).mapNotNull { it.obj("metadata")?.str("name") }
     }
 
     /** A refused read is an optional right the service account lacks, not a failure. */
@@ -326,7 +327,7 @@ class KubernetesClusterPort(
     }
     /** Every page of a list, at most [MAX_PAGES] pages of [PAGE_SIZE]. */
     private suspend fun list(clusterId: String, path: String, labelSelector: String?, maxPages: Int = MAX_PAGES, fieldSelector: String? = null,
-                             accept: String = JSON, expectedKind: String? = null): List<JsonObject> {
+                             accept: String = JSON, expectedKind: String? = null, enough: Int? = null): List<JsonObject> {
         val items = mutableListOf<JsonObject>()
         var next: String? = null
         repeat(maxPages) {
@@ -338,6 +339,8 @@ class KubernetesClusterPort(
             val page = get(clusterId, "$path?$query", accept) ?: if (next == null) return items else throw ClusterApiException(404)
             if (expectedKind != null && page.str("kind") != expectedKind) throw ClusterApiException(406)
             page["items"]?.jsonArray?.forEach { items += it.jsonObject }
+            // A caller that keeps only the first items stops paging once it has them.
+            if (enough != null && items.size >= enough) return items
             next = page.obj("metadata")?.str("continue")?.takeIf { it.isNotEmpty() } ?: return items
         }
         throw ClusterApiException(507) // More objects than one pass may read; refuse rather than act on a partial list.
