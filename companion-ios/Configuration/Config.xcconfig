@@ -1,0 +1,9 @@
+// A contributor without access to the TeamCode Apple team sets their own TEAM_ID (and DEVELOPMENT_TEAM in Xcode):
+// the bundle identifier then becomes unique to that team, so a local build never collides with the published app.
+TEAM_ID=
+
+PRODUCT_NAME=TeamCode
+PRODUCT_BUNDLE_IDENTIFIER=me.nathanfallet.teamcode$(TEAM_ID)
+
+CURRENT_PROJECT_VERSION=1
+MARKETING_VERSION=0.1.0

@@ -7,7 +7,7 @@ The companion app is a TeamCode client for iOS, Android and the desktop (macOS, 
 | `:api` and `:client` for Android (`androidLibrary`, minSdk 26) and iOS (`iosArm64`, `iosSimulatorArm64`), published with the other targets | Implemented |
 | Shared SSE reader for the session stream and the caller-wide feed | Implemented |
 | `followTeamEvents` in the typed client (`GET /api/v1/cloud/events/stream`, `cloud.events.v1`) | Implemented |
-| App skeleton: modules, sign-in, accounts, settings | Planned |
+| App skeleton: modules, sign-in, accounts, settings | Implemented |
 | Sessions: live list, transcript, reconnection | Planned |
 | Acting on sessions: send, interrupt, pause and resume, new session | Planned |
 | Artifacts: gallery, viewer, links | Planned (needs the artifact routes) |
@@ -28,7 +28,35 @@ The app reuses `TeamCodeClient` as is: the SDK still owns no operating system ke
 
 **Builds.** The Android targets need an Android SDK only for their own tasks (`ANDROID_HOME` or `local.properties`); JVM, native CLI and server tasks configure and run without one. Publishing the iOS targets, like the macOS ones, needs a Mac.
 
+## App
+
+`:companion` is the shared app (Compose Multiplatform); `:companion-android` and the Xcode project `companion-ios/` are thin shells around it, and the desktop entry point lives in its `jvmMain`. Inside, the code is split by layer, checked by `scripts/check-module-graph.py`:
+
+| Package | Holds | May import |
+| --- | --- | --- |
+| `domain` | Models (`Account`, `ServerInfo`, `SignInResult`...), repository and service ports, use cases (inspect a server, sign in, change a temporary password, sign out, refresh, rename the device) | Nothing from the other layers, nor `api` or `client` |
+| `infrastructure` | `TeamCodeClient` per account, the typed client mapped to domain errors, settings-backed repositories, one credential store per platform | `domain`, `api`, `client` |
+| `presentation` | Theme (the dashboard's palette), navigation, screens and view models | `domain` only |
+| `di` | Koin modules; each platform adds its own (`platformModule()`) | Everything |
+
+**Sign-in.** The user enters a server address; the app normalizes it (HTTPS required except on loopback), reads its public information and refuses a server that is not TeamCode or whose API it does not speak. It then signs in with `POST /api/v1/auth/login` and the installation id, so a new sign-in from the same device replaces its previous session instead of adding one. A temporary password leads to the password change (at least 14 characters), after which the app signs in again. Several accounts, on one or several servers, can be signed in; one is active.
+
+**Credentials.** Accounts (server, member, device name) are stored in the platform settings; tokens never are. Tokens go to the platform's secure storage: the iOS Keychain (`AfterFirstUnlockThisDeviceOnly`, never synced), an AES-256-GCM key in the Android Keystore (the account id as associated data; backups disabled), and the operating system keyring on the desktop (Keychain, Credential Manager, Secret Service). When the desktop has no keyring, tokens stay in memory and the app asks to sign in at each launch, never writing them to disk.
+
+**Desktop.** Artifacts open in the browser; there is no embedded browser.
+
+**Build and run.**
+
+| Platform | Command |
+| --- | --- |
+| Desktop | `./gradlew :companion:run`; packages with `:companion:packageDmg`, `packageMsi` or `packageDeb` on the matching host |
+| Android | `./gradlew :companion-android:installDebug` (needs the Android SDK with platform 37) |
+| iOS | Open `companion-ios/TeamCode.xcodeproj` in Xcode and run; the build phase calls `:companion:embedAndSignAppleFrameworkForXcode`. A contributor outside the TeamCode Apple team sets `TEAM_ID` in `companion-ios/Configuration/Config.xcconfig` and their team in Xcode |
+
+The Android app is `me.nathanfallet.teamcode` (minSdk 26, targetSdk 36, compiled against 37 as OkHttp 5.5 requires); the iOS app has the same identifier and requires iOS 16. Release signing and store delivery come with the distribution work; nothing in the repository holds a key or a certificate.
+
 ## Evidence
 
 - `EventStreamTest` (common, run on JVM, the Android host, iOS simulator and macOS): the team feed in order with keep-alives and `retry:` skipped, an unknown type delivered, cursor, `types` and bearer sent; no cursor without `after`; `gap` reported before the events after it; a feed cut in the middle of an event resumed from the last handled `seq` without loss or duplicate; a refused feed carrying its error code; invalid cursors and types refused before any request; the session stream still ending with `ENDED` and `DENIED`, joining data lines and ignoring unnamed frames, and throwing when closed; the line and data bounds, both `malformed_event`; fields without a space or a value.
 - Local runs: `:client:jvmTest :client:testAndroidHostTest :client:iosSimulatorArm64Test :client:macosArm64Test :api:iosSimulatorArm64Test`, and `compileTestKotlinLinuxX64` of both modules. Pull request CI runs `:client:jvmTest` and `:client:testAndroidHostTest` on Linux; the iOS tests are not part of any CI job yet (no paid macOS runner per pull request), so they are run locally before merging.
+- App (`:companion`): `AuthUseCasesTest` (origins normalized and only HTTPS or loopback accepted, another API version refused, the token stored but never the password, one account per member and server, a temporary password changed then signed in again, sign-out revoking then forgetting even offline, a revoked token signing the account out once, an offline refresh keeping it signed in, device rename), `SettingsRepositoriesTest` (accounts and active account across restarts, damaged preferences, installation id drawn once, theme), `RemoteAuthRepositoryTest` (capabilities, a server that is not TeamCode, login with the installation id, failures translated without the server's message, the token read at each call, device rename) in common code on the JVM and the Android host; `KeyringCredentialStoreTest` and `LoginScreenTest` (Compose UI test) on the desktop; `TokenCipherTest` on the Android host; `KeychainCredentialStoreTest` on the iOS simulator, which skips itself when the bare test binary has no Keychain (`errSecNotAvailable`). PR CI runs the JVM and Android host tests and assembles the Android app; the iOS app is built locally with Xcode.

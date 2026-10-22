@@ -7,6 +7,7 @@ TeamCode is an independent, self-hosted team gateway. Root package and Gradle gr
 ```mermaid
 flowchart LR
     cli --> client --> api
+    companion-android --> companion --> client
     app --> presentation
     app --> infrastructure
     app --> domain
@@ -21,6 +22,8 @@ flowchart LR
 | api | Serializable DTOs, typed Ktor resources, public error and event contracts | KMP, JVM, desktop Native, Android and iOS |
 | client | Typed TeamCode HTTP client, credential supplier and bounded streaming transport; caller supplies the engine | KMP, JVM, desktop Native, Android and iOS |
 | cli | Native commands, local proxy, browser login, OS credentials, agent integration and service registration | Kotlin/Native; JVM for fast tests |
+| companion | Companion app for iOS, Android and the desktop: Compose Multiplatform UI, Koin, account and credential storage; desktop entry point in `jvmMain` | KMP: JVM desktop, Android, iosArm64, iosSimulatorArm64 |
+| companion-android | Android application shell (`me.nathanfallet.teamcode`) around `companion`; the iOS shell is the Xcode project in `companion-ios/` | Android |
 | domain | Models, use cases, repository/service ports, admission, fairness, capacity forecasts and model selection | Server JVM; no HTTP or database dependency |
 | infrastructure | Provider adapters, OAuth, database, encryption, HTTP transports and telemetry | Server JVM |
 | presentation | Typed management API, incoming inference protocols, dashboard and agent-facing MCP gateway (one endpoint per server) | Server JVM |

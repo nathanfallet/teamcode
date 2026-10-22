@@ -1000,3 +1000,7 @@ Evidence: `MemberEnrollmentPersistenceTest` (MySQL 8.4, two pools: member refuse
 ## Typed client for mobile and the caller-wide feed (2026-10-22)
 
 `:api` and `:client` also target Android (`androidLibrary`, minSdk 26) and iOS (`iosArm64`, `iosSimulatorArm64`), for the [companion app](companion.md). `followTeamEvents` follows `GET /api/v1/cloud/events/stream` (`gap`, `denied`, resumption from the last `seq`); it and `followCloudEvents` share one bounded SSE reader. Evidence: `EventStreamTest` (common) on JVM, the Android host, the iOS simulator and macOS; PR CI runs the JVM and Android host tests, the iOS tests run locally (no paid macOS runner per pull request).
+
+## Companion app skeleton (2026-10-22)
+
+The [companion app](companion.md) exists on iOS, Android and the desktop: `:companion` (Compose Multiplatform, Koin, domain / infrastructure / presentation / di), `:companion-android`, the Xcode project `companion-ios/` and a desktop entry point. It adds a server after checking it is TeamCode, signs in with a password (temporary passwords changed in the app), keeps several accounts, stores tokens in the Keychain, the Android Keystore or the desktop keyring, and has a settings screen (theme, device name, sign-out). Sessions and artifacts come next. Evidence: the app tests listed in [companion.md](companion.md#evidence); the `companion` CI job runs them and assembles the Android app.

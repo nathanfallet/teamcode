@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older (allowBackup is false; this also covers adb backup on devices that ignore it). -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="teamcode_credentials.xml"/>
+    <exclude domain="sharedpref" path="teamcode.xml"/>
+</full-backup-content>

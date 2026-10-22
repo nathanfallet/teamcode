@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer: neither the encrypted tokens nor the account list go to a cloud backup or a new device. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="teamcode_credentials.xml"/>
+        <exclude domain="sharedpref" path="teamcode.xml"/>
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="teamcode_credentials.xml"/>
+        <exclude domain="sharedpref" path="teamcode.xml"/>
+    </device-transfer>
+</data-extraction-rules>
