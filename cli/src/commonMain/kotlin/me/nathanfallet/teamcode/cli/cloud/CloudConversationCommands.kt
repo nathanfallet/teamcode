@@ -90,7 +90,7 @@ internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Lon
             if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
             // Reconnecting would replay the same event from the same cursor.
             if (error.code == TeamCodeClient.MALFORMED_EVENT) {
-                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or skip the event with `teamcode cloud events $id --follow --after ${cursor + 1}`.")
+                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or skip the event with `teamcode cloud logs $id --follow --after ${cursor + 1}`.")
                 return false
             }
             notice("Disconnected; reconnecting from event $cursor.")
@@ -167,6 +167,8 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                 page.events.forEach { echo(it.render()) }
                 cursor = page.events.lastOrNull()?.seq ?: break
             }
+            // False when the transcript stopped on an event this version cannot read: detach, then exit 1.
+            var readable = true
             coroutineScope {
                 val renew = launch {
                     while (isActive) {
@@ -183,7 +185,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                             catch (_: Exception) { lease }
                     }
                 }
-                val follow = launch { followEvents(client, id, cursor, { echo(it.render()) }, notice) }
+                val follow = launch { readable = followEvents(client, id, cursor, { echo(it.render()) }, notice) }
                 // Not a child of this scope: a blocked stdin read cannot be cancelled and must not hold the detach.
                 val input = CoroutineScope(Dispatchers.Default).launch {
                     while (isActive) {
@@ -207,6 +209,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
             }
             try { client.detachCloudSession(id, lease.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
             echo("Detached; the session keeps running.", err = true)
+            if (!readable) SystemExit.exit(1)
         }
         // A blocked stdin read cannot be cancelled; leave without waiting for it.
         SystemExit.exit(0)

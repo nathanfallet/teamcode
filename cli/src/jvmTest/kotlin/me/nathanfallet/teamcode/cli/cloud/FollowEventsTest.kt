@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** `teamcode cloud events --follow`: which stream failures reconnect and which stop. */
+/** `teamcode cloud logs --follow`: which stream failures reconnect and which stop. */
 class FollowEventsTest {
     @Test fun anUnreadableEventStopsInsteadOfReplayingForever() = runTest {
         var requests = 0

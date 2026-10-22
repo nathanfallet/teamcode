@@ -446,7 +446,7 @@ class TeamCodeClient(
         onEvent: suspend (TeamEventView) -> Unit,
     ): CloudStreamEnd {
         require(after == null || after >= 0)
-        require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) }) { "Invalid event type." }
+        require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) && it != "gap" && it != "denied" }) { "Invalid event type." }
         val query = if (types.isEmpty()) "" else "?types=" + types.sorted().joinToString(",").encodeURLQueryComponent()
         return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null) { frame ->
             when (frame.event) {
