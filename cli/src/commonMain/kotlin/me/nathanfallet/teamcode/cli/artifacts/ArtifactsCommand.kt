@@ -1,6 +1,5 @@
 package me.nathanfallet.teamcode.cli.artifacts
 
-import me.nathanfallet.teamcode.cli.platform.hostOs
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.*
@@ -12,6 +11,7 @@ import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.loadConfig
+import me.nathanfallet.teamcode.cli.platform.hostOs
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.client.ArtifactConflictException
 import okio.ByteString.Companion.toByteString

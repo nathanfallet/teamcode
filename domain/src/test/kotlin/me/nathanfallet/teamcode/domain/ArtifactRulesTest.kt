@@ -132,6 +132,9 @@ class ArtifactRulesTest {
         assertNull(CloudConversationRules.detect("Token getAccessTokenForCurrentUserSession"))
         assertNull(CloudConversationRules.detect("token 2024-10-22-rotation-notes"), "Dates and words are prose")
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer abc123def456"), "Short tokens are still found")
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer AbCdEfGhIjKlMnOpQrStUvWxYz"))
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Token 4815162342108151623"))
+        assertNull(CloudConversationRules.detect("token 2024102212"), "A short number is not a token")
         // The transcript mask finds what the scanner finds.
         val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
         assertFalse(jwt in CloudConversationRules.mask("jwt=$jwt"))

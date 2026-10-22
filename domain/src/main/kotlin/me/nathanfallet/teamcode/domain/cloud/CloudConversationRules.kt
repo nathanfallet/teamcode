@@ -76,7 +76,7 @@ object CloudConversationRules {
     /**
      * Stricter than [looksLikeCredential], since a hit refuses a whole file. A `Basic` value counts only when it is
      * base64 (padded or not) of a `user:password` pair. A `Bearer` or `Token` value counts when it is at least 12
-     * characters with letters and digits, or at least 32 with both cases, and is neither a path (`/api/v1/items`,
+     * characters with letters and digits, at least 20 with both cases, or at least 16 digits, and is neither a path (`/api/v1/items`,
      * `https://…`), nor an identifier made of lowercase words and numbers (`refresh_interval_v2`,
      * `2024-10-22-rotation-notes`), nor a camel-case name (`getAccessTokenForCurrentUserSession`), which pages
      * legitimately contain.
@@ -85,8 +85,10 @@ object CloudConversationRules {
         val word = value.trimEnd('.')
         if (scheme.equals("basic", ignoreCase = true)) return basicPair(word)
         if (word.startsWith('/') || word.startsWith('.') || "://" in word) return false
-        if (word.length < 12 || word.none { it.isLetter() } || CAMEL_CASE.matches(word)) return false
-        if (word.none { it.isDigit() } && (word.length < 32 || word.none { it.isUpperCase() } || word.none { it.isLowerCase() })) return false
+        if (word.length < 12 || CAMEL_CASE.matches(word)) return false
+        // A long run of digits alone is a numeric token; a shorter one is a number.
+        if (word.none { it.isLetter() }) return word.length >= 16 && word.all { it.isDigit() }
+        if (word.none { it.isDigit() } && (word.length < 20 || word.none { it.isUpperCase() } || word.none { it.isLowerCase() })) return false
         val segments = word.split('.', '_', '-', '/', '~', '+', '=').filter { it.isNotEmpty() }
         val wordy = segments.size > 1 && segments.all { segment ->
             segment.all { it.isDigit() } || (segment.all { it.isLowerCase() || it.isDigit() } && segment.count { it.isDigit() } <= 2)

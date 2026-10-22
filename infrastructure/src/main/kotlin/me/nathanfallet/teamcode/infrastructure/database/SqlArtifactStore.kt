@@ -125,16 +125,17 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
     override suspend fun refuseBlob(actor: Principal, uploadId: String, sha256: String, code: String) = database.query {
         requireCurrent(this, actor)
         val upload = uploadRow(actor, uploadId)
-        ArtifactUploadChunks.deleteWhere { (ArtifactUploadChunks.uploadId eq uploadId) and (ArtifactUploadChunks.sha256 eq sha256) }
         val artifactId = upload[ArtifactUploads.artifactId]
+        // Locks in the order a commit takes them, the artifact, then the upload, before any chunk is touched.
+        val draft = Artifacts.select(Artifacts.state).where { Artifacts.id eq artifactId }.forUpdate().singleOrNull()?.get(Artifacts.state) == DRAFT
+        ArtifactUploads.select(ArtifactUploads.id).where { ArtifactUploads.id eq uploadId }.forUpdate().singleOrNull() ?: return@query
+        ArtifactUploadChunks.deleteWhere { (ArtifactUploadChunks.uploadId eq uploadId) and (ArtifactUploadChunks.sha256 eq sha256) }
         audit(actor.teamId, actor.member.id, "artifact.publish_refused", "$artifactId:$code".take(100), credential = actor.tokenId)
         // A mismatch is sent again in the same upload. Any other refusal ends the publication: its upload stops counting
         // at once (the next run collects what it stored), and so does a new artifact's draft that nothing else uses,
         // so retries never use up the open uploads and drafts a member may hold.
         if (code != "artifact_blob_mismatch") {
             val now = nowMillis()
-            // The artifact before the upload, in the order a commit takes them.
-            val draft = Artifacts.select(Artifacts.state).where { Artifacts.id eq artifactId }.forUpdate().singleOrNull()?.get(Artifacts.state) == DRAFT
             ArtifactUploads.update({ ArtifactUploads.id eq uploadId }) { it[expiresAt] = now }
             if (draft && ArtifactUploads.select(ArtifactUploads.id).where { (ArtifactUploads.artifactId eq artifactId) and (ArtifactUploads.expiresAt greater now) }.empty())
                 Artifacts.update({ (Artifacts.id eq artifactId) and (Artifacts.state eq DRAFT) }) { it[state] = DELETED; it[deletedAt] = now; it[updatedAt] = now }
