@@ -333,39 +333,21 @@ class TeamCodeClient(
     suspend fun followCloudEvents(id: String, after: Long, onEvent: suspend (CloudEventView) -> Unit): CloudStreamEnd {
         identifier(id)
         require(after >= 0)
-        return http.prepareGet("$origin/api/v1/cloud/sessions/$id/events/stream") {
-            authenticate()
-            header("Last-Event-ID", after.toString())
-            header(HttpHeaders.Accept, "text/event-stream")
-            // Keep-alives arrive every 15 s; a silent connection for 60 s is dead.
-            timeout { requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS; socketTimeoutMillis = 60_000 }
-        }.execute { response ->
-            if (!response.status.isSuccess()) throw failure(response)
-            readEventStream(response, onEvent)
+        return followStream("/api/v1/cloud/sessions/$id/events/stream", after, endEvent = "end") { frame ->
+            if (frame.data.isNotEmpty()) onEvent(decodeFrame<CloudEventView>(frame))
         }
-    }
-    private suspend fun readEventStream(response: HttpResponse, onEvent: suspend (CloudEventView) -> Unit): CloudStreamEnd {
-        var end: CloudStreamEnd? = null
-        readServerSentEvents(response.bodyAsChannel()) { frame ->
-            when (frame.event) {
-                "end" -> end = CloudStreamEnd.ENDED
-                "denied" -> end = CloudStreamEnd.DENIED
-                null -> Unit
-                else -> if (frame.data.isNotEmpty()) onEvent(Serialization.json.decodeFromString<CloudEventView>(frame.data))
-            }
-            end == null
-        }
-        return end ?: throw TeamCodeException(0, "The event stream closed.")
     }
 
     /**
      * Follows the caller-wide feed (`GET /api/v1/cloud/events/stream`, `cloud.events.v1`): the caller's cloud sessions
-     * and local runs, or the whole team's for an administrator. [after] resumes after a team sequence (`0` replays every
-     * retained event, `null` starts with what happens from now on); [types] keeps only those event types. [onGap] is
-     * called with the oldest retained sequence when events after [after] were purged, before the stream continues from
-     * there, so the caller reloads what it shows. The feed never ends on its own: returns [CloudStreamEnd.DENIED] when the
-     * server stopped accepting the credential and throws on a network failure, so the caller reconnects from the last
-     * [TeamEventView.seq] it handled. Event types are an open list; unknown ones reach [onEvent] like the others.
+     * and local runs, or the whole team's for an administrator. [after] resumes after a team sequence: `0` replays every
+     * retained event, `null` starts with what happens from now on, so events published between two connections opened
+     * with `null` are never delivered; a caller that must not miss one reconnects with the last [TeamEventView.seq] it
+     * handled. [types] keeps only those event types. [onGap] is called with the oldest retained sequence when events after
+     * [after] were purged, before the stream continues from there, so the caller reloads what it shows. The feed never
+     * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
+     * [TeamCodeException] on a network failure or a malformed stream. Event types are an open list; unknown ones reach
+     * [onEvent] like the others.
      */
     suspend fun followTeamEvents(
         after: Long? = null,
@@ -375,29 +357,49 @@ class TeamCodeClient(
     ): CloudStreamEnd {
         require(after == null || after >= 0)
         require(types.all { TEAM_EVENT_TYPE.matches(it) }) { "Invalid event type." }
-        return http.prepareGet("$origin/api/v1/cloud/events/stream") {
+        val query = if (types.isEmpty()) "" else "?types=" + types.sorted().joinToString(",").encodeURLQueryComponent()
+        return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null) { frame ->
+            when (frame.event) {
+                "gap" -> onGap(decodeFrame<TeamEventGapView>(frame).oldestSeq)
+                else -> if (frame.data.isNotEmpty()) onEvent(decodeFrame<TeamEventView>(frame))
+            }
+        }
+    }
+
+    /**
+     * One SSE request: [after] as `Last-Event-ID`, a 60 s silence limit (keep-alives come every 15 s), `denied` (and
+     * [endEvent] when the stream has one) ending it, unnamed frames skipped and every other frame handed to [onFrame].
+     * A stream that closes, breaks a bound or carries an undecodable event throws [TeamCodeException] with status `0`.
+     */
+    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
+        http.prepareGet("$origin$path") {
             authenticate()
             after?.let { header("Last-Event-ID", it.toString()) }
-            if (types.isNotEmpty()) url { parameters.append("types", types.sorted().joinToString(",")) }
             header(HttpHeaders.Accept, "text/event-stream")
-            // Keep-alives arrive every 15 s; a silent connection for 60 s is dead.
             timeout { requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS; socketTimeoutMillis = 60_000 }
         }.execute { response ->
             if (!response.status.isSuccess()) throw failure(response)
             var end: CloudStreamEnd? = null
             readServerSentEvents(response.bodyAsChannel()) { frame ->
                 when (frame.event) {
-                    "end" -> end = CloudStreamEnd.ENDED
                     "denied" -> end = CloudStreamEnd.DENIED
-                    "gap" -> onGap(Serialization.json.decodeFromString<TeamEventGapView>(frame.data).oldestSeq)
+                    endEvent -> end = CloudStreamEnd.ENDED
                     null -> Unit
-                    else -> if (frame.data.isNotEmpty()) onEvent(Serialization.json.decodeFromString<TeamEventView>(frame.data))
+                    else -> onFrame(frame)
                 }
                 end == null
             }
             end ?: throw TeamCodeException(0, "The event stream closed.")
         }
+
+    private inline fun <reified T> decodeFrame(frame: ServerSentEvent): T = try {
+        Serialization.json.decodeFromString<T>(frame.data)
+    } catch (_: kotlinx.serialization.SerializationException) {
+        throw TeamCodeException(0, "The event stream sent a malformed event.")
+    } catch (_: IllegalArgumentException) {
+        throw TeamCodeException(0, "The event stream sent a malformed event.")
     }
+
     /** [idempotencyKey] makes a retry return the first acknowledgement instead of sending the message twice. */
     suspend fun sendCloudMessage(id: String, input: SendCloudMessageRequest, idempotencyKey: String? = null): CloudInputView {
         identifier(id)

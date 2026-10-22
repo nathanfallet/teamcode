@@ -147,10 +147,32 @@ class EventStreamTest {
 
     @Test fun theReaderParsesFieldsWithoutASpaceOrAValue() = runTest {
         val frames = mutableListOf<ServerSentEvent>()
-        readServerSentEvents(ByteReadChannel("id:7\nevent:gap\ndata\ndata:{}\n\nevent: stop\n\n")) { frames += it; it.event != "stop" }
-        assertEquals("gap", frames.first().event)
-        assertEquals("7", frames.first().id)
-        assertEquals("\n{}", frames.first().data)
-        assertEquals(2, frames.size)
+        readServerSentEvents(ByteReadChannel("id:7\nevent:gap\ndata\ndata:{}\n\nevent:\ndata: unnamed\n\nevent: stop\n\n")) { frames += it; it.event != "stop" }
+        assertEquals("gap", frames[0].event)
+        assertEquals("\n{}", frames[0].data)
+        // An empty event name is no name: the frame is an unnamed one.
+        assertNull(frames[1].event)
+        assertEquals(3, frames.size)
+    }
+
+    @Test fun anOverLongLineThrowsSoTheCallerReconnects() = runTest {
+        val error = assertFailsWith<TeamCodeException> { readServerSentEvents(ByteReadChannel("data: ${"x".repeat(200)}\n\n"), maxLine = 100) { true } }
+        assertEquals(0, error.statusCode)
+    }
+
+    @Test fun aMalformedGapOrEventThrowsSoTheCallerReconnects() = runTest {
+        client("event: gap\ndata: {}\n\n", "event: cloud.turn\ndata: not json\n\n").use { client ->
+            assertEquals(0, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.statusCode)
+            assertEquals(0, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.statusCode)
+        }
+    }
+
+    @Test fun theTeamFeedHasNoEndEvent() = runTest {
+        // `end` belongs to a session's stream; on the feed it is an ordinary (unknown) type without data, skipped.
+        client("event: end\ndata: \n\n" + teamEvent(2) + "event: denied\ndata: {}\n\n").use { client ->
+            val seen = mutableListOf<Long>()
+            assertEquals(CloudStreamEnd.DENIED, client.followTeamEvents(after = 1) { seen += it.seq })
+            assertEquals(listOf(2L), seen)
+        }
     }
 }

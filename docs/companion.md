@@ -17,14 +17,14 @@ The companion app is a TeamCode client for iOS, Android and the desktop (macOS, 
 
 The app reuses `TeamCodeClient` as is: the SDK still owns no operating system keychain and receives a token provider (`token: suspend () -> String?`); the HTTP engine comes from the caller's factory (Darwin on iOS, OkHttp on Android, a JVM engine on the desktop).
 
-**Event streams.** `followCloudEvents(id, after, onEvent)` follows one session's transcript and `followTeamEvents(after, types, onGap, onEvent)` the caller-wide feed. Both read their response with the same internal SSE reader: lines bounded at 256 KiB and the data of one event at 1 MiB, comments (keep-alives) and `retry:` skipped, multi-line `data:` joined, frames without a name ignored.
+**Event streams.** `followCloudEvents(id, after, onEvent)` follows one session's transcript and `followTeamEvents(after, types, onGap, onEvent)` the caller-wide feed. Both read their response with the same internal SSE reader: lines bounded at 256 Ki characters and the data of one event at 1 Mi characters, comments (keep-alives), `id:` and `retry:` skipped (resumption uses the `seq` in the event), multi-line `data:` joined, frames without a name (or with an empty one) ignored. An over-long line, a broken transport or an undecodable event throws `TeamCodeException` with status `0`, like a closed stream.
 
 | Call | Ends with | Throws |
 | --- | --- | --- |
 | `followCloudEvents` | `ENDED` after `event: end` (the session ended and every event was sent), `DENIED` after `event: denied` | `TeamCodeException` with status `0` when the stream closes, with the API error code for a refused request |
 | `followTeamEvents` | `DENIED` after `event: denied` (the credential stopped being valid); the feed never ends otherwise | The same |
 
-`followTeamEvents` sends `after` as `Last-Event-ID` (`null` starts with what happens from now on, `0` replays every retained event) and `types` as `?types=a,b`. When the events after the cursor were purged, `onGap(oldestSeq)` is called before the events that follow, so the caller reloads what it shows. Event types are an open list: an unknown type reaches `onEvent` like the others. To resume after a network failure, call it again with the last `seq` handled: the server's sequence is gap-free, so nothing is lost or seen twice.
+`followTeamEvents` sends `after` as `Last-Event-ID` (`null` starts with what happens from now on, so events published between two connections opened with `null` are never delivered; `0` replays every retained event) and `types` as `?types=a,b`. When the events after the cursor were purged, `onGap(oldestSeq)` is called before the events that follow, so the caller reloads what it shows. Event types are an open list: an unknown type reaches `onEvent` like the others. To resume after a network failure, call it again with the last `seq` handled: the server's sequence is gap-free, so nothing is lost or seen twice.
 
 **Builds.** The Android targets need an Android SDK only for their own tasks (`ANDROID_HOME` or `local.properties`); JVM, native CLI and server tasks configure and run without one. Publishing the iOS targets, like the macOS ones, needs a Mac.
 
