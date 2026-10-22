@@ -26,10 +26,10 @@ class FollowEventsTest {
             }) { configure(this) }
         }
         client.use {
-            // Returns instead of exiting, so `attach` still detaches; `events --follow` then exits with status 1.
+            // Returns instead of exiting, so `attach` still detaches; `logs --follow` then exits with status 1.
             assertFalse(followEvents(it, "s1", 4, { }) { notice -> notices += notice })
         }
         assertEquals(1, requests)
-        assertTrue(notices.single().startsWith("The event after 4 cannot be read") && "--after 5" in notices.single(), notices.toString())
+        assertTrue(notices.single().startsWith("The event after 4 cannot be read") && "--after" in notices.single(), notices.toString())
     }
 }

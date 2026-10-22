@@ -90,7 +90,7 @@ internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Lon
             if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
             // Reconnecting would replay the same event from the same cursor.
             if (error.code == TeamCodeClient.MALFORMED_EVENT) {
-                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or skip the event with `teamcode cloud logs $id --follow --after ${cursor + 1}`.")
+                notice("The event after $cursor cannot be read (${error.message}). Update teamcode, or follow from a later event with `teamcode cloud logs $id --follow --after <sequence>`.")
                 return false
             }
             notice("Disconnected; reconnecting from event $cursor.")
