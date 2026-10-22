@@ -48,6 +48,7 @@ fun main() {
         requireNotNull(System.getenv("TEAMCODE_DATABASE_URL")) { "Set TEAMCODE_DATABASE_URL (a MySQL JDBC URL)." },
         requireNotNull(System.getenv("TEAMCODE_DATABASE_USER")) { "Set TEAMCODE_DATABASE_USER." },
         requireNotNull(System.getenv("TEAMCODE_DATABASE_PASSWORD")) { "Set TEAMCODE_DATABASE_PASSWORD." },
+        System.getenv("TEAMCODE_DATABASE_POOL_SIZE")?.toInt() ?: Database.DEFAULT_POOL_SIZE,
     ).also { it.migrate() } else null
     val providerHttp = HttpClient(CIO) { followRedirects = false; install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 30_000 } }
     val cipher = database?.let { CredentialCipher(Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." })) }

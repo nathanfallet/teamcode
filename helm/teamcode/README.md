@@ -26,7 +26,7 @@ publicUrl: https://teamcode.example.org
 existingSecret: teamcode-secrets
 image:
   tag: sha-REPLACE_WITH_COMMIT
-replicaCount: 2
+replicaCount: 3
 ingress:
   enabled: true
   className: nginx
@@ -80,7 +80,7 @@ mysql:
   jdbcUrl: jdbc:mysql://mysql.example.internal:3306/teamcode?sslMode=VERIFY_IDENTITY
 ```
 
-The same Secret supplies its user/password. Configure trust material through `volumes`, `volumeMounts` and JVM options if the database certificate uses a private CA. Each application replica has a maximum of eight database connections; size database connection limits for HPA maximum replicas plus rolling-update surge and migrations.
+The same Secret supplies its user/password. Configure trust material through `volumes`, `volumeMounts` and JVM options if the database certificate uses a private CA. Each application replica opens at most 16 database connections (`TEAMCODE_DATABASE_POOL_SIZE`, 2 to 64); size database connection limits (MySQL defaults to 151) for HPA maximum replicas plus rolling-update surge and migrations.
 
 The database is authoritative for sessions, account credentials, refresh intent, allowance reservations, model policies, quotas, guidance, worker leases, login throttling and gateway counters. A dead pod does not erase spend or free an active reservation until its lease expires. In-flight streams cannot migrate to another pod and are never automatically replayed. See [replica behavior](../../docs/replicas.md).
 
