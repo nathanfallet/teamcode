@@ -162,7 +162,9 @@ class ArtifactRoutesTest {
         val store = Store()
         application { configureGateway(gateway, team = team(), artifacts = ArtifactService(store, Admin(), Bucket())) }
         suspend fun policy(token: String) = client.get("/api/v1/artifacts/policy") { bearerAuth(token) }
-        assertEquals(ArtifactPolicyView(true, null), Serialization.json.decodeFromString<ArtifactPolicyView>(policy("reader-key").bodyAsText()))
+        assertEquals(ArtifactPolicyView(false, "credential_scope"), Serialization.json.decodeFromString<ArtifactPolicyView>(policy("reader-key").bodyAsText()),
+            "A read-only key would be refused at publish")
+        assertEquals(ArtifactPolicyView(true, null), Serialization.json.decodeFromString<ArtifactPolicyView>(policy("writer-key").bodyAsText()))
         // Every reason the store gives reaches the launcher, which then leaves the artifact tools out.
         for (reason in listOf("artifact_storage_missing", "artifact_storage_unverified", "artifacts_disabled", "artifact_publish_forbidden")) {
             store.policy = ArtifactPolicy(false, reason)

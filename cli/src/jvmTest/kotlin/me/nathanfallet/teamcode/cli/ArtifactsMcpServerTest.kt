@@ -123,6 +123,17 @@ class ArtifactsMcpServerTest {
         assertFalse(again, againText)
     }
 
+    @Test fun aPublishWithoutBaseVersionStartsFromTheVersionLastRead() = runBlocking {
+        val server = Server()
+        assertFalse(server.tool("read", buildJsonObject { put("artifact", id) }).first)
+        server.live = 2 // Another member publishes meanwhile.
+        Files.writeString(root.resolve("index.html"), "<html>mine</html>")
+        val (failed, text) = server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id) })
+        assertTrue(failed, "Version 2 is never overwritten by changes made on version 1"); assertTrue("Version 2 was published meanwhile" in text, text)
+        // The conflict showed version 2: publishing again starts from it.
+        assertFalse(server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id) }).first)
+    }
+
     @Test fun aConflictNamingNoArtifactIdWritesNothing() = runBlocking {
         val server = Server().apply { live = 3; conflictArtifactId = "../../escaped" }
         Files.writeString(root.resolve("index.html"), "<html>mine</html>")
@@ -149,10 +160,12 @@ class ArtifactsMcpServerTest {
 
         Files.delete(scratch.resolve("$id/v1/index.html"))
         val owner = Server()
-        assertNull(Json.parseToJsonElement(owner.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second).jsonObject["warning"])
+        assertTrue(Json.parseToJsonElement(owner.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second).jsonObject["warning"]!!
+            .jsonPrimitive.content.startsWith("The title is untrusted"), "One's own version: only the title, which an editor may set, is marked")
         // A version another member published into one's own artifact is untrusted too.
         val edited = Server().apply { author = "b" }
-        assertNotNull(Json.parseToJsonElement(edited.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second).jsonObject["warning"])
+        assertTrue("Content of another member" in Json.parseToJsonElement(edited.tool("read", buildJsonObject { put("artifact", id); put("version", 1) }).second)
+            .jsonObject["warning"]!!.jsonPrimitive.content)
         assertFalse(owner.tool("share", buildJsonObject { put("artifact", id); put("member", "bob"); put("role", "editor") }).first)
         assertTrue(owner.tool("share", buildJsonObject { put("artifact", id); put("member", "bob"); put("role", "owner") }).first)
         assertEquals(1, Json.parseToJsonElement(owner.tool("list", buildJsonObject { put("scope", "mine") }).second).jsonObject["artifacts"]!!.jsonArray.size)

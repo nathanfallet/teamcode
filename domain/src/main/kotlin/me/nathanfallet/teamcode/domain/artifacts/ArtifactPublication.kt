@@ -171,7 +171,13 @@ interface ArtifactStore {
  */
 class ArtifactService(private val store: ArtifactStore, private val admin: ArtifactAdminStore, private val objects: ArtifactObjectStore) {
     /** Whether [actor] may publish now, for `teamcode run` and the runner before they offer the artifact tools to an agent. */
-    suspend fun policy(actor: Principal): ArtifactPolicy { actor.requireArtifactRead(); return store.policy(actor) }
+    suspend fun policy(actor: Principal): ArtifactPolicy {
+        actor.requireArtifactRead()
+        val policy = store.policy(actor)
+        // A key that may only read gets the answer its publish would get: no tools offered that always fail.
+        val writes = actor.serviceScopes?.let { ServiceScope.ARTIFACTS_WRITE in it } ?: true
+        return if (policy.canPublish && !writes) ArtifactPolicy(false, "credential_scope") else policy
+    }
 
     suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin = ArtifactOrigin()): ArtifactUpload {
         actor.requireArtifactWrite()
