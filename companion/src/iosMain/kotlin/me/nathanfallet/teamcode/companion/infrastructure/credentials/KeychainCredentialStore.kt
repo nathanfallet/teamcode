@@ -8,6 +8,8 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import platform.CoreFoundation.CFDictionaryAddValue
@@ -55,10 +57,19 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
      * Keychain items survive the app's removal while its settings do not: on a fresh installation, items left by a
      * previous one are removed once, before the first read or write, so the purge can never race a new token.
      */
-    private val purge = if (purgeOrphans) lazy { runCatching { deleteAll() } } else null
+    private var purgePending = purgeOrphans
+    private val purgeLock = Mutex()
+
+    /** Retried before each call until it succeeds: a Keychain still locked at first launch must not skip it for good. */
+    private suspend fun purgeOrphansOnce() {
+        if (!purgePending) return
+        purgeLock.withLock {
+            if (purgePending && runCatching { deleteAll() }.isSuccess) purgePending = false
+        }
+    }
 
     // Keychain calls can block (after a reboot, while locked): never on the main thread.
-    override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) { purge?.value; readNow(accountId) }
+    override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) { purgeOrphansOnce(); readNow(accountId) }
 
     private fun readNow(accountId: String): String? = withQuery(accountId, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne) { query ->
         memScoped {
@@ -72,7 +83,7 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
         }
     }
 
-    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { purge?.value; writeNow(accountId, token) }
+    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { purgeOrphansOnce(); writeNow(accountId, token) }
 
     private fun writeNow(accountId: String, token: String) {
         val data = CFBridgingRetain(token.nsData())
@@ -91,7 +102,7 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
         }
     }
 
-    override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) { purge?.value; deleteNow(accountId) }
+    override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) { purgeOrphansOnce(); deleteNow(accountId) }
 
     private fun deleteNow(accountId: String) {
         val status = withQuery(accountId) { SecItemDelete(it) }

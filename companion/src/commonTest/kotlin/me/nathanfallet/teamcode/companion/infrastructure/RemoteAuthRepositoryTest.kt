@@ -51,6 +51,11 @@ class RemoteAuthRepositoryTest {
         assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
         answer = { HttpStatusCode.OK to "<html>a portal</html>" }
         assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
+        answer = { HttpStatusCode.Found to "" }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
+        // A proxy in front of a TeamCode server that is down is not "another server".
+        answer = { HttpStatusCode.BadGateway to "<html>bad gateway</html>" }
+        assertEquals(502, assertFailsWith<CompanionException.Server> { repository(backgroundScope).serverInfo("https://team.example") }.statusCode)
     }
 
     @Test fun loginSendsTheInstallationAndMapsTheMember() = runTest {

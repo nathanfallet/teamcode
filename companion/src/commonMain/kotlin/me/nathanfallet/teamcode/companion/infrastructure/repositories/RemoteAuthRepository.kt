@@ -28,8 +28,9 @@ class RemoteAuthRepository(
             client.capabilities()
         } catch (error: TeamCodeException) {
             // TeamCode serves this route without redirecting and gives every refusal an error code: a redirect (the
-            // client never follows one), a 404, or another status without a code is another server.
-            if (error.statusCode in 300..399 || error.statusCode == 404 || error.statusCode != 429 && error.statusCode >= 400 && error.code == null) throw CompanionException.NotTeamCode()
+            // client never follows one), a 404, or another 4xx without a code is another server. A 5xx without a code
+            // is more likely a proxy in front of a TeamCode server that is down: reported as such, not as "not TeamCode".
+            if (error.statusCode in 300..399 || error.statusCode == 404 || error.statusCode in 400..499 && error.statusCode != 429 && error.code == null) throw CompanionException.NotTeamCode()
             throw error
         } catch (error: CancellationException) {
             throw error
