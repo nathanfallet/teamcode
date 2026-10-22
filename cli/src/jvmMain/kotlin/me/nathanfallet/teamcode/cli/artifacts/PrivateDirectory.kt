@@ -18,6 +18,6 @@ internal actual fun ensurePrivateDirectory(path: String): Boolean = try {
         posix && Files.getOwner(directory, LinkOption.NOFOLLOW_LINKS).name != System.getProperty("user.name") -> false
         else -> { if (posix) Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------")); true }
     }
-} catch (_: java.io.IOException) { false }
+} catch (_: java.io.IOException) { false } catch (_: RuntimeException) { false }
 
 internal actual fun flushStandardOutput() = System.out.flush()

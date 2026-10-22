@@ -24,6 +24,8 @@ import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
 
+private val TOKEN_VARIABLES = listOf("TEAMCODE_ARTIFACTS_TOKEN", "TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN")
+
 class Mcp : SuspendingNoOpCliktCommand(name = "mcp") {
     override fun help(context: Context) = "MCP servers TeamCode runs beside an agent, over stdio."
     init { subcommands(ArtifactsMcpCommand()) }
@@ -50,7 +52,7 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
         val configuration = configPath().toPath().parent!!.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
         val client = client()
         client.use {
-            val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse + configuration.toString(), exemptPrefixes = listOf(scratchPath.toString()))
+            val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse, refusedExcept = listOf(configuration.toString() to scratchPath.toString()))
             val server = ArtifactsMcpServer(it, sources, scratchPath)
             while (true) {
                 val line = readlnOrNull() ?: break
@@ -69,8 +71,10 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
     private fun client(): TeamCodeClient {
         val url = environment("TEAMCODE_ARTIFACTS_URL") ?: return sdk(loadConfig())
         if (!Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}").matches(url)) throw CliUserException("TEAMCODE_ARTIFACTS_URL must be the local relay, http://127.0.0.1:<port>.")
-        // An unexpanded ${…} placeholder is not a token: fall back to the variables the launchers set.
-        val token = listOf("TEAMCODE_ARTIFACTS_TOKEN", "TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN").firstNotNullOfOrNull { name ->
+        // The launcher names the variable that holds this launch's token, so a token inherited from an outer launch is
+        // never picked first. Without it, the known variables in turn; an unexpanded ${…} placeholder is not a token.
+        val names = environment("TEAMCODE_ARTIFACTS_TOKEN_VAR")?.takeIf { it in TOKEN_VARIABLES }?.let(::listOf) ?: TOKEN_VARIABLES
+        val token = names.firstNotNullOfOrNull { name ->
             environment(name)?.takeIf { it.length >= 32 && "\${" !in it }
         } ?: throw CliUserException("No local TeamCode token: start the agent with teamcode run.")
         val runId = run

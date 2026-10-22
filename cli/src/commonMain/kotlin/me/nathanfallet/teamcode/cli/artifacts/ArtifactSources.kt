@@ -30,8 +30,11 @@ class ArtifactSource(val publishedPath: String, val localPath: String, val bytes
  * places credentials live are refused by name; a refusal names the path and the rule, never the content.
  */
 class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<String> = emptyList(), private val fileSystem: FileSystem = FileSystem.SYSTEM,
-    /** Directories inside a refused one whose files may still be published (the scratch directory inside the configuration directory). */
-    private val exemptPrefixes: List<String> = emptyList()) {
+    /**
+     * Refused directories with one subdirectory still published: the configuration directory and the scratch directory
+     * inside it. The exception lifts that refusal only, never [refusedPrefixes] or another entry.
+     */
+    private val refusedExcept: List<Pair<String, String>> = emptyList()) {
     private val roots: List<Path> = roots.map { fileSystem.canonicalize(it.toPath()) }.also { require(it.isNotEmpty()) }
 
     fun read(localPath: String, publishedPath: String): ArtifactSource {
@@ -41,7 +44,8 @@ class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<Str
         refusal(components)?.let { refuse(localPath, it) }
         val absolute = components.fold(root) { parent, name -> parent / name }.toString()
         fun under(prefix: String) = absolute == prefix || absolute.startsWith(prefix.trimEnd('/', '\\') + "/") || absolute.startsWith(prefix.trimEnd('/', '\\') + "\\")
-        if (exemptPrefixes.none(::under)) refusedPrefixes.firstOrNull(::under)?.let { refuse(localPath, "files under $it are never published") }
+        (refusedPrefixes.firstOrNull(::under) ?: refusedExcept.firstOrNull { (refused, kept) -> under(refused) && !under(kept) }?.first)
+            ?.let { refuse(localPath, "files under $it are never published") }
         val bytes = try { readWithoutLinks(root.toString(), components, ArtifactLimits.MAX_TEXT_FILE_BYTES) }
         catch (failure: SourceReadFailure) {
             val at = if (failure.component in components.indices) components.take(failure.component + 1).joinToString("/") else root.toString()

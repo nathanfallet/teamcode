@@ -25,7 +25,8 @@ class ArtifactSettingsRoutesTest {
         }
         override suspend fun inUse(actor: Principal) = false
         var usage = emptyList<ArtifactMemberUsage>()
-        override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, settings, false, usage)
+        override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, settings, false)
+        override suspend fun usage(actor: Principal) = usage
         override suspend fun deleteStorage(actor: Principal) { stored ?: throw TeamFailure("artifact_storage_missing", 404, "None."); stored = null; settings = settings.copy(enabled = false) }
         override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean { stored = stored?.copy(verifiedAt = if (passed) 9 else null); return stored != null }
         override suspend fun settings(actor: Principal) = settings

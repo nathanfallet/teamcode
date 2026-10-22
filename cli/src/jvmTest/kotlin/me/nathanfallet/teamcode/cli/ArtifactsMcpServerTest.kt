@@ -166,6 +166,13 @@ class ArtifactsMcpServerTest {
         assertTrue(failed); assertTrue("relay_sign_in_refused" in text && "Retrying does not help" in text && "Retry in a moment" !in text, text)
     }
 
+    @Test fun aLocalFailureIsNotReportedAsTheServer() = runBlocking {
+        val server = Server()
+        Files.createDirectories(scratch.resolve("$id/v1/index.html"))
+        val (failed, text) = server.tool("read", buildJsonObject { put("artifact", id); put("version", 1) })
+        assertTrue(failed); assertTrue(text.startsWith("local_error") && "retrying does not help" in text, text)
+    }
+
     @Test fun anUnreachableServerIsARetryableToolError() = runBlocking {
         val server = Server().apply { offline = true }
         val (failed, text) = server.tool("list", JsonObject(emptyMap()))

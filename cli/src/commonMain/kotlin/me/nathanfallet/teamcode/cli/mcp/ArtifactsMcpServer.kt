@@ -87,7 +87,15 @@ class ArtifactsMcpServer(
             "TeamCode refused the sign-in ($RELAY_SIGN_IN_REFUSED): run `teamcode login` on this computer; in a cloud session, the execution has ended. Retrying does not help."
         else "TeamCode refused the call (${error.code ?: "http_${error.statusCode}"}): ${error.message}" +
             (if (error.statusCode == 502 || error.statusCode == 503 || error.statusCode == 429) " Retry in a moment." else "")
+        is kotlinx.serialization.SerializationException -> "unexpected_answer: TeamCode answered something this version cannot read. Update teamcode."
+        is LocalFileFailure -> error.message!!
         else -> "server_unreachable: the TeamCode server could not be reached. Retry in a moment."
+    }
+
+    /** A failure writing or reading the scratch directory: local, never a reason to retry the server. */
+    private class LocalFileFailure(message: String) : Exception(message)
+    private inline fun <T> local(what: String, block: () -> T): T = try { block() } catch (_: okio.IOException) {
+        throw LocalFileFailure("local_error: $what failed in the scratch directory ($scratch). Check its space and permissions; retrying does not help.")
     }
 
     private suspend fun publish(arguments: JsonObject): String {
@@ -173,10 +181,10 @@ class ArtifactsMcpServer(
     private suspend fun download(artifactId: String, version: ArtifactVersionView): Path {
         version.files.forEach { ArtifactLimits.requirePublishedPath(it.path) }
         fun destination(directory: Path, path: String) = path.split('/').fold(directory) { parent, segment -> parent / segment }
-        fun matches(directory: Path) = version.files.all { file ->
+        fun matches(directory: Path) = local("Reading a downloaded file") { version.files.all { file ->
             val existing = destination(directory, file.path)
             fileSystem.metadataOrNull(existing) == null || fileSystem.read(existing) { readByteString() }.sha256().hex() == file.sha256
-        }
+        } }
         val directory = (1..MAX_COPIES).asSequence().map { copy -> scratch / artifactId / (if (copy == 1) "v${version.number}" else "v${version.number}-$copy") }
             .firstOrNull(::matches) ?: throw CliUserException("${scratch / artifactId} holds $MAX_COPIES edited copies of version ${version.number}. Remove the ones you no longer need, then try again.")
         for (file in version.files) {
@@ -184,8 +192,10 @@ class ArtifactsMcpServer(
             if (fileSystem.metadataOrNull(destination) != null) continue
             val bytes = client.artifactFile(artifactId, version.number, file.path, file.size)
             if (bytes.size.toLong() != file.size || bytes.toByteString().sha256().hex() != file.sha256) throw CliUserException("${file.path} does not match its SHA-256. Read again.")
-            destination.parent?.let { fileSystem.createDirectories(it) }
-            fileSystem.write(destination, mustCreate = true) { write(bytes) }
+            local("Writing ${file.path}") {
+                destination.parent?.let { fileSystem.createDirectories(it) }
+                fileSystem.write(destination, mustCreate = true) { write(bytes) }
+            }
         }
         return directory
     }

@@ -9,13 +9,15 @@ internal const val MAX_TRANSFERRED_ARTIFACTS = 500
 
 /**
  * In the transaction that moves cloud session [sessionId] to [recipientId]: every artifact created or updated in the
- * session (published, owned by someone else) gets the recipient as an `editor` with reason `session_transfer`, so the
+ * session (published, owned by the session's former owner) gets the recipient as an `editor` with reason `session_transfer`, so the
  * recipient's agent can read and republish it. The artifact keeps its owner. An existing viewer invitation becomes
  * editor; an editor stays as is. Three indexed reads and one insert or update per artifact, all bounded.
  */
-internal fun JdbcTransaction.grantSessionArtifacts(teamId: String, sessionId: String, recipientId: String, actorId: String, now: Long) {
+internal fun JdbcTransaction.grantSessionArtifacts(teamId: String, sessionId: String, formerOwnerId: String, recipientId: String, actorId: String, now: Long) {
     // Published artifacts only: a draft has no version to read and is not listed anywhere.
-    val live = (Artifacts.teamId eq teamId) and (Artifacts.state eq "active") and (Artifacts.ownerId neq recipientId)
+    // The former owner's own artifacts only: a version the session published into a third member's artifact (as their
+    // invited editor) never hands that artifact to someone its owner did not choose.
+    val live = (Artifacts.teamId eq teamId) and (Artifacts.state eq "active") and (Artifacts.ownerId eq formerOwnerId) and (Artifacts.ownerId neq recipientId)
     val created = Artifacts.select(Artifacts.id, Artifacts.ownerId).where { (Artifacts.originSessionId eq sessionId) and live }
         .limit(MAX_TRANSFERRED_ARTIFACTS).associate { it[Artifacts.id] to it[Artifacts.ownerId] }
     val updated = (ArtifactVersions innerJoin Artifacts).select(Artifacts.id, Artifacts.ownerId).where { (ArtifactVersions.originSessionId eq sessionId) and live }

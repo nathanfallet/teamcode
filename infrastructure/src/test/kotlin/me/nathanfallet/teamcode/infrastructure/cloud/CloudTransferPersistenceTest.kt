@@ -139,8 +139,8 @@ class CloudTransferPersistenceTest {
         // Inference of epoch 1 is charged to the former owner, through a credential of that execution.
         val former = ra.inference.issue(teamId, s.id, 1)
         assertEquals(from, ra.team.authenticate(former.token)?.member?.id)
-        // Artifacts the session's agent published: created in it, updated in it, already shared with the recipient, deleted, the recipient's own, or a draft never committed.
-        val shared = sessionArtifacts(ra, teamId, s.id, from, to)
+        // Artifacts the session's agent published: created in it, updated in it, already shared with the recipient, deleted, the recipient's own, a draft never committed, or a third member's it edited.
+        val shared = sessionArtifacts(ra, teamId, s.id, from, to, t.admin.member.id)
 
         // Both replicas accept at once: one acceptance, the same transfer for both.
         val accepted = coroutineScope { listOf(ra, rb).map { r -> async(Dispatchers.IO) { r.transfers.accept(t.recipient, null, offer.id, null) } }.awaitAll() }
@@ -226,17 +226,18 @@ class CloudTransferPersistenceTest {
     }
 
     /** Artifact rows as publications from the session leave them, written directly: the publication path has its own tests. */
-    private suspend fun sessionArtifacts(r: Replica, teamId: String, sessionId: String, from: String, to: String): SessionArtifacts {
-        val ids = List(7) { java.util.UUID.randomUUID().toString() }
+    private suspend fun sessionArtifacts(r: Replica, teamId: String, sessionId: String, from: String, to: String, third: String): SessionArtifacts {
+        val ids = List(8) { java.util.UUID.randomUUID().toString() }
         r.database.query {
             for ((index, id) in ids.withIndex()) Artifacts.insert {
-                it[Artifacts.id] = id; it[Artifacts.teamId] = teamId; it[ownerId] = if (index == 5) to else from; it[createdBy] = if (index == 5) to else from
-                it[originKind] = if (index == 1) "manual" else "cloud_session"; it[originSessionId] = if (index == 1) null else sessionId; it[originEpoch] = if (index == 1) null else 1
+                it[Artifacts.id] = id; it[Artifacts.teamId] = teamId; it[ownerId] = when (index) { 5 -> to; 7 -> third; else -> from }; it[createdBy] = when (index) { 5 -> to; 7 -> third; else -> from }
+                it[originKind] = if (index == 1 || index == 7) "api" else "cloud_session"; it[originSessionId] = if (index == 1 || index == 7) null else sessionId; it[originEpoch] = if (index == 1 || index == 7) null else 1
                 it[title] = "Artifact $index"; it[description] = ""; it[icon] = ""; it[access] = "personal"; it[publicFollowsLatest] = false
                 it[currentVersion] = 1; it[state] = when (index) { 4 -> "deleted"; 6 -> "draft"; else -> "active" }; it[storedBytes] = 0; it[generation] = 0; it[createdAt] = 1; it[updatedAt] = 1
             }
-            ArtifactVersions.insert {
-                it[id] = java.util.UUID.randomUUID().toString(); it[artifactId] = ids[1]; it[number] = 2; it[entryPath] = "index.html"; it[manifestDigest] = "d".repeat(64)
+            // Versions the session committed: into the former owner's artifact, and into a third member's one as their editor.
+            for (artifact in listOf(ids[1], ids[7])) ArtifactVersions.insert {
+                it[id] = java.util.UUID.randomUUID().toString(); it[artifactId] = artifact; it[number] = 2; it[entryPath] = "index.html"; it[manifestDigest] = "d".repeat(64)
                 it[fileCount] = 1; it[totalBytes] = 1; it[createdBy] = from; it[baseVersion] = 1; it[originSessionId] = sessionId; it[originEpoch] = 1; it[createdAt] = 2
             }
             for ((id, role) in listOf(ids[2] to "viewer", ids[3] to "editor")) ArtifactMembers.insert {

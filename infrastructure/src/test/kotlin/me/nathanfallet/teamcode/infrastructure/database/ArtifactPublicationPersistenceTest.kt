@@ -482,11 +482,11 @@ class ArtifactPublicationPersistenceTest {
             assertEquals(listOf(fromRun.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, access = ArtifactAccess.TEAM)))
             assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.MINE, access = ArtifactAccess.PERSONAL)))
             assertEquals("invalid_artifact_query", assertFailsWith<TeamFailure> { a.service.list(owner, ArtifactQuery(originKind = "elsewhere")) }.code)
-            val usage = b.admin.overview(admin).usage
+            val usage = b.admin.usage(admin)
             assertEquals(listOf(ArtifactMemberUsage(admin.member.id, admin.member.username, 1, direct.storedBytes), ArtifactMemberUsage(owner.member.id, owner.member.username, 1, page.size.toLong())), usage,
                 "Largest first; the drafts left by the refused uploads hold nothing")
             a.service.delete(admin, direct.id)
-            assertEquals(listOf(owner.member.id), b.admin.overview(admin).usage.map { it.memberId }, "A deleted artifact is no longer counted")
+            assertEquals(listOf(owner.member.id), b.admin.usage(admin).map { it.memberId }, "A deleted artifact is no longer counted")
         }
     }
 

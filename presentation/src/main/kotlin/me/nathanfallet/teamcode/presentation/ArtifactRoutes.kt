@@ -21,7 +21,6 @@ private fun ArtifactSharing.view() = ArtifactMembersView(ownerId, members.map { 
  * Publication and reading of artifacts for members, their agents and keys (`artifacts:read`, `artifacts:write`).
  * Making public and deleting stay interactive (the credential classifier sends every other route to that rule).
  */
-
 internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
     route("/api/v1/artifacts") {

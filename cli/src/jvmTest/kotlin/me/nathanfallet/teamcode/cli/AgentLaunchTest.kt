@@ -83,6 +83,7 @@ class AgentLaunchTest {
             server["args"]!!.jsonArray.map { it.jsonPrimitive.content })
         val env = server["env"]!!.jsonObject
         assertEquals("http://127.0.0.1:4242", env["TEAMCODE_ARTIFACTS_URL"]!!.jsonPrimitive.content)
+        assertEquals("TEAMCODE_ARTIFACTS_TOKEN", env["TEAMCODE_ARTIFACTS_TOKEN_VAR"]!!.jsonPrimitive.content, "The server reads only this launch's token")
         assertEquals("\${TEAMCODE_MCP_TOKEN}", env["TEAMCODE_ARTIFACTS_TOKEN"]!!.jsonPrimitive.content)
         assertFalse(launch.arguments.any { it.contains(token) }, "The local token is on no command line")
         assertEquals(token, launch.environment["TEAMCODE_MCP_TOKEN"])
@@ -93,7 +94,7 @@ class AgentLaunchTest {
         val overrides = launch.arguments.zipWithNext().filter { it.first == "-c" }.map { it.second }
         val server = overrides.single { it.startsWith("mcp_servers.teamcode_artifacts=") }
         assertEquals("mcp_servers.teamcode_artifacts={command=\"C:\\\\Tools\\\\team\\\"code.exe\",args=[\"mcp\",\"artifacts\",\"--root\",\"C:\\\\repo\"]," +
-            "env={TEAMCODE_ARTIFACTS_URL=\"http://127.0.0.1:4242\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}", server)
+            "env={TEAMCODE_ARTIFACTS_URL=\"http://127.0.0.1:4242\",TEAMCODE_ARTIFACTS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}", server)
         assertFalse(launch.arguments.any { it.contains(token) })
         assertEquals(listOf("--", "prompt"), launch.arguments.takeLast(2))
     }

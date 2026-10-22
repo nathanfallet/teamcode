@@ -58,8 +58,12 @@ class ArtifactSourcesTest {
         fs.createDirectories(root / "config" / "artifacts" / "run")
         fs.write(root / "config" / "config.json") { writeUtf8("{}") }
         fs.write(root / "config" / "artifacts" / "run" / "page.html") { writeUtf8("<html>merged</html>") }
-        val configured = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / "config").toString()), exemptPrefixes = listOf((root / "config" / "artifacts" / "run").toString()))
+        fs.createDirectories(root / "config" / "artifacts" / "run" / "kept")
+        fs.write(root / "config" / "artifacts" / "run" / "kept" / "notes.txt") { writeUtf8("refused by the caller") }
+        val configured = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / "config" / "artifacts" / "run" / "kept").toString()),
+            refusedExcept = listOf((root / "config").toString() to (root / "config" / "artifacts" / "run").toString()))
         assertTrue("never published" in refusal(configured, "config/config.json"))
         assertEquals("<html>merged</html>", configured.read("config/artifacts/run/page.html", "page.html").bytes.decodeToString())
+        assertTrue("never published" in refusal(configured, "config/artifacts/run/kept/notes.txt"), "The exception never lifts another refusal")
     }
 }

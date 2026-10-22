@@ -274,7 +274,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                 if (artifacts != null) putJsonObject(ARTIFACTS_MCP_LABEL) {
                     put("type", "stdio"); put("command", artifacts.command)
                     putJsonArray("args") { artifactArguments!!.forEach { add(it) } }
-                    putJsonObject("env") { put("TEAMCODE_ARTIFACTS_URL", relay); put("TEAMCODE_ARTIFACTS_TOKEN", "\${TEAMCODE_MCP_TOKEN}") }
+                    putJsonObject("env") { put("TEAMCODE_ARTIFACTS_URL", relay); put("TEAMCODE_ARTIFACTS_TOKEN", "\${TEAMCODE_MCP_TOKEN}"); put("TEAMCODE_ARTIFACTS_TOKEN_VAR", "TEAMCODE_ARTIFACTS_TOKEN") }
                 }
             }
         }.toString())
@@ -301,7 +301,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         ) + mcp.flatMap { (label, server) -> listOf("-c", "mcp_servers.$label={url=\"${mcpUrl(server)}\",bearer_token_env_var=\"TEAMCODE_LOCAL_TOKEN\"}") } +
             // Codex passes a stdio server only the variables it lists: the local token by name, never its value.
             (if (artifacts == null) emptyList() else listOf("-c", "mcp_servers.$ARTIFACTS_MCP_LABEL={command=${toml(artifacts.command)}," +
-                "args=[${artifactArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_ARTIFACTS_URL=${toml(relay)}},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}"))
+                "args=[${artifactArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_ARTIFACTS_URL=${toml(relay)},TEAMCODE_ARTIFACTS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}"))
         // Put overrides in the leaf command scope (exec/resume/review), before any literal delimiter.
         // Root overrides can be discarded by exec --ignore-user-config in some Codex versions.
         AgentLaunch(arguments.take(delimiter) + overrides + arguments.drop(delimiter),

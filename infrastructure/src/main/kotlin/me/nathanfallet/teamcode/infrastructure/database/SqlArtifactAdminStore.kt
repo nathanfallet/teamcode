@@ -19,10 +19,12 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
 
     override suspend fun overview(actor: Principal): ArtifactAdminOverview = database.query {
         requireCurrent(this, actor)
-        ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId), usage(actor.teamId))
+        ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId))
     }
 
-    /** One grouped read on `artifacts_owner` (team, owner), then the owners' names by primary key. */
+    override suspend fun usage(actor: Principal): List<ArtifactMemberUsage> = database.query { requireCurrent(this, actor); usage(actor.teamId) }
+
+    /** One grouped read of the team's published artifacts (`artifacts_team`), then the owners' names by primary key. */
     private fun usage(teamId: String): List<ArtifactMemberUsage> {
         val bytes = Artifacts.storedBytes.sum()
         val count = Artifacts.id.count()
