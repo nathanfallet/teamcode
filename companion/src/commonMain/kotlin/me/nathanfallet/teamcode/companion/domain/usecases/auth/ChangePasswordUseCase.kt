@@ -33,8 +33,9 @@ class ChangePasswordUseCase(
         }
         return when (result) {
             is SignInResult.SignedIn -> result
-            // The server asked for another change right after one: nothing the app can do but report it.
-            is SignInResult.PasswordChangeRequired -> throw CompanionException.PasswordRejected(null)
+            // The server asks for another change right after this one: the change itself went through, so the member
+            // starts over from the sign-in form with the new password.
+            is SignInResult.PasswordChangeRequired -> throw CompanionException.PasswordChanged()
         }
     }
 

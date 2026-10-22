@@ -2,7 +2,8 @@ package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 
-private val LOOPBACK = setOf("localhost", "127.0.0.1", "[::1]")
+// IPv6 loopback is left out: Android's network security config cannot allow cleartext to it.
+private val LOOPBACK = setOf("localhost", "127.0.0.1")
 private val ORIGIN = Regex("""(https?)://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?""", RegexOption.IGNORE_CASE)
 
 /**

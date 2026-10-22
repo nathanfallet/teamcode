@@ -33,12 +33,11 @@ class AuthUseCasesTest {
         assertEquals("https://team.example", normalizeOrigin(" Team.Example/ "))
         assertEquals("https://team.example:8443", normalizeOrigin("https://team.example:8443"))
         assertEquals("http://localhost:8080", normalizeOrigin("http://localhost:8080"))
-        assertEquals("http://[::1]:8080", normalizeOrigin("http://[::1]:8080"))
         // Mobile keyboards capitalize the first letter.
         assertEquals("https://team.example", normalizeOrigin("Https://Team.example"))
         assertEquals("https://team.example", normalizeOrigin("https://team.example:443"))
         assertEquals("https://team.example:8443", normalizeOrigin("https://team.example:08443"))
-        for (invalid in listOf("http://team.example", "https://team.example/path", "https://user:pw@team.example", "https://team.example?x=1",
+        for (invalid in listOf("http://team.example", "http://[::1]:8080", "https://team.example/path", "https://user:pw@team.example", "https://team.example?x=1",
             "https://team.example#x", "ftp://team.example", "https://", "https://team..example", "https://team.example:70000", ""))
             assertFailsWith<CompanionException.InvalidOrigin>(invalid) { normalizeOrigin(invalid) }
     }

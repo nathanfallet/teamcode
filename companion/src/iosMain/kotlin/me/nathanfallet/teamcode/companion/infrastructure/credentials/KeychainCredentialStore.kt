@@ -6,6 +6,9 @@ import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import platform.CoreFoundation.CFDictionaryAddValue
 import platform.CoreFoundation.CFDictionaryCreateMutable
@@ -48,7 +51,10 @@ import platform.Security.kSecValueData
 class KeychainCredentialStore(private val service: String = SERVICE) : CredentialStore {
     override val persistent = true
 
-    override suspend fun read(accountId: String): String? = withQuery(accountId, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne) { query ->
+    // Keychain calls can block (after a reboot, while locked): never on the main thread.
+    override suspend fun read(accountId: String): String? = withContext(Dispatchers.IO) { readNow(accountId) }
+
+    private fun readNow(accountId: String): String? = withQuery(accountId, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne) { query ->
         memScoped {
             val result = alloc<CFTypeRefVar>()
             val status = SecItemCopyMatching(query, result.ptr)
@@ -60,7 +66,9 @@ class KeychainCredentialStore(private val service: String = SERVICE) : Credentia
         }
     }
 
-    override suspend fun write(accountId: String, token: String) {
+    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { writeNow(accountId, token) }
+
+    private fun writeNow(accountId: String, token: String) {
         val data = CFBridgingRetain(token.nsData())
         try {
             val updated = withQuery(accountId) { query ->
@@ -77,7 +85,9 @@ class KeychainCredentialStore(private val service: String = SERVICE) : Credentia
         }
     }
 
-    override suspend fun delete(accountId: String) {
+    override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) { deleteNow(accountId) }
+
+    private fun deleteNow(accountId: String) {
         val status = withQuery(accountId) { SecItemDelete(it) }
         check(status == errSecSuccess || status == errSecItemNotFound) { "The Keychain refused to delete the token ($status)." }
     }

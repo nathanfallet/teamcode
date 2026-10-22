@@ -38,10 +38,11 @@ class KeystoreCredentialStore(
         check(preferences.edit().putString(accountId, sealed).commit()) { "The token could not be saved." }
     }
 
-    /** The key exists but cannot be used any more (KeyPermanentlyInvalidatedException is an InvalidKeyException). */
-    private fun resetKey() {
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)
-    }
+    /**
+     * The key exists but cannot be used any more (KeyPermanentlyInvalidatedException is an InvalidKeyException): every
+     * token sealed with it is lost anyway, and the next use generates a new key.
+     */
+    private fun resetKey() = deleteKey()
 
     override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) {
         preferences.edit().remove(accountId).commit()
@@ -52,6 +53,11 @@ class KeystoreCredentialStore(
         /** The preference file of the ciphertexts; `backup_rules.xml` and `data_extraction_rules.xml` exclude it. */
         const val FILE = "teamcode_credentials"
         private const val ALIAS = "me.nathanfallet.teamcode.credentials"
+
+        @Synchronized
+        private fun deleteKey() {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)
+        }
 
         // Reads and writes run concurrently on the IO dispatcher: two first uses must not each generate a key.
         @Synchronized

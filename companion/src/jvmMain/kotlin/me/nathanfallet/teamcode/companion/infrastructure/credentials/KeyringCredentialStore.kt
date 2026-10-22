@@ -1,9 +1,10 @@
 package me.nathanfallet.teamcode.companion.infrastructure.credentials
 
-import com.github.javakeyring.BackendNotSupportedException
 import com.github.javakeyring.Keyring
 import com.github.javakeyring.PasswordAccessException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 
@@ -22,26 +23,34 @@ interface KeyringBackend {
  */
 class KeyringCredentialStore(private val backend: KeyringBackend?, private val service: String = SERVICE) : CredentialStore {
     private val memory = MemoryCredentialStore()
-    @Volatile private var writeFailed = false
-    override val persistent: Boolean get() = backend != null && !writeFailed
+    /** Accounts whose token lives only in memory, after a keyring write failed. */
+    private val memoryOnly = MutableStateFlow(emptySet<String>())
+    override val persistent: Boolean get() = backend != null && memoryOnly.value.isEmpty()
 
-    // Memory first: a token kept there after a failed keyring write is newer than any entry the keyring still holds.
     // A keyring that fails to answer throws (the caller reports it) rather than reading as "no token", which would sign
-    // the account out for a keyring that is only locked.
+    // the account out for a keyring that is only locked. Memory first: a token kept there is newer.
     override suspend fun read(accountId: String): String? = memory.read(accountId) ?: backend?.let { keyring ->
         withContext(Dispatchers.IO) { keyring.get(service, accountId) }
     }
 
     override suspend fun write(accountId: String, token: String) {
-        if (keyring { it.set(service, accountId, token); Unit } != null) { memory.delete(accountId); writeFailed = false; return }
-        // A locked or broken keyring: keep the token in memory for this run instead of failing the sign-in.
-        if (backend != null) writeFailed = true
+        if (keyring { it.set(service, accountId, token); Unit } != null) {
+            memory.delete(accountId)
+            memoryOnly.update { it - accountId }
+            return
+        }
+        // A locked or broken keyring: keep the token in memory for this run instead of failing the sign-in, and drop
+        // the older entry when the keyring allows it, so a restart never brings back a replaced token.
+        if (backend != null) memoryOnly.update { it + accountId }
         memory.write(accountId, token)
+        keyring { it.delete(service, accountId) }
     }
 
+    /** Throws when the keyring refuses: the caller decides whether a token left behind matters. */
     override suspend fun delete(accountId: String) {
-        keyring { it.delete(service, accountId) }
         memory.delete(accountId)
+        memoryOnly.update { it - accountId }
+        backend?.let { keyring -> withContext(Dispatchers.IO) { keyring.delete(service, accountId) } }
     }
 
     /** One keyring call off the main thread; a failure is that call's alone (a locked keyring may open later). */
@@ -56,7 +65,9 @@ class KeyringCredentialStore(private val backend: KeyringBackend?, private val s
         const val SERVICE = "me.nathanfallet.teamcode"
 
         fun open(): KeyringCredentialStore = KeyringCredentialStore(
-            try { JavaKeyringBackend(Keyring.create()) } catch (_: BackendNotSupportedException) { null },
+            // No keyring (BackendNotSupportedException), or one that cannot load (a missing native library or D-Bus):
+            // the documented in-memory mode, never a crash.
+            try { JavaKeyringBackend(Keyring.create()) } catch (_: Exception) { null } catch (_: LinkageError) { null },
         )
     }
 }

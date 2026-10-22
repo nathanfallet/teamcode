@@ -40,7 +40,8 @@ class KeyringCredentialStoreTest {
         assertFalse(store.persistent)
         assertEquals("token", store.read("a1"))
         assertTrue(keyring.entries.isEmpty())
-        store.delete("a1")
+        // The memory copy goes; the keyring's refusal is reported, so a sign-out can tell a token may remain.
+        assertFailsWith<IllegalStateException> { store.delete("a1") }
         keyring.broken = false
         assertNull(store.read("a1"))
     }

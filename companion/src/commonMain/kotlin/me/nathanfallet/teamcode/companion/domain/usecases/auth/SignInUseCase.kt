@@ -40,6 +40,7 @@ class SignInUseCase(
             username = session.member.username,
             memberId = session.member.id,
             role = session.member.role,
+            // The server keeps the name of a known installation (it may have been renamed since): so does the app.
             deviceName = existing?.deviceName ?: deviceName,
             expiresAt = session.expiresAt,
             serverVersion = server.serverVersion,
