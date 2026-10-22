@@ -28,7 +28,11 @@ private fun ApiCatalog.accountOperations() {
         description = "Sends provider credentials obtained by `teamcode accounts add` or `import`. The server verifies " +
             "the subscription with the provider before storing them encrypted; credentials of a known account update it. " +
             "`freshSignIn: true` (a sign-in the CLI just ran) makes the account active at once; an import waits for a " +
-            "handover. Retry with the same `operationId` after a network failure. Administrators only."
+            "handover. Retry with the same `operationId` after a network failure. A provider account is identified by its " +
+            "provider, account and organization: adding it again updates the same account, never a second one. " +
+            "Administrators, or every member when `GET /api/v1/policy/account-enrollment` says `members`: a member sends " +
+            "only fresh sign-ins and replaces only the sign-in of an account they added or one that needs reconnecting " +
+            "(`account_enrollment_forbidden`, `account_import_forbidden`, `account_in_use`)."
         body<EnrollAccountRequest>("The provider tokens, their expiry, a unique operation identifier (16 to 64 characters) and the provider (`anthropic` or `codex`).")
         responses {
             ok<EnrollAccountResponse>("An existing account was updated (`created: false`).")
@@ -36,6 +40,25 @@ private fun ApiCatalog.accountOperations() {
             badRequest("Invalid credentials, operation identifier or provider (`invalid_credentials`, `invalid_operation`, `unsupported_provider`).")
             conflict("The credentials changed during the enrollment (`enrollment_conflict`): retry with a new operation.")
             error(HttpStatusCode.UnprocessableEntity, "The provider did not confirm a supported subscription (`provider_verification_failed`).")
+        }
+    }
+    get("/api/v1/policy/account-enrollment") {
+        operationId = "getAccountEnrollmentPolicy"; tag(ApiTags.ACCOUNTS)
+        summary = "Who can add accounts"
+        description = "`policy` is `administrators` (the default) or `members`, and `allowed` says whether the caller may " +
+            "add an account with `teamcode accounts add`. Any ready interactive member can ask, so the CLI checks before " +
+            "opening the provider sign-in."
+        responses { ok<AccountEnrollmentPolicyView>("The setting and the caller's permission.") }
+    }
+    put("/api/v1/policy/account-enrollment") {
+        operationId = "saveAccountEnrollmentPolicy"; tag(ApiTags.ACCOUNTS)
+        summary = "Change who can add accounts"
+        description = "`members` lets every member add a fresh sign-in and reconnect an account that needs it; account " +
+            "settings, imports and handovers stay with administrators. A change is audited. Administrators only."
+        body<AccountEnrollmentPolicyView>("The new `policy`; `allowed` is ignored.")
+        responses {
+            ok<AccountEnrollmentPolicyView>("The saved setting.")
+            badRequest("Neither `administrators` nor `members` (`invalid_account_enrollment_policy`).")
         }
     }
     patch("/api/v1/accounts/{id}") {

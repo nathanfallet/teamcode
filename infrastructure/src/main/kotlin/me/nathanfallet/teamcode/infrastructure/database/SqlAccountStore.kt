@@ -18,9 +18,16 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
     override suspend fun find(identity: AccountIdentity): AccountRecord? = database.query {
         Accounts.selectAll().where { identityFilter(identity) }.singleOrNull()?.let(::accountRecord)
     }
+    /**
+     * The team lock serializes every enrollment of a team, and `provider_identity` is unique, so two concurrent sign-ins
+     * to the same provider account (twice in a row, two members at once, a reconnection) end with one row: the second
+     * one finds the first under the lock and updates it instead of inserting a duplicate.
+     */
     override suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String, origin: EnrollmentOrigin): EnrollmentResult = database.query {
         val identity = verified.identity
-        val actorId = authorizeMutation(this, author, identity.teamId)
+        val actorId = authorizeMutation(this, author, identity.teamId, administrator = false)
+        val policy = readEnrollmentPolicy(identity.teamId)
+        if (author is AccountMutationActor.User) AccountEnrollmentRules.authorize(author.principal, policy, origin)
         val payload = Json.encodeToString(CredentialPayload(credentials.accessToken, credentials.refreshToken, credentials.expiresAtMillis))
         val hash = Passwords.digest(listOf(identity.provider, identity.accountId, identity.organizationId, payload).joinToString("\u0000"))
         val previous = EnrollmentOperations.selectAll().where { (EnrollmentOperations.teamId eq identity.teamId) and (EnrollmentOperations.operationId eq operationId) }.singleOrNull()
@@ -31,18 +38,36 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
         }
         val row = Accounts.selectAll().where { identityFilter(identity) }.forUpdate().singleOrNull()
         val existing = row?.let(::accountRecord)
+        // The decision that counts: current role, stored policy and the account row as it is now.
+        if (author is AccountMutationActor.User) AccountEnrollmentRules.authorize(author.principal, policy, origin, existing)
         if (row != null && row[Accounts.refreshPending] && existing!!.state != AccountState.RECONNECT_REQUIRED && row[Accounts.refreshStartedAt] + 60_000 > nowMillis()) return@query EnrollmentResult.Conflict
-        if (existing?.credentialVersion != expectedVersion) return@query EnrollmentResult.Conflict
-        val account = existing?.let { merge.merge(it, verified, expectedVersion!!, origin) } ?: AccountRecord(UUID.randomUUID().toString(), identity, verified.displayName.take(120), 1, false, null, 0, merge.initialState(origin), verified.email)
+        // A fresh sign-in holds the newest tokens there are, so it replaces whatever version is stored, including a row
+        // another enrollment inserted after this one was verified. An import must not overwrite credentials rotated meanwhile.
+        val expected = if (origin == EnrollmentOrigin.SIGN_IN) existing?.credentialVersion else expectedVersion
+        if (existing?.credentialVersion != expected) return@query EnrollmentResult.Conflict
+        val enrolledBy = (author as? AccountMutationActor.User)?.principal?.member?.id
+        val account = existing?.let { merge.merge(it, verified, expected!!, origin) } ?: AccountRecord(UUID.randomUUID().toString(), identity, verified.displayName.take(120), 1, false, null, 0, merge.initialState(origin), verified.email, enrolledBy)
         val envelope = cipher.encrypt(payload.toByteArray(), "${identity.teamId}:${account.id}")
         if (existing == null) Accounts.insert {
             it[id] = account.id; it[teamId] = identity.teamId; it[provider] = identity.provider; it[providerAccountId] = identity.accountId
             it[organizationId] = identity.organizationId; it[displayName] = account.displayName; it[email] = account.email; it[credentialVersion] = account.credentialVersion
-            it[credentialEnvelope] = envelope; it[state] = account.state.name
+            it[credentialEnvelope] = envelope; it[state] = account.state.name; it[Accounts.enrolledBy] = enrolledBy
         } else Accounts.update({ Accounts.id eq account.id }) { it[credentialVersion] = account.credentialVersion; it[email] = account.email; it[state] = account.state.name; it[credentialEnvelope] = envelope; it[refreshPending] = false }
         EnrollmentOperations.insert { it[teamId] = identity.teamId; it[EnrollmentOperations.operationId] = operationId; it[requestHash] = hash; it[accountId] = account.id; it[created] = existing == null }
-        audit(identity.teamId, actorId, if (existing == null) "account.enrolled" else "account.credentials_updated", account.id)
+        audit(identity.teamId, actorId, when {
+            existing == null -> "account.enrolled"
+            existing.state == AccountState.RECONNECT_REQUIRED -> "account.reconnected"
+            else -> "account.credentials_updated"
+        }, account.id)
         if (existing == null) EnrollmentResult.Created(account) else EnrollmentResult.Updated(account)
+    }
+    override suspend fun enrollmentPolicy(teamId: String): AccountEnrollmentPolicy = database.query { readEnrollmentPolicy(teamId) }
+    override suspend fun setEnrollmentPolicy(author: AccountMutationActor, teamId: String, policy: AccountEnrollmentPolicy): AccountEnrollmentPolicy = database.query {
+        val actorId = authorizeMutation(this, author, teamId)
+        val previous = readEnrollmentPolicy(teamId)
+        TeamSettingsTable.upsert { it[TeamSettingsTable.teamId] = teamId; it[accountEnrollment] = policy.wire }
+        if (previous != policy) audit(teamId, actorId, "accounts.enrollment_policy_changed", "$teamId:${previous.wire}->${policy.wire}")
+        policy
     }
     /** Fills a missing display address only; an address already known is never replaced and credentials are untouched. */
     override suspend fun recordEmail(identity: AccountIdentity, accountId: String, email: String): Boolean = database.query {
@@ -73,9 +98,10 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
         val value = Json.decodeFromString<CredentialPayload>(cipher.decrypt(encrypted, "$teamId:$id").decodeToString())
         ProviderCredentials(value.accessToken, value.refreshToken, value.expiresAtMillis)
     }
-    private fun authorizeMutation(transaction: JdbcTransaction, author: AccountMutationActor, teamId: String): String {
+    /** Without [administrator], the caller applies [AccountEnrollmentRules] itself once current membership is confirmed. */
+    private fun authorizeMutation(transaction: JdbcTransaction, author: AccountMutationActor, teamId: String, administrator: Boolean = true): String {
         if (author is AccountMutationActor.User) {
-            author.principal.requireAdmin()
+            if (administrator) author.principal.requireAdmin() else { author.principal.requireInteractive(); author.principal.requireReady() }
             if (author.principal.teamId != teamId) throw TeamFailure("forbidden", 403, "An account write cannot cross team boundaries.")
         }
         transaction.lockTeam(teamId)
@@ -91,4 +117,9 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
 }
 @Serializable
 internal class CredentialPayload(val accessToken: String, val refreshToken: String, val expiresAtMillis: Long)
-internal fun accountRecord(row: ResultRow) = AccountRecord(row[Accounts.id], AccountIdentity(row[Accounts.teamId], row[Accounts.provider], row[Accounts.providerAccountId], row[Accounts.organizationId]), row[Accounts.displayName], row[Accounts.credentialVersion], row[Accounts.disabled], row[Accounts.poolId], row[Accounts.priority], AccountState.valueOf(row[Accounts.state]), row[Accounts.email])
+internal fun accountRecord(row: ResultRow) = AccountRecord(row[Accounts.id], AccountIdentity(row[Accounts.teamId], row[Accounts.provider], row[Accounts.providerAccountId], row[Accounts.organizationId]), row[Accounts.displayName], row[Accounts.credentialVersion], row[Accounts.disabled], row[Accounts.poolId], row[Accounts.priority], AccountState.valueOf(row[Accounts.state]), row[Accounts.email], row[Accounts.enrolledBy])
+
+/** A stored value this binary does not know (a newer release, a manual edit) falls back to the restrictive default. */
+internal fun readEnrollmentPolicy(teamId: String): AccountEnrollmentPolicy = TeamSettingsTable.select(TeamSettingsTable.accountEnrollment)
+    .where { TeamSettingsTable.teamId eq teamId }.singleOrNull()
+    ?.let { row -> AccountEnrollmentPolicy.entries.firstOrNull { it.wire == row[TeamSettingsTable.accountEnrollment] } } ?: AccountEnrollmentPolicy.ADMINISTRATORS

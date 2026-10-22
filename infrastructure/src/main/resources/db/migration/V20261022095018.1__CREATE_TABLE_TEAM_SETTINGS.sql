@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS team_settings (team_id VARCHAR(36) PRIMARY KEY, account_enrollment VARCHAR(16) DEFAULT 'administrators' NOT NULL, CONSTRAINT fk_team_settings_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT);

@@ -28,6 +28,8 @@ data class AccountRecord(
     val state: AccountState,
     /** Provider-reported email; null for accounts enrolled before it was recorded, until they are added or imported again. */
     val email: String? = null,
+    /** Member who first added the account; null for an account added by the system or before this was recorded. */
+    val enrolledBy: String? = null,
 )
 enum class AccountState { PENDING_HANDOVER, READY, ACCESS_ONLY, RECONNECT_REQUIRED;
     val canServe: Boolean get() = this == READY || this == ACCESS_ONLY

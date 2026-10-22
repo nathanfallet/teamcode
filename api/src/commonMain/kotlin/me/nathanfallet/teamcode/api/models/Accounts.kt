@@ -17,6 +17,13 @@ data class AccountView(val id: String, val provider: String, val displayName: St
 }
 @Serializable
 data class EnrollAccountResponse(val created: Boolean, val account: AccountView)
+/**
+ * Who can add accounts with `teamcode accounts add`: [policy] is `administrators` (the default) or `members`. [allowed]
+ * says whether the caller may, and is only set in responses. `GET /api/v1/policy/account-enrollment` answers any ready
+ * interactive member; `PUT` is administrator-only and ignores [allowed].
+ */
+@Serializable
+data class AccountEnrollmentPolicyView(val policy: String, val allowed: Boolean? = null)
 @Serializable
 data class UpdateAccountRequest(val displayName: String, val disabled: Boolean, val priority: Int, val poolId: String? = null)
 

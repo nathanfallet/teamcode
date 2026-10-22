@@ -96,6 +96,8 @@ private class NamedAccounts(private val records: List<AccountRecord>) : AccountS
     override suspend fun configure(author: AccountMutationActor, teamId: String, id: String, displayName: String, disabled: Boolean, priority: Int, poolId: String?) = error("unused")
     override suspend fun handover(author: AccountMutationActor, teamId: String, id: String, accessOnly: Boolean, requirePending: Boolean) = error("unused")
     override suspend fun credentials(teamId: String, id: String) = error("unused")
+    override suspend fun enrollmentPolicy(teamId: String) = AccountEnrollmentPolicy.ADMINISTRATORS
+    override suspend fun setEnrollmentPolicy(author: AccountMutationActor, teamId: String, policy: AccountEnrollmentPolicy) = error("unused")
     override suspend fun find(identity: AccountIdentity): AccountRecord? = null
     override suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String, origin: EnrollmentOrigin): EnrollmentResult = error("unused")
 }

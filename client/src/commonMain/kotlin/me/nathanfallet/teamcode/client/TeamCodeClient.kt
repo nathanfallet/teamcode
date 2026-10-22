@@ -128,7 +128,13 @@ class TeamCodeClient(
         return request("/api/v1/forecasts" + (accountId?.let { "?account=$it" } ?: ""), HttpMethod.Get)
     }
     suspend fun accounts(): List<AccountView> = request("/api/v1/accounts", HttpMethod.Get)
-    suspend fun enrollAccount(input: EnrollAccountRequest): EnrollAccountResponse = request("/api/v1/accounts", HttpMethod.Post, input)
+    /** Failures carry the server's code, such as `account_enrollment_forbidden` or `account_in_use`. */
+    suspend fun enrollAccount(input: EnrollAccountRequest): EnrollAccountResponse = coded(HttpMethod.Post, "/api/v1/accounts", input)
+    /** Who can add accounts, and whether the signed-in member may; any member can ask (feature `accounts.enrollment-policy.v1`). */
+    suspend fun accountEnrollmentPolicy(): AccountEnrollmentPolicyView = request("/api/v1/policy/account-enrollment", HttpMethod.Get)
+    /** Administrator-only: [policy] is `administrators` or `members`. */
+    suspend fun saveAccountEnrollmentPolicy(policy: String): AccountEnrollmentPolicyView =
+        request("/api/v1/policy/account-enrollment", HttpMethod.Put, AccountEnrollmentPolicyView(policy))
     suspend fun handoverAccount(id: String, accessOnly: Boolean = false): AccountView {
         require(Regex("[a-zA-Z0-9-]{1,36}").matches(id))
         return request("/api/v1/accounts/$id/${if (accessOnly) "access-only" else "handover"}", HttpMethod.Post)

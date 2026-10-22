@@ -20,6 +20,8 @@ object Accounts : Table("accounts") {
     val cooldownUntil = long("cooldown_until").default(0)
     val refreshPending = bool("refresh_pending").default(false)
     val refreshStartedAt = long("refresh_started_at").default(0)
+    /** Member who first added the account (like `tokens.created_by`, no foreign key so member history stays deletable). */
+    val enrolledBy = varchar("enrolled_by", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("provider_identity", teamId, provider, providerAccountId, organizationId) }
 }

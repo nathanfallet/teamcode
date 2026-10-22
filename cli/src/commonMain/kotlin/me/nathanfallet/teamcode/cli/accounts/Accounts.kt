@@ -7,7 +7,9 @@ import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.mordant.terminal.Terminal
 import io.ktor.client.HttpClient
+import me.nathanfallet.teamcode.api.models.AccountEnrollmentPolicyView
 import me.nathanfallet.teamcode.api.models.EnrollAccountRequest
+import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.cli.platform.*
@@ -32,7 +34,8 @@ private class AddAccount : SuspendingCliktCommand(name = "add") {
     override suspend fun run() {
         val config = loadConfig()
         sdk(config).use { client ->
-            client.accounts() // Verify administrator access before opening provider sign-in.
+            // Check before opening the provider sign-in, with a call every member may make.
+            requireEnrollmentAllowed(client.capabilities().features, client::accountEnrollmentPolicy) { client.me().role }
             val provider = if (providerName == "codex") CodexOAuthEnrollment else ClaudeOAuthEnrollment
             val verifier = randomCode()
             val state = randomCode()
@@ -48,12 +51,33 @@ private class AddAccount : SuspendingCliktCommand(name = "add") {
             val paste = Terminal().readLineOrNull(hideInput = true)?.trim().orEmpty()
             val code = provider.parseCode(paste, state)
             val input = OAuthEnrollmentClient(provider) { configure -> HttpClient() { configure(this) } }.use { it.exchange(code, state, verifier, randomCode()) }
-            val result = client.enrollAccount(input)
+            val result = try { client.enrollAccount(input) } catch (error: TeamCodeException) { throw enrollmentRefusal(error) ?: error }
             echo("${if (result.created) "Added" else "Updated"} ${result.account.label}, id ${result.account.id}.")
             if (result.account.state == "PENDING_HANDOVER") echo("Stop any other refresher for this account, then run: teamcode accounts handover ${result.account.id} --confirm")
             else echo("TeamCode owns this sign-in: the account serves requests now (state ${result.account.state}).")
         }
     }
+}
+internal const val ENROLLMENT_POLICY_FEATURE = "accounts.enrollment-policy.v1"
+/** TeamCode's own words for the refusals of `accounts add`, safe to print; keyed by the server's error code. */
+internal object EnrollmentMessages {
+    const val ADMINISTRATORS_ONLY = "Only administrators can add accounts on this server. Ask an administrator, or ask them to allow every member to add accounts (setting \"Who can add accounts\" on the dashboard's Subscription accounts page, or PUT /api/v1/policy/account-enrollment)."
+    const val ACCOUNT_IN_USE = "This subscription account is already in the pool and does not need reconnecting. Only an administrator or the member who added it can replace its sign-in."
+    fun forCode(code: String?): String? = when (code) {
+        "account_enrollment_forbidden" -> ADMINISTRATORS_ONLY
+        "account_in_use" -> ACCOUNT_IN_USE
+        else -> null
+    }
+}
+internal fun enrollmentRefusal(error: TeamCodeException): CliUserException? =
+    EnrollmentMessages.forCode(error.code)?.takeIf { error.statusCode == 403 }?.let(::CliUserException)
+/**
+ * Refuses before any provider sign-in when the server would. A server that announces [ENROLLMENT_POLICY_FEATURE] says
+ * whether the caller may; an older one only accepts administrators, which the caller's own role tells.
+ */
+internal suspend fun requireEnrollmentAllowed(features: List<String>, policy: suspend () -> AccountEnrollmentPolicyView, role: suspend () -> String) {
+    val allowed = if (ENROLLMENT_POLICY_FEATURE in features) policy().allowed == true else role() in setOf("OWNER", "ADMIN")
+    if (!allowed) throw CliUserException(EnrollmentMessages.ADMINISTRATORS_ONLY)
 }
 private class ImportAccounts : SuspendingCliktCommand(name = "import") {
     private val from by option("--from").required()

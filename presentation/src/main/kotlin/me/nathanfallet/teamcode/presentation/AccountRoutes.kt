@@ -12,6 +12,14 @@ private fun AccountRecord.view() = AccountView(id, identity.provider, displayNam
 /** "Name (email)", the label every dashboard page uses for a pool account. */
 internal val AccountRecord.label: String get() = accountLabel(displayName, email)
 internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: String) {
+    // Any ready interactive member may read it, so `accounts add` can check before opening a provider sign-in.
+    get("/api/v1/policy/account-enrollment") { call.respond(accounts.enrollmentAccess(call.principal).view()) }
+    put("/api/v1/policy/account-enrollment") {
+        val input = call.jsonBody<AccountEnrollmentPolicyView>()
+        val actor = call.principal
+        accounts.setEnrollmentPolicy(actor, AccountEnrollmentPolicy.parse(input.policy))
+        call.respond(accounts.enrollmentAccess(actor).view())
+    }
     get("/api/v1/accounts") { call.respond(accounts.list(call.principal).map { it.view() }) }
     post("/api/v1/accounts") {
         val input = call.jsonBody<EnrollAccountRequest>()
@@ -31,7 +39,13 @@ internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: Stri
     post("/api/v1/accounts/{id}/access-only") { call.respond(accounts.handover(call.principal, call.parameters["id"]!!, accessOnly = true).view()) }
     get("/dashboard/accounts") {
         val actor = call.principal
-        call.respondText(call.page("Subscription accounts", accountsContent(actor, accounts.list(actor))), ContentType.Text.Html)
+        val list = accounts.list(actor)
+        call.respondText(call.page("Subscription accounts", accountsContent(actor, list, accounts.enrollmentAccess(actor).policy)), ContentType.Text.Html)
+    }
+    post("/dashboard/accounts/enrollment-policy") {
+        val input = call.form(publicOrigin.trimEnd('/'))
+        accounts.setEnrollmentPolicy(call.principal, AccountEnrollmentPolicy.parse(input["policy"].orEmpty()))
+        call.respondRedirect("/dashboard/accounts#who-can-add")
     }
     post("/dashboard/accounts/{id}/update") {
         val input = call.form(publicOrigin.trimEnd('/'))
@@ -48,11 +62,19 @@ internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: Stri
     }
 }
 
+private fun AccountEnrollmentAccess.view() = AccountEnrollmentPolicyView(policy.wire, allowed)
+
 /** The subscription accounts page body; the route supplies the administrator-only list. */
-internal fun accountsContent(actor: Principal, list: List<AccountRecord>): String {
+internal fun accountsContent(actor: Principal, list: List<AccountRecord>, enrollment: AccountEnrollmentPolicy = AccountEnrollmentPolicy.ADMINISTRATORS): String {
     val rows = list.joinToString("") { a -> """<tr id="account-${escape(a.id)}"><td>${accountCell(a.displayName, a.email, strong = true, afterName = " " + stateChip(a.state) + if (a.disabled) " <span class=\"chip danger\">disabled</span>" else "")}<br><small>${escape(a.identity.provider)} · credential version ${a.credentialVersion}</small>${if (a.state == AccountState.PENDING_HANDOVER) handoverControl(actor, a) else ""}</td><td><form action="/dashboard/accounts/${escape(a.id)}/update" method="post">${csrf(actor)}<label>Name <input name="name" value="${escape(a.displayName)}" maxlength="120" required></label><label>Priority <input type="number" name="priority" value="${a.priority}" min="-100" max="100"></label><label>Pool (empty = shared) <input name="pool" value="${escape(a.poolId.orEmpty())}" maxlength="36"></label><label><input type="checkbox" name="disabled" ${if (a.disabled) "checked" else ""}> Disabled</label><button>Save account</button></form></td></tr>""" }
     val table = if (list.isEmpty()) empty("No subscription account yet", "<p>Add one from your computer with <code>teamcode accounts add</code>.</p>") else """<table><thead><tr><th>Account</th><th>Settings</th></tr></thead><tbody>$rows</tbody></table>"""
-    return handoverBanner(list, onAccountsPage = true) + """<p>Add or reconnect accounts on your computer with <code>teamcode accounts add</code>, or import with <code>teamcode accounts import --from teamclaude</code>.</p><p>An account added with <code>teamcode accounts add</code> serves requests at once. Imported accounts wait for an explicit refresh-ownership handover: use the Handover button below, or <code>teamcode accounts handover &lt;id&gt; --confirm</code>. No provider credential is displayed here.</p>$table"""
+    return handoverBanner(list, onAccountsPage = true) + """<p>Add or reconnect accounts on your computer with <code>teamcode accounts add</code>, or import with <code>teamcode accounts import --from teamclaude</code>.</p><p>An account added with <code>teamcode accounts add</code> serves requests at once. Imported accounts wait for an explicit refresh-ownership handover: use the Handover button below, or <code>teamcode accounts handover &lt;id&gt; --confirm</code>. No provider credential is displayed here.</p>$table${enrollmentControl(actor, enrollment)}"""
+}
+
+/** Same setting as `PUT /api/v1/policy/account-enrollment`. */
+private fun enrollmentControl(actor: Principal, policy: AccountEnrollmentPolicy): String {
+    fun option(value: AccountEnrollmentPolicy, label: String) = """<label><input type="radio" name="policy" value="${value.wire}" ${if (value == policy) "checked" else ""}> $label</label>"""
+    return """<h2 id="who-can-add">Who can add accounts</h2><form action="/dashboard/accounts/enrollment-policy" method="post">${csrf(actor)}${option(AccountEnrollmentPolicy.ADMINISTRATORS, "Administrators only")}${option(AccountEnrollmentPolicy.MEMBERS, "Every member")}<p><small>With every member, any member can add a subscription with <code>teamcode accounts add</code> and reconnect an account that needs reconnecting. A member cannot replace the sign-in of a healthy account someone else added, and cannot change account settings, import accounts or hand them over. The audit log records who added or reconnected each account.</small></p><button>Save</button></form>"""
 }
 
 private fun stateChip(state: AccountState) = when (state) {

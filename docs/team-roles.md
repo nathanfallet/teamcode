@@ -5,7 +5,7 @@ TeamCode uses administrator-created usernames/passwords, with no public signup o
 | Identity | Authority |
 | --- | --- |
 | `OWNER` | All administration, plus granting/removing ownership and recovering an owner's password |
-| `ADMIN` | Members, non-owner recovery, accounts, policies, groups, devices, keys and operational views; no owner account changes or ownership grants |
+| `ADMIN` | Members, non-owner recovery, accounts (members may also add and reconnect them when [allowed](capacity.md#who-can-add-accounts)), policies, groups, devices, keys and operational views; no owner account changes or ownership grants |
 | `MEMBER` | Own authorized resources and inference within assigned budgets/pools/model policy |
 | Group `MANAGER` | An additional scoped assignment, not a global role; own group roster and admission pause/resume only |
 | Service/CI key | Selected scopes on its member's resources; no interactive administration, even for an owner-owned key; an administrator's `team:read` key adds a read-only view of the team, never a write |

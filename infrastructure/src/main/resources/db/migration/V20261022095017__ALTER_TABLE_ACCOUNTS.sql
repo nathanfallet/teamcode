@@ -1,0 +1,1 @@
+ALTER TABLE accounts ADD enrolled_by VARCHAR(36) NULL;
