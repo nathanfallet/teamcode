@@ -87,4 +87,28 @@ class OAuthEnrollmentTest {
             }
         }
     }
+
+    @Test fun signInFailuresCarryAReasonAndNeverThePasteOrProviderAnswer() = runBlocking {
+        fun reason(block: () -> Unit) = assertFailsWith<OAuthEnrollmentException> { block() }.reason
+        assertEquals(OAuthEnrollmentException.Reason.STATE_MISMATCH, reason { ClaudeOAuthEnrollment.parseCode("secret-code#other", "state") })
+        assertEquals(OAuthEnrollmentException.Reason.INVALID_PASTE, reason { ClaudeOAuthEnrollment.parseCode("secret-code", "state") })
+        assertEquals(OAuthEnrollmentException.Reason.INVALID_PASTE, reason { ClaudeOAuthEnrollment.parseCode("", "state") })
+        assertEquals(OAuthEnrollmentException.Reason.STATE_MISMATCH, reason { CodexOAuthEnrollment.parseCode("http://localhost:1455/auth/callback?code=c&state=x", "state") })
+        assertEquals(OAuthEnrollmentException.Reason.PROVIDER_REFUSED, reason { CodexOAuthEnrollment.parseCode("http://localhost:1455/auth/callback?error=denied&state=state", "state") })
+        assertEquals(OAuthEnrollmentException.Reason.INVALID_PASTE, reason { CodexOAuthEnrollment.parseCode("https://example.com/?code=c&state=state", "state") })
+        for ((engine, expected) in listOf(
+            MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.BadRequest) } to OAuthEnrollmentException.Reason.EXCHANGE_REJECTED,
+            MockEngine { respond("provider-secret-diagnostic", HttpStatusCode.OK) } to OAuthEnrollmentException.Reason.INVALID_TOKEN_RESPONSE,
+            MockEngine { throw java.net.ConnectException("connect to provider-secret-host failed") } to OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE,
+        )) {
+            OAuthEnrollmentClient(ClaudeOAuthEnrollment) { configure -> HttpClient(engine) { configure(this) } }.use { client ->
+                val error = assertFailsWith<OAuthEnrollmentException> { client.exchange("code", "state", "verifier", "operation-id") }
+                assertEquals(expected, error.reason)
+                assertEquals("Claude", error.provider)
+                assertFalse(error.message.orEmpty().contains("secret"))
+                assertNull(error.cause)
+                if (expected == OAuthEnrollmentException.Reason.EXCHANGE_REJECTED) assertEquals(400, error.status)
+            }
+        }
+    }
 }

@@ -18,6 +18,26 @@ curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/ins
 
 The script is pinned to the release it comes from, so every file it downloads matches that exact version. To install a specific version, replace `releases/latest/download/` with `releases/download/<version>/`. No JVM is required. The installer makes `teamcode` available by name (a `~/.local/bin` link on macOS/Linux, your user PATH on Windows) and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
 
+## Troubleshooting CLI errors
+
+When a command fails, the CLI prints what happened and what to do, then exits with status 1. Messages are built only from the HTTP status, the API error code, `Retry-After`, a request id and the configured server origin: never a response body, token, pasted code or exception text, which may carry credentials.
+
+| You see | Cause | What to do |
+| --- | --- | --- |
+| `session has expired or was revoked (HTTP 401, …)` | The saved session was signed out, revoked or expired. | Run `teamcode login`. |
+| `needs a team administrator, or your member is disabled (HTTP 403, forbidden)` | The command is reserved to administrators, or your member is disabled. | Ask an administrator to run it or to change your role. |
+| `service key without the needed scope (HTTP 403, credential_scope)` | The configured credential is a service key, or lacks the scope. | Sign in with `teamcode login`, or use a key with the scope. |
+| `Not found (HTTP 404, <code>)` | The id or name does not exist. | Check it with the matching `list` command. |
+| `does not know this request (HTTP 404)` | The server runs an older TeamCode than the CLI. | Update the server, or use a matching CLI. |
+| `conflicts with the current state (HTTP 409, …)` / `refused the request for now (HTTP 429, …)` | A conflict, a rate limit, or no allowance or capacity right now. | Retry after the delay the message gives (`Retry-After`). |
+| `unavailable or failed (HTTP 5xx, …)` | The server or a proxy in front of it failed. | Try again; report the request id to your administrator if one is shown. |
+| `Cannot reach` / `Cannot find` / `did not answer in time` | Connection refused, host name not resolved, or timeout. | Check the server URL in the message, that the server runs, and your network or VPN. |
+| `TLS error` | Untrusted, expired or mismatched certificate, or no HTTPS on that port. | Check the URL and the certificate; an HTTPS-intercepting proxy can cause this. |
+| `pasted … sign-in code is incomplete` / `did not accept the sign-in code` | The OAuth code is truncated, from another attempt, or expired. | Run `teamcode accounts add` again and paste the complete code (`code#state` for Claude, the whole `localhost:1455/auth/callback` URL for Codex). |
+| `Cannot read or write a private TeamCode file` | Permissions on the configuration directory. | Make sure your user owns `~/.config/teamcode` (or `$XDG_CONFIG_HOME/teamcode`) and can read and write it. |
+
+For a bug report, add `--debug` before the command (`teamcode --debug accounts list`) or set `TEAMCODE_DEBUG=1`. The CLI then prints one more line with the error type, HTTP status, codes, the network failure family and the CLI version, still without secrets.
+
 ## Run the team server
 
 Use JDK 21 and MySQL 8.4. The server applies Flyway migrations at startup:

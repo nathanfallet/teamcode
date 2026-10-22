@@ -27,6 +27,8 @@ const val VERSION = me.nathanfallet.teamcode.api.BuildInfo.VERSION
 
 class Cli : SuspendingNoOpCliktCommand(name = "teamcode") {
     override fun help(context: Context) = "A self-hosted team gateway. First use: teamcode login."
+    // Read by main() before parsing, so a failure in any command can print it; declared here for --help.
+    @Suppress("unused") private val debug by option("--debug", help = "On failure, also print the error type, HTTP status and codes (never secrets). Same as TEAMCODE_DEBUG=1.").flag()
     init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Sessions(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install(), me.nathanfallet.teamcode.cli.cloud.Cloud(), me.nathanfallet.teamcode.cli.github.GitHub(), me.nathanfallet.teamcode.cli.hooks.Hooks()) }
 }
 
@@ -43,7 +45,7 @@ private class Login : SuspendingCliktCommand(name = "login") {
         val terminal by lazy { Terminal() }
         fun read(label: String, secret: Boolean = false): String {
             echo("$label: ", trailingNewline = false, err = true)
-            return (if (passwordStdin) readlnOrNull() else terminal.readLineOrNull(hideInput = secret)) ?: error("Input ended.")
+            return (if (passwordStdin) readlnOrNull() else terminal.readLineOrNull(hideInput = secret)) ?: throw CliUserException("Input ended before $label was entered.")
         }
         val origin = validateServerUrl(server ?: ConfigStore().load()?.serverUrl ?: read("TeamCode server URL"))
         val name = username ?: read("Username")
@@ -53,7 +55,7 @@ private class Login : SuspendingCliktCommand(name = "login") {
         if (session.member.passwordChangeRequired) {
             echo("Choose a new password with at least 14 characters. This will sign out all existing sessions.")
             val replacement = read("New password", secret = true)
-            require(replacement == read("Confirm new password", secret = true)) { "Passwords do not match." }
+            if (replacement != read("Confirm new password", secret = true)) throw CliUserException("Passwords do not match. Run teamcode login again.")
             sdk(CliConfig(origin, session.accessToken)).use { it.changePassword(password, replacement) }
             password = replacement
             session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation) }
@@ -82,10 +84,7 @@ private class Configure : SuspendingCliktCommand(name = "configure") {
         echo("TeamCode access token (stdin; do not pass secrets as command arguments):", err = true)
         val accessToken = readlnOrNull()?.trim().orEmpty()
         val config = CliConfig(normalized, accessToken)
-        try {
-            sdk(config).use { client -> client.capabilities() } // Verify before saving a credential.
-        } catch (error: CancellationException) { throw error }
-        catch (error: Exception) { throw CliOperationException("server_verification_${error::class.simpleName.orEmpty().filter { it.isLetterOrDigit() }}") }
+        sdk(config).use { client -> client.capabilities() } // Verify before saving a credential; main() explains a failure.
         try { ConfigStore().save(config) }
         catch (error: CancellationException) { throw error }
         catch (error: CliOperationException) { throw error }
@@ -118,13 +117,22 @@ private class ProxyStart : SuspendingCliktCommand(name = "start") {
 }
 
 internal fun loadConfig() = ConfigStore().load() ?: throw CliUserException("No configuration found. Run teamcode login first.")
-internal fun sdk(config: CliConfig) = TeamCodeClient(config.serverUrl, { config.accessToken }) { configure ->
-    HttpClient() { configure(this) }
+internal fun sdk(config: CliConfig): TeamCodeClient {
+    contactedServer = config.serverUrl
+    return TeamCodeClient(config.serverUrl, { config.accessToken }) { configure -> HttpClient() { configure(this) } }
 }
 
+/** The origin of the last server this command contacted, named in network failure messages; an origin has no credential. */
+@kotlin.concurrent.Volatile internal var contactedServer: String? = null
+
+internal fun debugRequested(arguments: List<String>, env: (String) -> String? = ::environment): Boolean =
+    env("TEAMCODE_DEBUG") == "1" || "--debug" in arguments.takeWhile { it.startsWith("-") }
+
 fun main(args: Array<String>): Unit = runBlocking {
+    var debug = environment("TEAMCODE_DEBUG") == "1"
     try {
         val arguments = platformArguments(args)
+        debug = debugRequested(arguments.toList())
         if (arguments.firstOrNull() == "--teamcode-installation-probe") {
             SystemExit.exit(if (arguments.toList() == listOf("--teamcode-installation-probe", VERSION, "1")) 0 else 1)
         }
@@ -132,14 +140,10 @@ fun main(args: Array<String>): Unit = runBlocking {
         Cli().main(arguments)
     }
     catch (error: CancellationException) { throw error }
-    catch (error: CliUserException) { SystemExit.fail(error.message) }
-    catch (error: CliOperationException) {
-        if (error.code.startsWith("release_")) SystemExit.fail(releaseFailureMessage(error.code))
-        SystemExit.fail("TeamCode command failed (${error.code}). Check server connectivity, authentication and private file permissions.")
-    }
-    catch (_: Exception) {
-        // Never print exception chains from TLS, JSON, file paths or remote servers: they may carry credentials.
-        SystemExit.fail("TeamCode command failed. Check the server URL, authentication, file permissions and server availability.")
+    catch (error: Exception) {
+        // describeFailure never prints exception messages or chains from TLS, JSON, files or servers: they may carry credentials.
+        val failure = describeFailure(error, contactedServer ?: try { ConfigStore().load()?.serverUrl } catch (_: Exception) { null })
+        SystemExit.fail(if (debug) "${failure.message}\n${failure.diagnostic}" else failure.message)
     }
 }
 

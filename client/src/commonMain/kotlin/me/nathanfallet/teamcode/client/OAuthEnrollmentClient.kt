@@ -10,6 +10,7 @@ import kotlinx.io.readByteArray
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.EnrollAccountRequest
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 
 /** Provider login runs on the user's computer; only the resulting credentials are enrolled on TeamCode. */
 class OAuthEnrollmentClient(private val provider: OAuthEnrollmentProvider, createHttpClient: (io.ktor.client.HttpClientConfig<*>.() -> Unit) -> HttpClient) : AutoCloseable {
@@ -18,21 +19,29 @@ class OAuthEnrollmentClient(private val provider: OAuthEnrollmentProvider, creat
         followRedirects = false
         install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 30_000 }
     }
-    suspend fun exchange(code: String, state: String, verifier: String, operationId: String): EnrollAccountRequest = http.preparePost(provider.tokenEndpoint) {
-        contentType(ContentType.Application.Json)
-        setBody(provider.exchangeBody(code, state, verifier).toString())
-    }.execute { response ->
-        if (response.status.value != 200) throw TeamCodeException(response.status.value, "${provider.displayName} sign-in failed. Start a new sign-in attempt.")
-        val bytes = response.bodyAsChannel().readRemaining(65_537).readByteArray()
-        require(bytes.size <= 65_536) { "Invalid token response." }
-        val value = try { Json.parseToJsonElement(bytes.decodeToString()) as? JsonObject }
-            catch (_: IllegalArgumentException) { null }
-        requireNotNull(value) { "Invalid token response." }
-        val access = (value["access_token"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-        val refresh = (value["refresh_token"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-        val seconds = (value["expires_in"] as? JsonPrimitive)?.longOrNull
-        require(!access.isNullOrBlank() && !refresh.isNullOrBlank() && seconds != null && seconds in 1..31_536_000) { "Invalid token response." }
-        EnrollAccountRequest(access, refresh, Clock.System.now().toEpochMilliseconds() + seconds * 1000, operationId, provider.provider, freshSignIn = true)
-    }
+    suspend fun exchange(code: String, state: String, verifier: String, operationId: String): EnrollAccountRequest = try {
+        http.preparePost(provider.tokenEndpoint) {
+            contentType(ContentType.Application.Json)
+            setBody(provider.exchangeBody(code, state, verifier).toString())
+        }.execute { response ->
+            if (response.status.value != 200) throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.EXCHANGE_REJECTED, provider.displayName,
+                "${provider.displayName} sign-in failed. Start a new sign-in attempt.", response.status.value)
+            val bytes = response.bodyAsChannel().readRemaining(65_537).readByteArray()
+            if (bytes.size > 65_536) invalidTokenResponse()
+            val value = (try { Json.parseToJsonElement(bytes.decodeToString()) as? JsonObject }
+                catch (_: IllegalArgumentException) { null }) ?: invalidTokenResponse()
+            val access = (value["access_token"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val refresh = (value["refresh_token"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val seconds = (value["expires_in"] as? JsonPrimitive)?.longOrNull
+            if (access.isNullOrBlank() || refresh.isNullOrBlank() || seconds == null || seconds !in 1..31_536_000) invalidTokenResponse()
+            EnrollAccountRequest(access, refresh, Clock.System.now().toEpochMilliseconds() + seconds * 1000, operationId, provider.provider, freshSignIn = true)
+        }
+    } catch (error: CancellationException) { throw error }
+    catch (error: OAuthEnrollmentException) { throw error }
+    // Network and TLS failures name the provider endpoint, not the TeamCode server; never keep their messages.
+    catch (_: Exception) { throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.EXCHANGE_UNREACHABLE, provider.displayName, "${provider.displayName} sign-in service is unreachable.") }
+
+    private fun invalidTokenResponse(): Nothing =
+        throw OAuthEnrollmentException(OAuthEnrollmentException.Reason.INVALID_TOKEN_RESPONSE, provider.displayName, "Invalid token response.")
     override fun close() = http.close()
 }

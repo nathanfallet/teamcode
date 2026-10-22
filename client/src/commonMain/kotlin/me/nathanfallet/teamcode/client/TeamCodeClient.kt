@@ -293,9 +293,7 @@ class TeamCodeClient(
             method = HttpMethod.Post; contentType(ContentType.Application.Json); setBody(body); authenticate(); timeout { requestTimeoutMillis = 30_000 }
         }
         if (!response.status.isSuccess()) {
-            val code = try { response.body<ApiError>().error.type.takeIf { Regex("[a-z_]{1,64}").matches(it) } }
-                catch (error: CancellationException) { throw error } catch (_: Exception) { null }
-            throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code)
+            throw failure(response)
         }
         return response.body()
     }
@@ -333,7 +331,7 @@ class TeamCodeClient(
             // Keep-alives arrive every 15 s; a silent connection for 60 s is dead.
             timeout { requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS; socketTimeoutMillis = 60_000 }
         }.execute { response ->
-            if (!response.status.isSuccess()) throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", errorCode(response))
+            if (!response.status.isSuccess()) throw failure(response)
             readEventStream(response, onEvent)
         }
     }
@@ -383,7 +381,7 @@ class TeamCodeClient(
     suspend fun detachCloudSession(id: String, attachmentId: String) {
         identifier(id); identifier(attachmentId)
         val response = http.delete("$origin/api/v1/cloud/sessions/$id/attachments/$attachmentId") { authenticate(); timeout { requestTimeoutMillis = 10_000 } }
-        if (!response.status.isSuccess()) throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", errorCode(response))
+        if (!response.status.isSuccess()) throw failure(response)
     }
     suspend fun cloudAccessPolicy(): CloudAccessPolicyView = coded(HttpMethod.Get, "/api/v1/cloud/access", null as Unit?)
     suspend fun saveCloudAccessPolicy(policy: CloudAccessPolicyView): CloudAccessPolicyView = coded(HttpMethod.Put, "/api/v1/cloud/access", policy)
@@ -439,12 +437,21 @@ class TeamCodeClient(
             if (body != null) { contentType(ContentType.Application.Json); setBody(body) }
             configure()
         }
-        if (!response.status.isSuccess()) throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", errorCode(response))
+        if (!response.status.isSuccess()) throw failure(response)
         return if (R::class == Unit::class) Unit as R else response.body()
     }
-    private suspend fun errorCode(response: HttpResponse): String? =
-        try { response.body<ApiError>().error.type.takeIf { Regex("[a-z_]{1,64}").matches(it) } }
-        catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+    /**
+     * The failure of a non-success response, with only safe, validated fields: the API error `type` (never its
+     * message or the raw body, which a proxy or provider may fill with secrets), `Retry-After` in seconds and a
+     * proxy-assigned request id.
+     */
+    private suspend fun failure(response: HttpResponse): TeamCodeException {
+        val code = try { response.body<ApiError>().error.type.takeIf { ERROR_CODE.matches(it) } }
+            catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        return TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code,
+            retryAfterSeconds(response.headers[HttpHeaders.RetryAfter]),
+            REQUEST_ID_HEADERS.firstNotNullOfOrNull { response.headers[it] }?.takeIf { REQUEST_ID.matches(it) })
+    }
 
     private suspend inline fun <reified R> request(path: String, method: HttpMethod, timeoutMillis: Long = 10_000): R {
         val response = http.request("$origin$path") { this.method = method; authenticate(); timeout { requestTimeoutMillis = timeoutMillis } }
@@ -583,8 +590,7 @@ class TeamCodeClient(
 
     private suspend fun checkResponse(response: HttpResponse) {
         if (!response.status.isSuccess()) {
-            // Do not expose raw response bodies: a proxy/provider may echo secrets.
-            throw TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.")
+            throw failure(response)
         }
     }
 
@@ -593,6 +599,9 @@ class TeamCodeClient(
     companion object {
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
         private const val MAX_SSE_LINE = 256 * 1024
+        private val ERROR_CODE = Regex("[a-z_]{1,64}")
+        private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
+        private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
         val MCP_SERVER_NAME = Regex("[a-z0-9][a-z0-9._-]{0,63}")
         val SKILL_NAME = Regex("[a-z0-9]+(-[a-z0-9]+)*")
@@ -601,7 +610,20 @@ class TeamCodeClient(
     }
 }
 
-class TeamCodeException(val statusCode: Int, message: String, val code: String? = null) : Exception(message)
+/**
+ * A refused or failed TeamCode call. [code] is the API error `type` when the server sent one, [retryAfterSeconds] the
+ * `Retry-After` delay and [requestId] a request id set by the server or a proxy; all are validated and safe to print.
+ */
+class TeamCodeException(
+    val statusCode: Int,
+    message: String,
+    val code: String? = null,
+    val retryAfterSeconds: Long? = null,
+    val requestId: String? = null,
+) : Exception(message)
+
+/** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
+internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all(Char::isDigit) }?.toLong()
 
 /** How a followed event stream ended without a network failure. */
 enum class CloudStreamEnd { ENDED, DENIED }

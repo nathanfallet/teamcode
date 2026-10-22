@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.cli.config
 import io.ktor.http.*
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
+import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.platform.*
 import okio.FileSystem
 import okio.Path.Companion.toPath
@@ -16,15 +17,16 @@ class CliConfig(val serverUrl: String, val accessToken: String) {
     override fun toString(): String = "CliConfig(serverUrl=$serverUrl, accessToken=[REDACTED])"
 }
 
+/** Messages are TeamCode's own and never repeat the value, which may be a mistyped secret. */
 fun validateServerUrl(value: String): String {
-    require(value.isNotBlank()) { "A TeamCode server URL is required." }
-    val url = Url(value)
-    require(url.protocol == URLProtocol.HTTPS ||
-        (url.protocol == URLProtocol.HTTP && url.host in setOf("localhost", "127.0.0.1", "::1"))) {
-        "Use HTTPS; unencrypted HTTP is allowed only on loopback."
-    }
-    require(url.user.isNullOrEmpty() && url.password.isNullOrEmpty() && url.encodedPath in setOf("", "/") &&
-        url.parameters.isEmpty() && url.fragment.isEmpty()) { "Use a server origin without credentials, path, query or fragment." }
+    fun refuse(message: String): Nothing = throw CliUserException(message)
+    if (value.isBlank()) refuse("A TeamCode server URL is required, for example https://teamcode.example.com.")
+    val url = try { Url(value) } catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
+        catch (_: Exception) { refuse("The TeamCode server URL is not a valid URL. Use an origin such as https://teamcode.example.com.") }
+    if (url.protocol != URLProtocol.HTTPS && !(url.protocol == URLProtocol.HTTP && url.host in setOf("localhost", "127.0.0.1", "::1")))
+        refuse("Use HTTPS for the TeamCode server URL; unencrypted HTTP is allowed only on loopback.")
+    if (!url.user.isNullOrEmpty() || !url.password.isNullOrEmpty() || url.encodedPath !in setOf("", "/") ||
+        !url.parameters.isEmpty() || url.fragment.isNotEmpty()) refuse("Use a server origin without credentials, path, query or fragment, such as https://teamcode.example.com.")
     return value.trimEnd('/')
 }
 

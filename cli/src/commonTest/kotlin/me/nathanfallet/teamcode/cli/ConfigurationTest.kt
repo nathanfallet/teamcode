@@ -11,7 +11,8 @@ class ConfigurationTest {
     }
     @Test fun `remote plaintext redirects and embedded credentials are not acceptable origins`() {
         for (value in listOf("", "   ", "http://team.example", "https://user:secret@team.example", "https://team.example/path", "https://team.example?token=secret", "https://team.example#fragment")) {
-            assertFailsWith<IllegalArgumentException>(value) { validateServerUrl(value) }
+            val error = assertFailsWith<CliUserException>(value) { validateServerUrl(value) }
+            assertFalse(error.message.contains("secret"), "The refusal must not repeat the value")
         }
         assertEquals("https://self.hosted.example", validateServerUrl("https://self.hosted.example/"))
         assertEquals("http://127.0.0.1:8080", validateServerUrl("http://127.0.0.1:8080"))
