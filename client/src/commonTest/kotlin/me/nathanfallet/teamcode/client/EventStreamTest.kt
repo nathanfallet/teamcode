@@ -175,4 +175,21 @@ class EventStreamTest {
             assertEquals(listOf(2L), seen)
         }
     }
+
+    @Test fun aConnectionFailureThrowsTeamCodeExceptionWithItsCause() = runTest {
+        TeamCodeClient("https://team.example", { "synthetic-token" }) { configure ->
+            HttpClient(MockEngine { throw IllegalStateException("offline") }) { configure(this) }
+        }.use { client ->
+            val error = assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }
+            assertEquals(0, error.statusCode)
+            assertEquals("offline", error.cause?.message)
+        }
+    }
+
+    @Test fun theHandlerOwnFailureIsNotDisguisedAsANetworkFailure() = runTest {
+        client(teamEvent(2)).use { client ->
+            val error = assertFailsWith<IllegalStateException> { client.followTeamEvents(after = 1) { error("handler bug") } }
+            assertEquals("handler bug", error.message)
+        }
+    }
 }

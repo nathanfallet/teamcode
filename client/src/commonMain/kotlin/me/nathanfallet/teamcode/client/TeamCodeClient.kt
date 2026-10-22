@@ -371,7 +371,23 @@ class TeamCodeClient(
      * [endEvent] when the stream has one) ending it, unnamed frames skipped and every other frame handed to [onFrame].
      * A stream that closes, breaks a bound or carries an undecodable event throws [TeamCodeException] with status `0`.
      */
-    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
+    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd = try {
+        openStream(path, after, endEvent, onFrame)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (failure: CallbackFailure) {
+        // The caller's own exception, thrown by its handler: never disguised as a network failure.
+        throw failure.error
+    } catch (error: TeamCodeException) {
+        throw error
+    } catch (error: Exception) {
+        // Offline, DNS, TLS or connect timeout before the first byte: the same reconnect contract as a cut stream.
+        throw TeamCodeException(0, "The event stream could not be opened.", cause = error)
+    }
+
+    private class CallbackFailure(val error: Throwable) : Exception()
+
+    private suspend fun openStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
         http.prepareGet("$origin$path") {
             authenticate()
             after?.let { header("Last-Event-ID", it.toString()) }
@@ -386,7 +402,15 @@ class TeamCodeClient(
                     name == null -> Unit
                     name == "denied" -> end = CloudStreamEnd.DENIED
                     name == endEvent -> end = CloudStreamEnd.ENDED
-                    else -> onFrame(frame)
+                    else -> try {
+                        onFrame(frame)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: TeamCodeException) {
+                        throw error // A malformed event, from decodeFrame.
+                    } catch (error: Exception) {
+                        throw CallbackFailure(error)
+                    }
                 }
                 end == null
             }
@@ -671,7 +695,12 @@ class TeamCodeException(
     val requestId: String? = null,
     /** The transport or decoding failure behind a status `0` stream failure, kept for diagnostics. */
     cause: Throwable? = null,
-) : Exception(message, cause)
+) : Exception(message, cause) {
+    /** The constructor of earlier releases, kept for binary compatibility of compiled callers. */
+    @Deprecated("Kept for binary compatibility.", level = DeprecationLevel.HIDDEN)
+    constructor(statusCode: Int, message: String, code: String?, retryAfterSeconds: Long?, requestId: String?) :
+        this(statusCode, message, code, retryAfterSeconds, requestId, null)
+}
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */
 internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { it.length in 1..7 && it.all { c -> c in '0'..'9' } }?.toLong()
