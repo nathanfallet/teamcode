@@ -350,7 +350,7 @@ class TeamCodeClient(
      * [onEvent] like the others.
      */
     suspend fun followTeamEvents(
-        after: Long? = null,
+        after: Long?,
         types: Set<String> = emptySet(),
         onGap: suspend (oldestSeq: Long) -> Unit = {},
         onEvent: suspend (TeamEventView) -> Unit,
@@ -374,7 +374,9 @@ class TeamCodeClient(
     private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd = try {
         openStream(path, after, endEvent, onFrame)
     } catch (error: CancellationException) {
-        throw error
+        // A timeout can reach here as a cancellation of the call alone: only the caller's own cancellation propagates.
+        currentCoroutineContext().ensureActive()
+        throw TeamCodeException(0, "The event stream timed out.", error)
     } catch (failure: CallbackFailure) {
         // The caller's own exception, thrown by its handler: never disguised as a network failure.
         throw failure.error
@@ -382,7 +384,7 @@ class TeamCodeClient(
         throw error
     } catch (error: Exception) {
         // Offline, DNS, TLS or connect timeout before the first byte: the same reconnect contract as a cut stream.
-        throw TeamCodeException(0, "The event stream could not be opened.", cause = error)
+        throw TeamCodeException(0, "The event stream could not be opened.", error)
     }
 
     private class CallbackFailure(val error: Throwable) : Exception()
@@ -421,7 +423,7 @@ class TeamCodeClient(
         Serialization.json.decodeFromString<T>(frame.data)
     } catch (error: IllegalArgumentException) {
         // SerializationException is an IllegalArgumentException.
-        throw TeamCodeException(0, "The event stream sent a malformed event.", cause = error)
+        throw TeamCodeException(0, "The event stream sent a malformed event.", error)
     }
 
     /** [idempotencyKey] makes a retry return the first acknowledgement instead of sending the message twice. */
@@ -693,13 +695,14 @@ class TeamCodeException(
     val code: String? = null,
     val retryAfterSeconds: Long? = null,
     val requestId: String? = null,
+) : Exception(message) {
+    // Kept out of the public constructor so callers compiled against earlier releases still link.
+    private var failure: Throwable? = null
+
     /** The transport or decoding failure behind a status `0` stream failure, kept for diagnostics. */
-    cause: Throwable? = null,
-) : Exception(message, cause) {
-    /** The constructor of earlier releases, kept for binary compatibility of compiled callers. */
-    @Deprecated("Kept for binary compatibility.", level = DeprecationLevel.HIDDEN)
-    constructor(statusCode: Int, message: String, code: String?, retryAfterSeconds: Long?, requestId: String?) :
-        this(statusCode, message, code, retryAfterSeconds, requestId, null)
+    override val cause: Throwable? get() = failure
+
+    internal constructor(statusCode: Int, message: String, cause: Throwable) : this(statusCode, message) { failure = cause }
 }
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */

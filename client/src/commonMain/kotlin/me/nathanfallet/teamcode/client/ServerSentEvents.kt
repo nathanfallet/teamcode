@@ -30,7 +30,7 @@ internal suspend fun readServerSentEvents(
             throw error
         } catch (error: Exception) {
             // An over-long line (Ktor's TooLongLineException) or a broken transport: reconnect like a closed stream.
-            throw TeamCodeException(0, "The event stream failed.", cause = error)
+            throw TeamCodeException(0, "The event stream failed.", error)
         } ?: throw TeamCodeException(0, "The event stream closed.")
         val field = line.substringBefore(':')
         // "field: value" loses exactly one leading space after the colon; a line without a colon is a field with no value.

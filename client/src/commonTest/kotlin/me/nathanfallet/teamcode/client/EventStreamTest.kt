@@ -54,7 +54,7 @@ class EventStreamTest {
     }
 
     @Test fun theTeamFeedStartsFromNowWithoutACursor() = runTest {
-        client("event: denied\ndata: {}\n\n").use { client -> client.followTeamEvents { } }
+        client("event: denied\ndata: {}\n\n").use { client -> client.followTeamEvents(after = null) { } }
         val request = requests.single()
         assertNull(request.headers["Last-Event-ID"])
         assertNull(request.url.parameters["types"])
@@ -105,7 +105,7 @@ class EventStreamTest {
     @Test fun invalidCursorsAndTypesAreRejectedBeforeAnyRequest() = runTest {
         client().use { client ->
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = -1) { } }
-            assertFailsWith<IllegalArgumentException> { client.followTeamEvents(types = setOf("cloud.turn&after=0")) { } }
+            assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = setOf("cloud.turn&after=0")) { } }
         }
         assertTrue(requests.isEmpty())
     }
