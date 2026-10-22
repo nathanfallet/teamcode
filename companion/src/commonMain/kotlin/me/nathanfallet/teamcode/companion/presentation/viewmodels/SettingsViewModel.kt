@@ -37,12 +37,13 @@ class SettingsViewModel(
     private val preferences: PreferencesRepository,
     private val signOut: SignOutUseCase,
     private val renameDevice: RenameDeviceUseCase,
-    credentials: CredentialStore,
+    private val credentials: CredentialStore,
     platform: PlatformInfo,
 ) : ViewModel() {
     private val status = MutableStateFlow(SettingsUiState(appVersion = platform.appVersion, persistentCredentials = credentials.persistent))
+    // Read again whenever the accounts change: a sign-in that fell back to memory (locked keyring) shows at once.
     val uiState: StateFlow<SettingsUiState> = combine(accounts.accounts, accounts.activeAccountId, preferences.theme, status) { list, active, theme, status ->
-        status.copy(accounts = list, activeAccountId = active, theme = theme)
+        status.copy(accounts = list, activeAccountId = active, theme = theme, persistentCredentials = credentials.persistent)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, status.value)
 
     fun switchTo(account: Account) = accounts.setActive(account.id)

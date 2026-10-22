@@ -170,4 +170,12 @@ class AuthUseCasesTest {
         assertEquals("Work phone", rename("a1", " Work phone ").deviceName)
         assertEquals("Work phone", accounts.accounts.value.single().deviceName)
     }
+
+    @Test fun aRevokedDeviceFoundWhileRenamingSignsTheAccountOut() = runTest {
+        accounts.save(account("a1"))
+        auth.renameFailure = CompanionException.Unauthorized()
+        assertFailsWith<CompanionException.Unauthorized> { RenameDeviceUseCase(auth, accounts)("a1", "Work phone") }
+        assertFalse(accounts.accounts.value.single().signedIn)
+        assertEquals(listOf("a1"), auth.released)
+    }
 }

@@ -29,20 +29,14 @@ class KeystoreCredentialStore(
         val stored = preferences.getString(accountId, null) ?: return@withContext null
         // A key lost with a device restore, a key the system invalidated, or a damaged entry: the token is gone, the
         // member signs in again.
-        val token = try { TokenCipher.open(key(), accountId, stored) } catch (_: KeyPermanentlyInvalidatedException) { resetKey(); null }
+        val token = try { TokenCipher.open(key(), accountId, stored) } catch (_: KeyPermanentlyInvalidatedException) { deleteKey(); null }
         token ?: run { preferences.edit().remove(accountId).commit(); null }
     }
 
     override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) {
-        val sealed = try { TokenCipher.seal(key(), accountId, token) } catch (_: KeyPermanentlyInvalidatedException) { resetKey(); TokenCipher.seal(key(), accountId, token) }
+        val sealed = try { TokenCipher.seal(key(), accountId, token) } catch (_: KeyPermanentlyInvalidatedException) { deleteKey(); TokenCipher.seal(key(), accountId, token) }
         check(preferences.edit().putString(accountId, sealed).commit()) { "The token could not be saved." }
     }
-
-    /**
-     * The key was permanently invalidated by the system (other InvalidKeyExceptions may be transient and propagate): every
-     * token sealed with it is lost anyway, and the next use generates a new key.
-     */
-    private fun resetKey() = deleteKey()
 
     override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) {
         preferences.edit().remove(accountId).commit()
@@ -54,6 +48,10 @@ class KeystoreCredentialStore(
         const val FILE = "teamcode_credentials"
         private const val ALIAS = "me.nathanfallet.teamcode.credentials"
 
+        /**
+         * The key was permanently invalidated by the system (other InvalidKeyExceptions may be transient and propagate):
+         * every token sealed with it is lost anyway, and the next use generates a new key.
+         */
         @Synchronized
         private fun deleteKey() {
             KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS)

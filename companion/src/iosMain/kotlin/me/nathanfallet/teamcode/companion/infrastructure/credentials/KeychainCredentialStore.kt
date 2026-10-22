@@ -60,7 +60,10 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
     private var purgePending = purgeOrphans
     private val purgeLock = Mutex()
 
-    /** Retried before each call until it succeeds: a Keychain still locked at first launch must not skip it for good. */
+    /**
+     * Retried before each call while it has not succeeded and no token was written yet (a Keychain still locked at
+     * first launch). After the first token is stored, a late purge would delete it: the attempt stops there.
+     */
     private suspend fun purgeOrphansOnce() {
         if (!purgePending) return
         purgeLock.withLock {
@@ -83,7 +86,11 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
         }
     }
 
-    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) { purgeOrphansOnce(); writeNow(accountId, token) }
+    override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) {
+        purgeOrphansOnce()
+        writeNow(accountId, token)
+        purgeLock.withLock { purgePending = false }
+    }
 
     private fun writeNow(accountId: String, token: String) {
         val data = CFBridgingRetain(token.nsData())

@@ -40,7 +40,8 @@ class FakeAuthRepository : AuthRepository {
     override suspend fun changePassword(origin: String, token: String, current: String, replacement: String) { calls += "password $token $current $replacement" }
     override suspend fun me(accountId: String): Member { calls += "me $accountId"; return meResult() }
     override suspend fun logout(accountId: String) { calls += "logout $accountId"; logoutFailure?.let { throw it } }
-    override suspend fun renameCurrentDevice(accountId: String, name: String): String { calls += "rename $accountId $name"; return name }
+    var renameFailure: Exception? = null
+    override suspend fun renameCurrentDevice(accountId: String, name: String): String { calls += "rename $accountId $name"; renameFailure?.let { throw it }; return name }
     override fun release(accountId: String) { released += accountId }
 }
 
