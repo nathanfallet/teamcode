@@ -1,5 +1,11 @@
 # Implementation status
 
+## Companion app distribution (2026-10-23)
+
+The [companion app](companion.md#distribution) builds and uploads from a maintainer's Mac with fastlane: `ios beta` archives with automatic signing through the App Store Connect key and uploads to TestFlight, `android beta` signs the release bundle with the upload key and uploads to Play's internal track. Only builds are uploaded: listings stay in the stores, and no lane submits or releases. Build numbers are `(major × 1,000,000 + minor × 1,000 + patch) × 100 + n` from the TeamCode version. `companion-android` signs its release build when the upload key is present; the iOS app has a shared scheme and a privacy manifest; the desktop `.dmg` is signed and notarized when the Mac provides a Developer ID. No key, certificate or password is in the repository.
+
+Evidence: `:companion-android:assembleRelease` gives versionCode 100000 for the default `0.1.0-SNAPSHOT` and takes `-PcompanionVersionCode`; `xcodebuild -list` shows the shared `TeamCode` scheme; `plutil -lint` accepts `PrivacyInfo.xcprivacy`. The lanes themselves need the store keys and were not run from this change.
+
 ## Artifact tickets for apps (2026-10-22)
 
 `POST /api/v1/artifacts/{id}/tickets` gives an interactive login the [view ticket](artifacts.md#serving-and-access) the viewer page would mint, as a `contentUrl`, so the companion app shows an artifact in its own web view; at most 60 a minute per login session, advertised as `artifacts.tickets.v1`. The viewer page offers **Open in app** (`teamcode://open?url=…`) on phones and tablets. The typed client gains `issueArtifactTicket`. No schema change and no new query.

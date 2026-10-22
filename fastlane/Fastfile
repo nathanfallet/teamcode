@@ -1,0 +1,128 @@
+# The companion app's store builds, run from a maintainer's Mac (no CI yet).
+#
+#   bundle exec fastlane ios beta version:0.2.0       # build, then upload to TestFlight
+#   bundle exec fastlane android beta version:0.2.0   # signed bundle, then Play's internal track
+#
+# Only builds are uploaded: store listings, screenshots and descriptions are kept in the stores, never in this
+# repository, and no lane submits for review or releases.
+#
+# Secrets stay on the Mac, next to this file, and are ignored by git:
+#   fastlane/api_key.json   App Store Connect API key (key_id, issuer_id, key, in fastlane's format)
+#   fastlane/key.p8         the same key's .p8, for Xcode's cloud signing
+#   fastlane/play-key.json  Google Play service account
+#   fastlane/keystore.jks   Android upload key, with SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD
+#
+# Versions follow TeamCode: `version` is the TeamCode version (MAJOR.MINOR.PATCH). The build number (CFBundleVersion,
+# versionCode) is (major * 1 000 000 + minor * 1 000 + patch) * 100 + a counter, the counter going up for each upload
+# of the same version (at most 99), read from what the store already has.
+
+require "json"
+
+default_platform(:ios)
+
+ASC_KEY = "fastlane/api_key.json"
+PLAY_KEY = "fastlane/play-key.json"
+XCODEPROJ = "companion-ios/TeamCode.xcodeproj"
+SCHEME = "TeamCode"
+AAB = "companion-android/build/outputs/bundle/release/companion-android-release.aab"
+
+# Lanes run with fastlane/ as the working directory; plain Ruby resolves from there, actions from the repository root.
+def fastlane_file(name)
+  [File.join("fastlane", name), name].each do |candidate|
+    absolute = File.expand_path(candidate, Dir.pwd)
+    return absolute if File.exist?(absolute)
+  end
+  UI.user_error!("fastlane/#{name} is missing: it stays on the maintainer's Mac and is never committed.")
+end
+
+def release_version(options)
+  version = options[:version].to_s
+  UI.user_error!("Pass the TeamCode version: version:MAJOR.MINOR.PATCH") unless version.match?(/\A\d{1,3}\.\d{1,3}\.\d{1,3}\z/)
+  version
+end
+
+# The first build number of a version; uploads of the same version add one each.
+def base_build(version)
+  major, minor, patch = version.split(".").map(&:to_i)
+  UI.user_error!("Major versions above 20 overflow Android's versionCode.") if major > 20
+  (major * 1_000_000 + minor * 1_000 + patch) * 100
+end
+
+def next_build(version, uploaded)
+  base = base_build(version)
+  build = [base, uploaded.to_i + 1].max
+  UI.user_error!("Version #{version} was uploaded 100 times: publish a new version.") if build >= base + 100
+  build
+end
+
+platform :ios do
+  desc "Builds the iOS app and uploads it to TestFlight. Option: version:MAJOR.MINOR.PATCH (the TeamCode version)."
+  lane :beta do |options|
+    version = release_version(options)
+    latest = latest_testflight_build_number(api_key_path: ASC_KEY, version: version, initial_build_number: 0)
+    build = next_build(version, latest)
+    UI.message("TeamCode #{version}, build #{build}")
+
+    # Automatic signing with the App Store Connect key (cloud signing): no certificate needs to be in the keychain.
+    asc = JSON.parse(File.read(fastlane_file("api_key.json")))
+    build_app(
+      scheme: SCHEME,
+      project: XCODEPROJ,
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "companion-ios/build",
+      xcargs: [
+        "MARKETING_VERSION=#{version}",
+        "CURRENT_PROJECT_VERSION=#{build}",
+        "ORG_GRADLE_PROJECT_teamcodeVersion=#{version}",
+        "-allowProvisioningUpdates",
+        "-authenticationKeyPath #{fastlane_file('key.p8')}",
+        "-authenticationKeyID #{asc['key_id']}",
+        "-authenticationKeyIssuerID #{asc['issuer_id']}",
+      ].join(" "),
+    )
+
+    upload_to_testflight(
+      api_key_path: ASC_KEY,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+    )
+    clean_build_artifacts
+  end
+end
+
+platform :android do
+  desc "Builds the signed Android bundle and uploads it to Play's internal track. Option: version:MAJOR.MINOR.PATCH."
+  lane :beta do |options|
+    version = release_version(options)
+    # Without the upload key, bundleRelease would produce an unsigned bundle that Play refuses, minutes later.
+    unless File.exist?(fastlane_file("keystore.jks")) && ENV["SIGNING_STORE_PASSWORD"] && ENV["SIGNING_KEY_ALIAS"] && ENV["SIGNING_KEY_PASSWORD"]
+      UI.user_error!("fastlane/keystore.jks and SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD are needed to sign the bundle.")
+    end
+    uploaded = %w[internal alpha beta production].flat_map do |track|
+      google_play_track_version_codes(json_key: PLAY_KEY, track: track)
+    rescue StandardError
+      [] # A track that was never used.
+    end
+    build = next_build(version, uploaded.max)
+    UI.message("TeamCode #{version}, versionCode #{build}")
+
+    gradle(
+      task: ":companion-android:bundleRelease",
+      project_dir: ".",
+      flags: "--no-daemon",
+      properties: { "teamcodeVersion" => version, "companionVersionCode" => build.to_s },
+    )
+
+    upload_to_play_store(
+      json_key: PLAY_KEY,
+      track: "internal",
+      aab: AAB,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

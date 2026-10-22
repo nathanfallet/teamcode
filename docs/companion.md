@@ -11,7 +11,7 @@ The companion app is a TeamCode client for iOS, Android and the desktop (macOS, 
 | Sessions: live list, transcript, reconnection | Implemented |
 | Acting on sessions: send, interrupt, pause and resume, new session | Implemented |
 | Artifacts: gallery, viewer, links | Planned (needs the artifact routes) |
-| Store and desktop distribution | Planned |
+| Store and desktop distribution: fastlane lanes for TestFlight and Play's internal track, release signing, build numbers, privacy manifest, desktop signing and notarization | Implemented (publishing desktop packages with the GitHub release: planned) |
 
 ## Client contract
 
@@ -59,7 +59,26 @@ Both take an optional `onOpen`, called once the server accepted the stream and b
 | Android | `./gradlew :companion-android:installDebug` (needs the Android SDK with platform 37) |
 | iOS | Open `companion-ios/TeamCode.xcodeproj` in Xcode and run; the build phase calls `:companion:embedAndSignAppleFrameworkForXcode`. A contributor outside the TeamCode Apple team sets `TEAM_ID` in `companion-ios/Configuration/Config.xcconfig` and their team in Xcode |
 
-The Android app is `me.nathanfallet.teamcode` (minSdk 26, targetSdk 36, compiled against 37 as OkHttp 5.5 requires); the iOS app has the same identifier and requires iOS 16. Release signing and store delivery come with the distribution work; nothing in the repository holds a key or a certificate.
+The Android app is `me.nathanfallet.teamcode` (minSdk 26, targetSdk 36, compiled against 37 as OkHttp 5.5 requires); the iOS app has the same identifier and requires iOS 16.
+
+## Distribution
+
+Store builds are made and uploaded from a maintainer's Mac with fastlane (`Gemfile`, `fastlane/Fastfile`); there is no publication job yet. Nothing in the repository holds a key, a certificate or a password: each lane reads them from files next to the Fastfile and from the environment, all ignored by git.
+
+| Lane | Does | Needs (local only) |
+| --- | --- | --- |
+| `bundle exec fastlane ios beta version:X.Y.Z` | Archives `companion-ios/TeamCode.xcodeproj` (shared scheme `TeamCode`, Release) with automatic signing through the App Store Connect key (Xcode cloud signing, no certificate in the keychain), then uploads to TestFlight without submitting | `fastlane/api_key.json`, `fastlane/key.p8` |
+| `bundle exec fastlane android beta version:X.Y.Z` | `:companion-android:bundleRelease --no-daemon`, signed with the upload key, then uploads to Play's internal track | `fastlane/play-key.json`, `fastlane/keystore.jks`, `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS`, `SIGNING_KEY_PASSWORD` |
+
+Only builds are uploaded. Store listings, screenshots and descriptions are kept in App Store Connect and the Play Console, never in this repository (`fastlane/metadata/` and `fastlane/screenshots/` are ignored), and no lane submits for review or releases. App Review needs a demo account on a demo server, entered in App Store Connect only.
+
+**Versions.** The app carries the TeamCode version given to the lane (`MARKETING_VERSION`, `versionName`, and the shared code's `BuildInfo.VERSION` through `teamcodeVersion`). The build number (`CFBundleVersion`, `versionCode`) is `(major × 1,000,000 + minor × 1,000 + patch) × 100 + n`, where `n` counts the uploads of that version (read from TestFlight and the Play tracks, at most 99). Without the lane, Gradle builds use `n = 0`, and the Xcode project's `CURRENT_PROJECT_VERSION` stays 1.
+
+**Android release signing.** `companion-android` signs its release build only when `fastlane/keystore.jks` exists, with the passwords from `SIGNING_*`; otherwise the release build is unsigned, and the lane refuses to run.
+
+**iOS privacy.** `PrivacyInfo.xcprivacy` declares no tracking and no collected data, plus the two required-reason APIs the app uses: UserDefaults (`CA92.1`, the app's own settings) and system boot time (`35F9.1`, elapsed time for timeouts and reconnection delays). There are no analytics.
+
+**Desktop.** `:companion:packageDmg`, `packageMsi` and `packageDeb` build on the matching host. The `.dmg` is signed with a Developer ID and notarized when the Mac provides `TEAMCODE_MACOS_SIGNING_IDENTITY` (the identity's name in the keychain) and `TEAMCODE_NOTARIZATION_APPLE_ID`, `TEAMCODE_NOTARIZATION_PASSWORD` (an app-specific password) and `TEAMCODE_NOTARIZATION_TEAM_ID`; without them it is unsigned. Windows installers are not signed in v1 (SmartScreen warns). Attaching the desktop packages to TeamCode's GitHub release, with their lines in `manifest.json` and `SHA256SUMS`, is still to do.
 
 ## Evidence
 
