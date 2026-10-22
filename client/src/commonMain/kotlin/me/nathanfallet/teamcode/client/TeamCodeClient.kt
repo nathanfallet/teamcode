@@ -343,7 +343,7 @@ class TeamCodeClient(
      * and local runs, or the whole team's for an administrator. [after] resumes after a team sequence: `0` replays every
      * retained event, `null` starts with what happens from now on, so events published between two connections opened
      * with `null` are never delivered; a caller that must not miss one reconnects with the last [TeamEventView.seq] it
-     * handled. [types] keeps only those event types. [onGap] is called with the oldest retained sequence when events after
+     * handled. [types] keeps only those event types (at most 64). [onGap] is called with the oldest retained sequence when events after
      * [after] were purged, before the stream continues from there, so the caller reloads what it shows. The feed never
      * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
      * on a network failure ([TeamCodeException] with status `0` once the stream is open, the engine's exception before) or
@@ -357,7 +357,7 @@ class TeamCodeClient(
         onEvent: suspend (TeamEventView) -> Unit,
     ): CloudStreamEnd {
         require(after == null || after >= 0)
-        require(types.all { TEAM_EVENT_TYPE.matches(it) }) { "Invalid event type." }
+        require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) }) { "Invalid event type." }
         val query = if (types.isEmpty()) "" else "?types=" + types.sorted().joinToString(",").encodeURLQueryComponent()
         return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null) { frame ->
             when (frame.event) {
@@ -396,9 +396,10 @@ class TeamCodeClient(
 
     private inline fun <reified T> decodeFrame(frame: ServerSentEvent): T = try {
         Serialization.json.decodeFromString<T>(frame.data)
-    } catch (error: IllegalArgumentException) {
-        // SerializationException is an IllegalArgumentException.
-        throw TeamCodeException(0, "The event stream sent a malformed event.", MALFORMED_EVENT, error)
+    } catch (_: IllegalArgumentException) {
+        // SerializationException is an IllegalArgumentException. Its message quotes the payload, so it is not kept as the
+        // cause: the exception stays safe to print.
+        throw TeamCodeException(0, "The event stream sent a malformed event.", MALFORMED_EVENT)
     }
 
     /** [idempotencyKey] makes a retry return the first acknowledgement instead of sending the message twice. */
@@ -653,6 +654,7 @@ class TeamCodeClient(
         const val MALFORMED_EVENT = "malformed_event"
         // The server validates the names; this only keeps what would break the comma-separated query out.
         private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
+        private const val MAX_TEAM_EVENT_TYPES = 64
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
         private const val MAX_ERROR_BODY = 16 * 1024
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")

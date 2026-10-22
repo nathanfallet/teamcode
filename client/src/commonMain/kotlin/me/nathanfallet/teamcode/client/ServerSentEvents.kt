@@ -48,7 +48,7 @@ internal suspend fun readServerSentEvents(
                 event = null; data.clear(); hasData = false
             }
             line.startsWith(":") -> Unit
-            field == "event" -> event = value.trim().ifEmpty { null }
+            field == "event" -> event = value.ifEmpty { null }
             field == "data" -> {
                 if (hasData) data.append('\n')
                 data.append(value); hasData = true

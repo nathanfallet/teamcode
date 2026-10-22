@@ -81,6 +81,8 @@ internal suspend fun followEvents(client: TeamCodeClient, id: String, after: Lon
         } catch (error: CancellationException) { throw error }
         catch (error: TeamCodeException) {
             if (error.statusCode in setOf(401, 403, 404)) { notice("The server refused the transcript (HTTP ${error.statusCode}${error.code?.let { ", $it" } ?: ""})."); SystemExit.exit(1) }
+            // Reconnecting would replay the same event from the same cursor.
+            if (error.code == TeamCodeClient.MALFORMED_EVENT) { notice("The event after $cursor cannot be read by this version of teamcode; update it and run the command again."); SystemExit.exit(1) }
             notice("Disconnected; reconnecting from event $cursor.")
         } catch (_: Exception) { notice("Disconnected; reconnecting from event $cursor.") }
         delay(wait)

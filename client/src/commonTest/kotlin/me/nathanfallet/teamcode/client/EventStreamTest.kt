@@ -106,6 +106,7 @@ class EventStreamTest {
         client().use { client ->
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = -1) { } }
             assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = setOf("cloud.turn&after=0")) { } }
+            assertFailsWith<IllegalArgumentException> { client.followTeamEvents(after = null, types = (1..65).map { "type$it" }.toSet()) { } }
         }
         assertTrue(requests.isEmpty())
     }
@@ -167,7 +168,10 @@ class EventStreamTest {
         client("event: gap\ndata: {}\n\n", "event: cloud.turn\ndata: not json\n\n").use { client ->
             // A distinct code: reconnecting would replay the same event, so the caller must not retry blindly.
             assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)
-            assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)
+            val error = assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }
+            assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
+            // The decoder's message quotes the payload: it is not kept, so the exception stays safe to print.
+            assertNull(error.cause)
         }
     }
 
