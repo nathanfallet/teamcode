@@ -30,6 +30,7 @@ class ArtifactsMcpServerTest {
         var offline = false
         var signInRefused = false
         var author = "m"
+        var conflictArtifactId = id
         val liveFile = "<html>live</html>".encodeToByteArray()
         fun version(number: Int) = ArtifactVersionView(id, number, "index.html", "d".repeat(64), 1, liveFile.size.toLong(), author, 1, number - 1,
             listOf(ArtifactFileView("index.html", sha(liveFile), liveFile.size.toLong(), "text/html", "page")))
@@ -52,7 +53,7 @@ class ArtifactsMcpServerTest {
                 request.method == HttpMethod.Post && path == "/api/v1/artifacts/$id/versions" -> {
                     val commit = Serialization.json.decodeFromString(CommitArtifactVersionRequest.serializer(), request.body.toByteArray().decodeToString())
                     if (commit.baseVersion != live) json(Serialization.json.encodeToString(ArtifactConflictView.serializer(),
-                        ArtifactConflictView(ErrorDetail("artifact_conflict", "Changed."), version(live))), HttpStatusCode.Conflict)
+                        ArtifactConflictView(ErrorDetail("artifact_conflict", "Changed."), version(live).copy(artifactId = conflictArtifactId))), HttpStatusCode.Conflict)
                     else { live++; json(Serialization.json.encodeToString(ArtifactPublishedView.serializer(), ArtifactPublishedView(view(), version(live))), HttpStatusCode.Created) }
                 }
                 path == "/api/v1/artifacts/$id" -> json(Serialization.json.encodeToString(ArtifactView.serializer(), view()))
@@ -122,6 +123,14 @@ class ArtifactsMcpServerTest {
         assertFalse(again, againText)
     }
 
+    @Test fun aConflictNamingNoArtifactIdWritesNothing() = runBlocking {
+        val server = Server().apply { live = 3; conflictArtifactId = "../../escaped" }
+        Files.writeString(root.resolve("index.html"), "<html>mine</html>")
+        val (failed, text) = server.tool("publish", buildJsonObject { put("file_path", "index.html"); put("artifact", id); put("base_version", 1) })
+        assertTrue(failed); assertTrue("unexpected_answer" in text, text)
+        assertFalse(Files.exists(scratch.resolve("../../escaped").normalize()))
+    }
+
     @Test fun readsIntoTheScratchDirectoryAndMarksOtherMembersContent() = runBlocking {
         val server = Server().apply { relation = "team" }
         val (failed, text) = server.tool("read", buildJsonObject { put("artifact", "https://team.example/artifact/$id") })
@@ -176,7 +185,8 @@ class ArtifactsMcpServerTest {
         assertEquals(-32602, unknown["error"]!!.jsonObject["code"]!!.jsonPrimitive.int, "An unknown tool is a protocol error")
         val team = Server().apply { relation = "team" }
         assertTrue("untrusted" in Json.parseToJsonElement(team.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"]!!.jsonPrimitive.content)
-        assertNull(Json.parseToJsonElement(server.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"], "Only one's own artifacts: no warning")
+        assertTrue("untrusted" in Json.parseToJsonElement(server.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"]!!.jsonPrimitive.content,
+            "One's own artifacts too: an editor sets the titles of the versions they publish")
         Files.createDirectories(scratch.resolve("$id/v1/index.html"))
         val (failed, text) = server.tool("read", buildJsonObject { put("artifact", id); put("version", 1) })
         assertTrue(failed); assertTrue(text.startsWith("local_error") && "retrying does not help" in text, text)

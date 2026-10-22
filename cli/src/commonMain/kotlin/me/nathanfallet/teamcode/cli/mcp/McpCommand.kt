@@ -49,7 +49,11 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
             / "artifacts" / (run ?: "local")).also { default ->
             // The default's parent holds every run's scratch directory: private too.
             val parent = default.parent!!
-            parent.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
+            // A configuration directory created here will hold the login later: private from the start, like `teamcode login` makes it.
+            parent.parent?.let { configuration -> if (FileSystem.SYSTEM.metadataOrNull(configuration) == null) {
+                configuration.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
+                privateDirectory(configuration)
+            } }
             privateDirectory(parent)
         }
         privateDirectory(directory)
