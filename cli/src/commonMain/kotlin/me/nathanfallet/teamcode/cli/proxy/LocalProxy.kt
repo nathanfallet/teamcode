@@ -252,7 +252,7 @@ internal val ARTIFACT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
     HttpMethod.Post to listOf(Regex("/api/v1/artifacts/uploads"), Regex("/api/v1/artifacts/$ARTIFACT_ID/(versions|members)")),
     HttpMethod.Put to listOf(Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")),
     HttpMethod.Delete to listOf(// Never `.` or `..`: a segment a server or proxy could collapse into the artifact itself.
-    Regex("/api/v1/artifacts/$ARTIFACT_ID/members/[A-Za-z0-9_@-][A-Za-z0-9._@-]{0,63}")),
+    Regex("/api/v1/artifacts/$ARTIFACT_ID/members/(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}")),
 )
 
 /**

@@ -390,7 +390,7 @@ class TeamCodeClient(
     suspend fun artifactMembers(id: String): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Get) }
     suspend fun shareArtifact(id: String, input: ShareArtifactRequest): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Post, input) }
     suspend fun unshareArtifact(id: String, member: String): ArtifactMembersView {
-        identifier(id); require(Regex("[A-Za-z0-9_@-][A-Za-z0-9._@-]{0,63}").matches(member)) { "Invalid member." }
+        identifier(id); require(Regex("(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}").matches(member)) { "Invalid member." }
         return request("/api/v1/artifacts/$id/members/$member", HttpMethod.Delete)
     }
     /** Irreversible; interactive only. */

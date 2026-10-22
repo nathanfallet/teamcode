@@ -22,8 +22,8 @@ private val artifactRead = Regex("/api/v1/artifacts(/policy|/$ARTIFACT_ID(/versi
 /** Publishing and inviting; making public (`/access`) and deleting are not listed, so no key can do either. */
 private val artifactWritePost = Regex("/api/v1/artifacts/(uploads|$ARTIFACT_ID/(versions|members))")
 private val artifactChunk = Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")
-// Never `.` or `..` (nor any leading dot): a segment a proxy could collapse into the artifact itself, which no key deletes.
-private val artifactUnshare = Regex("/api/v1/artifacts/$ARTIFACT_ID/members/[A-Za-z0-9_@-][A-Za-z0-9._@-]{0,63}")
+// Never `.` or `..`: a segment a proxy could collapse into the artifact itself, which no key deletes.
+private val artifactUnshare = Regex("/api/v1/artifacts/$ARTIFACT_ID/members/(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */

@@ -24,9 +24,10 @@ internal fun JdbcTransaction.grantSessionArtifacts(teamId: String, sessionId: St
     val live = (Artifacts.teamId eq teamId) and (Artifacts.state eq "active") and (Artifacts.ownerId neq recipientId) and
         ((Artifacts.ownerId eq formerOwnerId) or (Artifacts.id inSubQuery inherited))
     val created = Artifacts.select(Artifacts.id, Artifacts.ownerId).where { (Artifacts.originSessionId eq sessionId) and live }
-        .limit(MAX_TRANSFERRED_ARTIFACTS).associate { it[Artifacts.id] to it[Artifacts.ownerId] }
-    val updated = (ArtifactVersions innerJoin Artifacts).select(Artifacts.id, Artifacts.ownerId).where { (ArtifactVersions.originSessionId eq sessionId) and live }
-        .withDistinct().limit(MAX_TRANSFERRED_ARTIFACTS).associate { it[Artifacts.id] to it[Artifacts.ownerId] }
+        .orderBy(Artifacts.updatedAt to SortOrder.DESC, Artifacts.id to SortOrder.ASC).limit(MAX_TRANSFERRED_ARTIFACTS).associate { it[Artifacts.id] to it[Artifacts.ownerId] }
+    val updated = (ArtifactVersions innerJoin Artifacts).select(Artifacts.id, Artifacts.ownerId, Artifacts.updatedAt).where { (ArtifactVersions.originSessionId eq sessionId) and live }
+        // Most recently updated first, so the cap keeps the same artifacts on every run (the selected columns are per artifact).
+        .withDistinct().orderBy(Artifacts.updatedAt to SortOrder.DESC, Artifacts.id to SortOrder.ASC).limit(MAX_TRANSFERRED_ARTIFACTS).associate { it[Artifacts.id] to it[Artifacts.ownerId] }
     val artifacts = (created + updated).entries.take(MAX_TRANSFERRED_ARTIFACTS).associate { it.key to it.value }
     if (artifacts.isEmpty()) return
     val existing = ArtifactMembers.select(ArtifactMembers.artifactId, ArtifactMembers.role)

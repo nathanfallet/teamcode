@@ -153,7 +153,8 @@ class ArtifactRoutesTest {
     @Test fun aKeyNeverReachesTheArtifactThroughADotMemberSegment() {
         val id = "00000000-0000-4000-8000-0000000000aa"
         assertEquals(CredentialAction.ARTIFACTS_WRITE, credentialAction("DELETE", "/api/v1/artifacts/$id/members/bob", emptySet()))
-        for (member in listOf("..", ".", ".bob"))
+        assertEquals(CredentialAction.ARTIFACTS_WRITE, credentialAction("DELETE", "/api/v1/artifacts/$id/members/.alice", emptySet()), "A name may start with a dot")
+        for (member in listOf("..", "."))
             assertEquals(CredentialAction.INTERACTIVE, credentialAction("DELETE", "/api/v1/artifacts/$id/members/$member", emptySet()), member)
     }
 

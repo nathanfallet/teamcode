@@ -418,6 +418,9 @@ internal class CloudHookSync(
     companion object { const val MAX_HOOKS = 50 }
 }
 
+/** The agent container's HOME below the workspace, as the session pod sets it (`KubernetesClusterPort.AGENT_HOME`). */
+internal const val CLOUD_AGENT_HOME_NAME = ".agent-home"
+
 internal class RunnerAgentTools(
     private val client: TeamCodeClient,
     private val start: suspend (List<String>) -> AgentProcess,
@@ -442,7 +445,9 @@ internal class RunnerAgentTools(
             catch (_: Exception) { false }
         if (!allowed) return null
         val root = workspace.trimEnd('/')
-        return me.nathanfallet.teamcode.cli.launch.ArtifactsMcp(command, root, CLOUD_ARTIFACTS_SCRATCH, listOfNotNull("$root/.home", home?.trimEnd('/')?.takeIf { it.isNotEmpty() }).distinct())
+        // The runner's home and the agent's own (its container sets HOME to `<workspace>/.agent-home`), wherever HOME points.
+        val homes = listOfNotNull("$root/.home", "$root/$CLOUD_AGENT_HOME_NAME", home?.trimEnd('/')?.takeIf { it.isNotEmpty() }).distinct()
+        return me.nathanfallet.teamcode.cli.launch.ArtifactsMcp(command, root, CLOUD_ARTIFACTS_SCRATCH, homes)
     }
 
     override suspend fun prepare(agent: String): List<String> {

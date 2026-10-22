@@ -63,7 +63,7 @@ class ArtifactRelayTest {
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Delete, "/api/v1/artifacts/$id").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/artifacts/storage").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/artifacts/$id/../storage").status)
-            for (member in listOf("..", ".", ".hidden")) assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Delete, "/api/v1/artifacts/$id/members/$member", runs = emptyList()).status, member)
+            for (member in listOf("..", ".")) assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Delete, "/api/v1/artifacts/$id/members/$member", runs = emptyList()).status, member)
             assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/artifacts", token = null).status)
             assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/artifacts", token = "x".repeat(43)).status)
             assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/artifacts", origin = "https://evil.example").status)

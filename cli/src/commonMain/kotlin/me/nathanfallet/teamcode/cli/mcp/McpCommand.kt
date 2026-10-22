@@ -43,8 +43,10 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
         run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
         // The launcher names its configuration directory: an agent passes a stdio server only some variables, so this
         // process may not see the XDG_CONFIG_HOME the launcher used.
-        val configurationDirectory = configDir?.toPath() ?: configPath().toPath().parent!!
-        val directory = scratch?.toPath() ?: (configurationDirectory / "artifacts" / (run ?: "local")).also { default ->
+        // Null when this environment names no home at all: then no login can be stored here either.
+        val configurationDirectory = configDir?.toPath() ?: try { configPath().toPath().parent } catch (_: CliUserException) { null }
+        val directory = scratch?.toPath() ?: ((configurationDirectory ?: throw CliUserException("No configuration directory: pass --scratch."))
+            / "artifacts" / (run ?: "local")).also { default ->
             // The default's parent holds every run's scratch directory: private too.
             val parent = default.parent!!
             parent.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
@@ -53,10 +55,10 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
         privateDirectory(directory)
         val scratchPath = FileSystem.SYSTEM.canonicalize(directory)
         // The TeamCode configuration directory holds the member's login: never published, even when the root contains it.
-        val configuration = configurationDirectory.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
+        val configuration = configurationDirectory?.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
         val client = client()
         client.use {
-            val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse, refusedExcept = listOf(configuration.toString() to scratchPath.toString()))
+            val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse, refusedExcept = listOfNotNull(configuration?.let { dir -> dir.toString() to scratchPath.toString() }))
             val server = ArtifactsMcpServer(it, sources, scratchPath)
             while (true) {
                 val line = readlnOrNull() ?: break

@@ -188,7 +188,10 @@ class ArtifactsMcpServer(
      * instead: an edited file is never overwritten.
      */
     private suspend fun download(artifactId: String, version: ArtifactVersionView): Path {
-        version.files.forEach { ArtifactLimits.requirePublishedPath(it.path) }
+        // Paths come from the server's manifest: one this version refuses is the server's answer, not the caller's argument.
+        version.files.forEach { file -> try { ArtifactLimits.requirePublishedPath(file.path) } catch (_: IllegalArgumentException) {
+            throw CliUserException("unexpected_answer: the version lists a file path this version of teamcode does not accept. Update teamcode.")
+        } }
         fun destination(directory: Path, path: String) = path.split('/').fold(directory) { parent, segment -> parent / segment }
         fun matches(directory: Path) = local("Reading a downloaded file") { version.files.all { file ->
             val existing = destination(directory, file.path)

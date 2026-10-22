@@ -231,7 +231,7 @@ A version published by an invited editor stays the owner's artifact and counts i
 | `artifacts:read` | List and read artifacts, versions, files and members |
 | `artifacts:write` | `artifacts:read`, plus uploads, commits, invitations and removals |
 
-`team:read` also reads every route of `artifacts:read`. No key changes an access level or deletes an artifact, whatever its scopes: those two routes need an interactive sign-in, and a member segment of `DELETE …/members/<member>` never starts with a dot, so no `.` or `..` can be collapsed into the artifact's own route. The [cloud execution credential](#cloud-sessions) (`tcex_`) has `artifacts:write`.
+`team:read` also reads every route of `artifacts:read`. No key changes an access level or deletes an artifact, whatever its scopes: those two routes need an interactive sign-in, and a member segment of `DELETE …/members/<member>` is never exactly `.` or `..`, so none can be collapsed into the artifact's own route. The [cloud execution credential](#cloud-sessions) (`tcex_`) has `artifacts:write`.
 
 ### File reader
 
@@ -240,7 +240,7 @@ One reader in the CLI (`ArtifactSources`) reads every file to publish, for `team
 - A relative path resolves against the first root; an absolute path must lie inside one. `..`, an empty path and NUL bytes are refused.
 - Every component below the root is opened without following links: `openat` with `O_NOFOLLOW` component by component on macOS and Linux (`O_DIRECTORY` for directories, then `fstat` on the leaf), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows with reparse points refused and every handle kept open without delete sharing, `NOFOLLOW_LINKS` on the JVM. A link refuses the file even when it points inside the root.
 - Regular files only, at most 16 MiB read.
-- Refused by name: `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.gnupg/`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pypirc`, `.claude/.credentials.json`, `.codex/auth.json`, the TeamCode configuration directory (where `teamcode login` keeps its credential; the scratch directory inside it stays readable), and every directory passed with `--refuse` (in a cloud session, `/workspace/.home` and the agent's `HOME`).
+- Refused by name: `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.gnupg/`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pypirc`, `.claude/.credentials.json`, `.codex/auth.json`, the TeamCode configuration directory (where `teamcode login` keeps its credential; the scratch directory inside it stays readable), and every directory passed with `--refuse` (in a cloud session, the runner's home `/workspace/.home`, the agent's home `/workspace/.agent-home`, and `HOME` wherever else it points).
 - A refusal names the path and the rule, never the content.
 
 Published paths follow the [skill catalog](skills.md) rules (up to 8 segments of letters, digits, `.`, `_`, `+` and `-`, no hidden or Windows-reserved segment). Limits, checked again by the server: 15 MiB per binary file, 16 MiB per page or text file, 255 files and 64 MiB per publication, 511 files and 256 MiB per version.
@@ -261,7 +261,7 @@ The CLI uses the login stored by `teamcode login` in its `config.json`, like eve
 
 ### Cloud sessions
 
-The execution credential of a cloud session (`tcex_`, [cloud sessions](cloud-sessions.md)) carries `artifacts:write` next to inference, MCP, skills and hooks; it still never changes an access level or deletes an artifact. When the runner starts the agent, it asks the policy with that credential (20 s at most) and, when the session's owner may publish, adds `teamcode mcp artifacts` exactly as `teamcode run` does: `--root` the workspace, `--scratch /tmp/teamcode-artifacts` (the pod is single-user), `--refuse <workspace>/.home` and `--refuse $HOME` when the agent's home is elsewhere (its sign-ins), the runner's own loopback relay and the local token only. A refused or unreachable policy starts the agent without it.
+The execution credential of a cloud session (`tcex_`, [cloud sessions](cloud-sessions.md)) carries `artifacts:write` next to inference, MCP, skills and hooks; it still never changes an access level or deletes an artifact. When the runner starts the agent, it asks the policy with that credential (20 s at most) and, when the session's owner may publish, adds `teamcode mcp artifacts` exactly as `teamcode run` does: `--root` the workspace, `--scratch /tmp/teamcode-artifacts` (the pod is single-user), `--refuse <workspace>/.home` (the runner's home), `--refuse <workspace>/.agent-home` (the agent's home and its sign-ins) and `--refuse $HOME` when it points elsewhere, the runner's own loopback relay and the local token only. A refused or unreachable policy starts the agent without it.
 
 The server takes the origin of a publication made with an execution credential from the credential, never from the call: a new artifact records `cloud_session` with the session and epoch (a claimed run is ignored), and every version records the session and epoch it was committed in (`artifact_versions.origin_session_id`, indexed). The artifact belongs to the member the execution runs for. The credential is revoked when the execution ends, so a paused session's agent can no longer publish (`401 authentication_required`).
 
