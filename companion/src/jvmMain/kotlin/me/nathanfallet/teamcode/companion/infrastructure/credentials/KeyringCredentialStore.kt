@@ -83,7 +83,10 @@ private class JavaKeyringBackend(private val keyring: Keyring) : KeyringBackend 
         }
     override fun set(service: String, account: String, secret: String) = keyring.setPassword(service, account, secret)
     override fun delete(service: String, account: String) {
-        try { keyring.deletePassword(service, account) } catch (_: PasswordAccessException) { /* Already absent. */ }
+        try { keyring.deletePassword(service, account) } catch (error: PasswordAccessException) {
+            // Already absent is success; a refusal (a locked keyring) is reported, like on read.
+            if (MISSING_ENTRY.none { it in error.message.orEmpty().lowercase() }) throw error
+        }
     }
 }
 

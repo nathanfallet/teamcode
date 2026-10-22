@@ -87,9 +87,12 @@ class KeychainCredentialStore(private val service: String = SERVICE, purgeOrphan
     }
 
     override suspend fun write(accountId: String, token: String) = withContext(Dispatchers.IO) {
-        purgeOrphansOnce()
-        writeNow(accountId, token)
-        purgeLock.withLock { purgePending = false }
+        // Purge and first write under one lock: no other call can purge between this write and the flag.
+        purgeLock.withLock {
+            if (purgePending) runCatching { deleteAll() }
+            writeNow(accountId, token)
+            purgePending = false
+        }
     }
 
     private fun writeNow(accountId: String, token: String) {

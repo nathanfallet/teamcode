@@ -42,5 +42,5 @@ val domainModule = module {
     single { ChangePasswordUseCase(get(), get()) }
     single { SignOutUseCase(get(), get(), get()) }
     single { RefreshAccountUseCase(get(), get(), get(), get()) }
-    single { RenameDeviceUseCase(get(), get()) }
+    single { RenameDeviceUseCase(get(), get(), get()) }
 }

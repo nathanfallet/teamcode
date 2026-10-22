@@ -39,8 +39,7 @@ class KeystoreCredentialStore(
     }
 
     override suspend fun delete(accountId: String) = withContext(Dispatchers.IO) {
-        preferences.edit().remove(accountId).commit()
-        Unit
+        check(preferences.edit().remove(accountId).commit()) { "The token could not be deleted." }
     }
 
     companion object {

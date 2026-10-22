@@ -51,9 +51,12 @@ class SettingsViewModel(
     fun dismissMessage() = status.update { it.copy(message = null) }
 
     fun signOut(account: Account) = work {
-        val revoked = signOut(account.id)
-        if (revoked) "Signed out of ${account.username} on ${account.origin}."
-        else "Signed out on this device. The server could not be reached; its session expires on its own."
+        when (signOut(account.id)) {
+            SignOutUseCase.Result.REVOKED -> "Signed out of ${account.username} on ${account.origin}."
+            SignOutUseCase.Result.SERVER_UNREACHABLE -> "Signed out on this device. The server could not be reached; its session expires on its own."
+            SignOutUseCase.Result.STORAGE_REFUSED ->
+                "Signed out on this device, but its secure storage refused access: the session may stay valid until it expires. Revoke it from the server's Devices page."
+        }
     }
 
     fun renameDevice(name: String) = work {
@@ -69,6 +72,8 @@ class SettingsViewModel(
             val message = try {
                 action()
             } catch (error: CancellationException) {
+                // The screen is closing, or the account's client was closed under the call: never a stuck spinner.
+                status.update { it.copy(working = false) }
                 throw error
             } catch (error: Exception) {
                 error.userMessage()

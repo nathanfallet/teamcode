@@ -18,7 +18,7 @@ data class AddServerUiState(
     val checking: Boolean = false,
     /** The server that answered, shown in full before any password is asked. */
     val server: ServerInfo? = null,
-    /** True when no signed-in account uses this origin yet: the screen says it is a new server. */
+    /** True when no account (signed in or not) uses this origin yet: the screen says it is a new server. */
     val newServer: Boolean = true,
     val error: String? = null,
 )

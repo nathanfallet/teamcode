@@ -103,12 +103,12 @@ class AuthUseCasesTest {
         accounts.save(account("a1")); accounts.save(account("a2", memberId = "m2", username = "grace"))
         store.write("a1", "t1"); store.write("a2", "t2")
         val signOut = SignOutUseCase(auth, accounts, store)
-        assertTrue(signOut("a2"))
+        assertEquals(SignOutUseCase.Result.REVOKED, signOut("a2"))
         assertEquals("logout a2", auth.calls.last())
         assertNull(store.read("a2")); assertEquals(listOf("a2"), auth.released)
         assertEquals("a1", accounts.activeAccountId.value)
         auth.logoutFailure = CompanionException.Unreachable()
-        assertFalse(signOut("a1"))
+        assertEquals(SignOutUseCase.Result.SERVER_UNREACHABLE, signOut("a1"))
         assertNull(store.read("a1"))
         assertTrue(accounts.accounts.value.isEmpty())
         assertNull(accounts.activeAccountId.value)
@@ -164,7 +164,7 @@ class AuthUseCasesTest {
 
     @Test fun renamingTheDeviceValidatesAndKeepsTheName() = runTest {
         accounts.save(account("a1"))
-        val rename = RenameDeviceUseCase(auth, accounts)
+        val rename = RenameDeviceUseCase(auth, accounts, store)
         assertFailsWith<IllegalArgumentException> { rename("a1", " ") }
         assertFailsWith<IllegalArgumentException> { rename("a1", "bad\nname") }
         assertEquals("Work phone", rename("a1", " Work phone ").deviceName)
@@ -174,7 +174,7 @@ class AuthUseCasesTest {
     @Test fun aRevokedDeviceFoundWhileRenamingSignsTheAccountOut() = runTest {
         accounts.save(account("a1"))
         auth.renameFailure = CompanionException.Unauthorized()
-        assertFailsWith<CompanionException.Unauthorized> { RenameDeviceUseCase(auth, accounts)("a1", "Work phone") }
+        assertFailsWith<CompanionException.Unauthorized> { RenameDeviceUseCase(auth, accounts, store)("a1", "Work phone") }
         assertFalse(accounts.accounts.value.single().signedIn)
         assertEquals(listOf("a1"), auth.released)
     }
