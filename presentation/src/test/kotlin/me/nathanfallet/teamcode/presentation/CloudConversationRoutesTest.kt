@@ -164,6 +164,7 @@ class CloudConversationRoutesTest {
                 override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
                 override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
                 override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
                 override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
@@ -297,6 +298,7 @@ class CloudConversationRoutesTest {
                 override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
                 override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
                 override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
                 override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings

@@ -98,6 +98,9 @@ class CloudSessionPersistenceTest {
         assertEquals(2, second.version)
         failure("profile_conflict") { ra.admin.saveProfile(admin, profile.id, 1, "toolchain", spec, emptySet()) }
         assertEquals(listOf(profile.id), ra.admin.profiles(colleague).map { it.id })
+        assertEquals(listOf(profile.id), rb.admin.profiles(admin, colleague.member.id).map { it.id }, "What the member can use, read by an administrator")
+        failure("invalid_effective_member") { ra.admin.profiles(admin, "00000000-0000-4000-8000-000000000000") }
+        failure("forbidden") { ra.admin.profiles(colleague, admin.member.id) }
         assertEquals(30, ra.store.profileVersion(admin.teamId, profile.id, 1)!!.idleTimeoutMinutes, "Published versions are immutable")
         failure("forbidden") { ra.admin.saveSettings(colleague, CloudSettings()) }
         failure("invalid_cloud_settings") { ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 0)) }
@@ -111,6 +114,7 @@ class CloudSessionPersistenceTest {
         failure("on_behalf_forbidden") { ra.sessions.create(colleague, admin.member.id, draft, key) }
         failure("credential_scope") { ra.sessions.create(admin.copy(serviceScopes = setOf(ServiceScope.INFERENCE)), null, draft, key) }
         failure("image_not_allowed") { ra.sessions.create(admin, colleague.member.id, draft.copy(image = "evil.example/miner:latest"), key) }
+        failure("profile_not_found") { ra.sessions.create(colleague, null, draft.copy(profileId = "00000000-0000-4000-8000-000000000000"), key) }
         val outcomes = coroutineScope { listOf(ra, rb).map { r -> async(Dispatchers.IO) { r.sessions.create(admin, colleague.member.id, draft, key) } }.awaitAll() }
         assertEquals(1, outcomes.count { it is CloudCreateOutcome.Created }, "Concurrent replays create one session")
         val ids = outcomes.map { (it as? CloudCreateOutcome.Created)?.session?.id ?: (it as CloudCreateOutcome.Replayed).session.id }.toSet()

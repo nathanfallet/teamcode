@@ -41,6 +41,15 @@ class CliErrorsTest {
         assertContains(old, "older TeamCode version"); assertContains(old, VERSION)
     }
 
+    @Test fun `a missing cloud profile is told from an unassigned one and both point at the list`() {
+        val missing = message(http(404, "profile_not_found"))
+        assertContains(missing, "No cloud profile you can use"); assertContains(missing, "teamcode cloud profiles"); assertContains(missing, "--member")
+        val unassigned = message(http(403, "profile_unassigned"))
+        assertContains(unassigned, "not assigned to the session owner"); assertContains(unassigned, "teamcode cloud profiles")
+        assertFalse("paused" in unassigned, "No longer read as a paused group")
+        assertContains(message(http(403, "group_paused")), "paused")
+    }
+
     @Test fun `409 and 429 carry Retry-After`() {
         assertContains(message(http(409, "session_busy", retryAfter = 30)), "Retry in 30 seconds.")
         val limited = message(http(429, "queue_turn", retryAfter = 300))

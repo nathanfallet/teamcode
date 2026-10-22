@@ -64,6 +64,11 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
         ids.take(200).mapNotNull { readProfile(actor.teamId, it) }.sortedBy { it.name }
     }
 
+    override suspend fun member(actor: Principal, memberId: String): Member? = database.query {
+        requireCurrent(this, actor)
+        Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq actor.teamId) }.singleOrNull()?.let(::readMember)
+    }
+
     override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val now = nowMillis()

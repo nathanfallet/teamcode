@@ -57,6 +57,10 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "invalid_credentials" -> return "Sign-in failed ($tag): the username or password is incorrect."
         "max_subscription_required" -> return "This account has no Claude Max subscription ($tag). Use --provider claude, or sign in with a Max account."
         "provider_verification_failed" -> return "The provider did not accept the new sign-in ($tag). Run `teamcode accounts add` again."
+        "profile_not_found" -> return "No cloud profile you can use has this id or name ($tag). Run `teamcode cloud profiles` to list them; " +
+            "an administrator adds --member <id> to list another member's."
+        "profile_unassigned" -> return "This cloud profile is not assigned to the session owner ($tag). Run `teamcode cloud profiles` to list the usable ones, " +
+            "or ask a team administrator to assign it."
     }
     return when (error.statusCode) {
         0 -> "The connection to the $server closed before the answer was complete. Check your network, then try again."
@@ -89,7 +93,7 @@ private fun forbiddenMessage(code: String?, tag: String): String = when (code) {
         "Your role does not allow this cloud session operation ($tag). Ask a team administrator."
     "model_not_allowed", "effort_not_allowed", "thinking_budget_not_allowed", "image_not_allowed" ->
         "The team policy does not allow this model or setting ($tag). Choose another one, or ask an administrator."
-    "group_paused", "run_paused", "profile_unassigned" -> "Your group or run is paused or not assigned ($tag). Ask a team administrator."
+    "group_paused", "run_paused" -> "Your group or run is paused ($tag). Ask a team administrator."
     "owner_unavailable" -> "The session owner is disabled or has not finished setting up their password ($tag)."
     else -> "TeamCode refused this operation ($tag). Ask a team administrator for access."
 }

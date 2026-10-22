@@ -117,8 +117,14 @@ private fun ApiCatalog.cloudAdministration() {
         summary = "List the session profiles"
         description = "A profile is what a session is created from: cluster and namespace, image, resources, workspace " +
             "size, agent, idle timeouts and the environment recipe (repositories, setup commands, required variables), " +
-            "with the members allowed to use it. Members see the profiles assigned to them; administrators see all."
-        responses { ok<List<CloudProfileView>>("The profiles.") }
+            "with the members allowed to use it. Members see the profiles assigned to them; administrators see all. " +
+            "A cloud administrator passes `member` to list the profiles that member can create sessions from " +
+            "(capability `cloud.profiles.member.v1`). `clusterName` names the profile's cluster."
+        parameters { queryText("member", "Another member's identifier; cloud administrators only.") }
+        responses {
+            ok<List<CloudProfileView>>("The profiles.")
+            error(HttpStatusCode.UnprocessableEntity, "The member does not exist, is disabled or has not completed password setup (`invalid_effective_member`).")
+        }
     }
     post("/api/v1/cloud/profiles") {
         operationId = "createCloudProfile"; tag(ApiTags.CLOUD_ADMIN)
@@ -183,7 +189,8 @@ private fun ApiCatalog.cloudSessions() {
         responses {
             ok<CloudSessionView>("Accepted: the session is being created.", HttpStatusCode.Accepted)
             badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`).")
-            notFound("No such profile for the member (`not_found`).")
+            error(HttpStatusCode.Forbidden, "The profile exists but is not assigned to the effective member (`profile_unassigned`).")
+            notFound("No profile has this id (`profile_not_found`). `profileId` is an id: list the usable ones with `GET /api/v1/cloud/profiles`.")
             conflict("The member's session limit is reached (`cloud_session_limit`), or the profile's cluster or namespace is gone (`cluster_unavailable`, `namespace_not_allowed`).")
             error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), or the effective member cannot own sessions (`invalid_effective_member`).")
         }

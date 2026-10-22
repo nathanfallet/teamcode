@@ -17,11 +17,12 @@ import me.nathanfallet.teamcode.cli.cloud.agent.CloudCredential
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudInstallSkills
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
+import me.nathanfallet.teamcode.client.TeamCodeException
 
 /** `teamcode cloud`: sessions that run on the team's Kubernetes cluster. */
 class Cloud : SuspendingNoOpCliktCommand(name = "cloud") {
     override fun help(context: Context) = "Create and manage cloud sessions on your team's cluster. Requires an interactive login."
-    init { subcommands(CloudCreate(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudCredential(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
+    init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudCredential(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
 }
 
 private fun CloudSessionView.line() = listOf(id, state + (phase?.let { " ($it)" } ?: ""), name, "epoch $currentEpoch", "updated ${Instant.fromEpochMilliseconds(updatedAt)}").joinToString("\t")
@@ -68,7 +69,7 @@ internal fun parseRepository(value: String): CloudRepositoryView {
 private class CloudCreate : SuspendingCliktCommand(name = "create") {
     override fun help(context: Context) = "Create a cloud session from a profile. Retrying with the same --idempotency-key never creates a second session."
     private val name by option("--name").required()
-    private val profile by option("--profile", help = "Profile ID (see the dashboard).").required()
+    private val profile by option("--profile", help = "Profile id or name (see teamcode cloud profiles).").required()
     private val image by option("--image", help = "Image override allowed by the profile.")
     private val model by option("--model")
     private val effort by option("--effort")
@@ -93,13 +94,51 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
             // An older server ignores unknown fields: never let it drop the message silently.
             if (initial != null && INITIAL_MESSAGE_CAPABILITY !in it.capabilities().features)
                 throw CliktError("This server does not accept --message; create the session, then use teamcode cloud send.")
-            it.createCloudSession(CreateCloudSessionRequest(name, profile, image, agent, parsed, idle, environment, initial), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
+            // The caller's list (every profile for an administrator): the server then says whether the owner may use it.
+            val profiles = try { it.cloudProfiles() } catch (error: TeamCodeException) { if (error.statusCode == 403) emptyList() else throw error }
+            val profileId = resolveProfile(profile, profiles)
+            it.createCloudSession(CreateCloudSessionRequest(name, profileId, image, agent, parsed, idle, environment, initial), idempotencyKey ?: Uuid.random().toString(), onBehalfOf)
         }
         echo(if (json) Serialization.json.encodeToString(session) else session.line())
     }
 }
 
 private const val INITIAL_MESSAGE_CAPABILITY = "cloud.sessions.initial-message.v1"
+private const val PROFILES_MEMBER_CAPABILITY = "cloud.profiles.member.v1"
+
+/**
+ * `--profile`: an id first; a name only when no listed profile has that id, the exact name before the name ignoring
+ * case. [profiles] are the ones listed to the caller, so a profile not assigned to a member is never found by its name.
+ * A value no listed profile matches goes to the server as an id: it answers `profile_not_found` or `profile_unassigned`.
+ */
+internal fun resolveProfile(value: String, profiles: List<CloudProfileView>): String {
+    if (profiles.any { it.id == value }) return value
+    val named = profiles.filter { it.name == value }.ifEmpty { profiles.filter { it.name.equals(value, ignoreCase = true) } }
+    return when (named.size) {
+        0 -> value
+        1 -> named.single().id
+        else -> throw CliktError("Several profiles are named \"$value\": ${named.joinToString(", ") { "${it.id} (${it.name})" }}. Pass one of these ids to --profile.")
+    }
+}
+
+internal fun CloudProfileView.line() = listOf(id, name, "v$version", "${clusterName ?: spec.clusterId}/${spec.namespace}", spec.image,
+    spec.agentKind + (spec.agentVersion?.let { " $it" } ?: "")).joinToString("\t")
+
+private class CloudProfiles : SuspendingCliktCommand(name = "profiles") {
+    override fun help(context: Context) = "List the profiles you can create sessions from (every profile for an administrator): id, name, version, cluster/namespace, image and agent."
+    private val member by option("--member", help = "The profiles this member can use; administrators only.")
+    private val json by option("--json").flag()
+    override suspend fun run() {
+        val profiles = sdk(loadConfig()).use {
+            // An older server ignores the parameter and would list the caller's profiles instead.
+            if (member != null && PROFILES_MEMBER_CAPABILITY !in it.capabilities().features)
+                throw CliktError("This server cannot list another member's profiles; update it, or run the command without --member.")
+            it.cloudProfiles(member)
+        }
+        if (json) echo(Serialization.json.encodeToString(profiles)) else profiles.forEach { echo(it.line()) }
+        if (profiles.isEmpty() && !json) echo("No profile is available" + (if (member != null) " to this member." else "; ask a team administrator to assign one."), err = true)
+    }
+}
 
 private class CloudList : SuspendingCliktCommand(name = "list") {
     override fun help(context: Context) = "List your sessions, newest first (at most $MAX_LISTED)."

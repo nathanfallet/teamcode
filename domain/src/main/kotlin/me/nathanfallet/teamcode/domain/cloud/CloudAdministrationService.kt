@@ -22,10 +22,25 @@ class CloudAdministrationService(
         validate(input, creating = id == null)
         return store.saveCluster(actor, id, expectedVersion, input)
     }
-    /** The profiles the caller can use; also readable with a `cloud:read` key, as its owner. */
-    suspend fun profiles(actor: Principal): List<CloudProfile> {
+    /**
+     * The profiles the caller can use (every profile for an administrator); also readable with a `cloud:read` key, as
+     * its owner. [memberId] names another member, for a cloud administrator only (as creating on their behalf): the
+     * profiles that member can create sessions from.
+     */
+    suspend fun profiles(actor: Principal, memberId: String? = null): List<CloudProfile> {
         actor.requireCloudRead()
-        return store.profiles(actor)
+        if (memberId == null || memberId == actor.member.id) return store.profiles(actor)
+        actor.requireCloudAdministrator()
+        val target = store.member(actor, memberId)
+        if (target == null || target.disabled || target.passwordChangeRequired)
+            throw TeamFailure("invalid_effective_member", 422, "The member must be an enabled team member who completed password setup.")
+        return store.profiles(actor).filter { target.role.isAdministrator || target.id in it.assignedMemberIds }
+    }
+
+    /** The names of the team's clusters by id, shown next to the profiles that run on them; no other cluster field. */
+    suspend fun clusterNames(actor: Principal): Map<String, String> {
+        actor.requireCloudRead()
+        return store.clusters(actor).associate { it.id to it.name }
     }
     /** Refuses a storage class that would keep provider volumes after a workspace is deleted. */
     suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile {

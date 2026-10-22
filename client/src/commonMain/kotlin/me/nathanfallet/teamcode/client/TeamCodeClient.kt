@@ -228,7 +228,11 @@ class TeamCodeClient(
         id?.let(::identifier)
         return request("/api/v1/cloud/clusters" + (id?.let { "/$it" } ?: ""), if (id == null) HttpMethod.Post else HttpMethod.Put, input)
     }
-    suspend fun cloudProfiles(): List<CloudProfileView> = request("/api/v1/cloud/profiles", HttpMethod.Get)
+    /** The profiles the caller can use, or those [member] can use (cloud administrators, `cloud.profiles.member.v1`). */
+    suspend fun cloudProfiles(member: String? = null): List<CloudProfileView> {
+        member?.let(::identifier)
+        return request("/api/v1/cloud/profiles" + (member?.let { "?member=$it" } ?: ""), HttpMethod.Get)
+    }
     suspend fun saveCloudProfile(input: SaveCloudProfileRequest, id: String? = null): CloudProfileView {
         id?.let(::identifier)
         return request("/api/v1/cloud/profiles" + (id?.let { "/$it" } ?: ""), if (id == null) HttpMethod.Post else HttpMethod.Put, input)

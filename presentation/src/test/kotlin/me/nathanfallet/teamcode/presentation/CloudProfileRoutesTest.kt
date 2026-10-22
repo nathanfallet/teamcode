@@ -31,6 +31,7 @@ class CloudProfileRoutesTest {
         override suspend fun clusters(actor: Principal) = clusters
         override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
         override suspend fun profiles(actor: Principal) = profiles.toList()
+        override suspend fun member(actor: Principal, memberId: String): Member? = null
         override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile {
             val current = profiles.find { it.id == id }
             if ((current?.version ?: 0) != expectedVersion) throw TeamFailure("profile_conflict", 409, "Changed.")

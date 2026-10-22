@@ -139,8 +139,9 @@ data class CloudProfileSpecView(
     val maxIdleTimeoutMinutes: Int = 1440,
     val environment: CloudEnvironmentView = CloudEnvironmentView(),
 )
+/** [clusterName] is the name of `spec.clusterId`, filled by `GET /cloud/profiles` (null from an older server). */
 @Serializable
-data class CloudProfileView(val id: String, val name: String, val version: Int, val spec: CloudProfileSpecView, val assignedMemberIds: List<String>, val createdAt: Long, val updatedAt: Long)
+data class CloudProfileView(val id: String, val name: String, val version: Int, val spec: CloudProfileSpecView, val assignedMemberIds: List<String>, val createdAt: Long, val updatedAt: Long, val clusterName: String? = null)
 /** `version` is the current version being replaced (0 for a new profile); each save publishes an immutable version. */
 @Serializable
 data class SaveCloudProfileRequest(val name: String, val version: Int = 0, val spec: CloudProfileSpecView, val assignedMemberIds: List<String> = emptyList())

@@ -33,7 +33,7 @@ private fun CloudProfileSpec.view() = CloudProfileSpecView(clusterId, namespace,
     workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.view())
 private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResources(resources.cpuMillis, resources.memoryMebibytes),
     workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.domain())
-private fun CloudProfile.view() = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt)
+private fun CloudProfile.view(clusterName: String? = null) = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt, clusterName)
 private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
     memberTransfers.wire, transferOfferDays, transferPendingInputs.wire)
 /** An absent transfer field keeps [current]'s value. */
@@ -128,7 +128,12 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
 
         get("/clusters/{id}/choices") { call.respond(admin.choices(call.principal, call.id(), call.request.queryParameters["namespace"]).view()) }
 
-        get("/profiles") { call.respond(admin.profiles(call.principal).map { it.view() }) }
+        get("/profiles") {
+            val member = call.request.queryParameters.getAll("member")?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send member at most once.") }
+            val profiles = admin.profiles(call.principal, member)
+            val clusters = admin.clusterNames(call.principal)
+            call.respond(profiles.map { it.view(clusters[it.spec.clusterId]) })
+        }
         post("/profiles") {
             val input = call.jsonBody<SaveCloudProfileRequest>()
             call.respond(HttpStatusCode.Created, admin.saveProfile(call.principal, null, 0, input.name, input.spec.domain(), input.assignedMemberIds.toSet()).view())

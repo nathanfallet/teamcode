@@ -139,6 +139,8 @@ interface CloudAdminStore {
     suspend fun clusters(actor: Principal): List<CloudCluster>
     suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput): CloudCluster
     suspend fun profiles(actor: Principal): List<CloudProfile>
+    /** A member of the actor's team, or null; read to list the profiles another member can use. */
+    suspend fun member(actor: Principal, memberId: String): Member?
     /** Publishes a new immutable version; [expectedVersion] must equal the current one (0 for a new profile). */
     suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile
     suspend fun settings(actor: Principal): CloudSettings

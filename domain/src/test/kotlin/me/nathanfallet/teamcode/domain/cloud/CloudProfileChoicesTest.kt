@@ -17,6 +17,7 @@ class CloudProfileChoicesTest {
         override suspend fun clusters(actor: Principal) = clusters
         override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
         override suspend fun profiles(actor: Principal) = profiles.toList()
+        override suspend fun member(actor: Principal, memberId: String): Member? = null
         override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>): CloudProfile {
             saves++
             return CloudProfile(id ?: "profile-$saves", actor.teamId, name, expectedVersion + 1, spec, assignedMemberIds, 1, 1).also { profiles.removeAll { p -> p.id == it.id }; profiles += it }

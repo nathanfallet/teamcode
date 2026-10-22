@@ -24,10 +24,12 @@ class CloudRoutesTest {
         val keys = mutableMapOf<String, Pair<String, String>>()
         var clock = 1_000L
         val profile = CloudProfile("profile-id", "default", "toolchain", 1, CloudProfileSpec("cluster-id", "teamcode", "registry.example/toolchain:1"), setOf(colleague.id), 1, 1)
+        /** A profile assigned to nobody: only administrators may use it. */
+        val reserved = CloudProfile("reserved-id", "default", "reserved", 1, profile.spec, emptySet(), 1, 1)
         override suspend fun now() = clock++
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun member(teamId: String, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
-        override suspend fun profile(teamId: String, profileId: String) = profile.takeIf { it.id == profileId }
+        override suspend fun profile(teamId: String, profileId: String) = listOf(profile, reserved).find { it.id == profileId }
         override suspend fun profileVersion(teamId: String, profileId: String, version: Int) = profile.spec
         override suspend fun cluster(teamId: String, clusterId: String) = CloudCluster("cluster-id", "default", "lab", "https://k8s.example.test", listOf("teamcode"), 10, "standard", 1, 0, null, 1, 1)
         override suspend fun settings(teamId: String) = CloudSettings()
@@ -64,11 +66,13 @@ class CloudRoutesTest {
         override suspend fun namespaces(clusterId: String) = emptySet<String>()
         override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = Unit
     }
-    private class Admin : CloudAdminStore {
+    private inner class Admin(val profiles: List<CloudProfile> = emptyList()) : CloudAdminStore {
         var settings = CloudSettings()
-        override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+        override suspend fun clusters(actor: Principal) = listOf(CloudCluster("cluster-id", "default", "lab", "https://k8s.example.test", listOf("teamcode"), 10, "standard", 1, 0, null, 1, 1))
         override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
-        override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+        /** As the SQL store: every profile for an administrator, the assigned ones for a member. */
+        override suspend fun profiles(actor: Principal) = profiles.filter { actor.member.role.isAdministrator || actor.member.id in it.assignedMemberIds }
+        override suspend fun member(actor: Principal, memberId: String) = listOf(admin, colleague).find { it.id == memberId }
         override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
         override suspend fun settings(actor: Principal) = settings
         override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings.also { this.settings = it }
@@ -142,6 +146,43 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions?owner=all&label=orchestrator.task=1234") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?state=sleeping") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?limit=51") { bearerAuth("admin") }.status)
+    }
+
+    @Test fun profilesListWhatTheMemberCanUseAndCreationTellsAMissingProfileFromAnUnassignedOne() = testApplication {
+        val store = Store()
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(store), cloudAdmin = CloudAdministrationService(Admin(listOf(store.profile, store.reserved)), FakeCluster),
+                publicOrigin = "http://localhost")
+        }
+        suspend fun profiles(token: String, query: String = "") = client.get("/api/v1/cloud/profiles$query") { bearerAuth(token) }
+        suspend fun ids(token: String, query: String = "") = Serialization.json.decodeFromString<List<CloudProfileView>>(profiles(token, query).bodyAsText()).map { it.id }
+        assertTrue("cloud.profiles.member.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        assertEquals(listOf("profile-id"), ids("colleague"), "A member lists the profiles assigned to them")
+        assertEquals(listOf("profile-id"), ids("colleague-read"))
+        assertEquals(listOf("profile-id", "reserved-id"), ids("admin"))
+        assertEquals("lab", Serialization.json.decodeFromString<List<CloudProfileView>>(profiles("colleague").bodyAsText()).single().clusterName, "The cluster's name, not only its id")
+        // An administrator lists what another member can use, as when creating on their behalf.
+        assertEquals(listOf("profile-id"), ids("admin", "?member=colleague-id"))
+        assertEquals(listOf("profile-id"), ids("admin-cloud", "?member=colleague-id"))
+        assertEquals(listOf("profile-id", "reserved-id"), ids("admin", "?member=admin-id"), "An administrator member can use every profile")
+        assertEquals(listOf("profile-id"), ids("colleague", "?member=colleague-id"))
+        assertEquals(HttpStatusCode.Forbidden, profiles("colleague", "?member=admin-id").status)
+        assertEquals(HttpStatusCode.Forbidden, profiles("admin-write", "?member=colleague-id").status, "A key without admin:cloud is only its owner")
+        assertTrue("invalid_effective_member" in profiles("admin", "?member=unknown-id").bodyAsText())
+        assertEquals(HttpStatusCode.BadRequest, profiles("admin", "?member=colleague-id&member=admin-id").status)
+        // Creation: an id that exists but is not assigned is told apart from an id that does not exist.
+        suspend fun create(token: String, profileId: String, onBehalf: String? = null) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"name":"Task","profileId":"$profileId"}""")
+            header(CloudHeaders.IDEMPOTENCY_KEY, "k-$token-$profileId"); onBehalf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+        }
+        val missing = create("colleague", "unknown-id")
+        assertEquals(HttpStatusCode.NotFound, missing.status); assertTrue("profile_not_found" in missing.bodyAsText())
+        val unassigned = create("colleague", "reserved-id")
+        assertEquals(HttpStatusCode.Forbidden, unassigned.status); assertTrue("profile_unassigned" in unassigned.bodyAsText())
+        val delegated = create("admin", "reserved-id", onBehalf = "colleague-id")
+        assertEquals(HttpStatusCode.Forbidden, delegated.status); assertTrue("profile_unassigned" in delegated.bodyAsText())
+        assertTrue(store.sessions.isEmpty())
+        assertEquals(HttpStatusCode.Accepted, create("admin", "reserved-id").status, "An administrator uses every profile")
     }
 
     @Test fun cloudKeysActForTheirOwnerAndOnlyAdminCloudKeysDelegate() = testApplication {

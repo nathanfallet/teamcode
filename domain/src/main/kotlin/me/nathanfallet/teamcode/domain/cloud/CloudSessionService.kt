@@ -36,9 +36,12 @@ class CloudSessionService(
     suspend fun create(principal: Principal, onBehalfOf: String?, draft: CloudSessionDraft, idempotency: IdempotencyRequest?): CloudCreateOutcome {
         val actor = actor(principal, onBehalfOf)
         validate(draft)
+        // A profile id is random and only listed to the members who may use it: saying that an id exists but is not
+        // assigned reveals nothing a member could guess. Names are resolved by clients among the profiles listed to
+        // the caller, so an unassigned profile is never found by its name.
         val profile = store.profile(principal.teamId, draft.profileId) ?: throw missingProfile()
         val owner = store.member(principal.teamId, actor.effectiveMemberId) ?: throw missingProfile()
-        if (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds) throw missingProfile()
+        if (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds) throw unassignedProfile(owner.id == principal.member.id)
         // The owner must hold `create` under the access policy, also when an administrator creates on their behalf.
         access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
         draft.initialMessage?.let { text ->
@@ -186,7 +189,10 @@ class CloudSessionService(
         /** `*` matches any run of characters, including `/` and `:`; everything else is literal. */
         fun matchesImagePattern(pattern: String, image: String) =
             Regex(pattern.split('*').joinToString(".*") { Regex.escape(it) }).matches(image)
-        private fun missingProfile() = TeamFailure("profile_not_found", 404, "Profile not found or not assigned to the effective member.")
+        private fun missingProfile() = TeamFailure("profile_not_found", 404, "No profile has this id. List the profiles you can use with GET /api/v1/cloud/profiles (teamcode cloud profiles).")
+        private fun unassignedProfile(self: Boolean) = TeamFailure("profile_unassigned", 403,
+            (if (self) "This profile is not assigned to you." else "This profile is not assigned to the effective member.") +
+                " List the usable profiles with GET /api/v1/cloud/profiles (teamcode cloud profiles), or ask an administrator to assign it.")
         private fun missing() = TeamFailure("not_found", 404, "Cloud session not found.")
         private fun notRunning() = TeamFailure("session_not_running", 409, "The cloud session is terminated or being deleted.")
     }
