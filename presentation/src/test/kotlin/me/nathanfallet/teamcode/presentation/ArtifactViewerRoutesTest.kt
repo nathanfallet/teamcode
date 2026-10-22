@@ -113,7 +113,7 @@ class ArtifactViewerRoutesTest {
         val entry = client.get("$base/index.html")
         assertEquals(HttpStatusCode.OK, entry.status); assertSandboxed(entry, "200")
         assertTrue(entry.bodyAsText().startsWith("<!doctype html><meta charset=\"utf-8\">")); assertEquals(ContentType.Text.Html, entry.contentType()?.withoutParameters())
-        assertEquals("private, max-age=3600, immutable", entry.headers[HttpHeaders.CacheControl])
+        assertEquals("private, max-age=30", entry.headers[HttpHeaders.CacheControl])
         assertEquals(HttpStatusCode.OK, client.get("$base/").status, "The bare prefix is the entry page")
         // 206: a single range of another file.
         val part = client.get("$base/site.css") { header(HttpHeaders.Range, "bytes=0-3") }
@@ -189,7 +189,7 @@ class ArtifactViewerRoutesTest {
         assertEquals(HttpStatusCode.Found, noRedirect.get("/artifact/$id?v=1").status, "A visitor sees only the version the link serves; any other asks to sign in")
         val ticket = ticketOf(body)
         val content = client.get("/artifact/$id/$ticket/index.html")
-        assertEquals(HttpStatusCode.OK, content.status); assertEquals("private, max-age=60", content.headers[HttpHeaders.CacheControl])
+        assertEquals(HttpStatusCode.OK, content.status); assertEquals("private, max-age=30", content.headers[HttpHeaders.CacheControl])
         assertTrue("viewable:anonymous" in store.calls)
         // Back to personal: the link asks to sign in, and the anonymous ticket stops at its next check.
         store.access = ArtifactAccess.PERSONAL
@@ -295,6 +295,19 @@ class ArtifactViewerRoutesTest {
         assertTrue("""href="https://example.com/__init__.py"""" in html, html)
         assertTrue("<strong>bold</strong>" in html && "<em>a</em>" in html && "<code>code</code>" in html)
         assertFalse('\u0000' in html)
+    }
+
+    @Test fun entryPagesAndHeadingsKeepWhatTheAuthorWrote() {
+        val latin1 = "<!doctype html><meta charset=\"windows-1252\"><p>caf".encodeToByteArray() + byteArrayOf(0xE9.toByte())
+        assertEquals(latin1.toList() to false, ArtifactPages.html(latin1).let { it.first.toList() to it.second }, "A page with its doctype is sent byte for byte")
+        val bare = ArtifactPages.html("<p>x</p>".encodeToByteArray())
+        assertTrue(bare.second && bare.first.decodeToString().startsWith("<!doctype html><meta charset=\"utf-8\">"))
+        assertFalse("charset" in ArtifactPages.html(byteArrayOf(0xE9.toByte())).first.decodeToString(), "A page in another encoding is not declared UTF-8")
+        assertTrue("<h1>Learning C#</h1>" in Markdown.render("# Learning C#"))
+        assertTrue("<h2>Issue</h2>" in Markdown.render("## Issue ##"))
+        val started = System.nanoTime()
+        Markdown.render("[".repeat(2_000_000))
+        assertTrue(System.nanoTime() - started < 5_000_000_000, "Unclosed brackets are rendered in linear time")
     }
 
     @Test fun anUntitledArtifactIsDeletedByTypingUntitled() = testApplication {

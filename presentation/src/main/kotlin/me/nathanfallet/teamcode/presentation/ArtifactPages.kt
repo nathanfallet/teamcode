@@ -8,11 +8,23 @@ package me.nathanfallet.teamcode.presentation
 internal object ArtifactPages {
     private const val RESET = "*,*::before,*::after{box-sizing:border-box}body{margin:0}"
     private const val SKELETON = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>$RESET</style>"""
+    private const val BARE_SKELETON = """<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>$RESET</style>"""
 
-    fun html(source: String): String {
-        val start = source.trimStart('﻿', ' ', '\t', '\r', '\n')
-        return if (start.regionMatches(0, "<!doctype", 0, 9, ignoreCase = true)) source else SKELETON + source
+    /**
+     * An HTML entry page as sent, and whether it is UTF-8. A page with its own doctype is sent byte for byte; one
+     * without gets the skeleton in front, which names UTF-8 only when the page is UTF-8, so a page in another
+     * encoding keeps its own `<meta charset>`.
+     */
+    fun html(source: ByteArray): Pair<ByteArray, Boolean> {
+        val utf8 = isUtf8(source)
+        val head = source.copyOfRange(0, minOf(source.size, 64)).decodeToString().trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+        if (head.regionMatches(0, "<!doctype", 0, 9, ignoreCase = true)) return source to utf8
+        return ((if (utf8) SKELETON else BARE_SKELETON).encodeToByteArray() + source) to utf8
     }
+
+    private fun isUtf8(bytes: ByteArray) = try {
+        Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)); true
+    } catch (_: java.nio.charset.CharacterCodingException) { false }
 
     private const val MARKDOWN_STYLE = "body{max-width:760px;margin:0 auto;padding:32px 20px;font:16px/1.6 -apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,sans-serif;color:#1f2328}" +
         "pre{background:#f6f8fa;padding:12px 14px;border-radius:8px;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}" +
@@ -58,7 +70,7 @@ internal object Markdown {
                 HEADING.matches(trimmed) -> {
                     flush()
                     val level = trimmed.takeWhile { it == '#' }.length
-                    out.append("<h$level>").append(inline(trimmed.drop(level).trim().trimEnd('#').trim())).append("</h$level>\n")
+                    out.append("<h$level>").append(inline(CLOSING_HASHES.replace(trimmed.drop(level).trim(), "").trim())).append("</h$level>\n")
                 }
                 RULE.matches(trimmed) && paragraph.isEmpty() -> { out.append("<hr>\n") }
                 trimmed.startsWith(">") && depth < MAX_QUOTE_DEPTH -> {
@@ -98,10 +110,13 @@ internal object Markdown {
     private val FENCE = Regex("^(```+|~~~+)")
     private val HEADING = Regex("^#{1,6}(\\s.*)?$")
     private val RULE = Regex("^(\\*\\s*){3,}$|^(-\\s*){3,}$|^(_\\s*){3,}$")
+    /** A closing sequence of `#` is only one preceded by a space (`# Learning C#` keeps its `#`). */
+    private val CLOSING_HASHES = Regex("(^|\\s+)#+\\s*$")
     private val PLACEHOLDER = Regex("\u0000(\\d+)\u0000")
     private val LIST_ITEM = Regex("^\\s{0,3}([-*+]|\\d{1,9}[.)])\\s+(.*)$")
     private val CODE = Regex("`([^`]+)`")
-    private val LINK = Regex("\\[([^\\]]+)]\\(([^)\\s]+)\\)")
+    // Bounded, so a line of `[` without `]` is scanned in linear time.
+    private val LINK = Regex("\\[([^\\]\\[]{1,500})]\\(([^)\\s]{1,2048})\\)")
     private val STRONG = Regex("\\*\\*([^*]+)\\*\\*|__([^_]+)__")
     private val EMPHASIS = Regex("(?<![*\\w])\\*([^*\\s][^*]*)\\*(?!\\*)|(?<![_\\w])_([^_\\s][^_]*)_(?![_\\w])")
 

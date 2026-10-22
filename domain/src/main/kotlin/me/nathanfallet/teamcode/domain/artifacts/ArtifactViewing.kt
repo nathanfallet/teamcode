@@ -135,13 +135,13 @@ class ArtifactViewing(
                 val manager = readable.relation in setOf("owner", "editor", "admin") || viewer.member.role.isAdministrator
                 val sharing = if (manager) artifacts.members(viewer, artifactId) else null
                 // Every use is checked against the login session too, so signing out stops the content within the recheck.
-                val ticket = tickets.issue(ViewTicket(artifactId, number, viewer.member.id, viewer.tokenId, now + MEMBER_TICKET_MILLIS))
+                val ticket = tickets.issue(ViewTicket(artifactId, number, viewer.member.id, viewer.tokenId, stable(now + MEMBER_TICKET_MILLIS, TICKET_STEP_MILLIS)))
                 return ArtifactShell(readable, version, artifacts.versions(viewer, artifactId), sharing, ticket, member = true)
             }
         }
         val public = store.publicArtifact(artifactId) ?: throw notFound()
         if (requested != null && requested != public.version.number) throw notFound()
-        val ticket = tickets.issue(ViewTicket(artifactId, public.version.number, null, null, now + PUBLIC_TICKET_MILLIS))
+        val ticket = tickets.issue(ViewTicket(artifactId, public.version.number, null, null, stable(now + PUBLIC_TICKET_MILLIS, TICKET_STEP_MILLIS)))
         return ArtifactShell(public.artifact, public.version, listOf(public.version), null, ticket, member = false)
     }
 
@@ -197,6 +197,12 @@ class ArtifactViewing(
         const val MEMBER_TICKET_MILLIS = 8 * 3_600_000L
         const val PUBLIC_TICKET_MILLIS = 3_600_000L
         private const val MAX_CACHED_TICKETS = 10_000
+        /**
+         * Expiries are rounded down to this step, so reloading the viewer gives the same content URLs (browser cache,
+         * `304`, one grant check) for a while; a ticket lasts at least its lifetime minus the step.
+         */
+        const val TICKET_STEP_MILLIS = 10 * 60_000L
+        private fun stable(expiry: Long, step: Long) = expiry - expiry % step
         private val RANGE = Regex("(\\d{0,19})-(\\d{0,19})")
 
         /**
@@ -224,7 +230,8 @@ class ArtifactViewing(
                 if (start >= size) return ByteRange.Unsatisfiable
                 start..minOf(end, size - 1)
             }
-            return if (range.first == 0L && range.last == size - 1) ByteRange.Whole else ByteRange.Part(range)
+            // A range covering the whole file is still answered `206` with `Content-Range`, which media players expect.
+            return ByteRange.Part(range)
         }
     }
 }

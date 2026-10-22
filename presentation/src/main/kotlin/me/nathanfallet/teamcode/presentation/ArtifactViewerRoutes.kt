@@ -84,7 +84,8 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         val etag = "\"${head.file.sha256}${if (head.entry) "-page" else ""}\""
         // Cache headers go only on a file that is sent: an error after this point stays `no-store`.
         fun cacheable() {
-            call.response.header(HttpHeaders.CacheControl, if (head.anonymous) "private, max-age=60" else "private, max-age=3600, immutable")
+            // No longer than the grant's recheck, so a revoked viewer's browser stops showing the content as soon as the server does.
+            call.response.header(HttpHeaders.CacheControl, "private, max-age=30")
             call.response.header(HttpHeaders.ETag, etag)
         }
         if (call.request.headers.getAll(HttpHeaders.IfNoneMatch).orEmpty().flatMap { it.split(',') }.any { it.trim() == etag || it.trim() == "*" })
@@ -96,9 +97,10 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         cacheable()
         val bytes = content.bytes!!
         if (content.entry) {
-            val text = bytes.decodeToString()
-            val page = if (content.file.path.lowercase().endsWith(".md")) ArtifactPages.markdown(text, content.file.path.substringAfterLast('/')) else ArtifactPages.html(text)
-            return@get call.respondText(page, ContentType.Text.Html.withCharset(Charsets.UTF_8))
+            if (content.file.path.lowercase().endsWith(".md"))
+                return@get call.respondText(ArtifactPages.markdown(bytes.decodeToString(), content.file.path.substringAfterLast('/')), ContentType.Text.Html.withCharset(Charsets.UTF_8))
+            val (page, utf8) = ArtifactPages.html(bytes)
+            return@get call.respondBytes(page, if (utf8) ContentType.Text.Html.withCharset(Charsets.UTF_8) else ContentType.Text.Html)
         }
         call.response.header(HttpHeaders.AcceptRanges, "bytes")
         // Only `.html`/`.htm` are HTML; Markdown that is not the entry page is shown as text.
@@ -200,7 +202,8 @@ private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean
     val manageAccess = shell.member && (owner || administrator)
     val invite = shell.member && (owner || artifact.relation == ArtifactMemberRole.EDITOR.wire)
     val byline = if (shell.member) "${escape(artifact.ownerName)} · " else ""
-    val latest = if (version.number == artifact.currentVersion) "" else """ · <a href="/artifact/$id">latest is v${artifact.currentVersion}</a>"""
+    // Only members learn that newer versions exist: a public link pinned to an older one says nothing about them.
+    val latest = if (!shell.member || version.number == artifact.currentVersion) "" else """ · <a href="/artifact/$id">latest is v${artifact.currentVersion}</a>"""
     val panels = buildList {
         if (shell.member && shell.versions.size > 1) add("""<details><summary>Versions</summary><div class="panel"><ul>""" + shell.versions.joinToString("") {
             val current = if (it.number == version.number) " aria-current=\"page\"" else ""

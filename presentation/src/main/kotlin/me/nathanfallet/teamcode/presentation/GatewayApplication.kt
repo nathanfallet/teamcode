@@ -58,7 +58,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         exception<CancellationException> { _, error -> throw error }
         // An unexpected failure under the content prefix still answers through the pipeline, so it keeps `no-store`.
         exception<Throwable> { call, error ->
-            if (!isArtifactContent(call.request.path()) || call.response.isCommitted) throw error
+            // Request errors keep their own status (the engine maps them, and the caching plugin still adds `no-store`).
+            if (!isArtifactContent(call.request.path()) || call.response.isCommitted || error is io.ktor.server.plugins.BadRequestException ||
+                error is io.ktor.server.plugins.NotFoundException) throw error
             call.application.environment.log.error("Artifact content failed", error)
             call.respondText("Request failed.", ContentType.Text.Plain, HttpStatusCode.InternalServerError)
         }
@@ -128,7 +130,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     // assets, live polls or form posts, which render no menu).
                     if (artifactViewing != null && artifacts != null && path.startsWith("/dashboard") && principal.serviceScopes == null &&
                         call.request.httpMethod == HttpMethod.Get && !path.startsWith("/dashboard/assets/") && !path.endsWith("/live"))
-                        call.attributes.put(ARTIFACTS_ACTIVE, artifactViewing.availability(principal.teamId).active)
+                        // A failure there hides the menu entry instead of failing an unrelated page.
+                        call.attributes.put(ARTIFACTS_ACTIVE, try { artifactViewing.availability(principal.teamId).active } catch (error: CancellationException) { throw error } catch (_: Exception) { false })
                     if (path !in setOf("/api/v1/auth/me", "/api/v1/auth/password", "/api/v1/auth/logout", "/dashboard/password", "/dashboard/logout")) {
                         if (principal.member.passwordChangeRequired && path.startsWith("/dashboard")) {
                             call.respondRedirect("/dashboard/password"); finish()
