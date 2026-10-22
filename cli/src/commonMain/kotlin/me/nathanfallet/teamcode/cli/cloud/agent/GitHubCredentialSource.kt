@@ -5,8 +5,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.nathanfallet.teamcode.api.models.RunnerGitHubView
 
-/** The execution owner's GitHub user token and the login of the linked account. The token never appears in `toString`. */
-internal class GitHubToken(val token: String, val login: String?) {
+/** The execution owner's GitHub user token, its expiry (null when unknown) and the linked login. The token never appears in `toString`. */
+internal class GitHubToken(val token: String, val login: String?, val expiresAt: Long? = null) {
     override fun toString() = "GitHubToken(login=$login, token=[REDACTED])"
 }
 
@@ -40,7 +40,7 @@ internal class GitHubCredentialSource(
             asked = true
             val fresh = view.token?.takeIf { view.status == "linked" && it.isNotBlank() }
             if (fresh == null) { current = null; renewAt = now() + RETRY_MILLIS; return@withLock null }
-            current = GitHubToken(fresh, view.login?.takeIf { it.isNotBlank() })
+            current = GitHubToken(fresh, view.login?.takeIf { it.isNotBlank() }, view.expiresAt)
             // A token with an unknown expiry is asked for again soon; otherwise renew with a margin.
             renewAt = view.expiresAt?.let { it - RENEW_MARGIN_MILLIS } ?: (now() + UNKNOWN_EXPIRY_MILLIS)
         }

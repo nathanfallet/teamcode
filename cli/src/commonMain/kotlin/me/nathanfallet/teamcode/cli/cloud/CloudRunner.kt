@@ -147,14 +147,6 @@ internal class RunnerLoop(
     }
 }
 
-/**
- * The token sources the runner serves to the agent's git helper: the execution owner's GitHub token, renewed through
- * the runner channel. This is the only place a source is plugged in. A server that does not advertise GitHub
- * answers an error, which the source treats as no credential. The same GitHub source also feeds the agent's `gh`
- * configuration, so `git` and `gh` always hold the same token.
- */
-internal fun credentialSources(github: GitHubCredentialSource): List<CredentialSource> = listOf(github)
-
 /** `teamcode cloud runner`: started inside the session pod; reads its coordinates from the pod environment. */
 internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
     override val hiddenFromHelp = true
@@ -195,6 +187,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             val localToken = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
             val scope = CoroutineScope(SupervisorJob())
             var lifeline: UnixConnection? = null
+            var githubCli: GitHubCliRenewal? = null
+            var githubCliJob: Job? = null
             val proxy = proxyServer(inferenceClient, localToken, 0, upstreamReady = { inference.available() }) { echo(it, err = true) }
             try {
                 proxy.start(wait = false)
@@ -205,14 +199,17 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 // supervisor there, and the helper in that container fetches git credentials from this process.
                 val processes = environment("TEAMCODE_AGENT_SOCKET")?.takeIf { it.isNotBlank() }?.let { RemoteProcesses(it, scope, log = { message -> echo(message, err = true) }) }
                 lifeline = processes?.let { try { it.hold() } catch (error: CancellationException) { throw error } catch (_: Exception) { echo("The agent container is not reachable.", err = true); null } }
+                // The one GitHub source: the execution owner's token, renewed through the runner channel, served to the
+                // agent's git helper and written to its `gh` configuration, so `git` and `gh` always hold the same token.
+                // A server that does not advertise GitHub answers an error, which the source treats as no credential.
                 val github = GitHubCredentialSource({ client.runnerGitHub(RunnerGitHubRequest(team, session, epoch)) })
                 environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { socket ->
-                    val broker = CredentialBroker(listenUnix(socket), credentialSources(github), log = { message -> echo(message, err = true) })
+                    val broker = CredentialBroker(listenUnix(socket), listOf(github), log = { message -> echo(message, err = true) })
                     scope.launch { broker.serve() }
                 }
                 // The agent's `gh` reads the owner's token from a memory volume only this container writes.
-                environment("TEAMCODE_GH_CONFIG_DIR")?.takeIf { it.isNotBlank() }?.let { directory ->
-                    scope.launch { GitHubCliRenewal(github, GitHubCliConfig(directory), log = { message -> echo(message, err = true) }).run() }
+                githubCli = environment("TEAMCODE_GH_CONFIG_DIR")?.takeIf { it.isNotBlank() }?.let { directory ->
+                    GitHubCliRenewal(github, GitHubCliConfig(directory), log = { message -> echo(message, err = true) })
                 }
                 val startProcess: suspend (AgentCommand, Map<String, String?>, String) -> AgentProcess = { command, overrides, directory ->
                     processes?.start(command.command, command.arguments, overrides, directory) ?: startAgentProcess(command.command, command.arguments, overrides, directory)
@@ -229,10 +226,22 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                         inference.available()
                         if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
                     }, tools = tools)
-                try { RunnerLoop(calls, log = log, prepare = { EnvironmentPreparation(preparation, commands, workspace, log = log).run() }, agent = agent).run() }
+                val prepare: suspend () -> Boolean = {
+                    val prepared = EnvironmentPreparation(preparation, commands, workspace, log = log).run()
+                    // The first write happens here, after registration and before the agent starts, so its first `gh` is authenticated.
+                    githubCli?.takeIf { prepared && githubCliJob == null }?.let { renewal ->
+                        val wait = renewal.refresh()
+                        githubCliJob = scope.launch { renewal.run(wait) }
+                    }
+                    prepared
+                }
+                try { RunnerLoop(calls, log = log, prepare = prepare, agent = agent).run() }
                 catch (error: RunnerLoop.RunnerRefused) { echo("The server refused this runner (HTTP ${error.status}).", err = true); RunnerLoop.EXIT_REFUSED }
             } finally {
                 withContext(NonCancellable) {
+                    // Joined, so the owner's token is removed from the gh configuration before the process exits.
+                    githubCliJob?.cancelAndJoin()
+                    githubCli?.clear()
                     scope.cancel()
                     lifeline?.close()
                     inference.clear()

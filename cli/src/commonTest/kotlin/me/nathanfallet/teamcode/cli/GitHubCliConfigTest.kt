@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -26,11 +27,11 @@ class GitHubCliConfigTest {
         assertEquals("""
             github.com:
                 users:
-                    octo-cat:
+                    "octo-cat":
                         oauth_token: ghu_owner_token
                 git_protocol: https
                 oauth_token: ghu_owner_token
-                user: octo-cat
+                user: "octo-cat"
 
         """.trimIndent(), hosts())
         assertEquals(listOf(GitHubCliConfig.HOSTS_FILE), FileSystem.SYSTEM.list(directory).map { it.name }, "No temporary file is left behind")
@@ -41,6 +42,8 @@ class GitHubCliConfigTest {
         assertEquals("github.com:\n    git_protocol: https\n    oauth_token: ghu_owner_token\n", hosts())
         assertEquals("github.com:\n    git_protocol: https\n    oauth_token: ghu_t\n", GitHubCliConfig.hostsYaml(GitHubToken("ghu_t", "bad login: x")),
             "A login that is not a GitHub login is left out rather than written into the YAML")
+        assertTrue("user: \"octocat_acme\"" in GitHubCliConfig.hostsYaml(GitHubToken("ghu_t", "octocat_acme"))!!, "Enterprise Managed User logins")
+        assertTrue("user: \"123\"" in GitHubCliConfig.hostsYaml(GitHubToken("ghu_t", "123"))!!, "Quoted: a numeric login stays a string")
     }
 
     @Test fun noTokenOrAnUnsafeTokenRemovesTheFileSoGhIsUnauthenticated() {
@@ -48,7 +51,7 @@ class GitHubCliConfigTest {
         config.write(null)
         assertNull(hosts())
         config.write(GitHubToken("ghu_owner_token", "octo"))
-        config.write(GitHubToken("ghu_x\n    oauth_token: injected", "octo"))
+        assertFalse(config.write(GitHubToken("ghu_x\n    oauth_token: injected", "octo")))
         assertNull(hosts(), "A token that would change the YAML's structure is never written")
         config.write(null) // Already gone: succeeds.
     }
@@ -62,7 +65,7 @@ class GitHubCliConfigTest {
         private val wake = Channel<Unit>(Channel.UNLIMITED)
         val source = GitHubCredentialSource({ calls++; answer() }, now = { clock })
         val job = scope.launch {
-            GitHubCliRenewal(source, config, now = { clock }, sleep = { waits += it; wake.receive(); clock += it }, log = { logs += it }).run()
+            GitHubCliRenewal(source, config, now = { clock }, sleep = { waits += it; wake.receive(); clock += it }, log = { logs += it }, io = Dispatchers.Unconfined).run()
         }
         fun next() = wake.trySend(Unit)
     }
@@ -70,7 +73,7 @@ class GitHubCliConfigTest {
     @Test fun renewsBeforeExpiryFollowsTheServersCurrentOwnerAndRemovesTheFileWhenNoLinkIsLeft() = runTest {
         val h = Harness(this, config) { RunnerGitHubView("linked", "ghu_owner_a_1", 3_600_000, "member-a") }
         runCurrent()
-        assertTrue("ghu_owner_a_1" in hosts()!!); assertTrue("user: member-a" in hosts()!!)
+        assertTrue("ghu_owner_a_1" in hosts()!!); assertTrue("user: \"member-a\"" in hosts()!!)
         assertEquals(listOf(3_600_000 - GitHubCredentialSource.RENEW_MARGIN_MILLIS), h.waits, "Sleeps until the renewal margin")
 
         // The token is renewed shortly before it expires: the file holds the new one, never both.
@@ -81,7 +84,7 @@ class GitHubCliConfigTest {
         // The server answers for the execution's current owner on every call: member B's token replaces A's.
         h.answer = { RunnerGitHubView("linked", "ghu_owner_b", 10_800_000, "member-b") }
         h.next(); runCurrent()
-        assertTrue("user: member-b" in hosts()!!); assertTrue("ghu_owner_b" in hosts()!!)
+        assertTrue("user: \"member-b\"" in hosts()!!); assertTrue("ghu_owner_b" in hosts()!!)
         assertFalse("ghu_owner_a" in everything() || "member-a" in everything(), "Nothing of the former owner is left")
 
         // B unlinks: gh becomes unauthenticated, it never falls back to an earlier token.
@@ -146,5 +149,39 @@ class GitHubCliConfigTest {
         runCurrent()
         assertEquals(GitHubCredentialSource.RETRY_MILLIS, h.waits.single())
         h.job.cancel(); runCurrent()
+    }
+
+    @Test fun anExpiredTokenIsRemovedWhenItCannotBeRenewed() = runTest {
+        var fail = false
+        val h = Harness(this, config) { if (fail) throw IllegalStateException("down") else RunnerGitHubView("linked", "ghu_expiring", 1_000_000, "octo") }
+        runCurrent()
+        fail = true
+        h.next(); runCurrent() // At the renewal margin: still valid, kept.
+        assertTrue("ghu_expiring" in hosts()!!)
+        h.next(); runCurrent() // 30 s later: still before the expiry.
+        assertNotNull(hosts())
+        h.next(); runCurrent() // Past the expiry: gh must not claim a login with a dead token.
+        assertNull(hosts())
+        h.job.cancel(); runCurrent()
+    }
+
+    @Test fun aTokenThatCannotBeWrittenIsLoggedOnceWithoutItsValue() = runTest {
+        val h = Harness(this, config) { RunnerGitHubView("linked", "ghu-not.github's", 3_600_000, "octo") }
+        runCurrent()
+        assertNull(hosts())
+        h.next(); runCurrent()
+        assertEquals(listOf("The GitHub token was not written to the gh configuration: unexpected format."), h.logs)
+        assertEquals(GitHubCliRenewal.IDLE_MILLIS, h.waits.last())
+        h.job.cancel(); runCurrent()
+    }
+
+    @Test fun theFirstPassIsDoneBeforeTheLoopSoTheAgentStartsWithTheFile() = runTest {
+        val source = GitHubCredentialSource({ RunnerGitHubView("linked", "ghu_first", 3_600_000, "octo") }, now = { 0 })
+        val renewal = GitHubCliRenewal(source, config, now = { 0 }, io = Dispatchers.Unconfined)
+        val wait = renewal.refresh()
+        assertTrue("ghu_first" in hosts()!!, "Written before the runner launches the loop and starts the agent")
+        assertEquals(3_600_000 - GitHubCredentialSource.RENEW_MARGIN_MILLIS, wait)
+        renewal.clear()
+        assertNull(hosts())
     }
 }

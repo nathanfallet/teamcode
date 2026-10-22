@@ -40,13 +40,8 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         val body = call.jsonBody<RunnerEnvironmentRequest>()
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
         val prepared = channel.runner.environment(pod.teamId, pod.sessionId, pod.epoch)
-        val github = when (val access = prepared.github) {
-            is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt, access.token.login)
-            GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
-            GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
-        }
         call.respond(RunnerEnvironmentView(prepared.spec.view(), RunnerGitIdentityView(prepared.git.name, prepared.git.email),
-            prepared.variables.values, prepared.variables.unavailable, github))
+            prepared.variables.values, prepared.variables.unavailable, prepared.github.view()))
     }
     post(RUNNER_PATH + "preparation") {
         val body = call.jsonBody<RunnerPreparationRequest>()
@@ -66,12 +61,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         post(RUNNER_PATH + "github") {
             val body = call.jsonBody<RunnerGitHubRequest>()
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
-            val view = when (val access = github.access(pod.teamId, pod.sessionId, pod.epoch)) {
-                is GitHubAccess.Linked -> RunnerGitHubView("linked", access.token.token, access.token.expiresAt, access.token.login)
-                GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
-                GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
-            }
-            call.respond(view)
+            call.respond(github.access(pod.teamId, pod.sessionId, pod.epoch).view())
         }
     }
     channel.inference?.let { inference ->
@@ -83,4 +73,11 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt, credential.lifetimeMillis))
         }
     }
+}
+
+/** The runner's view of the owner's GitHub access, the same for preparation and renewal. */
+private fun GitHubAccess.view() = when (this) {
+    is GitHubAccess.Linked -> RunnerGitHubView("linked", token.token, token.expiresAt, token.login)
+    GitHubAccess.NotLinked -> RunnerGitHubView("not_linked")
+    GitHubAccess.Unavailable -> RunnerGitHubView("unavailable")
 }
