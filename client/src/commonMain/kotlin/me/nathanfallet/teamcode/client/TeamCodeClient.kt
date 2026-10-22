@@ -346,7 +346,8 @@ class TeamCodeClient(
      * handled. [types] keeps only those event types. [onGap] is called with the oldest retained sequence when events after
      * [after] were purged, before the stream continues from there, so the caller reloads what it shows. The feed never
      * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
-     * [TeamCodeException] on a network failure or a malformed stream. Event types are an open list; unknown ones reach
+     * on a network failure ([TeamCodeException] with status `0` once the stream is open, the engine's exception before) or
+     * on an unreadable event ([TeamCodeException] with code [MALFORMED_EVENT]). Event types are an open list; unknown ones reach
      * [onEvent] like the others.
      */
     suspend fun followTeamEvents(
@@ -371,25 +372,7 @@ class TeamCodeClient(
      * [endEvent] when the stream has one) ending it, unnamed frames skipped and every other frame handed to [onFrame].
      * A stream that closes, breaks a bound or carries an undecodable event throws [TeamCodeException] with status `0`.
      */
-    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd = try {
-        openStream(path, after, endEvent, onFrame)
-    } catch (error: CancellationException) {
-        // A timeout can reach here as a cancellation of the call alone: only the caller's own cancellation propagates.
-        currentCoroutineContext().ensureActive()
-        throw TeamCodeException(0, "The event stream timed out.", error)
-    } catch (failure: CallbackFailure) {
-        // The caller's own exception, thrown by its handler: never disguised as a network failure.
-        throw failure.error
-    } catch (error: TeamCodeException) {
-        throw error
-    } catch (error: Exception) {
-        // Offline, DNS, TLS or connect timeout before the first byte: the same reconnect contract as a cut stream.
-        throw TeamCodeException(0, "The event stream could not be opened.", error)
-    }
-
-    private class CallbackFailure(val error: Throwable) : Exception()
-
-    private suspend fun openStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
+    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
         http.prepareGet("$origin$path") {
             authenticate()
             after?.let { header("Last-Event-ID", it.toString()) }
@@ -404,15 +387,7 @@ class TeamCodeClient(
                     name == null -> Unit
                     name == "denied" -> end = CloudStreamEnd.DENIED
                     name == endEvent -> end = CloudStreamEnd.ENDED
-                    else -> try {
-                        onFrame(frame)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: TeamCodeException) {
-                        throw error // A malformed event, from decodeFrame.
-                    } catch (error: Exception) {
-                        throw CallbackFailure(error)
-                    }
+                    else -> onFrame(frame)
                 }
                 end == null
             }
@@ -423,7 +398,7 @@ class TeamCodeClient(
         Serialization.json.decodeFromString<T>(frame.data)
     } catch (error: IllegalArgumentException) {
         // SerializationException is an IllegalArgumentException.
-        throw TeamCodeException(0, "The event stream sent a malformed event.", error)
+        throw TeamCodeException(0, "The event stream sent a malformed event.", MALFORMED_EVENT, error)
     }
 
     /** [idempotencyKey] makes a retry return the first acknowledgement instead of sending the message twice. */
@@ -672,6 +647,11 @@ class TeamCodeClient(
     companion object {
         val FORWARDED_HEADERS: Set<String> = me.nathanfallet.teamcode.api.InferenceHeaders.names
         // The server validates the names; this only keeps what would break the comma-separated query out.
+        /**
+         * The [TeamCodeException.code] of a stream event this client cannot read (undecodable or over the size bound).
+         * Reconnecting replays the same event, so a caller stops (or updates) instead of retrying forever.
+         */
+        const val MALFORMED_EVENT = "malformed_event"
         private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
         private const val MAX_ERROR_BODY = 16 * 1024
@@ -702,7 +682,7 @@ class TeamCodeException(
     /** The transport or decoding failure behind a status `0` stream failure, kept for diagnostics. */
     override val cause: Throwable? get() = failure
 
-    internal constructor(statusCode: Int, message: String, cause: Throwable) : this(statusCode, message) { failure = cause }
+    internal constructor(statusCode: Int, message: String, code: String?, cause: Throwable) : this(statusCode, message, code) { failure = cause }
 }
 
 /** `Retry-After` as delta seconds; HTTP dates and malformed values are ignored. */

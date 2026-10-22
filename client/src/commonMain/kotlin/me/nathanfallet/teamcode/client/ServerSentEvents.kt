@@ -30,7 +30,7 @@ internal suspend fun readServerSentEvents(
             throw error
         } catch (error: Exception) {
             // An over-long line (Ktor's TooLongLineException) or a broken transport: reconnect like a closed stream.
-            throw TeamCodeException(0, "The event stream failed.", error)
+            throw TeamCodeException(0, "The event stream failed.", null, error)
         } ?: throw TeamCodeException(0, "The event stream closed.")
         val field = line.substringBefore(':')
         // "field: value" loses exactly one leading space after the colon; a line without a colon is a field with no value.
@@ -47,7 +47,7 @@ internal suspend fun readServerSentEvents(
             field == "data" -> {
                 if (hasData) data.append('\n')
                 data.append(value); hasData = true
-                if (data.length > maxData) throw TeamCodeException(0, "An event of the stream exceeds the limit.")
+                if (data.length > maxData) throw TeamCodeException(0, "An event of the stream exceeds the limit.", TeamCodeClient.MALFORMED_EVENT)
             }
         }
     }

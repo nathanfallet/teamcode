@@ -136,6 +136,7 @@ class EventStreamTest {
         client(cloudEvent(1)).use { client ->
             val error = assertFailsWith<TeamCodeException> { client.followCloudEvents("s1", 0) { } }
             assertEquals(0, error.statusCode)
+            assertNull(error.code) // Transient: reconnect.
         }
     }
 
@@ -143,6 +144,7 @@ class EventStreamTest {
         val body = "event: message.agent\n" + "data: ${"x".repeat(100)}\n".repeat(20) + "\n"
         val error = assertFailsWith<TeamCodeException> { readServerSentEvents(ByteReadChannel(body), maxData = 1_000) { true } }
         assertEquals(0, error.statusCode)
+        assertEquals(TeamCodeClient.MALFORMED_EVENT, error.code)
     }
 
     @Test fun theReaderParsesFieldsWithoutASpaceOrAValue() = runTest {
@@ -162,8 +164,9 @@ class EventStreamTest {
 
     @Test fun aMalformedGapOrEventThrowsSoTheCallerReconnects() = runTest {
         client("event: gap\ndata: {}\n\n", "event: cloud.turn\ndata: not json\n\n").use { client ->
-            assertEquals(0, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.statusCode)
-            assertEquals(0, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.statusCode)
+            // A distinct code: reconnecting would replay the same event, so the caller must not retry blindly.
+            assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)
+            assertEquals(TeamCodeClient.MALFORMED_EVENT, assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }.code)
         }
     }
 
@@ -176,13 +179,11 @@ class EventStreamTest {
         }
     }
 
-    @Test fun aConnectionFailureThrowsTeamCodeExceptionWithItsCause() = runTest {
+    @Test fun aConnectionFailureReachesTheCallerAsTheEngineReportsIt() = runTest {
         TeamCodeClient("https://team.example", { "synthetic-token" }) { configure ->
             HttpClient(MockEngine { throw IllegalStateException("offline") }) { configure(this) }
         }.use { client ->
-            val error = assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 1) { } }
-            assertEquals(0, error.statusCode)
-            assertEquals("offline", error.cause?.message)
+            assertEquals("offline", assertFailsWith<IllegalStateException> { client.followTeamEvents(after = 1) { } }.message)
         }
     }
 
