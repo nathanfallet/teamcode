@@ -1,5 +1,11 @@
 # Implementation status
 
+## Artifact tickets for apps (2026-10-22)
+
+`POST /api/v1/artifacts/{id}/tickets` gives an interactive login the [view ticket](artifacts.md#serving-and-access) the viewer page would mint, as a `contentUrl`, so the companion app shows an artifact in its own web view; at most 60 a minute per login session, advertised as `artifacts.tickets.v1`. The viewer page offers **Open in app** (`teamcode://open?url=…`) on phones and tablets. The typed client gains `issueArtifactTicket`. No schema change and no new query.
+
+Evidence: `ArtifactViewerRoutesTest` (the ticket serving the entry page and its files, an older version, a missing version or a member without access `404`, artifacts off `404`, no login `401`, a service key `403`, one version read per ticket, the per-minute limit with `Retry-After`, the link only for members on a phone).
+
 ## Team feed: a cloud session waiting for a person (2026-10-22)
 
 `cloud.session.waiting` (`reason` `permission` or `question`, `requestId`, `eventSeq`) is published in the team event feed, and to its webhooks, when a session's runner uploads a `permission.request`, and `cloud.session.answered` (`requestId`, `behavior`, `reason`, `eventSeq`) when a member's answer is consumed by the agent (`reason` `answered`) or when the runner denied the request at the team's deadline (`reason` `expired`, `behavior` `deny`, `eventSeq` the `permission.expired` event), so an expired request ends the wait like an answer. All are published in the transaction that stores the transcript event, after its other writes, like `cloud.turn`, and in transcript order with the turns of the same batch; none carries the tool input, the question or the answer. Evidence: `CloudConversationPersistenceTest` (MySQL 8.4, run locally) reads them from `SqlTeamEventStore` for the session owner, in order, without the question's text; a request and its turn end uploaded in one batch keep their order, an unanswerable request id is left out, and an expiry publishes `answered` with `deny`/`expired` pointing at its event. No pod was run. Built on the permission relay above (maintainer decisions of 2026-10-22).

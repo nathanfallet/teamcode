@@ -43,6 +43,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         cloudOperations()
         webhookOperations()
         artifactOperations()
+        artifactTicketOperations()
         artifactMemberOperations()
     }.operations
 }

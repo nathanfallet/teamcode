@@ -213,6 +213,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (artifactAdmin != null && team != null) artifactSettingsRoutes(artifactAdmin, publicOrigin)
         if (artifacts != null && team != null) artifactRoutes(artifacts, publicOrigin)
         if (artifacts != null && artifactViewing != null && team != null) artifactViewerRoutes(artifactViewing, artifacts, team, publicOrigin)
+        if (artifacts != null && artifactViewing != null && team != null) artifactTicketRoutes(artifactViewing, publicOrigin)
         if (cancellation != null && team != null) {
             post("/api/v1/requests/{id}/cancel") {
                 cancellation.cancel(call.principal, call.parameters["id"].orEmpty())
@@ -260,7 +261,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
                     (if (team != null && github != null) listOf("github.link.v1") else emptyList()) +
                     // Published, served and viewed: whether a team can use them right now is its settings' business.
-                    (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1") else emptyList())))
+                    (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1", "artifacts.tickets.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()

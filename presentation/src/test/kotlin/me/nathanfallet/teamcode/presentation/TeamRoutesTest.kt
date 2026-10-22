@@ -124,6 +124,7 @@ internal class FakeTeam : TeamService {
         "admin" -> admin
         "temporary" -> admin.copy(member = admin.member.copy(passwordChangeRequired = true))
         "member" -> admin.copy(member = admin.member.copy(role = Role.MEMBER))
+        "service" -> admin.copy(member = admin.member.copy(role = Role.MEMBER), tokenId = "key", serviceScopes = setOf(ServiceScope.ARTIFACTS_READ, ServiceScope.ARTIFACTS_WRITE))
         else -> null
     }
     override suspend fun login(username: String, password: String, device: String, installationId: String?) = LoginSession("admin", admin, Long.MAX_VALUE)

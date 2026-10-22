@@ -71,7 +71,10 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
                 return@get call.respondRedirect("/dashboard/login?next=" + ("/artifact/$id" + (requested?.let { "?v=$it" } ?: "")).encodeURLParameter())
             throw error
         }
-        call.respondText(viewerPage(shell, viewer, requested != null), ContentType.Text.Html)
+        // Phones and tablets get a link that opens the artifact in the TeamCode app (which asks for its own ticket).
+        val appLink = if (shell.member && MOBILE_AGENT.containsMatchIn(call.request.headers[HttpHeaders.UserAgent].orEmpty()))
+            "teamcode://open?url=" + ("$origin/artifact/$id" + (requested?.let { "?v=$it" } ?: "")).encodeURLParameter() else null
+        call.respondText(viewerPage(shell, viewer, requested != null, appLink), ContentType.Text.Html)
     }
 
     get("/artifact/{id}/{ticket}/{path...}") {
@@ -192,7 +195,10 @@ private fun card(artifact: Artifact): String {
 }
 
 /** The viewer: a bar with the title, version, sharing and files, and the content in a sandboxed frame below. */
-private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean): String {
+/** User agents of the platforms the app runs on as a phone or tablet app; the desktop app opens links itself. */
+private val MOBILE_AGENT = Regex("iPhone|iPad|Android")
+
+private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean, appLink: String? = null): String {
     val artifact = shell.artifact
     val version = shell.version
     val id = escape(artifact.id)
@@ -219,7 +225,7 @@ private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean
     val live = if (shell.member && !pinned) """<p id="artifact-newer" class="notice" hidden>A newer version is published. <a href="/artifact/$id">Show it</a></p><script src="/dashboard/assets/artifact-viewer.js" defer></script>""" else ""
     val back = if (shell.member) """<a class="brand" href="$ARTIFACT_GALLERY_PATH" title="Artifacts"><span class="glyph" aria-hidden="true"></span></a>""" else """<span class="brand"><span class="glyph" aria-hidden="true"></span></span>"""
     val bar = """<header class="viewer-bar" data-artifact="$id" data-version="${version.number}">$back<div class="viewer-title"><h1>${escape(title)}</h1>""" +
-        """<small>$byline<span class="chip">${escape(artifact.access.wire)}</span> v${version.number} · ${time(version.createdAt)}$latest</small></div>""" +
+        """<small>$byline<span class="chip">${escape(artifact.access.wire)}</span> v${version.number} · ${time(version.createdAt)}$latest${appLink?.let { """ · <a href="${escape(it)}" class="open-in-app">Open in app</a>""" }.orEmpty()}</small></div>""" +
         """<div class="viewer-panels">${panels.joinToString("")}</div></header>"""
     val frame = """<iframe class="viewer-frame" src="/artifact/$id/${escape(shell.ticket)}/${escape(version.entry)}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="${escape(title)}"></iframe>"""
     return viewerShell(title, bar + banner + live + frame)

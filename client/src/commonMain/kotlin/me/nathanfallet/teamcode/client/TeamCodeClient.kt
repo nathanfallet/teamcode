@@ -315,6 +315,10 @@ class TeamCodeClient(
     suspend fun artifact(id: String): ArtifactView { identifier(id); return request("/api/v1/artifacts/$id", HttpMethod.Get) }
     suspend fun artifactVersions(id: String): List<ArtifactVersionView> { identifier(id); return request("/api/v1/artifacts/$id/versions", HttpMethod.Get) }
     suspend fun artifactVersion(id: String, number: Int): ArtifactVersionView { identifier(id); return request("/api/v1/artifacts/$id/versions/$number", HttpMethod.Get) }
+    /** A view ticket for [version] (the current one when null), to show the content in an app (`artifacts.tickets.v1`, interactive logins). */
+    suspend fun issueArtifactTicket(id: String, version: Int? = null): ArtifactTicketView {
+        identifier(id); return request("/api/v1/artifacts/$id/tickets", HttpMethod.Post, IssueArtifactTicketRequest(version))
+    }
     /** The bytes of one file of a version, at most [maxBytes]. */
     suspend fun artifactFile(id: String, number: Int, path: String, maxBytes: Long = 16L * 1024 * 1024): ByteArray {
         identifier(id)

@@ -323,6 +323,65 @@ class ArtifactViewerRoutesTest {
         }
         assertEquals(HttpStatusCode.Found, deleted.status); assertTrue("delete" in store.calls)
     }
+
+    private suspend fun ApplicationTestBuilder.ticket(token: String?, body: String? = null) = client.post("/api/v1/artifacts/$id/tickets") {
+        token?.let { bearerAuth(it) }
+        body?.let { contentType(ContentType.Application.Json); setBody(it) }
+    }
+
+    @Test fun anAppGetsAMemberTicketWithTheViewerRightsAndNothingMore() = testApplication {
+        val store = Store(); install(store)
+        val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("member") }.bodyAsText()).features
+        assertTrue("artifacts.tickets.v1" in features)
+        // The current version by default; the content URL serves the entry page and its files, no credential needed.
+        val issued = ticket("member")
+        assertEquals(HttpStatusCode.OK, issued.status)
+        val view = Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.ArtifactTicketView>(issued.bodyAsText())
+        assertEquals(2, view.version)
+        assertTrue(view.contentUrl.startsWith("$origin/artifact/$id/") && view.contentUrl.endsWith("/"))
+        val path = view.contentUrl.removePrefix(origin)
+        assertEquals(HttpStatusCode.OK, client.get(path).status)
+        assertEquals(HttpStatusCode.OK, client.get(path + "site.css").status)
+        assertEquals(0, view.expiresAt % ArtifactViewing.TICKET_STEP_MILLIS)
+        // The same ticket as the viewer page: one version read, which is what audits an administrator's look.
+        assertEquals(1, store.calls.count { it == "version:2" })
+        // An older version on request; a version that does not exist, or a member without access, is 404.
+        assertEquals(1, Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.ArtifactTicketView>(ticket("member", "{\"version\":1}").bodyAsText()).version)
+        assertEquals(HttpStatusCode.NotFound, ticket("member", "{\"version\":3}").status)
+        assertEquals(HttpStatusCode.NotFound, ticket("member", "{\"version\":0}").status)
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/artifacts/not-an-id/tickets") { bearerAuth("member") }.status)
+        store.relation = null
+        assertEquals(HttpStatusCode.NotFound, ticket("member").status, "Personal and not shared")
+        store.relation = "owner"; store.active = false
+        assertEquals(HttpStatusCode.NotFound, ticket("member").status, "Artifacts turned off")
+        store.active = true
+        // Signed out, or a service key (the route is interactive only).
+        assertEquals(HttpStatusCode.Unauthorized, ticket(null).status)
+        assertEquals(HttpStatusCode.Forbidden, ticket("service").status)
+    }
+
+    @Test fun ticketsAreLimitedPerLoginSessionAndMinute() = testApplication {
+        var now = 1_000_000_000_000L
+        val store = Store(); install(store) { now }
+        repeat(ArtifactViewing.TICKETS_PER_MINUTE) { assertEquals(HttpStatusCode.OK, ticket("member").status, "ticket ${it + 1}") }
+        val refused = ticket("member")
+        assertEquals(HttpStatusCode.TooManyRequests, refused.status)
+        assertEquals("60", refused.headers[HttpHeaders.RetryAfter])
+        assertTrue("artifact_ticket_rate_limited" in refused.bodyAsText())
+        now += 60_000
+        assertEquals(HttpStatusCode.OK, ticket("member").status, "A new minute")
+    }
+
+    @Test fun phonesAreOfferedToOpenTheArtifactInTheApp() = testApplication {
+        val store = Store(); install(store)
+        fun agent(ua: String) = suspend { client.get("/artifact/$id?v=1") { header(HttpHeaders.Cookie, "teamcode_session=member"); header(HttpHeaders.UserAgent, ua) }.bodyAsText() }
+        val phone = agent("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)")()
+        assertTrue("href=\"teamcode://open?url=${"$origin/artifact/$id?v=1".encodeURLParameter()}\"" in phone, phone)
+        assertFalse("teamcode://" in agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0)")())
+        // A visitor of a public link has no account to open it with.
+        store.access = ArtifactAccess.PUBLIC
+        assertFalse("teamcode://" in client.get("/artifact/$id") { header(HttpHeaders.UserAgent, "Android 15") }.bodyAsText())
+    }
 }
 
 /** An implementation that fails on any call: the delegating fakes above override only what the routes use. */

@@ -84,6 +84,9 @@ data class ArtifactShell(val artifact: Artifact, val version: ArtifactVersion, v
     /** Signed in and allowed to read the artifact as a member (not only through its public link). */
     val member: Boolean)
 
+/** A member's ticket for one version, handed to an app that shows the content itself; [expiresAt] in epoch milliseconds. */
+data class IssuedTicket(val version: Int, val ticket: String, val expiresAt: Long)
+
 /** One file to send, or only its metadata when the viewer's cached copy is current. */
 class ArtifactContent(val file: ArtifactFile, val bytes: ByteArray?, val totalSize: Long, val range: LongRange?, val anonymous: Boolean, val entry: Boolean)
 
@@ -155,6 +158,47 @@ class ArtifactViewing(
         return ArtifactShell(public.artifact, public.version, listOf(public.version), null, ticket, member = false)
     }
 
+    /**
+     * A ticket for version [requested] (the current one when null) of [artifactId], for an app signed in as a member: the
+     * same ticket the viewer page mints, with the same rights (an administrator's read of a personal artifact is
+     * audited by the version read). Interactive logins only, at most [TICKETS_PER_MINUTE] a minute per login session.
+     * Anything the member may not read, and artifacts turned off, are `404`.
+     */
+    suspend fun ticket(viewer: Principal, artifactId: String, requested: Int?): IssuedTicket {
+        viewer.requireInteractive()
+        if (!ArtifactService.ID.matches(artifactId) || (requested != null && requested < 1)) throw notFound()
+        val now = clock()
+        admitTicket(viewer.tokenId, now)
+        if (!store.availability(viewer.teamId).active) throw notFound()
+        val readable = try { artifacts.artifact(viewer, artifactId) } catch (error: TeamFailure) {
+            if (error.status == 404 || error.status == 409) throw notFound()
+            throw error
+        }
+        if (readable.currentVersion < 1) throw notFound()
+        val number = requested ?: readable.currentVersion
+        try { artifacts.version(viewer, artifactId, number) } catch (error: TeamFailure) {
+            if (error.status == 404 || error.status == 409) throw notFound()
+            throw error
+        }
+        val expiresAt = stable(now + MEMBER_TICKET_MILLIS, TICKET_STEP_MILLIS)
+        return IssuedTicket(number, tickets.issue(ViewTicket(artifactId, number, viewer.member.id, viewer.tokenId, expiresAt)), expiresAt)
+    }
+
+    private class TicketWindow(val startedAt: Long, var count: Int)
+    private val ticketWindows = object : LinkedHashMap<String, TicketWindow>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TicketWindow>) = size > MAX_CACHED_TICKETS
+    }
+
+    /** A fixed one-minute window per login session on this replica; `429 artifact_ticket_rate_limited` past it. */
+    private fun admitTicket(tokenId: String, now: Long) {
+        val retryAfter = synchronized(ticketWindows) {
+            val window = ticketWindows[tokenId]?.takeIf { now - it.startedAt < 60_000 } ?: TicketWindow(now, 0).also { ticketWindows[tokenId] = it }
+            if (window.count >= TICKETS_PER_MINUTE) ((window.startedAt + 60_000 - now + 999) / 1_000).coerceAtLeast(1)
+            else { window.count++; null }
+        } ?: return
+        throw TeamFailure("artifact_ticket_rate_limited", 429, "Too many artifact views were opened in a minute. Try again in a moment.", retryAfterSeconds = retryAfter)
+    }
+
     /** The current version number for a signed-in member, so the viewer page can offer a newer one. */
     suspend fun latest(viewer: Principal, artifactId: String): Int = artifacts.artifact(viewer, artifactId).currentVersion
 
@@ -206,6 +250,8 @@ class ArtifactViewing(
         /** A member's ticket lives as long as a dashboard session at most (8 hours), and never beyond the session itself. */
         const val MEMBER_TICKET_MILLIS = 8 * 3_600_000L
         const val PUBLIC_TICKET_MILLIS = 3_600_000L
+        /** Tickets an app may ask for per login session and minute: opening, switching versions and renewing stay far below. */
+        const val TICKETS_PER_MINUTE = 60
         private const val MAX_CACHED_TICKETS = 10_000
         /**
          * Expiries are rounded down to this step, so reloading the viewer gives the same content URLs (browser cache,
