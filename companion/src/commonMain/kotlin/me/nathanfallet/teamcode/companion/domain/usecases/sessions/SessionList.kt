@@ -86,6 +86,9 @@ data class SessionList(
 
     private fun remembered(id: String) = (if (outside.size >= MAX_OUTSIDE) outside.drop(outside.size - MAX_OUTSIDE + 1).toSet() else outside) + id
 
+    /** [sessionId] cannot be read (gone, or hidden from this member): it leaves the list and its turns are not read again. */
+    fun forgotten(sessionId: String): SessionList = copy(sessions = sessions.filterNot { it.id == sessionId }, outside = remembered(sessionId))
+
     fun opened(sessionId: String): SessionList = copy(finishedTurns = finishedTurns - sessionId)
 
     private fun belongs(session: CloudSession) = session.state.group == group && (scope == SessionScope.TEAM || session.ownerId == memberId)

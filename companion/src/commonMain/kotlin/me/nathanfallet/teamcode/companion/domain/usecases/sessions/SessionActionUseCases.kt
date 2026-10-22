@@ -74,7 +74,10 @@ internal fun PendingMessage.received(receipt: InputReceipt): PendingMessage = co
  */
 fun List<PendingMessage>.reconciled(events: List<TranscriptEvent>): List<PendingMessage> {
     if (isEmpty()) return this
-    val recorded = events.mapNotNullTo(mutableSetOf()) { (it as? TranscriptEvent.UserMessage)?.inputId }
+    // Recorded as a message, or consumed by the agent: a message too large for the event cap is recorded only as a size
+    // marker without its input id, but its input is still marked consumed.
+    val recorded = events.mapNotNullTo(mutableSetOf()) { (it as? TranscriptEvent.UserMessage)?.inputId } +
+        events.mapNotNull { (it as? TranscriptEvent.InputChanged)?.takeIf { e -> e.status == "consumed" }?.inputId }
     val refused = events.filterIsInstance<TranscriptEvent.InputChanged>().filter { it.status == "rejected" || it.status == "cancelled" }.associateBy { it.inputId }
     return mapNotNull { message ->
         val id = message.inputId

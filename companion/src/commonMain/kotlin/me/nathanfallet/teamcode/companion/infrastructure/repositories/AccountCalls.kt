@@ -49,7 +49,9 @@ internal fun Exception.translated(credentialsFailure: Boolean = false, resource:
         statusCode == 0 -> CompanionException.Unreachable()
         statusCode == 401 && credentialsFailure -> CompanionException.InvalidCredentials()
         statusCode == 401 -> CompanionException.Unauthorized()
-        resource && (statusCode == 403 || statusCode == 404) -> CompanionException.NotFound()
+        // The server hides what a member may not read behind 404; a 403 is a refusal of the action (a role, a scope), not a
+        // missing resource, and keeps its code.
+        resource && statusCode == 404 -> CompanionException.NotFound()
         statusCode == 429 -> CompanionException.RateLimited(retryAfterSeconds)
         statusCode == 400 && code == "invalid_password" -> CompanionException.PasswordRejected(code)
         else -> CompanionException.Server(statusCode, code)

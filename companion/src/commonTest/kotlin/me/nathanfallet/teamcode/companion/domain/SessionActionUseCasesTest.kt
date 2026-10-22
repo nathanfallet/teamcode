@@ -70,6 +70,12 @@ class SessionActionUseCasesTest {
         assertEquals(PendingMessage.State.REFUSED, left[0].state); assertEquals("delivery_failed", left[0].reason)
     }
 
+    @Test fun aConsumedInputSettlesAMessageRecordedOnlyAsASizeMarker() {
+        val pending = listOf(PendingMessage("c1", "long", PendingMessage.State.SENT, inputId = "i1"))
+        val events = listOf(TranscriptEvent.Truncated(1, 1, "message.user", 70_000), TranscriptEvent.InputChanged(2, 2, "i1", "consumed", null))
+        assertTrue(pending.reconciled(events).isEmpty())
+    }
+
     @Test fun nothingToInterruptIsNotAFailureAndControlsFollowTheRole() = runTest {
         val control = ControlSessionUseCase(sessions, guard, SequenceIds())
         assertTrue(control.interrupt("a1", "s1", control.interruptKey()))

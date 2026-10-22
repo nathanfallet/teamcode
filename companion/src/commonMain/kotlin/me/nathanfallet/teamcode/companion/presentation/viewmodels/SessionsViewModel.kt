@@ -165,9 +165,7 @@ class SessionsViewModel(
         when {
             session != null -> state.update { it.copy(list = it.list?.upserted(session)) }
             // Gone or hidden (a transfer to someone else): it leaves the list.
-            outcome.exceptionOrNull() is CompanionException.NotFound -> state.update { current ->
-                current.copy(list = current.list?.let { it.copy(sessions = it.sessions.filterNot { s -> s.id == sessionId }) })
-            }
+            outcome.exceptionOrNull() is CompanionException.NotFound -> state.update { it.copy(list = it.list?.forgotten(sessionId)) }
             // Unreachable for a moment: the next event or reload brings it.
         }
     }

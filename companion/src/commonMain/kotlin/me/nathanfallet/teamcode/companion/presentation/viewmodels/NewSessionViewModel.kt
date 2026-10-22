@@ -55,7 +55,10 @@ class NewSessionViewModel(
         viewModelScope.launch {
             try {
                 val (profiles, acceptsMessage) = loadProfiles(route.accountId)
+                val before = state.value
                 state.update { it.copy(profiles = profiles, acceptsMessage = acceptsMessage, profileId = it.profileId ?: profiles.singleOrNull()?.id, loadingProfiles = false) }
+                // What is sent changed (the first message now announced or not, a profile picked): a new creation.
+                if (state.value.form() != before.form()) key = ids.newId()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

@@ -40,15 +40,7 @@ class ReconnectPolicy(
     }
 }
 
-/**
- * Runs [connect] again and again until the stream ends: a network failure, a closed stream, a `408`, `429` or `5xx`
- * reconnect after the policy's delay ([LiveUpdate.Reconnecting] says when); `ENDED` emits [LiveUpdate.Ended] and
- * completes; `DENIED` and every other refusal end the flow with a [CompanionException] (a `401` is
- * [CompanionException.Unauthorized], an unreadable event [CompanionException.UnreadableEvent], which a reconnection
- * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent, and calls
- * [StreamProgress.opened] once accepted and [StreamProgress.itemSent] after each item. [resource] says whether the stream
- * belongs to one resource (a session), whose `403` or `404` means it is gone, or to the caller (the team feed).
- */
+/** What [reconnecting] needs to hear from a connection: accepted, and each item sent. */
 internal interface StreamProgress {
     fun opened()
     fun itemSent()
@@ -59,6 +51,15 @@ private fun monotonicMillis(): () -> Long {
     return { origin.elapsedNow().inWholeMilliseconds }
 }
 
+/**
+ * Runs [connect] again and again until the stream ends: a network failure, a closed stream, a `408`, `429` or `5xx`
+ * reconnect after the policy's delay ([LiveUpdate.Reconnecting] says when); `ENDED` emits [LiveUpdate.Ended] and
+ * completes; `DENIED` and every other refusal end the flow with a [CompanionException] (a `401` is
+ * [CompanionException.Unauthorized], an unreadable event [CompanionException.UnreadableEvent], which a reconnection
+ * would replay). [connect] keeps its own cursor so that each attempt resumes after the last item it sent, and calls
+ * [StreamProgress.opened] once accepted and [StreamProgress.itemSent] after each item. [resource] says whether the stream
+ * belongs to one resource (a session), whose `403` or `404` means it is gone, or to the caller (the team feed).
+ */
 internal fun <T> reconnecting(
     policy: ReconnectPolicy,
     resource: Boolean,

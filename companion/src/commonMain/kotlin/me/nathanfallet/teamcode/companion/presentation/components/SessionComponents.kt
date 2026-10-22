@@ -101,9 +101,12 @@ fun ConfirmingLinks(content: @Composable () -> Unit) {
     }
 }
 
-/** An absolute `http` or `https` URL with a host, without control characters. */
+/**
+ * An absolute `http` or `https` URL with a host, without control characters, nor format characters (bidirectional
+ * overrides, zero-width marks) that would make the URL shown for confirmation read differently from the one opened.
+ */
 fun isWebLink(uri: String): Boolean {
-    if (uri.any { it.isISOControl() || it.isWhitespace() }) return false
+    if (uri.any { it.isISOControl() || it.isWhitespace() || it.category == CharCategory.FORMAT }) return false
     val scheme = uri.substringBefore("://", "").lowercase()
     if (scheme != "http" && scheme != "https") return false
     val host = uri.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')

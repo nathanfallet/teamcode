@@ -48,9 +48,11 @@ def base_build(version)
   (major * 1_000_000 + minor * 1_000 + patch) * 100
 end
 
+# [uploaded] is every build number the store holds; only this version's range counts.
 def next_build(version, uploaded)
   base = base_build(version)
-  build = [base, uploaded.to_i + 1].max
+  mine = Array(uploaded).compact.map(&:to_i).select { |code| code >= base && code < base + 100 }
+  build = mine.empty? ? base : mine.max + 1
   UI.user_error!("Version #{version} was uploaded 100 times: publish a new version.") if build >= base + 100
   build
 end
@@ -60,7 +62,7 @@ platform :ios do
   lane :beta do |options|
     version = release_version(options)
     latest = latest_testflight_build_number(api_key_path: ASC_KEY, version: version, initial_build_number: 0)
-    build = next_build(version, latest)
+    build = next_build(version, [latest])
     UI.message("TeamCode #{version}, build #{build}")
 
     # Automatic signing with the App Store Connect key (cloud signing): no certificate needs to be in the keychain.
@@ -99,12 +101,16 @@ platform :android do
     unless File.exist?(fastlane_file("keystore.jks")) && ENV["SIGNING_STORE_PASSWORD"] && ENV["SIGNING_KEY_ALIAS"] && ENV["SIGNING_KEY_PASSWORD"]
       UI.user_error!("fastlane/keystore.jks and SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD are needed to sign the bundle.")
     end
+    # A wrong or expired key fails here, before any track is read: a read failure is never taken for an empty track.
+    validate_play_store_json_key(json_key: PLAY_KEY)
     uploaded = %w[internal alpha beta production].flat_map do |track|
       google_play_track_version_codes(json_key: PLAY_KEY, track: track)
-    rescue StandardError
-      [] # A track that was never used.
+    rescue StandardError => error
+      # Only a track that holds no release yet is empty; anything else stops the lane.
+      raise unless error.message.match?(/track|not found|no releases/i)
+      []
     end
-    build = next_build(version, uploaded.max)
+    build = next_build(version, uploaded)
     UI.message("TeamCode #{version}, versionCode #{build}")
 
     gradle(

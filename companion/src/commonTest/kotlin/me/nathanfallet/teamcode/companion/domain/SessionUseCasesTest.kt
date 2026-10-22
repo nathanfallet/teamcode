@@ -104,6 +104,9 @@ class SessionUseCasesTest {
         assertNull(remembered.applied(change(2, "old")).second)
         // An event saying its state changed reads it again, and the page that brings it forgets it.
         assertEquals("old", remembered.applied(change(3, "old", "cloud.session.resumed", state = SessionState.READY)).second)
+        // A session that cannot be read leaves the list and its turns are not read again.
+        val hidden = active.forgotten("a")
+        assertTrue(hidden.sessions.isEmpty()); assertNull(hidden.applied(change(5, "a")).second)
         assertTrue("old" !in remembered.appended(SessionPage(listOf(cloudSession("old", createdAt = 1)), null)).outside)
         // A turn never runs in a paused or ended session: those lists never read one.
         val paused = SessionList(SessionScope.TEAM, SessionGroup.PAUSED, "m1")

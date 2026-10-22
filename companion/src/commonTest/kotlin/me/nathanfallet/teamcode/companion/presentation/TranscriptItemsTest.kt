@@ -50,6 +50,9 @@ class TranscriptItemsTest {
     @Test fun onlyWebLinksWithAHostOpen() {
         assertTrue(isWebLink("https://example.org/a?b#c"))
         assertTrue(isWebLink("HTTP://example.org"))
+        // A bidirectional override or a zero-width mark would make the confirmed URL read differently.
+        assertFalse(isWebLink("https://good.example\u202E/moc.live"))
+        assertFalse(isWebLink("https://good\u200B.example"))
         for (link in listOf("javascript:alert(1)", "file:///etc/passwd", "intent://x#Intent;end", "https://", "https:// example.org", "mailto:a@b.c", "https://example.org/\u0000"))
             assertFalse(isWebLink(link), link)
     }

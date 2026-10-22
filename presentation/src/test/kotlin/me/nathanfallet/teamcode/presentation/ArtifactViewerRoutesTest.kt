@@ -348,6 +348,9 @@ class ArtifactViewerRoutesTest {
         // An older version on request; a version that does not exist, or a member without access, is 404.
         assertEquals(1, Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.ArtifactTicketView>(ticket("member", "{\"version\":1}").bodyAsText()).version)
         assertEquals(HttpStatusCode.NotFound, ticket("member", "{\"version\":3}").status)
+        // No body at all, an empty one without a content type, or a malformed one.
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/artifacts/$id/tickets") { bearerAuth("member"); setBody("") }.status)
+        assertEquals(HttpStatusCode.BadRequest, ticket("member", "not json").status)
         assertEquals(HttpStatusCode.NotFound, ticket("member", "{\"version\":0}").status)
         assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/artifacts/not-an-id/tickets") { bearerAuth("member") }.status)
         store.relation = null
