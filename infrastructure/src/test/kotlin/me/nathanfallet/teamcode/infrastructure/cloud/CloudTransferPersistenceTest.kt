@@ -206,6 +206,15 @@ class CloudTransferPersistenceTest {
             shared.viewer to ("editor" to "session_transfer"), shared.editor to ("editor" to "invited")), members)
         assertEquals(setOf(from), ra.database.query { Artifacts.select(Artifacts.ownerId).where { Artifacts.id inList shared.all }.map { it[Artifacts.ownerId] }.toSet() })
         assertEquals(3L, ra.database.query { AuditEvents.selectAll().where { AuditEvents.action eq "artifact.member_added" }.count() })
+        // A later transfer of the same session passes on what the recipient received from it and their own artifacts from it,
+        // never what they were invited to.
+        val next = t.outsider.member.id
+        val later = ra.store.now()
+        ra.database.query { grantSessionArtifacts(teamId, s.id, to, next, to, later) }
+        assertEquals(setOf(shared.created, shared.updated, shared.viewer, shared.recipients), ra.database.query {
+            ArtifactMembers.selectAll().where { ArtifactMembers.memberId eq next }.map { it[ArtifactMembers.artifactId] }.toSet()
+        })
+        ra.database.query { ArtifactMembers.deleteWhere { ArtifactMembers.memberId eq next } }
 
         // The next execution runs for the recipient; the first one stays the former owner's.
         val pod = CloudSessionService.podName(s.id, 2)

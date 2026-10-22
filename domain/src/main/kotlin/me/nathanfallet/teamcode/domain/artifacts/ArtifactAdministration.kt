@@ -90,6 +90,9 @@ data class ArtifactAvailability(val active: Boolean, val reason: String?) {
 /** What one owner's published (active) artifacts hold, for the settings page; drafts hold nothing yet. */
 data class ArtifactMemberUsage(val memberId: String, val username: String, val artifacts: Int, val bytes: Long)
 
+/** The team's stored bytes (all its published artifacts) and the largest owners. */
+data class ArtifactUsage(val teamBytes: Long, val members: List<ArtifactMemberUsage>)
+
 data class ArtifactAdminOverview(val storage: ArtifactStorage?, val settings: ArtifactSettings, val inUse: Boolean) {
     val availability get() = ArtifactAvailability.of(settings, storage)
 }
@@ -136,7 +139,7 @@ interface ArtifactAdminStore {
     /** The storage, the settings and [inUse] read in one transaction, for the settings page and the admin API. */
     suspend fun overview(actor: Principal): ArtifactAdminOverview
     /** Owners by stored bytes, largest first, at most [ArtifactAdministrationService.MAX_USAGE_ROWS]; read only by the settings page. */
-    suspend fun usage(actor: Principal): List<ArtifactMemberUsage> = emptyList()
+    suspend fun usage(actor: Principal): ArtifactUsage = ArtifactUsage(0, emptyList())
     /** Whether any artifact may still have files in the bucket (every state but a deleted one whose folder was proven empty). */
     suspend fun inUse(actor: Principal): Boolean
     /**
@@ -186,7 +189,7 @@ class ArtifactAdministrationService(
     /** For administrators: whether artifacts are active and why not. Members learn it from the publication policy (later). */
     suspend fun availability(actor: Principal): ArtifactAvailability = overview(actor).availability
     suspend fun overview(actor: Principal): ArtifactAdminOverview { actor.requireAdmin(); return store.overview(actor) }
-    suspend fun usage(actor: Principal): List<ArtifactMemberUsage> { actor.requireAdmin(); return store.usage(actor) }
+    suspend fun usage(actor: Principal): ArtifactUsage { actor.requireAdmin(); return store.usage(actor) }
 
     suspend fun saveSettings(actor: Principal, settings: ArtifactSettings): ArtifactSettings {
         actor.requireAdmin()

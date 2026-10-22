@@ -179,7 +179,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             AgentLaunch(emptyList(), emptyMap())
         } else AgentLaunch(emptyList(), emptyMap())
         val artifactServer = if (artifacts) try {
-            ArtifactsMcp(servicePlatform().executable, okio.FileSystem.SYSTEM.canonicalize(".".toPath()).toString())
+            ArtifactsMcp(servicePlatform().executable, okio.FileSystem.SYSTEM.canonicalize(".".toPath()).toString(),
+                configDir = me.nathanfallet.teamcode.cli.config.configPath().toPath().parent?.toString())
         } catch (error: CancellationException) { throw error } catch (_: Exception) {
             echo("The artifact tools could not be prepared; continuing without them.", err = true)
             null
@@ -204,7 +205,7 @@ private const val ARTIFACTS_POLICY_CAPABILITY = "artifacts.policy.v1"
  * session; [scratch] is the private directory read and merged files go to (a default under the configuration
  * directory when null); [refused] are paths below the roots that are never published.
  */
-internal class ArtifactsMcp(val command: String, val root: String, val scratch: String? = null, val refused: List<String> = emptyList())
+internal class ArtifactsMcp(val command: String, val root: String, val scratch: String? = null, val refused: List<String> = emptyList(), val configDir: String? = null)
 
 /** The agent-side name of the artifact tools; never a team server's label, which always starts with `teamcode-`. */
 internal const val ARTIFACTS_MCP_LABEL = "teamcode_artifacts"
@@ -258,6 +259,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
     fun mcpUrl(server: String) = "http://127.0.0.1:$port/mcp/$server"
     // The artifact tools reach the same proxy's artifact relay; the token never goes on a command line.
     val artifactArguments = artifacts?.let { listOf("mcp", "artifacts", "--root", it.root) + (it.scratch?.let { dir -> listOf("--scratch", dir) } ?: emptyList()) +
+        (it.configDir?.let { dir -> listOf("--config-dir", dir) } ?: emptyList()) +
         (runId?.let { id -> listOf("--run", id) } ?: emptyList()) + it.refused.flatMap { path -> listOf("--refuse", path) } }
     val relay = "http://127.0.0.1:$port"
     // Agent options go before a literal "--" delimiter, and after the caller's own options because

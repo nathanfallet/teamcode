@@ -65,5 +65,23 @@ class ArtifactSourcesTest {
         assertTrue("never published" in refusal(configured, "config/config.json"))
         assertEquals("<html>merged</html>", configured.read("config/artifacts/run/page.html", "page.html").bytes.decodeToString())
         assertTrue("never published" in refusal(configured, "config/artifacts/run/kept/notes.txt"), "The exception never lifts another refusal")
+
+        // A refused directory named through a link is refused all the same.
+        fs.createSymlink(base / "home-link", root / ".home")
+        val linked = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((base / "home-link").toString()))
+        assertTrue("never published" in refusal(linked, ".home/notes.txt"))
+    }
+
+    @Test fun privateDirectoriesAreCreatedOrAlreadyPrivate() {
+        fs.createDirectories(base)
+        val fresh = base / "fresh"
+        assertTrue(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(fresh.toString()))
+        assertTrue(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(fresh.toString()), "An existing 0700 directory of this user")
+        val shared = base / "shared"
+        fs.createDirectories(shared)
+        platform.posix.chmod(shared.toString(), 493u)
+        assertFalse(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(shared.toString()), "A shared directory keeps its permissions and is refused")
+        fs.createSymlink(base / "link", fresh)
+        assertFalse(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory((base / "link").toString()), "Never a link")
     }
 }

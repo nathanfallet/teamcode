@@ -168,6 +168,11 @@ class ArtifactsMcpServerTest {
 
     @Test fun aLocalFailureIsNotReportedAsTheServer() = runBlocking {
         val server = Server()
+        val (badMember, badText) = server.tool("share", buildJsonObject { put("artifact", id); put("member", "two words"); put("remove", true) })
+        assertTrue(badMember); assertTrue(badText.startsWith("invalid_argument"), badText)
+        val team = Server().apply { relation = "team" }
+        assertTrue("untrusted" in Json.parseToJsonElement(team.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"]!!.jsonPrimitive.content)
+        assertNull(Json.parseToJsonElement(server.tool("list", JsonObject(emptyMap())).second).jsonObject["warning"], "Only one's own artifacts: no warning")
         Files.createDirectories(scratch.resolve("$id/v1/index.html"))
         val (failed, text) = server.tool("read", buildJsonObject { put("artifact", id); put("version", 1) })
         assertTrue(failed); assertTrue(text.startsWith("local_error") && "retrying does not help" in text, text)

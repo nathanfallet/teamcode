@@ -101,8 +101,9 @@ internal fun Route.artifactSettingsRoutes(artifacts: ArtifactAdministrationServi
             """<label>Delete shared artifacts after (days, empty to keep) <input name="sharedRetentionDays" inputmode="numeric" value="${days(settings.retention.sharedDays)}"></label>""" +
             """<label>Versions kept per artifact <input name="maxVersionsPerArtifact" inputmode="numeric" required value="${settings.retention.maxVersionsPerArtifact}"></label>""" +
             """<button>Save settings</button></form>"""
-        val members = artifacts.usage(actor)
-        val used = members.sumOf { it.bytes }
+        val report = artifacts.usage(actor)
+        val members = report.members
+        val used = report.teamBytes
         val usage = """<h2>Usage</h2><p>${byteSize(used)} of ${byteSize(settings.quotas.teamBytes)} stored for the team, counting each file once per artifact; deleted artifacts are not counted.</p>""" +
             (if (members.isEmpty()) "<div class='empty'><strong>No artifact is stored.</strong></div>"
             else """<table><thead><tr><th>Member</th><th class="num">Artifacts</th><th class="num">Stored</th><th class="num">Of the member quota</th></tr></thead><tbody>""" +

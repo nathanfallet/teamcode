@@ -35,12 +35,16 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
     private val root by option("--root", help = "The directory files are published from (default: the current directory).").default(".")
     private val scratch by option("--scratch", help = "A private directory for the files read and merged (default: under the TeamCode configuration directory).")
     private val run by option("--run", help = "The agent run this server belongs to, recorded as the artifacts' origin.")
+    private val configDir by option("--config-dir", help = "The TeamCode configuration directory, never published (default: the one this process finds).")
     private val refuse by option("--refuse", help = "A directory below the roots whose files are never published. Repeatable.").multiple()
     override fun help(context: Context) = "The stdio MCP server agents publish artifacts with. teamcode run adds it to Claude Code and Codex; " +
         "outside it, it uses your stored teamcode login."
     override suspend fun run() {
         run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
-        val directory = scratch?.toPath() ?: (configPath().toPath().parent!! / "artifacts" / (run ?: "local")).also { default ->
+        // The launcher names its configuration directory: an agent passes a stdio server only some variables, so this
+        // process may not see the XDG_CONFIG_HOME the launcher used.
+        val configurationDirectory = configDir?.toPath() ?: configPath().toPath().parent!!
+        val directory = scratch?.toPath() ?: (configurationDirectory / "artifacts" / (run ?: "local")).also { default ->
             // The default's parent holds every run's scratch directory: private too.
             val parent = default.parent!!
             parent.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
@@ -49,7 +53,7 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
         privateDirectory(directory)
         val scratchPath = FileSystem.SYSTEM.canonicalize(directory)
         // The TeamCode configuration directory holds the member's login: never published, even when the root contains it.
-        val configuration = configPath().toPath().parent!!.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
+        val configuration = configurationDirectory.let { FileSystem.SYSTEM.metadataOrNull(it)?.let { _ -> FileSystem.SYSTEM.canonicalize(it) } ?: it }
         val client = client()
         client.use {
             val sources = ArtifactSources(listOf(root, scratchPath.toString()), refuse, refusedExcept = listOf(configuration.toString() to scratchPath.toString()))
@@ -87,6 +91,6 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
     }
 
     private fun privateDirectory(directory: Path) {
-        if (!ensurePrivateDirectory(directory.toString())) throw CliUserException("$directory cannot be made private to you.")
+        if (!ensurePrivateDirectory(directory.toString())) throw CliUserException("$directory must be a directory of yours readable by you only (mode 0700), or not exist yet.")
     }
 }

@@ -9,14 +9,18 @@ import java.nio.file.attribute.PosixFilePermissions
 internal actual fun ensurePrivateDirectory(path: String): Boolean = try {
     val directory = Paths.get(path)
     val posix = directory.fileSystem.supportedFileAttributeViews().contains("posix")
-    if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+    val created = !Files.exists(directory, LinkOption.NOFOLLOW_LINKS)
+    if (created) {
         if (posix) Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
         else Files.createDirectory(directory)
     }
+    val ownerOnly = PosixFilePermissions.fromString("rwx------")
     when {
         !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS) -> false
-        posix && Files.getOwner(directory, LinkOption.NOFOLLOW_LINKS).name != System.getProperty("user.name") -> false
-        else -> { if (posix) Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------")); true }
+        !posix -> true
+        Files.getOwner(directory, LinkOption.NOFOLLOW_LINKS).name != System.getProperty("user.name") -> false
+        created -> { Files.setPosixFilePermissions(directory, ownerOnly); true }
+        else -> Files.getPosixFilePermissions(directory, LinkOption.NOFOLLOW_LINKS) == ownerOnly
     }
 } catch (_: java.io.IOException) { false } catch (_: RuntimeException) { false }
 

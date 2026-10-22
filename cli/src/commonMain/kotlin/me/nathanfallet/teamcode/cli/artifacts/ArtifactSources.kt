@@ -36,6 +36,10 @@ class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<Str
      */
     private val refusedExcept: List<Pair<String, String>> = emptyList()) {
     private val roots: List<Path> = roots.map { fileSystem.canonicalize(it.toPath()) }.also { require(it.isNotEmpty()) }
+    // Compared with canonical paths: a refused directory reached through a link (or /tmp for /private/tmp) is still refused.
+    private fun canonical(path: String) = try { fileSystem.canonicalize(path.toPath()).toString() } catch (_: okio.IOException) { path }
+    private val refused: List<String> = refusedPrefixes.flatMap { listOf(it, canonical(it)) }.distinct()
+    private val refusedExceptCanonical: List<Pair<String, String>> = refusedExcept.map { (refused, kept) -> canonical(refused) to canonical(kept) }
 
     fun read(localPath: String, publishedPath: String): ArtifactSource {
         if ('\u0000' in localPath || localPath.isBlank()) refuse(localPath, "the path is empty or holds a NUL byte")
@@ -44,7 +48,7 @@ class ArtifactSources(roots: List<String>, private val refusedPrefixes: List<Str
         refusal(components)?.let { refuse(localPath, it) }
         val absolute = components.fold(root) { parent, name -> parent / name }.toString()
         fun under(prefix: String) = absolute == prefix || absolute.startsWith(prefix.trimEnd('/', '\\') + "/") || absolute.startsWith(prefix.trimEnd('/', '\\') + "\\")
-        (refusedPrefixes.firstOrNull(::under) ?: refusedExcept.firstOrNull { (refused, kept) -> under(refused) && !under(kept) }?.first)
+        (refused.firstOrNull(::under) ?: refusedExceptCanonical.firstOrNull { (refused, kept) -> under(refused) && !under(kept) }?.first)
             ?.let { refuse(localPath, "files under $it are never published") }
         val bytes = try { readWithoutLinks(root.toString(), components, ArtifactLimits.MAX_TEXT_FILE_BYTES) }
         catch (failure: SourceReadFailure) {

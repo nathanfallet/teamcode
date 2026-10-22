@@ -22,7 +22,12 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
         ArtifactAdminOverview(readStorage(actor.teamId), readSettings(actor.teamId), hasArtifacts(actor.teamId))
     }
 
-    override suspend fun usage(actor: Principal): List<ArtifactMemberUsage> = database.query { requireCurrent(this, actor); usage(actor.teamId) }
+    override suspend fun usage(actor: Principal): ArtifactUsage = database.query {
+        requireCurrent(this, actor)
+        val total = Artifacts.storedBytes.sum()
+        val teamBytes = Artifacts.select(total).where { (Artifacts.teamId eq actor.teamId) and (Artifacts.state eq "active") }.single()[total] ?: 0
+        ArtifactUsage(teamBytes, usage(actor.teamId))
+    }
 
     /** One grouped read of the team's published artifacts (`artifacts_team`), then the owners' names by primary key. */
     private fun usage(teamId: String): List<ArtifactMemberUsage> {
