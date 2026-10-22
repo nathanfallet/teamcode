@@ -35,7 +35,8 @@ object CloudConversationRules {
         Regex("(?<![A-Za-z0-9_-])tc(?:ex|sk|dv|ss)?_(?=[A-Za-z0-9_-]{0,256}[0-9])[A-Za-z0-9_-]{16,}"),
         Regex("(?:AKIA|ASIA)[A-Z0-9]{16}"),
         Regex("xox[abprs]-[A-Za-z0-9-]{10,}"),
-        Regex("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"),
+        // Anchored at a word start and possessive: `eyJeyJeyJ…` without a dot is scanned once, not once per `eyJ`.
+        Regex("(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}"),
         Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     )
     private val authorization = Regex("(?i)\\b(bearer|basic|token)\\s+([A-Za-z0-9._~+/=-]{12,})")
@@ -74,20 +75,26 @@ object CloudConversationRules {
 
     /**
      * Stricter than [looksLikeCredential], since a hit refuses a whole file. A `Basic` value counts only when it is
-     * base64 (padded or not) of a `user:password` pair. A `Bearer` or `Token` value counts when it is at least 16
+     * base64 (padded or not) of a `user:password` pair. A `Bearer` or `Token` value counts when it is at least 12
      * characters with letters and digits, or at least 32 with both cases, and is neither a path (`/api/v1/items`,
-     * `https://…`) nor an identifier made of lowercase words (`refresh_interval_v2`), which pages legitimately contain.
+     * `https://…`), nor an identifier made of lowercase words and numbers (`refresh_interval_v2`,
+     * `2024-10-22-rotation-notes`), nor a camel-case name (`getAccessTokenForCurrentUserSession`), which pages
+     * legitimately contain.
      */
     private fun looksLikeSecretValue(scheme: String, value: String): Boolean {
         val word = value.trimEnd('.')
         if (scheme.equals("basic", ignoreCase = true)) return basicPair(word)
         if (word.startsWith('/') || word.startsWith('.') || "://" in word) return false
-        if (word.length < 16 || word.none { it.isLetter() }) return false
+        if (word.length < 12 || word.none { it.isLetter() } || CAMEL_CASE.matches(word)) return false
         if (word.none { it.isDigit() } && (word.length < 32 || word.none { it.isUpperCase() } || word.none { it.isLowerCase() })) return false
         val segments = word.split('.', '_', '-', '/', '~', '+', '=').filter { it.isNotEmpty() }
-        val wordy = segments.size > 1 && segments.all { segment -> segment.all { it.isLowerCase() || it.isDigit() } && segment.count { it.isDigit() } <= 2 }
+        val wordy = segments.size > 1 && segments.all { segment ->
+            segment.all { it.isDigit() } || (segment.all { it.isLowerCase() || it.isDigit() } && segment.count { it.isDigit() } <= 2)
+        }
         return !wordy
     }
+
+    private val CAMEL_CASE = Regex("[a-z]+(?:[A-Z][a-z]+)+")
 
     /** Base64, padded or not, of printable text holding a colon: what `Authorization: Basic` carries. */
     private fun basicPair(word: String): Boolean {

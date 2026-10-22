@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.domain.artifacts
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.domain.team.*
 
 /** Where a publication came from. PR 2 publishes through the API only; runs and cloud sessions come with their launchers. */
@@ -168,10 +170,11 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         try { objects.put(connection, ArtifactKeys.blob(connection.prefix, blob.teamId, blob.artifactId, sha256), content) }
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { throw TeamFailure("artifact_storage_unavailable", 503, "The artifact storage did not accept the file. Send the last chunk again.", retryAfterSeconds = 5) }
+        // The blob is in the bucket: if it is not recorded, whatever the reason (a cancelled request included), it is
+        // marked for collection, without being cancelled itself, so it never sits uncounted in the folder.
         try { store.recordBlob(actor, uploadId, sha256) }
-        catch (error: CancellationException) { throw error }
-        catch (error: Exception) {
-            try { store.abandonBlob(blob) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+        catch (error: Throwable) {
+            withContext(NonCancellable) { try { store.abandonBlob(blob) } catch (_: Exception) { } }
             throw error
         }
         return receipt.copy(stored = true)

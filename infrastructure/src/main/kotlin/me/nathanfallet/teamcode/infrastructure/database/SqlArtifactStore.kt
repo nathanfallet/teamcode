@@ -74,7 +74,9 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         // The upload row alone is locked (never the artifact's, which a commit holds while it removes the upload), and only
         // around the insert and the count: chunks of one upload sent in parallel are counted one after the other, so the
         // last one sees all the others, while the checks above run concurrently.
-        ArtifactUploads.select(ArtifactUploads.id).where { ArtifactUploads.id eq uploadId }.forUpdate().singleOrNull()
+        // Read again under the lock: a commit, a refusal or the expiry job may have ended the upload while this request waited.
+        ArtifactUploads.select(ArtifactUploads.id).where { (ArtifactUploads.id eq uploadId) and (ArtifactUploads.expiresAt greater nowMillis()) }.forUpdate().singleOrNull()
+            ?: throw TeamFailure("artifact_upload_not_found", 404, "This upload does not exist, has expired or belongs to another credential. Start a new one.")
         // One row per (upload, file, chunk number) at its exact size: what an upload holds is bounded by what it announced.
         ArtifactUploadChunks.insertIgnore {
             it[ArtifactUploadChunks.uploadId] = uploadId; it[ArtifactUploadChunks.sha256] = sha256; it[ArtifactUploadChunks.number] = number

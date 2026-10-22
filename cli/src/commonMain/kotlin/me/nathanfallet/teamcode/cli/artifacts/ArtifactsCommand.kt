@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.artifacts
 
+import me.nathanfallet.teamcode.cli.platform.hostOs
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.*
@@ -202,11 +203,11 @@ private class ArtifactDelete : SuspendingCliktCommand(name = "delete") {
  * name, so `publish dist/index.html --file dist/app.js` keeps `./app.js` working. A file outside that directory needs
  * an explicit `PUBLISHED=PATH`.
  */
-internal fun publishedBesidePage(page: String, file: String): String {
+internal fun publishedBesidePage(page: String, file: String, ignoreCase: Boolean = hostOs() != "linux"): String {
     val directory = lexical(page).dropLast(1)
     val path = lexical(file)
-    // Compared without case, as published paths are: `Dist\\index.html` and `dist\\app.js` are beside each other on Windows.
-    val beside = path.size > directory.size && path.take(directory.size).zip(directory).all { (a, b) -> a.equals(b, ignoreCase = true) }
+    // Compared as the file system does: without case on Windows and macOS, where `Dist` and `dist` are one directory.
+    val beside = path.size > directory.size && path.take(directory.size).zip(directory).all { (a, b) -> a.equals(b, ignoreCase) }
     val published = path.drop(directory.size)
     if (!beside || ".." in published || published.first() == "/" || published.first().endsWith(':'))
         throw CliUserException("$file is outside the page's directory ${directory.joinToString("/").ifEmpty { "." }}. Say where it is published with PUBLISHED=$file.")

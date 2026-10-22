@@ -42,7 +42,8 @@ class ArtifactRulesCliTest {
         assertFailsWith<CliUserException> { publishedBesidePage("dist/index.html", "distribution/app.js") }
         assertEquals("app.js", publishedBesidePage("dist/index.html", "dist/sub/../app.js"))
         assertEquals("app.js", publishedBesidePage("dist/index.html", "dist//app.js"))
-        assertEquals("app.js", publishedBesidePage("Dist\\index.html", "dist\\app.js"))
+        assertEquals("app.js", publishedBesidePage("Dist\\index.html", "dist\\app.js", ignoreCase = true))
+        assertFailsWith<CliUserException> { publishedBesidePage("dist/index.html", "Dist/app.js", ignoreCase = false) }
         assertEquals("app.js", publishedBesidePage("/abs/dist/index.html", "/abs/dist/app.js"))
         assertFailsWith<CliUserException> { publishedBesidePage("dist/index.html", "dist/../shared/logo.png") }
         assertFailsWith<CliUserException> { publishedBesidePage("index.html", "../secret.txt") }

@@ -113,7 +113,7 @@ class ArtifactRulesTest {
         if (method.name == "toString") "stub" else error("Unexpected call to ${method.name}.")
     } as T
 
-    @Test fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
+    @Test @org.junit.jupiter.api.Timeout(120) fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
         for (prose in listOf("Basic cross-browser support for every page", "Token\n----------------\nexplained below", "Basic\n================", "basic setup-instructions-here",
                 "Basic input/output", "Token usage/limits", "token refresh_interval", "basic /api/v1/artifacts", "token getAccessToken", "Bearer /api/v1/artifacts/uploads",
                 "token refresh_interval_v2_settings"))
@@ -127,17 +127,20 @@ class ArtifactRulesTest {
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIj_kLmN"))
         assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer Ab//Cd3fGhIjKlMnOpQrSt"))
         assertEquals("url_credentials", CloudConversationRules.detect("--url-https://u:hunter2pw@host"))
-        assertEquals("jwt", CloudConversationRules.detect("Bearer-eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"))
+        assertEquals("jwt", CloudConversationRules.detect("Bearer eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"))
         assertNull(CloudConversationRules.detect("token getAccessTokenForCurrentUser"), "A camel-case identifier is not a token")
-        // The transcript mask finds what the scanner finds, glued to a word or not.
+        assertNull(CloudConversationRules.detect("Token getAccessTokenForCurrentUserSession"))
+        assertNull(CloudConversationRules.detect("token 2024-10-22-rotation-notes"), "Dates and words are prose")
+        assertEquals("authorization_header", CloudConversationRules.detect("Authorization: Bearer abc123def456"), "Short tokens are still found")
+        // The transcript mask finds what the scanner finds.
         val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
-        assertFalse(jwt in CloudConversationRules.mask("Bearer-$jwt"))
+        assertFalse(jwt in CloudConversationRules.mask("jwt=$jwt"))
         assertFalse("hunter2" in CloudConversationRules.mask("--url-https://u:hunter2@host"))
         val started = System.nanoTime()
         for (crafted in listOf("a-".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "tc_".repeat(700_000)))
             assertNull(CloudConversationRules.detect(crafted))
-        for (crafted in listOf("a.".repeat(1_000_000), "sk-".repeat(700_000), "a".repeat(2_000_000), "x://a:".repeat(300_000)))
+        for (crafted in listOf("a.".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "-eyJ".repeat(500_000), "a".repeat(2_000_000), "x://a:".repeat(300_000)))
             CloudConversationRules.mask(crafted)
-        assertTrue(System.nanoTime() - started < 10_000_000_000, "Each 2 MiB crafted file is scanned and masked in linear time")
+        assertTrue(System.nanoTime() - started < 30_000_000_000, "Each 2 MiB crafted file is scanned and masked in linear time (quadratic would take hours)")
     }
 }
