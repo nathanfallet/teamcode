@@ -38,7 +38,7 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         val now = nowMillis()
         // A state reported before a silence is not carried over it (it would be a guess); one reported during it is current.
         val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
-        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent && (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt]) { it[activity] = null; it[activityAt] = null } }
+        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent && (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS) { it[activity] = null; it[activityAt] = null } }
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 
@@ -48,9 +48,10 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
         val previous = row[AgentRuns.activityAt]
         val now = nowMillis()
-        // The same state writes nothing, except during a silence: the heartbeat that ends it would clear a report older than the silence.
-        val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
-        if (row[AgentRuns.activity] == activity.wire && previous != null && !silent) return@query RunActivityChange(id, activity, previous)
+        // The same state writes nothing, except during a silence when the stored report is older than the silence began: the heartbeat that ends it would clear it.
+        val silenceBegan = row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
+        val stale = now > silenceBegan && (previous ?: 0) <= silenceBegan
+        if (row[AgentRuns.activity] == activity.wire && previous != null && !stale) return@query RunActivityChange(id, activity, previous)
         if (AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now } == 0)
             throw TeamFailure("run_ended", 409, "This run has ended.")
         RunActivityChange(id, activity, now)

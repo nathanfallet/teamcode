@@ -5,7 +5,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
-import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 import me.nathanfallet.teamcode.api.models.RunIdentifiers
@@ -78,6 +78,11 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
                 next = pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value }?.also { pending.remove(it.first) } }
             }
         } finally { lock.unlock() }
+        // A hook that found the lock taken just after the last drain left its state behind: send it now.
+        pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value } }?.let { (run, latest) ->
+            pendingLock.withLock { if (pending[run] == latest) pending.remove(run) }
+            report(run, latest)
+        }
     }
     private suspend fun send(runId: String, state: String) {
         val seen = last[runId]
@@ -92,5 +97,5 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
         last.remove(runId); last[runId] = seen
         if (last.size > MAX_RUNS) last.remove(last.keys.first())
     }
-    private companion object { const val MAX_RUNS = 256; val REMEMBER = 5.minutes }
+    private companion object { const val MAX_RUNS = 256; val REMEMBER = 30.seconds }
 }

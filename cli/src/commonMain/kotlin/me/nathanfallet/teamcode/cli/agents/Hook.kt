@@ -39,6 +39,8 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
                             bridge.acknowledge(emission)
                         }
                     } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+                    // Nothing to say to the agent: answer now, the report finishes after.
+                    if (!written) { println("{}"); written = true }
                     report?.await()
                 }
             }
