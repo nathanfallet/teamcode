@@ -566,6 +566,49 @@ class CloudRoutesTest {
         } finally { runner.close() }
     }
 
+    @Test fun runnerReadsTheVariablesOfTheExecutionOwnerOnlyWhileTheSessionRuns() = testApplication {
+        val store = Store()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity? =
+                if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
+        }
+        val variables = CloudVariableSource { _, member ->
+            CloudVariables(if (member == colleague.id) mapOf("NPM_TOKEN" to "synthetic-colleague-value") else mapOf("NPM_TOKEN" to "synthetic-admin-value"))
+        }
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster), variables = RunnerVariablesUseCase(store, variables)),
+                publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.ACTIVE)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1, ownerId = colleague.id)
+        assertTrue("cloud.variables.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        suspend fun call(token: String?, epoch: Int = 1) = client.post("/api/v1/cloud/runner/variables") {
+            token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":$epoch}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, call(null).status)
+        assertEquals(HttpStatusCode.Unauthorized, call("colleague").status, "A member credential cannot read the runner's variables")
+        assertEquals(HttpStatusCode.Conflict, call("projected-pod-token-1", epoch = 2).status, "Another epoch is fenced")
+        assertEquals(HttpStatusCode.Conflict, call("projected-pod-token-1").status, "Not before the execution runs")
+        store.runs["s1" to 1] = store.runs.getValue("s1" to 1).copy(state = ExecutionState.RUNNING)
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        try {
+            val view = runner.runnerVariables(RunnerVariablesRequest("default", "s1", 1))
+            assertEquals(mapOf("NPM_TOKEN" to "synthetic-colleague-value"), view.variables)
+            assertFalse("synthetic-colleague-value" in view.toString())
+            // After a transfer the execution runs for the recipient: the former owner's values are never served again.
+            store.runs["s1" to 1] = store.runs.getValue("s1" to 1).copy(ownerId = admin.id)
+            assertEquals(mapOf("NPM_TOKEN" to "synthetic-admin-value"), runner.runnerVariables(RunnerVariablesRequest("default", "s1", 1)).variables)
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED)
+            assertEquals("variables_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
+                runner.runnerVariables(RunnerVariablesRequest("default", "s1", 1))
+            }.code)
+        } finally { runner.close() }
+    }
+
     @Test fun runnerReadsItsEnvironmentAndReportsPreparationThroughTheTypedClient() = testApplication {
         val store = Store()
         val cluster = object : ClusterPort by FakeCluster {

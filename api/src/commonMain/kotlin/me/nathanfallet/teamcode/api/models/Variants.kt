@@ -51,3 +51,13 @@ data class MemberVariantAssignmentsView(
 
 @Serializable
 data class BulkAssignmentResponse(val assigned: Int, val keptDirect: Int, val excluded: Int)
+
+/**
+ * The environment variables a member is assigned through `ENV` variants, with their values: the caller's own
+ * (`GET /api/v1/environment`) or a cloud session owner's for its runner. [unavailable] names assigned variables whose
+ * value cannot be read right now. Holds secrets: never log, persist or echo it.
+ */
+@Serializable
+class EnvironmentVariablesView(val variables: Map<String, String> = emptyMap(), val unavailable: List<String> = emptyList()) {
+    override fun toString() = "EnvironmentVariablesView(names=${variables.keys.sorted()}, unavailable=$unavailable, values=[REDACTED])"
+}

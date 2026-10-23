@@ -621,6 +621,8 @@ class TeamCodeClient(
     suspend fun runnerInference(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/inference", input)
     /** The execution owner's current GitHub token (`status` `linked`), or why there is none; keep it in memory only. */
     suspend fun runnerGitHub(input: RunnerGitHubRequest): RunnerGitHubView = coded(HttpMethod.Post, "/api/v1/cloud/runner/github", input)
+    /** The execution owner's current environment variables (`cloud.variables.v1`); keep them in memory only. */
+    suspend fun runnerVariables(input: RunnerVariablesRequest): EnvironmentVariablesView = coded(HttpMethod.Post, "/api/v1/cloud/runner/variables", input)
 
     /** Failures carry the server's error code (for example `cloud_permission_denied`), never its message. */
     private suspend inline fun <reified R, reified B> coded(method: HttpMethod, path: String, body: B?, crossinline configure: HttpRequestBuilder.() -> Unit = {}): R {
@@ -685,6 +687,9 @@ class TeamCodeClient(
 
     /** MCP servers currently assigned to the signed-in member; each has its own gateway endpoint. */
     suspend fun mcpServers(): List<McpServerView> = request("/api/v1/mcp/servers", HttpMethod.Get)
+
+    /** The signed-in member's environment variables, with values (`team.environment.v1`); never log or persist them. */
+    suspend fun environmentVariables(): EnvironmentVariablesView = request("/api/v1/environment", HttpMethod.Get)
 
     /**
      * Relays one MCP JSON-RPC message to the gateway endpoint of an assigned [server] and returns the gateway's status

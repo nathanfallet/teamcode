@@ -45,6 +45,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     private val noMcp by option("--no-mcp", help = "Do not connect the team MCP servers assigned to you for this launch.").flag()
     private val noTeamHooks by option("--no-team-hooks", help = "Do not install the team hooks you approved for this launch.").flag()
     private val noArtifacts by option("--no-artifacts", help = "Do not connect the artifact tools (teamcode mcp artifacts) for this launch.").flag()
+    private val noVariables by option("--no-variables", help = "Do not give the agent the environment variables assigned to you for this launch.").flag()
     private val workload by option("--workload", help = "Scheduling class for this launch; quotas and permissions still apply.").choice("interactive", "background").default("interactive")
     private val labels by option("--label", help = "key=value; repeatable. Attached to this launch; filter with teamcode sessions list --label.").multiple()
     private val arguments by argument("AGENT_ARGS").multiple()
@@ -77,6 +78,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val servers = assignedMcpServers(client, capabilities)
             val hooks = approvedTeamHooks(client, capabilities)
             val artifacts = artifactsAvailable(client, capabilities)
+            // Read before the agent starts: it begins with the current values in its environment.
+            val variables = assignedVariables(client, capabilities)
             // Whether the agent works or waits for a person: a state only, reported by the hooks that carry guidance.
             val activity = !noActivity && RUN_ACTIVITY_CAPABILITY in capabilities.features
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
@@ -84,7 +87,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                 val service = loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity)
+                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
@@ -93,7 +96,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(port, token, runId, servers, claudeLogin, hooks, artifacts, activity)
+                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -115,6 +118,26 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             "credential_scope" -> echo("This service key cannot publish artifacts (it needs artifacts:write); the artifact tools are not connected.", err = true)
         }
         return policy.canPublish
+    }
+    /**
+     * The environment variables assigned to this member, with their values, or null when the server does not serve
+     * them or they are turned off. Never blocks the launch: a failed read starts the agent without them (and a Claude
+     * Code session still gets them once the next refresh succeeds). Only names are ever printed.
+     */
+    private suspend fun assignedVariables(client: TeamCodeClient, capabilities: Capabilities): Map<String, String>? {
+        if (noVariables || ENVIRONMENT_CAPABILITY !in capabilities.features) return null
+        val view = try { client.environmentVariables() } catch (error: CancellationException) { throw error } catch (error: Exception) {
+            val code = (error as? me.nathanfallet.teamcode.client.TeamCodeException)?.code
+            echo(if (code == "credential_scope") "Environment variables are given to interactive logins only; this service key starts the agent without them."
+                else "Environment variables could not be read; starting the agent without them.", err = true)
+            return if (code == "credential_scope") null else emptyMap()
+        }
+        if (view.unavailable.isNotEmpty()) echo("Environment variables unavailable right now: ${view.unavailable.sorted().joinToString(", ")}.", err = true)
+        val refused = AgentEnvironment.refused(view.variables)
+        if (refused.isNotEmpty()) echo("Environment variables not given to the agent (reserved names): ${refused.joinToString(", ")}.", err = true)
+        val accepted = AgentEnvironment.accepted(view.variables)
+        if (accepted.isNotEmpty()) echo("Environment variables: ${accepted.keys.joinToString(", ")}.", err = true)
+        return accepted
     }
     /** The team MCP servers to connect for this launch: names only, never an upstream address or credential. */
     private suspend fun assignedMcpServers(client: TeamCodeClient, capabilities: Capabilities): List<String> {
@@ -162,7 +185,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
     /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
     private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
-    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean): Int {
+    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?): Int {
         val options = arguments.takeWhile { it != "--" }
         val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
@@ -201,8 +224,17 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer,
                 codexInstructions = codexInstructions)
-            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment) }
-            catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
+            // The variables go first: TeamCode's own settings always win (the server already refuses their names).
+            val environment = variables.orEmpty() + plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment
+            val variablesFile = if (agent == "claude" && variables != null) LocalEnvironmentFile.create(client, variables) { echo(it, err = true) } else null
+            return try {
+                coroutineScope {
+                    val refresh = variablesFile?.let { file -> launch { file.refresh.run() } }
+                    try { runInteractiveProcess(agent, plan.arguments, environment + (variablesFile?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it.path) }.orEmpty())) }
+                    finally { refresh?.cancel() }
+                }
+            } catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
+            finally { variablesFile?.close() }
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
         }
@@ -212,6 +244,35 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
 private const val RUN_LABELS_CAPABILITY = "team.runs.labels.v1"
 private const val RUN_ACTIVITY_CAPABILITY = "team.runs.activity.v1"
 private const val ARTIFACTS_POLICY_CAPABILITY = "artifacts.policy.v1"
+internal const val ENVIRONMENT_CAPABILITY = "team.environment.v1"
+
+/**
+ * The run's `CLAUDE_ENV_FILE` ([path]) and the values file it sources before each Bash command, both private
+ * (`0600`, in a `0700` directory under the TeamCode configuration directory). [refresh] rewrites the values file when
+ * the variables change; both are removed when the run ends. A script the user had in `CLAUDE_ENV_FILE` keeps running first.
+ */
+internal class LocalEnvironmentFile private constructor(val path: String, private val values: String, val refresh: EnvironmentRefresh) {
+    fun close() {
+        for (file in listOf(values, path)) try { okio.FileSystem.SYSTEM.delete(file.toPath(), mustExist = false) } catch (_: Exception) { }
+    }
+
+    companion object {
+        fun create(client: TeamCodeClient, variables: Map<String, String>, log: (String) -> Unit): LocalEnvironmentFile? = try {
+            val directory = configPath().toPath().parent?.div("environment") ?: error("No configuration directory.")
+            val name = secureRandomBytes(16).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+            val path = (directory / "$name.sh").toString()
+            val values = (directory / "$name.values.sh").toString()
+            val chained = environment(AgentEnvironment.CLAUDE_ENV_FILE)?.takeIf { it.isNotBlank() }
+            val refresh = EnvironmentRefresh({ client.environmentVariables() }, { writePrivateFile(values, it) }, variables, log = log)
+            refresh.start()
+            writePrivateFile(path, AgentEnvironment.localScript(values, chained))
+            LocalEnvironmentFile(path, values, refresh)
+        } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            log("The environment file could not be written; the agent keeps the variables it starts with.")
+            null
+        }
+    }
+}
 
 /**
  * `teamcode mcp artifacts`, started by the agent itself as a stdio server: [command] is this TeamCode executable and

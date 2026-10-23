@@ -55,7 +55,7 @@ class ApiDocsTest {
             accounts = AccountManagement(stub(), stub()), admission = stub(), directives = stub(), modelPolicies = stub(),
             routes = stub(), cancellation = RequestCancellationService(stub()), devices = stub(), serviceKeys = stub(),
             audit = stub(), pacingSettings = stub(), forecasts = stub(), groups = stub(), runs = stub(), budgetOverrides = stub(),
-            reconciliation = stub(), variants = stub(), skills = SkillCatalog(stub()), hooks = HookCatalog(stub()),
+            reconciliation = stub(), variants = stub(), environment = me.nathanfallet.teamcode.domain.variants.ResolveOwnEnvironmentUseCase(stub()), skills = SkillCatalog(stub()), hooks = HookCatalog(stub()),
             mcp = McpGateway(ResolveEffectiveVariantsUseCase(stub()), stub(), stub()), mcpAccess = stub(),
             cloudRuntime = CloudRuntimeService(stub(), "https://teamcode.example.org"), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(stub(), cluster),
             cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(sessionStore), AuthenticateRunnerUseCase(sessionStore, cluster),

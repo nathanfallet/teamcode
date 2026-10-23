@@ -289,6 +289,9 @@ data class RunnerInferenceRequest(val teamId: String, val sessionId: String, val
 /** Asks for the GitHub token of the member the execution runs for (`cloud.github.v1`). */
 @Serializable
 data class RunnerGitHubRequest(val teamId: String, val sessionId: String, val epoch: Int)
+/** Asks for the environment variables of the member the execution runs for (`cloud.variables.v1`), while the session runs. */
+@Serializable
+data class RunnerVariablesRequest(val teamId: String, val sessionId: String, val epoch: Int)
 /** A `tcex_` inference credential for the execution's owner, kept in the runner's memory only. */
 @Serializable
 data class RunnerInferenceCredentialView(val token: String, val expiresAt: Long, val expiresInMillis: Long? = null) {

@@ -358,6 +358,14 @@ internal fun ApiCatalog.variantOperations() {
             notFound("No such variant (`not_found`).")
         }
     }
+    get("/api/v1/environment") {
+        operationId = "getOwnEnvironment"; tag(ApiTags.VARIANTS)
+        summary = "The caller's environment variables"
+        description = "The environment variables assigned to the caller through `ENV` variants, with their values, " +
+            "which `teamcode run` gives its agent. Only the caller's own: no member can be named. `unavailable` lists " +
+            "assigned variables whose value cannot be read right now, by name. Answered with `Cache-Control: no-store`."
+        responses { ok<EnvironmentVariablesView>("The variables.") }
+    }
     get("/api/v1/mcp/servers") {
         operationId = "listMcpServers"; tag(ApiTags.MCP)
         summary = "The caller's MCP servers"

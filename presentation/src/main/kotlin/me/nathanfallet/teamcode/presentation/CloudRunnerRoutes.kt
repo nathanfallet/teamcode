@@ -17,6 +17,8 @@ class CloudRunnerChannel(
     val inference: RunnerInferenceUseCase? = null,
     /** Renews the owner's GitHub token for the credential helper; null where GitHub is not configured. */
     val github: RunnerGitHubUseCase? = null,
+    /** The owner's environment variables for the running agent; null where variants are not configured. */
+    val variables: RunnerVariablesUseCase? = null,
 )
 
 internal const val RUNNER_PATH = "/api/v1/cloud/runner/"
@@ -62,6 +64,15 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val body = call.jsonBody<RunnerGitHubRequest>()
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
             call.respond(github.access(pod.teamId, pod.sessionId, pod.epoch).view())
+        }
+    }
+    channel.variables?.let { variables ->
+        // Same audience as the GitHub route; the values are returned to that runner only, never stored or logged.
+        post(RUNNER_PATH + "variables") {
+            val body = call.jsonBody<RunnerVariablesRequest>()
+            val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
+            val resolved = variables.variables(pod.teamId, pod.sessionId, pod.epoch)
+            call.respond(EnvironmentVariablesView(resolved.values, resolved.unavailable))
         }
     }
     channel.inference?.let { inference ->

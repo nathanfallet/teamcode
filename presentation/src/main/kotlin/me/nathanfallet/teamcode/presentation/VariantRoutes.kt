@@ -139,3 +139,14 @@ internal fun Route.variantRoutes(variants: VariantService, publicOrigin: String)
         call.respondRedirect("/dashboard/variants")
     }
 }
+
+/** The caller's own environment variables, with values, for `teamcode run`; see [ResolveOwnEnvironmentUseCase]. */
+internal const val ENVIRONMENT_PATH = "/api/v1/environment"
+
+internal fun Route.environmentRoutes(environment: ResolveOwnEnvironmentUseCase) {
+    get(ENVIRONMENT_PATH) {
+        val resolved = environment(call.principal)
+        // Secrets in the body: the gateway's `Cache-Control: no-store` keeps intermediaries from storing a copy.
+        call.respond(EnvironmentVariablesView(resolved.values, resolved.unavailable))
+    }
+}

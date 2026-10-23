@@ -43,7 +43,7 @@ Direct and bulk selections are materialized in the same row (one per member and 
 
 `ResolveEffectiveVariantsUseCase(teamId, memberId)` returns the member's effective environment variables and MCP servers, with decrypted values. It reads MySQL on every call, so a change made on any replica is visible to the next resolution, with no cache to invalidate. This is the entry point the MCP gateway and cloud sessions will call when they create, resume or transfer a session.
 
-It is a trusted server-side port: it does not authenticate anyone. Callers must already act for an authenticated member (or an authorized session for them), and must neither log its result nor return it to another member. No HTTP route returns these values. An assigned slot that cannot be served (a value that fails to decrypt because of a wrong key or an envelope moved to another row, or a delegated MCP assignment without a credential) is withheld and listed in `unavailable`, by name only; the member's other slots are still returned. Each entry carries the variant `version` (bumped by variant edits) and the assignment's `assignedAt` (changed by a new selection or a rotated member value), so a consumer can detect either change.
+It is a trusted server-side port: it does not authenticate anyone. Callers must already act for an authenticated member (or an authorized session for them), and must neither log its result nor return it to another member. Two HTTP routes return environment values, each to one audience only: `GET /api/v1/environment` returns the caller's own, and `POST /api/v1/cloud/runner/variables` the session owner's to that session's runner (see [delivery to agents](#delivery-to-agents)). An assigned slot that cannot be served (a value that fails to decrypt because of a wrong key or an envelope moved to another row, or a delegated MCP assignment without a credential) is withheld and listed in `unavailable`, by name only; the member's other slots are still returned. Each entry carries the variant `version` (bumped by variant edits) and the assignment's `assignedAt` (changed by a new selection or a rotated member value), so a consumer can detect either change.
 
 ## Secrets
 
@@ -77,14 +77,38 @@ Capabilities advertise `team.variants.v1`. The dashboard page is `/dashboard/var
 
 Tables `variants`, `variant_assignments` (primary key member/kind/target, so at most one selection per slot) and `variant_exclusions` (same key), generated from the Exposed definitions in `infrastructure/database/tables/VariantTables.kt`. The generator emitted the `variants` table twice across two files; the reviewed migration keeps one file with the three tables in dependency order. A test checks that the migrated schema matches the Exposed tables. At most 500 variants per team; secret values are at most 16,384 characters.
 
+## Delivery to agents
+
+The environment variables assigned to a member reach their agent, in `teamcode run` and in cloud sessions, for Claude Code and Codex.
+
+**At start**, the agent's process environment holds the current values, so its Bash commands, tools, hooks and MCP servers see them. `teamcode run` reads `GET /api/v1/environment` (capability `team.environment.v1`) before launching; a cloud session's runner reads `POST /api/v1/cloud/runner/variables` (`cloud.variables.v1`) each time it starts the agent. TeamCode's own settings for the agent are applied after them, and the CLI drops reserved names again (the server's list plus `GH_CONFIG_DIR`, `GIT_TERMINAL_PROMPT` and shell-option variables), naming them on stderr. `teamcode run --no-variables` starts without them. A read that fails starts the agent without them, with a notice.
+
+**During the session**, Claude Code gets `CLAUDE_ENV_FILE`, a script that Claude Code runs in the shell of every Bash command, before the command. Measured with Claude Code 2.1.309, Claude Code reads the file's content once, when the session starts, and runs that same content each time: rewriting the file later changes nothing, while content that reads another file, or runs a command, gets fresh values every time. So TeamCode's script holds no value and fetches them:
+
+- **Locally**, `teamcode run claude` writes two files under `<configuration directory>/environment/`, both `0600` in a `0700` directory: the script, and a values file it sources. A loop reads `GET /api/v1/environment` every 60 seconds while the agent runs and rewrites the values file atomically when something changed, with `unset` for a name the agent had and lost. Both files are removed when the run ends. A script the user had in `CLAUDE_ENV_FILE` still runs, first, so the team values win.
+- **In a cloud session**, the script runs `teamcode cloud environment`, which asks the runner over a socket on the pod's memory volume; the values stay in the runner's memory (see [cloud sessions](cloud-sessions.md#agent-variables)).
+
+So a value rotated, added or removed while the agent runs, and the recipient's values after a cloud transfer, reach the next Bash command: within 60 seconds locally, 30 seconds in the cloud.
+
+**Why this mechanism.** A `SessionStart` hook writing to the `CLAUDE_ENV_FILE` it receives would run once, and that file is read once too; a `PreToolUse` hook cannot set a command's environment (`updatedInput` only replaces the command, and rewriting the command would put the values in the transcript); settings `env` and the launch environment are fixed for the process; `CLAUDE_CODE_SHELL_PREFIX` also wraps hooks and MCP server start-up. `CLAUDE_ENV_FILE` set at launch applies to every Bash command, needs no hook or plugin (so it works with `--bare` and with a user's own hooks), and keeps values out of the command line and the transcript.
+
+**Limits.**
+
+- Codex has no per-command environment script: it gets the values of its start. A change reaches a local Codex at the next `teamcode run`, and a cloud Codex when its agent process starts again. A `shell_environment_policy` in the user's Codex configuration still filters what its commands inherit.
+- Only Claude Code's Bash commands see changes. Its process environment, and so its MCP servers, hooks and other tools, keep the values of the start.
+- Claude Code passes the variables of `CLAUDE_ENV_FILE` to PowerShell commands only when the file holds plain assignments; TeamCode's script reads another file, so PowerShell commands (Windows) keep the values of the start.
+- The agent can read the values: they are its own, as they would be in a member's shell. A command that prints them puts them in the transcript; TeamCode never does.
+- A local run that is killed (`SIGKILL`, power loss) leaves its two files in the private directory until they are removed by hand.
+- Service keys never receive a member's values (`403`): `teamcode run` signed in with a key starts the agent without them.
+
 ## Limits and open questions
 
 - **Granularity**: one variant fills one slot (one variable or one server). Grouping several variables into one assignable bundle is not supported; it could be added as a layer that expands into slots.
-- **Update semantics**: assignees always get the latest version; there is no pinning and no stored history of earlier values, so there is no rollback to a previous value other than updating it again. Running sessions are not notified; consumers compare `version` and `assignedAt` when they resolve again.
+- **Update semantics**: assignees always get the latest version; there is no pinning and no stored history of earlier values, so there is no rollback to a previous value other than updating it again. Running sessions are not notified: Claude Code sessions read the values again before their Bash commands ([delivery to agents](#delivery-to-agents)); other consumers resolve again at their next start.
 - **Delegated credentials** are supplied by an administrator at assignment. A member-driven delegated flow (e.g. OAuth with the upstream MCP server, with explicit ownership and revocation by the member) is not implemented.
 - **Per-tool MCP restrictions** are tool policies on the MCP variant, enforced by the [MCP gateway](mcp-gateway.md#tool-policies); a variant without a policy grants the whole server.
 - **Groups and defaults**: the precedence slot exists; group assignments, and whether a team default should exist at all, remain open. A default must never grant a member who has no assignment of any kind.
-- **Consumers**: the [MCP gateway](mcp-gateway.md) implements discovery and per-call authorization. Cloud session preparation, the typed SDK/CLI commands and the revocation behavior for running sessions remain to be built and accepted against the roadmap.
+- **Consumers**: the [MCP gateway](mcp-gateway.md) implements discovery and per-call authorization; cloud session preparation and [agents](#delivery-to-agents), local and cloud, receive environment variables. There is no administrator CLI command for variants yet.
 
 ## TeamClaude reference
 
