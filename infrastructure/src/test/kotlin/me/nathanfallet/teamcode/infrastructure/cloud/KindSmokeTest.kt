@@ -33,7 +33,7 @@ import kotlin.test.*
  * here through [RunnerChannelUseCase].
  */
 class KindSmokeTest {
-    @Test fun lifecycleOnARealCluster(): Unit = runBlocking(Dispatchers.Default) {
+    @Test fun lifecycleOnARealCluster(): Unit = runBlocking(Dispatchers.IO) {
         val dir = System.getenv("TEAMCODE_KIND_SMOKE_DIR")
         assumeTrue(dir != null, "Set TEAMCODE_KIND_SMOKE_DIR (see scripts/smoke-cloud-kind.py).")
         fun read(name: String) = File(dir, name).readText().trim()
@@ -181,13 +181,15 @@ class KindSmokeTest {
 
     private fun kubectl(kubeconfig: String, vararg arguments: String): String {
         val output = File.createTempFile("kubectl", ".out")
+        val errors = File.createTempFile("kubectl", ".err")
         try {
             val process = ProcessBuilder(listOf("kubectl", "--kubeconfig", kubeconfig) + arguments)
-                .redirectErrorStream(true).redirectOutput(output).start()
+                .redirectOutput(output).redirectError(errors).start()
             val finished = process.waitFor(60, TimeUnit.SECONDS)
             if (!finished) process.destroyForcibly()
-            check(finished && process.exitValue() == 0) { "kubectl ${arguments.joinToString(" ").take(80)} failed: ${output.readText().take(300)}" }
+            check(finished && process.exitValue() == 0) { "kubectl ${arguments.take(3).joinToString(" ")} failed: ${errors.readText().take(300)}" }
+            // Only stdout is the value: a warning on stderr must never end up in a UID or a token.
             return output.readText().trim()
-        } finally { output.delete() }
+        } finally { output.delete(); errors.delete() }
     }
 }
