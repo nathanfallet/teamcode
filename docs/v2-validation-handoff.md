@@ -10,7 +10,7 @@ Baseline is now published: [0.1.0](https://github.com/nathanfallet/teamcode/rele
 
 Start from `0.1.0`, fetch current `origin/main` and rebase the working branch before review. Other V2 agents already own separate branches/worktrees; preserve them and coordinate overlaps. Squash-merge PRs. Repository content stays English. Keep provider credentials, prompts and response bodies out of git/logs. Never stop another person's processes or Gradle daemons. Do not deploy an operator/user cluster.
 
-Use [progress](progress.md), [detailed evidence](status.md) and the [TeamClaude comparison](teamclaude-comparison.md). Exact logs in `/tmp` are local reproduction evidence, not portable release assets; reproduce assertions on your machine/runner. Successful CI proves only the scenarios its scripts execute.
+Use [progress](progress.md) and the [TeamClaude comparison](teamclaude-comparison.md). Exact logs in `/tmp` are local reproduction evidence, not portable release assets; reproduce assertions on your machine/runner. Successful CI proves only the scenarios its scripts execute.
 
 Use the [end-to-end testing playbook](testing.md) for prerequisites, native build commands, isolated real-account import/upsert, tiny Claude/Codex prompts, real coding tasks, dispatch/usage evidence, hooks/browser fixtures, services and signed distribution checks. It distinguishes actual subscriptions from synthetic upstreams and records what each method does not establish.
 
@@ -106,4 +106,4 @@ Existing independent-pool MySQL tests cover atomic reservations, member rotation
 
 ## PR evidence expected
 
-For each completed scenario, state the tested commit/tag, OS/CPU, exact bounded command, synthetic versus actual provider, observed assertions and remaining limits. Add focused regression tests for defects, update `docs/status.md` and this checklist, and distinguish new evidence from earlier history. Keep experimental conversion and the separately owned cloud/MCP/skill work out of this validation PR unless explicitly coordinated.
+For each completed scenario, state the tested commit/tag, OS/CPU, exact bounded command, synthetic versus actual provider, observed assertions and remaining limits. Add focused regression tests for defects, put the evidence in the pull request, update this checklist, and distinguish new evidence from earlier history. Keep experimental conversion and the separately owned cloud/MCP/skill work out of this validation PR unless explicitly coordinated.

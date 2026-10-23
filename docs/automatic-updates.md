@@ -1,6 +1,6 @@
 # Opt-in automatic native updates
 
-Managed user installations can register an independent OS job for signed updates. It is **off by default** and separate from informational release notifications. Current platform evidence is recorded in [status](status.md); compiling the adapters does not prove actual Windows/Linux scheduling or a workstation reboot.
+Managed user installations can register an independent OS job for signed updates. It is **off by default** and separate from informational release notifications. Compiling the adapters does not prove actual Windows/Linux scheduling or a workstation reboot.
 
 ```sh
 teamcode update --automatic on
