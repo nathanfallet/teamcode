@@ -26,6 +26,8 @@ internal interface RunnerAgent {
     suspend fun drain(deadline: Long?): Boolean
     fun resumeAfterDrain()
     suspend fun stop()
+    /** Registers [changed], called when the agent learns that the session's desired state changed (a pause, a resume). */
+    fun onInstructionChange(changed: () -> Unit) {}
 }
 
 /** The agent half of the runner channel, bound to one session epoch. */
@@ -33,6 +35,11 @@ interface AgentChannel {
     suspend fun agent(): RunnerAgentView
     suspend fun events(events: List<RunnerEventView>): RunnerEventsAckView
     suspend fun inputs(waitMillis: Long): List<RunnerInputView>
+    /**
+     * [inputs], also returning the session's desired state; the server ends the wait early when it differs from
+     * [desiredState], the one the runner last knew. A server without the field answers it as null.
+     */
+    suspend fun poll(waitMillis: Long, desiredState: String): RunnerInputsView = RunnerInputsView(inputs(waitMillis))
     suspend fun acknowledge(acks: List<RunnerInputAckView>)
 }
 
@@ -96,6 +103,11 @@ internal class AgentHost(
     /** Requests whose deadline passed while their answer was being written: denied at once if that write fails. Under [lock]. */
     private val dueWhileWriting = mutableSetOf<String>()
     private lateinit var scope: CoroutineScope
+    /** The desired state the last input poll returned, sent with the next one. */
+    private var desiredState = "running"
+    private var instructionChanged: () -> Unit = {}
+
+    override fun onInstructionChange(changed: () -> Unit) { instructionChanged = changed }
 
     /** Runs input delivery and uploads until cancelled or fenced. */
     override suspend fun run() = coroutineScope {
@@ -128,7 +140,9 @@ internal class AgentHost(
             while (now() < until && running()) sleep(250)
         }
         lock.withLock { process }?.stop(STOP_GRACE_MILLIS)
-        reader?.join()
+        // The process is stopped; a reader still blocked after that (an output stream some descendant keeps open) must
+        // not hold the checkpoint back: the pause would only end at the server's deadline.
+        reader?.let { job -> if (withTimeoutOrNull(READER_END_MILLIS) { job.join() } == null) { log("The agent output did not end; checkpointing anyway."); job.cancel(); clean = false } }
         return flush(now() + FLUSH_MILLIS) && clean
     }
 
@@ -146,9 +160,12 @@ internal class AgentHost(
     private suspend fun inputLoop() {
         var wait = 1_000L
         while (!fenced) {
-            val inputs = try { channel.inputs(INPUT_WAIT_MILLIS).also { wait = 1_000L } }
+            val view = try { channel.poll(INPUT_WAIT_MILLIS, desiredState).also { wait = 1_000L } }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { if (handle(error)) return; sleep(wait); wait = (wait * 2).coerceAtMost(15_000); continue }
+            // A pause (or its cancellation) reaches the runner loop now, through the poll already open, not at its next heartbeat.
+            view.desiredState?.takeIf { it != desiredState }?.let { desiredState = it; instructionChanged() }
+            val inputs = view.inputs
             if (inputs.isEmpty()) continue
             val acks = inputs.mapNotNull { input -> handled[input.id] ?: deliver(input)?.also { remember(it) } }
             if (acks.isEmpty()) continue
@@ -465,6 +482,7 @@ internal class AgentHost(
         const val SAFETY_MARGIN_MILLIS = 60_000L
         const val INTERRUPT_GRACE_MILLIS = 15_000L
         const val STOP_GRACE_MILLIS = 10_000L
+        const val READER_END_MILLIS = 5_000L
         const val FLUSH_MILLIS = 30_000L
         /** Runner coordinates are not the agent's business; the token path in particular stays out of its environment. */
         val AGENT_ENVIRONMENT: Map<String, String?> = listOf("TEAMCODE_SERVER_URL", "TEAMCODE_CLOUD_TOKEN_FILE", "TEAMCODE_CLOUD_TEAM", "TEAMCODE_CLOUD_SESSION", "TEAMCODE_CLOUD_EPOCH")

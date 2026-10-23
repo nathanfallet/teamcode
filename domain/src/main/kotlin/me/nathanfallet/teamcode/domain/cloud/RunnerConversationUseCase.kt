@@ -11,6 +11,9 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 data class RunnerAgentConfig(val kind: String, val version: String?, val model: String?, val effort: String?, val conversation: ConversationResume,
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0)
 
+/** Inputs delivered to the runner, and the session's desired state when they were read. */
+data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredState)
+
 /**
  * The agent side of the runner channel: configuration, transcript upload, input delivery and acknowledgements.
  * Every call is fenced like the lifecycle channel: only the registered execution of the current epoch of a live
@@ -59,15 +62,26 @@ class RunnerConversationUseCase(
      * delivered only while the agent can take them (`ready` or `active`, desired running); a session that is
      * pausing receives none, so its queue survives for the next execution.
      */
-    suspend fun inputs(teamId: String, sessionId: String, epoch: Int, waitMillis: Long): List<CloudInput> {
+    suspend fun inputs(teamId: String, sessionId: String, epoch: Int, waitMillis: Long): List<CloudInput> = poll(teamId, sessionId, epoch, waitMillis, null).inputs
+
+    /**
+     * [inputs], with the session's desired state when the wait ended. A runner that sends the desired state it [known]
+     * gets an answer as soon as the session's differs: a pause (or a resume that cancels it) reaches it within
+     * [POLL_MILLIS] through this already open request, instead of at its next heartbeat.
+     */
+    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?): RunnerInputs {
+        // Only the two states a runner acts on: a deleted session fences the call anyway.
+        val knownState = known?.let { wire -> DesiredState.entries.firstOrNull { it.wire == wire && it != DesiredState.TERMINATED }
+            ?: throw TeamFailure("invalid_state", 400, "Send the desired state as running or paused.") }
         val deadline = sessions.now() + waitMillis.coerceIn(0, CloudConversationRules.MAX_RUNNER_WAIT_MILLIS)
         while (true) {
             val session = live(teamId, sessionId, epoch)
+            if (knownState != null && session.desiredState != knownState) return RunnerInputs(emptyList(), session.desiredState)
             if (session.desiredState == DesiredState.RUNNING && (session.state == READY || session.state == ACTIVE)) {
                 val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH)
-                if (delivered.isNotEmpty()) return delivered
+                if (delivered.isNotEmpty()) return RunnerInputs(delivered, session.desiredState)
             }
-            if (sessions.now() >= deadline) return emptyList()
+            if (sessions.now() >= deadline) return RunnerInputs(emptyList(), session.desiredState)
             sleep(POLL_MILLIS)
         }
     }

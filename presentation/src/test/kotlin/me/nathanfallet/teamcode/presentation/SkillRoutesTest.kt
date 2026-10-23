@@ -24,8 +24,11 @@ class SkillRoutesTest {
         private fun version(name: String, label: String) = versions[name]?.find { it.first.version == label }?.first ?: throw TeamFailure("not_found", 404, "Skill version not found.")
         override suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return skills.values.toList() }
         override suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> { actor.requireAdmin(); return skill(name) to versions[name].orEmpty().map { it.first } }
-        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
-            val skill = skills.getOrPut(name) { Skill("id-$name", name, null, false, 1, 1) }
+        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
+            if (allMembers) actor.requireSkillAudienceWriter()
+            skills.getOrPut(name) { Skill("id-$name", name, null, false, 1, 1) }
+            if (allMembers) skills[name] = skills.getValue(name).copy(allMembers = true)
+            val skill = skills.getValue(name)
             versions[name]?.find { it.first.version == version }?.let { (existing, _) ->
                 if (existing.digest != artifact.digest) throw TeamFailure("skill_version_conflict", 409, "Conflict.")
                 return SkillPublication(if (pin) pin(actor, name, version) else skill, existing, false)
@@ -42,6 +45,9 @@ class SkillRoutesTest {
         override suspend fun retire(actor: Principal, name: String): Skill { actor.requireAdmin(); return skill(name).copy(retired = true, pinnedVersion = null).also { skills[name] = it } }
         override suspend fun restore(actor: Principal, name: String): Skill { actor.requireAdmin(); return skill(name).copy(retired = false).also { skills[name] = it } }
         override suspend fun retireVersion(actor: Principal, name: String, version: String): SkillVersion { actor.requireAdmin(); return version(name, version).copy(retired = true) }
+        override suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Skill {
+            actor.requireAdmin(); return skill(name).copy(allMembers = allMembers).also { skills[name] = it }
+        }
         override suspend fun assignments(actor: Principal, name: String): List<SkillAssignment> {
             actor.requireAdmin(); val id = skill(name).id
             return decisions.filterKeys { it.first == name }.map { (key, decision) -> SkillAssignment(id, key.second, decision, 1) }
@@ -69,6 +75,7 @@ class SkillRoutesTest {
             override suspend fun authenticate(token: String): Principal? {
                 val scopes = when (token) {
                     "service-publish" -> setOf(ServiceScope.SKILLS_PUBLISH)
+                    "service-assign" -> setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN)
                     "service-read" -> setOf(ServiceScope.SKILLS_READ)
                     "service-inference" -> setOf(ServiceScope.INFERENCE)
                     else -> return interactive.authenticate(token)
@@ -237,5 +244,51 @@ class SkillRoutesTest {
         assertTrue(delivered.contains("Laptop &lt;b&gt;")); assertFalse(delivered.contains("Laptop <b>"))
         assertEquals(HttpStatusCode.Found, form("/dashboard/skills/review/retire", "http://localhost", "csrf=session").status)
         assertTrue(store.skills.getValue("review").retired)
+    }
+
+    @Test fun aKeyWithTheAssignScopeDeliversWhatItPublishesToAllMembers() = testApplication {
+        val store = MemoryStore()
+        application { configureGateway(NoGateway(), team = team(), publicOrigin = "http://localhost", skills = SkillCatalog(store)) }
+        suspend fun call(method: HttpMethod, path: String, token: String, body: String) = client.request(path) {
+            this.method = method; bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
+        }
+        fun forEveryone(version: String) = Serialization.json.encodeToString(PublishSkillVersionRequest(version, listOf(upload("SKILL.md", version)), pin = true, allMembers = true))
+
+        // skills:publish alone is refused, whole: nothing is stored.
+        val refused = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", forEveryone("1"))
+        assertEquals(HttpStatusCode.Forbidden, refused.status)
+        assertTrue(refused.bodyAsText().contains("credential_scope"))
+        assertTrue(store.skills.isEmpty())
+        val created = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-assign", forEveryone("1"))
+        assertEquals(HttpStatusCode.Created, created.status)
+        val published = Serialization.json.decodeFromString<PublishSkillVersionResponse>(created.bodyAsText())
+        assertTrue(published.skill.allMembers); assertTrue(published.version.pinned)
+        // The administrator has no decision and receives it.
+        assertEquals(listOf("review"), Serialization.json.decodeFromString<SkillManifestView>(client.get("/api/v1/skill-delivery") { bearerAuth("admin") }.bodyAsText()).skills.map { it.name })
+
+        // Changing the audience afterwards is interactive: no key reaches the route.
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/audience", "service-assign", """{"allMembers":false}""").status)
+        assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/audience", "member", """{"allMembers":false}""").status)
+        val narrowed = call(HttpMethod.Put, "/api/v1/skills/review/audience", "admin", """{"allMembers":false}""")
+        assertEquals(HttpStatusCode.OK, narrowed.status)
+        assertFalse(Serialization.json.decodeFromString<SkillView>(narrowed.bodyAsText()).allMembers)
+        assertEquals("""{"memberId":"admin-id","skills":[]}""", client.get("/api/v1/skill-delivery") { bearerAuth("admin") }.bodyAsText())
+        assertTrue(client.get("/api/v1/capabilities") { bearerAuth("service-assign") }.bodyAsText().contains("team.skills.all-members.v1"))
+
+        // The dashboard shows and sets the audience, behind the same CSRF check as every form.
+        val browser = createClient { followRedirects = false }
+        suspend fun form(body: String) = browser.post("/dashboard/skills/review/audience") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody(body)
+        }
+        assertEquals(HttpStatusCode.Forbidden, form("csrf=wrong&audience=all").status)
+        assertFalse(store.skills.getValue("review").allMembers)
+        assertEquals(HttpStatusCode.BadRequest, form("csrf=session&audience=everyone").status)
+        assertEquals(HttpStatusCode.Found, form("csrf=session&audience=all").status)
+        assertTrue(store.skills.getValue("review").allMembers)
+        val page = browser.get("/dashboard/skills/review") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(page.contains("""<option value="all" selected>"""))
+        assertTrue(page.contains("Default (receives it)"))
+        assertTrue(browser.get("/dashboard/skills") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText().contains("All members"))
     }
 }

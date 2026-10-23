@@ -97,7 +97,11 @@ private fun resultText(content: JsonElement?): String = when (content) {
  */
 class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapter {
     override var conversationId: String? = null; private set
-    /** Messages written and not yet answered by a `result` line. */
+    /**
+     * Messages written since the last `result` line. Claude Code answers every message it has read with one `result`:
+     * two messages written together (or one written during a turn) are often one turn, so a `result` ends them all. A
+     * message it reads only after that `result` starts a turn of its own, seen by its first `assistant` line.
+     */
     private var pending = 0
     override val turnActive get() = pending > 0
 
@@ -203,7 +207,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
                     put("agent", "claude"); put("conversation", "resumable"); put("conversationId", id); value["model"].string()?.let { put("model", it) }
                 }))) else AgentOutput()
             } else AgentOutput()
-            "assistant" -> AgentOutput(value["message"].obj()?.get("content").array().orEmpty().mapNotNull { block ->
+            "assistant" -> AgentOutput((if (pending == 0) listOf(turn("started")).also { pending = 1 } else emptyList()) + value["message"].obj()?.get("content").array().orEmpty().mapNotNull { block ->
                 val content = block.obj() ?: return@mapNotNull null
                 when (content["type"].string()) {
                     "text" -> content["text"].string()?.takeIf { it.isNotBlank() }?.let { AgentEvent(CloudEventTypes.AGENT_MESSAGE, buildJsonObject { put("text", it); parent(value) }) }
@@ -256,7 +260,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
             "result" -> {
                 // A request cannot outlive its turn.
                 permissions.clear()
-                if (pending > 0) pending--
+                pending = 0
                 val failed = (value["is_error"] as? JsonPrimitive)?.booleanOrNull == true
                 val interrupted = value["subtype"].string() == "error_during_execution"
                 // `total_cost_usd` is the conversation's running total (kept across `--resume`); `usage` is this turn's.

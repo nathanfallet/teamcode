@@ -10,7 +10,9 @@ import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.SystemExit
 import okio.FileSystem
 import okio.Path.Companion.toPath
+import me.nathanfallet.teamcode.cli.cloud.untilTerminated
 import me.nathanfallet.teamcode.cli.platform.environment
+import me.nathanfallet.teamcode.cli.platform.installServiceSignalHandlers
 import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 
@@ -25,7 +27,10 @@ internal class CloudAgentSupervisor : SuspendingCliktCommand(name = "agent-super
         environment("HOME")?.takeIf { it.isNotBlank() }?.let { runCatching { FileSystem.SYSTEM.createDirectories(it.toPath()) } }
         val supervisor = AgentSupervisor(listenUnix(socket), { command, arguments, overrides, cwd -> startAgentProcess(command, arguments, overrides, cwd) }, directory,
             log = { echo(it, err = true) })
-        val code = supervisor.serve()
+        // PID 1 of the agent container: without a handler SIGTERM is ignored and the pod waits for its grace period.
+        installServiceSignalHandlers()
+        // Stopped by a signal, the supervisor's connections stop the processes they started on the way out.
+        val code = untilTerminated({ echo(it, err = true) }) { supervisor.serve() }
         if (code != 0) SystemExit.exit(code)
     }
 }

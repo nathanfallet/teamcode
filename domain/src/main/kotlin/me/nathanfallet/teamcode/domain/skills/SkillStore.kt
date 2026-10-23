@@ -17,8 +17,10 @@ interface SkillStore {
      * Creates the skill on its first publication and stores an immutable version. Republishing the same version with
      * the same digest is an idempotent success; a different digest is a conflict. Pins the version in the same
      * transaction only when [pin] is set, which is also idempotent: republishing the pinned version changes nothing.
+     * With [allMembers], the skill is also delivered to all members in the same transaction (idempotent as well); the
+     * caller has checked [requireSkillAudienceWriter]. Without it, the audience is left as it is.
      */
-    suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean = false): SkillPublication
+    suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean = false, allMembers: Boolean = false): SkillPublication
 
     /**
      * Approves [version] as the delivered version. Pinning an older version is a rollback. Allowed to skill publishers
@@ -35,6 +37,12 @@ interface SkillStore {
     suspend fun retireVersion(actor: Principal, name: String, version: String): SkillVersion
 
     suspend fun assignments(actor: Principal, name: String): List<SkillAssignment>
+
+    /**
+     * Delivers the skill to all members without an explicit decision (true), or only to members set to *yes* (false).
+     * Interactive administrators only; idempotent.
+     */
+    suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Skill
 
     /** Sets a member's explicit decision, or clears it with null. */
     suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?): SkillAssignment?

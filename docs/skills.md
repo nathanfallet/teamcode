@@ -12,7 +12,8 @@ A skill is instructions and files loaded by an agent. It is not executed by the 
 | Version | Immutable, case-sensitive label of 1–64 characters `[0-9A-Za-z][0-9A-Za-z.+_-]*` (binary collation, so `v1` and `V1` are distinct). Its files and digest never change. A retired version cannot be republished. Labels carry no ordering: "update" and "rollback" are both explicit pins, by an administrator or by a publisher with `pin`. |
 | Artifact | 1–200 files, at most 5 MiB of content in total, with `SKILL.md` at the root. Stored in MySQL (`MEDIUMBLOB` per file). |
 | Pinned version | The single approved version. An administrator pins it, or the publisher does with `pin: true` (see [Pinning from CI](#pinning-from-ci)). Publication without `pin` never pins. A skill without a pin delivers nothing. |
-| Access decision | Per member: **yes** (`allow`), **no** (`deny`) or not assigned. Only *yes* delivers. There are no variants. |
+| Access decision | Per member: **yes** (`allow`), **no** (`deny`) or not assigned. *Yes* delivers; *no* never does; *not assigned* delivers only when the skill's audience is *all members*. There are no variants. |
+| Audience | Per skill: **members set to yes** (default) or **all members** (`allMembers`). With *all members*, every member without an explicit decision receives the pinned version, including members who join later, and an explicit *no* still excludes a member. Set by an administrator on the dashboard or the API, or at publication (see [Delivering to all members](#delivering-to-all-members)). |
 | Installation status | Reported per registered CLI device: `installed`, `failed`, `conflict` or `removed`. It never grants or revokes access. |
 
 ### Paths and file types
@@ -33,18 +34,20 @@ rendered as `sha256:<64 lowercase hex>`. The server recomputes it from stored co
 
 ### Access precedence
 
-Today only member decisions exist: an explicit *yes* delivers, an explicit *no* or no decision delivers nothing. Groups arrive with V1 team administration; when they do, `SkillAccessPolicy` combines them without changing the member rule:
+Today only member decisions exist: an explicit *yes* delivers, an explicit *no* never does, and no decision delivers only when the skill's audience is *all members*. Groups arrive with V1 team administration; when they do, `SkillAccessPolicy` combines them without changing the member rule:
 
 1. An explicit member decision wins.
 2. Otherwise, any group *no* wins over a group *yes*.
 3. Otherwise, a group *yes* delivers.
-4. With no decision at all, nothing is delivered.
+4. With no decision at all, the audience decides: *all members* delivers, *members set to yes* delivers nothing.
+
+*All members* is therefore the weakest rule: it never overrides a decision someone made. It is evaluated on every request, so a member created after the skill was published receives it at once, with no assignment row.
 
 The rule is implemented and unit-tested now; the store passes no group decisions until groups exist.
 
 ## Publishing from CI
 
-Publication goes through the API. It needs either an interactive administrator login or a service key with the dedicated `skills:publish` scope. That scope can only be granted to a key owned by an administrator, and the owner's role is rechecked against shared state on every write. A publishing key can also pin the versions it publishes (see [Pinning from CI](#pinning-from-ci)); it cannot unpin, assign, retire or read the catalog.
+Publication goes through the API. It needs either an interactive administrator login or a service key with the dedicated `skills:publish` scope. That scope can only be granted to a key owned by an administrator, and the owner's role is rechecked against shared state on every write. A publishing key can also pin the versions it publishes (see [Pinning from CI](#pinning-from-ci)), and, with the additional `skills:assign` scope, deliver them to all members (see [Delivering to all members](#delivering-to-all-members)); it cannot unpin, assign members, retire or read the catalog.
 
 ```sh
 # Once, from an administrator login: a key that can only publish skills.
@@ -59,6 +62,7 @@ Content-Type: application/json
 {
   "version": "1.4.0",
   "pin": false,
+  "allMembers": false,
   "files": [
     { "path": "SKILL.md", "mode": "file", "contentBase64": "LS0tCm5hbWU6..." },
     { "path": "scripts/check.sh", "mode": "executable", "contentBase64": "IyEvYmluL3No..." }
@@ -72,7 +76,7 @@ Content-Type: application/json
 - `409 skill_version_retired`: the version exists but was retired; publish a new version.
 - `409 skill_retired`: the skill was removed from the catalog; restore it first.
 - `400` for invalid names, versions, paths, modes or base64; `413` above the size bound (the request body itself is bounded at 8 MiB).
-- `403 credential_scope` for a key without `skills:publish`, `403 forbidden` for a member or a non-administrator key.
+- `403 credential_scope` for a key without `skills:publish` (or without `skills:assign` when `allMembers` is set), `403 forbidden` for a member or a non-administrator key.
 
 Limits: 500 skills per team, 200 versions per skill.
 
@@ -91,6 +95,30 @@ A pipeline that should deliver what it publishes, without an administrator pinni
 Servers that support the field advertise `team.skills.publish-pin.v1` in `GET /api/v1/capabilities` (readable with any key). An older server ignores the unknown field and publishes without pinning; a client detects this from `version.pinned: false` in the response and should report it instead of assuming delivery.
 
 Leave `pin` out where a human must approve each version: publication without it never pins.
+
+### Delivering to all members
+
+By default a pinned skill reaches only members set to *Yes*, so every new skill would need each member assigned by hand. A skill whose **audience** is *all members* reaches every member without an explicit decision, including members who join later. An administrator sets it on the skill's page (**Access → Audience**) or with `PUT /api/v1/skills/{name}/audience` and `{ "allMembers": true }`; a pipeline sets it at publication with `"allMembers": true`, next to `"pin": true`:
+
+```sh
+# Once, from an administrator login: a key that publishes, pins and delivers to everyone.
+teamcode keys create --name skills-ci --scopes skills:publish,skills:assign --no-expiry --json
+```
+
+```json
+{ "version": "1.4.0", "pin": true, "allMembers": true, "files": [ ... ] }
+```
+
+- The audience changes in the publication's transaction, so the version is never visible pinned for the old audience only. Like `pin`, it is idempotent: a retry, or a later publication with the flag, changes nothing once the skill is for all members. Re-running a pipeline with the flag also sets it on skills published before the option existed.
+- `"allMembers": false`, or no field, leaves the audience as it is: a publication never narrows it. Narrowing it back to *members set to yes* is an administrator's (dashboard or `PUT .../audience` with `false`), and a pipeline that keeps sending `true` widens it again on its next run, as `pin` undoes an unpin.
+- An explicit *No* still excludes a member, whatever the audience. Use it for a member who must not receive the skill.
+- Each actual change appends `skill.audience.all_members` or `skill.audience.assigned_only` (subject: skill ID), with `credentialId` set to the key's id when a key made it.
+
+**Why a separate `skills:assign` scope.** `skills:publish` already lets a key choose the delivered version, but only for members an administrator set to *Yes*. Delivering to all members widens *who* receives a skill, and skills can carry executable scripts that agents run on members' computers. Keeping it in its own scope means a leaked publishing key cannot push a new skill to every workstation unless the administrator who created the key chose that. Like `skills:publish`, `skills:assign` is valid only on an administrator's key (the owner's role is rechecked on every write), and it grants nothing without `skills:publish`. The audience route itself stays interactive: no key can call it.
+
+There is no team-wide default ("every new skill goes to all members"): it would grant every future skill from any publisher without anyone choosing it per skill or per key. The publication flag gives the same result for a pipeline that wants it, and the choice stays visible on the key's scopes and in the journal.
+
+Servers that support the field advertise `team.skills.all-members.v1`. An older server ignores it; a client detects this from `skill.allMembers: false` in the response.
 
 ### Example: publishing from a GitHub repository
 
@@ -149,7 +177,8 @@ A re-run of the same tag succeeds without creating anything (`200`, `created: fa
 - **Unpin**: stop delivery without touching versions or decisions.
 - **Retire a version**: it can no longer be pinned. The pinned version cannot be retired; pin another one first.
 - **Remove from catalog** (retire the skill): unpins, stops delivery and refuses new publications. Versions and decisions remain. **Restore** reopens publication without pinning anything.
-- Set each member's decision: *Yes*, *No* or *Not assigned*. Each member row links to the member's delivered skills and per-device installation status.
+- Set the **audience**: *Members set to Yes* or *All members, except those set to No*. The catalog lists each skill's audience.
+- Set each member's decision: *Yes*, *No* or *Not assigned* (shown as *Default (receives it)* when the audience is all members). Each member row links to the member's delivered skills and per-device installation status.
 
 Members opening **Skills** are redirected to their own delivered skills.
 
@@ -161,6 +190,7 @@ Members opening **Skills** are redirected to their own delivered skills.
 | Unpin | `DELETE /api/v1/skills/{name}/pin` |
 | Remove from catalog / restore | `DELETE /api/v1/skills/{name}` / `POST /api/v1/skills/{name}/restore` |
 | Retire a version | `DELETE /api/v1/skills/{name}/versions/{version}` |
+| Audience | `PUT /api/v1/skills/{name}/audience` with `{ "allMembers": true \| false }` |
 | Decisions | `GET /api/v1/skills/{name}/assignments`, `PUT /api/v1/skills/{name}/assignments/{memberId}` with `{ "decision": "allow" \| "deny" }`, `DELETE` to clear |
 
 ## Delivery to a member
@@ -182,11 +212,11 @@ Installation reports upsert the status of up to 500 named catalog skills for the
 
 ## Audit
 
-Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID; `credentialId`: the `skills:publish` key that pinned, empty for an administrator's pin), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the assignment ID, a stable row of `skill_assignments` naming both the skill and the member; clearing a decision keeps the row). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
+Catalog writes append metadata-only events in the same team-locked transaction: `skill.created`, `skill.version.published` (subject: version ID), `skill.pinned` (subject: version ID; `credentialId`: the `skills:publish` key that pinned, empty for an administrator's pin), `skill.unpinned`, `skill.retired`, `skill.restored` (subject: skill ID), `skill.version.retired` (subject: version ID), `skill.audience.all_members`, `skill.audience.assigned_only` (subject: skill ID; `credentialId`: the key that set it at publication, empty for an administrator), and `skill.access.allowed`, `skill.access.denied`, `skill.access.cleared` (subject: the assignment ID, a stable row of `skill_assignments` naming both the skill and the member; clearing a decision keeps the row). No file content, path, digest or label is written to the journal. Repeated identical writes (same pin, same decision, idempotent publication) append nothing.
 
 ## Persistence and upgrade
 
-Five additive tables: `skills`, `skill_versions`, `skill_files`, `skill_assignments`, `skill_installations`, created by one Flyway migration generated from the Exposed definitions and reviewed (the generator emitted one file per table, each repeating the `skills` DDL; they were merged into a single file). Existing data is untouched. Every replica must run this version before the catalog is used, because older replicas do not serve the new routes.
+Five additive tables: `skills`, `skill_versions`, `skill_files`, `skill_assignments`, `skill_installations`, created by one Flyway migration generated from the Exposed definitions and reviewed (the generator emitted one file per table, each repeating the `skills` DDL; they were merged into a single file). Existing data is untouched. The audience is the `skills.all_members` column (`BOOLEAN DEFAULT FALSE`, migration `V20261023191500`, shared with `hooks`): existing skills keep delivering only to members set to *Yes*, and a replica that predates it ignores the column. Create a `skills:assign` key only once every replica runs this version: an older replica does not know the scope and cannot authenticate the key. Every replica must run this version before the catalog is used, because older replicas do not serve the new routes.
 
 Authorization and input validation live in `ManageSkillCatalogUseCase` and the publication/delivery use cases; rules that depend on shared state (retired skill, pinned version, limits) are enforced by the store inside its transaction. Administrative writes lock the team row briefly; a version's content insert holds only its skill row lock, so a 5 MiB upload does not delay team-wide admission. Concurrent publications of the same version on two replicas converge on one record (tested). Publication commits the catalog entry before the version: if the version step then fails (revoked key, conflict, database error), the skill remains with no version. It delivers nothing, counts toward the 500-skill limit, and can be retired; a retry reuses it. No content is cached in memory between requests.
 

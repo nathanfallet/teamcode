@@ -19,10 +19,12 @@ class SkillCatalogTest {
         val reports = mutableListOf<SkillInstallationReport>()
         override suspend fun candidates(actor: Principal, memberId: String) = candidates[memberId].orEmpty()
         override suspend fun files(actor: Principal, versionId: String) = files.getValue(versionId)
-        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
+        val audiences = mutableListOf<Pair<String, Boolean>>()
+        override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
             published += artifact
             if (pin) pins += name to version
-            val skill = Skill("s", name, if (pin) version else null, false, 1, 1)
+            if (allMembers) audiences += name to true
+            val skill = Skill("s", name, if (pin) version else null, false, 1, 1, allMembers)
             return SkillPublication(skill, SkillVersion("v", "s", version, artifact.digest, artifact.sizeBytes, artifact.entries.size, actor.member.id, 1, false), true)
         }
         override suspend fun reportInstallations(actor: Principal, reports: List<SkillInstallationReport>) { this.reports += reports }
@@ -34,6 +36,7 @@ class SkillCatalogTest {
         override suspend fun restore(actor: Principal, name: String) = error("unused")
         override suspend fun retireVersion(actor: Principal, name: String, version: String) = error("unused")
         override suspend fun assignments(actor: Principal, name: String) = error("unused")
+        override suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Skill { audiences += name to allMembers; return Skill("s", name, null, false, 1, 1, allMembers) }
         override suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?) = error("unused")
         override suspend fun installations(actor: Principal, memberId: String) = error("unused")
     }
@@ -81,6 +84,59 @@ class SkillCatalogTest {
         assertFalse(SkillAccessPolicy.allowed(null, listOf(SkillDecision.ALLOW, SkillDecision.DENY)))
         assertTrue(SkillAccessPolicy.allowed(SkillDecision.ALLOW, listOf(SkillDecision.DENY)))
         assertFalse(SkillAccessPolicy.allowed(SkillDecision.DENY, listOf(SkillDecision.ALLOW)))
+    }
+
+    @Test fun allMembersIsTheWeakestRuleAndAnExplicitNoStillExcludes() {
+        assertTrue(SkillAccessPolicy.allowed(null, allMembers = true))
+        assertTrue(SkillAccessPolicy.allowed(SkillDecision.ALLOW, allMembers = true))
+        assertFalse(SkillAccessPolicy.allowed(SkillDecision.DENY, allMembers = true))
+        assertFalse(SkillAccessPolicy.allowed(null, listOf(SkillDecision.DENY), allMembers = true))
+        assertTrue(SkillAccessPolicy.allowed(null, listOf(SkillDecision.ALLOW), allMembers = false))
+    }
+
+    @Test fun aSkillForAllMembersReachesMembersWithoutADecisionIncludingNewOnes() = runTest {
+        val store = FakeStore()
+        val everyone = skill("everyone", "1").copy(allMembers = true)
+        // A member who joined after the publication has no decision row at all.
+        store.candidates["member"] = listOf(SkillCandidate(everyone, version("a", "1"), null), SkillCandidate(skill("assigned", "1"), version("b", "1"), null))
+        store.candidates["admin"] = listOf(SkillCandidate(everyone, version("a", "1"), SkillDecision.DENY))
+        val catalog = SkillCatalog(store)
+        assertEquals(listOf("everyone"), catalog.effective(member).map { it.name })
+        assertEquals(emptyList(), catalog.effective(admin), "An explicit no wins over all members")
+        // Unpinned or retired still deliver nothing, whatever the audience.
+        store.candidates["member"] = listOf(SkillCandidate(everyone.copy(pinnedVersion = null), null, null), SkillCandidate(everyone.copy(retired = true), version("a", "1"), null))
+        assertEquals(emptyList(), catalog.effective(member))
+    }
+
+    @Test fun deliveringToAllMembersAtPublicationNeedsTheAssignScopeOnAKey() = runTest {
+        val store = FakeStore()
+        val catalog = SkillCatalog(store)
+        val files = listOf(file("SKILL.md"))
+        val publisher = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH))
+        val assigner = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN))
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(publisher, "review", "1", files, pin = true, allMembers = true) }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_ASSIGN)), "review", "1", files, allMembers = true) }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { catalog.publish(member.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN)), "review", "1", files, allMembers = true) }.code)
+        assertEquals("forbidden", assertFailsWith<TeamFailure> { catalog.publish(member, "review", "1", files, allMembers = true) }.code)
+        assertTrue(store.published.isEmpty(), "Refused before the store is reached")
+        assertTrue(catalog.publish(assigner, "review", "1", files, pin = true, allMembers = true).skill.allMembers)
+        assertTrue(catalog.publish(admin, "review", "2", files, allMembers = true).skill.allMembers)
+        // Without the flag, a publishing key keeps working and leaves the audience alone.
+        assertFalse(catalog.publish(publisher, "review", "3", files).skill.allMembers)
+        assertEquals(listOf("review" to true, "review" to true), store.audiences)
+    }
+
+    @Test fun onlyAnInteractiveAdministratorChangesTheAudienceAfterwards() = runTest {
+        val store = FakeStore()
+        val catalog = SkillCatalog(store)
+        for ((actor, code) in listOf(
+            member to "forbidden",
+            admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN)) to "credential_scope",
+        )) assertEquals(code, assertFailsWith<TeamFailure> { catalog.manage.setAudience(actor, "review", true) }.code)
+        assertEquals("invalid_skill_name", assertFailsWith<TeamFailure> { catalog.manage.setAudience(admin, "Bad", true) }.code)
+        assertTrue(catalog.manage.setAudience(admin, "review", true).allMembers)
+        assertFalse(catalog.manage.setAudience(admin, "review", false).allMembers)
+        assertEquals(listOf("review" to true, "review" to false), store.audiences)
     }
 
     private fun version(id: String, label: String, digest: String = "sha256:" + "0".repeat(64), retired: Boolean = false) =

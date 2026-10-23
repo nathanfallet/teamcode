@@ -169,4 +169,36 @@ class VariantRoutesTest {
         assertFalse("synthetic-npm-value" in view.toString())
         assertEquals(listOf("default" to "admin-id"), asked)
     }
+
+    @Test fun dashboardFormExplainsVariantsAndPicksFieldsByType() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway, team = team(), publicOrigin = "http://localhost", variants = registry) }
+        suspend fun submit(body: String) = client.post("/dashboard/variants") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=session&$body")
+        }
+        val body = client.get("/dashboard/variants") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        for (text in listOf("What is a variant?", "Where it reaches a session", "/mcp/&lt;name&gt;", "Environment variable", "MCP server", "Variable name", "Server name", "Endpoint", "Credential (optional)", "Who provides the value"))
+            assertTrue(body.contains(text), text)
+        assertTrue(body.contains("variant-form"))
+        // The fields of each type are marked so the page shows only the selected type's.
+        for (field in listOf("env_target", "secret_env")) assertTrue(body.contains("name=\"$field\""), field)
+        for (field in listOf("mcp_target", "endpoint", "config", "secret_mcp")) assertTrue(body.contains("name=\"$field\""), field)
+
+        // Hidden fields of the other type are submitted by browsers and must not leak into the variant.
+        assertEquals(HttpStatusCode.Found, submit("kind=ENV&env_target=NPM_TOKEN&mcp_target=ignored&name=ci&binding=SHARED&endpoint=https%3A%2F%2Fx.test&config=a%3Db&secret_env=v&secret_mcp=other").status)
+        registry.variants.values.last().let { assertEquals("NPM_TOKEN", it.target); assertNull(it.endpoint); assertTrue(it.config.isEmpty()) }
+        assertEquals(HttpStatusCode.Found, submit("kind=MCP&env_target=ignored&mcp_target=tracker&name=team&binding=SHARED&endpoint=https%3A%2F%2Fmcp.example.test&secret_env=&secret_mcp=cred").status)
+        registry.variants.values.last().let { assertEquals("tracker", it.target); assertTrue(it.hasSharedSecret) }
+        assertEquals(HttpStatusCode.Found, submit("kind=ENV&env_target=OWN_TOKEN&name=own&binding=PER_MEMBER&secret_env=leftover").status)
+        registry.variants.values.last().let { assertEquals(VariantBinding.PER_MEMBER, it.binding); assertFalse(it.hasSharedSecret) }
+
+        // Per-type validation still answers with a message about the selected type.
+        assertEquals(HttpStatusCode.BadRequest, submit("kind=ENV&env_target=PATH&name=bad&binding=SHARED&secret_env=v").status)
+        assertEquals(HttpStatusCode.BadRequest, submit("kind=ENV&name=bad&binding=SHARED&secret_env=v").status)
+        assertEquals(HttpStatusCode.BadRequest, submit("kind=ENV&env_target=EMPTY&name=bad&binding=SHARED").status)
+        assertEquals(HttpStatusCode.BadRequest, submit("kind=MCP&mcp_target=tracker&name=bad&binding=SHARED").status)
+        assertEquals(HttpStatusCode.BadRequest, submit("kind=MCP&mcp_target=tracker&name=bad&binding=SHARED&endpoint=http%3A%2F%2Fplain.test").status)
+        assertEquals(3, registry.variants.size)
+    }
 }

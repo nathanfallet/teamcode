@@ -12,6 +12,16 @@ fun Principal.requireSkillPublisher() {
     if (!member.role.isAdministrator) throw TeamFailure("forbidden", 403, "Skill publication requires a key owned by an administrator.")
 }
 
+/**
+ * Delivering a skill to all members at publication: an interactive administrator, or a publishing key that also holds
+ * `skills:assign` (administrator-owned only, rechecked by the store). `skills:publish` alone can choose the delivered
+ * version for members already set to *yes*, never widen who receives a skill.
+ */
+fun Principal.requireSkillAudienceWriter() {
+    requireSkillPublisher()
+    if (serviceScopes != null) requireScope(ServiceScope.SKILLS_ASSIGN)
+}
+
 /** Reading one's own delivery: an interactive member, or a service key with `skills:read`. Others require an administrator. */
 fun Principal.requireSkillReader(memberId: String) {
     if (member.id != memberId) return requireAdmin()
@@ -20,17 +30,20 @@ fun Principal.requireSkillReader(memberId: String) {
 
 /**
  * Validates a CI or administrator upload and stores it as an immutable version. With `pin`, the uploaded version also
- * becomes the delivered one, under the same publication right.
+ * becomes the delivered one, under the same publication right. With `allMembers`, the skill is delivered to all members
+ * without an explicit decision, which needs [requireSkillAudienceWriter].
  */
 class PublishSkillVersionUseCase(private val store: SkillStore) {
     /** Lets transports refuse an unauthorized caller before reading a multi-megabyte upload. */
     fun authorize(actor: Principal) = actor.requireSkillPublisher()
 
-    suspend operator fun invoke(actor: Principal, name: String, version: String, files: List<SkillFile>, pin: Boolean = false): SkillPublication {
-        actor.requireSkillPublisher()
+    suspend operator fun invoke(
+        actor: Principal, name: String, version: String, files: List<SkillFile>, pin: Boolean = false, allMembers: Boolean = false,
+    ): SkillPublication {
+        if (allMembers) actor.requireSkillAudienceWriter() else actor.requireSkillPublisher()
         SkillArtifacts.validateName(name)
         SkillArtifacts.validateVersion(version)
-        return store.publish(actor, name, version, SkillArtifacts.validate(files), pin)
+        return store.publish(actor, name, version, SkillArtifacts.validate(files), pin, allMembers)
     }
 }
 
@@ -48,7 +61,7 @@ class ResolveEffectiveSkillsUseCase(private val store: SkillStore) {
         return store.candidates(actor, memberId).mapNotNull { candidate ->
             val pinned = candidate.pinned ?: return@mapNotNull null
             if (candidate.skill.retired || pinned.retired) return@mapNotNull null
-            if (!SkillAccessPolicy.allowed(candidate.memberDecision, candidate.groupDecisions)) return@mapNotNull null
+            if (!SkillAccessPolicy.allowed(candidate.memberDecision, candidate.groupDecisions, candidate.skill.allMembers)) return@mapNotNull null
             EffectiveSkill(candidate.skill.name, pinned.version, pinned.digest, pinned.sizeBytes, pinned.fileCount) to pinned
         }.sortedBy { it.first.name }
     }
@@ -105,6 +118,9 @@ class ManageSkillCatalogUseCase(private val store: SkillStore) {
     suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }
     suspend fun retireVersion(actor: Principal, name: String, version: String): SkillVersion = admin(actor, name, version) { store.retireVersion(actor, name, version) }
     suspend fun assignments(actor: Principal, name: String): List<SkillAssignment> = admin(actor, name) { store.assignments(actor, name) }
+    /** All members (an explicit *no* still excludes) or only members set to *yes*. Interactive administrators only. */
+    suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Skill =
+        admin(actor, name) { store.setAudience(actor, name, allMembers) }
     /** Sets a member's yes/no decision; null clears it. */
     suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?): SkillAssignment? =
         admin(actor, name) { store.assign(actor, name, memberId, decision) }

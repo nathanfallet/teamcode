@@ -24,7 +24,7 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
         return database.query {
             lockTeam(actor.teamId); authorize(this, actor)
             val role = requireMember(actor, memberId, lock = true)
-            for (scope in listOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)) if (scope in scopes && role != Role.ADMIN.name)
+            for (scope in listOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)) if (scope in scopes && role != Role.ADMIN.name)
                 throw TeamFailure("invalid_service_key", 400, "Only an administrator's key can receive the ${scope.wire} scope.")
             // The actor was just re-validated by authorize, so this is their current role; requireMember already demands it for another member.
             ServiceKeyService.requireNoExpiryAllowed(validDays, actor.member.role.isAdministrator)

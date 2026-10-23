@@ -13,7 +13,8 @@ Unlike a skill, a hook **executes code** on the member's computer, with the memb
 | Definition | `events` (one or more of `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`, `PreCompact`, `Notification`), an optional `matcher` (1–256 characters, passed to the agent unchanged, for example a tool name for `PreToolUse`), `command` (the path of an executable file of the artifact) and `timeoutSeconds` (1–600, default 60). |
 | Artifact | 1–50 files, at most 1 MiB, with the skill catalog's path rules (relative, portable, no links, no hidden or parent segments). The `command` file must be published with mode `executable`. No `SKILL.md` is required. |
 | Pinned version | The single approved version. **Only an interactive administrator pins** (dashboard or API); publication never pins. A hook without a pin delivers nothing. |
-| Access decision | Per member: *yes* (`allow`), *no* (`deny`) or not assigned. Only *yes* delivers. |
+| Access decision | Per member: *yes* (`allow`), *no* (`deny`) or not assigned. *Yes* delivers; *no* never does; *not assigned* delivers only when the hook's audience is *all members*. |
+| Audience | Per hook: *members set to yes* (default) or *all members* (`allMembers`): every member without an explicit decision, including members who join later, receives the pinned version, with the [skills' precedence](skills.md#access-precedence). See [Delivering to all members](#delivering-to-all-members). |
 | Member approval | On their computer, each member approves or refuses each delivered version (`teamcode hooks`). `teamcode run` installs only approved versions. |
 
 The command is not a shell line: it is a file of the artifact, run with no argument, with the event's JSON on standard input exactly as the agent defines it ([Claude Code hooks](https://code.claude.com/docs/en/hooks), [Codex hooks](https://learn.chatgpt.com/docs/hooks)). The client builds the command line itself, as the quoted absolute path of the installed file, so a definition cannot inject shell syntax. Exit codes and JSON output mean what the agent says they mean; for example, exit code 2 from a `Stop` hook makes Claude Code continue with the hook's standard error as the reason.
@@ -31,7 +32,7 @@ rendered as `sha256:<64 lowercase hex>`. The definition is part of the digest, s
 
 Publication needs an interactive administrator login or a service key with the dedicated `hooks:publish` scope, which only a key owned by an administrator can receive (the owner's role is rechecked on every write). It is separate from `skills:publish`: a leaked skills key must not be able to put code on members' computers.
 
-A `hooks:publish` key **cannot pin**, unlike a `skills:publish` key, and cannot unpin, assign or read the catalog. A leaked hook key can therefore add versions, which deliver nothing, but never choose what runs on a workstation: an administrator reads the version's definition and files on the dashboard (**Read the files**, verified against the digest) and pins it. This is a deliberate difference from [skills](skills.md#pinning-from-ci).
+A `hooks:publish` key **cannot pin**, unlike a `skills:publish` key, and cannot unpin, assign members, change the audience of a pinned hook or read the catalog. A leaked hook key can therefore add versions, which deliver nothing, but never choose what runs on a workstation: an administrator reads the version's definition and files on the dashboard (**Read the files**, verified against the digest) and pins it. This is a deliberate difference from [skills](skills.md#pinning-from-ci).
 
 ```sh
 teamcode keys create --name hooks-ci --scopes hooks:publish --no-expiry --json
@@ -54,13 +55,23 @@ Content-Type: application/json
 - `201 Created`: a new immutable version, not pinned. `200 OK` with `created: false`: the same version with the same digest (CI retries are safe and append no audit event).
 - `409 hook_version_conflict`: the label exists with different content or definition. `409 hook_limit` / `hook_version_limit` at the bounds.
 - `400 invalid_hook_definition`, `invalid_hook_artifact`, `invalid_hook_path`, `invalid_hook_name`, `invalid_hook_version`; `413` above 1 MiB of content (the body is bounded at 2 MiB).
-- `403 credential_scope` for a key without `hooks:publish`, `403 forbidden` for a member or a non-administrator key.
+- `403 credential_scope` for a key without `hooks:publish`, `403 forbidden` for a member or a non-administrator key, `403 hook_audience_requires_administrator` for a key asking for `allMembers` on a pinned hook (nothing is stored).
 
 The GitHub Actions example of [skills](skills.md#example-publishing-from-a-github-repository) applies with this body and route.
 
+### Delivering to all members
+
+A hook whose audience is *all members* runs for every member without an explicit decision, including members who join later; an explicit *No* still excludes a member, and each member still approves each version on their computer. An administrator sets it on the hook's page (**Access → Audience**) or with `PUT /api/v1/hooks/{name}/audience` and `{ "allMembers": true }`. A publication can ask for it with `"allMembers": true`:
+
+- From an interactive administrator, always.
+- From a `hooks:publish` key, **only while the hook has no pinned version** (in practice its first publications), or when it is already for all members (a retry). Nothing runs before an administrator pins a version, and the hook's page shows the audience next to the code, so the administrator's interactive pin approves both. On a pinned hook that is not already for all members, the publication is refused whole with `403 hook_audience_requires_administrator`: a key never widens what already runs on workstations. Publish without the flag, or ask an administrator.
+- `"allMembers": false`, or no field, leaves the audience as it is.
+
+No new scope is needed for this, unlike [skills](skills.md#delivering-to-all-members): a hook key never delivers anything by itself, so the pin, which stays interactive, remains the single approval. Each actual change appends `hook.audience.all_members` or `hook.audience.assigned_only` (subject: hook ID; `credentialId`: the key that asked for it, empty for an administrator). Servers advertise `team.hooks.all-members.v1`.
+
 ## Administration
 
-**Dashboard → Team hooks** (administrators; members are redirected to their delivered hooks) lists the hooks. A hook's page shows each version's definition, digest, size and publisher, and lets an administrator read any version's files, pin a version (update or rollback), unpin it (stop delivery) and set each member's decision.
+**Dashboard → Team hooks** (administrators; members are redirected to their delivered hooks) lists the hooks. A hook's page shows each version's definition, digest, size and publisher, and lets an administrator read any version's files, pin a version (update or rollback), unpin it (stop delivery), set the audience (*Members set to Yes* or *All members, except those set to No*) and set each member's decision.
 
 | Operation | Route (interactive administrator) |
 | --- | --- |
@@ -69,6 +80,7 @@ The GitHub Actions example of [skills](skills.md#example-publishing-from-a-githu
 | Read a version's definition and files, pinned or not | `GET /api/v1/hooks/{name}/versions/{version}` |
 | Pin (update/rollback) | `PUT /api/v1/hooks/{name}/pin` with `{ "version": "..." }` |
 | Unpin | `DELETE /api/v1/hooks/{name}/pin` |
+| Audience | `PUT /api/v1/hooks/{name}/audience` with `{ "allMembers": true \| false }` |
 | Decisions | `GET /api/v1/hooks/{name}/assignments`, `PUT /api/v1/hooks/{name}/assignments/{memberId}` with `{ "decision": "allow" \| "deny" }`, `DELETE` to clear |
 
 | Delivery | Route | Credential |
@@ -107,11 +119,11 @@ Separately from team hooks, TeamCode's own hooks report whether a launch's agent
 
 ## Audit
 
-Catalog writes append metadata-only events in the same team-locked transaction: `hook.created`, `hook.version.published` (subject: version ID; `credentialId`: the publishing key, empty for an administrator), `hook.pinned` (subject: version ID), `hook.unpinned`, `hook.access.allowed`, `hook.access.denied`, `hook.access.cleared` (subject: the assignment ID). No content, path, digest, label or definition is written to the journal.
+Catalog writes append metadata-only events in the same team-locked transaction: `hook.created`, `hook.version.published` (subject: version ID; `credentialId`: the publishing key, empty for an administrator), `hook.pinned` (subject: version ID), `hook.unpinned`, `hook.audience.all_members`, `hook.audience.assigned_only` (subject: hook ID), `hook.access.allowed`, `hook.access.denied`, `hook.access.cleared` (subject: the assignment ID). No content, path, digest, label or definition is written to the journal.
 
 ## Persistence and upgrade
 
-Four additive tables, `hooks`, `hook_versions`, `hook_files` and `hook_assignments`, in one reviewed migration (`V20261021190000`) checked against the Exposed definitions by `HookPersistenceTest`. Every replica must run this version before the catalog is used. The execution credential of cloud sessions created by an older server lacks `hooks:read`: such an execution starts without team hooks until its next credential.
+Four additive tables, `hooks`, `hook_versions`, `hook_files` and `hook_assignments`, in one reviewed migration (`V20261021190000`) checked against the Exposed definitions by `HookPersistenceTest`. The audience is the `hooks.all_members` column (`BOOLEAN DEFAULT FALSE`, migration `V20261023191500`): existing hooks keep running only for members set to *Yes*. Every replica must run this version before the catalog is used. The execution credential of cloud sessions created by an older server lacks `hooks:read`: such an execution starts without team hooks until its next credential.
 
 ## What is planned
 

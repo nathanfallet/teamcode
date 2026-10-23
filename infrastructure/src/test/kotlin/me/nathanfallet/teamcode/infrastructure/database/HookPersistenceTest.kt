@@ -103,4 +103,50 @@ class HookPersistenceTest {
             } }
         }
     }
+
+    @Test fun aHookForAllMembersRunsForLaterMembersOnlyAfterAnAdministratorPinsIt() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                a.migrate(); b.migrate()
+                val teamA = SqlTeamService(a); val teamB = SqlTeamService(b)
+                val initial = teamA.bootstrap()!!
+                teamA.changePassword(teamA.login("admin", initial, "fixture").principal, initial, "hook administrator password")
+                val admin = teamB.login("admin", "hook administrator password", "fixture").principal
+                val early = teamA.createMember(admin, "early-member", Role.MEMBER).member
+                val publisher = teamB.authenticate(SqlServiceKeyService(a).create(admin, admin.member.id, "hooks CI", setOf(ServiceScope.HOOKS_PUBLISH), 1).accessToken)!!
+                val catalogA = HookCatalog(SqlHookStore(a)); val catalogB = HookCatalog(SqlHookStore(b))
+
+                // A key may propose the audience of a hook nobody approved yet: nothing runs until an administrator pins.
+                assertTrue(catalogA.publish(publisher, "stop-guard", "1", stop, files("one"), allMembers = true).hook.allMembers)
+                assertEquals(emptyList(), catalogB.effective(admin, early.id))
+                catalogB.store.pin(admin, "stop-guard", "1")
+                assertEquals(listOf("stop-guard"), catalogA.effective(admin, early.id).map { it.name })
+                val late = teamB.createMember(admin, "late-member", Role.MEMBER).member
+                assertEquals(listOf("stop-guard"), catalogA.effective(admin, late.id).map { it.name }, "Members who join later receive it")
+                catalogA.store.assign(admin, "stop-guard", late.id, SkillDecision.DENY)
+                assertEquals(emptyList(), catalogB.effective(admin, late.id))
+
+                // Once pinned, only an administrator widens it: the key's publication is refused whole, nothing stored.
+                catalogB.manage.setAudience(admin, "stop-guard", false)
+                assertEquals(emptyList(), catalogA.effective(admin, early.id))
+                failure("hook_audience_requires_administrator") { catalogA.publish(publisher, "stop-guard", "2", stop, files("two"), allMembers = true) }
+                failure("hook_audience_requires_administrator") { catalogB.publish(publisher, "stop-guard", "1", stop, files("one"), allMembers = true) }
+                assertEquals(listOf("1"), catalogA.store.versions(admin, "stop-guard").second.map { it.version })
+                assertTrue(catalogA.publish(publisher, "stop-guard", "2", stop, files("two")).created, "Without the flag the key still publishes")
+                assertFalse(catalogB.store.versions(admin, "stop-guard").first.allMembers)
+                assertTrue(catalogB.publish(admin, "stop-guard", "3", stop, files("three"), allMembers = true).hook.allMembers, "An administrator may")
+                assertFalse(catalogA.publish(publisher, "stop-guard", "3", stop, files("three"), allMembers = true).created, "Already all members: a retry passes")
+                failure("credential_scope") { catalogA.manage.setAudience(publisher, "stop-guard", false) }
+
+                val events = a.query {
+                    AuditEvents.select(AuditEvents.action, AuditEvents.credentialId)
+                        .where { AuditEvents.action inList listOf("hook.audience.all_members", "hook.audience.assigned_only") }
+                        .orderBy(AuditEvents.id to SortOrder.ASC).map { it[AuditEvents.action] to it[AuditEvents.credentialId] }
+                }
+                assertEquals(listOf("hook.audience.all_members" to publisher.tokenId, "hook.audience.assigned_only" to null, "hook.audience.all_members" to null), events)
+            } }
+        }
+    }
 }

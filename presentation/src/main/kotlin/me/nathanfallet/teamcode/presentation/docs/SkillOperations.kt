@@ -29,15 +29,19 @@ internal fun ApiCatalog.skillOperations() {
             "bounded at 8 MiB). The first publication creates the skill. With `pin: true`, the version also becomes " +
             "the delivered one in the same transaction (`version.pinned` confirms it; servers advertising " +
             "`team.skills.publish-pin.v1` support it). Otherwise an administrator approves it later with " +
-            "`PUT /api/v1/skills/{name}/pin`. Republishing the same content is safe (200, `created: false`), with or " +
-            "without `pin`. A `skills:publish` key must be owned by an administrator; it can publish and pin, but " +
-            "cannot assign or read the catalog."
+            "`PUT /api/v1/skills/{name}/pin`. With `allMembers: true`, the skill is also delivered to every member " +
+            "without an explicit decision, members who join later included (`skill.allMembers` confirms it; servers " +
+            "advertising `team.skills.all-members.v1` support it); `false` leaves the audience as it is. Republishing " +
+            "the same content is safe (200, `created: false`), with or without these flags. A `skills:publish` key " +
+            "must be owned by an administrator; it can publish and pin, but cannot assign or read the catalog. " +
+            "`allMembers` also needs the `skills:assign` scope on the key (403 `credential_scope` otherwise)."
         parameters { skillName() }
         body<PublishSkillVersionRequest>("The version label and its files, base64-encoded (`mode` is `file` or `executable`).")
         responses {
             ok<PublishSkillVersionResponse>("The version already existed with the same content (`created: false`).")
             ok<PublishSkillVersionResponse>("Published.", HttpStatusCode.Created)
             badRequest("An invalid name, version, path, mode or base64 content (`invalid_skill_artifact`).")
+            error(HttpStatusCode.Forbidden, "`allMembers` from a key without `skills:assign` (`credential_scope`).")
             conflict("The version exists with other content (`skill_version_conflict`) or is retired (`skill_version_retired`), " +
                 "the skill is retired (`skill_retired`), or a catalog limit is reached (`skill_limit`, `skill_version_limit`).")
             error(HttpStatusCode.PayloadTooLarge, "The body exceeds 8 MiB (`payload_too_large`).")
@@ -54,6 +58,19 @@ internal fun ApiCatalog.skillOperations() {
             ok<SkillView>("The skill with its new pin.")
             notFound("No such skill or version (`not_found`).")
             conflict("The skill or the version is retired (`skill_retired`, `skill_version_retired`).")
+        }
+    }
+    put("/api/v1/skills/{name}/audience") {
+        operationId = "setSkillAudience"; tag(ApiTags.SKILLS)
+        summary = "Deliver a skill to all members"
+        description = "With `allMembers: true`, every member without an explicit decision receives the pinned version, " +
+            "members who join later included; an explicit `deny` still excludes a member. With `false`, only members " +
+            "set to `allow` receive it. Interactive administrators only."
+        parameters { skillName() }
+        body<SetSkillAudienceRequest>("The audience.")
+        responses {
+            ok<SkillView>("The skill with its audience.")
+            notFound("No such skill (`not_found`).")
         }
     }
     delete("/api/v1/skills/{name}/pin") {
@@ -104,7 +121,8 @@ internal fun ApiCatalog.skillOperations() {
     get("/api/v1/skills/{name}/assignments") {
         operationId = "listSkillAssignments"; tag(ApiTags.SKILLS)
         summary = "Who may receive a skill"
-        description = "The explicit decisions per member: `allow` delivers, `deny` or no decision delivers nothing. Administrators only."
+        description = "The explicit decisions per member: `allow` delivers, `deny` never delivers, and no decision " +
+            "delivers only when the skill's audience is all members (`allMembers`). Administrators only."
         parameters { skillName() }
         responses {
             ok<List<SkillAssignmentView>>("The decisions.")
@@ -129,7 +147,7 @@ internal fun ApiCatalog.skillOperations() {
     delete("/api/v1/skills/{name}/assignments/{memberId}") {
         operationId = "clearSkillAssignment"; tag(ApiTags.SKILLS)
         summary = "Remove a member's decision"
-        description = "Without a decision, the member receives nothing. Administrators only."
+        description = "Without a decision, the member receives the skill only when its audience is all members. Administrators only."
         parameters {
             skillName()
             pathId("memberId", "The member's identifier.")

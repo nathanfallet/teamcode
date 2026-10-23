@@ -9,6 +9,11 @@ enum class ServiceScope(val wire: String) {
     SKILLS_READ("skills:read"),
     /** Publish skill versions to the catalog; only valid for a key owned by an administrator. */
     SKILLS_PUBLISH("skills:publish"),
+    /**
+     * With `skills:publish`, also deliver a published skill to all members (`allMembers` at publication). Only valid for
+     * a key owned by an administrator. Separate so that a leaked publishing key cannot widen who receives a skill.
+     */
+    SKILLS_ASSIGN("skills:assign"),
     /** Download the owner's effective team hooks. */
     HOOKS_READ("hooks:read"),
     /**

@@ -25,6 +25,8 @@ object Skills : Table("skills") {
     val retiredAt = long("retired_at").nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
+    /** Delivered to every member without an explicit decision, including later members. */
+    val allMembers = bool("all_members").default(false)
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("skill_team_name", teamId, name) }
 }

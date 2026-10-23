@@ -2,9 +2,15 @@ package me.nathanfallet.teamcode.api.models
 
 import kotlinx.serialization.Serializable
 
-/** One catalog entry as seen by an administrator. */
+/**
+ * One catalog entry as seen by an administrator. `allMembers` delivers the skill to every member without an explicit
+ * decision, including later members; absent (false) from a server older than `team.skills.all-members.v1`.
+ */
 @Serializable
-data class SkillView(val id: String, val name: String, val pinnedVersion: String? = null, val retired: Boolean, val createdAt: Long, val updatedAt: Long)
+data class SkillView(
+    val id: String, val name: String, val pinnedVersion: String? = null, val retired: Boolean, val createdAt: Long, val updatedAt: Long,
+    val allMembers: Boolean = false,
+)
 
 @Serializable
 data class SkillVersionView(
@@ -34,15 +40,23 @@ class SkillFileUpload(val path: String, val mode: String = "file", val contentBa
  * With `pin`, the published version also becomes the delivered one in the same transaction. Republishing the same
  * content with `pin` is idempotent. Servers advertise `team.skills.publish-pin.v1`; an older server ignores the field,
  * which a client detects from `version.pinned` in the response.
+ *
+ * With `allMembers`, the skill is also delivered to every member without an explicit decision, in the same transaction
+ * (a key needs `skills:assign` besides `skills:publish`). `false` leaves the audience unchanged. Servers advertise
+ * `team.skills.all-members.v1`; an older server ignores the field, which a client detects from `skill.allMembers`.
  */
 @Serializable
-data class PublishSkillVersionRequest(val version: String, val files: List<SkillFileUpload>, val pin: Boolean = false)
+data class PublishSkillVersionRequest(val version: String, val files: List<SkillFileUpload>, val pin: Boolean = false, val allMembers: Boolean = false)
 
 @Serializable
 data class PublishSkillVersionResponse(val skill: SkillView, val version: SkillVersionView, val created: Boolean)
 
 @Serializable
 data class PinSkillRequest(val version: String)
+
+/** `true`: every member without an explicit decision receives the skill; `false`: only members set to *yes*. */
+@Serializable
+data class SetSkillAudienceRequest(val allMembers: Boolean)
 
 /** A member's explicit yes/no access decision: `allow` or `deny`. */
 @Serializable

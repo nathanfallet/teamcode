@@ -32,8 +32,11 @@ enum class HookEvent(val wire: String, val codex: Boolean = true) {
  */
 data class HookDefinition(val events: Set<HookEvent>, val matcher: String?, val command: String, val timeoutSeconds: Int)
 
-/** A catalog entry. A hook is delivered only through its pinned version, which only an interactive administrator sets. */
-data class Hook(val id: String, val name: String, val pinnedVersion: String?, val createdAt: Long, val updatedAt: Long)
+/**
+ * A catalog entry. A hook is delivered only through its pinned version, which only an interactive administrator sets.
+ * With [allMembers], every member without an explicit decision receives it, including members who join later.
+ */
+data class Hook(val id: String, val name: String, val pinnedVersion: String?, val createdAt: Long, val updatedAt: Long, val allMembers: Boolean = false)
 
 /** An immutable published version: its definition, files and digest never change. */
 data class HookVersion(

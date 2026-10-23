@@ -198,9 +198,6 @@ class CloudSessionPersistenceTest {
         assertEquals(paused.generation, ra.sessions.pause(colleague, null, s.id, false).generation, "A repeated pause writes nothing")
         pass(ra)
         assertEquals(PAUSING, ra.store.find(admin.teamId, s.id)!!.state)
-        // A resume while the pause is draining is refused: accepting it would wedge the drain and be dropped later.
-        failure("session_pausing") { rb.sessions.resume(colleague, null, s.id) }
-        assertEquals(DesiredState.PAUSED, ra.store.find(admin.teamId, s.id)!!.desiredState)
         val instruction = ra.runner.heartbeat(admin.teamId, s.id, 1, ready = true)
         assertEquals(DesiredState.PAUSED, instruction.desiredState); assertNotNull(instruction.pauseDeadline)
         rb.runner.checkpoint(admin.teamId, s.id, 1, completed = true)
@@ -370,6 +367,36 @@ class CloudSessionPersistenceTest {
         drain(ra) { ra.store.find(team, early.id)!!.state == PAUSED }
         assertEquals(WorkspaceResume.CONSISTENT, ra.store.find(team, early.id)!!.resumeWorkspace)
         ra.sessions.delete(admin, null, early.id)
+
+        // A resume before the checkpoint cancels the pause: the same execution goes back to ready, no new pod.
+        val cancelled = create("Pause cancelled")
+        val cancelledPod = ready(cancelled.id)
+        rb.sessions.pause(admin, null, cancelled.id, false)
+        pass(ra)
+        assertEquals(PAUSING, ra.store.find(team, cancelled.id)!!.state)
+        val requested = ra.store.find(team, cancelled.id)!!.pauseRequestedAt
+        val resumedWhilePausing = rb.sessions.resume(admin, null, cancelled.id)
+        assertEquals(DesiredState.RUNNING, resumedWhilePausing.desiredState, "Accepted at once, not 409 session_pausing")
+        assertEquals(requested, resumedWhilePausing.pauseRequestedAt, "The pause keeps its deadlines until the reconciler decides")
+        assertEquals(DesiredState.RUNNING, ra.runner.heartbeat(team, cancelled.id, 1, ready = true).desiredState, "The runner stops draining")
+        pass(ra)
+        val back = ra.store.find(team, cancelled.id)!!
+        assertEquals(READY, back.state); assertNull(back.pauseRequestedAt); assertEquals(1, back.currentEpoch)
+        assertEquals(setOf(cancelledPod), cluster(ra).podNames().filter { it.startsWith("tc-${cancelled.id}-") }.toSet(), "The pod kept running")
+        assertEquals(1, ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.pause_cancelled") and (AuditEvents.subjectId eq cancelled.id) }.count() })
+        failure("not_pausing") { ra.runner.checkpoint(team, cancelled.id, 1, completed = true) }
+
+        // A resume after the checkpoint waits for the pause, then resumes at once into the next epoch.
+        rb.sessions.pause(admin, null, cancelled.id, false)
+        pass(ra)
+        ra.runner.checkpoint(team, cancelled.id, 1, completed = true)
+        rb.sessions.resume(admin, null, cancelled.id)
+        drain(ra) { ra.store.find(team, cancelled.id)!!.currentEpoch == 2 }
+        val next = ra.store.find(team, cancelled.id)!!
+        assertEquals(RESUMING, next.state); assertEquals(DesiredState.RUNNING, next.desiredState)
+        assertEquals(WorkspaceResume.CONSISTENT, next.resumeWorkspace, "The checkpointed pause completed before the resume")
+        assertEquals("paused", ra.store.execution(cancelled.id, 1)!!.exitReason)
+        ra.sessions.delete(admin, null, cancelled.id)
 
         // A running session without its execution row pauses crash-consistent instead of an illegal ready -> failed.
         val orphaned = create("No execution")

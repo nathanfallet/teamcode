@@ -16,7 +16,7 @@ import me.nathanfallet.teamcode.domain.team.*
 private const val MAX_PUBLISH_BODY_BYTES = 8 * 1024 * 1024
 private const val MAX_REPORT_BODY_BYTES = 131_072
 
-private fun Skill.view() = SkillView(id, name, pinnedVersion, retired, createdAt, updatedAt)
+private fun Skill.view() = SkillView(id, name, pinnedVersion, retired, createdAt, updatedAt, allMembers)
 private fun SkillVersion.view(pinned: String?) = SkillVersionView(version, digest, sizeBytes, fileCount, publishedBy, publishedAt, retired, version == pinned)
 private fun SkillAssignment.view() = SkillAssignmentView(memberId, decision.wire, updatedAt)
 private fun EffectiveSkill.view() = EffectiveSkillView(name, version, digest, sizeBytes, fileCount)
@@ -64,7 +64,7 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
         val name = call.skillName
         skills.publish.authorize(call.principal) // Before buffering up to 8 MiB.
         val input = call.boundedJson<PublishSkillVersionRequest>(MAX_PUBLISH_BODY_BYTES)
-        val result = skills.publish(call.principal, name, input.version, input.files(), input.pin)
+        val result = skills.publish(call.principal, name, input.version, input.files(), input.pin, input.allMembers)
         call.respond(if (result.created) HttpStatusCode.Created else HttpStatusCode.OK,
             PublishSkillVersionResponse(result.skill.view(), result.version.view(result.skill.pinnedVersion), result.created))
     }
@@ -73,6 +73,11 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
         store.authorizePin(call.principal) // Same order as publication: refuse before reading the body.
         val input = call.boundedJson<PinSkillRequest>(4_096)
         call.respond(store.pin(call.principal, name, input.version).view())
+    }
+    put("/api/v1/skills/{name}/audience") {
+        val name = call.skillName
+        val input = call.boundedJson<SetSkillAudienceRequest>(4_096)
+        call.respond(store.setAudience(call.principal, name, input.allMembers).view())
     }
     delete("/api/v1/skills/{name}/pin") { call.respond(store.unpin(call.principal, call.skillName).view()) }
     delete("/api/v1/skills/{name}") { call.respond(store.retire(call.principal, call.skillName).view()) }
@@ -117,15 +122,26 @@ internal fun Route.skillRoutes(skills: SkillCatalog, team: TeamService, origin: 
 
 private fun date(value: Long) = Instant.ofEpochMilli(value).toString()
 
+/** The audience selector shared by the skill and hook pages: only members set to *Yes*, or all members. */
+internal fun audienceForm(actor: Principal, base: String, allMembers: Boolean): String {
+    fun option(value: String, label: String, selected: Boolean) = """<option value="$value" ${if (selected) "selected" else ""}>$label</option>"""
+    return """<form method="post" action="$base/audience">${csrf(actor)}<label>Audience <select name="audience">${option("assigned", "Members set to Yes", !allMembers)}${option("all", "All members, except those set to No", allMembers)}</select></label><button>Save audience</button></form>"""
+}
+internal fun audience(value: String?) = when (value) {
+    "all" -> true
+    "assigned" -> false
+    else -> throw TeamFailure("invalid_audience", 400, "Choose all members or members set to Yes.")
+}
+
 private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin: String) {
     val store = skills.manage
     get("/dashboard/skills") {
         val actor = call.principal
         if (!actor.member.role.isAdministrator) return@get call.respondRedirect("/dashboard/members/${actor.member.id}/skills")
         val rows = store.catalog(actor).joinToString("") { skill ->
-            """<tr><td><a href="/dashboard/skills/${escape(skill.name)}">${escape(skill.name)}</a></td><td>${skill.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td>${if (skill.retired) "Retired" else "Active"}</td><td><small>${date(skill.updatedAt)}</small></td></tr>"""
+            """<tr><td><a href="/dashboard/skills/${escape(skill.name)}">${escape(skill.name)}</a></td><td>${skill.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td>${if (skill.allMembers) "All members" else "Members set to Yes"}</td><td>${if (skill.retired) "Retired" else "Active"}</td><td><small>${date(skill.updatedAt)}</small></td></tr>"""
         }
-        call.respondText(call.page("Skill catalog", """<details class='help'><summary>How this works</summary><p>Skills are published by CI through the API with a <code>skills:publish</code> service key owned by an administrator. A version is delivered only once it is pinned, and only to members with an explicit <em>allow</em> decision. An administrator pins a version here; CI can also pin the version it publishes, with the same key, and the audit journal names that key. Delivered files can be copied by their recipients: protect tools and data at the service that owns them.</p></details><table><thead><tr><th>Skill</th><th>Pinned version</th><th>State</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No skill has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/skills">My delivered skills</a></p>"""), ContentType.Text.Html)
+        call.respondText(call.page("Skill catalog", """<details class='help'><summary>How this works</summary><p>Skills are published by CI through the API with a <code>skills:publish</code> service key owned by an administrator. A version is delivered only once it is pinned, and only to members with an explicit <em>allow</em> decision, or to every member not set to <em>No</em> when the skill's audience is <em>All members</em> (members who join later included). An administrator pins a version and sets the audience here; CI can also pin the version it publishes, with the same key, and deliver it to all members with a key that also holds <code>skills:assign</code>. The audit journal names the key. Delivered files can be copied by their recipients: protect tools and data at the service that owns them.</p></details><table><thead><tr><th>Skill</th><th>Pinned version</th><th>Audience</th><th>State</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No skill has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/skills">My delivered skills</a></p>"""), ContentType.Text.Html)
     }
     get("/dashboard/skills/{name}") {
         val actor = call.principal
@@ -145,11 +161,11 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
         val memberRows = team.members(actor).joinToString("") { member ->
             val current = decisions[member.id]
             fun option(value: String, label: String, selected: Boolean) = """<option value="$value" ${if (selected) "selected" else ""}>$label</option>"""
-            """<tr><td>${escape(member.username)}<br><a href="/dashboard/members/${escape(member.id)}/skills">Delivered skills and installations</a></td><td><form method="post" action="$base/assignments/${escape(member.id)}">${csrf(actor)}<select name="decision">${option("none", "Not assigned", current == null)}${option("allow", "Yes", current == SkillDecision.ALLOW)}${option("deny", "No", current == SkillDecision.DENY)}</select><button>Save</button></form></td></tr>"""
+            """<tr><td>${escape(member.username)}<br><a href="/dashboard/members/${escape(member.id)}/skills">Delivered skills and installations</a></td><td><form method="post" action="$base/assignments/${escape(member.id)}">${csrf(actor)}<select name="decision">${option("none", if (skill.allMembers) "Default (receives it)" else "Not assigned", current == null)}${option("allow", "Yes", current == SkillDecision.ALLOW)}${option("deny", "No", current == SkillDecision.DENY)}</select><button>Save</button></form></td></tr>"""
         }
         val controls = if (skill.retired) """<form method="post" action="$base/restore">${csrf(actor)}<button>Restore skill</button></form>"""
             else """${if (skill.pinnedVersion != null) """<form method="post" action="$base/unpin">${csrf(actor)}<button>Unpin (stop delivery)</button></form>""" else ""}<form method="post" action="$base/retire">${csrf(actor)}<button>Remove from catalog</button></form>"""
-        call.respondText(call.page("Skill ${skill.name}", """<details class='help'><summary>How this works</summary><p>${if (skill.retired) "Retired: not delivered and closed to publication. Restoring does not pin a version." else skill.pinnedVersion?.let { "Delivering <code>${escape(it)}</code>." } ?: "No pinned version: nothing is delivered."} Update or roll back by pinning another immutable version.</p></details>$controls<h2>Versions</h2><table><thead><tr><th>Version / digest</th><th>Content</th><th>Published by / UTC</th><th>Manage</th></tr></thead><tbody>$versionRows</tbody></table><h2>Access</h2><p>Only <em>Yes</em> delivers the pinned version. <em>Not assigned</em> currently delivers nothing; it will let group decisions apply once groups exist, while an explicit <em>Yes</em> or <em>No</em> keeps precedence.</p><table><thead><tr><th>Member</th><th>Decision</th></tr></thead><tbody>$memberRows</tbody></table><p><a href="/dashboard/skills">Back to catalog</a></p>"""), ContentType.Text.Html)
+        call.respondText(call.page("Skill ${skill.name}", """<details class='help'><summary>How this works</summary><p>${if (skill.retired) "Retired: not delivered and closed to publication. Restoring does not pin a version." else skill.pinnedVersion?.let { "Delivering <code>${escape(it)}</code>." } ?: "No pinned version: nothing is delivered."} Update or roll back by pinning another immutable version.</p></details>$controls<h2>Versions</h2><table><thead><tr><th>Version / digest</th><th>Content</th><th>Published by / UTC</th><th>Manage</th></tr></thead><tbody>$versionRows</tbody></table><h2>Access</h2>${audienceForm(actor, base, skill.allMembers)}<p>${if (skill.allMembers) "Every member receives the pinned version, including members who join later, except those set to <em>No</em>." else "Only <em>Yes</em> delivers the pinned version. <em>Not assigned</em> delivers nothing."} An explicit <em>Yes</em> or <em>No</em> always takes precedence.</p><table><thead><tr><th>Member</th><th>Decision</th></tr></thead><tbody>$memberRows</tbody></table><p><a href="/dashboard/skills">Back to catalog</a></p>"""), ContentType.Text.Html)
     }
     post("/dashboard/skills/{name}/pin") {
         val input = call.form(origin)
@@ -163,6 +179,10 @@ private fun Route.skillDashboard(skills: SkillCatalog, team: TeamService, origin
         val name = call.skillName
         store.retireVersion(call.principal, name, call.parameters["version"]!!)
         call.respondRedirect("/dashboard/skills/$name")
+    }
+    post("/dashboard/skills/{name}/audience") {
+        val input = call.form(origin)
+        call.respondRedirect("/dashboard/skills/${store.setAudience(call.principal, call.skillName, audience(input["audience"])).name}")
     }
     post("/dashboard/skills/{name}/assignments/{memberId}") {
         val input = call.form(origin)

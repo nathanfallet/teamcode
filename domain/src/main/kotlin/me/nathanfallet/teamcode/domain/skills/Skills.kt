@@ -2,7 +2,10 @@ package me.nathanfallet.teamcode.domain.skills
 
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
-/** A catalog entry. A skill is served only through its approved pinned version. */
+/**
+ * A catalog entry. A skill is served only through its approved pinned version. With [allMembers], every member without
+ * an explicit decision receives it, including members who join later; an explicit *no* still excludes a member.
+ */
 data class Skill(
     val id: String,
     val name: String,
@@ -10,6 +13,7 @@ data class Skill(
     val retired: Boolean,
     val createdAt: Long,
     val updatedAt: Long,
+    val allMembers: Boolean = false,
 )
 
 /** An immutable published version. Its files and digest never change after publication. */
@@ -42,8 +46,8 @@ class SkillArtifact(val digest: String, val files: List<SkillFile>, val entries:
 }
 
 /**
- * A member's explicit yes/no decision for one skill. Absence means "not assigned", which currently grants nothing.
- * Group decisions will be combined through [SkillAccessPolicy] when groups exist.
+ * A member's explicit yes/no decision for one skill. Absence means "not assigned": it delivers nothing, unless the skill
+ * is delivered to all members. Group decisions will be combined through [SkillAccessPolicy] when groups exist.
  */
 enum class SkillDecision(val wire: String) { ALLOW("allow"), DENY("deny") }
 
@@ -78,15 +82,17 @@ data class SkillInstallation(
 )
 
 /**
- * Precedence rule for skill access. Today only member decisions exist, so `groups` is always empty.
- * Planned group precedence: an explicit member decision wins; otherwise any group denial wins over a group grant;
- * otherwise a group grant allows; with no decision at all, nothing is delivered.
+ * Precedence rule for skill and hook access. Today only member decisions exist, so `groups` is always empty.
+ * An explicit member decision wins; otherwise (planned) any group denial wins over a group grant; otherwise a group
+ * grant allows; with no decision at all, the item's audience decides: [allMembers] delivers, otherwise nothing is
+ * delivered. "All members" is therefore the weakest rule: any explicit *no* overrides it.
  */
 object SkillAccessPolicy {
-    fun allowed(member: SkillDecision?, groups: Collection<SkillDecision> = emptyList()): Boolean = when {
+    fun allowed(member: SkillDecision?, groups: Collection<SkillDecision> = emptyList(), allMembers: Boolean = false): Boolean = when {
         member != null -> member == SkillDecision.ALLOW
         SkillDecision.DENY in groups -> false
-        else -> SkillDecision.ALLOW in groups
+        SkillDecision.ALLOW in groups -> true
+        else -> allMembers
     }
 }
 

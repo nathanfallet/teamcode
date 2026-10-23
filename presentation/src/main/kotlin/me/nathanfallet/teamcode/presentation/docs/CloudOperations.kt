@@ -252,7 +252,7 @@ private fun ApiCatalog.cloudSessions() {
     post("/api/v1/cloud/sessions/{id}/resume") {
         operationId = "resumeCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Resume a paused session"
-        description = "Starts a new execution on the kept workspace and conversation."
+        description = "Starts a new execution on the kept workspace and conversation. During a pause, cancels it when the runner has not checkpointed yet, otherwise resumes as soon as the pause completes."
         parameters {
             sessionId()
             onBehalfOf()
@@ -260,7 +260,7 @@ private fun ApiCatalog.cloudSessions() {
         responses {
             ok<CloudSessionView>("Accepted: the session is resuming.", HttpStatusCode.Accepted)
             notFound("No such session (`not_found`).")
-            conflict("The session cannot resume now (`invalid_transition`, `session_pausing`, `session_transferring`, `session_busy`).")
+            conflict("The session cannot resume now (`invalid_transition`, `session_transferring`, `session_busy`).")
         }
     }
     delete("/api/v1/cloud/sessions/{id}") {

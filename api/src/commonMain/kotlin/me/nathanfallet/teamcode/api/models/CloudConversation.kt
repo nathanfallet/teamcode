@@ -180,13 +180,17 @@ data class RunnerEventView(val sequence: Long, val type: String, val data: JsonO
 data class RunnerEventsRequest(val teamId: String, val sessionId: String, val epoch: Int, val events: List<RunnerEventView>)
 @Serializable
 data class RunnerEventsAckView(val acceptedThrough: Long, val lastSeq: Long)
-/** Waits up to [waitMillis] (at most 20 000) for queued inputs; returns them marked `delivered`. */
+/**
+ * Waits up to [waitMillis] (at most 20 000) for queued inputs; returns them marked `delivered`. With [desiredState],
+ * the one the runner last knew (`running` or `paused`), the wait also ends as soon as the session's differs.
+ */
 @Serializable
-data class RunnerInputsRequest(val teamId: String, val sessionId: String, val epoch: Int, val waitMillis: Long = 20_000)
+data class RunnerInputsRequest(val teamId: String, val sessionId: String, val epoch: Int, val waitMillis: Long = 20_000, val desiredState: String? = null)
 @Serializable
 data class RunnerInputView(val id: String, val kind: String, val text: String? = null, val attempt: Int = 1)
+/** [desiredState]: the session's desired state when the wait ended, so a pause reaches the runner without a heartbeat. */
 @Serializable
-data class RunnerInputsView(val inputs: List<RunnerInputView>)
+data class RunnerInputsView(val inputs: List<RunnerInputView>, val desiredState: String? = null)
 /** `status`: `consumed` (handed to the agent) or `rejected` with a stable [reason]. */
 @Serializable
 data class RunnerInputAckView(val id: String, val status: String, val reason: String? = null)
