@@ -71,26 +71,34 @@ class OpenArtifactUseCase(
          * escaped character in the ticket; null otherwise.
          */
         fun contentPrefix(origin: String, artifactId: String, contentUrl: String): String? {
-            // The server spells its own origin as configured (case, an explicit default port): compared normalized, and
-            // the prefix is kept in the server's spelling, the one the web view navigates with.
-            val authorityEnd = contentUrl.indexOf('/', contentUrl.indexOf("://").takeIf { it > 0 }?.plus(3) ?: return null)
-            if (authorityEnd < 0) return null
-            val served = contentUrl.substring(0, authorityEnd)
-            val normalized = try { normalizeOrigin(served) } catch (_: CompanionException.InvalidOrigin) { return null }
-            if (normalized != origin || '@' in served) return null
-            val base = "$served/artifact/$artifactId/"
-            if (!contentUrl.startsWith(base)) return null
-            val ticket = contentUrl.removePrefix(base).substringBefore('/')
+            // The server spells its own origin as configured (case, an explicit default port): compared, and kept, in the
+            // canonical form, the one web views report the pages they navigate to in.
+            val canonical = canonical(contentUrl) ?: return null
+            val base = "$origin/artifact/$artifactId/"
+            if (!canonical.startsWith(base)) return null
+            val ticket = canonical.removePrefix(base).substringBefore('/')
             if (!TICKET.matches(ticket) || ticket.all { it == '.' }) return null
             val prefix = "$base$ticket/"
-            return prefix.takeIf { contentUrl.startsWith(it) && allows(prefix, contentUrl) }
+            return prefix.takeIf { canonical.startsWith(it) && allows(prefix, canonical) }
         }
 
         /** Whether the viewer may load [url] for the ticket's [prefix]: a page under it, never a path that climbs out. */
         fun allows(prefix: String, url: String): Boolean {
-            if (!url.startsWith(prefix)) return false
-            val path = url.removePrefix(prefix).substringBefore('#').substringBefore('?')
-            return path.split('/').none { it == ".." || it == "." } && "%2e" !in path.lowercase() && "%2f" !in path.lowercase() && '\\' !in path
+            val canonical = canonical(url) ?: return false
+            if (!canonical.startsWith(prefix)) return false
+            val path = canonical.removePrefix(prefix).substringBefore('#').substringBefore('?').lowercase()
+            // Dots, slashes and backslashes, escaped or not, and any escaped percent (a double encoding).
+            return path.split('/').none { it == ".." || it == "." } && listOf("%2e", "%2f", "%5c", "%25").none { it in path } && '\\' !in path
+        }
+
+        /** [url] with its origin normalized (lower-case host, default port dropped); null without a valid web origin. */
+        private fun canonical(url: String): String? {
+            val schemeEnd = url.indexOf("://").takeIf { it > 0 } ?: return null
+            val authorityEnd = url.indexOf('/', schemeEnd + 3).takeIf { it > 0 } ?: return null
+            val served = url.substring(0, authorityEnd)
+            if ('@' in served) return null
+            val origin = try { normalizeOrigin(served) } catch (_: CompanionException.InvalidOrigin) { return null }
+            return origin + url.substring(authorityEnd)
         }
     }
 }

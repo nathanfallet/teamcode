@@ -82,6 +82,8 @@ class ArtifactViewModelsTest {
         model.selectVersion(1)
         settle()
         assertEquals(1, model.uiState.value.opened?.ticket?.version)
+        // The link copied or opened is the version shown.
+        assertEquals("https://team.example/artifact/$id?v=1", model.uiState.value.versionUrl)
         val reload = model.uiState.value.reload
         // A 404 with a ticket still valid: a link to a page the version lacks, nothing reloads by itself.
         model.contentMissing()

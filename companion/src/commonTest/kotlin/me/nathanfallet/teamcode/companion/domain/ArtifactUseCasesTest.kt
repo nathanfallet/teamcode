@@ -63,12 +63,14 @@ class ArtifactUseCasesTest {
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, prefix))
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, "${prefix}index.html"))
         // The server's own spelling of its origin is accepted and kept.
-        assertEquals("https://Team.Example:443/artifact/$id/tk_1/", OpenArtifactUseCase.contentPrefix("https://team.example", id, "https://Team.Example:443/artifact/$id/tk_1/"))
+        assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, "https://Team.Example:443/artifact/$id/tk_1/"))
+        // Pages the web view reports in the canonical spelling, or the server's, are both under the prefix.
+        assertTrue(OpenArtifactUseCase.allows(prefix, "https://TEAM.example:443/artifact/$id/tk_1/page.html"))
         for (url in listOf("https://evil.example/artifact/$id/tk_1/", "https://team.example/artifact/$id/../x/", "https://team.example/artifact/other/tk/",
             "https://team.example/artifact/$id/tk%2F1/", "https://team.example.evil/artifact/$id/tk/", "https://u@team.example/artifact/$id/tk/", "https://team.example"))
             assertNull(OpenArtifactUseCase.contentPrefix("https://team.example", id, url), url)
         assertTrue(OpenArtifactUseCase.allows(prefix, "${prefix}img/a.png?x=1#top"))
-        for (url in listOf("${prefix}../other/", "${prefix}%2e%2e/x", "https://team.example/dashboard", "${prefix}a\\..\\b", "https://team.example/artifact/$id/tk_2/"))
+        for (url in listOf("${prefix}../other/", "${prefix}%2e%2e/x", "https://team.example/dashboard", "${prefix}a\\..\\b", "${prefix}..%5c..%5cx", "${prefix}%252e%252e/x", "https://team.example/artifact/$id/tk_2/"))
             assertFalse(OpenArtifactUseCase.allows(prefix, url), url)
     }
 

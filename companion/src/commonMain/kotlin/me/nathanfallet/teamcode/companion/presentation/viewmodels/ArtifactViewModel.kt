@@ -38,7 +38,10 @@ data class ArtifactUiState(
     /** A link inside the content led to a page the version does not have (a `404` on a ticket still valid). */
     val missingPage: Boolean = false,
     val error: String? = null,
-)
+) {
+    /** The viewer page of the version shown: copied and opened in the browser, pinned when it is not the current one. */
+    val versionUrl: String? get() = viewerUrl?.let { url -> version?.takeIf { it != artifact?.currentVersion }?.let { "$url?v=$it" } ?: url }
+}
 
 /**
  * One artifact: its versions, and a ticket for the version shown when the platform embeds the content ([embedded]).

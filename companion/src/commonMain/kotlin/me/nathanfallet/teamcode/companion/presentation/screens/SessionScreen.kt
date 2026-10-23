@@ -143,7 +143,8 @@ private fun Header(session: CloudSession, state: SessionUiState) {
             LiveState.ENDED -> Res.string.session_ended
             LiveState.STOPPED -> Res.string.session_paused_stream
         }
-        Text(stringResource(live), style = MaterialTheme.typography.labelMedium, color = if (state.live == LiveState.LIVE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("live"))
+        // Stopped by an error, the error says why: "paused in the background" would be wrong.
+        if (state.live != LiveState.STOPPED || state.error == null) Text(stringResource(live), style = MaterialTheme.typography.labelMedium, color = if (state.live == LiveState.LIVE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("live"))
     }
     Text(listOfNotNull(session.agentKind, session.model, session.effort, session.phase).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (session.repositories.isNotEmpty()) Text(session.repositories.joinToString(", "), style = MonospaceStyle, maxLines = 2, overflow = TextOverflow.Ellipsis)
