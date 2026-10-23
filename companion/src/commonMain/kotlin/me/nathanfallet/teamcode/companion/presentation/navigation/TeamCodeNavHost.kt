@@ -38,6 +38,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.SubscriptionAccountsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
 import me.nathanfallet.teamcode.companion.presentation.screens.TransfersScreen
 import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
@@ -51,6 +52,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactViewMo
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.RootViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
 import me.nathanfallet.teamcode.companion.resources.link_new_server
@@ -114,6 +116,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenLink = ::openLink,
                 onAddAccount = { navController.navigate(AddServerRoute) },
                 onOpenTransfers = { accountId -> navController.navigate(TransfersRoute(accountId)) },
+                onOpenSubscriptions = { accountId -> navController.navigate(SubscriptionAccountsRoute(accountId)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -142,6 +145,11 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                     TransferSheet(sheet, onDismiss = { transferring = null })
                 }
             }
+        }
+        composable<SubscriptionAccountsRoute> { entry ->
+            val route = entry.toRoute<SubscriptionAccountsRoute>()
+            val viewModel: SubscriptionAccountsViewModel = koinViewModel { parametersOf(route) }
+            SubscriptionAccountsScreen(viewModel, onBack = { navController.popBackStack() })
         }
         composable<TransfersRoute> { entry ->
             val route = entry.toRoute<TransfersRoute>()

@@ -6,9 +6,11 @@ import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.darwin.Darwin
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
+import me.nathanfallet.teamcode.companion.domain.services.SecureRandom
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.KeychainCredentialStore
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.system.IosPlatformInfo
+import me.nathanfallet.teamcode.companion.infrastructure.system.IosSecureRandom
 import org.koin.dsl.module
 import platform.Foundation.NSUserDefaults
 
@@ -19,4 +21,5 @@ fun platformModule() = module {
     single<CredentialStore> { KeychainCredentialStore(purgeOrphans = !get<Settings>().hasKey(SettingsAccountRepository.ACCOUNTS_KEY)) }
     single<HttpClientEngineFactory<*>> { Darwin }
     single<PlatformInfo> { IosPlatformInfo }
+    single<SecureRandom> { IosSecureRandom }
 }

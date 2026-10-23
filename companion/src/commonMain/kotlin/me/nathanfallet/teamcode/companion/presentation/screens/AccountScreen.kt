@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.Plus
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.ThemePreference
@@ -75,6 +76,9 @@ import me.nathanfallet.teamcode.companion.resources.settings_theme
 import me.nathanfallet.teamcode.companion.resources.settings_theme_dark
 import me.nathanfallet.teamcode.companion.resources.settings_theme_light
 import me.nathanfallet.teamcode.companion.resources.settings_theme_system
+import me.nathanfallet.teamcode.companion.resources.subscriptions_row_hint
+import me.nathanfallet.teamcode.companion.resources.subscriptions_section
+import me.nathanfallet.teamcode.companion.resources.subscriptions_title
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -84,6 +88,7 @@ fun AccountScreen(
     onAddAccount: () -> Unit,
     onSignInAgain: (Account) -> Unit,
     onSwitchAccount: () -> Unit,
+    onOpenSubscriptions: (Account) -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -116,6 +121,20 @@ fun AccountScreen(
                             else TcButton(stringResource(Res.string.home_sign_in_again), onClick = { onSignInAgain(account) }, modifier = Modifier.weight(1f).testTag("sign-in-again"))
                             TcButton(stringResource(Res.string.settings_sign_out), onClick = { viewModel.signOut(account) }, enabled = !state.working, kind = ButtonKind.DANGER,
                                 modifier = Modifier.weight(1f).testTag("sign-out"))
+                        }
+                    }
+                }
+            }
+
+            active?.takeIf { it.signedIn }?.let { account ->
+                Section(stringResource(Res.string.subscriptions_section)) {
+                    Group {
+                        GroupRow(Modifier.testTag("subscriptions"), onClick = { onOpenSubscriptions(account) }) {
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(Res.string.subscriptions_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(stringResource(Res.string.subscriptions_row_hint), color = colors.muted, fontSize = 12.5.sp)
+                            }
+                            Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
                         }
                     }
                 }

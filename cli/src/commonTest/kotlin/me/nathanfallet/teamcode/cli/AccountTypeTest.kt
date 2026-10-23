@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.cli
 
 import me.nathanfallet.teamcode.cli.accounts.*
+import me.nathanfallet.teamcode.client.API_KEY_UNSUPPORTED
+import me.nathanfallet.teamcode.client.AccountType
 import kotlin.test.*
 
 class AccountTypeTest {

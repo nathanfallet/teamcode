@@ -30,6 +30,27 @@ sealed class CompanionException(message: String) : Exception(message) {
      */
     class TransferRefused(val code: String, val problems: List<String> = emptyList()) :
         CompanionException("The server refused the transfer" + (code.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
+    /**
+     * The provider sign-in of a new subscription account did not complete; the message is TeamCode's own, never the
+     * provider's. [restart] is true when this attempt is spent (another state, a code refused or already used): the
+     * sign-in starts again; false when pasting again can work.
+     */
+    class ProviderSignIn(val restart: Boolean, message: String) : CompanionException(message)
+    /** An Anthropic API key, or any kind the server cannot hold yet: TeamCode pools hold subscription sign-ins only. */
+    class UnavailableAccountType : CompanionException("TeamCode servers hold subscription sign-ins only: add an Anthropic or Codex subscription.")
+    /** The server refused to add the account ([code]: `account_enrollment_forbidden`, `account_in_use`, or the app's `session_cannot_enroll`). */
+    class EnrollmentRefused(val code: String) : CompanionException(
+        when (code) {
+            ENROLLMENT_FORBIDDEN -> "Only administrators can add accounts on this server. Ask an administrator, or ask them to let every member add accounts (\"Who can add accounts\" on the dashboard's Subscription accounts page)."
+            "account_in_use" -> "This subscription account is already in the pool and is not waiting to be reconnected. Ask an administrator to replace its sign-in."
+            else -> "This session cannot add accounts. Finish any required password change, then try again."
+        },
+    ) {
+        companion object {
+            const val ENROLLMENT_FORBIDDEN = "account_enrollment_forbidden"
+            const val SESSION_CANNOT_ENROLL = "session_cannot_enroll"
+        }
+    }
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
 }

@@ -1,25 +1,9 @@
 package me.nathanfallet.teamcode.cli.accounts
 
 import me.nathanfallet.teamcode.cli.CliUserException
+import me.nathanfallet.teamcode.client.API_KEY_UNSUPPORTED
+import me.nathanfallet.teamcode.client.AccountType
 
-/**
- * The kinds of account `teamcode accounts add` offers, in the order of the numbered selector (the same menu as
- * TeamClaude's login). [supported] is false for a kind the server cannot hold yet: it is listed so the menu is final,
- * and choosing it explains why instead of silently doing something else.
- */
-internal enum class AccountType(val flag: String, val label: String, val provider: String?, val supported: Boolean = true) {
-    ANTHROPIC_SUBSCRIPTION("anthropic-subscription", "Anthropic subscription (Claude Pro, Max, Team, Enterprise)", "anthropic"),
-    CODEX_SUBSCRIPTION("codex-subscription", "Codex subscription (ChatGPT Plus, Pro, Team)", "codex"),
-    ANTHROPIC_API("anthropic-api", "Anthropic API key (Claude Console, console.anthropic.com)", null, supported = false);
-
-    companion object {
-        val flags = entries.map { it.flag }
-        /** `--provider` predates `--type`: claude and claude-max meant the Anthropic subscription. */
-        fun fromProvider(name: String) = if (name == "codex") CODEX_SUBSCRIPTION else ANTHROPIC_SUBSCRIPTION
-    }
-}
-
-internal const val API_KEY_UNSUPPORTED = "Anthropic API key accounts are not supported by TeamCode servers yet: the pool holds subscription sign-ins (refreshable OAuth credentials) only. Add an Anthropic or Codex subscription instead."
 
 internal fun requireSupported(type: AccountType): AccountType {
     if (!type.supported) throw CliUserException(API_KEY_UNSUPPORTED)

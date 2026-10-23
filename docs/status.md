@@ -1,5 +1,11 @@
 # Implementation status
 
+## Companion app adds subscription accounts (2026-10-23)
+
+The [companion app](companion.md#app) adds a subscription account as `teamcode accounts add` does: Account tab, Team, Subscription accounts, "Add a subscription account"; the enrollment check first, the kind of account (the API key listed as unavailable), the provider's page in the system browser, the pasted code sent to the server, the pool read again. The shared pieces moved from the CLI to the typed client so both use the same code: the account types (`AccountType`, `API_KEY_UNSUPPORTED`), one PKCE sign-in attempt (`OAuthSignIn`, `randomOAuthCode`, `pkceChallenge`, with SHA-256 from okio) and the enrollment check (`accountEnrollmentAccess`). The CLI's behavior and messages are unchanged. No server change.
+
+Evidence: `OAuthSignInTest` (client, RFC 7636 challenge), `RemoteSubscriptionAccountRepositoryTest` and `SubscriptionAccountsViewModelTest` (companion), the CLI's `AccountTypeTest` and `AccountEnrollmentMessageTest` unchanged; `:client:jvmTest`, `:cli:jvmTest`, `:companion:jvmTest`, `:companion:testAndroidHostTest`, `:companion-android:assembleDebug`, and `:companion:compileKotlinIosSimulatorArm64` and `:cli:compileKotlinMacosArm64` locally.
+
 ## Companion app session transfers (2026-10-23)
 
 The [companion app](companion.md#app) transfers cloud sessions (`cloud.transfer.v1`), as `teamcode cloud transfer` and `cloud transfers` do: "Transfer…" in a cloud session's menu for its owner and administrators, never on a remote session or one being prepared, ended or already changing owner; an administrator searches a member and transfers at once, optionally resuming it for them and pausing without waiting for the running turn; a member names the recipient by ID and sends an offer (the server lists members to administrators only). A Transfers screen, from the Sessions tab, lists transfers to and from the member, with accept, decline and withdraw (and cancel for administrators), and every refusal in plain words, including each failed check of an ineligible recipient: the typed client now keeps the problem codes of `422 recipient_ineligible` (`TeamCodeException.problems`, validated codes only, never the rest of the message). No server change.

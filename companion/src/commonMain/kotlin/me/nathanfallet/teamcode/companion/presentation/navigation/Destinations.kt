@@ -37,3 +37,7 @@ data class TransferRoute(val accountId: String, val sessionId: String, val owner
 /** An account's incoming and outgoing session transfers. */
 @Serializable
 data class TransfersRoute(val accountId: String)
+
+/** The subscription accounts of an account's server, and adding one with a provider sign-in. */
+@Serializable
+data class SubscriptionAccountsRoute(val accountId: String)

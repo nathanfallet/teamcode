@@ -81,6 +81,7 @@ fun MainScreen(
     onOpenLink: (String) -> Boolean,
     onAddAccount: () -> Unit,
     onOpenTransfers: (accountId: String) -> Unit = {},
+    onOpenSubscriptions: (accountId: String) -> Unit = {},
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
 ) {
@@ -106,7 +107,8 @@ fun MainScreen(
                     val viewModel: ArtifactsViewModel = koinViewModel(key = "artifacts-${account.id}") { parametersOf(ArtifactsRoute(account.id)) }
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
                 } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
-                MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { switcher = true }, viewModel = settings)
+                MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { switcher = true },
+                    onOpenSubscriptions = { onOpenSubscriptions(it.id) }, viewModel = settings)
             }
         }
         TabBar(tab) { tab = it }

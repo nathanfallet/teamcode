@@ -59,6 +59,8 @@ kotlin {
             implementation(libs.ktor.client.resources)
             implementation(libs.ktor.client.json)
             implementation(libs.ktor.json)
+            // SHA-256 and base64url for PKCE (OAuthSignIn).
+            implementation(libs.okio)
         }
         commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test); implementation(libs.ktor.client.mock) }
         jvmTest.dependencies { runtimeOnly(libs.junit) }
