@@ -28,15 +28,19 @@ private class ListAccounts : SuspendingCliktCommand(name = "list") {
     } }
 }
 private class AddAccount : SuspendingCliktCommand(name = "add") {
-    private val providerName by option("--provider").choice("claude", "claude-max", "codex").default("claude")
+    private val typeName by option("--type", help = "Account type, skipping the selector: ${AccountType.flags.joinToString(", ")}.").choice(*AccountType.flags.toTypedArray())
+    private val providerName by option("--provider", help = "Older spelling of --type: claude or claude-max (Anthropic subscription), codex.").choice("claude", "claude-max", "codex")
     private val noBrowser by option("--no-browser", help = "Print the sign-in link without opening a browser.").flag()
-    override fun help(context: Context) = "Sign in to Claude or Codex locally, then send verified credentials to your TeamCode server. Existing accounts are updated without replacing their settings."
+    override fun help(context: Context) = "Choose an account type (numbered selector, or --type), sign in locally, then send verified credentials to your TeamCode server. Existing accounts are updated without replacing their settings."
     override suspend fun run() {
         val config = loadConfig()
+        // Chosen first: a type the server cannot hold is refused before any network call or sign-in.
+        val terminal = Terminal()
+        val type = chooseAccountType(typeName, providerName, ::echo) { terminal.readLineOrNull(hideInput = false) }
         sdk(config).use { client ->
             // Check before opening the provider sign-in, with a call every member may make.
             requireEnrollmentAllowed(client.capabilities().features, client::accountEnrollmentPolicy) { client.me().role }
-            val provider = if (providerName == "codex") CodexOAuthEnrollment else ClaudeOAuthEnrollment
+            val provider = if (type == AccountType.CODEX_SUBSCRIPTION) CodexOAuthEnrollment else ClaudeOAuthEnrollment
             val verifier = randomCode()
             val state = randomCode()
             val challenge = verifier.encodeToByteArray().toByteString().sha256().base64().replace('+', '-').replace('/', '_').trimEnd('=')
