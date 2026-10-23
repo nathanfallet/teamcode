@@ -44,7 +44,12 @@ class CloudAgentTest {
         val result = adapter.parse("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a.txt"}],"is_error":false}]}}""").events.single()
         assertEquals("a.txt", result.data.str("output"))
         assertEquals("completed", adapter.parse("""{"type":"result","subtype":"success","is_error":false,"duration_ms":5}""").events.single().data.str("phase"))
-        assertTrue(adapter.turnActive, "The queued message runs next")
+        assertFalse(adapter.turnActive, "One result answers every message Claude Code read, the one written during the turn included")
+        // A message Claude Code reads only after that result runs as a turn of its own, seen from its first output.
+        val next = adapter.parse("""{"type":"assistant","message":{"content":[{"type":"text","text":"And more"}]}}""").events
+        assertEquals(listOf(CloudEventTypes.TURN, CloudEventTypes.AGENT_MESSAGE), next.map { it.type })
+        assertEquals("started", next.first().data.str("phase"))
+        assertTrue(adapter.turnActive)
         adapter.parse("""{"type":"result","subtype":"success","is_error":false}""")
         assertFalse(adapter.turnActive)
         assertTrue(adapter.parse("not json").events.isEmpty(), "Stray output is ignored")
@@ -438,6 +443,68 @@ class CloudAgentTest {
         until { started.size == 2 }
         assertEquals(listOf("--resume", "c1"), started[1].first.arguments.takeLast(2))
         nextJob.cancel()
+    }
+
+    @Test fun messagesAnsweredByOneResultDoNotHoldThePause() = runTest {
+        // Session eef7f7f7: two messages delivered together, one Claude Code turn and one result. Counting a result per
+        // message left a turn "running" forever, so the drain waited for the pause deadline instead of stopping at once.
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Review the repository", 1), RunnerInputView("in-2", "message", "Put it in an artifact", 1)))
+        until { channel.acks.size == 2 }
+        val process = started.single().second
+        process.output.send("""{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}""")
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { channel.uploaded.count { it.type == CloudEventTypes.TURN } == 2 }
+        val pausedAt = testScheduler.currentTime
+        assertTrue(host.drain(pausedAt + 10 * 60_000), "Nothing runs: a clean stop")
+        assertTrue(testScheduler.currentTime - pausedAt < 1_000, "The drain did not wait for a turn that had ended (${testScheduler.currentTime - pausedAt} ms)")
+        assertFalse(process.written.any { "\"interrupt\"" in it })
+        job.cancel()
+    }
+
+    @Test fun anAgentOutputThatNeverEndsDoesNotHoldTheCheckpoint() = runTest {
+        // The process stops, but its output stream stays open (a descendant keeps it): the drain gives up on the reader.
+        val output = Channel<String?>(Channel.UNLIMITED)
+        var exit: Int? = null
+        val stuck = object : AgentProcess {
+            override suspend fun writeLine(line: String) = exit == null
+            override suspend fun readLine(maxLine: Int) = output.receive()
+            override fun closeInput() = Unit
+            override fun exitCode() = exit
+            override suspend fun stop(graceMillis: Long): Int { exit = 0; return 0 }
+        }
+        val channel = FakeChannel()
+        val host = AgentHost(channel, { _, _, _ -> stuck }, MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime })
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Go", 1)))
+        until { channel.acks.isNotEmpty() }
+        output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { channel.uploaded.count { it.type == CloudEventTypes.TURN } == 2 }
+        val pausedAt = testScheduler.currentTime
+        assertFalse(host.drain(pausedAt + 10 * 60_000), "Reported as an unclean stop")
+        assertTrue(testScheduler.currentTime - pausedAt <= AgentHost.READER_END_MILLIS + 1_000, "Bounded by the reader timeout")
+        job.cancel()
+    }
+
+    @Test fun theInputPollCarriesTheDesiredStateAndSignalsAChange() = runTest {
+        val channel = FakeChannel()
+        val sent = mutableListOf<String>()
+        val answers = Channel<String>(Channel.UNLIMITED)
+        val polling = object : AgentChannel by channel {
+            override suspend fun poll(waitMillis: Long, desiredState: String): RunnerInputsView { sent += desiredState; return RunnerInputsView(emptyList(), answers.receive()) }
+        }
+        var changes = 0
+        val host = AgentHost(polling, { _, _, _ -> FakeProcess() }, MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime })
+        host.onInstructionChange { changes++ }
+        val job = launch { host.run() }
+        answers.send("running"); answers.send("paused"); answers.send("paused"); answers.send("running")
+        until { sent.size == 5 }
+        assertEquals(listOf("running", "running", "paused", "paused", "running"), sent, "Each poll sends the state the previous one returned")
+        assertEquals(2, changes, "The pause and its cancellation each reached the runner loop once")
+        job.cancel()
     }
 
     @Test fun drainInterruptsALongTurnAndFencingStopsTheHost() = runTest {

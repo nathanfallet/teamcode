@@ -225,8 +225,8 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
     post(RUNNER_PATH + "inputs") {
         val body = call.boundedJson<RunnerInputsRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
-        val inputs = runner.inputs(pod.teamId, pod.sessionId, pod.epoch, body.waitMillis)
-        call.respond(RunnerInputsView(inputs.map { RunnerInputView(it.id, it.kind.wire, it.text, it.attempts) }))
+        val polled = runner.poll(pod.teamId, pod.sessionId, pod.epoch, body.waitMillis, body.desiredState)
+        call.respond(RunnerInputsView(polled.inputs.map { RunnerInputView(it.id, it.kind.wire, it.text, it.attempts) }, polled.desiredState.wire))
     }
     post(RUNNER_PATH + "inputs/ack") {
         val body = call.boundedJson<RunnerInputAckRequest>(64 * 1024)

@@ -213,6 +213,11 @@ class ReconcileCloudSessionsUseCase(
         val seen = execution.lastHeartbeatAt ?: execution.registeredAt ?: execution.createdAt
         val requested = s.pauseRequestedAt ?: now
         val checkpointed = execution.checkpoint == "completed"
+        // A resume before any checkpoint cancels the pause: the runner is alive, it stops draining and takes messages again.
+        if (s.desiredState == DesiredState.RUNNING && execution.checkpoint == null && now - seen <= HEARTBEAT_LOSS_MILLIS) {
+            commit(s, owner, s.copy(state = READY, phase = null, pauseRequestedAt = null, pauseForce = false, lastActivityAt = now, updatedAt = now), "cloud.session.pause_cancelled")
+            return now
+        }
         val expired = now - requested > PAUSING_DEADLINE_MILLIS || now - seen > HEARTBEAT_LOSS_MILLIS || execution.checkpoint == "failed"
         if (!checkpointed && !expired) return now + STEP_MILLIS
         if (!stopPod(s, execution, force = !checkpointed)) {
@@ -220,7 +225,8 @@ class ReconcileCloudSessionsUseCase(
             return now + STEP_MILLIS
         }
         val quality = if (checkpointed) WorkspaceResume.CONSISTENT else WorkspaceResume.CRASH_CONSISTENT
-        commit(s, owner, pausedCopy(s, now, quality), "cloud.session.paused_checkpoint",
+        // A resume that came after the checkpoint stays desired: the next pass starts the next execution at once.
+        commit(s, owner, pausedCopy(s, now, quality).copy(desiredState = s.desiredState), "cloud.session.paused_checkpoint",
             updateExecution = execution.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = if (checkpointed) "paused" else "pause_forced"))
         return now
     }

@@ -25,7 +25,7 @@ class CloudConversationService(
         // It wakes like any message: a creation replayed after the session paused still gets its message delivered.
         val input = newInput(principal, session, CloudInputKind.MESSAGE, text, InputRequest(text, true, INITIAL_MESSAGE_KEY, digest, null))
         val outcome = store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
-        if (outcome is InputOutcome.Accepted && session.state != PAUSING) wake(principal.teamId, session.id, principal)
+        if (outcome is InputOutcome.Accepted) wake(principal.teamId, session.id, principal)
     }
 
     suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
@@ -69,11 +69,10 @@ class CloudConversationService(
         val text = request.text ?: throw TeamFailure("invalid_message", 400, "Send a message text.")
         CloudConversationRules.validateMessage(text)
         val session = open(principal, id, CloudPermission.MESSAGE)
-        val pausing = session.state == PAUSING
         val input = newInput(principal, session, CloudInputKind.MESSAGE, text, request)
         return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)) {
             is InputOutcome.Replayed -> outcome
-            is InputOutcome.Accepted -> if (request.wake && !pausing) InputOutcome.Accepted(outcome.input.copy(woke = wake(principal.teamId, session.id, principal))) else outcome
+            is InputOutcome.Accepted -> if (request.wake) InputOutcome.Accepted(outcome.input.copy(woke = wake(principal.teamId, session.id, principal))) else outcome
         }
     }
 
@@ -150,8 +149,8 @@ class CloudConversationService(
     }
 
     /**
-     * Wakes a session that waits for a message sent while it was pausing, once it is paused. Run by the server's
-     * maintenance worker; failures leave the message queued for the next explicit resume.
+     * Wakes a session that waits for a message sent while it was asleep and not woken then (a wake that lost a race or
+     * failed). Run by the server's maintenance worker; failures leave the message queued for the next explicit resume.
      */
     suspend fun wakePending(limit: Int = 50): Int {
         var woken = 0
@@ -159,7 +158,7 @@ class CloudConversationService(
             val session = sessions.find(teamId, sessionId)
             if (session == null || session.state.terminal || session.desiredState == DesiredState.TERMINATED) { store.clearWake(sessionId); continue }
             // The completed transfer clears wake requests: a former owner's message never resumes the recipient's session.
-            if (session.state == PAUSING || session.state == TRANSFERRING || session.transferId != null) continue
+            if (session.state == TRANSFERRING || session.transferId != null) continue
             if (wake(teamId, session.id, null)) woken++
             store.clearWake(sessionId)
         }
@@ -167,8 +166,9 @@ class CloudConversationService(
     }
 
     /**
-     * Sets the desired state to running for a paused (or resume-blocked) session after the same rechecks as an
-     * explicit resume. Returns whether this call woke it. The message stays queued whatever the outcome.
+     * Sets the desired state to running for a paused, pausing (or resume-blocked) session after the same rechecks as an
+     * explicit resume: a pause not checkpointed yet is cancelled, one already checkpointed is followed by a resume.
+     * Returns whether this call woke it. The message stays queued whatever the outcome.
      */
     private suspend fun wake(teamId: String, sessionId: String, principal: Principal?): Boolean {
         val session = sessions.find(teamId, sessionId) ?: return false
@@ -182,13 +182,16 @@ class CloudConversationService(
         if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds)) return false
         var woke = false
         transition(teamId, sessionId) { current ->
-            if (current.state.terminal || current.state == PAUSING || current.desiredState == DesiredState.TERMINATED) return@transition null
+            if (current.state.terminal || current.desiredState == DesiredState.TERMINATED) return@transition null
             if (current.transferId != null || current.state == TRANSFERRING) return@transition null
             if (current.desiredState == DesiredState.RUNNING && current.resumeBlocked == null) return@transition null
             val now = sessions.now()
             woke = true
+            // A pausing session keeps its pause's request time, for its deadlines: the reconciler cancels or completes it.
+            val pausing = current.state == PAUSING
             CloudTransition(
-                current.copy(desiredState = DesiredState.RUNNING, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, updatedAt = now),
+                current.copy(desiredState = DesiredState.RUNNING, resumeBlocked = null, pauseRequestedAt = current.pauseRequestedAt.takeIf { pausing },
+                    pauseForce = pausing && current.pauseForce, updatedAt = now),
                 CloudWrite(actor = principal?.let { CloudActor(it, it.member.id) }, auditAction = "cloud.session.woken", reconcileAt = now),
             )
         }

@@ -4,6 +4,8 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.selects.select
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.SystemExit
 import me.nathanfallet.teamcode.api.BuildInfo
@@ -15,6 +17,8 @@ import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.platform.environment
+import me.nathanfallet.teamcode.cli.platform.installServiceSignalHandlers
+import me.nathanfallet.teamcode.cli.platform.serviceStopRequested
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
@@ -29,8 +33,10 @@ internal interface RunnerCalls {
 
 /**
  * The runner: register, prepare the environment while heartbeating every 15 s, report ready once prepared, and
- * checkpoint when a pause is requested. It starts no agent yet (the agent, its loopback proxy and transcript come
- * with later releases), so there is nothing to drain and the checkpoint is immediately complete.
+ * checkpoint when a pause is requested. The loop does not wait for the next 15-second tick when something changes:
+ * the end of the preparation (ready is reported at once), the end of the drain (the checkpoint is sent at once) and a
+ * change of the desired state seen by the agent's input long-poll ([wake]) all start the next heartbeat right away.
+ * Once the server accepted the checkpoint the runner exits, so the pod stops without waiting for its grace period.
  *
  * `409 execution_fenced` means this execution is fenced: stop and exit without checkpointing; any other `409` is
  * retried. A `401` means the pod's token is not accepted. Network failures are retried; the server marks the execution lost after 90 s without heartbeats.
@@ -49,6 +55,14 @@ internal class RunnerLoop(
     /** The session's agent; null runs the lifecycle alone. */
     private val agent: RunnerAgent? = null,
 ) {
+    /** Wakes the heartbeat loop before its next tick; conflated, so several reasons make one early heartbeat. */
+    private val wakeUps = Channel<Unit>(Channel.CONFLATED)
+
+    init { agent?.onInstructionChange(::wake) }
+
+    /** Sends the next heartbeat now rather than at the next tick (the agent saw the desired state change). */
+    fun wake() { wakeUps.trySend(Unit) }
+
     private sealed interface Outcome {
         data class Done(val instruction: RunnerInstructionView) : Outcome
         /** `409 execution_fenced`: stop without a checkpoint. */
@@ -79,19 +93,20 @@ internal class RunnerLoop(
             prepared = try { prepare() }
                 catch (error: CancellationException) { throw error }
                 catch (_: Exception) { log("The environment could not be prepared."); false }
-            if (prepared) { log("Environment prepared."); started() }
+            if (prepared) { log("Environment prepared."); started(); wake() }
         }
         return try { heartbeats(scope) { prepared } } finally { preparation.cancel() }
     }
 
     private suspend fun heartbeats(scope: CoroutineScope, prepared: () -> Boolean): Int {
-        var checkpointed = false
         // The agent drains beside the heartbeats: a silent runner would be declared lost after 90 s.
         var draining: Deferred<Boolean>? = null
         var iterations = 0
         while (iterations++ < maxIterations) {
             yield() // Let the preparation progress between heartbeats.
             if (agent?.fenced == true) { log("This execution is fenced; exiting without a checkpoint."); return EXIT_FENCED_OR_DONE }
+            // This heartbeat answers every wake-up so far (a preparation that ended before the first one, in particular).
+            wakeUps.tryReceive()
             val ready = prepared()
             val instruction = when (val outcome = attempt { calls.heartbeat(ready = ready) }) {
                 is Outcome.Done -> outcome.instruction
@@ -101,22 +116,28 @@ internal class RunnerLoop(
             when (instruction?.desiredState) {
                 "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
                 // Nothing to checkpoint before the environment is ready: the server stops a resume it cancels.
-                "paused" -> if (!checkpointed && ready) {
-                    val drain = draining ?: (if (agent == null) CompletableDeferred(true) else scope.async { agent.drain(instruction.pauseDeadline) }).also { draining = it }
+                "paused" -> if (ready) {
+                    val drain = draining ?: (if (agent == null) CompletableDeferred(true)
+                        else scope.async { agent.drain(instruction.pauseDeadline) }.also { it.invokeOnCompletion { wake() } }).also { draining = it }
                     if (drain.isCompleted) when (attempt { calls.checkpoint(completed = drain.await()) }) {
-                        is Outcome.Done -> { checkpointed = true; log("Checkpoint complete; waiting for the pod to stop.") }
+                        // Nothing is left to do here: exiting stops the pod now instead of after the kubelet's grace period.
+                        is Outcome.Done -> { log("Checkpoint complete; exiting."); return EXIT_FENCED_OR_DONE }
                         Outcome.Fenced -> return EXIT_FENCED_OR_DONE
                         Outcome.Conflict -> Unit // The pause may have been cancelled; the next heartbeat tells.
                     }
                 }
-                "running" -> {
-                    if (draining != null) { draining?.cancel(); draining = null; agent?.resumeAfterDrain() }
-                    checkpointed = false
-                }
+                "running" -> if (draining != null) { draining?.cancel(); draining = null; agent?.resumeAfterDrain() }
             }
-            sleep(HEARTBEAT_MILLIS)
+            nextTick()
         }
         return EXIT_FENCED_OR_DONE
+    }
+
+    /** Waits for the next heartbeat: [HEARTBEAT_MILLIS], or less when [wake] is called meanwhile. */
+    private suspend fun nextTick() = coroutineScope {
+        val tick = launch { sleep(HEARTBEAT_MILLIS) }
+        select { wakeUps.onReceive {}; tick.onJoin {} }
+        tick.cancel()
     }
 
     /** Retries network failures and server errors with backoff; throws [RunnerRefused] for an authentication failure. */
@@ -160,7 +181,10 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
         val epoch = required("TEAMCODE_CLOUD_EPOCH").toInt()
         // The kubelet rotates the projected token: read it again for every call.
         val client = TeamCodeClient(server, { FileSystem.SYSTEM.read(tokenFile.toPath()) { readUtf8() }.trim() }) { configure -> HttpClient { configure(this) } }
-        val code = client.use {
+        // The runner is PID 1 of its container, where a signal without a handler is ignored and the kubelet would wait
+        // for its whole grace period: the whole run, start-up included, stops on SIGTERM.
+        installServiceSignalHandlers()
+        val code = untilTerminated({ echo(it, err = true) }) { client.use {
             val calls = object : RunnerCalls {
                 override suspend fun register() = client.runnerRegister(RunnerRegisterRequest(team, session, epoch))
                 override suspend fun heartbeat(ready: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready))
@@ -178,6 +202,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun agent() = client.runnerAgent(RunnerAgentRequest(team, session, epoch))
                 override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
                 override suspend fun inputs(waitMillis: Long) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis)).inputs
+                override suspend fun poll(waitMillis: Long, desiredState: String) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState))
                 override suspend fun acknowledge(acks: List<RunnerInputAckView>) = client.runnerAcknowledge(RunnerInputAckRequest(team, session, epoch, acks))
             }
             // The agent's inference goes through a loopback proxy in this process, authenticated to the server with
@@ -192,6 +217,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             val proxy = proxyServer(inferenceClient, localToken, 0, upstreamReady = { inference.available() }) { echo(it, err = true) }
             try {
                 proxy.start(wait = false)
+                // Again after the proxy, whose engine installs its own handlers.
+                installServiceSignalHandlers()
                 val port = proxy.engine.resolvedConnectors().single().port
                 // HOME is on the workspace volume, so the conversation id survives pauses and new pods.
                 val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
@@ -250,7 +277,29 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                     inferenceClient.close()
                 }
             }
-        }
+        } }
         if (code != 0) SystemExit.exit(code)
     }
 }
+
+/**
+ * Runs [block] until it returns or the process receives SIGTERM or SIGINT, which stops it (its `finally` blocks run)
+ * and returns 0. The cluster sends SIGTERM when it stops the pod: after a checkpoint, on deletion or on eviction.
+ */
+internal suspend fun untilTerminated(log: (String) -> Unit, stopRequested: () -> Boolean = ::serviceStopRequested, block: suspend () -> Int): Int = coroutineScope {
+    val work = async { block() }
+    val watch = launch {
+        while (!stopRequested()) delay(SIGNAL_POLL_MILLIS)
+        log("Stopping on a termination signal.")
+        work.cancel()
+    }
+    try { work.await() }
+    catch (error: CancellationException) {
+        // Our own cancellation propagates; only the signal's ends the work normally.
+        currentCoroutineContext().ensureActive()
+        if (!stopRequested()) throw error
+        RunnerLoop.EXIT_FENCED_OR_DONE
+    } finally { watch.cancel() }
+}
+
+private const val SIGNAL_POLL_MILLIS = 100L

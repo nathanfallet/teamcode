@@ -10,7 +10,8 @@ object CloudStateMachine {
         PREPARING to setOf(READY, FAILED, TERMINATED),
         READY to setOf(ACTIVE, PAUSING, PAUSED, TERMINATED),
         ACTIVE to setOf(READY, PAUSING, PAUSED, TERMINATED),
-        PAUSING to setOf(PAUSED, TERMINATED),
+        // Back to ready: a resume cancelled the pause before the runner checkpointed.
+        PAUSING to setOf(READY, PAUSED, TERMINATED),
         // Ownership changes only at a paused boundary: no pod, every execution ended.
         PAUSED to setOf(RESUMING, TERMINATED, TRANSFERRING),
         RESUMING to setOf(READY, PAUSED, FAILED, TERMINATED),

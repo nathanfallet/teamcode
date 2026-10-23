@@ -294,21 +294,24 @@ class CloudConversationPersistenceTest {
         val unconsumed = ra.conversation.send(colleague, s.id, InputRequest("Survives the pod", true, null, null, null)).let { (it as InputOutcome.Accepted).input }
         assertEquals(unconsumed.id, rb.agent.inputs(team, s.id, 1, 0).single().id)
 
-        // Pausing: a message sent now waits, then wakes the session once it is paused.
+        // Pausing: a message sent now wakes the session at once; with the checkpoint already taken, it resumes as soon
+        // as the pause completes.
         ra.sessions.pause(colleague, null, s.id, false)
         pass(ra)
         assertEquals(PAUSING, ra.store.find(team, s.id)!!.state)
         assertEquals(emptyList(), ra.agent.inputs(team, s.id, 1, 0), "A pausing session receives no new input")
-        val queued = rb.conversation.send(colleague, s.id, InputRequest("Continue after the pause", true, null, null, null)) as InputOutcome.Accepted
-        assertFalse(queued.input.woke)
-        assertEquals(0, ra.conversation.wakePending(), "Nothing wakes while the session is still pausing")
+        val polled = ra.agent.poll(team, s.id, 1, 20_000, "running")
+        assertEquals(DesiredState.PAUSED, polled.desiredState, "The pause ends the runner's open poll, which knew it running")
+        assertTrue(polled.inputs.isEmpty())
         rb.runner.checkpoint(team, s.id, 1, completed = true)
-        pass(rb)
-        assertEquals(PAUSED, ra.store.find(team, s.id)!!.state)
-        assertEquals(1, rb.conversation.wakePending())
+        val queued = rb.conversation.send(colleague, s.id, InputRequest("Continue after the pause", true, null, null, null)) as InputOutcome.Accepted
+        assertTrue(queued.input.woke, "A message wakes a pausing session")
         assertEquals(DesiredState.RUNNING, ra.store.find(team, s.id)!!.desiredState)
+        assertEquals(0, ra.conversation.wakePending(), "Nothing is left to wake")
+        repeat(4) { if (ra.store.find(team, s.id)!!.state != RESUMING) pass(rb) }
+        assertEquals(RESUMING, ra.store.find(team, s.id)!!.state, "The checkpointed pause completed, then the session resumed")
+        assertEquals("paused", ra.store.execution(s.id, 1)!!.exitReason)
         assertEquals(1, ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.woken") and (AuditEvents.subjectId eq s.id) }.count() })
-        assertEquals(0, ra.conversation.wakePending(), "A wake request is handled once")
 
         // Resume into epoch 2: the unconsumed message comes first, then the queued one.
         val pod = CloudSessionService.podName(s.id, 2)
