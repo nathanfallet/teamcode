@@ -36,9 +36,9 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
         val now = nowMillis()
-        // A state reported before a silence is not carried over it: after missed heartbeats it would be a guess.
+        // A state reported before a silence is not carried over it (it would be a guess); one reported during it is current.
         val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
-        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent) { it[activity] = null; it[activityAt] = null } }
+        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent && (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt]) { it[activity] = null; it[activityAt] = null } }
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 

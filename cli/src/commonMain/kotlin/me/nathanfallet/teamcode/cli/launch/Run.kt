@@ -82,7 +82,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
-                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && agent == "claude")) {
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" })) {
                     echo("Running $agent through the TeamCode user service.", err = true)
                     launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity)
                 } else {
@@ -192,7 +192,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer)
-            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment) }
+            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment) }
             catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }

@@ -4,6 +4,8 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import me.nathanfallet.teamcode.cli.config.ConfigStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.environment
@@ -25,16 +27,16 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
                 val bridge = HookGuidance(client)
                 val state = HookActivity.state(input)
                 val run = HookActivity.runId(environment("TEAMCODE_RUN_ID")).takeIf { environment("TEAMCODE_ACTIVITY") == "1" }
-                val emission = bridge.prepare(input)
-                if (emission != null) {
-                    println(emission.output)
-                    written = true
-                }
-                if (emission != null) bridge.acknowledge(emission)
-                // Last, and after the output: guidance never waits for it. The agent still waits for this process to exit (at most 1.5 s).
-                if (state != null && run != null) {
-                    if (!written) { println("{}"); written = true }
-                    HookActivity.report(client, run, state)
+                // Concurrent with the guidance lookup: the agent waits for the slower of the two, not their sum (the report is bounded at 1.5 s).
+                coroutineScope {
+                    val report = if (state != null && run != null) async { HookActivity.report(client, run, state) } else null
+                    val emission = bridge.prepare(input)
+                    if (emission != null) {
+                        println(emission.output)
+                        written = true
+                        bridge.acknowledge(emission)
+                    }
+                    report?.await()
                 }
             }
         } catch (error: CancellationException) { throw error }

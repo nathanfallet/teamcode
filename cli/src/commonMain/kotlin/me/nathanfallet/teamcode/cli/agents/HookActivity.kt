@@ -5,6 +5,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import me.nathanfallet.teamcode.api.models.RunIdentifiers
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
@@ -41,28 +44,37 @@ internal object HookActivity {
     /** Refusals that will repeat for this launch: not yours (403), unknown (404), ended or changed (409). 401, 408 and 429 are retried. */
     private val PERMANENT = setOf(403, 404, 409)
 
-    /** One report, never a diagnostic. A refusal the server will repeat returns true, like a success. */
-    suspend fun report(client: TeamCodeClient, runId: String, state: String): Boolean = try {
-        withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state); true } ?: false
+    /** One report, never a diagnostic.  */
+    suspend fun report(client: TeamCodeClient, runId: String, state: String): Outcome = try {
+        if (withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state); true } == true) Outcome.REPORTED else Outcome.RETRY
     } catch (error: CancellationException) { throw error }
-    catch (error: TeamCodeException) { error.statusCode in PERMANENT }
-    catch (_: Exception) { false }
+    catch (error: TeamCodeException) { if (error.statusCode in PERMANENT) Outcome.REFUSED else Outcome.RETRY }
+    catch (_: Exception) { Outcome.RETRY }
+    enum class Outcome { REPORTED, REFUSED, RETRY }
 }
 
 /**
  * The local proxy sees every hook of a launch, so a state already reported is not sent again: a tool-heavy turn costs one
- * request, not one per tool. Bounded: one entry per launch, cleared when many launches have passed through.
+ * request, not one per tool. The memory expires after [REMEMBER], so a state the server dropped (a silence) is sent again;
+ * a launch the server refused for good (ended, foreign, unknown) is left alone for as long. Bounded: oldest launch first.
  */
 internal class ActivityReporter(private val client: TeamCodeClient) {
     private val lock = Mutex()
-    private val last = LinkedHashMap<String, String>()
-    /** One report at a time, so two hooks of a launch reach the server in the order they came; the oldest launch is forgotten first. */
+    private class Seen(val state: String?, val at: TimeMark)
+    private val last = LinkedHashMap<String, Seen>()
+    /** One report at a time, so two hooks of a launch reach the server in the order they came. */
     suspend fun report(runId: String, state: String) = lock.withLock {
-        if (last[runId] == state) return@withLock
-        if (HookActivity.report(client, runId, state)) {
-            last.remove(runId); last[runId] = state
-            if (last.size > MAX_RUNS) last.remove(last.keys.first())
+        val seen = last[runId]
+        if (seen != null && seen.at.elapsedNow() < REMEMBER && (seen.state == null || seen.state == state)) return@withLock
+        when (HookActivity.report(client, runId, state)) {
+            HookActivity.Outcome.REPORTED -> remember(runId, Seen(state, TimeSource.Monotonic.markNow()))
+            HookActivity.Outcome.REFUSED -> remember(runId, Seen(null, TimeSource.Monotonic.markNow()))
+            HookActivity.Outcome.RETRY -> Unit
         }
     }
-    private companion object { const val MAX_RUNS = 256 }
+    private fun remember(runId: String, seen: Seen) {
+        last.remove(runId); last[runId] = seen
+        if (last.size > MAX_RUNS) last.remove(last.keys.first())
+    }
+    private companion object { const val MAX_RUNS = 256; val REMEMBER = 5.minutes }
 }

@@ -244,7 +244,7 @@ class AgentRunPersistenceTest {
             val reader = assertNotNull(f.team.authenticate(SqlServiceKeyService(f.a).create(f.member.principal, f.member.principal.member.id, "Reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
             failure("credential_scope") { b.activity(reader, id, RunActivity.WAITING_FOR_HUMAN) }
             // Silence makes the state unknown, not stale-but-shown; the end does too and refuses further reports.
-            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000 } }
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 60_000 } }
             assertEquals(RunState.STALE, b.get(f.member.principal, id).run.state)
             assertNull(b.get(f.member.principal, id).run.activity); assertNull(b.get(f.member.principal, id).run.activitySinceMillis)
             a.heartbeat(f.member.principal, id)
@@ -252,6 +252,11 @@ class AgentRunPersistenceTest {
             assertEquals(RunActivity.WAITING_FOR_HUMAN, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN).activity)
             a.heartbeat(f.member.principal, id)
             assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity, "A heartbeat without a silence keeps it")
+            // A state reported during a silence is current: the heartbeat that ends the silence keeps it.
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - 10_000 } }
+            b.activity(f.member.principal, id, RunActivity.WORKING)
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WORKING, b.get(f.member.principal, id).run.activity)
             a.end(f.member.principal, id, 0)
             assertNull(b.get(f.member.principal, id).run.activity)
             failure("run_ended") { b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN) }

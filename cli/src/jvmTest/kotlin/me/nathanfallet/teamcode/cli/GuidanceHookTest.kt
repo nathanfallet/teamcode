@@ -117,6 +117,8 @@ class GuidanceHookTest {
             hook({ put("hook_event_name", "UserPromptSubmit") })
             settled(6)
             hook({ put("hook_event_name", "UserPromptSubmit") })
+            // The launch is refused for good: no other state is tried either.
+            hook({ put("hook_event_name", "Stop") })
             withContext(Dispatchers.Default) { delay(300) }
             assertEquals(6, reports.size)
             assertTrue(reports.none { "private" in it })
