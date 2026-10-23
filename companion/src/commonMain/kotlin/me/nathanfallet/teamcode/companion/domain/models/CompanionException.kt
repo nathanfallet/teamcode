@@ -21,6 +21,8 @@ sealed class CompanionException(message: String) : Exception(message) {
     class UnreadableEvent : CompanionException("The server sent an event this version of the app cannot read. Update the app.")
     /** The server does not offer what the screen needs ([feature] is the missing capability). */
     class Unsupported(val feature: String) : CompanionException("This server does not offer this yet.")
+    /** A view ticket for another origin than the account's: the server's public origin is not the address signed in to. */
+    class ForeignContent : CompanionException("The server shows artifacts on another address than the one you signed in with. Sign in with its public address.")
     class CredentialStorage : CompanionException("This device's secure storage refused to read or keep the sign-in. Unlock the device and try again.")
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")

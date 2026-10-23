@@ -36,7 +36,7 @@ class ArtifactUseCasesTest {
         assertEquals(LinkTarget.UnknownServer("https://new.example"), resolve("https://new.example/artifact/$id"))
         for (link in listOf(
             "https://team.example/artifact/not-an-id", "https://team.example/artifact/$id/ticket/index.html", "https://team.example/artifact/$id?v=0",
-            "https://user@team.example/artifact/$id", "http://team.example/artifact/$id", "javascript:alert(1)", "teamcode://open?url=%ZZ",
+            "https://user@team.example/artifact/$id", "http://team.example/artifact/$id", "javascript:alert(1)", "teamcode://open?url=%ZZ", "teamcode://open?url=https%3A%2F%2Fteam.example%2Fartifact%2F$id%-1",
             "teamcode://open?other=1", "https://team.example/dashboard", "",
         )) assertNull(resolve(link), link)
     }
@@ -74,7 +74,7 @@ class ArtifactUseCasesTest {
         val open = OpenArtifactUseCase(artifacts, FakeFeatures(setOf("artifacts.v1", "artifacts.tickets.v1")), accounts, guard)
         assertEquals("https://team.example/artifact/$id/t0/", open("a1", id, null).prefix)
         artifacts.tickets = { a, _ -> ArtifactTicket(a, 2, "https://evil.example/artifact/$a/t/", 1) }
-        assertFailsWith<CompanionException.Server> { open("a1", id, null) }
+        assertFailsWith<CompanionException.ForeignContent> { open("a1", id, null) }
         artifacts.tickets = { a, _ -> ArtifactTicket(a, 2, "https://team.example/artifact/$a/t/", 1) }
         assertFailsWith<CompanionException.Server> { open("a1", id, 3) }
         assertFailsWith<CompanionException.Unsupported> { OpenArtifactUseCase(artifacts, FakeFeatures(setOf("artifacts.v1")), accounts, guard)("a1", id, null) }

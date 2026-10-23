@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.services.Clock
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.GetArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenedArtifact
@@ -35,19 +36,22 @@ data class ArtifactUiState(
     /** A version newer than the newest listed was published since the screen opened; shown only on request. */
     val newerVersion: Int? = null,
     val gone: Boolean = false,
+    /** A link inside the content led to a page the version does not have (a `404` on a ticket still valid). */
+    val missingPage: Boolean = false,
     val error: String? = null,
 )
 
 /**
  * One artifact: its versions, and a ticket for the version shown when the platform embeds the content ([embedded]).
  * While visible ([start], [stop]), the artifact is read again every 30 s to offer a newer version, never to reload it
- * by itself. A page the server no longer serves (an expired ticket) gets one new ticket in silence.
+ * by itself. An expired ticket is renewed in silence, at most once a minute.
  */
 class ArtifactViewModel(
     private val route: ArtifactRoute,
     private val getArtifact: GetArtifactUseCase,
     private val openArtifact: OpenArtifactUseCase,
     private val embedded: Boolean,
+    private val clock: Clock,
 ) : ViewModel() {
     private val state = MutableStateFlow(ArtifactUiState(version = route.version))
     val uiState: StateFlow<ArtifactUiState> = state.asStateFlow()
@@ -117,17 +121,41 @@ class ArtifactViewModel(
     }
 
     /**
-     * The page answered `404` or crashed: a new ticket in silence, in a new web view (it expired, or a link led to a
-     * file the version lacks: the entry page loads again). A second time within a minute, the version is shown as gone.
+     * The page answered `404`. With the ticket expired (or about to), a new one in silence; with a valid ticket, a link
+     * led to a file the version lacks: the screen says so and offers to go back to the entry page ([restart]).
      */
     fun contentMissing() {
         val version = state.value.version ?: return
-        if (renewedAt?.let { it.elapsedNow() < RENEWAL_WINDOW } == true) {
+        val ticket = state.value.opened?.ticket ?: return
+        if (clock.nowMillis() < ticket.expiresAt - EXPIRY_MARGIN_MILLIS) {
+            state.update { it.copy(missingPage = true) }
+            return
+        }
+        if (recentlyRenewed()) {
             state.update { it.copy(opened = null, error = CompanionException.NotFound().userMessage()) }
             return
         }
-        renewedAt = TimeSource.Monotonic.markNow()
         open(version)
+    }
+
+    /** The page's renderer or content process died: loaded again once, in a new web view; a second time, an error. */
+    fun contentCrashed() {
+        if (state.value.opened == null) return
+        if (recentlyRenewed()) {
+            state.update { it.copy(opened = null, error = "The page stopped working.") }
+            return
+        }
+        state.update { it.copy(reload = it.reload + 1) }
+    }
+
+    /** Back to the version's entry page. */
+    fun restart() = state.update { it.copy(missingPage = false, reload = it.reload + 1) }
+
+    /** True when a silent reload already happened within a minute (so a failing page never loops); marks this one otherwise. */
+    private fun recentlyRenewed(): Boolean {
+        if (renewedAt?.let { it.elapsedNow() < RENEWAL_WINDOW } == true) return true
+        renewedAt = TimeSource.Monotonic.markNow()
+        return false
     }
 
     private fun open(version: Int) {
@@ -135,7 +163,7 @@ class ArtifactViewModel(
         ticket = viewModelScope.launch {
             try {
                 val opened = openArtifact(route.accountId, route.artifactId, version)
-                state.update { if (it.version == version) it.copy(opened = opened, reload = it.reload + 1, loading = false) else it }
+                state.update { if (it.version == version) it.copy(opened = opened, reload = it.reload + 1, missingPage = false, loading = false) else it }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -147,5 +175,6 @@ class ArtifactViewModel(
     private companion object {
         const val WATCH_MILLIS = 30_000L
         val RENEWAL_WINDOW = 1.minutes
+        const val EXPIRY_MARGIN_MILLIS = 60_000L
     }
 }

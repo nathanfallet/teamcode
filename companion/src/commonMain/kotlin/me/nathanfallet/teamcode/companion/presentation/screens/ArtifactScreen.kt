@@ -52,6 +52,8 @@ import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.artifact_copied
 import me.nathanfallet.teamcode.companion.resources.artifact_copy_link
 import me.nathanfallet.teamcode.companion.resources.artifact_desktop
+import me.nathanfallet.teamcode.companion.resources.artifact_missing_page
+import me.nathanfallet.teamcode.companion.resources.artifact_restart
 import me.nathanfallet.teamcode.companion.resources.artifact_newer
 import me.nathanfallet.teamcode.companion.resources.artifact_open_browser
 import me.nathanfallet.teamcode.companion.resources.artifact_show_newer
@@ -110,6 +112,10 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit) {
                         TextButton(onClick = viewModel::showNewer, modifier = Modifier.testTag("artifact-newer")) { Text(stringResource(Res.string.artifact_show_newer)) }
                     }
                 }
+                if (state.missingPage) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(Res.string.artifact_missing_page), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary, modifier = Modifier.weight(1f))
+                    TextButton(onClick = viewModel::restart, modifier = Modifier.testTag("artifact-restart")) { Text(stringResource(Res.string.artifact_restart)) }
+                }
                 ErrorText(state.error)
                 if (state.error != null && !state.gone) TextButton(onClick = viewModel::load) { Text(stringResource(Res.string.action_retry)) }
                 BusyRow(state.loading)
@@ -124,7 +130,7 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit) {
                 }
                 opened != null -> ConfirmingLinks {
                     val confirm = LocalUriHandler.current
-                    ArtifactContentView(opened.ticket.contentUrl, opened.prefix, state.reload, onExternal = confirm::openUri, onMissing = viewModel::contentMissing,
+                    ArtifactContentView(opened.ticket.contentUrl, opened.prefix, state.reload, onExternal = confirm::openUri, onMissing = viewModel::contentMissing, onCrashed = viewModel::contentCrashed,
                         modifier = Modifier.fillMaxWidth().weight(1f).testTag("artifact-content"))
                 }
             }

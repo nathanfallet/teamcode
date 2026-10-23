@@ -24,10 +24,11 @@ actual val embedsArtifacts: Boolean = true
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
+    val crashed by rememberUpdatedState(onCrashed)
     // A new web view per URL and reload: a renewed ticket may have the same URL, and a crashed renderer is never reused.
     key(contentUrl, reload) { AndroidView(
         modifier = modifier,
@@ -63,7 +64,7 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, 
 
                     /** The page's renderer died (memory, a heavy script): the app lives on, and the screen reloads it once. */
                     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                        missing()
+                        crashed()
                         return true
                     }
                 }

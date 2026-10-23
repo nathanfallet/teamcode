@@ -124,7 +124,8 @@ class SessionViewModel(
                         is LiveUpdate.Opened -> {
                             state.update { it.copy(live = LiveState.LIVE) }
                             // Back after a cut: the session may have been paused or resumed meanwhile.
-                            if (reconnected) { reconnected = false; refreshSessionQuietly() }
+                            // Beside the stream, so a slow header never holds up the events.
+                            if (reconnected) { reconnected = false; viewModelScope.launch { refreshSessionQuietly() } }
                         }
                         is LiveUpdate.Item -> state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).copy(live = LiveState.LIVE) }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
@@ -132,7 +133,7 @@ class SessionViewModel(
                         LiveUpdate.Ended -> {
                             state.update { it.copy(live = LiveState.ENDED) }
                             // The final state stays whatever the header read does.
-                            refreshSessionQuietly()
+                            viewModelScope.launch { refreshSessionQuietly() }
                         }
                     }
                 }

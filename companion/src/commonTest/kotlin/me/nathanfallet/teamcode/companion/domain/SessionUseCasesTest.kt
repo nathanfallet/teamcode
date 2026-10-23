@@ -147,8 +147,9 @@ class SessionUseCasesTest {
     @Test fun withoutTheFeedTheListIsReloadedEveryFifteenSeconds() = runTest {
         val sessions = FakeSessionRepository()
         val start = testScheduler.currentTime
-        val signals = FollowSessionListUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1")), guard())("a1").take(3).toList()
-        assertEquals(List(3) { SessionListSignal.Reload }, signals)
+        val signals = FollowSessionListUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1")), guard())("a1").take(4).toList()
+        // "Reconnecting" ends first, in case the start needed retries.
+        assertEquals(listOf<SessionListSignal>(SessionListSignal.Connection(reconnecting = false)) + List(3) { SessionListSignal.Reload }, signals)
         assertEquals(30_000, testScheduler.currentTime - start)
         assertFalse("feed" in sessions.calls)
     }

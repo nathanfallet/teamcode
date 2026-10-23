@@ -55,7 +55,10 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
                 when {
                     c == '%' -> {
                         if (i + 2 >= value.length) return null
-                        bytes += (value.substring(i + 1, i + 3).toIntOrNull(16) ?: return null).toByte()
+                        val hex = value.substring(i + 1, i + 3)
+                        // Two hexadecimal digits exactly: toIntOrNull alone would take a sign ("%-1").
+                        if (!hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
+                        bytes += hex.toInt(16).toByte()
                         i += 3
                     }
                     c == '+' -> { bytes += ' '.code.toByte(); i++ }

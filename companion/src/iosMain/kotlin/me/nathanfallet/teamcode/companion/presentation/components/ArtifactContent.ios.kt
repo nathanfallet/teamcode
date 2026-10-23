@@ -32,12 +32,13 @@ actual val embedsArtifacts: Boolean = true
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
+    val crashed by rememberUpdatedState(onCrashed)
     // Held here: the web view keeps its delegates weakly.
-    val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing() }) }
+    val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing() }, { crashed() }) }
     // A new web view per URL and reload: a renewed ticket may have the same URL.
     key(contentUrl, reload) { UIKitView(
         factory = {
@@ -63,6 +64,7 @@ private class ArtifactNavigation(
     private val prefix: () -> String,
     private val onExternal: (String) -> Unit,
     private val onMissing: () -> Unit,
+    private val onCrashed: () -> Unit,
 ) : NSObject(), WKNavigationDelegateProtocol, WKUIDelegateProtocol {
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, decidePolicyForNavigationAction: WKNavigationAction, decisionHandler: (WKNavigationActionPolicy) -> Unit) {
@@ -84,7 +86,7 @@ private class ArtifactNavigation(
     }
 
     /** The page's content process died: the screen reloads it once, in a new web view. */
-    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) = onMissing()
+    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) = onCrashed()
 
     /** A pop-up never opens a second web view: a link the member followed is offered to the browser. */
     override fun webView(

@@ -147,6 +147,8 @@
     <string name="artifact_version_item">Version %1$d · %2$s</string>
     <string name="artifact_newer">Version %1$d was published.</string>
     <string name="artifact_show_newer">Show it</string>
+    <string name="artifact_missing_page">This page is not part of the artifact.</string>
+    <string name="artifact_restart">Back to the start</string>
     <string name="artifact_copy_link">Copy link</string>
     <string name="artifact_copied">Link copied.</string>
     <string name="artifact_open_browser">Open in the browser</string>

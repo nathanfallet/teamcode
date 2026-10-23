@@ -61,6 +61,8 @@ class FollowSessionListUseCase(
                 }
             }
         } else {
+            // Reached at last after retries at start: "reconnecting" ends here, as an opened feed would end it.
+            emit(SessionListSignal.Connection(reconnecting = false))
             while (true) {
                 emit(SessionListSignal.Reload)
                 delay(pollMillis)

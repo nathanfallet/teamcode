@@ -58,7 +58,8 @@ class OpenArtifactUseCase(
         val origin = accounts.accounts.value.firstOrNull { it.id == accountId }?.origin ?: throw CompanionException.Unauthorized()
         val ticket = artifacts.ticket(accountId, artifactId, version)
         val prefix = contentPrefix(origin, artifactId, ticket.contentUrl)
-        if (ticket.artifactId != artifactId || (version != null && ticket.version != version) || prefix == null) throw CompanionException.Server(200, "invalid_content_url")
+        if (prefix == null) throw CompanionException.ForeignContent()
+        if (ticket.artifactId != artifactId || (version != null && ticket.version != version)) throw CompanionException.Server(200, "invalid_ticket")
         OpenedArtifact(ticket, prefix)
     }
 

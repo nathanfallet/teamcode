@@ -37,13 +37,14 @@ class ArtifactViewModelsTest {
     private val artifacts = FakeArtifactRepository()
     private val accounts = InMemoryAccountRepository(listOf(account("a1")))
     private val features = FakeFeatures(setOf("artifacts.v1", "artifacts.tickets.v1"))
+    private val clock = FixedClock(1_000_000)
     private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
 
     @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     private fun viewer(version: Int? = null, embedded: Boolean = true) =
-        ArtifactViewModel(ArtifactRoute("a1", id, version), GetArtifactUseCase(artifacts, accounts, guard), OpenArtifactUseCase(artifacts, features, accounts, guard), embedded)
+        ArtifactViewModel(ArtifactRoute("a1", id, version), GetArtifactUseCase(artifacts, accounts, guard), OpenArtifactUseCase(artifacts, features, accounts, guard), embedded, clock)
 
     @Test fun theGalleryLoadsOnePageAtATimeAndAScopeChangeStartsOver() = runTest(dispatcher) {
         artifacts.pages = { scope, before -> if (before == null) ArtifactPage(listOf(artifact("${scope.wire}-1")), "c1") else ArtifactPage(listOf(artifact("${scope.wire}-2")), null) }
@@ -69,7 +70,7 @@ class ArtifactViewModelsTest {
         assertTrue(artifacts.calls.isEmpty())
     }
 
-    @Test fun aVersionGetsItsOwnTicketAndAMissingPageIsRenewedOnce() = runTest(dispatcher) {
+    @Test fun aVersionGetsItsOwnTicketAndAnExpiredOneIsRenewed() = runTest(dispatcher) {
         artifacts.byId[id] = artifact(id, version = 3)
         val model = viewer()
         settle()
@@ -79,19 +80,40 @@ class ArtifactViewModelsTest {
         model.selectVersion(1)
         settle()
         assertEquals(1, model.uiState.value.opened?.ticket?.version)
-        val first = model.uiState.value.reload
-        // The renewed ticket may have the same URL (the server rounds its expiry): the view loads again all the same.
+        // A 404 while the ticket is valid: a link to a page the version lacks, no new ticket.
+        model.contentMissing()
+        assertTrue(model.uiState.value.missingPage)
+        val reload = model.uiState.value.reload
+        model.restart()
+        assertFalse(model.uiState.value.missingPage)
+        assertEquals(reload + 1, model.uiState.value.reload)
+        assertEquals(2, artifacts.calls.count { it.startsWith("ticket") })
+        // Expired: renewed in silence, and loaded again even with the same URL (the server rounds its expiry).
+        clock.now = 9_000_000
         artifacts.tickets = { a, v -> me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket(a, v ?: 1, "https://team.example/artifact/$a/same/", 9_000_000) }
         model.contentMissing()
         settle()
-        assertEquals(first + 1, model.uiState.value.reload)
+        assertEquals(3, artifacts.calls.count { it.startsWith("ticket") })
+        assertEquals(reload + 2, model.uiState.value.reload)
         assertNull(model.uiState.value.error)
-        // A second 404 on the same version: it is gone, no endless renewal.
+        // A second time within a minute: it is gone, no endless renewal.
         model.contentMissing()
         settle()
         assertNull(model.uiState.value.opened)
         assertNotNull(model.uiState.value.error)
         assertEquals(3, artifacts.calls.count { it.startsWith("ticket") })
+    }
+
+    @Test fun aCrashedPageIsLoadedAgainOnce() = runTest(dispatcher) {
+        artifacts.byId[id] = artifact(id)
+        val model = viewer()
+        settle()
+        val reload = model.uiState.value.reload
+        model.contentCrashed()
+        assertEquals(reload + 1, model.uiState.value.reload)
+        model.contentCrashed()
+        assertNull(model.uiState.value.opened)
+        assertNotNull(model.uiState.value.error)
     }
 
     @Test fun aNewerVersionIsOfferedNotLoadedAndTheDesktopAsksForNoTicket() = runTest(dispatcher) {
