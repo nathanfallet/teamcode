@@ -28,7 +28,7 @@ With Docker and JDK 21 available:
 
 Earlier negative controls, which removed member-turn ordering and interactive priority from `SelectQueueTurnUseCase`, applied to the previous shared two-slot account scenario; that scenario no longer exists.
 
-See [current implementation evidence](status.md) for the observed result and timings. The app integration suite runs on ordinary Linux CI; this test does not enable native or paid macOS/Windows jobs.
+The app integration suite runs on ordinary Linux CI; this test does not enable native or paid macOS/Windows jobs.
 
 ## Remaining acceptance
 

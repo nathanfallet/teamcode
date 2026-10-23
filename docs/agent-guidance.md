@@ -78,7 +78,7 @@ python3 scripts/smoke-claude-guidance.py \
   --claude /absolute/path/to/the/actual/claude/executable
 ```
 
-This isolated fixture supplies deterministic inference and directive responses, and a team `Stop` hook approved with `teamcode hooks approve`. It proves real hook loading, the team hook running from the session plugin, correlation between hook/inference session IDs, UserPromptSubmit/PreToolUse context injection, a harmless Bash tool round trip, receipts and plugin cleanup. It does not establish forecast accuracy under real quota consumption or prove model compliance with pacing. See [status](status.md) for completed runs and pending platform CI.
+This isolated fixture supplies deterministic inference and directive responses, and a team `Stop` hook approved with `teamcode hooks approve`. It proves real hook loading, the team hook running from the session plugin, correlation between hook/inference session IDs, UserPromptSubmit/PreToolUse context injection, a harmless Bash tool round trip, receipts and plugin cleanup. It does not establish forecast accuracy under real quota consumption or prove model compliance with pacing.
 
 For the real Codex client, without consuming a subscription:
 
