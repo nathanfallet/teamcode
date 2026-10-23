@@ -177,7 +177,6 @@ class SessionViewModel(
     }
 
     fun onDraftChange(text: String) = state.update { it.copy(draft = text) }
-    fun dismissNotice() = state.update { it.copy(notice = null) }
 
     /** Shows the message at once, then sends it; the draft is cleared only once it is queued for sending. */
     fun send() {
@@ -187,7 +186,8 @@ class SessionViewModel(
             state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
             return
         }
-        state.update { it.copy(draft = "", pending = it.pending + message) }
+        // A new message replaces what the last action said (a refused draft, nothing to interrupt).
+        state.update { it.copy(draft = "", pending = it.pending + message, notice = null) }
         deliver(message)
     }
 

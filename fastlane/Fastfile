@@ -17,6 +17,7 @@
 # of the same version (at most 99), read from what the store already has.
 
 require "json"
+require "shellwords"
 
 default_platform(:ios)
 
@@ -70,7 +71,7 @@ platform :ios do
     # The export needs a distribution profile too: it gets the same key and may create it.
     authentication = [
       "-allowProvisioningUpdates",
-      "-authenticationKeyPath #{fastlane_file('key.p8')}",
+      "-authenticationKeyPath #{fastlane_file('key.p8').shellescape}",
       "-authenticationKeyID #{asc['key_id']}",
       "-authenticationKeyIssuerID #{asc['issuer_id']}",
     ]
