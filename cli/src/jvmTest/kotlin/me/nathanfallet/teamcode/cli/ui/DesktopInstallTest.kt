@@ -8,6 +8,7 @@ import java.security.Signature
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.PSSParameterSpec
 import java.util.Base64
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -22,6 +23,8 @@ import me.nathanfallet.teamcode.client.DownloadedReleaseMetadata
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toOkioPath
+import okio.Path.Companion.toPath
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.test.*
 
 /**
@@ -94,7 +97,7 @@ class DesktopInstallTest {
     }
 
     private fun installer(os: String, target: String, source: DesktopSource, run: suspend (String, List<String>) -> Int = realRun, teamId: String? = "ABCDE12345") =
-        DesktopInstaller(os, target, DesktopLocations(os, environment::get), source, temporary.toOkioPath(), run, VerifyReleaseManifest(listOf(trusted)), teamId)
+        DesktopInstaller(os, target, DesktopLocations(os, environment::get), source, temporary.toOkioPath(), run, VerifyReleaseManifest(listOf(trusted)), teamId, windowsTimeout = 200.milliseconds)
 
     private fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<CliOperationException> { runBlocking { block() } }.code)
 
@@ -185,9 +188,23 @@ class DesktopInstallTest {
         assertEquals("msiexec.exe", command[0])
         assertEquals(listOf("/i"), command.subList(1, 2))
         assertTrue(command[2].endsWith("teamcode-desktop-1.2.3-windows-x64.msi"))
-        assertEquals(listOf("/qb", "/norestart", "MSIINSTALLPERUSER=1"), command.subList(3, 6))
+        assertEquals(listOf("/qn", "/norestart", "/l*v"), command.subList(3, 6))
+        assertTrue(command[6].endsWith("teamcode-desktop-msiexec.log"))
+        assertEquals("MSIINSTALLPERUSER=1", command[7])
         val failing = installer("windows", "windows-x64", FixtureSource(fixture("1.2.3", mapOf("windows-x64" to "msi bytes".encodeToByteArray()))), { _, _ -> 1603 })
         failure("desktop_msiexec_failed_1603") { failing.install(failing.release("1.2.3")) }
+    }
+
+    @Test fun msiexecArgumentsAreQuietOnlyWithoutAPersonAndAlwaysLogged() {
+        val msi = "C:/tmp/app.msi".toPath()
+        val log = "C:/tmp/app.log".toPath()
+        assertEquals(listOf("/i", msi.toString(), "/qn", "/norestart", "/l*v", log.toString(), "MSIINSTALLPERUSER=1"), msiexecArguments(msi, log, quiet = true))
+        assertEquals("/qb", msiexecArguments(msi, log, quiet = false)[2])
+    }
+
+    @Test fun anInstallerThatNeverReturnsIsStoppedAndReported() = runBlocking {
+        val hanging = installer("windows", "windows-x64", FixtureSource(fixture("1.2.3", mapOf("windows-x64" to "msi bytes".encodeToByteArray()))), { _, _ -> awaitCancellation() })
+        failure("desktop_msiexec_timeout") { hanging.install(hanging.release("1.2.3")) }
     }
 
     @Test fun uiUsesAnAppOfThisVersionOrNewerAndAsksBeforeInstalling() = runBlocking {

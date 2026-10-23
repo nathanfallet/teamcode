@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.ui
 
+import kotlinx.coroutines.withTimeoutOrNull
 import me.nathanfallet.teamcode.api.models.DesktopReleaseFormat
 import me.nathanfallet.teamcode.api.models.ReleaseAsset
 import me.nathanfallet.teamcode.api.models.ReleaseFormat
@@ -20,6 +21,8 @@ import okio.Path
 import okio.Path.Companion.toPath
 import okio.buffer
 import okio.use
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 
 /** Where the desktop packages come from: the GitHub release of a version, or an offline directory (`--bundle`). */
 internal interface DesktopSource {
@@ -80,6 +83,8 @@ internal class DesktopInstaller(
     private val macosTeamId: String? = DesktopPublisher.MACOS_TEAM_ID,
     private val fs: FileSystem = FileSystem.SYSTEM,
     private val report: (String) -> Unit = {},
+    private val quietWindows: Boolean = true,
+    private val windowsTimeout: Duration = WINDOWS_INSTALL_TIMEOUT,
 ) {
     /** The authenticated release of [version] and this system's package in it. */
     suspend fun release(version: String): DesktopRelease {
@@ -136,9 +141,19 @@ internal class DesktopInstaller(
 
     private suspend fun installWindows(msi: Path, version: String): DesktopInstallation {
         val root = locations.windowsRoot ?: throw CliOperationException("desktop_home_unknown")
-        // Per-user package: no administrator rights; basic progress window; 3010 = installed, restart suggested.
-        val code = run("msiexec.exe", listOf("/i", msi.toString(), "/qb", "/norestart", "MSIINSTALLPERUSER=1"))
-        if (code != 0 && code != 3010) throw CliOperationException("desktop_msiexec_failed_${code.toUInt()}")
+        // Per-user package: no administrator rights; 3010 = installed, restart suggested. Without a person to watch
+        // (--yes, or no console) the installer shows no window, which would wait for a click nobody can give. Its
+        // verbose log is kept next to the staging folder, and its wait is bounded.
+        val log = temporary / "teamcode-desktop-msiexec.log"
+        val code = withTimeoutOrNull(windowsTimeout) { run("msiexec.exe", msiexecArguments(msi, log, quiet = quietWindows)) }
+        if (code == null) {
+            report("The Windows installer did not finish within ${windowsTimeout.inWholeMinutes} minutes; its log: $log")
+            throw CliOperationException("desktop_msiexec_timeout")
+        }
+        if (code != 0 && code != 3010) {
+            report("The Windows installer exited with code ${code.toUInt()}; its log: $log")
+            throw CliOperationException("desktop_msiexec_failed_${code.toUInt()}")
+        }
         return installed(root, version)
     }
 
@@ -193,3 +208,9 @@ internal class DesktopInstaller(
         private fun randomName() = Buffer().write(secureRandomBytes(8)).readByteString().hex()
     }
 }
+
+internal val WINDOWS_INSTALL_TIMEOUT = 10.minutes
+
+/** msiexec's arguments: per-user, no restart, a verbose log, and no window unless a person is there to use it. */
+internal fun msiexecArguments(msi: Path, log: Path, quiet: Boolean): List<String> =
+    listOf("/i", msi.toString(), if (quiet) "/qn" else "/qb", "/norestart", "/l*v", log.toString(), "MSIINSTALLPERUSER=1")
