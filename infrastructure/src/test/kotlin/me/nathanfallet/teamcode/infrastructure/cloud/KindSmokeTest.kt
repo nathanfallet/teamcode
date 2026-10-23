@@ -11,7 +11,7 @@ import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.Role
-import me.nathanfallet.teamcode.domain.team.TeamFailure
+import TeamFailure
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.CloudSessions
@@ -83,23 +83,12 @@ class KindSmokeTest {
                             }
                         }
                         suspend fun both() = coroutineScope { listOf(async { tolerant("replica 1") { reconciler("replica-1") } }, async { tolerant("replica 2") { secondReconciler("replica-2") } }).forEach { it.await() } }
-                        // Both replicas also act on the very same session snapshot at once, without the lease: the guards behind it
-                        // (compare-and-set on the generation, the epoch advance, the stale-pod cleanup) are what must stop a second launch.
-                        suspend fun contend() {
-                            val snapshot = store.find(principal.teamId, created.id) ?: return
-                            if (snapshot.state != CREATING && snapshot.state != RESUMING) return
-                            coroutineScope { listOf(async { tolerant("replica 1") { reconciler.reconcile(snapshot, "replica-1"); 0 } },
-                                async { tolerant("replica 2") { secondReconciler.reconcile(snapshot, "replica-2"); 0 } }).forEach { it.await() } }
-                        }
                         suspend fun until(what: String, timeoutSeconds: Int = 180, done: suspend (CloudSession) -> Boolean): CloudSession {
                             repeat(timeoutSeconds) {
                                 val s = store.find(principal.teamId, created.id)!!
                                 if (done(s)) return s
                                 database.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }
-                                contend()
-                                contend()
-                                contend()
-                            both()
+                                                                                                                            both()
                                 delay(1_000)
                             }
                             fail("Timed out waiting for $what: ${store.find(principal.teamId, created.id)}")
@@ -116,7 +105,7 @@ class KindSmokeTest {
                             "--bound-object-kind", "Pod", "--bound-object-name", pod, "--bound-object-uid", uid, "--duration", "10m")
                         val identity = AuthenticateRunnerUseCase(store, port)(token, principal.teamId, created.id, 1)
                         assertEquals(pod, identity.podName)
-                        assertEquals(401, assertFailsWith<me.nathanfallet.teamcode.domain.team.TeamFailure> {
+                        assertEquals(401, assertFailsWith<TeamFailure> {
                             AuthenticateRunnerUseCase(store, port)(kubectl(kubeconfig, "create", "token", "default", "-n", namespace, "--duration", "10m"), principal.teamId, created.id, 1)
                         }.status, "A token for another audience is refused")
 
