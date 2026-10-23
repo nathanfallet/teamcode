@@ -155,10 +155,13 @@ class TeamCodeClient(
     /** Register one local wrapper launch. The UUID makes a repeated start idempotent. */
     override suspend fun startRun(input: StartRunRequest): RunLeaseView { identifier(input.id); return request("/api/v1/runs", HttpMethod.Post, input) }
     override suspend fun heartbeatRun(id: String): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/heartbeat", HttpMethod.Post) }
-    /** What the agent's hooks report, never content: [state] is `working` or `waiting_for_human`. */
-    suspend fun reportRunActivity(id: String, state: String): RunActivityView {
+    /**
+     * What the agent's hooks report, never content: [state] is `working` or `waiting_for_human`, [observedAtMillis] when the
+     * hook fired by this computer's clock, so the server can ignore a slow report that lands after a newer one.
+     */
+    suspend fun reportRunActivity(id: String, state: String, observedAtMillis: Long? = null): RunActivityView {
         identifier(id)
-        return request("/api/v1/runs/$id/activity", HttpMethod.Post, RunActivityRequest(state))
+        return request("/api/v1/runs/$id/activity", HttpMethod.Post, RunActivityRequest(state, observedAtMillis))
     }
     override suspend fun endRun(id: String, exitCode: Int?): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/end", HttpMethod.Post, EndRunRequest(exitCode)) }
     suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null, labels: Map<String, String> = emptyMap()): RunPageView {

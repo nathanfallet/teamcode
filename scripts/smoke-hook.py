@@ -34,6 +34,9 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
                 state['calls'].append((self.path, body))
                 assert 'PRIVATE_TOOL_INPUT' not in json.dumps(body)
                 if self.path.startswith('/api/v1/runs/'):
+                    # The hook's time travels with the state so the server can drop a late, older report; nothing else does.
+                    assert set(body) == {'state', 'observedAtMillis'} and isinstance(body['observedAtMillis'], int) and body['observedAtMillis'] > 0, body
+                    state['calls'][-1] = (self.path, {'state': body['state']})
                     response = {'id': RUN, 'state': body['state'], 'sinceMillis': 1}
                 elif self.path == '/api/v1/directives/claim':
                     assert body == {'sessionId': 'native-session', 'stage': 'EMITTED_TO_HOOK'}

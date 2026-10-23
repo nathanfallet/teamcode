@@ -12,11 +12,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
+import io.ktor.server.routing.routing
+import me.nathanfallet.teamcode.cli.proxy.guidanceHook
 import me.nathanfallet.teamcode.cli.proxy.localProxy
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import kotlin.test.*
+import kotlin.time.Duration.Companion.milliseconds
 
 class GuidanceHookTest {
+    private fun state(body: String) = Json.parseToJsonElement(body).jsonObject["state"]!!.jsonPrimitive.content
     private val localToken = "synthetic-guidance-local-capability-1234"
     @Test fun sessionOnlyClaimAndReceiptNeverTransmitToolContent() = testApplication {
         val calls = mutableListOf<Pair<String, JsonObject>>()
@@ -82,7 +86,7 @@ class GuidanceHookTest {
                 else -> respond("""{"directive":null}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
             }
         }) { configure(this) } }
-        application { localProxy(sdk, localToken) }
+        application { routing { guidanceHook(sdk, localToken, activityRetryDelays = listOf(10.milliseconds, 10.milliseconds)) } }
         suspend fun hook(payload: JsonObjectBuilder.() -> Unit, launch: String? = run) = client.post("/_teamcode/hooks/claude") {
             bearerAuth(localToken); contentType(ContentType.Application.Json)
             launch?.let { header("X-TeamCode-Run", it) }
@@ -92,14 +96,16 @@ class GuidanceHookTest {
         try {
             assertEquals("{}", hook({ put("hook_event_name", "Stop"); put("last_assistant_message", "private-message") }).bodyAsText())
             settled(1)
-            assertEquals("""{"state":"waiting_for_human"}""", reports.single())
+            assertEquals("waiting_for_human", state(reports.single()))
+            // Only the state and when the hook fired: nothing else of the payload.
+            assertEquals(setOf("state", "observedAtMillis"), Json.parseToJsonElement(reports.single()).jsonObject.keys)
             // The same state again, from any event, is not sent again.
             hook({ put("hook_event_name", "Notification"); put("notification_type", "permission_prompt"); put("message", "private") })
             hook({ put("hook_event_name", "Notification"); put("notification_type", "auth_success") })
             hook({ put("hook_event_name", "PreToolUse"); put("tool_input", "private-tool-input") })
             hook({ put("hook_event_name", "PostToolUse"); put("tool_name", "Bash"); put("tool_response", "private") })
             settled(2)
-            assertEquals("""{"state":"working"}""", reports[1])
+            assertEquals("working", state(reports[1]))
             hook({ put("hook_event_name", "PostToolUse") })
             hook({ put("hook_event_name", "Stop") })
             settled(3)
@@ -107,20 +113,22 @@ class GuidanceHookTest {
             // Neither a missing nor a malformed launch header reports anything.
             hook({ put("hook_event_name", "Stop") }, launch = null)
             hook({ put("hook_event_name", "Stop") }, launch = "../etc")
-            // A refusal the server will repeat is remembered; an outage is retried at the next hook.
+            // A refusal the server will repeat is remembered; an outage is retried, and a newer state replaces the retry.
             failWith = HttpStatusCode.ServiceUnavailable
             hook({ put("hook_event_name", "UserPromptSubmit") })
-            settled(4)
-            hook({ put("hook_event_name", "UserPromptSubmit") })
-            settled(5)
+            // The first try and two bounded retries, all of the same state and hook time.
+            settled(6)
+            withContext(Dispatchers.Default) { delay(200) }
+            assertEquals(6, reports.size)
+            assertEquals(1, reports.drop(3).map { Json.parseToJsonElement(it).jsonObject }.toSet().size)
             failWith = HttpStatusCode.Conflict
             hook({ put("hook_event_name", "UserPromptSubmit") })
-            settled(6)
+            settled(7)
             hook({ put("hook_event_name", "UserPromptSubmit") })
             // The launch is refused for good: no other state is tried either.
             hook({ put("hook_event_name", "Stop") })
             withContext(Dispatchers.Default) { delay(300) }
-            assertEquals(6, reports.size)
+            assertEquals(7, reports.size)
             assertTrue(reports.none { "private" in it })
         } finally { sdk.close() }
     }
@@ -132,7 +140,7 @@ class GuidanceHookTest {
         val sdk = TeamCodeClient("https://team.example", { "server-secret" }) { configure -> HttpClient(MockEngine { request ->
             if (request.url.encodedPath == "/api/v1/runs/$run/activity") {
                 reports += (request.body as TextContent).text
-                respond("""{"error":"x"}""", status, headersOf(HttpHeaders.ContentType, "application/json"))
+                respond(if (status == HttpStatusCode.OK) """{"id":"$run","state":"working","sinceMillis":1}""" else """{"error":"x"}""", status, headersOf(HttpHeaders.ContentType, "application/json"))
             } else respond("""{"directive":null}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
         }) { configure(this) } }
         application { localProxy(sdk, localToken, report = { notices += it }) }
@@ -144,7 +152,7 @@ class GuidanceHookTest {
         try {
             assertEquals("{}", hook("PostToolUse", big = true).bodyAsText())
             settled(1)
-            assertEquals("""{"state":"working"}""", reports.single())
+            assertEquals("working", state(reports.single()))
             status = HttpStatusCode.Forbidden
             hook("Stop"); settled(2)
             hook("UserPromptSubmit"); hook("Stop")

@@ -235,7 +235,7 @@ class AgentRunPersistenceTest {
             assertEquals(RunActivity.WAITING_FOR_HUMAN, shown.activity); assertEquals(first.sinceMillis, shown.activitySinceMillis)
             assertEquals(RunActivity.WAITING_FOR_HUMAN, b.list(f.member.principal).runs.single { it.id == id }.activity)
             val working = b.activity(f.member.principal, id, RunActivity.WORKING)
-            assertTrue(working.sinceMillis >= first.sinceMillis)
+            assertTrue(working.sinceMillis!! >= first.sinceMillis!!)
             assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
             // Another login, another member, a key that cannot write: none can report for this launch.
             val anotherLogin = f.team.login("developer", MEMBER_PASSWORD, "another login")
@@ -257,9 +257,36 @@ class AgentRunPersistenceTest {
             b.activity(f.member.principal, id, RunActivity.WORKING)
             a.heartbeat(f.member.principal, id)
             assertEquals(RunActivity.WORKING, b.get(f.member.principal, id).run.activity)
+            // Waiting for a person outlives a silence of the wrapper: it is still true until the next event or the end.
+            b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 60_000 } }
+            val waitingSince = b.get(f.member.principal, id).run.let { assertNull(it.activity, "Hidden while STALE"); f.a.query { AgentRuns.selectAll().where { AgentRuns.id eq id }.single()[AgentRuns.activityAt] } }
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity, "A silence does not clear a wait for a person")
+            assertEquals(waitingSince, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN).sinceMillis, "Nor does a repeated wait reset when it began")
+            assertEquals(waitingSince, b.get(f.member.principal, id).run.activitySinceMillis)
             a.end(f.member.principal, id, 0)
             assertNull(b.get(f.member.principal, id).run.activity)
             failure("run_ended") { b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN) }
+        }
+    }
+    @Test @Timeout(120)
+    fun aReportObservedBeforeTheStoredOneChangesNothingWhenItLandsLate() = runBlocking {
+        fixture { f ->
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b); val id = id()
+            a.start(f.member.principal, id, "claude", "interactive")
+            val working = a.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 2_000)
+            // A `waiting` the client gave up on (observed at 1,000) lands after the `working` observed at 2,000.
+            val late = b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 1_000)
+            assertTrue(late.superseded); assertEquals(RunActivity.WORKING, late.activity); assertEquals(working.sinceMillis, late.sinceMillis)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // A repeated state still moves the stored observation forward, so an older change arriving after it is refused too.
+            assertFalse(a.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 3_000).superseded)
+            assertTrue(b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 2_500).superseded)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // A newer one is applied.
+            val waiting = b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 3_500)
+            assertFalse(waiting.superseded); assertEquals(RunActivity.WAITING_FOR_HUMAN, a.get(f.member.principal, id).run.activity)
         }
     }
     private fun input(id: String, units: Long) = AdmissionInput(units, "claude-test", "anthropic", runId = id)

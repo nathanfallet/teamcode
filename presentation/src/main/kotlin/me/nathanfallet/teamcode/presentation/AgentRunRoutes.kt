@@ -29,8 +29,10 @@ internal fun Route.agentRunRoutes(runs: AgentRunService) {
     get<RunsResource.Id> { call.respond(runs.get(call.principal, it.id).view()) }
     post<RunsResource.Id.Heartbeat> { call.respond(runs.heartbeat(call.principal, it.parent.id).view()) }
     post<RunsResource.Id.Activity> {
-        val change = runs.activity(call.principal, it.parent.id, RunActivity.parse(call.jsonBody<RunActivityRequest>().state))
-        call.respond(RunActivityView(change.id, change.activity.wire, change.sinceMillis))
+        val input = call.jsonBody<RunActivityRequest>()
+        if ((input.observedAtMillis ?: 1) <= 0) throw TeamFailure("invalid_run_activity", 400, "observedAtMillis must be positive.")
+        val change = runs.activity(call.principal, it.parent.id, RunActivity.parse(input.state), input.observedAtMillis)
+        call.respond(RunActivityView(change.id, change.activity?.wire, change.sinceMillis, change.superseded))
     }
     post<RunsResource.Id.End> { call.respond(runs.end(call.principal, it.parent.id, call.jsonBody<EndRunRequest>().exitCode).view()) }
     put<RunsResource.Id.Policy> {

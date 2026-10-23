@@ -25,8 +25,9 @@ class AgentRunRoutesTest {
                 assertEquals("claude", agent); assertEquals("background", workload); calls += "start:" + labels.toSortedMap(); return RunLease(id, 1000, 2000, null, RunState.RUNNING)
             }
             override suspend fun heartbeat(actor: Principal, id: String): RunLease { actor.requireScope(ServiceScope.INFERENCE); calls += "heartbeat"; return RunLease(id, 1000, 3000, null, RunState.RUNNING) }
-            override suspend fun activity(actor: Principal, id: String, activity: RunActivity): RunActivityChange {
-                actor.requireScope(ServiceScope.INFERENCE); calls += "activity:${activity.wire}"; return RunActivityChange(id, activity, 5000)
+            override suspend fun activity(actor: Principal, id: String, activity: RunActivity, observedAtMillis: Long?): RunActivityChange {
+                actor.requireScope(ServiceScope.INFERENCE); calls += "activity:${activity.wire}:$observedAtMillis"
+                return if (observedAtMillis == 1L) RunActivityChange(id, RunActivity.WORKING, 4000, superseded = true) else RunActivityChange(id, activity, 5000)
             }
             override suspend fun end(actor: Principal, id: String, exitCode: Int?): RunLease { actor.requireScope(ServiceScope.INFERENCE); assertEquals(7, exitCode); calls += "end"; return RunLease(id, 1000, 3000, 4000, RunState.ENDED) }
             override suspend fun list(actor: Principal, memberId: String?, all: Boolean, beforeId: String?, labels: Map<String, String>): RunPage {
@@ -55,8 +56,10 @@ class AgentRunRoutesTest {
             assertEquals(id, sdk.startRun(StartRunRequest(id, "claude", "background", mapOf("task" to "1234", "team" to "a=b"))).id)
             assertTrue("start:{task=1234, team=a=b}" in calls)
             assertEquals(3000, sdk.heartbeatRun(id).heartbeatAtMillis)
-            assertEquals(RunActivityView(id, "waiting_for_human", 5000), sdk.reportRunActivity(id, "waiting_for_human"))
-            assertTrue("activity:waiting_for_human" in calls)
+            assertEquals(RunActivityView(id, "waiting_for_human", 5000), sdk.reportRunActivity(id, "waiting_for_human", 7000))
+            assertTrue("activity:waiting_for_human:7000" in calls)
+            // A report older than the stored one says so, with the newer stored state.
+            assertEquals(RunActivityView(id, "working", 4000, superseded = true), sdk.reportRunActivity(id, "waiting_for_human", 1))
             assertEquals("ENDED", sdk.endRun(id, 7).state)
             assertEquals(id, sdk.runs(all = true, beforeId = id).nextBeforeId)
             assertEquals("<member>", sdk.run(id).run.username)
@@ -74,6 +77,9 @@ class AgentRunRoutesTest {
             // Another state is refused before the service; a reader key cannot report, only the launch's inference credential.
             assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/runs/$id/activity") {
                 bearerAuth("inference"); contentType(ContentType.Application.Json); setBody("""{"state":"idle"}""")
+            }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.post("/api/v1/runs/$id/activity") {
+                bearerAuth("inference"); contentType(ContentType.Application.Json); setBody("""{"state":"working","observedAtMillis":0}""")
             }.status)
             assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/runs/$id/activity") {
                 bearerAuth("reader"); contentType(ContentType.Application.Json); setBody("""{"state":"working"}""")

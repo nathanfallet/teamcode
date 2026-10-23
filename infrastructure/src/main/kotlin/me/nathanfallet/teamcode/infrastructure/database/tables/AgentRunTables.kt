@@ -27,6 +27,8 @@ object AgentRuns : Table("agent_runs") {
     /** `working` or `waiting_for_human`, as the agent's hooks last reported (null until one did), and when it changed. */
     val activity = varchar("activity", 24).nullable()
     val activityAt = long("activity_at").nullable()
+    /** The reporter's clock for the stored report: a later-arriving report observed earlier is ignored. Kept when a silence clears [activity]. */
+    val activityObservedAt = long("activity_observed_at").nullable()
     /** When the feed last reported this run stale; older than [heartbeatAt] once a heartbeat followed, so a new silence is reported again. */
     val staleNotifiedAt = long("stale_notified_at").nullable()
     override val primaryKey = PrimaryKey(id)

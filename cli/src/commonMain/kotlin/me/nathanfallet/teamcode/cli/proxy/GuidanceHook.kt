@@ -11,13 +11,16 @@ import me.nathanfallet.teamcode.cli.agents.ActivityReporter
 import me.nathanfallet.teamcode.cli.agents.HookActivity
 import me.nathanfallet.teamcode.cli.agents.HookGuidance
 import me.nathanfallet.teamcode.client.TeamCodeClient
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tool inputs and transcript paths stop here. Only the session identifier reaches TeamCode, and, when the launch's plugin
  * names its run in `X-TeamCode-Run`, whether the agent works or waits for a person (see [HookActivity]).
  */
-internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String, notice: ((String) -> Unit)? = null) {
-    val activity = ActivityReporter(client, notice)
+internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String, notice: ((String) -> Unit)? = null,
+    activityRetryDelays: List<Duration> = listOf(2.seconds, 5.seconds)) {
+    val activity = ActivityReporter(client, notice, activityRetryDelays)
     post("/_teamcode/hooks/claude") {
         if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
             call.respond(HttpStatusCode.Unauthorized); return@post

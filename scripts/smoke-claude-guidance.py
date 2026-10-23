@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-claude-guidance-') as director
                         self.reply({'id':body['id'],'startedAtMillis':now,'heartbeatAtMillis':now,'endedAtMillis':None,'state':'RUNNING'}); return
                     run, action = self.path.split('/')[4:6]
                     if action == 'activity':
-                        assert set(body) == {'state'} and body['state'] in ('working', 'waiting_for_human'), body
+                        assert set(body) == {'state', 'observedAtMillis'} and body['state'] in ('working', 'waiting_for_human') and isinstance(body['observedAtMillis'], int), body
                         with lock: state['activity'].append((run, body['state']))
                         self.reply({'id':run,'state':body['state'],'sinceMillis':now}); return
                     self.reply({'id':run,'startedAtMillis':now,'heartbeatAtMillis':now,'endedAtMillis':now if action == 'end' else None,'state':'ENDED' if action == 'end' else 'RUNNING'}); return

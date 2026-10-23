@@ -36,25 +36,37 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
         val now = nowMillis()
-        // A state reported before a silence is not carried over it (it would be a guess); one reported during it is current.
+        // A `working` reported before a silence is not carried over it (it would be a guess); one reported during it is current.
+        // `waiting_for_human` is kept: a person still has to answer, whatever the wrapper's connection did, until the next event or the end.
         val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
-        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent && (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS) { it[activity] = null; it[activityAt] = null } }
+        val guess = silent && row[AgentRuns.activity] == RunActivity.WORKING.wire &&
+            (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
+        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (guess) { it[activity] = null; it[activityAt] = null } }
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 
     /** Reads and writes under the team lock that [writeActor] takes, like `end` and `heartbeat`: replicas apply reports one at a time. */
-    override suspend fun activity(actor: Principal, id: String, activity: RunActivity): RunActivityChange = database.query {
+    override suspend fun activity(actor: Principal, id: String, activity: RunActivity, observedAtMillis: Long?): RunActivityChange = database.query {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
+        val stored = row[AgentRuns.activity]?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } }
         val previous = row[AgentRuns.activityAt]
+        val storedObservedAt = row[AgentRuns.activityObservedAt]
+        // A slow report the client gave up on can land after a newer one: by the reporter's clock it is older, so it changes nothing.
+        if (observedAtMillis != null && storedObservedAt != null && observedAtMillis < storedObservedAt)
+            return@query RunActivityChange(id, stored, previous.takeIf { stored != null }, superseded = true)
         val now = nowMillis()
-        // The same state writes nothing, except during a silence when the stored report is older than the silence began: the heartbeat that ends it would clear it.
+        // The same state keeps its time, except a `working` during a silence older than the silence: the heartbeat that ends it would clear it.
         val silenceBegan = row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
-        val stale = now > silenceBegan && (previous ?: 0) <= silenceBegan
-        if (row[AgentRuns.activity] == activity.wire && previous != null && !stale) return@query RunActivityChange(id, activity, previous)
-        if (AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now } == 0)
-            throw TeamFailure("run_ended", 409, "This run has ended.")
-        RunActivityChange(id, activity, now)
+        val stale = activity == RunActivity.WORKING && now > silenceBegan && (previous ?: 0) <= silenceBegan
+        val same = stored == activity && previous != null && !stale
+        val written = AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) {
+            if (!same) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now }
+            // The newest observation is kept even for a repeated state, so an older one arriving later is still recognised.
+            it[activityObservedAt] = observedAtMillis
+        }
+        if (written == 0) throw TeamFailure("run_ended", 409, "This run has ended.")
+        RunActivityChange(id, activity, if (same) previous else now)
     }
 
     override suspend fun end(actor: Principal, id: String, exitCode: Int?): RunLease = database.query {

@@ -1,10 +1,13 @@
 package me.nathanfallet.teamcode.cli.agents
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.*
+import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -62,56 +65,95 @@ internal object HookActivity {
     /** Refusals that will repeat for this launch: not yours (403), unknown (404), ended or changed (409). 401, 408 and 429 are retried. */
     private val PERMANENT = setOf(403, 404, 409)
 
-    /** One report, never a diagnostic.  */
-    suspend fun report(client: TeamCodeClient, runId: String, state: String): Outcome = try {
-        if (withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state); true } == true) Outcome.REPORTED else Outcome.RETRY
+    /** When a hook fired, by this computer's clock: the server orders reports by it, not by their arrival. */
+    fun observedNow(): Long = Clock.System.now().toEpochMilliseconds()
+
+    /** One report, never a diagnostic. [observedAtMillis] is when the hook fired, kept across retries. */
+    suspend fun report(client: TeamCodeClient, runId: String, state: String, observedAtMillis: Long = observedNow()): Outcome = try {
+        when (withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state, observedAtMillis) }?.superseded) {
+            false -> Outcome.REPORTED
+            true -> Outcome.SUPERSEDED
+            null -> Outcome.RETRY
+        }
     } catch (error: CancellationException) { throw error }
     catch (error: TeamCodeException) { if (error.statusCode == 403) Outcome.FOREIGN else if (error.statusCode in PERMANENT) Outcome.REFUSED else Outcome.RETRY }
     catch (_: Exception) { Outcome.RETRY }
-    enum class Outcome { REPORTED, REFUSED, FOREIGN, RETRY }
+    /** [SUPERSEDED]: the server already holds a report observed later, so this one changed nothing. */
+    enum class Outcome { REPORTED, SUPERSEDED, REFUSED, FOREIGN, RETRY }
 }
 
 /**
  * The local proxy sees every hook of a launch, so a state already reported is not sent again: a tool-heavy turn costs one
  * request, not one per tool. The memory expires after [REMEMBER], so a state the server dropped (a silence) is sent again;
  * a launch the server refused for good (ended, foreign, unknown) is left alone for as long. Bounded: oldest launch first.
+ * A temporary failure (timeout, 5xx, 401) is sent again after each of [retryDelays], unless a newer state of the launch
+ * arrived meanwhile; then it is dropped and the next event reports again.
  */
-internal class ActivityReporter(private val client: TeamCodeClient, private val notice: ((String) -> Unit)? = null) {
+internal class ActivityReporter(
+    private val client: TeamCodeClient, private val notice: ((String) -> Unit)? = null,
+    private val retryDelays: List<Duration> = listOf(2.seconds, 5.seconds),
+) {
     private var warned = false
     private val lock = Mutex()
     private class Seen(val state: String?, val at: TimeMark)
     private val last = LinkedHashMap<String, Seen>()
+    /** One state per launch, the latest; a retry carries the time its hook fired and waits until [notBefore]. */
+    private class Pending(val state: String, val observedAtMillis: Long, val attempt: Int = 0, val notBefore: TimeMark? = null)
     private val pendingLock = Mutex()
-    private val pending = LinkedHashMap<String, String>()
+    private val pending = LinkedHashMap<String, Pending>()
+    /** Wakes a sender waiting for a retry when a new state arrives, so it is not held behind the delay. */
+    private val arrived = Channel<Unit>(Channel.CONFLATED)
     /**
      * One report at a time, so two hooks of a launch reach the server in the order they came. A hook that finds a report in
      * flight leaves its state for the one in flight to send after it (the latest per launch wins), so a slow server never
      * piles up one waiting handler per hook.
      */
     suspend fun report(runId: String, state: String) {
-        pendingLock.withLock { pending[runId] = state }
+        val observed = HookActivity.observedNow()
+        pendingLock.withLock { enqueue(runId, Pending(state, observed)) }
+        arrived.trySend(Unit)
         // Enqueue first, then try to be the sender: a state queued while another report finishes is picked up by the loop.
         while (lock.tryLock()) {
             try {
                 while (true) {
-                    val next = pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value }?.also { pending.remove(it.first) } } ?: break
-                    send(next.first, next.second)
+                    val (next, wait) = pendingLock.withLock { next() } ?: break
+                    if (next != null) send(next.first, next.second)
+                    else if (wait != null) withTimeoutOrNull(wait) { arrived.receive() }
                 }
             } finally { lock.unlock() }
             if (pendingLock.withLock { pending.isEmpty() }) return
         }
     }
-    private suspend fun send(runId: String, state: String) {
+    /** The first launch ready to send (removed from the queue), or how long until a retry is due; null once nothing is queued. */
+    private fun next(): Pair<Pair<String, Pending>?, Duration?>? {
+        if (pending.isEmpty()) return null
+        val ready = pending.entries.firstOrNull { it.value.notBefore?.hasPassedNow() != false }
+        if (ready != null) { pending.remove(ready.key); return (ready.key to ready.value) to null }
+        return null to pending.values.minOf { -it.notBefore!!.elapsedNow() }.coerceAtLeast(Duration.ZERO)
+    }
+    private fun enqueue(runId: String, entry: Pending) {
+        pending.remove(runId); pending[runId] = entry
+        if (pending.size > MAX_RUNS) pending.remove(pending.keys.first())
+    }
+    private suspend fun send(runId: String, entry: Pending) {
+        val state = entry.state
         val seen = last[runId]
         if (seen != null && seen.at.elapsedNow() < REMEMBER && (seen.state == null || seen.state == state)) return
-        when (HookActivity.report(client, runId, state)) {
+        when (HookActivity.report(client, runId, state, entry.observedAtMillis)) {
             HookActivity.Outcome.REPORTED -> remember(runId, Seen(state, TimeSource.Monotonic.markNow()))
+            // The server holds a later report of ours, already remembered when it was sent.
+            HookActivity.Outcome.SUPERSEDED -> Unit
             HookActivity.Outcome.REFUSED -> remember(runId, Seen(null, TimeSource.Monotonic.markNow()))
             HookActivity.Outcome.FOREIGN -> {
                 remember(runId, Seen(null, TimeSource.Monotonic.markNow()))
                 if (!warned) { warned = true; notice?.invoke(FOREIGN_NOTICE) }
             }
-            HookActivity.Outcome.RETRY -> Unit
+            HookActivity.Outcome.RETRY -> pendingLock.withLock {
+                val delay = retryDelays.getOrNull(entry.attempt)
+                // A newer state of the launch replaces this one; it keeps its own hook time, so the server orders them right.
+                if (delay != null && runId !in pending)
+                    enqueue(runId, Pending(state, entry.observedAtMillis, entry.attempt + 1, TimeSource.Monotonic.markNow() + delay))
+            }
         }
     }
     private fun remember(runId: String, seen: Seen) {
