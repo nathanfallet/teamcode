@@ -153,10 +153,12 @@ def main():
             # Give the imported image its digest name on the node, as a registry pull would have.
             node = f"{CLUSTER}-control-plane"
             inspected = json.loads(run("docker", "exec", node, "crictl", "inspecti", f"docker.io/library/{IMAGE}", capture=True))
-            # The digest the kubelet reports as the pod's image ID (kind names the import `import-<date>`).
-            image_id = next(d.split("@")[1] for d in inspected["status"]["repoDigests"] if "/import-" in d)
-            run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", f"docker.io/library/{IMAGE}",
-                f"docker.io/library/{IMAGE.split(':')[0]}@{image_id}")
+            # Name the image by every digest the runtime knows for it (its ID and its repository digests, among them
+            # the one the kubelet reports as the pod's image ID), so any of them resolves locally.
+            digests = {inspected["status"]["id"]} | {d.split("@")[1] for d in inspected["status"].get("repoDigests", []) if "@" in d}
+            for digest in sorted(digests):
+                run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", "--force", f"docker.io/library/{IMAGE}",
+                    f"docker.io/library/{IMAGE.split(':')[0]}@{digest}")
             run(*kubectl, "apply", "-f", "-", stdin=RBAC)
             token = run(*kubectl, "create", "token", "teamcode-server", "-n", "teamcode-system", "--duration", "2h", capture=True)
             config = json.loads(run(*kubectl, "config", "view", "--raw", "--minify", "-o", "json", capture=True))

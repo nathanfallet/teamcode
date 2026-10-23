@@ -6,7 +6,7 @@ import kotlinx.coroutines.sync.withLock
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 /** The pod a runner call comes from, as proven by the cluster. */
-data class RunnerIdentity(val teamId: String, val sessionId: String, val epoch: Int, val podName: String, val podUid: String? = null)
+data class RunnerIdentity(val teamId: String, val sessionId: String, val epoch: Int, val podName: String)
 
 /**
  * Authenticates a runner by its projected service-account token: the session's cluster reviews the token
@@ -37,7 +37,7 @@ class AuthenticateRunnerUseCase(
         if (identity.namespace != session.namespace || !pod.startsWith("tc-${session.id}-e")) throw unauthenticated()
         if (pod != CloudSessionService.podName(session.id, epoch) || epoch != session.currentEpoch)
             throw TeamFailure("execution_fenced", 409, "This execution is no longer current. Stop the agent and exit without checkpointing.")
-        return RunnerIdentity(teamId, sessionId, epoch, pod, identity.podUid)
+        return RunnerIdentity(teamId, sessionId, epoch, pod)
     }
 
     private suspend fun review(clusterId: String, token: String): TokenIdentity? {

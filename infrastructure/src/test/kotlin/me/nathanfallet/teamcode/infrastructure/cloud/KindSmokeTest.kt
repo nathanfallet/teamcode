@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.infrastructure.cloud
 
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -41,17 +42,20 @@ class KindSmokeTest {
                 database.migrate()
                 val cipher = CredentialCipher(ByteArray(32) { 7 })
                 val adminStore = SqlCloudAdminStore(database, cipher)
-                val port = KubernetesClusterPort({ adminStore.connection(it) },
-                    KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce").let { options -> { options } })
+                val options = KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce")
+                val port = KubernetesClusterPort({ adminStore.connection(it) }, { options })
                 val store = SqlCloudSessionStore(database)
                 val admin = CloudAdministrationService(adminStore, port)
                 val sessions = CloudSessionService(store)
                 val reconciler = ReconcileCloudSessionsUseCase(store, port, onError = { id, error -> println("reconcile $id: $error") })
                 // The second replica: its own pool, store, cluster client and reconciler over the same database.
-                val secondDatabase = Database(mysql.jdbcUrl, mysql.username, mysql.password)
-                val secondPort = KubernetesClusterPort({ SqlCloudAdminStore(secondDatabase, cipher).connection(it) },
-                    KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce").let { options -> { options } })
-                val secondReconciler = ReconcileCloudSessionsUseCase(SqlCloudSessionStore(secondDatabase), secondPort, onError = { id, error -> println("reconcile (replica 2) $id: $error") })
+                Database(mysql.jdbcUrl, mysql.username, mysql.password).use { secondDatabase ->
+                val secondAdminStore = SqlCloudAdminStore(secondDatabase, cipher)
+                val secondPort = KubernetesClusterPort({ secondAdminStore.connection(it) }, { options })
+                try {
+                val secondStore = SqlCloudSessionStore(secondDatabase)
+                val secondSessions = CloudSessionService(secondStore)
+                val secondReconciler = ReconcileCloudSessionsUseCase(secondStore, secondPort, onError = { id, error -> println("reconcile (replica 2) $id: $error") })
                 val runner = RunnerChannelUseCase(store)
                 val team = SqlTeamService(database)
                 val password = team.bootstrap()!!
@@ -69,7 +73,11 @@ class KindSmokeTest {
                     resources = CloudResources(100, 128), workspaceSizeGibibytes = 1), emptySet())
                 val created = (sessions.create(principal, null, CloudSessionDraft("Smoke", profile.id, null, null, null, mapOf("smoke" to "kind"), null), null) as CloudCreateOutcome.Created).session
                 // Both replicas reconcile at the same moment; each claims sessions through its own lease owner.
-                suspend fun both() = coroutineScope { listOf(async { reconciler() }, async { secondReconciler() }).forEach { it.await() } }
+                // A transient database error of one replica under the deliberate contention is retried at the next round.
+                suspend fun tolerant(name: String, round: suspend () -> Int) {
+                    try { round() } catch (error: CancellationException) { throw error } catch (error: Exception) { println("$name round failed: $error") }
+                }
+                suspend fun both() = coroutineScope { listOf(async { tolerant("replica 1") { reconciler() } }, async { tolerant("replica 2") { secondReconciler() } }).forEach { it.await() } }
                 suspend fun until(what: String, timeoutSeconds: Int = 180, done: suspend (CloudSession) -> Boolean): CloudSession {
                     repeat(timeoutSeconds) {
                         val s = store.find(principal.teamId, created.id)!!
@@ -110,7 +118,7 @@ class KindSmokeTest {
                 assertEquals(emptyList(), sessionPods(kubeconfig, namespace, created.id), "No pod of the session exists on the cluster while paused")
 
                 // Resume, requested twice at once (two API replicas), lands in a new pod of epoch 2.
-                coroutineScope { listOf(async { sessions.resume(principal, null, created.id) }, async { sessions.resume(principal, null, created.id) }).forEach { it.await() } }
+                coroutineScope { listOf(async { sessions.resume(principal, null, created.id) }, async { secondSessions.resume(principal, null, created.id) }).forEach { it.await() } }
                 val secondPod = CloudSessionService.podName(created.id, 2)
                 val resumed = until("the pod of epoch 2 to run") { it.currentEpoch == 2 && port.pod(cluster.id, namespace, secondPod)?.phase == PodPhase.RUNNING }
                 assertEquals(paused.workspace.claimName, resumed.workspace.claimName, "The same workspace claim")
@@ -118,23 +126,25 @@ class KindSmokeTest {
                 val newUid = kubectl(kubeconfig, "get", "pod", secondPod, "-n", namespace, "-o", "jsonpath={.metadata.uid}")
                 assertTrue(newUid.isNotEmpty() && newUid != uid, "A new pod: UID $newUid differs from $uid")
                 assertNull(port.pod(cluster.id, namespace, pod), "The first pod does not come back")
-                val secondIdentity = AuthenticateRunnerUseCase(store, port)(
-                    kubectl(kubeconfig, "create", "token", "default", "-n", namespace, "--audience", AuthenticateRunnerUseCase.AUDIENCE,
-                        "--bound-object-kind", "Pod", "--bound-object-name", secondPod, "--bound-object-uid", newUid, "--duration", "10m"),
-                    principal.teamId, created.id, 2)
+                val secondToken = kubectl(kubeconfig, "create", "token", "default", "-n", namespace, "--audience", AuthenticateRunnerUseCase.AUDIENCE,
+                    "--bound-object-kind", "Pod", "--bound-object-name", secondPod, "--bound-object-uid", newUid, "--duration", "10m")
+                // The cluster itself says which pod incarnation the token belongs to.
+                assertEquals(newUid, port.reviewToken(cluster.id, secondToken, AuthenticateRunnerUseCase.AUDIENCE)?.podUid)
+                val secondIdentity = AuthenticateRunnerUseCase(store, port)(secondToken, principal.teamId, created.id, 2)
                 assertEquals(secondPod, secondIdentity.podName)
-                assertEquals(newUid, secondIdentity.podUid)
                 runner.register(principal.teamId, created.id, 2, secondIdentity.podName)
                 runner.heartbeat(principal.teamId, created.id, 2, ready = true)
                 assertEquals(READY, store.find(principal.teamId, created.id)!!.state)
 
                 // No double launch: many more concurrent reconciliation rounds neither add a pod nor an epoch.
                 repeat(15) {
+                    runner.heartbeat(principal.teamId, created.id, 2, ready = true)
                     database.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }
                     both()
                     delay(500)
                 }
                 assertEquals(listOf(secondPod), sessionPods(kubeconfig, namespace, created.id), "Exactly one pod for the session")
+                assertEquals(newUid, kubectl(kubeconfig, "get", "pod", secondPod, "-n", namespace, "-o", "jsonpath={.metadata.uid}"), "The pod was never deleted and recreated while the replicas reconciled")
                 assertEquals(listOf(1, 2), store.executions(principal.teamId, created.id).map { it.epoch }.sorted(), "One execution per epoch, none duplicated")
                 assertEquals(2, store.find(principal.teamId, created.id)!!.currentEpoch)
 
@@ -145,8 +155,8 @@ class KindSmokeTest {
                 assertNull(port.volume(cluster.id, deleted.workspace.volumeName!!), "The PersistentVolume, and the volume behind it, is gone")
                 assertEquals(0, CollectCloudGarbageUseCase(store, port)(store.cluster(principal.teamId, cluster.id)!!).deletedPods)
                 port.close()
-                secondPort.close()
-                secondDatabase.close()
+                } finally { secondPort.close() }
+                }
             }
         }
     }
