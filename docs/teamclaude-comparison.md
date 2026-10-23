@@ -46,7 +46,7 @@ Tests use synthetic provider responses. Correcting parser fixtures does not esta
 
 The `--workload` launcher option follows the reference's `src/index.js:runCommand` delimiter rule: TeamCode flags belong before `--`, and agent arguments after it remain literal. `test/cli-env.test.js` is the reference for invocation-local proxy configuration. Workload classes are a TeamCode team-scheduling addition; they use a local inference prefix without changing the canonical upstream path, global service state or personal agent settings. The native run/service fixtures verify this adaptation.
 
-The comparison is a working acceptance ledger. Update this file when a finding is fixed and attach runtime evidence to [status](status.md); do not turn an unverified behavior into a completed checkbox.
+The comparison is a working acceptance ledger. Update this file when a finding is fixed and attach runtime evidence to its pull request; do not turn an unverified behavior into a completed checkbox.
 
 ### Active-target forecast scope
 

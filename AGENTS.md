@@ -2,7 +2,7 @@
 
 - All repository content must be English. Root package and Gradle group: `me.nathanfallet.teamcode`.
 - Squash-merge pull requests; do not create merge commits or rebase-merge PRs.
-- Remove temporary diagnostic branches and their clean, owned worktrees when the investigation is finished; preserve findings and verification evidence in `docs/status.md`.
+- Remove temporary diagnostic branches and their clean, owned worktrees when the investigation is finished; preserve findings and verification evidence in the pull request description.
 - V2 may be developed independently in separate branches/worktrees by the owner's other agent. Do not merge V2 into `main` before V1 acceptance or modify those worktrees/branches.
 - Current execution scope is V1 only. The owner will implement V2 separately; its roadmap records ideas and does not authorize V2 implementation under the active V1 goal.
 - Standalone public project. No ControlResell dependencies, registries, secrets, infrastructure or CI.
@@ -19,7 +19,7 @@
 - Never log credentials, prompts or response bodies. The only exception is the initial administrator temporary password, printed once after first-run creation commits, as explicitly requested by the project owner. Never print it again on restart. No real provider calls in normal tests or PR CI.
 - Extend providers through `ProviderTransport` and `OAuthEnrollmentProvider`; extend incoming HTTP formats through `InboundProtocol` and request/stream formats through `ProtocolAdapter`. Keep team policy and account selection shared. Document capability limits and test real protocol fixtures before claiming support.
 - Preserve coroutine cancellation. Bound request bodies, queues, retries and network waits. Never replay a stream after committed output.
-- Update `docs/status.md` with evidence when a milestone changes. Never present a planned command as implemented.
+- Put verification evidence in the pull request description, not in a shared log file. Do not add a shared status or changelog file that every PR edits: it puts all waiting PRs in conflict at each merge. Never present a planned command as implemented.
 - Never stop processes or Gradle daemons started by someone else. Never kill by process name.
 
 - Keep ordinary push/PR CI on Linux (JVM, Helm and Docker). Paid native matrices, including every macOS job, run only on version tags or explicit manual `full_validation=true`. Batch native changes before requesting that matrix; do not dispatch it per commit. Keep full native acceptance mandatory for versioned CLI releases.

@@ -1,6 +1,6 @@
 # Windows workstations
 
-Windows x64 native runtime acceptance passed in [CI run 39178163269](https://github.com/nathanfallet/teamcode/actions/runs/39178163269), including authentication, TLS, Unicode paths, agent launchers and Task Scheduler lifecycle. Additional real-workstation reboot/logon checks are owner-deferred to V2; see [implementation status](status.md). TeamCode runs directly on Windows, without WSL, Java or Gradle at runtime.
+Windows x64 native runtime acceptance passed in [CI run 39178163269](https://github.com/nathanfallet/teamcode/actions/runs/39178163269), including authentication, TLS, Unicode paths, agent launchers and Task Scheduler lifecycle. Additional real-workstation reboot/logon checks are owner-deferred to V2. TeamCode runs directly on Windows, without WSL, Java or Gradle at runtime.
 
 ## Release installer
 
