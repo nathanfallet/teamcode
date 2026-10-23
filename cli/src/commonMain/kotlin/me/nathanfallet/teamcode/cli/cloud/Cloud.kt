@@ -8,6 +8,7 @@ import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.*
+import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
@@ -18,6 +19,7 @@ import me.nathanfallet.teamcode.cli.cloud.agent.CloudCredential
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudEnvironment
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudInstallSkills
 import me.nathanfallet.teamcode.cli.loadConfig
+import me.nathanfallet.teamcode.cli.remote.REMOTE_CAPABILITY
 import me.nathanfallet.teamcode.cli.sdk
 import me.nathanfallet.teamcode.client.TeamCodeException
 
@@ -27,20 +29,33 @@ class Cloud : SuspendingNoOpCliktCommand(name = "cloud") {
     init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAnswer(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudCredential(), CloudEnvironment(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
 }
 
-private fun CloudSessionView.line() = listOf(id, state + (phase?.let { " ($it)" } ?: ""), name, "epoch $currentEpoch", "updated ${Instant.fromEpochMilliseconds(updatedAt)}").joinToString("\t")
+/** One row: id, state, name, epoch, last update, kind, and where it runs (the profile of a cloud session, the device of a remote one). */
+internal fun CloudSessionView.line() = listOf(id, state + (phase?.let { " ($it)" } ?: ""), name, "epoch $currentEpoch", "updated ${Instant.fromEpochMilliseconds(updatedAt)}",
+    kind, where()).joinToString("\t")
+private fun CloudSessionView.where() = if (kind == CloudSessionKinds.REMOTE) host.let { host ->
+    "on " + (host?.deviceName ?: "a removed device") + (host?.platform?.let { " ($it)" } ?: "") + if (host?.online == true) ", online" else ", offline"
+} else "profile ${profile.id}"
 private fun CloudSessionView.details() = buildString {
     appendLine("Session:      $id")
     appendLine("Name:         $name")
     appendLine("State:        $state" + (phase?.let { " ($it)" } ?: "") + ", desired $desiredState")
     appendLine("Owner:        $ownerId" + if (createdBy.initiatorId != ownerId) " (created by ${createdBy.initiatorId})" else "")
-    appendLine("Profile:      ${profile.id} v${profile.version}")
-    appendLine("Image:        ${image.reference}" + (image.digest?.let { " @ $it" } ?: ""))
+    if (kind == CloudSessionKinds.REMOTE) {
+        appendLine("Kind:         remote")
+        val system = listOfNotNull(host?.platform, host?.osVersion).joinToString(" ")
+        appendLine("Host:         ${host?.deviceName ?: "removed device"}" + (if (system.isEmpty()) "" else " ($system)") + if (host?.online == true) ", online" else ", offline")
+        host?.directoryName?.let { appendLine("Directory:    $it") }
+        host?.permissionMode?.let { appendLine("Permissions:  $it") }
+    } else {
+        appendLine("Profile:      ${profile.id} v${profile.version}")
+        appendLine("Image:        ${image.reference}" + (image.digest?.let { " @ $it" } ?: ""))
+    }
     appendLine("Agent:        ${agent.kind}" + listOfNotNull(agent.model, agent.effort).joinToString(" ", prefix = " ").trimEnd())
     appendLine("Epoch:        $currentEpoch")
     appendLine("Resume:       workspace ${resume.workspace}, conversation ${resume.conversation}")
     failure?.let { appendLine("Failure:      ${it.code}: ${it.message}") }
     resumeBlocked?.let { appendLine("Resume block: ${it.code}: ${it.message}") }
-    if (workspaceDeletion.state != "none") appendLine("Workspace:    deletion ${workspaceDeletion.state}" + (workspaceDeletion.problem?.let { " (${it.code})" } ?: ""))
+    if (workspaceDeletion.state != "none" && workspaceDeletion.state != "not_applicable") appendLine("Workspace:    deletion ${workspaceDeletion.state}" + (workspaceDeletion.problem?.let { " (${it.code})" } ?: ""))
     environment.repositories.forEach { appendLine("Repository:   ${it.path} <- ${it.url}" + (it.ref?.let { ref -> " @ $ref" } ?: "") + (it.branch?.let { branch -> " (branch $branch)" } ?: "")) }
     environment.workingDirectory?.let { appendLine("Working dir:  $it") }
     labels.entries.sortedBy { it.key }.forEach { (key, value) -> appendLine("Label:        $key=$value") }
@@ -155,15 +170,20 @@ private class CloudList : SuspendingCliktCommand(name = "list") {
     private val member by option("--member", help = "Another member's sessions; administrators only.")
     private val states by option("--state", help = "Repeatable: ${CloudSessionStates.all.joinToString(", ")}.").multiple()
     private val labels by option("--label", help = "key=value; repeatable.").multiple()
+    private val kinds by option("--kind", help = "cloud or remote; repeatable. Both by default where the server has remote sessions.").choice(CloudSessionKinds.CLOUD, CloudSessionKinds.REMOTE).multiple()
     private val json by option("--json").flag()
     override suspend fun run() {
         if (all && member != null) throw UsageError("Use --all or --member, not both.")
         val parsed = parseLabels(labels)
         sdk(loadConfig()).use { client ->
+            val remote = REMOTE_CAPABILITY in client.capabilities().features
+            if (CloudSessionKinds.REMOTE in kinds && !remote) throw CliktError("This server has no remote sessions (cloud.sessions.remote.v1).")
+            // An older server lists cloud sessions only and would ignore the parameter.
+            val listed = if (!remote) emptyList() else kinds.ifEmpty { listOf(CloudSessionKinds.CLOUD, CloudSessionKinds.REMOTE) }.distinct()
             var before: String? = null
             val sessions = mutableListOf<CloudSessionView>()
             do {
-                val page = client.cloudSessions(if (all) "*" else member, states, parsed, before, 50)
+                val page = client.cloudSessions(if (all) "*" else member, states, parsed, before, 50, listed)
                 sessions += page.sessions
                 before = page.nextBefore
             } while (before != null && sessions.size < MAX_LISTED)
