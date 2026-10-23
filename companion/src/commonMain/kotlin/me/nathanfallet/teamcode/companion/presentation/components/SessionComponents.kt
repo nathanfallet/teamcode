@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
@@ -24,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.Radii
@@ -34,6 +37,11 @@ import me.nathanfallet.teamcode.companion.resources.link_open_confirm
 import me.nathanfallet.teamcode.companion.resources.link_open_hint
 import me.nathanfallet.teamcode.companion.resources.link_open_refused
 import me.nathanfallet.teamcode.companion.resources.link_open_title
+import me.nathanfallet.teamcode.companion.resources.session_host_offline_chip
+import me.nathanfallet.teamcode.companion.resources.session_host_removed
+import me.nathanfallet.teamcode.companion.resources.session_host_unnamed
+import me.nathanfallet.teamcode.companion.resources.session_kind_cloud
+import me.nathanfallet.teamcode.companion.resources.session_kind_remote
 import me.nathanfallet.teamcode.companion.resources.state_active
 import me.nathanfallet.teamcode.companion.resources.state_creating
 import me.nathanfallet.teamcode.companion.resources.state_failed
@@ -73,6 +81,37 @@ fun StateChip(state: SessionState, modifier: Modifier = Modifier) {
         else -> Tone.MUTED
     }
     Chip(stringResource(state.label()), modifier, tone = tone, dot = state == SessionState.ACTIVE)
+}
+
+/** A remote session's device as the member knows it: its name, or that it was removed or never named. */
+@Composable
+fun hostName(host: SessionHost?): String = when {
+    host == null || host.removed -> stringResource(Res.string.session_host_removed)
+    else -> host.deviceName?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.session_host_unnamed)
+}
+
+/** The system a device reports, worded as its vendor does; null until the device reported it. */
+fun systemOf(host: SessionHost): String? {
+    val name = when (host.platform) {
+        null -> return null
+        "macos" -> "macOS"
+        "windows" -> "Windows"
+        "linux" -> "Linux"
+        "ios" -> "iOS"
+        "android" -> "Android"
+        else -> host.platform
+    }
+    return listOfNotNull(name, host.osVersion?.takeIf { it.isNotBlank() }).joinToString(" ")
+}
+
+/** Where the session runs: "Cloud", or "Remote · <device>"; a device that stopped answering is marked offline next to it. */
+@Composable
+fun KindChips(session: CloudSession, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        val text = if (session.remote) stringResource(Res.string.session_kind_remote, hostName(session.host)) else stringResource(Res.string.session_kind_cloud)
+        Chip(text, Modifier.testTag("where-${session.id}"), tone = Tone.MUTED)
+        if (session.hostOffline) Chip(stringResource(Res.string.session_host_offline_chip), Modifier.testTag("offline-${session.id}"), tone = Tone.WARN)
+    }
 }
 
 /**

@@ -17,7 +17,10 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionHost
+import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
@@ -70,6 +73,35 @@ class RemoteSessionRepositoryTest {
         val url = requests.single().url
         assertEquals("all", url.parameters["owner"]); assertEquals("s9", url.parameters["before"])
         assertEquals(listOf("creating", "preparing", "ready", "active", "pausing", "resuming", "transferring"), url.parameters.getAll("state"))
+    }
+
+    @Test fun aRemoteSessionCarriesItsHostAndTheListAsksForTheKindsGiven() = runTest {
+        val remote = sessionJson.replace(""""future":{"x":1}}""", """"kind":"remote","host":{"deviceId":"d1","deviceName":"Ada's MacBook","platform":"macos","osVersion":"15.1",
+            "directoryName":"app","online":false,"permissionMode":"bypass"},"failure":{"code":"host_offline","message":"Gone.","retryable":true}}""")
+        json("""{"sessions":[$remote,$sessionJson]}""")
+        val page = sessions.sessions("a1", SessionScope.MINE, SessionGroup.PAUSED, before = null, kinds = setOf(SessionKind.REMOTE, SessionKind.CLOUD))
+        val (onDevice, inPod) = page.sessions
+        assertEquals(SessionKind.REMOTE, onDevice.kind)
+        assertEquals(SessionHost("Ada's MacBook", "macos", "15.1", "app", online = false, removed = false, permissionMode = "bypass"), onDevice.host)
+        assertTrue(onDevice.hostOffline)
+        // A server without the field: a cloud session, without a host.
+        assertEquals(SessionKind.CLOUD, inPod.kind); assertNull(inPod.host); assertFalse(inPod.hostOffline)
+        assertEquals(listOf("cloud", "remote"), requests.single().url.parameters.getAll("kind"))
+    }
+
+    @Test fun withoutKindsTheListAndTheFeedAskAsBefore() = runTest {
+        json("""{"sessions":[]}""")
+        sessions.sessions("a1", SessionScope.MINE, SessionGroup.ACTIVE, before = null)
+        assertNull(requests.single().url.parameters.getAll("kind"))
+        sse(teamEvent(1, "cloud.turn", data = """{"phase":"completed","kind":"remote"}""") + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { seen += it } }
+        assertNull(requests[1].url.parameters.getAll("kind"))
+        assertEquals(SessionKind.REMOTE, seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().single().value.kind)
+        requests.clear()
+        sse("event: denied\ndata: {}\n\n")
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", setOf(SessionKind.CLOUD, SessionKind.REMOTE)).collect { } }
+        assertEquals(listOf("cloud", "remote"), requests.first().url.parameters.getAll("kind"))
     }
 
     @Test fun aMissingSessionIsNotFound() = runTest {

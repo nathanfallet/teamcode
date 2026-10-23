@@ -10,6 +10,9 @@ import me.nathanfallet.teamcode.cli.cloud.RunnerCalls
 import me.nathanfallet.teamcode.cli.cloud.RunnerInference
 import me.nathanfallet.teamcode.cli.cloud.RunnerLoop
 import me.nathanfallet.teamcode.cli.cloud.dollars
+import me.nathanfallet.teamcode.cli.cloud.printed
+import me.nathanfallet.teamcode.cli.cloud.shown
+import me.nathanfallet.teamcode.cli.cloud.tailStart
 import me.nathanfallet.teamcode.cli.cloud.render
 import me.nathanfallet.teamcode.cli.cloud.agent.*
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
@@ -309,6 +312,118 @@ class CloudAgentTest {
         assertEquals("00:00:00 #1 [result] Found a.txt", rendered(done))
     }
 
+    /**
+     * Lines shaped like Claude Code 2.1.309's `--include-partial-messages` output (captured locally, text replaced): a
+     * text block streamed by `text_delta`, its `assistant` line before its `content_block_stop`, then a tool use whose
+     * input streams as `input_json_delta`.
+     */
+    private fun stream(event: String, message: String = "msg_1", parent: String? = null) =
+        """{"type":"stream_event","event":$event,"session_id":"c1","parent_tool_use_id":${parent?.let { "\"$it\"" } ?: "null"},"uuid":"u","api_message_id":"$message"}"""
+    private fun textDelta(index: Int, text: String, message: String = "msg_1", parent: String? = null) =
+        stream("""{"type":"content_block_delta","index":$index,"delta":{"type":"text_delta","text":${JsonPrimitive(text)}}}""", message, parent)
+    private fun blockStart(index: Int, type: String, message: String = "msg_1", parent: String? = null) =
+        stream("""{"type":"content_block_start","index":$index,"content_block":{"type":"$type","text":""}}""", message, parent)
+    private fun blockStop(index: Int, message: String = "msg_1", parent: String? = null) = stream("""{"type":"content_block_stop","index":$index}""", message, parent)
+
+    @Test fun claudeStreamsAgentTextLiveInCoalescedDeltas() {
+        assertFalse("--include-partial-messages" in ClaudeStreamJsonAdapter(claude).command(null).arguments, "Only a server that takes deltas gets them")
+        var clock = 0L
+        val adapter = ClaudeStreamJsonAdapter(claude.copy(liveText = true), now = { clock })
+        assertTrue("--include-partial-messages" in adapter.command(null).arguments)
+        adapter.message("Tell me about the sea, then list files")
+        adapter.takeEvents()
+        assertTrue(adapter.parse(stream("""{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[]}}""")).events.isEmpty())
+        assertTrue(adapter.parse(blockStart(0, "text")).events.isEmpty())
+        clock = 100
+        assertTrue(adapter.parse(textDelta(0, "The sea ")).events.isEmpty(), "Held: less than 500 ms since the block started")
+        clock = 600
+        val first = adapter.parse(textDelta(0, "is wide. ")).events.single()
+        assertEquals(CloudEventTypes.AGENT_MESSAGE_DELTA, first.type)
+        assertEquals(buildJsonObject { put("messageId", "msg_1"); put("index", 0); put("text", "The sea is wide. ") }, first.data, "What was added since the last delta of this block")
+        clock = 700
+        assertTrue(adapter.parse(textDelta(0, "It is deep.")).events.isEmpty())
+        // Claude Code writes the block's `assistant` line before its `content_block_stop`: the final text replaces the deltas.
+        val final = adapter.parse("""{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"The sea is wide. It is deep."}]},"parent_tool_use_id":null,"session_id":"c1"}""").events.single()
+        assertEquals(CloudEventTypes.AGENT_MESSAGE, final.type)
+        assertEquals(buildJsonObject { put("text", "The sea is wide. It is deep."); put("messageId", "msg_1"); put("index", 0) }, final.data)
+        assertTrue(adapter.parse(blockStop(0)).events.isEmpty(), "The final message replaced what was held: no delta after it")
+
+        // A tool use's streamed input and a thinking block never become deltas.
+        assertTrue(adapter.parse(stream("""{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"Bash","input":{}}}""")).events.isEmpty())
+        clock = 5_000
+        assertTrue(adapter.parse(stream("""{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}""")).events.isEmpty())
+        assertEquals(CloudEventTypes.TOOL_CALL, adapter.parse("""{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""").events.single().type)
+        assertTrue(adapter.parse(blockStop(1)).events.isEmpty())
+        assertTrue(adapter.parse(blockStart(2, "thinking")).events.isEmpty())
+        clock = 9_000
+        assertTrue(adapter.parse(stream("""{"type":"content_block_delta","index":2,"delta":{"type":"thinking_delta","thinking":"secret"}}""")).events.isEmpty())
+        assertTrue(adapter.parse(stream("""{"type":"content_block_delta","index":2,"delta":{"type":"signature_delta","signature":"sig"}}""")).events.isEmpty())
+        assertTrue(adapter.parse(blockStop(2)).events.isEmpty())
+        assertTrue(adapter.parse(stream("""{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""")).events.isEmpty())
+        assertTrue(adapter.parse(stream("""{"type":"message_stop"}""")).events.isEmpty())
+
+        // About 2,000 characters go at once; what remains at the block's end goes with its stop when no final came first.
+        adapter.parse(blockStart(0, "text", message = "msg_2", parent = "a1"))
+        val long = adapter.parse(textDelta(0, "x".repeat(2_000), message = "msg_2", parent = "a1")).events.single()
+        assertEquals(2_000, long.data.getValue("text").jsonPrimitive.content.length)
+        assertEquals("a1", long.data.str("parentToolUseId"), "A subagent's deltas keep their parent tool call")
+        assertTrue(adapter.parse(textDelta(0, "tail", message = "msg_2", parent = "a1")).events.isEmpty())
+        val tail = adapter.parse(blockStop(0, message = "msg_2", parent = "a1")).events.single()
+        assertEquals("tail", tail.data.str("text")); assertEquals("msg_2", tail.data.str("messageId"))
+
+        // An interrupted turn: what was held is dropped with the turn, never sent after its end.
+        adapter.parse(blockStart(0, "text", message = "msg_3"))
+        adapter.parse(textDelta(0, "Half a", message = "msg_3"))
+        assertEquals(listOf(CloudEventTypes.TURN), adapter.parse("""{"type":"result","subtype":"error_during_execution","is_error":true}""").events.map { it.type })
+        assertTrue(adapter.parse(blockStop(0, message = "msg_3")).events.isEmpty())
+        assertTrue(adapter.parse("""{"type":"stream_event","event":"not an object"}""").events.isEmpty(), "A malformed line is ignored")
+    }
+
+    @Test fun claudeFinalMessagesCarryTheirMessageIdWithoutLiveText() {
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        adapter.message("Hi")
+        // Without partial messages nothing streams, and the index of a block is unknown: the final replaces all of its message.
+        assertTrue(adapter.parse(blockStart(0, "text")).events.isEmpty())
+        assertTrue(adapter.parse(textDelta(0, "Hel")).events.isEmpty(), "Deltas only with liveText")
+        val events = adapter.parse("""{"type":"assistant","message":{"id":"msg_9","content":[{"type":"text","text":"One"},{"type":"text","text":"Two"}]}}""").events
+        assertEquals(listOf("msg_9", "msg_9"), events.map { it.data.str("messageId") })
+        assertTrue(events.none { "index" in it.data }, "Two text blocks in one line: no index")
+        assertEquals(buildJsonObject { put("text", "Done") }, adapter.parse("""{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}""").events.single().data, "No id, no messageId")
+    }
+
+    @Test fun liveTextNamesTheMessageFromItsStartWhenLinesDoNot() {
+        var clock = 0L
+        val adapter = ClaudeStreamJsonAdapter(claude.copy(liveText = true), now = { clock })
+        fun bare(event: String) = """{"type":"stream_event","event":$event,"session_id":"c1","parent_tool_use_id":null,"uuid":"u"}"""
+        adapter.parse(bare("""{"type":"message_start","message":{"id":"msg_9","type":"message","role":"assistant","content":[]}}"""))
+        adapter.parse(bare("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"""))
+        clock = 600
+        val delta = adapter.parse(bare("""{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}""")).events.single()
+        assertEquals(buildJsonObject { put("messageId", "msg_9"); put("index", 0); put("text", "Hi") }, delta.data)
+    }
+
+    @Test fun tailCountsOnlyTheEventsShown() = runTest {
+        // 1..30: every third event is a final message, the others live text deltas.
+        val all = (1L..30L).map { CloudEventView(it, if (it % 3 == 0L) CloudEventTypes.AGENT_MESSAGE else CloudEventTypes.AGENT_MESSAGE_DELTA, 0, 1, buildJsonObject { put("text", "t") }) }
+        val asked = mutableListOf<Long>()
+        val page: suspend (Long) -> CloudEventPageView = { before ->
+            asked += before
+            val rows = all.filter { it.seq < before }.takeLast(4)
+            CloudEventPageView(rows, 1, 30, null, rows.firstOrNull()?.seq?.takeIf { it > 1 })
+        }
+        assertEquals(23, tailStart(3, 30, { it.shown() }, page), "Three final messages: 24, 27 and 30")
+        assertEquals(listOf(31L, 27L), asked, "Walked back page by page")
+        assertEquals(27, tailStart(3, 30, { true }, page), "--json counts every event")
+        assertEquals(0, tailStart(50, 30, { it.shown() }, page), "Fewer shown events than asked: from the start")
+        assertEquals(30, tailStart(0, 30, { it.shown() }, page))
+    }
+
+    @Test fun cloudLogsSkipLiveDeltas() {
+        val delta = CloudEventView(3, CloudEventTypes.AGENT_MESSAGE_DELTA, 0, 1, buildJsonObject { put("messageId", "msg_1"); put("index", 0); put("text", "Half") })
+        assertNull(delta.printed(), "logs and attach print the final message only")
+        assertEquals("00:00:00 #4 Done", CloudEventView(4, CloudEventTypes.AGENT_MESSAGE, 0, 1, buildJsonObject { put("text", "Done"); put("messageId", "msg_1") }).printed())
+    }
+
     @Test fun codexAppServerHoldsSteersRetriesAndFallsBack() {
         val adapter = CodexAppServerAdapter(codex, "1.0")
         val startup = adapter.startup("th-old", "/workspace").map(::obj)
@@ -372,7 +487,8 @@ class CloudAgentTest {
         var attempts = 0
         var relay = false
         var deadline = 0
-        override suspend fun agent() = RunnerAgentView("claude", "2.1", "opus", null, "none", permissionRelay = relay, permissionDeadlineMinutes = deadline)
+        var live = false
+        override suspend fun agent() = RunnerAgentView("claude", "2.1", "opus", null, "none", permissionRelay = relay, permissionDeadlineMinutes = deadline, liveText = live)
         override suspend fun events(events: List<RunnerEventView>): RunnerEventsAckView {
             // An Error, not an Exception: the host cannot swallow it, so a retry loop without pause fails the test.
             if (++attempts > 10_000) throw AssertionError("The host retries the upload without pause")
@@ -397,6 +513,23 @@ class CloudAgentTest {
     }, state, "/workspace", "1.0", now = { testScheduler.currentTime })
 
     private suspend fun TestScope.until(condition: () -> Boolean) { repeat(1_000) { if (condition()) return; delay(100) }; fail("Condition not reached") }
+
+    @Test fun hostStreamsLiveTextWhenTheServerTakesIt() = runTest {
+        val channel = FakeChannel().apply { live = true }
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val job = launch { host(channel, MemoryState(), started).run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Hi", 1)))
+        until { started.isNotEmpty() }
+        val (command, process) = started.single()
+        assertTrue("--include-partial-messages" in command.arguments)
+        process.output.send(blockStart(0, "text"))
+        process.output.send(textDelta(0, "Hel"))
+        delay(600) // The host's clock: the next delta goes out, with what was held.
+        process.output.send(textDelta(0, "lo"))
+        until { channel.uploaded.any { it.type == CloudEventTypes.AGENT_MESSAGE_DELTA } }
+        assertEquals("Hello", channel.uploaded.single { it.type == CloudEventTypes.AGENT_MESSAGE_DELTA }.data.str("text"))
+        job.cancel()
+    }
 
     @Test fun hostStartsLazilyAcknowledgesUploadsAndResumes() = runTest {
         val channel = FakeChannel()

@@ -34,14 +34,27 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         val now = nowMillis()
         // Turns, permission requests and their expiries, in transcript order, so a request and what closes it reach the feed in that order.
         val feed = mutableListOf<Triple<Long, CloudEventType, String>>()
+        val waited = readHumanWait(session)
+        var wait = waited
+        // A request raised while the session takes no answer (a pause asked: the runner denies it) never shows as waiting.
+        val answerable = DesiredState.parse(session[CloudSessions.desiredState]) == DesiredState.RUNNING &&
+            CloudSessionState.parse(session[CloudSessions.state]).let { it == CloudSessionState.READY || it == CloudSessionState.ACTIVE }
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
             if (event.sequence != through + 1) break // A gap: the runner resends from acceptedThrough + 1.
             insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data)
             if (event.type in FEED_TYPES) feed += Triple(last, event.type, event.data)
+            // The wait follows the transcript event by event, so it is exact whatever the batch holds.
+            wait = when {
+                event.type == CloudEventType.PERMISSION_REQUEST -> (if (answerable) humanWait(jsonObject(event.data), now, last, epoch) else null) ?: wait
+                event.turn == TurnMarker.ENDED -> null // Every request of the turn ended with it.
+                event.type == CloudEventType.PERMISSION_EXPIRED -> closeWait(sessionId, wait, jsonObject(event.data).str("requestId"))
+                else -> wait
+            }
             through = event.sequence
         }
         if (last != start) saveCursor(sessionId, cursor != null, last, epoch, through)
+        if (wait != waited) saveHumanWait(sessionId, wait)
         // Last, so the team's cursor lock is taken after every other write of this transaction.
         val owner = session[CloudSessions.ownerId]
         // One batch, however many turns and requests the upload carried.
@@ -95,6 +108,11 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         val asked = CloudSessionEvents.select(CloudSessionEvents.data, CloudSessionEvents.epoch)
             .where { (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.seq eq anchor) }.single()
         val data = jsonObject(asked[CloudSessionEvents.data]) ?: return null
+        return permissionRequestRecord(requestId, data, requestState(sessionId, anchor, requestId)).copy(epoch = asked[CloudSessionEvents.epoch])
+    }
+
+    /** Whether the request [requestId] stored at [anchor] is still open: the first closing event after it, through the index (session, type, seq). */
+    private fun requestState(sessionId: String, anchor: Long, requestId: String): PermissionRequestState {
         fun closing(type: CloudEventType, scanned: Int, closes: (JsonObject) -> Boolean): Long? =
             CloudSessionEvents.select(CloudSessionEvents.seq, CloudSessionEvents.data).where {
                 (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.type eq type.wire) and (CloudSessionEvents.seq greater anchor)
@@ -105,9 +123,58 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         val ended = closing(CloudEventType.TURN, MAX_CLOSING_SCANNED) { it.str("phase") in CloudConversationRules.TURN_END_PHASES }
         val answered = closing(CloudEventType.INPUT, MAX_CLOSING_SCANNED) { it.str("requestId") == requestId && it.str("status") == CloudInputStatus.CONSUMED.wire }
         val expired = closing(CloudEventType.PERMISSION_EXPIRED, MAX_CLOSING_SCANNED) { it.str("requestId") == requestId }
-        val state = listOfNotNull(ended?.let { it to PermissionRequestState.ENDED }, answered?.let { it to PermissionRequestState.ANSWERED }, expired?.let { it to PermissionRequestState.EXPIRED })
+        return listOfNotNull(ended?.let { it to PermissionRequestState.ENDED }, answered?.let { it to PermissionRequestState.ANSWERED }, expired?.let { it to PermissionRequestState.EXPIRED })
             .minByOrNull { it.first }?.second ?: PermissionRequestState.OPEN
-        return permissionRequestRecord(requestId, data, state).copy(epoch = asked[CloudSessionEvents.epoch])
+    }
+
+    /**
+     * The wait a stored `permission.request` sets: why, which request, since when. None for an id no member could
+     * answer with: the runner denies such a request at once, so nobody is waited for.
+     */
+    private fun humanWait(request: JsonObject?, now: Long, seq: Long, epoch: Int): CloudHumanWait? {
+        val requestId = request.str("requestId")?.takeIf(CloudConversationRules::isPermissionRequestId) ?: return null
+        return CloudHumanWait(if (request.str("question") == "true") CloudHumanWait.Reason.QUESTION else CloudHumanWait.Reason.PERMISSION, requestId, now, seq, epoch)
+    }
+
+    /**
+     * The wait once the request [requestId] was answered or expired: unchanged unless it is the one shown, else the
+     * newest earlier request of the same execution still open, or none. Requests are read newest first through the
+     * index (session, type, seq), at most [MAX_OPEN_SCANNED], from their head only (never another request's input);
+     * the first one whose turn ended stops the search, since every earlier one ended with that turn or before.
+     * Called under the session row lock, after the closing event was written.
+     */
+    private fun closeWait(sessionId: String, wait: CloudHumanWait?, requestId: String?): CloudHumanWait? {
+        if (wait == null || requestId == null || wait.requestId != requestId) return wait
+        val head = CloudSessionEvents.data.substring(1, REQUEST_HEAD_CHARS)
+        val earlier = CloudSessionEvents.select(CloudSessionEvents.seq, CloudSessionEvents.epoch, head).where {
+            (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.type eq CloudEventType.PERMISSION_REQUEST.wire) and (CloudSessionEvents.seq less wait.eventSeq)
+        }.orderBy(CloudSessionEvents.seq to SortOrder.DESC).limit(MAX_OPEN_SCANNED).toList()
+        for (row in earlier) {
+            if (row[CloudSessionEvents.epoch] != wait.epoch) return null // Another execution's requests ended with it.
+            val seq = row[CloudSessionEvents.seq]
+            fun asked() = CloudSessionEvents.select(CloudSessionEvents.data, CloudSessionEvents.at)
+                .where { (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.seq eq seq) }.single()
+            // The runner writes `requestId` first; a head without it is read whole (by primary key) rather than guessed.
+            val id = requestHeadId(row[head]) ?: asked().let { jsonObject(it[CloudSessionEvents.data]).str("requestId")?.takeIf(CloudConversationRules::isPermissionRequestId) }
+                // An id no member could answer with: the runner denied that request at once, it never waited.
+                ?: continue
+            when (requestState(sessionId, seq, id)) {
+                PermissionRequestState.OPEN -> {
+                    val open = asked()
+                    return humanWait(jsonObject(open[CloudSessionEvents.data]), open[CloudSessionEvents.at], seq, wait.epoch)
+                }
+                PermissionRequestState.ENDED -> return null
+                PermissionRequestState.ANSWERED, PermissionRequestState.EXPIRED -> continue
+            }
+        }
+        return null
+    }
+
+    private fun saveHumanWait(sessionId: String, wait: CloudHumanWait?) {
+        CloudSessions.update({ CloudSessions.id eq sessionId }) {
+            it[awaitingReason] = wait?.reason?.wire; it[awaitingRequestId] = wait?.requestId; it[awaitingSince] = wait?.since
+            it[awaitingEventSeq] = wait?.eventSeq; it[awaitingEpoch] = wait?.epoch
+        }
     }
 
     override suspend fun insertInput(new: NewInput, pendingLimit: Int): InputOutcome = database.query {
@@ -238,9 +305,13 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             if (ack.consumed) finish(teamId, input, CloudInputStatus.CONSUMED, null, now)
             else finish(teamId, input, CloudInputStatus.REJECTED, ack.reason ?: "rejected", now)
         }.also { finished ->
+            val answers = finished.filter { it.kind == CloudInputKind.PERMISSION && it.status == CloudInputStatus.CONSUMED }
+            // A consumed answer closes its request: the wait moves to the next request still open, if it was this one.
+            val waited = readHumanWait(session)
+            val wait = answers.fold(waited) { current, answer -> closeWait(sessionId, current, jsonObject(answer.text).str("requestId")) }
+            if (wait != waited) saveHumanWait(sessionId, wait)
             // Last, so the team's cursor lock is taken after every other write of this transaction.
-            publishTeamEvents(teamId, finished.filter { it.kind == CloudInputKind.PERMISSION && it.status == CloudInputStatus.CONSUMED }
-                .map { answeredEvent(sessionId, session[CloudSessions.ownerId], it, now).ofKind(session) })
+            publishTeamEvents(teamId, answers.map { answeredEvent(sessionId, session[CloudSessions.ownerId], it, now).ofKind(session) })
         }
     }
 
@@ -450,7 +521,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     }
 
     private fun lockSession(sessionId: String): ResultRow =
-        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode, CloudSessions.currentEpoch, CloudSessions.kind)
+        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode, CloudSessions.currentEpoch, CloudSessions.kind,
+            CloudSessions.awaitingReason, CloudSessions.awaitingRequestId, CloudSessions.awaitingSince, CloudSessions.awaitingEventSeq, CloudSessions.awaitingEpoch)
             .where { CloudSessions.id eq sessionId }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Cloud session not found.")
 
     private fun ownerChanged() = TeamFailure("session_busy", 409, "The cloud session changed owner. Retry the request.")
@@ -488,6 +560,13 @@ private const val MAX_PENDING_ALL = CloudConversationRules.MAX_PENDING_INPUTS + 
 private const val MAX_CLOSING_SCANNED = 200
 /** Enough of a stored `permission.request` for its leading `requestId` (at most 128 characters, escaped). */
 private const val REQUEST_HEAD_CHARS = 300
+/** Earlier requests read when the shown one closes: more than a turn holds open at once in practice (parallel tool uses). */
+private const val MAX_OPEN_SCANNED = 16
+private val REQUEST_HEAD_ID = Regex("""^\{"requestId":("(?:[^"\\]|\\.)*")""")
+/** The `requestId` a stored request starts with (the runner writes it first), or null. */
+private fun requestHeadId(head: String): String? = REQUEST_HEAD_ID.find(head)?.groupValues?.get(1)?.let {
+    try { (Json.parseToJsonElement(it) as? JsonPrimitive)?.contentOrNull } catch (_: IllegalArgumentException) { null }
+}?.takeIf(CloudConversationRules::isPermissionRequestId)
 
 /** Stored JSON text (an event's data, a permission answer) as an object; null when absent or not an object. */
 private fun jsonObject(text: String?): JsonObject? = text?.let { try { Json.parseToJsonElement(it) as? JsonObject } catch (_: IllegalArgumentException) { null } }

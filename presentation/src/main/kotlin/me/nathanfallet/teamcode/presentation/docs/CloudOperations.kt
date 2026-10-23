@@ -238,7 +238,8 @@ private fun ApiCatalog.cloudSessions() {
         operationId = "getCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "One cloud session"
         description = "Its state and phase, profile, image, agent, activity and idle timeout, failure, workspace " +
-            "deletion proof and environment."
+            "deletion proof and environment, and `waiting` while its agent waits for a person (the open permission " +
+            "request's `reason`, `requestId`, `since` and `eventSeq`)."
         parameters { sessionId() }
         responses {
             ok<CloudSessionView>("The session.")
@@ -305,8 +306,10 @@ private fun ApiCatalog.cloudConversation() {
         operationId = "listCloudEvents"; tag(ApiTags.CLOUD_CONVERSATION)
         summary = "Read a session's transcript"
         description = "Events in ascending `seq` order: user and agent messages, tool calls and results, turns, " +
-            "statuses, errors and input changes. Continue with `after` = `nextAfter`, or go back with `before` = " +
-            "`nextBefore`. Clients must tolerate unknown event types. Requires the `transcript` permission."
+            "statuses, errors and input changes, and `message.agent.delta` (live text, replaced by the `message.agent` " +
+            "with the same `messageId` and `index`; ignore it to show final messages only). An event above 60,000 bytes " +
+            "is replaced by `{truncated, originalBytes}` with its identity fields. Continue with `after` = `nextAfter`, " +
+            "or go back with `before` = `nextBefore`. Clients must tolerate unknown event types. Requires the `transcript` permission."
         parameters {
             sessionId()
             queryNumber("after", "Events after this sequence number.")

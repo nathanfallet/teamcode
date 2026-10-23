@@ -1,0 +1,73 @@
+package me.nathanfallet.teamcode.companion
+
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.runComposeUiTest
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.SessionState
+import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
+import me.nathanfallet.teamcode.companion.domain.models.TranscriptPage
+import me.nathanfallet.teamcode.companion.domain.repositories.TranscriptRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.transcript.FollowTranscriptUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
+import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
+import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
+import me.nathanfallet.teamcode.companion.presentation.theme.TeamCodeTheme
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
+import kotlin.test.*
+
+/** A session's header on the desktop target: where it runs, an offline device worded plainly, no resume from here. */
+@OptIn(ExperimentalTestApi::class)
+class SessionScreenTest {
+    private val transcripts = object : TranscriptRepository {
+        override suspend fun page(accountId: String, sessionId: String, before: Long?) = TranscriptPage(emptyList(), nextBefore = null, lastSeq = 0)
+        override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = emptyFlow()
+    }
+
+    private fun viewModel(sessions: FakeSessionRepository): SessionViewModel {
+        val features = FakeFeatures()
+        val accounts = InMemoryAccountRepository(listOf(account("a1")))
+        val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
+        return SessionViewModel(
+            SessionRoute("a1", "s1"), GetSessionUseCase(sessions, guard), LoadTranscriptUseCase(transcripts, features, guard), FollowTranscriptUseCase(transcripts, guard),
+            SendMessageUseCase(sessions, features, guard, SequenceIds()), ControlSessionUseCase(sessions, guard, SequenceIds()), accounts,
+        )
+    }
+
+    @Test fun aRemoteSessionWhoseDeviceWentQuietSaysSoAndOffersNoResume() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED, host = laptop(online = false), problemCode = "host_offline") }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("host-offline").assertExists()
+        onNodeWithTag("problem").assertDoesNotExist()
+        onNodeWithText("Remote · Ada's MacBook").assertExists()
+        onNodeWithText("Paused on Ada's MacBook. A message asks it to resume.").assertExists()
+        onNodeWithTag("dock-resume").assertDoesNotExist()
+        onNodeWithTag("summary").performClick()
+        onNodeWithText("macOS 15.1").assertExists()
+        onNodeWithText("Asks before acting").assertExists()
+        onNodeWithTag("session-menu").performClick()
+        onNodeWithTag("resume").assertDoesNotExist()
+    }
+
+    @Test fun aPausedCloudSessionStillResumesFromHere() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("dock-resume").assertExists()
+        onNodeWithTag("host-offline").assertDoesNotExist()
+        onNodeWithTag("summary").performClick()
+        onNodeWithText("Cloud").assertExists()
+    }
+}

@@ -6,11 +6,27 @@ The [companion app](companion.md#app) adds a subscription account as `teamcode a
 
 Evidence: `OAuthSignInTest` (client, RFC 7636 challenge), `RemoteSubscriptionAccountRepositoryTest` and `SubscriptionAccountsViewModelTest` (companion), the CLI's `AccountTypeTest` and `AccountEnrollmentMessageTest` unchanged; `:client:jvmTest`, `:cli:jvmTest`, `:companion:jvmTest`, `:companion:testAndroidHostTest`, `:companion-android:assembleDebug`, and `:companion:compileKotlinIosSimulatorArm64` and `:cli:compileKotlinMacosArm64` locally.
 
+## Remote sessions in the companion app (2026-10-23)
+
+Third step of remote sessions, with Nathan's approval beyond the V1 scope (23/10, in #105): the companion app tells remote sessions from cloud ones. From a server that announces `cloud.sessions.remote.v1` it asks the list and the feed for both kinds and offers a cloud / remote / all filter; cards and the session header say "Cloud" or "Remote · <device>", a device that went quiet (`host_offline`) is shown as offline in plain words, and a remote session offers no Resume (only its device resumes it; a message asks it to) and never a transfer. An older server is asked exactly as before. Details in [companion.md](companion.md#app).
+
+Evidence: `RemoteSessionRepositoryTest`, `SessionUseCasesTest`, `SessionsViewModelTest`, `SessionsScreenTest` and `SessionScreenTest` (desktop target); `:companion:jvmTest`, `:companion:testAndroidHostTest`, `:companion:compileKotlinIosSimulatorArm64` and `:companion-android:assembleDebug` pass locally.
+
 ## Companion app session transfers (2026-10-23)
 
 The [companion app](companion.md#app) transfers cloud sessions (`cloud.transfer.v1`), as `teamcode cloud transfer` and `cloud transfers` do: "Transfer…" in a cloud session's menu for its owner and administrators, never on a remote session or one being prepared, ended or already changing owner; an administrator searches a member and transfers at once, optionally resuming it for them and pausing without waiting for the running turn; a member names the recipient by ID and sends an offer (the server lists members to administrators only). A Transfers screen, from the Sessions tab, lists transfers to and from the member, with accept, decline and withdraw (and cancel for administrators), and every refusal in plain words, including each failed check of an ineligible recipient: the typed client now keeps the problem codes of `422 recipient_ineligible` (`TeamCodeException.problems`, validated codes only, never the rest of the message). No server change.
 
 Evidence: the transfer tests listed in [companion.md](companion.md#evidence); `:companion:jvmTest`, `:companion:testAndroidHostTest`, `:client:jvmTest` (`TeamCodeFailureTest`), and `:companion:compileKotlinIosSimulatorArm64` / `compileKotlinIosArm64` locally.
+
+## Live agent text, sessions waiting for a person, cut events keeping their identity (2026-10-23)
+
+Three additions to the cloud session API for clients that show a session as it runs ([contract](cloud-conversations.md)):
+
+- **Live text** (`cloud.transcript.live.v1`). With `liveText` from `POST /cloud/runner/agent`, the runner starts Claude Code with `--include-partial-messages` and turns its `text_delta` lines into `message.agent.delta` events `{messageId, index, text, parentToolUseId?}`, coalesced per block (500 ms, about 2,000 characters, or the block's end). `message.agent` now carries `messageId` and, for a streamed block, `index`: it replaces that block's deltas, and no delta of the block follows it. Thinking and tool input are never streamed; an interrupted turn's held text is dropped. `logs` and `attach` print final messages only; the companion app ignores the type. Codex is unchanged. Behavior checked locally against Claude Code 2.1.309 (the image pins 2.1.306): one `assistant` line per content block, carrying the API message id, written before that block's `content_block_stop`; `stream_event` lines carry `api_message_id` and `parent_tool_use_id`.
+- **`waiting` on the session view** (`cloud.sessions.waiting.v1`): `{reason, requestId?, since, eventSeq}` while a permission request is open, the newest when several are, the next one still open when it closes. Stored on `cloud_sessions` (migration `V20261023230000.2`, five nullable columns) in the transaction of the transcript event or the answer's acknowledgement that changes it, under the session row lock already held; the session store clears it when the session stops taking answers. Read with the session row: no extra query per session in a list.
+- **Cut events keep their identity**: the `{truncated, originalBytes}` marker of an event above 60,000 bytes keeps `id`, `parentToolUseId`, `toolUseId`, `requestId`, `messageId`, `inputId` (strings of at most 128 characters), `name` (200), `isError` and `index`.
+
+Evidence: `CloudAgentTest` (live text, the host's clock, logs skipping deltas), `CloudTranscriptSanitizerTest`, `CloudHumanWaitTest`, `CloudConversationRoutesTest` (capabilities, `liveText`, `waiting` in a read and a list), `CloudConversationPersistenceTest` (MySQL 8.4: migration drift, `waiting` across answers, expiries, turn ends, a pause and session writes, deltas stored).
 
 ## Shared local configuration module (2026-10-23)
 

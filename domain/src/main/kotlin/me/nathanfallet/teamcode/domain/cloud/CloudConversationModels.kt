@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode.domain.cloud
 /** Normalized transcript event types; nothing else is stored. Thinking blocks have no type and never reach the server. */
 enum class CloudEventType(val wire: String) {
     USER_MESSAGE("message.user"), AGENT_MESSAGE("message.agent"), TOOL_CALL("tool.call"), TOOL_RESULT("tool.result"),
+    /** Live text of an agent message while it is written, replaced by its `message.agent`: `{messageId, index, text, parentToolUseId?}`. */
+    AGENT_MESSAGE_DELTA("message.agent.delta"),
     TURN("turn"), STATUS("status"), ERROR("error"),
     /** The agent waits for a person before using a tool; answered by a [CloudInputKind.PERMISSION] input. */
     PERMISSION_REQUEST("permission.request"),
