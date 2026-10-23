@@ -20,10 +20,30 @@ sealed interface TranscriptEvent {
     data class Turn(override val seq: Long, override val at: Long, val phase: TurnPhase, val durationMs: Long?, val steps: Int?) : TranscriptEvent
     data class Status(override val seq: Long, override val at: Long, val agent: String?, val model: String?, val exitCode: Int?) : TranscriptEvent
     data class Error(override val seq: Long, override val at: Long, val code: String?, val message: String?) : TranscriptEvent
-    /** An input that changed status: rejected or cancelled (with [reason]), or a consumed permission answer. */
-    data class InputChanged(override val seq: Long, override val at: Long, val inputId: String?, val status: String?, val reason: String?) : TranscriptEvent
-    /** The agent waits for a person: a tool use to allow, or a question. Answering it comes later; this only shows it. */
-    data class PermissionRequest(override val seq: Long, override val at: Long, val requestId: String?, val toolName: String?, val question: Boolean) : TranscriptEvent
+    /**
+     * An input that changed status: rejected or cancelled (with [reason]), or a consumed permission answer. A permission
+     * answer's event also names the request it answered ([requestId]).
+     */
+    data class InputChanged(
+        override val seq: Long, override val at: Long, val inputId: String?, val status: String?, val reason: String?, val requestId: String? = null,
+    ) : TranscriptEvent
+    /**
+     * The agent waits for a person: a tool use to allow, or a question ([question], `AskUserQuestion`, with [questions]).
+     * [input] is the tool input as indented JSON; a request whose input was too large for the event has [inputLeftOut]
+     * and only its first characters in [inputPreview], and can only be denied.
+     */
+    data class PermissionRequest(
+        override val seq: Long,
+        override val at: Long,
+        val requestId: String?,
+        val toolName: String?,
+        val question: Boolean,
+        val questions: List<AgentQuestion> = emptyList(),
+        val input: String? = null,
+        val inputLeftOut: Boolean = false,
+        val inputPreview: String? = null,
+        val description: String? = null,
+    ) : TranscriptEvent
     data class PermissionExpired(override val seq: Long, override val at: Long, val requestId: String?) : TranscriptEvent
     data class Transferred(override val seq: Long, override val at: Long, val fromMemberId: String?, val toMemberId: String?) : TranscriptEvent
     /** An event of more than 60 000 bytes, replaced by the server. */

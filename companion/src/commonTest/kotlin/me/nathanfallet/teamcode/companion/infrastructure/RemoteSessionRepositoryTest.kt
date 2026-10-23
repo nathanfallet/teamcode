@@ -159,7 +159,8 @@ class RemoteSessionRepositoryTest {
         assertEquals("Bash", call.name); assertEquals("ls -la…", call.summary); assertTrue("\"command\"" in call.input)
         assertEquals(TranscriptEvent.ToolResult(3, 3, "t1", "a b", true, 2, null), events[2])
         assertEquals(TranscriptEvent.Turn(4, 4, TurnPhase.COMPLETED, 1500, 3), events[3])
-        assertEquals(TranscriptEvent.PermissionRequest(5, 5, "r1", "AskUserQuestion", true), events[4])
+        // Without an input the request can only be declined, as the server reads it.
+        assertEquals(TranscriptEvent.PermissionRequest(5, 5, "r1", "AskUserQuestion", true, inputLeftOut = true), events[4])
         assertEquals(TranscriptEvent.Truncated(6, 6, "message.agent", 70_000), events[5])
         assertEquals(TranscriptEvent.Unknown(7, 7, "something.new"), events[6])
         // A field of an unexpected type reads as missing.
@@ -208,5 +209,56 @@ class RemoteSessionRepositoryTest {
         val error = assertFailsWith<CompanionException.Server> { sessions.interrupt("a1", "s1", "k1") }
         assertEquals("nothing_to_interrupt", error.code)
         assertEquals("k1", requests.last().headers["Idempotency-Key"])
+    }
+
+    @Test fun anAnswerPostsTheIndexesOrTextsWithItsIdempotencyKey() = runTest {
+        json(inputJson.replace("\"kind\":\"message\"", "\"kind\":\"permission\""))
+        json(inputJson)
+        val answer = me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer(
+            "r1", allow = true,
+            answers = listOf(me.nathanfallet.teamcode.companion.domain.models.QuestionAnswer(0, listOf(1)), me.nathanfallet.teamcode.companion.domain.models.QuestionAnswer(1, text = "S, XL")),
+        )
+        val receipt = sessions.answer("a1", "s1", answer, "00000000-0000-4000-8000-000000000007")
+        assertEquals("in1", receipt.inputId)
+        val request = requests.first()
+        assertEquals("/api/v1/cloud/sessions/s1/permissions", request.url.encodedPath)
+        assertEquals("POST", request.method.value)
+        assertEquals("00000000-0000-4000-8000-000000000007", request.headers["Idempotency-Key"])
+        val body = kotlinx.serialization.json.Json.parseToJsonElement((request.body as io.ktor.http.content.TextContent).text) as kotlinx.serialization.json.JsonObject
+        assertEquals(kotlinx.serialization.json.Json.parseToJsonElement("""{"requestId":"r1","behavior":"allow","answers":[{"question":0,"options":[1]},{"question":1,"text":"S, XL"}]}"""),
+            kotlinx.serialization.json.JsonObject(body.filterValues { it != kotlinx.serialization.json.JsonNull }.mapValues { (key, value) ->
+                if (key != "answers") value else kotlinx.serialization.json.JsonArray((value as kotlinx.serialization.json.JsonArray).map { item ->
+                    // Defaults left out or sent empty mean the same to the server.
+                    kotlinx.serialization.json.JsonObject((item as kotlinx.serialization.json.JsonObject).filterValues { it != kotlinx.serialization.json.JsonNull && it != kotlinx.serialization.json.JsonArray(emptyList()) })
+                })
+            }))
+        // A denial sends no answers.
+        sessions.answer("a1", "s1", me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer("r2", allow = false), "k2")
+        val denial = (requests.last().body as io.ktor.http.content.TextContent).text
+        assertTrue("\"behavior\":\"deny\"" in denial && "\"requestId\":\"r2\"" in denial, denial)
+        assertFalse("\"question\"" in denial, denial)
+    }
+
+    @Test fun aPermissionRequestCarriesItsQuestionsAndWhetherItsInputWasLeftOut() = runTest {
+        val question = """{"requestId":"r1","toolName":"AskUserQuestion","question":true,"input":{"questions":[
+            {"question":"Red or blue?","header":"Colour","options":[{"label":"Red","description":"Warm"},{"label":"Blue"}]},
+            {"question":"Which sizes?","multiSelect":true,"options":[{"label":"S"},{"label":"M"}]},
+            {"question":"Red or blue?","options":[{"label":"Red"}]}]}}"""
+        json("""{"events":[
+            ${cloudEvent(1, "permission.request", question).substringAfter("data: ").trim()},
+            ${cloudEvent(2, "permission.request", """{"requestId":"t1","toolName":"Bash","inputTruncated":true,"inputPreview":"{\"command\":","question":false}""").substringAfter("data: ").trim()},
+            ${cloudEvent(3, "input", """{"inputId":"i1","kind":"permission","status":"consumed","requestId":"r1","behavior":"allow"}""").substringAfter("data: ").trim()}
+        ],"firstSeq":1,"lastSeq":3,"nextBefore":null}""")
+        val events = transcripts.page("a1", "s1", before = null).events
+        val asked = assertIs<TranscriptEvent.PermissionRequest>(events[0])
+        assertTrue(asked.question); assertFalse(asked.inputLeftOut)
+        // The repeated question text is kept once: Claude Code keys answers by text.
+        assertEquals(listOf(0, 1), asked.questions.map { it.index })
+        assertEquals("Colour", asked.questions[0].header)
+        assertEquals(listOf("Warm", null), asked.questions[0].options.map { it.description })
+        assertTrue(asked.questions[1].multiSelect)
+        val tool = assertIs<TranscriptEvent.PermissionRequest>(events[1])
+        assertTrue(tool.inputLeftOut); assertNull(tool.input); assertEquals("{\"command\":", tool.inputPreview)
+        assertEquals(TranscriptEvent.InputChanged(3, 3, "i1", "consumed", null, requestId = "r1"), events[2])
     }
 }

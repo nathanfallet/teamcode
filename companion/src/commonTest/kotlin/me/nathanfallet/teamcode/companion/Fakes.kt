@@ -110,7 +110,7 @@ fun cloudSession(
     profileId = "p1", repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = null,
 )
 
-class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1")) :
+class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1")) :
     me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
     val refreshes = mutableListOf<Boolean>()
     override suspend fun features(accountId: String, refresh: Boolean): Set<String> { refreshes += refresh; return features }
@@ -151,6 +151,15 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
         calls += "send $sessionId $text $clientMessageId"
         return sendResult(clientMessageId)
+    }
+    /** Each answer's acknowledgement; throw from it to fail. */
+    var answerResult: (me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer) -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt =
+        { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("ans-${it.requestId}", "queued", false, null) }
+    val answers = mutableListOf<Pair<me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer, String>>()
+    override suspend fun answer(accountId: String, sessionId: String, answer: me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
+        calls += "answer $sessionId ${answer.requestId} $idempotencyKey"
+        answers += answer to idempotencyKey
+        return answerResult(answer)
     }
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }

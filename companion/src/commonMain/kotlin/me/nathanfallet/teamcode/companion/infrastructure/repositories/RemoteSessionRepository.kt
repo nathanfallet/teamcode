@@ -1,12 +1,15 @@
 package me.nathanfallet.teamcode.companion.infrastructure.repositories
 
 import kotlinx.coroutines.flow.Flow
+import me.nathanfallet.teamcode.api.models.AnswerCloudPermissionRequest
 import me.nathanfallet.teamcode.api.models.CloudAgentRequest
+import me.nathanfallet.teamcode.api.models.CloudQuestionAnswer
 import me.nathanfallet.teamcode.api.models.CloudInputView
 import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
 import me.nathanfallet.teamcode.api.models.SendCloudMessageRequest
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
+import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
@@ -38,6 +41,17 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
 
     override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt =
         calls.withAccount(accountId, resource = true) { it.sendCloudMessage(sessionId, SendCloudMessageRequest(text, wake = true), idempotencyKey = clientMessageId).receipt() }
+
+    override suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt =
+        calls.withAccount(accountId, resource = true) { client ->
+            val request = AnswerCloudPermissionRequest(
+                requestId = answer.requestId,
+                behavior = if (answer.allow) "allow" else "deny",
+                message = answer.message,
+                answers = answer.answers.takeIf { it.isNotEmpty() }?.map { CloudQuestionAnswer(it.question, it.options, it.text) },
+            )
+            client.answerCloudPermission(sessionId, request, idempotencyKey).receipt()
+        }
 
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt =
         calls.withAccount(accountId, resource = true) { it.interruptCloudSession(sessionId, idempotencyKey).receipt() }

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -92,6 +95,13 @@ import me.nathanfallet.teamcode.companion.resources.composer_ended
 import me.nathanfallet.teamcode.companion.resources.composer_hint
 import me.nathanfallet.teamcode.companion.resources.composer_send
 import me.nathanfallet.teamcode.companion.resources.notice_nothing_running
+import me.nathanfallet.teamcode.companion.resources.notice_permission_answered
+import me.nathanfallet.teamcode.companion.resources.notice_permission_denied
+import me.nathanfallet.teamcode.companion.resources.notice_permission_ended
+import me.nathanfallet.teamcode.companion.resources.notice_permission_expired
+import me.nathanfallet.teamcode.companion.resources.notice_permission_input_unseen
+import me.nathanfallet.teamcode.companion.resources.notice_permission_invalid
+import me.nathanfallet.teamcode.companion.resources.notice_permission_rejected
 import me.nathanfallet.teamcode.companion.resources.pending_discard
 import me.nathanfallet.teamcode.companion.resources.pending_failed
 import me.nathanfallet.teamcode.companion.resources.pending_refused
@@ -149,6 +159,15 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
                     val text = when (notice) {
                         is SessionNotice.Text -> notice.text
                         SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
+                        is SessionNotice.PermissionClosed -> stringResource(when (notice.code) {
+                            "permission_request_answered" -> Res.string.notice_permission_answered
+                            "permission_request_expired" -> Res.string.notice_permission_expired
+                            else -> Res.string.notice_permission_ended
+                        })
+                        is SessionNotice.PermissionInvalid -> if (notice.code == "permission_input_unseen") stringResource(Res.string.notice_permission_input_unseen)
+                            else stringResource(Res.string.notice_permission_invalid, notice.code ?: "400")
+                        SessionNotice.PermissionDenied -> stringResource(Res.string.notice_permission_denied)
+                        is SessionNotice.PermissionRejected -> stringResource(Res.string.notice_permission_rejected, notice.reason ?: "rejected")
                     }
                     Banner(text, Tone.WARN, Modifier.testTag("notice"))
                 }
@@ -280,6 +299,10 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                     Text(stringResource(Res.string.composer_ended), color = colors.muted, fontSize = 13.5.sp, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).testTag("composer-ended"))
                     return@Column
+                }
+                // The agent waits on it: shown above everything else, scrolled within a bounded height.
+                state.permission?.let { card ->
+                    Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) { PermissionCardView(card, viewModel) }
                 }
                 val paused = session.state == SessionState.PAUSED || session.state == SessionState.PAUSING
                 when {

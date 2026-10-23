@@ -5,6 +5,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
+import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
@@ -23,6 +24,8 @@ interface SessionRepository {
     suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession
     /** [clientMessageId]: a retry returns the first acknowledgement instead of queueing the message twice. */
     suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt
+    /** Answers a permission request; [idempotencyKey]: a retry returns the first acknowledgement, even once consumed. */
+    suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt
     suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt
     suspend fun pause(accountId: String, sessionId: String): CloudSession
     suspend fun resume(accountId: String, sessionId: String): CloudSession
