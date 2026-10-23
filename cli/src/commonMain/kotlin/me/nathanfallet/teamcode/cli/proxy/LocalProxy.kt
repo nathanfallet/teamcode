@@ -27,7 +27,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
     require(localToken.length >= 32) { "A local proxy token of at least 32 characters is required." }
     val refusals = RefusalNotices(report)
     routing {
-        guidanceHook(client, localToken)
+        guidanceHook(client, localToken, report)
         if (serviceId != null) get("/_teamcode/service") {
             if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
                 call.respond(HttpStatusCode.Unauthorized)

@@ -31,6 +31,13 @@ class HookActivityTest {
         assertNull(HookActivity.state(ByteArray(65_537) { '{'.code.toByte() }))
     }
 
+    @Test fun anOversizedEventStillReportsItsState() {
+        val big = "x".repeat(100_000)
+        assertEquals("working", state("""{"session_id":"s","hook_event_name":"PostToolUse","tool_response":"$big"}"""))
+        assertEquals("waiting_for_human", state("""{"hook_event_name":"Stop","last_assistant_message":"$big"}"""))
+        assertNull(state("""{"hook_event_name":"Notification","notification_type":"auth_success","message":"$big"}"""))
+    }
+
     @Test fun onlyACanonicalRunIdentifierIsUsed() {
         assertEquals("11111111-2222-3333-4444-555555555555", HookActivity.runId("11111111-2222-3333-4444-555555555555"))
         assertNull(HookActivity.runId("../x")); assertNull(HookActivity.runId(null)); assertNull(HookActivity.runId(""))

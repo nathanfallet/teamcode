@@ -25,7 +25,7 @@ internal object HookActivity {
 
     /** The state this payload reports, or null for an event that says nothing about it (or a payload that is not a hook event). */
     fun state(input: ByteArray): String? = try {
-        if (input.size > 65_536) null else {
+        if (input.size > MAXIMUM_PARSED) prefixState(input) else {
             val body = Json.parseToJsonElement(input.decodeToString(throwOnInvalidSequence = true)).jsonObject
             fun text(key: String) = (body[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
             when (text("hook_event_name")) {
@@ -38,6 +38,24 @@ internal object HookActivity {
     } catch (error: CancellationException) { throw error }
     catch (_: Exception) { null }
 
+    private const val MAXIMUM_PARSED = 65_536
+    private val EVENT = Regex(""""hook_event_name"\s*:\s*"([A-Za-z]{1,40})"""")
+    private val NOTIFICATION = Regex(""""notification_type"\s*:\s*"([a-z_]{1,40})"""")
+
+    /**
+     * A payload too large to parse (a big tool result) still changes the state: the event name is read from the head, where
+     * Claude Code writes it before the tool input and response. The body itself is never parsed or kept.
+     */
+    private fun prefixState(input: ByteArray): String? {
+        val head = input.decodeToString(0, minOf(input.size, 4_096))
+        return when (EVENT.find(head)?.groupValues?.get(1)) {
+            "Stop" -> WAITING
+            "Notification" -> WAITING.takeIf { NOTIFICATION.find(head)?.groupValues?.get(1) in ASKING }
+            "UserPromptSubmit", "PostToolUse", "PostToolUseFailure" -> WORKING
+            else -> null
+        }
+    }
+
     /** The run identifier a hook may report to: the canonical UUID of the launch, or null. */
     fun runId(value: String?): String? = value?.takeIf { RunIdentifiers.isValid(it) }
 
@@ -48,9 +66,9 @@ internal object HookActivity {
     suspend fun report(client: TeamCodeClient, runId: String, state: String): Outcome = try {
         if (withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state); true } == true) Outcome.REPORTED else Outcome.RETRY
     } catch (error: CancellationException) { throw error }
-    catch (error: TeamCodeException) { if (error.statusCode in PERMANENT) Outcome.REFUSED else Outcome.RETRY }
+    catch (error: TeamCodeException) { if (error.statusCode == 403) Outcome.FOREIGN else if (error.statusCode in PERMANENT) Outcome.REFUSED else Outcome.RETRY }
     catch (_: Exception) { Outcome.RETRY }
-    enum class Outcome { REPORTED, REFUSED, RETRY }
+    enum class Outcome { REPORTED, REFUSED, FOREIGN, RETRY }
 }
 
 /**
@@ -58,7 +76,8 @@ internal object HookActivity {
  * request, not one per tool. The memory expires after [REMEMBER], so a state the server dropped (a silence) is sent again;
  * a launch the server refused for good (ended, foreign, unknown) is left alone for as long. Bounded: oldest launch first.
  */
-internal class ActivityReporter(private val client: TeamCodeClient) {
+internal class ActivityReporter(private val client: TeamCodeClient, private val notice: ((String) -> Unit)? = null) {
+    private var warned = false
     private val lock = Mutex()
     private class Seen(val state: String?, val at: TimeMark)
     private val last = LinkedHashMap<String, Seen>()
@@ -88,6 +107,10 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
         when (HookActivity.report(client, runId, state)) {
             HookActivity.Outcome.REPORTED -> remember(runId, Seen(state, TimeSource.Monotonic.markNow()))
             HookActivity.Outcome.REFUSED -> remember(runId, Seen(null, TimeSource.Monotonic.markNow()))
+            HookActivity.Outcome.FOREIGN -> {
+                remember(runId, Seen(null, TimeSource.Monotonic.markNow()))
+                if (!warned) { warned = true; notice?.invoke(FOREIGN_NOTICE) }
+            }
             HookActivity.Outcome.RETRY -> Unit
         }
     }
@@ -95,5 +118,8 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
         last.remove(runId); last[runId] = seen
         if (last.size > MAX_RUNS) last.remove(last.keys.first())
     }
-    private companion object { const val MAX_RUNS = 256; val REMEMBER = 30.seconds }
+    private companion object {
+        const val FOREIGN_NOTICE = "TeamCode refused this launch's activity reports (HTTP 403): the shared service uses another credential than this launch. " +
+            "The team view will not show whether the agent works or waits. Sign in again with the credential the service runs with, or restart the service from this one."
+        const val MAX_RUNS = 256; val REMEMBER = 30.seconds }
 }

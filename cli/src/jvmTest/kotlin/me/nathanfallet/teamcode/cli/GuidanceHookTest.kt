@@ -124,4 +124,33 @@ class GuidanceHookTest {
             assertTrue(reports.none { "private" in it })
         } finally { sdk.close() }
     }
+    @Test fun anOversizedEventIsReportedAndAForeignCredentialIsSaidOnce() = testApplication {
+        val run = "11111111-2222-3333-4444-555555555555"
+        val reports = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val notices = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var status = HttpStatusCode.OK
+        val sdk = TeamCodeClient("https://team.example", { "server-secret" }) { configure -> HttpClient(MockEngine { request ->
+            if (request.url.encodedPath == "/api/v1/runs/$run/activity") {
+                reports += (request.body as TextContent).text
+                respond("""{"error":"x"}""", status, headersOf(HttpHeaders.ContentType, "application/json"))
+            } else respond("""{"directive":null}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }) { configure(this) } }
+        application { localProxy(sdk, localToken, report = { notices += it }) }
+        suspend fun hook(event: String, big: Boolean = false) = client.post("/_teamcode/hooks/claude") {
+            bearerAuth(localToken); contentType(ContentType.Application.Json); header("X-TeamCode-Run", run)
+            setBody("""{"session_id":"s","hook_event_name":"$event","tool_response":"${if (big) "x".repeat(200_000) else ""}"}""")
+        }
+        suspend fun settled(count: Int) = withContext(Dispatchers.Default) { withTimeout(5_000) { while (reports.size < count) delay(10) } }
+        try {
+            assertEquals("{}", hook("PostToolUse", big = true).bodyAsText())
+            settled(1)
+            assertEquals("""{"state":"working"}""", reports.single())
+            status = HttpStatusCode.Forbidden
+            hook("Stop"); settled(2)
+            hook("UserPromptSubmit"); hook("Stop")
+            withContext(Dispatchers.Default) { delay(300) }
+            assertEquals(1, notices.size)
+            assertTrue("403" in notices.single() && "credential" in notices.single())
+        } finally { sdk.close() }
+    }
 }

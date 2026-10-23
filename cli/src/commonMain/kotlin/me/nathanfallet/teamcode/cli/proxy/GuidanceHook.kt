@@ -16,8 +16,8 @@ import me.nathanfallet.teamcode.client.TeamCodeClient
  * Tool inputs and transcript paths stop here. Only the session identifier reaches TeamCode, and, when the launch's plugin
  * names its run in `X-TeamCode-Run`, whether the agent works or waits for a person (see [HookActivity]).
  */
-internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String) {
-    val activity = ActivityReporter(client)
+internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String, notice: ((String) -> Unit)? = null) {
+    val activity = ActivityReporter(client, notice)
     post("/_teamcode/hooks/claude") {
         if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
             call.respond(HttpStatusCode.Unauthorized); return@post
@@ -41,9 +41,10 @@ internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String) {
                     if (count < 0) break
                     size += count
                 }
-                if (size > 65_536) return@withTimeoutOrNull
                 val payload = buffer.copyOf(size)
+                // Too large for guidance (a big tool result), but its event still changes the state.
                 state = HookActivity.state(payload)
+                if (size > 65_536) return@withTimeoutOrNull
                 emitted = bridge.prepare(payload)
                 output = emitted?.output ?: "{}"
             }
