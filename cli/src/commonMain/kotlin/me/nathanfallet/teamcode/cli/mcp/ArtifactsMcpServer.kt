@@ -261,11 +261,23 @@ class ArtifactsMcpServer(
         private const val MAX_COPIES = 20
         /** The page contract: what a page must do to work behind the content policy, so the agent gets it right the first time. */
         private const val PAGE_CONTRACT = "The page runs in a sandbox with this content policy: scripts only from the published files, inline, " +
-            "cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com or code.jquery.com; styles from the files, inline or Google Fonts; " +
-            "images, fonts, media and fetch() only from the published files (relative URLs such as img/a.png or data.json) or data:/blob: URLs; no forms, " +
+            "cdnjs.cloudflare.com, cdn.jsdelivr.net/npm/, unpkg.com, cdn.tailwindcss.com or code.jquery.com; styles from the files, inline or Google Fonts (fonts.googleapis.com, with the font files from fonts.gstatic.com); " +
+            "images, media and fetch() only from the published files (relative URLs such as img/a.png or data.json) or data:/blob: URLs (fonts may also be data: URLs); no forms, " +
             "no frames, no external images, no cookies or storage. Publish every file the page uses."
+        /** How a page should look: the design brief that keeps published pages from being unstyled HTML. */
+        private const val PAGE_DESIGN = "Design the page, never ship unstyled HTML. " +
+            "Match the treatment to the request: a document or report is calm and polished, with no big hero; a dashboard, a tool or a landing page may be bolder. " +
+            "If the project already has a design system (colours, fonts, components), use it. " +
+            "Ground the page in its subject, with real content from the task and no lorem ipsum. " +
+            "Type: a Google Fonts pair (a heading face and a text face) with system fallbacks, a clear size scale, lines of about 65 characters, " +
+            "text-wrap: balance on headings, letter-spacing on uppercase labels. Colour: greys tinted towards one accent, not pure grey. " +
+            "Define every colour as a custom property on :root, redefine them under @media (prefers-color-scheme: dark), set color-scheme and an explicit body background; " +
+            "no colour literal that only works in one theme. " +
+            "Layout: flex or grid with gap, a 16px side gutter, one column by 400px wide, no horizontal page scroll (tables and code scroll inside their own container), " +
+            "min-width: 0 on flex and grid children, font-variant-numeric: tabular-nums on figures. " +
+            "Keep repeated elements consistent, use cards sparingly, draw charts to a true scale. Give the page a <title> of two to four words."
         private const val INSTRUCTIONS = "Publish pages (HTML or Markdown, with their images, CSS, JS and data files) for your team to read behind the TeamCode login. " +
-            "publish returns the URL to share; republish with the same artifact to add a version. $PAGE_CONTRACT"
+            "publish returns the URL to share; republish with the same artifact to add a version. $PAGE_CONTRACT $PAGE_DESIGN"
 
         private fun schema(required: List<String>, properties: JsonObjectBuilder.() -> Unit) = buildJsonObject {
             put("type", "object"); putJsonObject("properties", properties)
@@ -280,7 +292,7 @@ class ArtifactsMcpServer(
                 put("name", "publish")
                 put("description", "Publish a page and its files as a new artifact, or as a new version of an existing one (pass artifact). Files are read from your " +
                     "working directory without following symbolic links; credentials and key files are refused, and a file holding a secret is refused by the server. " +
-                    "Returns the artifact URL. If another version was published since base_version, its files are written to a local directory for you to merge. $PAGE_CONTRACT")
+                    "Returns the artifact URL. If another version was published since base_version, its files are written to a local directory for you to merge. $PAGE_CONTRACT $PAGE_DESIGN")
                 put("inputSchema", schema(listOf("file_path")) {
                     text("file_path", "The page: an .html, .htm or .md file, published under its file name.")
                     putJsonObject("files") {

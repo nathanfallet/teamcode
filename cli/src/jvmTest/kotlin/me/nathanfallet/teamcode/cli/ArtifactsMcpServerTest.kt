@@ -83,6 +83,10 @@ class ArtifactsMcpServerTest {
         assertEquals("2025-11-25", unknown["protocolVersion"]!!.jsonPrimitive.content)
         val tools = Json.parseToJsonElement(server.mcp.handle(request("tools/list"))!!).jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
         assertEquals(listOf("publish", "share", "list", "read"), tools.map { it.jsonObject["name"]!!.jsonPrimitive.content })
+        val design = listOf("fonts.gstatic.com", "prefers-color-scheme: dark", "color-scheme", "text-wrap: balance", "Google Fonts", "16px", "<title>")
+        val instructions = init["instructions"]!!.jsonPrimitive.content
+        val publishDescription = tools.first { it.jsonObject["name"]!!.jsonPrimitive.content == "publish" }.jsonObject["description"]!!.jsonPrimitive.content
+        design.forEach { assertTrue(it in instructions, "instructions lack $it"); assertTrue(it in publishDescription, "publish lacks $it") }
         assertNull(server.mcp.handle("""{"jsonrpc":"2.0","method":"notifications/initialized"}"""), "Notifications get no answer")
         assertEquals(-32700, Json.parseToJsonElement(server.mcp.handle("not json")!!).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.int)
         assertEquals(-32601, Json.parseToJsonElement(server.mcp.handle(request("resources/list"))!!).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.int)
