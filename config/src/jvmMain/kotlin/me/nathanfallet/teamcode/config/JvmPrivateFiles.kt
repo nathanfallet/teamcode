@@ -31,17 +31,35 @@ object JvmPrivateFiles : PrivateFiles {
         var created = false
         if (attributesOrNull(absolute) == null) {
             absolute.parent?.let { Files.createDirectories(it) }
-            try {
-                if (posix) Files.createDirectory(absolute, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
-                else Files.createDirectory(absolute, ownerOnlyAcl(directory = true))
+            if (posix) try {
+                Files.createDirectory(absolute, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
                 created = true
             } catch (_: FileAlreadyExistsException) { /* Created concurrently: validated below. */ }
+            else created = publishWindowsDirectory(absolute)
         }
         val attributes = attributesOrNull(absolute) ?: throw FileSystemException(absolute.toString(), null, "The configuration directory disappeared.")
         require(attributes.isDirectory && !attributes.isSymbolicLink && !attributes.isOther) { "Configuration directory cannot be a symbolic link or a reparse point." }
         if (posix) Files.setPosixFilePermissions(absolute, PosixFilePermissions.fromString("rwx------"))
         else restrictWindows(absolute, directory = true, created = created)
     }
+
+    /**
+     * Java cannot pass an owner to CreateDirectory: an elevated process creates the directory owned by Administrators and
+     * gives it to the user only afterwards. A concurrent first run that found it in between refused it as belonging to
+     * another user, so the directory is prepared under a temporary name and renamed into place already owned by the user,
+     * like the native CLI's single CreateDirectory call. False when another process published it first.
+     */
+    private fun publishWindowsDirectory(directory: Path): Boolean {
+        val staging = directory.resolveSibling("${directory.fileName}.${temporarySuffix()}.tmp")
+        Files.createDirectory(staging, ownerOnlyAcl(directory = true))
+        try {
+            restrictWindows(staging, directory = true, created = true)
+            try { moveRetrying(staging, directory) } catch (_: FileAlreadyExistsException) { return false }
+            return true
+        } finally { Files.deleteIfExists(staging) }
+    }
+
+    private fun temporarySuffix(): String = ByteArray(16).also(random::nextBytes).let { HexFormat.of().formatHex(it) }
 
     private fun writePrivate(destination: Path, content: ByteArray, replace: Boolean): Boolean {
         require(destination.isAbsolute) { "Private files need an absolute path." }
@@ -53,8 +71,7 @@ object JvmPrivateFiles : PrivateFiles {
             if (!posix && Files.getOwner(destination, LinkOption.NOFOLLOW_LINKS) != windowsUser)
                 throw FileSystemException(destination.toString(), null, "The configuration file belongs to another user.")
         }
-        val suffix = ByteArray(16).also(random::nextBytes).let { HexFormat.of().formatHex(it) }
-        val temporary = parent.resolve("${destination.fileName}.$suffix.tmp")
+        val temporary = parent.resolve("${destination.fileName}.${temporarySuffix()}.tmp")
         try {
             if (posix) Files.createFile(temporary, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
             else {

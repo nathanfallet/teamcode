@@ -7,6 +7,8 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.*
 import kotlin.test.*
 
@@ -71,5 +73,46 @@ class JvmPrivateFilesTest {
             start.countDown()
             assertEquals(1, ids.map { it.get(60, TimeUnit.SECONDS) }.toSet().size)
         } finally { pool.shutdownNow() }
+    }
+
+    /**
+     * An elevated Windows process (the CI runner, an administrator shell) creates files owned by Administrators. Another
+     * first run must never find the directory before it belongs to the user, or it refuses it as someone else's.
+     */
+    @Test fun `concurrent first runs never see the directory before it is private`() {
+        repeat(20) { round ->
+            val directory = root.resolve("round-$round").resolve("teamcode")
+            val stop = AtomicBoolean(false)
+            val seen = AtomicReference<String?>(null)
+            val observer = Thread {
+                while (!stop.get() && seen.get() == null) {
+                    if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) continue
+                    val problem = try { privacyProblem(directory) } catch (_: NoSuchFileException) { null }
+                    if (problem != null) seen.compareAndSet(null, problem)
+                }
+            }.apply { start() }
+            val pool = Executors.newFixedThreadPool(8)
+            val start = CountDownLatch(1)
+            try {
+                val tasks = (0 until 8).map { pool.submit { start.await(); JvmPrivateFiles.ensurePrivateDirectory(directory) } }
+                start.countDown()
+                tasks.forEach { it.get(60, TimeUnit.SECONDS) }
+            } finally { pool.shutdownNow(); stop.set(true); observer.join() }
+            assertNull(seen.get(), "Round $round")
+            assertNull(privacyProblem(directory))
+            assertEquals(listOf("teamcode"), directory.parent.listDirectoryEntries().map { it.name }, "No staging directory is left behind")
+        }
+    }
+
+    private fun privacyProblem(path: Path): String? {
+        if (posix) return PosixFilePermissions.toString(Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS))
+            .takeIf { it != "rwx------" }?.let { "$path is $it" }
+        val view = Files.getFileAttributeView(path, AclFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+        val entries = view.acl
+        return when {
+            entries.size != 1 -> "$path has ${entries.size} entries"
+            entries.single().principal() != view.owner -> "$path is owned by ${view.owner}, not by the user of its entry ${entries.single().principal()}"
+            else -> null
+        }
     }
 }
