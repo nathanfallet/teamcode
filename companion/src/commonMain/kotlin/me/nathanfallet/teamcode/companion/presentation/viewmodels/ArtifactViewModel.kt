@@ -17,9 +17,14 @@ import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.GetArtifactU
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenedArtifact
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactRoute
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 data class ArtifactUiState(
     val artifact: Artifact? = null,
+    /** The viewer page on the account's server: copied and opened in the browser. */
+    val viewerUrl: String? = null,
     val versions: List<ArtifactVersion> = emptyList(),
     /** The version shown, or asked for while its ticket comes. */
     val version: Int? = null,
@@ -46,19 +51,20 @@ class ArtifactViewModel(
     val uiState: StateFlow<ArtifactUiState> = state.asStateFlow()
     private var ticket: Job? = null
     private var watch: Job? = null
-    /** The shown version already had its silent renewal. */
-    private var renewed = false
+    /** When the last silent renewal happened: at most one a minute, so a page that is really missing never loops. */
+    private var renewedAt: TimeMark? = null
 
     init { load() }
 
     fun load() {
+        renewedAt = null
         state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
-                val (artifact, versions) = getArtifact(route.accountId, route.artifactId)
+                val (artifact, versions, viewerUrl) = getArtifact(route.accountId, route.artifactId)
                 val version = state.value.version ?: artifact.currentVersion
                 if (versions.isNotEmpty() && versions.none { it.number == version }) throw CompanionException.NotFound()
-                state.update { it.copy(artifact = artifact, versions = versions, version = version, loading = embedded && it.opened?.ticket?.version != version) }
+                state.update { it.copy(artifact = artifact, viewerUrl = viewerUrl, versions = versions, version = version, loading = embedded && it.opened?.ticket?.version != version) }
                 if (embedded && state.value.opened?.ticket?.version != version) open(version)
             } catch (error: CancellationException) {
                 throw error
@@ -95,7 +101,7 @@ class ArtifactViewModel(
     /** Shows [number], with a ticket fixed on it. */
     fun selectVersion(number: Int) {
         if (number == state.value.version && state.value.opened != null) return
-        renewed = false
+        renewedAt = null
         state.update { it.copy(version = number, loading = embedded, error = null) }
         if (embedded) open(number)
     }
@@ -104,18 +110,21 @@ class ArtifactViewModel(
     fun showNewer() {
         val newer = state.value.newerVersion ?: return
         state.update { it.copy(version = newer, newerVersion = null) }
-        renewed = false
+        renewedAt = null
         load()
     }
 
-    /** The page answered `404`: once per version, a new ticket (it expired); after that, the version is gone. */
+    /**
+     * The page answered `404`: a new ticket in silence (it expired, or a link led to a file the version lacks: the
+     * entry page loads again). A second `404` within a minute means the version is gone.
+     */
     fun contentMissing() {
         val version = state.value.version ?: return
-        if (renewed) {
+        if (renewedAt?.let { it.elapsedNow() < RENEWAL_WINDOW } == true) {
             state.update { it.copy(opened = null, error = CompanionException.NotFound().userMessage()) }
             return
         }
-        renewed = true
+        renewedAt = TimeSource.Monotonic.markNow()
         open(version)
     }
 
@@ -135,5 +144,6 @@ class ArtifactViewModel(
 
     private companion object {
         const val WATCH_MILLIS = 30_000L
+        val RENEWAL_WINDOW = 1.minutes
     }
 }

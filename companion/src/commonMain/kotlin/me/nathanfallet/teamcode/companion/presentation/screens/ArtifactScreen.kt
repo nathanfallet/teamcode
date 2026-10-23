@@ -86,11 +86,11 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit) {
                     IconButton(onClick = onBack) { Icon(PhosphorIcons.Regular.CaretLeft, contentDescription = stringResource(Res.string.action_back), modifier = Modifier.size(22.dp)) }
                 },
                 actions = {
-                    state.artifact?.let { artifact ->
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(artifact.url)); copied = true }, modifier = Modifier.testTag("artifact-copy")) {
+                    state.artifact?.takeIf { state.viewerUrl != null }?.let { artifact ->
+                        IconButton(onClick = { clipboard.setText(AnnotatedString(state.viewerUrl!!)); copied = true }, modifier = Modifier.testTag("artifact-copy")) {
                             Icon(PhosphorIcons.Regular.Copy, contentDescription = stringResource(Res.string.artifact_copy_link), modifier = Modifier.size(22.dp))
                         }
-                        IconButton(onClick = { browser.openUri(artifact.url) }, modifier = Modifier.testTag("artifact-browser")) {
+                        IconButton(onClick = { browser.openUri(state.viewerUrl!!) }, modifier = Modifier.testTag("artifact-browser")) {
                             Icon(PhosphorIcons.Regular.Browser, contentDescription = stringResource(Res.string.artifact_open_browser), modifier = Modifier.size(22.dp))
                         }
                     }
@@ -119,7 +119,7 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit) {
                 !embedsArtifacts -> state.artifact?.let { artifact ->
                     Column(Modifier.widthIn(max = 820.dp).fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(stringResource(Res.string.artifact_desktop), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Button(onClick = { browser.openUri(artifact.url) }, modifier = Modifier.testTag("artifact-open-desktop")) { Text(stringResource(Res.string.artifact_open_browser)) }
+                        if (state.viewerUrl != null) Button(onClick = { browser.openUri(state.viewerUrl!!) }, modifier = Modifier.testTag("artifact-open-desktop")) { Text(stringResource(Res.string.artifact_open_browser)) }
                     }
                 }
                 opened != null -> ConfirmingLinks {

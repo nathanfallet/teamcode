@@ -11,6 +11,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.normalizeOrigin
 
 /** An artifact id as the server writes it. */
 val ARTIFACT_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -22,11 +23,15 @@ class LoadArtifactsUseCase(private val artifacts: ArtifactRepository, private va
     }
 }
 
-/** The artifact and its versions, newest first. */
-class GetArtifactUseCase(private val artifacts: ArtifactRepository, private val guard: AccountGuard) {
-    suspend operator fun invoke(accountId: String, artifactId: String): Pair<Artifact, List<ArtifactVersion>> = guard(accountId) {
+/** An artifact, its versions (newest first), and its viewer page on the account's server, the link the app shares. */
+data class ArtifactDetails(val artifact: Artifact, val versions: List<ArtifactVersion>, val viewerUrl: String)
+
+class GetArtifactUseCase(private val artifacts: ArtifactRepository, private val accounts: AccountRepository, private val guard: AccountGuard) {
+    /** The viewer URL is built from the account's origin, never taken from the answer: the app opens and shares only its own server's page. */
+    suspend operator fun invoke(accountId: String, artifactId: String): ArtifactDetails = guard(accountId) {
         if (!ARTIFACT_ID.matches(artifactId)) throw CompanionException.NotFound()
-        artifacts.artifact(accountId, artifactId) to artifacts.versions(accountId, artifactId)
+        val origin = accounts.accounts.value.firstOrNull { it.id == accountId }?.origin ?: throw CompanionException.Unauthorized()
+        ArtifactDetails(artifacts.artifact(accountId, artifactId), artifacts.versions(accountId, artifactId), "$origin/artifact/$artifactId")
     }
 
     /** The artifact alone, to see whether a newer version was published. */
@@ -65,7 +70,14 @@ class OpenArtifactUseCase(
          * escaped character in the ticket; null otherwise.
          */
         fun contentPrefix(origin: String, artifactId: String, contentUrl: String): String? {
-            val base = "$origin/artifact/$artifactId/"
+            // The server spells its own origin as configured (case, an explicit default port): compared normalized, and
+            // the prefix is kept in the server's spelling, the one the web view navigates with.
+            val authorityEnd = contentUrl.indexOf('/', contentUrl.indexOf("://").takeIf { it > 0 }?.plus(3) ?: return null)
+            if (authorityEnd < 0) return null
+            val served = contentUrl.substring(0, authorityEnd)
+            val normalized = try { normalizeOrigin(served) } catch (_: CompanionException.InvalidOrigin) { return null }
+            if (normalized != origin || '@' in served) return null
+            val base = "$served/artifact/$artifactId/"
             if (!contentUrl.startsWith(base)) return null
             val ticket = contentUrl.removePrefix(base).substringBefore('/')
             if (!TICKET.matches(ticket) || ticket.all { it == '.' }) return null

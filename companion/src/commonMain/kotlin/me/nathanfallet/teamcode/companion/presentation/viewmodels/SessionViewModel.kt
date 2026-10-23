@@ -152,7 +152,12 @@ class SessionViewModel(
         state.update { if (it.live == LiveState.ENDED) it else it.copy(live = LiveState.STOPPED) }
     }
 
-    fun retry() { if (started) { state.update { it.copy(error = null) }; start() } }
+    /** After the stream stopped, follow again; while it runs, the error came from an older page: ask for it again. */
+    fun retry() {
+        if (!started) return
+        state.update { it.copy(error = null) }
+        if (follow?.isActive == true) loadOlder() else start()
+    }
 
     fun loadOlder() {
         val before = state.value.transcript.nextBefore ?: return

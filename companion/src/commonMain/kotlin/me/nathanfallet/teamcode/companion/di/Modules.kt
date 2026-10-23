@@ -84,7 +84,7 @@ val domainModule = module {
     single { LoadProfilesUseCase(get(), get(), get()) }
     single { CreateSessionUseCase(get(), get(), get()) }
     single { LoadArtifactsUseCase(get(), get(), get()) }
-    single { GetArtifactUseCase(get(), get()) }
+    single { GetArtifactUseCase(get(), get(), get()) }
     single { OpenArtifactUseCase(get(), get(), get(), get()) }
     single { ResolveLinkUseCase(get()) }
 }

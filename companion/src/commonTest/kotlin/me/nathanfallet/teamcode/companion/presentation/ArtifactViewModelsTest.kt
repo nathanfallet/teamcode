@@ -43,7 +43,7 @@ class ArtifactViewModelsTest {
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     private fun viewer(version: Int? = null, embedded: Boolean = true) =
-        ArtifactViewModel(ArtifactRoute("a1", id, version), GetArtifactUseCase(artifacts, guard), OpenArtifactUseCase(artifacts, features, accounts, guard), embedded)
+        ArtifactViewModel(ArtifactRoute("a1", id, version), GetArtifactUseCase(artifacts, accounts, guard), OpenArtifactUseCase(artifacts, features, accounts, guard), embedded)
 
     @Test fun theGalleryLoadsOnePageAtATimeAndAScopeChangeStartsOver() = runTest(dispatcher) {
         artifacts.pages = { scope, before -> if (before == null) ArtifactPage(listOf(artifact("${scope.wire}-1")), "c1") else ArtifactPage(listOf(artifact("${scope.wire}-2")), null) }
@@ -75,6 +75,7 @@ class ArtifactViewModelsTest {
         settle()
         assertEquals(3, model.uiState.value.opened?.ticket?.version)
         assertEquals(listOf(3, 2, 1), model.uiState.value.versions.map { it.number })
+        assertEquals("https://team.example/artifact/$id", model.uiState.value.viewerUrl)
         model.selectVersion(1)
         settle()
         assertEquals(1, model.uiState.value.opened?.ticket?.version)

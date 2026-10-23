@@ -21,6 +21,8 @@ dependencies {
 val semver = Regex("""(\d+)\.(\d+)\.(\d+).*""").matchEntire(project.version.toString())!!.groupValues.drop(1).map(String::toInt)
 val companionVersionCode = providers.gradleProperty("companionVersionCode").map(String::toInt)
     .orElse(maxOf(1, (semver[0] * 1_000_000 + semver[1] * 1_000 + semver[2]) * 100)).get()
+// Play's ceiling, also checked by the fastlane lane: above it the code would wrap around instead of failing.
+check(semver[0] <= 20 && companionVersionCode in 1..2_100_000_000) { "versionCode $companionVersionCode is outside 1..2100000000 (TeamCode major versions up to 20)." }
 // The upload key stays on the maintainer's Mac (fastlane/keystore.jks, git-ignored) with its passwords in SIGNING_*.
 val uploadKeystore = rootProject.file("fastlane/keystore.jks")
 

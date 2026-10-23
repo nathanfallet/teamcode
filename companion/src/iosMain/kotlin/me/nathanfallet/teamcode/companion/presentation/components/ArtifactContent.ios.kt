@@ -37,7 +37,8 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (
     val missing by rememberUpdatedState(onMissing)
     // Held here: the web view keeps its delegates weakly.
     val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing() }) }
-    val shown = remember { mutableListOf<String>() }
+    // The URL the web view was last asked to load.
+    val shown = remember { arrayOfNulls<String>(1) }
     UIKitView(
         factory = {
             val configuration = WKWebViewConfiguration().apply {
@@ -48,14 +49,14 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (
             WKWebView(frame = CGRectZero.readValue(), configuration = configuration).apply {
                 navigationDelegate = delegate
                 UIDelegate = delegate
-                shown.clear(); shown += contentUrl
+                shown[0] = contentUrl
                 NSURL.URLWithString(contentUrl)?.let { loadRequest(NSURLRequest.requestWithURL(it)) }
             }
         },
         modifier = modifier,
         update = { view ->
             if (shown.lastOrNull() != contentUrl) {
-                shown.clear(); shown += contentUrl
+                shown[0] = contentUrl
                 NSURL.URLWithString(contentUrl)?.let { view.loadRequest(NSURLRequest.requestWithURL(it)) }
             }
         },
