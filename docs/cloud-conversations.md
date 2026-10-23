@@ -134,6 +134,7 @@ teamcode cloud send SESSION TEXT|- [--no-wake] [--idempotency-key KEY] [--wait] 
 teamcode cloud interrupt SESSION
 teamcode cloud answer SESSION REQUEST_ID allow|deny [--message TEXT] [--answer QUESTION=OPTION[,OPTION...]]... [--answer-text QUESTION=TEXT]...
 teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]
+teamcode attach SESSION [--tail N] [--read-only] [--no-wake]   # the same command, for cloud and remote sessions
 ```
 
 `send` retries network failures with the same idempotency key, so a retry never sends twice; `--wait` waits until the message was consumed or rejected. `logs --follow` reconnects like `attach`.

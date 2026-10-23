@@ -169,6 +169,10 @@ static inline int teamcode_spawn_detached(const char *command, char *const argv[
         posix_spawnattr_setsigdefault(&attributes, &defaults);
         posix_spawnattr_setsigmask(&attributes, &empty);
         short flags = POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK;
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+        /* Only the three standard streams reach the host, never this process's sockets or files. */
+        flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
         /* An older C library refuses the new-session flag (EINVAL): the second attempt takes a new process group. */
         if (attempt == 0) flags |= POSIX_SPAWN_SETSID;
         else { flags |= POSIX_SPAWN_SETPGROUP; posix_spawnattr_setpgroup(&attributes, 0); }
