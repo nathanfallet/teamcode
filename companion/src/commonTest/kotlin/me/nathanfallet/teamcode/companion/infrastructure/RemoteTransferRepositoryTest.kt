@@ -78,6 +78,16 @@ class RemoteTransferRepositoryTest {
         assertEquals("outgoing", url.parameters["direction"]); assertEquals("t3", url.parameters["before"]); assertNull(url.parameters["scope"])
     }
 
+    @Test fun recipientsComeFromTheirOwnListAndARefusalKeepsItsCode() = runTest {
+        json("""{"recipients":[{"id":"m1","username":"ada","administrator":true},{"id":"m2","username":"bob","administrator":false}]}""")
+        val recipients = transfers.recipients("a1")
+        assertEquals(listOf("ada" to true, "bob" to false), recipients.map { it.username to it.administrator })
+        assertTrue(recipients.all { it.available })
+        assertEquals("/api/v1/cloud/transfer-recipients", requests.single().url.encodedPath)
+        json("""{"error":{"type":"transfer_disabled","message":"x"}}""", HttpStatusCode.Forbidden)
+        assertEquals("transfer_disabled", assertFailsWith<CompanionException.TransferRefused> { transfers.recipients("a1") }.code)
+    }
+
     @Test fun membersAreAvailableOnlyWhenEnabledAndSetUp() = runTest {
         json("""[{"id":"m1","username":"ada","role":"ADMIN","disabled":false,"passwordChangeRequired":false},
             {"id":"m2","username":"bob","role":"MEMBER","disabled":true,"passwordChangeRequired":false},

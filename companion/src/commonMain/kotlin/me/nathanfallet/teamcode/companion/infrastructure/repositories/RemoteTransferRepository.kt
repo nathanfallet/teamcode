@@ -27,6 +27,10 @@ class RemoteTransferRepository(private val calls: AccountCalls) : TransferReposi
     override suspend fun decline(accountId: String, transferId: String): SessionTransfer = refusals(accountId) { it.declineCloudTransfer(transferId).domain() }
     override suspend fun cancel(accountId: String, transferId: String): SessionTransfer = refusals(accountId) { it.cancelCloudTransfer(transferId).domain() }
 
+    override suspend fun recipients(accountId: String): List<TeamMember> = refusals(accountId, resource = false) { client ->
+        client.cloudTransferRecipients().map { TeamMember(it.id, it.username, it.administrator, available = true) }
+    }
+
     override suspend fun members(accountId: String): List<TeamMember> = calls.withAccount(accountId) { client ->
         client.members().map { TeamMember(it.id, it.username, administrator = it.role.uppercase() in ADMIN_ROLES, available = !it.disabled && !it.passwordChangeRequired) }
     }
@@ -35,7 +39,7 @@ class RemoteTransferRepository(private val calls: AccountCalls) : TransferReposi
      * A refusal of the transfer (`403`, `409` or `422` with a code) keeps its code and the recipient's problems, which
      * the screens word; a `404` means the session or transfer is gone or hidden.
      */
-    private suspend fun <T> refusals(accountId: String, call: suspend (TeamCodeClient) -> T): T = calls.withAccount(accountId, resource = true) { client ->
+    private suspend fun <T> refusals(accountId: String, resource: Boolean = true, call: suspend (TeamCodeClient) -> T): T = calls.withAccount(accountId, resource) { client ->
         try {
             call(client)
         } catch (error: TeamCodeException) {

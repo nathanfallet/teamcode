@@ -38,4 +38,6 @@ class FakeTransferRepository : TransferRepository {
     override suspend fun decline(accountId: String, transferId: String) = decision("decline", transferId).also { calls += "decline $transferId" }
     override suspend fun cancel(accountId: String, transferId: String) = decision("cancel", transferId).also { calls += "cancel $transferId" }
     override suspend fun members(accountId: String): List<TeamMember> { calls += "members"; return members }
+    var recipients = listOf(TeamMember("m2", "grace", administrator = false, available = true), TeamMember("m1", "ada", administrator = true, available = true))
+    override suspend fun recipients(accountId: String): List<TeamMember> { calls += "recipients"; return recipients }
 }

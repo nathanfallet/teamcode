@@ -35,10 +35,10 @@ internal fun Throwable.transferError(): TransferError =
 data class TransferUiState(
     val administrator: Boolean = false,
     val loading: Boolean = true,
-    /** The team's members for an administrator; null for a member, who names the recipient by member ID. */
+    /** Who can receive the session; null on a server that lists them to administrators only, for a member, who types a member ID. */
     val members: List<TeamMember>? = null,
     val query: String = "",
-    /** The member picked in the list (administrators) or typed (members). */
+    /** The member picked in the list, or the ID typed when there is no list. */
     val recipientId: String = "",
     val resume: Boolean = false,
     val force: Boolean = false,

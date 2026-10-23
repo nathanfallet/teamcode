@@ -27,7 +27,7 @@ class TransfersScreenTest {
         transfers.pages = { _, _ -> TransferPage(listOf(offer), null) }
         transfers.decision = { _, _ -> throw CompanionException.TransferRefused("recipient_ineligible", listOf("profile_unassigned", "recipient_no_quota")) }
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        val model = TransfersViewModel(TransfersRoute("a1"), TransferListUseCase(transfers, accounts, guard), accounts)
+        val model = TransfersViewModel(TransfersRoute("a1"), TransferListUseCase(transfers, FakeFeatures(setOf("cloud.transfer.v1")), accounts, guard), accounts)
         setContent { TeamCodeTheme { TransfersScreen(model, onBack = {}, onOpenSession = {}, clock = FixedClock()) } }
         waitUntil { model.uiState.value.list.loaded }
         onNodeWithText("Offered").assertExists()

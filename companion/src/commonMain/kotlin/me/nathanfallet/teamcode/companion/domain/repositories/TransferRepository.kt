@@ -20,6 +20,8 @@ interface TransferRepository {
     suspend fun accept(accountId: String, transferId: String, resume: Boolean?): SessionTransfer
     suspend fun decline(accountId: String, transferId: String): SessionTransfer
     suspend fun cancel(accountId: String, transferId: String): SessionTransfer
+    /** The members a session can be given to (`cloud.transfer.recipients.v1`), for whoever may transfer. */
+    suspend fun recipients(accountId: String): List<TeamMember>
     /** Every member of the team; the server answers this to administrators only. */
     suspend fun members(accountId: String): List<TeamMember>
 }

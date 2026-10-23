@@ -17,9 +17,9 @@ import org.koin.dsl.module
 val transferModule = module {
     single<TransferRepository> { RemoteTransferRepository(get()) }
     single { TransferAvailabilityUseCase(get(), get()) }
-    single { LoadRecipientsUseCase(get(), get(), get()) }
+    single { LoadRecipientsUseCase(get(), get(), get(), get()) }
     single { TransferSessionUseCase(get(), get(), get(), get()) }
-    single { TransferListUseCase(get(), get(), get()) }
+    single { TransferListUseCase(get(), get(), get(), get()) }
     viewModel { (route: TransferRoute) -> TransferViewModel(route, get(), get(), get(), get()) }
     viewModel { (route: TransfersRoute) -> TransfersViewModel(route, get(), get()) }
 }

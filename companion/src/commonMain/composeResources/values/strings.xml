@@ -92,7 +92,7 @@
     <string name="transfer_unavailable">Disabled or not set up yet</string>
     <string name="transfer_administrator">Administrator</string>
     <string name="transfer_member_id">Recipient's member ID</string>
-    <string name="transfer_member_id_hint">Only administrators can list the team. Ask the recipient for their member ID.</string>
+    <string name="transfer_member_id_hint">This server does not list members to you. Ask the recipient for their member ID.</string>
     <string name="transfer_resume">Resume for them</string>
     <string name="transfer_resume_body">Starts the session for the recipient as soon as it is theirs.</string>
     <string name="transfer_force">Pause at once</string>

@@ -88,6 +88,17 @@ class TransferUseCasesTest {
         assertTrue(transfers.calls.isEmpty())
     }
 
+    @Test fun withTheRecipientsListEveryoneWhoMayTransferPicksAMember() = runTest {
+        features.features = setOf("cloud.sessions.v1", "cloud.transfer.v1", "cloud.transfer.recipients.v1")
+        transfers.recipients = listOf(TeamMember("m3", "zoe", false, true), TeamMember("m1", "ada", true, true), TeamMember("m2", "Carl", false, true))
+        for (accounts in listOf(InMemoryAccountRepository(listOf(account())), InMemoryAccountRepository(listOf(admin())))) {
+            transfers.calls.clear()
+            assertEquals(listOf("m2", "m3"), LoadRecipientsUseCase(transfers, features, accounts, guard(accounts))("a1", "m1")?.map { it.id })
+            // The administrators' member list is not needed any more.
+            assertEquals(listOf("recipients"), transfers.calls)
+        }
+    }
+
     @Test fun anAdministratorPicksAmongTheOtherMembersAndAMemberNamesAnId() = runTest {
         transfers.members = listOf(
             TeamMember("m3", "zoe", false, available = true), TeamMember("m1", "ada", true, available = true),
@@ -95,10 +106,10 @@ class TransferUseCasesTest {
         )
         val admins = InMemoryAccountRepository(listOf(admin()))
         // The owner is left out; available members first, by name.
-        assertEquals(listOf("m2", "m3", "m4"), LoadRecipientsUseCase(transfers, admins, guard(admins))("a1", "m1")?.map { it.id })
+        assertEquals(listOf("m2", "m3", "m4"), LoadRecipientsUseCase(transfers, features, admins, guard(admins))("a1", "m1")?.map { it.id })
         val members = InMemoryAccountRepository(listOf(account()))
         transfers.calls.clear()
-        assertNull(LoadRecipientsUseCase(transfers, members, guard(members))("a1", "m1"))
+        assertNull(LoadRecipientsUseCase(transfers, features, members, guard(members))("a1", "m1"))
         // The member list is an administrator's: a member never asks for it.
         assertTrue(transfers.calls.isEmpty())
     }

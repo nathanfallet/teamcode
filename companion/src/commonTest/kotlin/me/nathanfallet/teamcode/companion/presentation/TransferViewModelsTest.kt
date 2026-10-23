@@ -47,13 +47,13 @@ class TransferViewModelsTest {
 
     private fun form(accounts: InMemoryAccountRepository, ownerId: String = "m1"): TransferViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        return TransferViewModel(TransferRoute("a1", "s1", ownerId), LoadRecipientsUseCase(transfers, accounts, guard),
+        return TransferViewModel(TransferRoute("a1", "s1", ownerId), LoadRecipientsUseCase(transfers, features, accounts, guard),
             TransferSessionUseCase(transfers, features, accounts, guard), accounts, SequenceIds())
     }
 
     private fun list(accounts: InMemoryAccountRepository): TransfersViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        return TransfersViewModel(TransfersRoute("a1"), TransferListUseCase(transfers, accounts, guard), accounts)
+        return TransfersViewModel(TransfersRoute("a1"), TransferListUseCase(transfers, features, accounts, guard), accounts)
     }
 
     @Test fun anAdministratorSearchesAMemberAndTransfersAtOnceWithOptions() = runTest(dispatcher) {
@@ -99,6 +99,26 @@ class TransferViewModelsTest {
         // The refusal keeps its code and every failed check, for the screen to word.
         assertEquals(TransferError.Refused("recipient_ineligible", listOf("profile_unassigned", "recipient_no_quota")), model.uiState.value.error)
         assertNull(model.uiState.value.done)
+    }
+
+    @Test fun aMemberPicksTheRecipientFromTheListAndSeesNames() = runTest(dispatcher) {
+        features.features = setOf("cloud.sessions.v1", "cloud.transfer.v1", "cloud.transfer.recipients.v1")
+        val accounts = InMemoryAccountRepository(listOf(account(memberId = "m1")))
+        val model = form(accounts)
+        settle()
+        assertFalse(model.uiState.value.administrator)
+        assertEquals(listOf("m2"), model.uiState.value.members?.map { it.id }, "The owner is left out")
+        model.onRecipient("m2"); model.onResume(true)
+        model.send(); settle()
+        // An offer: no administrator option goes with it.
+        assertTrue(transfers.calls.last().startsWith("transfer s1 m2 resume=false force=false"), transfers.calls.last())
+        assertEquals(TransferState.OFFERED, model.uiState.value.done?.state)
+
+        transfers.pages = { _, _ -> TransferPage(listOf(transfer("t1", from = "m1", to = "m2")), null) }
+        val list = list(accounts)
+        settle()
+        assertEquals(mapOf("m2" to "grace", "m1" to "ada"), list.uiState.value.names)
+        assertFalse("members" in transfers.calls)
     }
 
     @Test fun anOfferIsAcceptedFromTheIncomingListAndARefusalShowsItsCurrentState() = runTest(dispatcher) {

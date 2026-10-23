@@ -73,8 +73,8 @@ import org.jetbrains.compose.resources.stringResource
 
 /**
  * Transfer a session, in a sheet over it. An administrator picks a member (searched by name) and transfers at once, with
- * the options to resume it for them and to pause without waiting for the running turn; a member names the recipient by
- * member ID and sends an offer they accept.
+ * the options to resume it for them and to pause without waiting for the running turn; a member picks the recipient
+ * the same way and sends an offer they accept. A server without the recipients' list takes a member ID instead.
  */
 @Composable
 fun TransferSheet(viewModel: TransferViewModel, onDismiss: () -> Unit) {
@@ -119,7 +119,7 @@ fun TransferSheet(viewModel: TransferViewModel, onDismiss: () -> Unit) {
                 ToggleRow(stringResource(Res.string.transfer_force), stringResource(Res.string.transfer_force_body), state.force, viewModel::onForce, Modifier.testTag("transfer-force"))
             }
             state.error?.let { error ->
-                Banner(transferErrorText(error), Tone.DANGER, Modifier.testTag("transfer-error"), action = if (state.members == null && state.administrator) {
+                Banner(transferErrorText(error), Tone.DANGER, Modifier.testTag("transfer-error"), action = if (state.members == null) {
                     { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::reload, kind = ButtonKind.SECONDARY, small = true) }
                 } else null)
             }

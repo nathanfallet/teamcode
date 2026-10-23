@@ -68,14 +68,24 @@ class TransferAvailabilityUseCase(private val accounts: AccountRepository, priva
 }
 
 /**
- * Who the session can go to. Administrators get the team's members (the session's owner left out); a member gets
- * null: the server lists members to administrators only, so the recipient is named by their member ID.
+ * Who the session can go to, the session's owner left out. A server with `cloud.transfer.recipients.v1` lists them to
+ * whoever may transfer (members included); an older one lists members to administrators only, so a member there gets
+ * null and names the recipient by member ID.
  */
-class LoadRecipientsUseCase(private val transfers: TransferRepository, private val accounts: AccountRepository, private val guard: AccountGuard) {
+class LoadRecipientsUseCase(
+    private val transfers: TransferRepository,
+    private val features: FeaturesRepository,
+    private val accounts: AccountRepository,
+    private val guard: AccountGuard,
+) {
     suspend operator fun invoke(accountId: String, ownerId: String): List<TeamMember>? = guard(accountId) {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: throw CompanionException.Unauthorized()
-        if (!account.isAdministrator) return@guard null
-        transfers.members(accountId).filter { it.id != ownerId }.sortedWith(compareByDescending<TeamMember> { it.available }.thenBy { it.username.lowercase() })
+        val listed = when {
+            Features.TRANSFER_RECIPIENTS in features.features(accountId) -> transfers.recipients(accountId)
+            account.isAdministrator -> transfers.members(accountId)
+            else -> return@guard null
+        }
+        listed.filter { it.id != ownerId }.sortedWith(compareByDescending<TeamMember> { it.available }.thenBy { it.username.lowercase() })
     }
 }
 
@@ -107,13 +117,25 @@ class TransferSessionUseCase(
 }
 
 /** The signed-in member's incoming or outgoing transfers, newest first, and the decisions on them. */
-class TransferListUseCase(private val transfers: TransferRepository, private val accounts: AccountRepository, private val guard: AccountGuard) {
+class TransferListUseCase(
+    private val transfers: TransferRepository,
+    private val features: FeaturesRepository,
+    private val accounts: AccountRepository,
+    private val guard: AccountGuard,
+) {
     suspend fun page(accountId: String, direction: TransferDirection, before: String? = null): TransferPage = guard(accountId) { transfers.transfers(accountId, direction, before) }
 
-    /** Member names by ID, for administrators (one request); a member sees IDs, and "you" for themselves. */
+    /**
+     * Member names by ID, in one request: the recipients' list where the server has it (members who can no longer
+     * receive a session, disabled for example, show by ID), else the member list for administrators; otherwise none.
+     */
     suspend fun names(accountId: String): Map<String, String> = guard(accountId) {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: return@guard emptyMap()
-        if (!account.isAdministrator) emptyMap() else transfers.members(accountId).associate { it.id to it.username }
+        when {
+            Features.TRANSFER_RECIPIENTS in features.features(accountId) -> transfers.recipients(accountId).associate { it.id to it.username }
+            account.isAdministrator -> transfers.members(accountId).associate { it.id to it.username }
+            else -> emptyMap()
+        }
     }
 
     suspend fun accept(accountId: String, transferId: String, resume: Boolean? = null): SessionTransfer = guard(accountId) { transfers.accept(accountId, transferId, resume) }
