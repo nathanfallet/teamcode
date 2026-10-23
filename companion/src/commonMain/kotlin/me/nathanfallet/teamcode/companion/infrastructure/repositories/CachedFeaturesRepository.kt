@@ -15,7 +15,8 @@ class CachedFeaturesRepository(private val auth: AuthRepository, private val acc
     override suspend fun features(accountId: String, refresh: Boolean): Set<String> {
         val origin = accounts.accounts.value.firstOrNull { it.id == accountId }?.origin ?: throw CompanionException.Unauthorized()
         if (!refresh) lock.withLock { cache[accountId]?.takeIf { it.first == origin }?.let { return it.second } }
-        val features = auth.serverInfo(origin).features
+        // With the account's token: the server announces its capabilities to signed-in callers only.
+        val features = auth.capabilities(accountId).features
         lock.withLock { cache[accountId] = origin to features }
         return features
     }

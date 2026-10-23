@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.companion.domain.repositories
 
 import me.nathanfallet.teamcode.companion.domain.models.LoginSession
 import me.nathanfallet.teamcode.companion.domain.models.Member
+import me.nathanfallet.teamcode.companion.domain.models.ServerCapabilities
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
 
 /**
@@ -9,7 +10,15 @@ import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
  * Calls with an explicit token run before an account exists; the others use the token stored for the account.
  */
 interface AuthRepository {
-    suspend fun serverInfo(origin: String): ServerInfo
+    /**
+     * Checks, without any credential, that [origin] answers like a TeamCode server. Its capabilities are behind
+     * authentication: an anonymous refusal carrying a TeamCode error code is a TeamCode server asking for a sign-in.
+     */
+    suspend fun discover(origin: String): ServerInfo
+    /** `GET /api/v1/capabilities` with a session that was just created and is not stored yet. */
+    suspend fun capabilities(origin: String, token: String): ServerCapabilities
+    /** `GET /api/v1/capabilities` with the token stored for the account. */
+    suspend fun capabilities(accountId: String): ServerCapabilities
     suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession
     suspend fun changePassword(origin: String, token: String, current: String, replacement: String)
     suspend fun me(accountId: String): Member

@@ -62,7 +62,7 @@ fun LoginScreen(
     val changing = state.passwordChange != null
     FormScaffold(stringResource(if (changing) Res.string.password_change_title else Res.string.login_title), onBack) {
         InfoCard(Modifier.testTag("login-server")) {
-            state.server?.let { Text(stringResource(Res.string.add_server_found, it.serverVersion), style = MaterialTheme.typography.titleMedium) }
+            state.server?.let { Text(stringResource(Res.string.add_server_found), style = MaterialTheme.typography.titleMedium) }
             Text(state.origin, style = MonospaceStyle)
         }
         if (state.server == null && !state.working) {

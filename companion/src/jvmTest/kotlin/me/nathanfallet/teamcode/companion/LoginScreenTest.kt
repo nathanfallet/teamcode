@@ -33,7 +33,7 @@ class LoginScreenTest {
         var signedIn = false
         setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = { signedIn = true }, viewModel = viewModel) } }
 
-        onNodeWithText("TeamCode 0.7.0").assertExists()
+        onNodeWithText("TeamCode server").assertExists()
         onNodeWithText("https://team.example").assertExists()
         onNodeWithTag("submit").assertIsNotEnabled()
         onNodeWithTag("username").performTextInput("ada")
@@ -52,12 +52,13 @@ class LoginScreenTest {
         onNodeWithTag("submit").performClick()
         waitUntil { signedIn }
         assertEquals("ada", accounts.accounts.value.single().username)
+        assertEquals("0.7.0", accounts.accounts.value.single().serverVersion)
         assertEquals("", viewModel.uiState.value.password)
     }
 
     @Test fun anUnreachableServerOffersARetry() = runComposeUiTest {
         val auth = object : me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository by FakeAuthRepository() {
-            override suspend fun serverInfo(origin: String) = throw me.nathanfallet.teamcode.companion.domain.models.CompanionException.Unreachable()
+            override suspend fun discover(origin: String) = throw me.nathanfallet.teamcode.companion.domain.models.CompanionException.Unreachable()
         }
         val signIn = SignInUseCase(auth, InMemoryAccountRepository(), credentials(), FixedInstallation, SequenceIds())
         val viewModel = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform)

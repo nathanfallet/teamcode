@@ -7,7 +7,7 @@
     <string name="add_server_intro">Enter the address of your team's TeamCode server. The app checks it before asking for a password.</string>
     <string name="add_server_origin">Server address</string>
     <string name="add_server_check">Check the server</string>
-    <string name="add_server_found">TeamCode %1$s</string>
+    <string name="add_server_found">TeamCode server</string>
     <string name="add_server_new_warning">You have never signed in to this server from this device. Continue only if you trust this address.</string>
     <string name="login_title">Sign in</string>
     <string name="login_server">Server</string>

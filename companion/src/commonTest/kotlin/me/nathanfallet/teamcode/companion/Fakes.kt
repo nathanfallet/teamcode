@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LoginSession
 import me.nathanfallet.teamcode.companion.domain.models.Member
+import me.nathanfallet.teamcode.companion.domain.models.ServerCapabilities
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
@@ -16,7 +17,8 @@ import me.nathanfallet.teamcode.companion.domain.services.InstallationIdentity
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.MemoryCredentialStore
 
-val server = ServerInfo("https://team.example", "0.7.0", 1, setOf("cloud.sessions.v1"))
+val server = ServerInfo("https://team.example")
+val capabilities = ServerCapabilities("0.7.0", 1, setOf("cloud.sessions.v1"))
 
 fun member(id: String = "m1", username: String = "ada", passwordChangeRequired: Boolean = false, role: String = "MEMBER") =
     Member(id, username, role, passwordChangeRequired)
@@ -31,7 +33,15 @@ class FakeAuthRepository : AuthRepository {
     var loginFailure: Exception? = null
     val released = mutableListOf<String>()
 
-    override suspend fun serverInfo(origin: String): ServerInfo { calls += "capabilities $origin"; return info.copy(origin = origin) }
+    var announced: ServerCapabilities = capabilities
+    var capabilitiesFailure: Exception? = null
+    override suspend fun discover(origin: String): ServerInfo { calls += "discover $origin"; return info.copy(origin = origin) }
+    override suspend fun capabilities(origin: String, token: String): ServerCapabilities {
+        calls += "capabilities $origin $token"
+        capabilitiesFailure?.let { throw it }
+        return announced
+    }
+    override suspend fun capabilities(accountId: String): ServerCapabilities { calls += "capabilities $accountId"; return announced }
     override suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession {
         calls += "login $origin $username $password $deviceName $installationId"
         loginFailure?.let { throw it }

@@ -13,7 +13,8 @@ import me.nathanfallet.teamcode.companion.domain.services.IdGenerator
 import me.nathanfallet.teamcode.companion.domain.services.InstallationIdentity
 
 /**
- * Password login, as `teamcode login`: the installation id registers the app as a device. The password is never
+ * Password login, as `teamcode login`: the installation id registers the app as a device. The server's capabilities
+ * are read with the new session, and a server whose API this app does not speak is refused before anything is stored. The password is never
  * stored; the token goes to the [CredentialStore] and the account metadata to the [AccountRepository]. Signing in
  * again as the same member on the same server replaces that account instead of adding a second one, and revokes the
  * session it replaces: the server keeps every session of a device until it is logged out or expires.
@@ -30,10 +31,18 @@ class SignInUseCase(
         val device = validDeviceName(deviceName)
         val session = auth.login(server.origin, name, password, device, installation.id())
         if (session.member.passwordChangeRequired) return SignInResult.PasswordChangeRequired(server, name, device, session.accessToken)
-        return SignInResult.SignedIn(store(server, session, device))
+        // Read with the new session: the server announces its version and capabilities to signed-in callers only.
+        val capabilities = try {
+            auth.capabilities(server.origin, session.accessToken).also { requireSupportedApi(it.apiVersion) }
+        } catch (error: Throwable) {
+            // The session is not kept (an API this app does not speak, or no answer): revoked instead of left valid.
+            auth.abandon(server.origin, session.accessToken)
+            throw error
+        }
+        return SignInResult.SignedIn(store(server, session, device, capabilities.serverVersion))
     }
 
-    private suspend fun store(server: ServerInfo, session: LoginSession, deviceName: String): Account {
+    private suspend fun store(server: ServerInfo, session: LoginSession, deviceName: String, serverVersion: String): Account {
         val existing = accounts.accounts.value.firstOrNull { it.origin == server.origin && it.memberId == session.member.id }
         val account = Account(
             id = existing?.id ?: ids.newId(),
@@ -44,7 +53,7 @@ class SignInUseCase(
             // The server keeps the name of a known installation (it may have been renamed since): so does the app.
             deviceName = existing?.deviceName ?: deviceName,
             expiresAt = session.expiresAt,
-            serverVersion = server.serverVersion,
+            serverVersion = serverVersion,
         )
         val replaced = existing?.let {
             try { credentials.read(it.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { null }

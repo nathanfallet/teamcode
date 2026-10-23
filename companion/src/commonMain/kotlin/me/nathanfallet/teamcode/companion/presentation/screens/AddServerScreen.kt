@@ -60,7 +60,7 @@ fun AddServerScreen(
             }
         } else {
             InfoCard(Modifier.testTag("server")) {
-                Text(stringResource(Res.string.add_server_found, server.serverVersion), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(Res.string.add_server_found), style = MaterialTheme.typography.titleMedium)
                 Text(server.origin, style = MonospaceStyle)
                 if (state.newServer) Text(stringResource(Res.string.add_server_new_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
             }

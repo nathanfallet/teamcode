@@ -67,6 +67,9 @@ kotlin {
         jvmTest.dependencies {
             runtimeOnly(libs.junit)
             implementation(libs.compose.ui.test)
+            // The real server application, for discovery and sign-in over a socket (GatewayDiscoveryTest).
+            implementation(projects.presentation)
+            implementation(libs.ktor.server.cio)
         }
     }
 }

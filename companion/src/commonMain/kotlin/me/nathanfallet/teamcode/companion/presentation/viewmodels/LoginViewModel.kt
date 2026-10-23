@@ -37,7 +37,7 @@ data class LoginUiState(
     }
 
     // Passwords stay out of logs and crash reports.
-    override fun toString() = "LoginUiState($origin, server=${server?.serverVersion}, working=$working, signedIn=$signedIn)"
+    override fun toString() = "LoginUiState($origin, checked=${server != null}, working=$working, signedIn=$signedIn)"
 }
 
 /** Password sign-in, then the password change a temporary password requires, as `teamcode login`. */

@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.companion.FixedInstallation
 import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.SequenceIds
 import me.nathanfallet.teamcode.companion.account
+import me.nathanfallet.teamcode.companion.capabilities
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.member
 import me.nathanfallet.teamcode.companion.server
@@ -42,16 +43,37 @@ class AuthUseCasesTest {
             assertFailsWith<CompanionException.InvalidOrigin>(invalid) { normalizeOrigin(invalid) }
     }
 
-    @Test fun inspectingAServerRefusesAnotherApiVersion() = runTest {
-        assertEquals("0.7.0", InspectServerUseCase(auth)("team.example").serverVersion)
-        assertEquals("capabilities https://team.example", auth.calls.single())
+    @Test fun inspectingAServerRefusesAnotherApiVersionOnlyWhenItIsAnnounced() = runTest {
+        // TeamCode keeps its version behind authentication: the server is accepted, its API checked at sign-in.
+        assertEquals("https://team.example", InspectServerUseCase(auth)("team.example").origin)
+        assertEquals("discover https://team.example", auth.calls.single())
         auth.info = server.copy(apiVersion = 2)
         assertEquals(2, assertFailsWith<CompanionException.UnsupportedApi> { InspectServerUseCase(auth)("team.example") }.apiVersion)
     }
 
+    @Test fun signingInReadsTheCapabilitiesWithTheNewSessionAndRefusesAnotherApi() = runTest {
+        val account = assertIs<SignInResult.SignedIn>(signIn(server, "ada", "pw", "Phone")).account
+        assertEquals("capabilities https://team.example token-1", auth.calls.last())
+        assertEquals("0.7.0", account.serverVersion)
+        assertTrue(auth.abandoned.isEmpty())
+
+        accounts.remove(account.id)
+        auth.announced = capabilities.copy(apiVersion = 2)
+        assertEquals(2, assertFailsWith<CompanionException.UnsupportedApi> { signIn(server, "ada", "pw", "Phone") }.apiVersion)
+        // Nothing kept, and the session the login created is revoked.
+        assertTrue(accounts.accounts.value.isEmpty())
+        assertEquals(listOf("https://team.example token-1"), auth.abandoned)
+
+        auth.announced = capabilities
+        auth.capabilitiesFailure = CompanionException.Unreachable()
+        assertFailsWith<CompanionException.Unreachable> { signIn(server, "ada", "pw", "Phone") }
+        assertTrue(accounts.accounts.value.isEmpty())
+        assertEquals(2, auth.abandoned.size)
+    }
+
     @Test fun signingInStoresTheTokenAndTheAccountButNeverThePassword() = runTest {
         val result = assertIs<SignInResult.SignedIn>(signIn(server, " ada ", "secret password", "TeamCode Test · Bench"))
-        assertEquals("login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111", auth.calls.single())
+        assertEquals("login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111", auth.calls.first())
         assertEquals("token-1", store.read(result.account.id))
         assertEquals(listOf(result.account), accounts.accounts.value)
         assertEquals(result.account.id, accounts.activeAccountId.value)
@@ -90,6 +112,8 @@ class AuthUseCasesTest {
         val signed = change(pending, "temporary-pw", "a new long password", "a new long password")
         assertEquals("password temporary temporary-pw a new long password", auth.calls[1])
         assertTrue(auth.calls[2].startsWith("login https://team.example ada a new long password "))
+        // A temporary session reads nothing else: the capabilities come with the session that follows the change.
+        assertEquals("capabilities https://team.example token-2", auth.calls.single { it.startsWith("capabilities") })
         assertEquals("token-2", store.read(signed.account.id))
     }
 

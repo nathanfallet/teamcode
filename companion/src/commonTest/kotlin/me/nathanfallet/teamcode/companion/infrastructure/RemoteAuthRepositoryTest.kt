@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientProvider
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.CachedFeaturesRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteAuthRepository
 import kotlin.test.*
 
@@ -38,24 +39,57 @@ class RemoteAuthRepositoryTest {
     private fun repository(scope: kotlinx.coroutines.CoroutineScope) =
         TeamCodeClientProvider(engine, store, FakePlatform).let { RemoteAuthRepository(it, me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls(it, accounts), scope) }
 
-    @Test fun capabilitiesAreMappedAndTheAppNamesItself() = runTest {
-        answer = { HttpStatusCode.OK to """{"apiVersion":1,"serverVersion":"0.7.0","mode":"team","features":["cloud.events.v1"],"future":true}""" }
-        val info = repository(backgroundScope).serverInfo("https://team.example")
-        assertEquals("0.7.0", info.serverVersion); assertEquals(setOf("cloud.events.v1"), info.features)
+    /** As every TeamCode server: `/api/v1/capabilities` refuses a call without a credential with a 401 and its code. */
+    private val teamCode: (HttpRequestData) -> Pair<HttpStatusCode, String> = { request ->
+        when {
+            request.headers[HttpHeaders.Authorization] == null && request.url.encodedPath != "/api/v1/auth/login" ->
+                HttpStatusCode.Unauthorized to """{"error":{"type":"authentication_required","message":"Sign in to TeamCode."}}"""
+            request.url.encodedPath == "/api/v1/capabilities" ->
+                HttpStatusCode.OK to """{"apiVersion":1,"serverVersion":"0.7.0","mode":"team","features":["cloud.events.v1"],"future":true}"""
+            else -> HttpStatusCode.NotFound to """{"error":{"type":"not_found","message":"x"}}"""
+        }
+    }
+
+    @Test fun aServerThatAsksForASignInIsTeamCodeAndTheAppNamesItself() = runTest {
+        answer = teamCode
+        val info = repository(backgroundScope).discover("https://team.example")
+        assertEquals("https://team.example", info.origin); assertNull(info.apiVersion)
+        assertEquals("/api/v1/capabilities", requests.single().url.encodedPath)
         assertEquals("TeamCode-Companion/0.7.0 (Test)", requests.single().headers[HttpHeaders.UserAgent])
         assertNull(requests.single().headers[HttpHeaders.Authorization])
     }
 
+    @Test fun aServerThatAnnouncesItselfAnonymouslyGivesItsApiVersion() = runTest {
+        answer = { HttpStatusCode.OK to """{"apiVersion":2,"serverVersion":"9.0.0","mode":"team","features":[]}""" }
+        assertEquals(2, repository(backgroundScope).discover("https://team.example").apiVersion)
+    }
+
+    @Test fun capabilitiesAreReadWithTheSessionThenWithTheAccountToken() = runTest {
+        answer = teamCode
+        val repository = repository(backgroundScope)
+        val announced = repository.capabilities("https://team.example", "tc_new")
+        assertEquals("0.7.0", announced.serverVersion); assertEquals(1, announced.apiVersion); assertEquals(setOf("cloud.events.v1"), announced.features)
+        store.write("a1", "tc_stored")
+        val features = CachedFeaturesRepository(repository, accounts)
+        assertEquals(setOf("cloud.events.v1"), features.features("a1"))
+        assertEquals(listOf("Bearer tc_new", "Bearer tc_stored"), requests.map { it.headers[HttpHeaders.Authorization] })
+    }
+
     @Test fun aServerThatIsNotTeamCodeIsSaidSo() = runTest {
         answer = { HttpStatusCode.NotFound to "<html>nope</html>" }
-        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).discover("https://other.example") }
         answer = { HttpStatusCode.OK to "<html>a portal</html>" }
-        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).discover("https://other.example") }
         answer = { HttpStatusCode.Found to "" }
-        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).serverInfo("https://other.example") }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).discover("https://other.example") }
+        // A 401 without TeamCode's code (a proxy's login page, another API) is another server, never "signed out".
+        answer = { HttpStatusCode.Unauthorized to "<html>sign in</html>" }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).discover("https://other.example") }
+        answer = { HttpStatusCode.Unauthorized to """{"error":{"type":"authentication_error","message":"x"}}""" }
+        assertFailsWith<CompanionException.NotTeamCode> { repository(backgroundScope).discover("https://other.example") }
         // A proxy in front of a TeamCode server that is down is not "another server".
         answer = { HttpStatusCode.BadGateway to "<html>bad gateway</html>" }
-        assertEquals(502, assertFailsWith<CompanionException.Server> { repository(backgroundScope).serverInfo("https://team.example") }.statusCode)
+        assertEquals(502, assertFailsWith<CompanionException.Server> { repository(backgroundScope).discover("https://team.example") }.statusCode)
     }
 
     @Test fun loginSendsTheInstallationAndMapsTheMember() = runTest {
