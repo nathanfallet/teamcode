@@ -201,4 +201,20 @@
     <string name="action_done">Done</string>
     <string name="session_title_back">Session</string>
     <string name="link_open_hint">Opens in your browser. Check the address first: an agent's text can put any link behind any label.</string>
+    <string name="sessions_kind_all">All</string>
+    <string name="sessions_kind_cloud">Cloud</string>
+    <string name="sessions_kind_remote">Remote</string>
+    <string name="session_kind_cloud">Cloud</string>
+    <string name="session_kind_remote">Remote · %1$s</string>
+    <string name="session_host_unnamed">unnamed device</string>
+    <string name="session_host_removed">removed device</string>
+    <string name="session_host_offline_chip">Offline</string>
+    <string name="session_host_offline">%1$s stopped answering, so the session paused. It goes on once the device is back online; a message asks it to resume.</string>
+    <string name="session_detail_runs_on">Runs on</string>
+    <string name="session_detail_system">System</string>
+    <string name="session_detail_folder">Folder</string>
+    <string name="session_detail_permissions">Permissions</string>
+    <string name="session_permissions_ask">Asks before acting</string>
+    <string name="session_permissions_bypass">Acts without asking</string>
+    <string name="session_paused_remote_dock">Paused on %1$s. A message asks it to resume.</string>
 </resources>

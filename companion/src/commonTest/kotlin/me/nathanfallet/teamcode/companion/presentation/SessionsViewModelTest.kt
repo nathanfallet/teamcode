@@ -22,6 +22,7 @@ import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
+import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
@@ -45,8 +46,7 @@ class SessionsViewModelTest {
     @BeforeTest fun setUp() { Dispatchers.setMain(dispatcher); sessions.changes = feed.receiveAsFlow() }
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
-    private fun viewModel(): SessionsViewModel {
-        val features = FakeFeatures()
+    private fun viewModel(features: FakeFeatures = FakeFeatures()): SessionsViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
         return SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
     }
@@ -126,6 +126,36 @@ class SessionsViewModelTest {
         settle()
         assertEquals("list MINE PAUSED null", sessions.calls.last())
         assertFalse(model.uiState.value.loading)
+        model.stop()
+    }
+
+    @Test fun theKindFilterAppearsWithRemoteSessionsAndReloadsWithoutReopeningTheFeed() = runTest(dispatcher) {
+        val model = viewModel(FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1")))
+        // Before the server's capabilities are read, there is no filter to choose.
+        model.setKind(KindFilter.REMOTE)
+        assertEquals(KindFilter.ALL, model.uiState.value.kind)
+        model.start()
+        feed.send(LiveUpdate.Opened(false))
+        settle()
+        assertTrue(model.uiState.value.remoteSessions)
+        assertEquals(listOf("feed cloud,remote", "list MINE ACTIVE null cloud,remote"), sessions.calls)
+        model.setKind(KindFilter.REMOTE)
+        settle()
+        assertEquals(listOf("feed cloud,remote", "list MINE ACTIVE null cloud,remote", "list MINE ACTIVE null remote"), sessions.calls)
+        assertEquals(KindFilter.REMOTE, model.uiState.value.kind)
+        model.stop()
+    }
+
+    @Test fun anOlderServerOffersNoKindFilterAndIsAskedAsBefore() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start()
+        feed.send(LiveUpdate.Opened(false))
+        settle()
+        assertFalse(model.uiState.value.remoteSessions)
+        model.setKind(KindFilter.CLOUD)
+        settle()
+        assertEquals(listOf("feed", "list MINE ACTIVE null"), sessions.calls)
+        assertEquals(KindFilter.ALL, model.uiState.value.kind)
         model.stop()
     }
 

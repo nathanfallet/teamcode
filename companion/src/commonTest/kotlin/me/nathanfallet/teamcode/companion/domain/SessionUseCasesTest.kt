@@ -13,6 +13,9 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.KindFilter
+import me.nathanfallet.teamcode.companion.domain.models.SessionKind
+import me.nathanfallet.teamcode.companion.laptop
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
@@ -129,7 +132,7 @@ class SessionUseCasesTest {
         }
         val start = testScheduler.currentTime
         val signals = FollowSessionListUseCase(sessions, features, guard())("a1").toList()
-        assertEquals(listOf(SessionListSignal.Connection(true), SessionListSignal.Connection(true), SessionListSignal.Connection(false), SessionListSignal.Reload), signals)
+        assertEquals(listOf(SessionListSignal.Connection(true), SessionListSignal.Connection(true), NO_REMOTE, SessionListSignal.Connection(false), SessionListSignal.Reload), signals)
         assertEquals(6_000, testScheduler.currentTime - start)
     }
 
@@ -139,7 +142,7 @@ class SessionUseCasesTest {
         sessions.changes = flowOf(LiveUpdate.Opened(false), LiveUpdate.Item(c), LiveUpdate.Reconnecting(2_000), LiveUpdate.Opened(true), LiveUpdate.Gap)
         val signals = FollowSessionListUseCase(sessions, FakeFeatures(), guard())("a1").toList()
         assertEquals(
-            listOf(SessionListSignal.Connection(false), SessionListSignal.Reload, SessionListSignal.Changed(c), SessionListSignal.Connection(true), SessionListSignal.Connection(false), SessionListSignal.Reload),
+            listOf(NO_REMOTE, SessionListSignal.Connection(false), SessionListSignal.Reload, SessionListSignal.Changed(c), SessionListSignal.Connection(true), SessionListSignal.Connection(false), SessionListSignal.Reload),
             signals,
         )
     }
@@ -156,9 +159,9 @@ class SessionUseCasesTest {
     @Test fun withoutTheFeedTheListIsReloadedEveryFifteenSeconds() = runTest {
         val sessions = FakeSessionRepository()
         val start = testScheduler.currentTime
-        val signals = FollowSessionListUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1")), guard())("a1").take(4).toList()
+        val signals = FollowSessionListUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1")), guard())("a1").take(5).toList()
         // "Reconnecting" ends first, in case the start needed retries.
-        assertEquals(listOf<SessionListSignal>(SessionListSignal.Connection(reconnecting = false)) + List(3) { SessionListSignal.Reload }, signals)
+        assertEquals(listOf(NO_REMOTE, SessionListSignal.Connection(reconnecting = false)) + List(3) { SessionListSignal.Reload }, signals)
         assertEquals(30_000, testScheduler.currentTime - start)
         assertFalse("feed" in sessions.calls)
     }
@@ -189,6 +192,56 @@ class SessionUseCasesTest {
         assertEquals(8, older.newestSeq)
         // A page that says the session has newer events than it holds: following resumes after them.
         assertEquals(12, Transcript().withLatest(TranscriptPage(emptyList(), null, lastSeq = 12)).newestSeq)
+    }
+
+    @Test fun aListKeepsOnlyTheKindsItFiltersOnAndIgnoresTheFeedsOtherKinds() {
+        val remote = cloudSession("r", createdAt = 2_000, host = laptop())
+        val both = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("c"), remote), null))
+        assertEquals(listOf("r", "c"), both.sessions.map { it.id })
+        val cloudOnly = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1", KindFilter.CLOUD).loaded(SessionPage(listOf(cloudSession("c"), remote), null))
+        assertEquals(listOf("c"), cloudOnly.sessions.map { it.id })
+        // A remote session's event is not read into a cloud list; an event without a kind (an older server) still is.
+        assertNull(cloudOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING).copy(kind = SessionKind.REMOTE)).second)
+        assertEquals("n", cloudOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING)).second)
+        // Read anyway, a remote session never lands in it.
+        assertTrue(cloudOnly.upserted(cloudSession("n", host = laptop())).sessions.none { it.id == "n" })
+        val remoteOnly = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1", KindFilter.REMOTE).loaded(SessionPage(listOf(remote), null))
+        assertEquals("n", remoteOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING).copy(kind = SessionKind.REMOTE)).second)
+    }
+
+    @Test fun kindsAreAskedForOnlyFromAServerWithRemoteSessions() = runTest {
+        val sessions = FakeSessionRepository()
+        val remote = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1"))
+        LoadSessionsUseCase(sessions, remote, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE)
+        LoadSessionsUseCase(sessions, remote, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE, kind = KindFilter.REMOTE)
+        val older = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1"))
+        LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE)
+        // An older server has no remote session: nothing to ask it for.
+        assertTrue(LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE, kind = KindFilter.REMOTE).sessions.isEmpty())
+        assertEquals(listOf("list MINE ACTIVE null cloud,remote", "list MINE ACTIVE null remote", "list MINE ACTIVE null"), sessions.calls)
+
+        sessions.calls.clear()
+        sessions.changes = flowOf(LiveUpdate.Opened(false))
+        assertEquals(SessionListSignal.RemoteSessions(true), FollowSessionListUseCase(sessions, remote, guard())("a1").toList().first())
+        FollowSessionListUseCase(sessions, older, guard())("a1").toList()
+        // The feed carries every kind from a server that has them, and is asked as before otherwise.
+        assertEquals(listOf("feed cloud,remote", "feed"), sessions.calls)
+    }
+
+    @Test fun aRemoteSessionIsNeitherResumedFromHereNorTransferred() {
+        val paused = cloudSession("r", SessionState.PAUSED, host = laptop(online = false), problemCode = "host_offline")
+        assertFalse(me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase.canResume(paused))
+        assertFalse(me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase.canTransfer(paused))
+        assertTrue(me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase.canMessage(paused))
+        assertTrue(paused.hostOffline)
+        val cloud = cloudSession("c", SessionState.PAUSED, problemCode = "host_offline")
+        assertTrue(me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase.canResume(cloud))
+        assertTrue(me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase.canTransfer(cloud))
+        assertFalse(cloud.hostOffline)
+    }
+
+    private companion object {
+        val NO_REMOTE = SessionListSignal.RemoteSessions(false)
     }
 
     private fun guard() = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))

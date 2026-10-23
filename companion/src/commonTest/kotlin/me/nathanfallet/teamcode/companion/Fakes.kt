@@ -105,10 +105,18 @@ fun cloudSession(
     state: me.nathanfallet.teamcode.companion.domain.models.SessionState = me.nathanfallet.teamcode.companion.domain.models.SessionState.READY,
     ownerId: String = "m1",
     createdAt: Long = 1_000,
+    host: me.nathanfallet.teamcode.companion.domain.models.SessionHost? = null,
+    problemCode: String? = null,
 ) = me.nathanfallet.teamcode.companion.domain.models.CloudSession(
     id = id, name = "Session $id", ownerId = ownerId, state = state, phase = null, agentKind = "claude", model = "opus", effort = null,
-    profileId = "p1", repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = null,
+    profileId = "p1", repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = problemCode,
+    kind = if (host != null) me.nathanfallet.teamcode.companion.domain.models.SessionKind.REMOTE else me.nathanfallet.teamcode.companion.domain.models.SessionKind.CLOUD,
+    host = host,
 )
+
+/** A remote session's host: a named macOS laptop running in `app`, online unless said otherwise. */
+fun laptop(online: Boolean = true, name: String? = "Ada's MacBook", removed: Boolean = false) =
+    me.nathanfallet.teamcode.companion.domain.models.SessionHost(name, "macos", "15.1", "app", online, removed, "ask")
 
 class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1")) :
     me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
@@ -128,8 +136,9 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     /** Suspends each list load until released, to change things while it is in flight. */
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, group: me.nathanfallet.teamcode.companion.domain.models.SessionGroup, before: String?): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
-        calls += "list $scope $group $before"
+    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, group: me.nathanfallet.teamcode.companion.domain.models.SessionGroup, before: String?,
+        kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
+        calls += "list $scope $group $before" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")
         gate?.await()
         return pages(group, before)
     }
@@ -155,7 +164,8 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
-    override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }
+    override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>) =
+        changes.also { calls += "feed" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",") }
 }
 
 fun artifact(id: String, title: String = "Report $id", version: Int = 1, updatedAt: Long = 1_000) = me.nathanfallet.teamcode.companion.domain.models.Artifact(

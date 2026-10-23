@@ -1,5 +1,11 @@
 # Implementation status
 
+## Remote sessions in the companion app (2026-10-23)
+
+Third step of remote sessions, with Nathan's approval beyond the V1 scope (23/10, in #105): the companion app tells remote sessions from cloud ones. From a server that announces `cloud.sessions.remote.v1` it asks the list and the feed for both kinds and offers a cloud / remote / all filter; cards and the session header say "Cloud" or "Remote · <device>", a device that went quiet (`host_offline`) is shown as offline in plain words, and a remote session offers no Resume (only its device resumes it; a message asks it to) and never a transfer. An older server is asked exactly as before. Details in [companion.md](companion.md#app).
+
+Evidence: `RemoteSessionRepositoryTest`, `SessionUseCasesTest`, `SessionsViewModelTest`, `SessionsScreenTest` and `SessionScreenTest` (desktop target); `:companion:jvmTest`, `:companion:testAndroidHostTest`, `:companion:compileKotlinIosSimulatorArm64` and `:companion-android:assembleDebug` pass locally.
+
 ## Shared local configuration module (2026-10-23)
 
 The CLI's local configuration moves into a new module, `:config` (Kotlin/Native for the CLI's five targets and JVM for the desktop app): the path of `config.json` (`XDG_CONFIG_HOME`, else `~/.config`), its format and validation, `installation-id` (created without replacement) and a new advisory lock, `config.lock`. The lock is a POSIX record lock (`fcntl`, the lock the JVM's `FileChannel.lock` takes, so the native CLI and a JVM app exclude each other) or `LockFileEx` on Windows, held by login, logout and `teamcode configure` around their read-modify-write and never across a network call; a command waits up to 10 seconds, then refuses, and the file is never deleted to guess that a holder died. Login revokes the session its new configuration replaced; logout removes the file only if it still holds the session it revoked. Private writes stay behind an interface: the CLI's native writers (0600/0700, protected DACL through the Windows interop) are unchanged, and the module adds the JVM writer the desktop app needs, POSIX permissions or, on Windows, an owner-only ACL entry for the token user (a path owned by someone else or a reparse point is refused). `scripts/check-module-graph.py` knows `cli -> config`.
