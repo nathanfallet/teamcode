@@ -37,7 +37,9 @@ class PoolAccountStatusPersistenceTest {
 
                 // The member's view: home pool only, neutral labels, no identifiers, no other pool and no reserve without opt-in.
                 val seen = admission.poolAccounts(member)
-                assertEquals(listOf("Account 1", "Account 2"), seen.map { it.label })
+                // The listing is ordered by next reset (home's 5-hour window first); the number follows priority then random id, so only the set is stable.
+                assertEquals(setOf("Account 1", "Account 2"), seen.map { it.label }.toSet())
+                assertTrue(seen.first().windows.any { it.window == "five_hour" }, "The account resetting first comes first")
                 assertTrue(seen.all { it.accountId == null && it.name == null && it.email == null && it.poolId == null }, "Members see no identifiers, not even pool names")
                 val homeView = seen.single { it.windows.any { w -> w.window == "five_hour" } }
                 assertTrue(homeView.usable, "A spent model window bars only that model")
