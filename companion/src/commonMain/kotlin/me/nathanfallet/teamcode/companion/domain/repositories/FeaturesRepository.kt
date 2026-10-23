@@ -12,4 +12,6 @@ object Features {
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
+    const val ARTIFACTS = "artifacts.v1"
+    const val ARTIFACT_TICKETS = "artifacts.tickets.v1"
 }

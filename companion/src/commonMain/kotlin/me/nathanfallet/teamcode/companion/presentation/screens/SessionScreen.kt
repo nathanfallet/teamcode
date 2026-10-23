@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.CaretLeft
+import com.adamglin.phosphoricons.regular.Files
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ConfirmingLinks
@@ -71,6 +72,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_back
+import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.session_connecting
 import me.nathanfallet.teamcode.companion.resources.session_empty
@@ -88,7 +90,7 @@ import org.jetbrains.compose.resources.stringResource
 /** A session's header and transcript: history pages upward, live events downward while visible. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> Unit) {
+fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> Unit, onOpenArtifacts: () -> Unit = {}) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LifecycleStartEffect(viewModel) {
         viewModel.start()
@@ -100,6 +102,12 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
                 title = { Text(state.session?.name ?: stringResource(Res.string.sessions_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(PhosphorIcons.Regular.CaretLeft, contentDescription = stringResource(Res.string.action_back), modifier = Modifier.size(22.dp)) }
+                },
+                actions = {
+                    // What this session published (the artifacts it created or updated).
+                    IconButton(onClick = onOpenArtifacts, modifier = Modifier.testTag("session-artifacts")) {
+                        Icon(PhosphorIcons.Regular.Files, contentDescription = stringResource(Res.string.artifacts_session_title), modifier = Modifier.size(22.dp))
+                    }
                 },
             )
         },

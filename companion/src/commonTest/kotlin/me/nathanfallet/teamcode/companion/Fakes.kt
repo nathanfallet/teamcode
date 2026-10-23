@@ -147,3 +147,28 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }
 }
+
+fun artifact(id: String, title: String = "Report $id", version: Int = 1, updatedAt: Long = 1_000) = me.nathanfallet.teamcode.companion.domain.models.Artifact(
+    id = id, url = "https://team.example/artifact/$id", title = title, description = "", icon = "chart", access = "team", ownerName = "ada",
+    currentVersion = version, originKind = "api", originSessionId = null, updatedAt = updatedAt,
+)
+
+/** Artifacts answered from [byId]; [pages] answers the gallery, [tickets] each ticket request. */
+class FakeArtifactRepository : me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository {
+    val calls = mutableListOf<String>()
+    val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.Artifact>()
+    var pages: (me.nathanfallet.teamcode.companion.domain.models.ArtifactScope, String?) -> me.nathanfallet.teamcode.companion.domain.models.ArtifactPage =
+        { _, _ -> me.nathanfallet.teamcode.companion.domain.models.ArtifactPage(emptyList(), null) }
+    var tickets: (String, Int?) -> me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket = { id, version ->
+        me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket(id, version ?: 1, "https://team.example/artifact/$id/t${calls.size}/", 9_000_000)
+    }
+    override suspend fun artifacts(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.ArtifactScope, sessionId: String?, before: String?) =
+        pages(scope, before).also { calls += "list ${scope.wire} $sessionId $before" }
+    override suspend fun artifact(accountId: String, artifactId: String) = (byId[artifactId] ?: throw CompanionException.NotFound()).also { calls += "get $artifactId" }
+    override suspend fun versions(accountId: String, artifactId: String): List<me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion> {
+        calls += "versions $artifactId"
+        val current = byId[artifactId]?.currentVersion ?: throw CompanionException.NotFound()
+        return (current downTo 1).map { me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion(it, it * 1_000L, 1, 10) }
+    }
+    override suspend fun ticket(accountId: String, artifactId: String, version: Int?) = tickets(artifactId, version).also { calls += "ticket $artifactId $version" }
+}

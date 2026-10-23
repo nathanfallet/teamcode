@@ -1,5 +1,11 @@
 # Implementation status
 
+## Companion app artifacts (2026-10-23)
+
+The [companion app](companion.md#app) shows artifacts: a gallery (own or team artifacts, a search over what is loaded, a session's artifacts from its screen), a viewer with a version picker, copy link and open in the browser, and on iOS and Android the content in a web view loaded from a view ticket (`artifacts.tickets.v1`) whose URL must be the account's origin under `/artifact/<id>/<ticket>/`; the web view keeps no cookie or storage, has no bridge or file access, and navigates only under the ticket's directory. An expired ticket is renewed once; a newer version is offered every 30 seconds, never loaded by itself. `teamcode://open?url=<viewer URL>` (the viewer page's **Open in app**) is registered on iOS and Android, Android takes shared text, and a pasted link opens from the gallery; a link resolves only to an artifact of an account on exactly its origin, and an unknown server is named before any sign-in. The desktop opens the viewer page in the browser. No server change.
+
+Evidence: `ArtifactUseCasesTest` (links, the ticket's prefix, a ticket for another server or version refused), `ArtifactViewModelsTest` (paging, scope, missing capability, one silent renewal, a newer version offered, no ticket on the desktop, a version the artifact lacks), `RemoteArtifactRepositoryTest`; the app compiles for the JVM, Android and the iOS simulator.
+
 ## Companion app distribution (2026-10-23)
 
 The [companion app](companion.md#distribution) builds and uploads from a maintainer's Mac with fastlane: `ios beta` archives with automatic signing through the App Store Connect key and uploads to TestFlight, `android beta` signs the release bundle with the upload key and uploads to Play's internal track. Only builds are uploaded: listings stay in the stores, and no lane submits or releases. Build numbers are `(major × 1,000,000 + minor × 1,000 + patch) × 100 + n` from the TeamCode version. `companion-android` signs its release build when the upload key is present; the iOS app has a shared scheme and a privacy manifest; the desktop `.dmg` is signed and notarized when the Mac provides a Developer ID. No key, certificate or password is in the repository.

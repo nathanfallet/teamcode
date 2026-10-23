@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.Gear
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.companion.domain.models.Account
@@ -54,6 +55,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
+import me.nathanfallet.teamcode.companion.resources.artifacts_title
 import me.nathanfallet.teamcode.companion.resources.new_session_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
 import me.nathanfallet.teamcode.companion.resources.home_signed_in_as
@@ -87,6 +89,7 @@ fun HomeScreen(
     onSignInAgain: (Account) -> Unit,
     onOpenSession: (Account, CloudSession) -> Unit,
     onNewSession: (Account) -> Unit = {},
+    onOpenArtifacts: (Account) -> Unit = {},
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
     clock: Clock = koinInject(),
@@ -120,6 +123,9 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    if (account?.signedIn == true) IconButton(onClick = { onOpenArtifacts(account) }, modifier = Modifier.testTag("artifacts")) {
+                        Icon(PhosphorIcons.Regular.Files, contentDescription = stringResource(Res.string.artifacts_title), modifier = Modifier.size(22.dp))
+                    }
                     IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("settings")) {
                         Icon(PhosphorIcons.Regular.Gear, contentDescription = stringResource(Res.string.settings_title), modifier = Modifier.size(22.dp))
                     }

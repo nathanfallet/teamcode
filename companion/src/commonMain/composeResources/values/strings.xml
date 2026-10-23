@@ -131,4 +131,27 @@
     <string name="settings_server_version">Server version %1$s</string>
     <string name="settings_license">TeamCode is open source software under the Apache License 2.0.</string>
     <string name="settings_no_keyring">This computer has no keyring available: your sign-in is kept only until the app quits.</string>
+    <string name="artifacts_title">Artifacts</string>
+    <string name="artifacts_session_title">Artifacts of this session</string>
+    <string name="artifacts_mine">Mine</string>
+    <string name="artifacts_team">Team</string>
+    <string name="artifacts_search">Search titles</string>
+    <string name="artifacts_empty">No artifact yet.</string>
+    <string name="artifacts_no_match">No loaded artifact matches.</string>
+    <string name="artifacts_load_more">Load more</string>
+    <string name="artifacts_card_details">%1$s · %2$s · v%3$d</string>
+    <string name="artifacts_open_link">Open a link</string>
+    <string name="artifacts_open_link_hint">Paste an artifact link</string>
+    <string name="artifacts_link_unknown">This is not a TeamCode artifact link.</string>
+    <string name="artifact_versions">Version %1$d</string>
+    <string name="artifact_version_item">Version %1$d · %2$s</string>
+    <string name="artifact_newer">Version %1$d was published.</string>
+    <string name="artifact_show_newer">Show it</string>
+    <string name="artifact_copy_link">Copy link</string>
+    <string name="artifact_copied">Link copied.</string>
+    <string name="artifact_open_browser">Open in the browser</string>
+    <string name="artifact_desktop">Artifacts open in your browser, on the viewer page of your server.</string>
+    <string name="link_new_server_title">A new server</string>
+    <string name="link_new_server">This link is for %1$s, a server this app is not signed in to. Sign in to it only if you trust it.</string>
+    <string name="link_new_server_confirm">Sign in to it</string>
 </resources>

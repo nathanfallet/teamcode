@@ -40,6 +40,12 @@ import me.nathanfallet.teamcode.companion.infrastructure.repositories.CachedFeat
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTranscriptRepository
 import me.nathanfallet.teamcode.companion.infrastructure.stream.ReconnectPolicy
+import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.GetArtifactUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.LoadArtifactsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenArtifactUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.links.ResolveLinkUseCase
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteArtifactRepository
 import org.koin.dsl.module
 
 /** Implementations; the platform module adds Settings, the CredentialStore, the HTTP engine and PlatformInfo. */
@@ -57,6 +63,7 @@ val infrastructureModule = module {
     single<FeaturesRepository> { CachedFeaturesRepository(get(), get()) }
     single<SessionRepository> { RemoteSessionRepository(get(), get()) }
     single<TranscriptRepository> { RemoteTranscriptRepository(get(), get()) }
+    single<ArtifactRepository> { RemoteArtifactRepository(get()) }
 }
 
 val domainModule = module {
@@ -76,4 +83,8 @@ val domainModule = module {
     single { ControlSessionUseCase(get(), get(), get()) }
     single { LoadProfilesUseCase(get(), get(), get()) }
     single { CreateSessionUseCase(get(), get(), get()) }
+    single { LoadArtifactsUseCase(get(), get(), get()) }
+    single { GetArtifactUseCase(get(), get()) }
+    single { OpenArtifactUseCase(get(), get(), get(), get()) }
+    single { ResolveLinkUseCase(get()) }
 }
