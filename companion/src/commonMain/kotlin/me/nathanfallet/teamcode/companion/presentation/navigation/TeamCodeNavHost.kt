@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -104,7 +105,9 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 route = entry.toRoute(),
                 onBack = { navController.popBackStack() },
                 onSignedIn = {
-                    navController.navigate(MainRoute) { popUpTo(0) { inclusive = true } }
+                    // The first account's arrival may already have opened the tabs.
+                    if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() != true)
+                        navController.navigate(MainRoute) { popUpTo(0) { inclusive = true } }
                 },
             )
         }
@@ -175,11 +178,24 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
         }
     }
 
-    // The last account signed out: back to adding a server. Only on that change, not on every new composition (a
-    // rotation while signing in for the first time keeps the login screen).
+    // Only on a change of the account list, not on every new composition (a rotation while signing in for the first
+    // time keeps the login screen).
     var hadAccounts by rememberSaveable { mutableStateOf(hasAccounts) }
     LaunchedEffect(hasAccounts) {
-        if (hadAccounts && !hasAccounts) navController.navigate(AddServerRoute) { popUpTo(0) { inclusive = true } }
+        destinationAfterAccountsChange(hadAccounts, hasAccounts)
+            // The sign-in that saved the account may already have opened the tabs.
+            ?.takeUnless { it == MainRoute && navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true }
+            ?.let { navController.navigate(it) { popUpTo(0) { inclusive = true } } }
         hadAccounts = hasAccounts
     }
+}
+
+/** Where the whole stack goes when the account list goes from [had] accounts to [has]; null to stay where it is. */
+internal fun destinationAfterAccountsChange(had: Boolean, has: Boolean): Any? = when {
+    // The last account signed out: back to adding a server.
+    had && !has -> AddServerRoute
+    // A first account, saved by a sign-in or from outside it (the desktop's CLI account, described after the window
+    // opened on adding a server): the tabs.
+    !had && has -> MainRoute
+    else -> null
 }
