@@ -51,6 +51,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
+import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
@@ -92,7 +93,7 @@ import org.jetbrains.compose.resources.stringResource
 fun SubscriptionAccountsScreen(viewModel: SubscriptionAccountsViewModel, onBack: () -> Unit, backLabel: String = stringResource(Res.string.account_title)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
-    Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap(), horizontalAlignment = Alignment.CenterHorizontally) {
         NavBar(backLabel, onBack, stringResource(Res.string.subscriptions_title)) {
             TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.subscriptions_refresh), onClick = viewModel::refresh, enabled = !state.loading,
                 modifier = Modifier.testTag("subscriptions-refresh"))

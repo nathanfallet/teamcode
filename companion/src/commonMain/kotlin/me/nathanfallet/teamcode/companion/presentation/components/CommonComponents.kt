@@ -59,6 +59,10 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentType
@@ -607,3 +611,19 @@ fun Centered(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> 
 /** A tap target that only consumes clicks (no ripple), for rows that are not buttons. */
 @Composable
 fun Modifier.quietClickable(onClick: () -> Unit): Modifier = clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+
+/**
+ * A tap that no child consumed (empty space, plain text) drops focus and closes the on-screen keyboard.
+ * Taps on buttons, links, cards and text fields are consumed by those, and scrolling is untouched.
+ */
+@Composable
+fun Modifier.dismissKeyboardOnTap(): Modifier {
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    return pointerInput(focus, keyboard) {
+        detectTapGestures {
+            focus.clearFocus()
+            keyboard?.hide()
+        }
+    }
+}

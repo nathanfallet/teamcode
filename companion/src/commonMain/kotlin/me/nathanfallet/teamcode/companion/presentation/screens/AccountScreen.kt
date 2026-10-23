@@ -49,6 +49,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.SectionTitle
 import me.nathanfallet.teamcode.companion.presentation.components.Segmented
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
+import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
@@ -97,7 +98,7 @@ fun AccountScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
     val active = state.activeAccount
-    Column(Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Column(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),

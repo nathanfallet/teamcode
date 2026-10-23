@@ -1,6 +1,12 @@
 package me.nathanfallet.teamcode.companion
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -27,7 +33,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewMod
 import kotlin.test.*
 
 /** A session's header on the desktop target: where it runs, an offline device worded plainly, no resume from here. */
-@OptIn(ExperimentalTestApi::class)
+@OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
 class SessionScreenTest {
     private val transcripts = object : TranscriptRepository {
         override suspend fun page(accountId: String, sessionId: String, before: Long?) = TranscriptPage(emptyList(), nextBefore = null, lastSeq = 0)
@@ -71,5 +77,39 @@ class SessionScreenTest {
         onNodeWithTag("host-offline").assertDoesNotExist()
         onNodeWithTag("summary").performClick()
         onNodeWithText("Cloud").assertExists()
+    }
+
+    @Test fun tappingOutsideTheComposerClearsItsFocusAndClosesTheKeyboard() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        val model = viewModel(sessions)
+        var hidden = 0
+        val keyboard = object : SoftwareKeyboardController {
+            override fun show() {}
+            override fun hide() { hidden++ }
+        }
+        setContent { CompositionLocalProvider(LocalSoftwareKeyboardController provides keyboard) { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("composer").performClick()
+        onNodeWithTag("composer").assertIsFocused()
+        assertEquals(0, hidden)
+        onNodeWithTag("transcript").performClick()
+        onNodeWithTag("composer").assertIsNotFocused()
+        assertEquals(1, hidden)
+    }
+
+    @Test fun aButtonTappedWhileTypingStillRunsAndDoesNotCloseTheKeyboard() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        val model = viewModel(sessions)
+        var hidden = 0
+        val keyboard = object : SoftwareKeyboardController {
+            override fun show() {}
+            override fun hide() { hidden++ }
+        }
+        setContent { CompositionLocalProvider(LocalSoftwareKeyboardController provides keyboard) { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("composer").performClick()
+        onNodeWithTag("summary").performClick()
+        onNodeWithText("Cloud").assertExists()
+        assertEquals(0, hidden)
     }
 }

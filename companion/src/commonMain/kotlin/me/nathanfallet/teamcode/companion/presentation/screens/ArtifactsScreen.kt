@@ -60,6 +60,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcSheet
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
+import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
@@ -104,7 +105,7 @@ fun ArtifactsScreen(
     val now = rememberNow()
     val colors = TeamCode.colors
     var linkSheet by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap(), horizontalAlignment = Alignment.CenterHorizontally) {
         if (forSession) NavBar(backLabel, onBack, stringResource(Res.string.artifacts_session_title))
         Column(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().then(if (forSession) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars))
