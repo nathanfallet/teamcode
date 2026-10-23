@@ -105,6 +105,8 @@ class CloudRoutesTest {
             "admin-read" -> Principal(admin, "admin-read-key", "default", setOf(ServiceScope.TEAM_READ))
             "admin-usage" -> Principal(admin, "admin-usage-key", "default", setOf(ServiceScope.USAGE_READ, ServiceScope.CLOUD_READ))
             "admin-read-write" -> Principal(admin, "admin-read-write-key", "default", setOf(ServiceScope.TEAM_READ, ServiceScope.CLOUD_WRITE))
+            // A cloud session's execution credential, given every scope to show the refusal does not depend on them.
+            "pod" -> Principal(colleague, "pod-execution", "default", ServiceScope.entries.toSet())
             else -> null
         }
     }
@@ -581,6 +583,7 @@ class CloudRoutesTest {
         val owners = mapOf("laptop-id" to "colleague-id", "desktop-id" to "colleague-id", "admin-device" to "admin-id")
         override suspend fun now() = store.clock
         override suspend fun deviceOf(principal: Principal) = store.deviceOf(principal)
+        override suspend fun cloudExecution(principal: Principal) = principal.tokenId == "pod-execution"
         override suspend fun touch(deviceId: String, version: String?) { seen[deviceId] = store.clock to version }
         override suspend fun offline(deviceId: String) { seen.remove(deviceId) }
         override suspend fun publish(deviceId: String, folders: List<DeviceFolder>) { this.folders[deviceId] = folders }
@@ -620,6 +623,8 @@ class CloudRoutesTest {
         // The daemon channel is interactive and bound to a device.
         runCatchingAssert("credential_scope", json(HttpMethod.Post, "/api/v1/devices/current/daemon/poll", "colleague-write", "{}"), HttpStatusCode.Forbidden)
         runCatchingAssert("device_offline", create("colleague-desktop", start), HttpStatusCode.Conflict)
+        // A cloud pod never becomes a device and never orders one: one pod runs one session.
+        runCatchingAssert("cloud_session_credential", create("pod", start), HttpStatusCode.Forbidden)
         val published = json(HttpMethod.Put, "/api/v1/devices/current/folders", "colleague", """{"folders":[{"id":"api","name":"api","label":"~/work/api"}]}""")
         assertEquals(listOf(DeviceFolderView("api", "api", "~/work/api")), Serialization.json.decodeFromString<List<DeviceFolderView>>(published.bodyAsText()))
         runCatchingAssert("invalid_folders", json(HttpMethod.Put, "/api/v1/devices/current/folders", "colleague", """{"folders":[{"id":"x","name":"/home/x"}]}"""), HttpStatusCode.BadRequest)

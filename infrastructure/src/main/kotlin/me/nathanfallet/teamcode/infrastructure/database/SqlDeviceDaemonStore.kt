@@ -21,6 +21,10 @@ class SqlDeviceDaemonStore(private val database: Database) : DeviceDaemonStore {
         }
     }
 
+    override suspend fun cloudExecution(principal: Principal): Boolean = database.query {
+        CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId).where { CloudInferenceCredentials.tokenId eq principal.tokenId }.limit(1).any()
+    }
+
     override suspend fun touch(deviceId: String, version: String?) {
         database.query {
             val now = nowMillis()

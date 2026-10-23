@@ -198,7 +198,9 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
 
     override suspend fun deviceOf(principal: Principal): String? = database.query {
         if (principal.serviceScopes != null) null
-        else Tokens.select(Tokens.deviceId).where { Tokens.id eq principal.tokenId }.singleOrNull()?.get(Tokens.deviceId)
+        // A cloud session's execution credential is never a host device, whatever its row says: one pod runs one session.
+        else Tokens.select(Tokens.deviceId).where { (Tokens.id eq principal.tokenId) and notExists(CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId)
+            .where { CloudInferenceCredentials.tokenId eq Tokens.id }) }.singleOrNull()?.get(Tokens.deviceId)
     }
 
     override suspend fun startHostExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? = database.query {

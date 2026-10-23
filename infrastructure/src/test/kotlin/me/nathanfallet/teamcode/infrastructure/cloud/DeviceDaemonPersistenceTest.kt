@@ -104,6 +104,34 @@ class DeviceDaemonPersistenceTest {
         assertEquals(CREATING to CloudSessionService.WAITING_HOST, read.state to read.phase)
         assertEquals(Triple(laptopId, "api", "api"), Triple(read.host!!.deviceId, read.host!!.directoryName, read.host!!.folderId))
         assertEquals(RemotePermissionMode.BYPASS, read.host!!.permissionMode)
+        // A cloud pod's execution credential never becomes a host device, never shows online and never starts a session
+        // on a device, whatever its scopes or device: here the worst case, a link to a cloud execution on a token that
+        // otherwise looks like the laptop's interactive login.
+        val podToken = "tcex_" + "synthetic-execution-credential-0123456789"
+        a.query {
+            val now = nowMillis()
+            Tokens.insert {
+                it[id] = "pod-token"; it[memberId] = laptop.member.id; it[tokenHash] = me.nathanfallet.teamcode.infrastructure.secrets.Passwords.digest(podToken)
+                it[device] = "cloud session"; it[deviceId] = laptopId; it[createdAt] = now; it[expiresAt] = now + 3_600_000
+            }
+            CloudInferenceCredentials.insert {
+                it[tokenId] = "pod-token"; it[sessionId] = first.id; it[epoch] = 1; it[teamId] = laptop.teamId; it[createdAt] = now; it[expiresAt] = now + 3_600_000
+            }
+        }
+        val pod = team.authenticate(podToken)!!
+        val devicesBefore = devices.devices(phone).map { it.id to it.name }
+        failure("cloud_session_credential") { daemon.poll(pod, 0, "1.0.0") }
+        failure("cloud_session_credential") { daemon.publish(pod, listOf(DeviceFolder("workspace", "workspace"))) }
+        failure("cloud_session_credential") { daemon.offline(pod) }
+        failure("cloud_session_credential") { sessions.createRemote(pod, null, draft(), null) }
+        // Nor does it host one, or create one on "its" device: the session store never sees a device behind it.
+        assertNull(sessionStore.deviceOf(pod))
+        failure("remote_requires_device") { sessions.host(pod, first.id) }
+        failure("remote_requires_device") { sessions.createRemote(pod, null, draft(device = null, folder = null).copy(directoryName = "workspace"), null) }
+        assertEquals(devicesBefore, devices.devices(phone).map { it.id to it.name }, "No device registered for the pod")
+        assertEquals(listOf("teamcode", "api"), daemon.owned(phone, laptopId).folders.map { it.id }, "The pod published nothing")
+        a.query { Tokens.deleteWhere { Tokens.id eq "pod-token" } }
+
         // A session started on the device itself is not the daemon's: `teamcode remote start` hosts it.
         sessions.createRemote(laptop, null, RemoteSessionDraft("Local", "codex", null, null, emptyMap(), "teamcode", RemotePermissionMode.ASK), null)
 

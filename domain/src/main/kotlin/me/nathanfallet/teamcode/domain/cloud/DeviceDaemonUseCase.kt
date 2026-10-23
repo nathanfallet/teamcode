@@ -19,6 +19,11 @@ interface DeviceDaemonStore {
     suspend fun now(): Long
     /** The device of an interactive login bound to an installation; null for a service key, a browser or an older login. */
     suspend fun deviceOf(principal: Principal): String?
+    /**
+     * Whether [principal] is a cloud session's credential (a `tcex_` execution token, issued to one pod for one session),
+     * whatever its scopes: a pod never registers, heartbeats or orders as a device.
+     */
+    suspend fun cloudExecution(principal: Principal): Boolean
     /** Marks the daemon seen at the database clock, unless a poll did within [DeviceDaemonRules.TOUCH_MILLIS]. */
     suspend fun touch(deviceId: String, version: String?)
     /** Marks the daemon offline at once. */
@@ -44,6 +49,7 @@ class DeviceDaemonUseCase(
 ) {
     /** The caller's device, required for every daemon call. */
     suspend fun device(principal: Principal): String {
+        requireNotCloudSession(store, principal)
         if (principal.serviceScopes != null) throw daemonRequiresDevice()
         return store.deviceOf(principal) ?: throw daemonRequiresDevice()
     }
@@ -82,6 +88,15 @@ class DeviceDaemonUseCase(
     }
 
     companion object {
+        /**
+         * One pod runs one session, by design (Nathan, 23/10/2026): a cloud session's credential never becomes a host
+         * device, never appears online and never starts a session on a device. Checked before anything else, so the
+         * refusal holds even if such a credential were ever given more scopes.
+         */
+        suspend fun requireNotCloudSession(store: DeviceDaemonStore, principal: Principal) {
+            if (store.cloudExecution(principal)) throw TeamFailure("cloud_session_credential", 403,
+                "A cloud session cannot host or start remote sessions: one pod runs one session. Use teamcode login on a computer.")
+        }
         fun deviceNotFound() = TeamFailure("device_not_found", 404, "Device not found among your devices.")
         private fun daemonRequiresDevice() = TeamFailure("daemon_requires_device", 422,
             "The daemon channel takes the interactive login of the device itself (teamcode login on that device); service keys and browser sessions cannot use it.")

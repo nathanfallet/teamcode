@@ -177,6 +177,7 @@ class CloudSessionService(
      */
     private suspend fun targetFolder(principal: Principal, draft: RemoteSessionDraft): Pair<String, DeviceFolder> {
         val daemons = daemons ?: throw TeamFailure("device_target_unsupported", 400, "This server does not start remote sessions on another device.")
+        DeviceDaemonUseCase.requireNotCloudSession(daemons, principal)
         if (principal.serviceScopes != null)
             throw TeamFailure("remote_requires_login", 422, "Only the device's owner, signed in interactively, starts a session on it; service keys cannot.")
         val deviceId = draft.deviceId!!
