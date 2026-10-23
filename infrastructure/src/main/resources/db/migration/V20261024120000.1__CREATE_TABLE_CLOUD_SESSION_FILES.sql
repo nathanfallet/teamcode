@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS cloud_session_files (id VARCHAR(36) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, session_id VARCHAR(36) NOT NULL, author_id VARCHAR(36) NOT NULL, credential_id VARCHAR(36) NOT NULL, `name` VARCHAR(255) NOT NULL, content_type VARCHAR(64) NULL, `size` BIGINT NOT NULL, sha256 VARCHAR(64) NULL, client_key VARCHAR(128) NULL, request_digest VARCHAR(64) NULL, input_id VARCHAR(36) NULL, created_at BIGINT NOT NULL, completed_at BIGINT NULL, expires_at BIGINT NOT NULL, consumed_at BIGINT NULL, deleting_since BIGINT NULL);
+ALTER TABLE cloud_session_files ADD CONSTRAINT cloud_session_files_key UNIQUE (session_id, author_id, client_key);
+CREATE INDEX cloud_session_files_session ON cloud_session_files (session_id, deleting_since);
+CREATE INDEX cloud_session_files_input ON cloud_session_files (input_id);
+CREATE INDEX cloud_session_files_sweep ON cloud_session_files (deleting_since, expires_at);

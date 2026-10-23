@@ -268,6 +268,10 @@ data class CloudSettings(
     val permissionDeadlineMinutes: Int = 0,
     /** Minutes without activity before a remote session pauses (its host drains, checkpoints and exits); 0 never pauses. */
     val remoteIdleTimeoutMinutes: Int = 60,
+    /** Largest file a member may send to a session, in MiB (1 to [CloudFileRules.MAX_MEBIBYTES]). */
+    val fileMaxMebibytes: Int = CloudFileRules.DEFAULT_FILE_MEBIBYTES,
+    /** Largest total of the files of one message, in MiB (1 to [CloudFileRules.MAX_MEBIBYTES]). */
+    val messageFileMebibytes: Int = CloudFileRules.DEFAULT_MESSAGE_MEBIBYTES,
 )
 enum class MemberTransfers(val wire: String) {
     DISABLED("disabled"), OFFER("offer");

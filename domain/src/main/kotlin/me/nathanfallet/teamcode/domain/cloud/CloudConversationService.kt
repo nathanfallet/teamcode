@@ -6,7 +6,7 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.*
 
 /** A message or interrupt as sent by a member. [clientKey] is the `Idempotency-Key` header or `clientMessageId`. */
-data class InputRequest(val text: String?, val wake: Boolean, val clientKey: String?, val requestDigest: String?, val expectedLastEventSeq: Long?)
+data class InputRequest(val text: String?, val wake: Boolean, val clientKey: String?, val requestDigest: String?, val expectedLastEventSeq: Long?, val fileIds: List<String> = emptyList())
 
 /**
  * Transcript reads, messages, interrupts and attachments for members. Each call is authorized with the caller's own
@@ -67,13 +67,26 @@ class CloudConversationService(
 
     suspend fun send(principal: Principal, id: String, request: InputRequest): InputOutcome {
         val text = request.text ?: throw TeamFailure("invalid_message", 400, "Send a message text.")
-        CloudConversationRules.validateMessage(text)
+        CloudConversationRules.validateMessage(text, files = request.fileIds.isNotEmpty())
+        if (request.fileIds.size > CloudFileRules.MAX_FILES_PER_MESSAGE || request.fileIds.toSet().size != request.fileIds.size)
+            throw TeamFailure("invalid_files", 400, "Name at most ${CloudFileRules.MAX_FILES_PER_MESSAGE} distinct files.")
         val session = open(principal, id, CloudPermission.MESSAGE)
         val input = newInput(principal, session, CloudInputKind.MESSAGE, text, request)
-        return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)) {
+        val fileBytes = if (request.fileIds.isEmpty()) 0 else CloudFileRules.messageLimit(sessions.settings(principal.teamId))
+        return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq, session.ownerId, fileIds = request.fileIds, fileBytes = fileBytes), CloudConversationRules.MAX_PENDING_INPUTS)) {
             is InputOutcome.Replayed -> outcome
             is InputOutcome.Accepted -> if (request.wake) InputOutcome.Accepted(outcome.input.copy(woke = wake(principal.teamId, session.id, principal))) else outcome
         }
+    }
+
+    /**
+     * The session a member may send a message to, checked exactly as [send] does (`message` permission, a write
+     * credential, a session that is not ending); files are uploaded with the same right.
+     */
+    suspend fun authorizeMessage(principal: Principal, id: String): CloudSession {
+        val session = open(principal, id, CloudPermission.MESSAGE)
+        if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw ended()
+        return session
     }
 
     /** Stops the current agent turn. Interrupts are delivered before queued messages and never wake a session. */

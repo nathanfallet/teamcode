@@ -18,7 +18,7 @@ private fun ApplicationCall.auditCursor(): Long? {
 internal fun Route.auditRoutes(audit: AuditService) {
     get("/api/v1/audit") {
         val result = audit.list(call.principal, call.auditCursor())
-        call.respond(AuditPageView(result.events.map { AuditEventView(it.id, it.actorId, it.action, it.subjectId, it.occurredAt, it.effectiveMemberId, it.credentialId, it.relatedMemberId) }, result.nextBeforeId))
+        call.respond(AuditPageView(result.events.map { AuditEventView(it.id, it.actorId, it.action, it.subjectId, it.occurredAt, it.effectiveMemberId, it.credentialId, it.relatedMemberId, it.details) }, result.nextBeforeId))
     }
     get("/dashboard/audit") {
         val result = audit.list(call.principal, call.auditCursor())

@@ -64,6 +64,9 @@ object CloudSettingsTable : Table("cloud_settings") {
     /** Minutes a cloud agent's permission request waits before the runner denies it; 0 waits without a deadline. */
     val permissionDeadlineMinutes = integer("permission_deadline_minutes").default(0)
     val remoteIdleTimeoutMinutes = integer("remote_idle_timeout_minutes").default(60)
+    /** Largest file sent to a session and largest total per message, in MiB. */
+    val fileMaxMebibytes = integer("file_max_mebibytes").default(20)
+    val messageFileMebibytes = integer("message_file_mebibytes").default(25)
     override val primaryKey = PrimaryKey(teamId)
 }
 /** Whether cloud sessions run and how their pods are built; no row until an administrator or the initial seed saves it. */

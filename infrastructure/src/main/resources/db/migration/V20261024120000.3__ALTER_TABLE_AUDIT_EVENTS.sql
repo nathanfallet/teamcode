@@ -1,0 +1,1 @@
+ALTER TABLE audit_events ADD details VARCHAR(512) NULL;

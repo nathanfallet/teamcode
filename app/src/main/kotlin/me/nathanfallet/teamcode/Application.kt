@@ -137,8 +137,15 @@ fun main() {
             }
         }
     }
-    // Cloud sessions are configured on the dashboard; the former variables only seed an empty database.
-    val cloud = database?.let { CloudServer(it, cipher!!, origin) }?.also {
+    // Artifacts: the bucket and its settings live in the database, configured on the dashboard; no deployment variable.
+    val artifactHttp = HttpClient(CIO) {
+        followRedirects = false; expectSuccess = false
+        install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 60_000; socketTimeoutMillis = 30_000 }
+    }
+    val artifactObjects = me.nathanfallet.teamcode.infrastructure.artifacts.S3ObjectStore(artifactHttp)
+    // Cloud sessions are configured on the dashboard; the former variables only seed an empty database. Files sent to
+    // sessions use the artifact bucket.
+    val cloud = database?.let { CloudServer(it, cipher!!, origin, artifactObjects) }?.also {
         // The seed is a convenience: a database error here is reported and the stored runtime is reread later.
         try { runBlocking { it.start(initialCloudRuntime()) } }
         catch (error: CancellationException) { throw error }
@@ -168,13 +175,7 @@ fun main() {
         me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!), it,
             me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpLimits)
     }
-    // Artifacts: the bucket and its settings live in the database, configured on the dashboard; no deployment variable.
-    val artifactHttp = HttpClient(CIO) {
-        followRedirects = false; expectSuccess = false
-        install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 60_000; socketTimeoutMillis = 30_000 }
-    }
     val artifactAdminStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore(it, cipher!!) }
-    val artifactObjects = me.nathanfallet.teamcode.infrastructure.artifacts.S3ObjectStore(artifactHttp)
     val artifactAdmin = artifactAdminStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(it, artifactObjects) }
     val artifactStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactStore(it) }
     val artifacts = artifactStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactService(it, artifactAdminStore!!, artifactObjects) }

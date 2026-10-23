@@ -89,6 +89,8 @@ data class CloudInput(
     val finishedAt: Long? = null,
     val reason: String? = null,
     val eventSeq: Long? = null,
+    /** Files the message carries to the agent (`cloud.files.v1`); read by the store when it delivers or acknowledges. */
+    val files: List<CloudFileRef> = emptyList(),
 )
 data class CloudInputPage(val inputs: List<CloudInput>, val nextBefore: String?)
 
@@ -103,6 +105,12 @@ data class NewInput(
     val permissionRequestId: String? = null,
     /** For a permission answer: the rules it must pass, given the session and its request as they are under the lock. */
     val permissionCheck: ((AnswerContext) -> Unit)? = null,
+    /**
+     * Files the message carries: each must be complete, the author's, in this session, not expired and not named by
+     * another message (`409 file_unavailable`), and together at most [fileBytes] (`413 files_too_large`).
+     */
+    val fileIds: List<String> = emptyList(),
+    val fileBytes: Long = 0,
 )
 
 /** What a permission answer is checked against, read under the session row lock: [request] is null when none was found. */

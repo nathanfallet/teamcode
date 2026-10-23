@@ -219,14 +219,35 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         if (pending >= limit) throw TeamFailure("too_many_pending_inputs", 429, "The session already has $limit pending ${if (answering) "permission answers" else "inputs"}. Wait for the agent to consume them.")
         val sleeping = desired == DesiredState.PAUSED || state == CloudSessionState.PAUSING || state == CloudSessionState.PAUSED || session[CloudSessions.blockedCode] != null
         val now = nowMillis()
-        val stored = input.copy(createdAt = now)
+        val files = bindableFiles(new, now)
+        val stored = input.copy(createdAt = now, files = files.map { CloudFileRef(it[CloudSessionFiles.id], it[CloudSessionFiles.name], it[CloudSessionFiles.size],
+            it[CloudSessionFiles.contentType].orEmpty(), it[CloudSessionFiles.sha256].orEmpty()) })
         CloudSessionInputs.insert {
             it[id] = stored.id; it[sessionId] = stored.sessionId; it[teamId] = stored.teamId; it[kind] = stored.kind.wire; it[status] = stored.status.wire
             it[authorId] = stored.authorId; it[credentialId] = stored.credentialId; it[text] = stored.text; it[wake] = stored.wake
             it[wakePending] = stored.kind == CloudInputKind.MESSAGE && stored.wake && sleeping
             it[clientKey] = stored.clientKey; it[requestDigest] = stored.requestDigest; it[createdAt] = now
         }
+        // Bound under the session lock, so a file is carried by one message only.
+        if (files.isNotEmpty()) CloudSessionFiles.update({ (CloudSessionFiles.id inList new.fileIds) and CloudSessionFiles.inputId.isNull() }) { it[inputId] = stored.id }
         InputOutcome.Accepted(stored)
+    }
+
+    /**
+     * The files [new] names, in its order: each complete, the author's, in the session, not expired, not being deleted
+     * and carried by no other message (`409 file_unavailable`, the same answer whatever the reason, so nobody learns of
+     * another member's files), together at most [NewInput.fileBytes] (`413 files_too_large`).
+     */
+    private fun bindableFiles(new: NewInput, now: Long): List<ResultRow> {
+        if (new.fileIds.isEmpty()) return emptyList()
+        val rows = CloudSessionFiles.selectAll().where {
+            (CloudSessionFiles.id inList new.fileIds) and (CloudSessionFiles.sessionId eq new.input.sessionId) and (CloudSessionFiles.authorId eq new.input.authorId) and
+                CloudSessionFiles.inputId.isNull() and CloudSessionFiles.deletingSince.isNull() and CloudSessionFiles.completedAt.isNotNull() and (CloudSessionFiles.expiresAt greater now)
+        }.forUpdate().associateBy { it[CloudSessionFiles.id] }
+        if (rows.size != new.fileIds.size) throw TeamFailure("file_unavailable", 409, "A file is unknown, expired or already sent. Upload it again.")
+        if (rows.values.sumOf { it[CloudSessionFiles.size] } > new.fileBytes)
+            throw TeamFailure("files_too_large", 413, "A message's files are limited to ${new.fileBytes / CloudFileRules.MEBIBYTE} MiB together on this team.")
+        return new.fileIds.map { rows.getValue(it) }
     }
 
     override suspend fun input(sessionId: String, id: String): CloudInput? = database.query {
@@ -285,7 +306,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         // Interrupts and permission answers first, read on their own so a full message queue never hides them:
         // they concern the turn running now, not the queue behind it.
         val chosen = queued(urgent = true).let { urgent -> if (urgent.size >= limit) urgent else urgent + queued(urgent = false).take(limit - urgent.size) }
-        chosen.map { input ->
+        val files = filesOf(chosen.filter { it.kind == CloudInputKind.MESSAGE }.map { it.id })
+        chosen.map { it.copy(files = files[it.id].orEmpty()) }.map { input ->
             CloudSessionInputs.update({ (CloudSessionInputs.id eq input.id) and (CloudSessionInputs.status eq CloudInputStatus.QUEUED.wire) }) {
                 it[status] = CloudInputStatus.DELIVERED.wire; it[deliveredAt] = now; it[deliveredEpoch] = epoch; it[attempts] = input.attempts + 1
             }
@@ -297,11 +319,15 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         val session = lockSession(sessionId)
         val teamId = session[CloudSessions.teamId]
         val now = nowMillis()
-        acks.distinctBy { it.id }.mapNotNull { ack ->
-            val input = CloudSessionInputs.selectAll().where {
-                (CloudSessionInputs.id eq ack.id) and (CloudSessionInputs.sessionId eq sessionId) and
-                    (CloudSessionInputs.status eq CloudInputStatus.DELIVERED.wire) and (CloudSessionInputs.deliveredEpoch eq epoch)
-            }.singleOrNull()?.let(::readInput) ?: return@mapNotNull null
+        val unique = acks.distinctBy { it.id }
+        val matched = CloudSessionInputs.selectAll().where {
+            (CloudSessionInputs.id inList unique.map { it.id }) and (CloudSessionInputs.sessionId eq sessionId) and
+                (CloudSessionInputs.status eq CloudInputStatus.DELIVERED.wire) and (CloudSessionInputs.deliveredEpoch eq epoch)
+        }.map(::readInput).associateBy { it.id }
+        // The files of every acknowledged message in one read: a consumed message's event names them.
+        val files = filesOf(matched.values.filter { it.kind == CloudInputKind.MESSAGE }.map { it.id })
+        unique.mapNotNull { ack ->
+            val input = matched[ack.id]?.let { it.copy(files = files[it.id].orEmpty()) } ?: return@mapNotNull null
             if (ack.consumed) finish(teamId, input, CloudInputStatus.CONSUMED, null, now)
             else finish(teamId, input, CloudInputStatus.REJECTED, ack.reason ?: "rejected", now)
         }.also { finished ->
@@ -415,6 +441,10 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
     internal fun JdbcTransaction.finish(teamId: String, input: CloudInput, status: CloudInputStatus, reason: String?, now: Long): CloudInput {
         val data = if (status == CloudInputStatus.CONSUMED && input.kind == CloudInputKind.MESSAGE) buildJsonObject {
             put("inputId", input.id); put("authorId", input.authorId); put("text", CloudConversationRules.bound(input.text.orEmpty()))
+            // Name, size and type only: never the path the host wrote the file to.
+            if (input.files.isNotEmpty()) put("files", JsonArray(input.files.map { file ->
+                buildJsonObject { put("id", file.id); put("name", CloudConversationRules.bound(file.name, 255)); put("size", file.size); put("contentType", file.contentType) }
+            }))
         } else buildJsonObject {
             put("inputId", input.id); put("kind", input.kind.wire); put("status", status.wire); reason?.let { put("reason", it) }
             if (input.kind == CloudInputKind.PERMISSION) {
@@ -435,6 +465,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
             if (status == CloudInputStatus.CONSUMED) it[consumedAt] = now
             it[wakePending] = false
         }
+        // Whatever the outcome, the message's files are no longer needed: the sweep removes their bytes.
+        if (input.kind == CloudInputKind.MESSAGE) releaseFiles(input.id, status == CloudInputStatus.CONSUMED, now)
         return input.copy(status = status, finishedAt = now, reason = reason, eventSeq = seq, consumedAt = if (status == CloudInputStatus.CONSUMED) now else input.consumedAt)
     }
 

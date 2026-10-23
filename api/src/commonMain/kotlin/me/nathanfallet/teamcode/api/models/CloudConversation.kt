@@ -17,6 +17,7 @@ object CloudTranscriptLimits {
 
 /** Normalized transcript event types. Clients must tolerate unknown types and unknown `data` fields. */
 object CloudEventTypes {
+    /** A consumed message: `data.text`, `inputId`, `authorId`, and `files` (`[{id, name, size, contentType}]`) when it carried files. */
     const val USER_MESSAGE = "message.user"
     /**
      * The agent's text (`data.text`). With `messageId` (the agent's API message id) and `index` (the content block, when
@@ -74,7 +75,8 @@ data class CloudEventPageView(
 /**
  * `POST /cloud/sessions/{id}/messages`. [clientMessageId] is an alias of the `Idempotency-Key` header (send one or
  * the other). [wake] `false` leaves a paused session paused; the message waits for the next resume.
- * [expectedLastEventSeq] refuses the message (`409 stale_view`) when newer events exist.
+ * [expectedLastEventSeq] refuses the message (`409 stale_view`) when newer events exist. [fileIds] (`cloud.files.v1`, at
+ * most 5) names files uploaded to this session by the caller and not sent yet; with files, [text] may be empty.
  */
 @Serializable
 data class SendCloudMessageRequest(
@@ -82,6 +84,38 @@ data class SendCloudMessageRequest(
     val wake: Boolean = true,
     val clientMessageId: String? = null,
     val expectedLastEventSeq: Long? = null,
+    val fileIds: List<String> = emptyList(),
+)
+
+/**
+ * A file uploaded to a session (`POST /cloud/sessions/{id}/files`, `cloud.files.v1`). [name] is the cleaned name the host
+ * writes it under; [contentType] the type the server recognized from its bytes. Send its [id] in a message's `fileIds`
+ * before [expiresAt]; it is removed once the session's host received it.
+ */
+@Serializable
+data class CloudFileView(
+    val id: String,
+    val sessionId: String,
+    val name: String,
+    val size: Long,
+    val contentType: String,
+    val sha256: String,
+    val createdAt: Long,
+    val expiresAt: Long,
+)
+
+/**
+ * `GET /cloud/files/policy`: whether the caller's team can send files now ([available]; [reason] `file_storage_not_configured`
+ * when it has no tested bucket), and its limits.
+ */
+@Serializable
+data class CloudFilePolicyView(
+    val available: Boolean,
+    val reason: String? = null,
+    val maxFileBytes: Long,
+    val maxMessageBytes: Long,
+    val maxFilesPerMessage: Int,
+    val types: List<String>,
 )
 
 /**
@@ -162,6 +196,17 @@ object CloudPermissions {
     val all = listOf(CREATE, ATTACH, MESSAGE, TRANSCRIPT)
 }
 
+/** `cloud.files.v1` limits and refusals, as the server applies them. */
+object CloudFiles {
+    const val MAX_FILES_PER_MESSAGE = 5
+    const val FILE_TOO_LARGE = "file_too_large"
+    const val FILE_TYPE_NOT_ALLOWED = "file_type_not_allowed"
+    const val UPLOAD_QUOTA = "upload_quota"
+    const val STORAGE_NOT_CONFIGURED = "file_storage_not_configured"
+    /** The reason a message with files is rejected for a runner that does not download them. */
+    const val UNSUPPORTED = "files_unsupported"
+}
+
 /**
  * One rule: [subject] is `everyone`, `member:<id>` or `group:<id>`; [scope] `own` applies to the member's own
  * sessions (and to creation), `team` to every team session. Administrators always hold every permission.
@@ -198,9 +243,17 @@ data class RunnerEventsAckView(val acceptedThrough: Long, val lastSeq: Long)
  * the one the runner last knew (`running` or `paused`), the wait also ends as soon as the session's differs.
  */
 @Serializable
-data class RunnerInputsRequest(val teamId: String, val sessionId: String, val epoch: Int, val waitMillis: Long = 20_000, val desiredState: String? = null)
+data class RunnerInputsRequest(
+    val teamId: String, val sessionId: String, val epoch: Int, val waitMillis: Long = 20_000, val desiredState: String? = null,
+    /** The runner downloads the [RunnerInputView.files] of a message; without it, a message with files is rejected (`files_unsupported`). */
+    val acceptsFiles: Boolean = false,
+)
+/** [files]: what a message carries; download each from `GET /cloud/runner/files/{id}` and check its [RunnerFileView.sha256]. */
 @Serializable
-data class RunnerInputView(val id: String, val kind: String, val text: String? = null, val attempt: Int = 1)
+data class RunnerInputView(val id: String, val kind: String, val text: String? = null, val attempt: Int = 1, val files: List<RunnerFileView> = emptyList())
+/** A file of a message, as its host writes it: [name] is already cleaned, [contentType] recognized from the bytes. */
+@Serializable
+data class RunnerFileView(val id: String, val name: String, val size: Long, val contentType: String, val sha256: String)
 /** [desiredState]: the session's desired state when the wait ended, so a pause reaches the runner without a heartbeat. */
 @Serializable
 data class RunnerInputsView(val inputs: List<RunnerInputView>, val desiredState: String? = null)

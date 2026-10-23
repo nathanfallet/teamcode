@@ -139,9 +139,10 @@ object CloudConversationRules {
         return if (masked.length <= limit) masked else masked.take(limit - TRUNCATION_MARK.length) + TRUNCATION_MARK
     }
 
-    fun validateMessage(text: String) {
-        if (text.isBlank() || text.length > MAX_MESSAGE_CHARS || text.any { it.isISOControl() && it != '\n' && it != '\t' && it != '\r' })
-            throw TeamFailure("invalid_message", 400, "Send a message of 1–$MAX_MESSAGE_CHARS characters without control characters.")
+    /** A message that carries [files] may have an empty text: the host adds the files' paths. */
+    fun validateMessage(text: String, files: Boolean = false) {
+        if ((text.isBlank() && !(files && text.isEmpty())) || text.length > MAX_MESSAGE_CHARS || text.any { it.isISOControl() && it != '\n' && it != '\t' && it != '\r' })
+            throw TeamFailure("invalid_message", 400, "Send a message of 1–$MAX_MESSAGE_CHARS characters without control characters (it may be empty when it carries files).")
     }
 
     /** Request ids are the agent's own (Claude Code uses UUIDs); answers are short: a label index or a sentence each. */

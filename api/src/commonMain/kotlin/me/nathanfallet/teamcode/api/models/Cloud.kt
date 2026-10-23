@@ -288,6 +288,10 @@ data class CloudSettingsView(
      * 0 never pauses one. Absent (null) in a `PUT` keeps the stored value.
      */
     val remoteIdleTimeoutMinutes: Int? = null,
+    /** Largest file sent to a session, in MiB (`cloud.files.v1`; 1 to 100, 20 by default). Absent (null) in a `PUT` keeps the stored value. */
+    val fileMaxMebibytes: Int? = null,
+    /** Largest total of one message's files, in MiB (1 to 100, 25 by default). Absent (null) in a `PUT` keeps the stored value. */
+    val messageFileMebibytes: Int? = null,
 )
 
 /**

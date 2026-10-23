@@ -370,7 +370,9 @@ private fun ApiCatalog.cloudConversation() {
         description = "Queues a message, authored by the caller. Its `status` moves from `queued` to `delivered` and " +
             "`consumed`, or ends `cancelled` or `rejected`. `wake: false` leaves a paused session paused. " +
             "`expectedLastEventSeq` refuses the message if newer events exist. Send an `Idempotency-Key` (or " +
-            "`clientMessageId`) to retry safely. Requires the `message` permission."
+            "`clientMessageId`) to retry safely. Requires the `message` permission. With `cloud.files.v1`, `fileIds` names up to 5 files " +
+            "the caller uploaded to this session and has not sent yet; the text may then be empty. A host that does not download files " +
+            "rejects such a message (`files_unsupported`)."
         parameters {
             sessionId()
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT)
@@ -378,10 +380,47 @@ private fun ApiCatalog.cloudConversation() {
         body<SendCloudMessageRequest>("The message text and options (at most 256 KiB).")
         responses {
             ok<CloudInputView>("Accepted.", HttpStatusCode.Accepted)
-            badRequest("An invalid message or key, or `TeamCode-On-Behalf-Of` was sent (`invalid_message`, `invalid_idempotency_key`, `on_behalf_unsupported`).")
+            badRequest("An invalid message, file list or key, or `TeamCode-On-Behalf-Of` was sent (`invalid_message`, `invalid_files`, `invalid_idempotency_key`, " +
+                "`on_behalf_unsupported`); files named on a server without `cloud.files.v1` (`files_unsupported`).")
             notFound("No such session (`not_found`).")
-            conflict("Newer events exist (`stale_view`), or the session cannot take messages (`session_not_running`, `session_transferring`).")
-            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 256 KiB (`payload_too_large`).")
+            conflict("Newer events exist (`stale_view`), the session cannot take messages (`session_not_running`, `session_transferring`), or a file " +
+                "is unknown, expired, another member's or already sent (`file_unavailable`).")
+            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 256 KiB (`payload_too_large`), or the files exceed the team's total per message (`files_too_large`).")
+        }
+    }
+    get("/api/v1/cloud/files/policy") {
+        operationId = "getCloudFilePolicy"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Whether files can be sent"
+        description = "Whether the caller's team can send files to sessions now, and its limits. `available` is false with `reason` " +
+            "`file_storage_not_configured` while the team has no tested artifact bucket: hide or explain file sending then. Capability `cloud.files.v1`."
+        responses { ok<CloudFilePolicyView>("The policy and limits.") }
+    }
+    post("/api/v1/cloud/sessions/{id}/files") {
+        operationId = "uploadCloudFile"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Upload a file for a session"
+        description = "The raw bytes of one file, sent before the message that names it in `fileIds`. Authorized exactly like a message " +
+            "(the `message` permission, a `cloud:write` key, never on behalf of another member). The type is recognized from the bytes, never " +
+            "from the request: PNG, JPEG, WebP, GIF, PDF, or UTF-8 text (plain, Markdown, CSV or JSON by extension). The name is cleaned into a " +
+            "single safe file name (no path), and a binary file gets its type's extension. The file waits in the team's artifact bucket until " +
+            "the session's host received it, 24 hours at most. Limits: the team's size per file (20 MiB by default), 20 files not sent yet and " +
+            "100 MiB not received per session, and a daily amount per member. Each upload is audited (`cloud.file.uploaded`: name, size, type). " +
+            "Capability `cloud.files.v1`."
+        parameters {
+            sessionId()
+            queryText("name", "The file's name, at most 1,024 characters; only its last segment is kept, cleaned.")
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT)
+        }
+        responses {
+            ok<CloudFileView>("Stored.", HttpStatusCode.Created)
+            ok<CloudFileView>("The same file was already uploaded with this key (`Idempotency-Replayed: true`).")
+            badRequest("An empty file (`empty_file`), a name too long (`invalid_file_name`), an invalid key or `TeamCode-On-Behalf-Of` (`invalid_idempotency_key`, `on_behalf_unsupported`).")
+            notFound("No such session (`not_found`).")
+            conflict("The team has no tested bucket (`file_storage_not_configured`), the session is ending (`session_not_running`), or a file with this key is still being uploaded (`file_upload_in_progress`).")
+            error(HttpStatusCode.PayloadTooLarge, "The file exceeds the team's size per file (`file_too_large`).")
+            error(HttpStatusCode.UnsupportedMediaType, "The bytes are not an accepted type (`file_type_not_allowed`).")
+            error(HttpStatusCode.UnprocessableEntity, "The key was used with another file (`idempotency_conflict`).")
+            error(HttpStatusCode.TooManyRequests, "The session holds too many files not sent or not received, or the member reached today's amount (`upload_quota`, with `Retry-After` for the daily amount).")
+            error(HttpStatusCode.ServiceUnavailable, "The bucket did not answer (`file_storage_unavailable`): send the file again.")
         }
     }
     get("/api/v1/cloud/sessions/{id}/messages") {

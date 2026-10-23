@@ -74,7 +74,11 @@ class RunnerConversationUseCase(
      * gets an answer as soon as the session's differs: a pause (or a resume that cancels it) reaches it within
      * [POLL_MILLIS] through this already open request, instead of at its next heartbeat.
      */
-    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?): RunnerInputs {
+    /**
+     * [acceptsFiles]: the runner downloads the files a message carries (`cloud.files.v1`). A runner that does not would hand
+     * the agent the text alone, so such a message is rejected for it with `files_unsupported` instead of being delivered.
+     */
+    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?, acceptsFiles: Boolean = false): RunnerInputs {
         // Only the two states a runner acts on: a deleted session fences the call anyway.
         val knownState = known?.let { wire -> DesiredState.entries.firstOrNull { it.wire == wire && it != DesiredState.TERMINATED }
             ?: throw TeamFailure("invalid_state", 400, "Send the desired state as running or paused.") }
@@ -83,7 +87,11 @@ class RunnerConversationUseCase(
             val session = live(teamId, sessionId, epoch)
             if (knownState != null && session.desiredState != knownState) return RunnerInputs(emptyList(), session.desiredState)
             if (session.desiredState == DesiredState.RUNNING && (session.state == READY || session.state == ACTIVE)) {
-                val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH)
+                val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH).let { inputs ->
+                    val unsupported = if (acceptsFiles) emptyList() else inputs.filter { it.files.isNotEmpty() }
+                    if (unsupported.isNotEmpty()) store.acknowledge(sessionId, epoch, unsupported.map { RunnerInputAck(it.id, false, "files_unsupported") })
+                    inputs - unsupported.toSet()
+                }
                 if (delivered.isNotEmpty()) return RunnerInputs(delivered, session.desiredState)
             }
             if (sessions.now() >= deadline) return RunnerInputs(emptyList(), session.desiredState)
@@ -98,17 +106,20 @@ class RunnerConversationUseCase(
         return store.acknowledge(sessionId, epoch, acks)
     }
 
-    private suspend fun live(teamId: String, sessionId: String, epoch: Int): CloudSession {
-        val session = sessions.find(teamId, sessionId) ?: throw fenced()
-        if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
-        val execution = sessions.execution(sessionId, epoch) ?: throw fenced()
-        if (execution.state != ExecutionState.RUNNING) throw fenced()
-        return session
-    }
-    private fun fenced() = TeamFailure("execution_fenced", 409, "This execution is no longer current. Stop the agent and exit without checkpointing.")
+    private suspend fun live(teamId: String, sessionId: String, epoch: Int): CloudSession = liveExecution(sessions, teamId, sessionId, epoch)
 
     companion object {
         const val POLL_MILLIS = 500L
         const val DELIVERY_BATCH = 25
     }
 }
+
+/** The session of a runner call when [epoch] is its current, running execution; anything else is `409 execution_fenced`. */
+internal suspend fun liveExecution(sessions: CloudSessionStore, teamId: String, sessionId: String, epoch: Int): CloudSession {
+    val session = sessions.find(teamId, sessionId) ?: throw fenced()
+    if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
+    val execution = sessions.execution(sessionId, epoch) ?: throw fenced()
+    if (execution.state != ExecutionState.RUNNING) throw fenced()
+    return session
+}
+private fun fenced() = TeamFailure("execution_fenced", 409, "This execution is no longer current. Stop the agent and exit without checkpointing.")

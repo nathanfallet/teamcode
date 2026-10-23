@@ -61,8 +61,11 @@ class ApiDocsTest {
             cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(sessionStore), AuthenticateRunnerUseCase(sessionStore, cluster),
                 RunnerInferenceUseCase(sessionStore, stub()), RunnerGitHubUseCase(sessionStore, stub())),
             github = GitHubLinkService(stub(), stub(), stub()),
-            cloudConversation = CloudConversation(CloudConversationService(conversationStore, sessionStore, access), access,
-                RunnerConversationUseCase(sessionStore, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(stub<me.nathanfallet.teamcode.domain.team.TeamEventStore>())),
+            cloudConversation = CloudConversationService(conversationStore, sessionStore, access).let { conversation ->
+                CloudConversation(conversation, access, RunnerConversationUseCase(sessionStore, conversationStore),
+                    me.nathanfallet.teamcode.domain.team.TeamEventService(stub<me.nathanfallet.teamcode.domain.team.TeamEventStore>()),
+                    files = CloudFileService(stub(), sessionStore, conversation, stub(), stub()))
+            },
             cloudTransfers = CloudTransferService(sessionStore, stub(), sessions, CloudRecipientPolicy(sessionStore)),
             webhooks = me.nathanfallet.teamcode.domain.webhooks.WebhookService(stub(), stub()),
             apiPrices = stub(), poolSizing = stub(),

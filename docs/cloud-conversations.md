@@ -19,6 +19,7 @@ This page is the contract for talking to a [cloud session](cloud-sessions.md): t
 | Permission requests relayed to members (`ask` rules, questions), answered through the API (`cloud.permissions.v1`) | Implemented for Claude Code, see [permission requests](#permission-requests) |
 | Live agent text: `message.agent.delta` events replaced by their final `message.agent` (`cloud.transcript.live.v1`) | Implemented for Claude Code, see [live text](#live-text) |
 | `waiting` on the session view while the agent waits for a person (`cloud.sessions.waiting.v1`) | Implemented, see [a session waiting for a person](#a-session-waiting-for-a-person) |
+| Files sent with a message (images, PDFs, text), kept in the team's artifact bucket until the host receives them (`cloud.files.v1`) | Server implemented, see [files](#files); hosts, the CLI and the apps follow |
 
 The capabilities are advertised with `cloud.sessions.v1`, while cloud sessions are on in the stored [runtime](cloud-sessions.md#runtime-on-off-runner-image-and-pod-callback).
 
@@ -45,6 +46,7 @@ All take `{teamId, sessionId, epoch}` and the pod's projected token, like the li
 | `POST /cloud/runner/events` | `{events: [{sequence, type, data}]}`, the runner's own consecutive sequence per epoch (a retried batch is deduplicated); returns `{acceptedThrough, lastSeq}`. Body at most 2 MB, 200 events |
 | `POST /cloud/runner/inputs` | Long-poll (`waitMillis` at most 20,000) for queued inputs, interrupts first; returns them `delivered`, with the session's `desiredState`. Nothing is delivered unless the session is `ready` or `active` and desired `running`. With `desiredState` in the request (the one the runner last knew, `running` or `paused`), the poll also ends as soon as the session's differs: that is how a pause, or a resume that cancels it, reaches the runner without waiting for a heartbeat |
 | `POST /cloud/runner/inputs/ack` | `{acks: [{id, status: consumed or rejected, reason}]}` |
+| `GET /cloud/runner/files/{id}?teamId&sessionId&epoch` | The bytes of a file a message delivered to this very epoch carries, as `application/octet-stream` with `X-TeamCode-Sha256`; `404` for any other file, `409 execution_fenced` for another epoch (`cloud.files.v1`, see [files](#files)) |
 | `POST /cloud/runner/inference` | The execution's `tcex_` inference credential, see [inference from the pod](cloud-sessions.md#inference-from-the-pod) |
 
 A `turn` event with phase `started` makes a `ready` session `active`; `completed`, `interrupted` or `failed` makes it `ready` again. Both refresh `lastActivityAt`. A `status` event with `conversation` updates `resume.conversation`.
@@ -55,7 +57,7 @@ Events, in `cloud_session_events`:
 
 | Type | `data` |
 | --- | --- |
-| `message.user` | `{text, inputId, authorId}`, written by the server when the agent consumed the message |
+| `message.user` | `{text, inputId, authorId, files?}`, written by the server when the agent consumed the message; `files` lists `{id, name, size, contentType}` of the files it carried, never where the host wrote them |
 | `message.agent` | `{text, messageId?, index?, parentToolUseId?}`; `messageId` is the agent's API message id (Claude Code), `index` the content block when it was streamed, see [live text](#live-text) |
 | `message.agent.delta` | `{messageId, index, text, parentToolUseId?}`, the text a block gained since its previous delta, see [live text](#live-text) |
 | `tool.call` | `{id, name, input, parentToolUseId?}` |
@@ -105,6 +107,25 @@ Acknowledgement levels: `queued`, `delivered` (handed to the runner), `consumed`
 `POST /cloud/sessions/{id}/interrupt` stops the current turn; interrupts are delivered before queued messages, never wake a session and are refused with `409 nothing_to_interrupt` unless the session is `ready` or `active`. `GET .../messages` lists inputs (newest first, `before` cursor) and `GET .../messages/{input}` reads one.
 
 `TeamCode-On-Behalf-Of` is refused on these routes (`400 on_behalf_unsupported`): a message is always written by the authenticated member.
+
+## Files
+
+With `cloud.files.v1` a member sends files to a running (or paused) session: images (PNG, JPEG, WebP, GIF), PDFs and UTF-8 text (plain, Markdown, CSV, JSON). The bytes never travel inside a message: the client uploads each file, then names it in a message; the session's host downloads it, writes it to a temporary directory outside the working directory and gives the agent its path in the message text.
+
+1. `POST /cloud/sessions/{id}/files?name=<name>` with the raw bytes. It is authorized exactly like a message: the `message` permission on the session, an interactive login or a `cloud:write` key, never `TeamCode-On-Behalf-Of` (`400 on_behalf_unsupported`). `Idempotency-Key` makes a retry of the same name and bytes return the first file (`200`, `Idempotency-Replayed: true`); other bytes under the key are `422 idempotency_conflict`. Returns `201` with `{id, sessionId, name, size, contentType, sha256, createdAt, expiresAt}`.
+2. `POST /cloud/sessions/{id}/messages` with `fileIds` (at most 5, distinct, `400 invalid_files`): each file must be the caller's, uploaded to this session, complete, not expired and not carried by another message, otherwise `409 file_unavailable` (the same answer for another member's file, another session's, a consumed or an expired one). A message with files may have an empty text. The files are part of what the idempotency key stands for.
+3. The host polls `POST /cloud/runner/inputs` with `acceptsFiles: true`; each input lists `files: [{id, name, size, contentType, sha256}]`, downloaded from `GET /cloud/runner/files/{id}` while the input is delivered to that execution. A runner that does not send `acceptsFiles` never hands the agent a message without its files: such a message is rejected for it with `files_unsupported`.
+4. Once the input is consumed, rejected or cancelled, its files are marked for deletion; a sweep (every minute, one replica) deletes their objects, then their rows. A file is kept 24 hours at most, sent or not, received or not; an upload that does not complete within an hour is removed the same way.
+
+**Checks.** The type is recognized from the first bytes (PNG, JPEG, GIF, WebP and PDF signatures), otherwise the whole file must be UTF-8 without NUL bytes; anything else is `415 file_type_not_allowed`, an empty file `400 empty_file`. The client's type is never read. The name is only a label: its last segment after `/` or `\` is kept, normalized to NFC, without control, format (bidirectional overrides, zero-width), separator or surrogate characters, with `< > : " | ? *` replaced by `_`, leading dots and dashes and trailing dots and spaces removed, Windows device names (`CON`, `NUL`, `COM1`…) prefixed by `_`, cut to 120 UTF-8 bytes keeping its extension, and `file` when nothing is left. A binary file keeps its extension only when it matches its type (`shot.exe` sent as a PNG becomes `shot.exe.png`), and text never keeps an image or PDF extension. Hosts still prefix the name with the file id and check the final path stays in the session's directory.
+
+**Limits.** Per file, the team's `fileMaxMebibytes` (20 MiB by default, 1 to 100), checked against `Content-Length` before reading and while reading (`413 file_too_large`); per message, `messageFileMebibytes` (25 MiB by default, 1 to 100, `413 files_too_large`). Per session, 20 files no message names yet and 100 MiB its host has not received; per member, 1 GiB and 500 files per UTC day: `429 upload_quota`, with `Retry-After` for the daily amount. Both settings are on Dashboard → Cloud sessions and in `PUT /cloud/settings`.
+
+**Storage.** The bytes go to the team's artifact bucket (`artifact_storage`), as objects of 1 MiB under `<prefix>/session-files/<teamId>/<sessionId>/<fileId>/<part>`, with the bucket's server-side encryption setting; never to MySQL. A team without a stored bucket whose current version passed a connection test cannot send files: `GET /cloud/files/policy` says `available: false`, `reason: file_storage_not_configured`, and an upload is `409 file_storage_not_configured`; clients hide or explain the feature then. `cloud_session_files` holds the metadata only (id, session, author, credential, cleaned name, type, size, SHA-256, idempotency key, carrying input, creation, completion, expiry, consumption and `deleting_since`), `cloud_file_usage` the per-member daily counters. Uploads lock the session row to count its files, then the member's counter.
+
+**Audit.** Each upload writes `cloud.file.uploaded` with the file id as subject, the credential, and `details` `{sessionId, name, size, contentType}`: never the content.
+
+A server without `cloud.files.v1` mounts none of these routes, and refuses a message that names files with `400 files_unsupported` rather than dropping them.
 
 ## Permission requests
 
@@ -201,7 +222,7 @@ Each frame is `id: <seq>`, `event: <type>`, `data: <TeamEventView>` (`seq`, `typ
 
 ## Storage
 
-Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `cloud_access_policies`, `cloud_session_inputs` (text as `MEDIUMTEXT`, unique `(session, author, client key)`), `cloud_session_events` (primary key `(session_id, seq)`, unique `(session_id, epoch, runner_seq)` for deduplication) and `cloud_session_attachments`, and `cloud_session_transcripts`, the per-session cursors (last sequence, runner sequence of the latest execution) that the retention purge never deletes, so numbering never restarts. Writes take the session row lock, so sequences stay dense across replicas. Migration `V20261023230000.2` adds the `awaiting_*` columns of `cloud_sessions` that hold [`waiting`](#a-session-waiting-for-a-person).
+Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `cloud_access_policies`, `cloud_session_inputs` (text as `MEDIUMTEXT`, unique `(session, author, client key)`), `cloud_session_events` (primary key `(session_id, seq)`, unique `(session_id, epoch, runner_seq)` for deduplication) and `cloud_session_attachments`, and `cloud_session_transcripts`, the per-session cursors (last sequence, runner sequence of the latest execution) that the retention purge never deletes, so numbering never restarts. Writes take the session row lock, so sequences stay dense across replicas. Migration `V20261023230000.2` adds the `awaiting_*` columns of `cloud_sessions` that hold [`waiting`](#a-session-waiting-for-a-person). Migrations `V20261024120000*` add the file settings of `cloud_settings`, `cloud_session_files`, `cloud_file_usage` and `audit_events.details` for [files](#files).
 
 ## Known limits
 
@@ -212,6 +233,7 @@ Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `clou
 - An event replaced by `{truncated, originalBytes}` (above 60,000 bytes) keeps only its identity fields (see [bounds and masking](#transcript)): its text, input or output is gone.
 - Live text adds about two events per second of agent writing to the transcript; coalescing bounds it, nothing else does.
 - When a Claude resume fails, the in-flight message that started the process may be lost; the next one starts a fresh conversation.
+- A file waits 24 hours at most: a message queued for longer (a session paused for a day) still names its files, whose download then answers `404`. A cloud pod replaced after a pause loses the files it had written; the transcript still names them.
 
 ## Evidence
 
@@ -221,5 +243,6 @@ Migrations `V20261020100009*`: `cloud_settings.transcript_retention_days`, `clou
 - `AttachRequestsTest`, `AttachPickerTest`, `PickerTest` (CLI, common): a line typed while a question waits answers it (the reported bug: `1` was queued as a message), one question at a time with indexes, several for a multi-select question, or free text; `/deny`, `/allow`, `/message`; requests closed by their consumed answer, expiry or turn end and asked again after a rejection that keeps them open; Mordant key events mapped; the picker one question at a time with back keeping choices, Other joined with the chosen labels, decline, agent text unable to draw escape sequences or wider lines; the live area redrawn under printed lines; the shared `pickOne` and `pickMany` on Mordant's recorder, interactive and numbered.
 - `CloudConversationPersistenceTest` also covers `waiting`: set by a stored request and read with the session (and the list), ended by the consumed answer, by its turn's end in the same batch, by an expiry that shows the earlier request still open, by a pause asked, never set by a request raised while pausing, kept through a session write (a turn marker); live text deltas stored like other events.
 - `CloudAgentTest` (live text): coalesced `text_delta` lines from a Claude Code 2.1.309-shaped stream, the final `message.agent` with `messageId` and `index` dropping held text, no delta after it, thinking and tool input never streamed, the 2,000-character flush, a subagent's `parentToolUseId`, held text dropped with an interrupted turn, the flag only when the server takes deltas, the host's clock; `logs` and `attach` skipping deltas. `CloudTranscriptSanitizerTest`: the identity fields a cut event keeps. `CloudHumanWaitTest`: when a stored wait shows.
+- `CloudFileRulesTest`: names made safe (`../..`, absolute and Windows paths, backslashes, NUL, bidirectional overrides, zero-width characters, NFC, lone surrogates, Windows device names, over-long names cut on a character with their extension), signatures, text checked across parts, extensions following the type. `CloudFilePersistenceTest` (real MySQL 8.4, two pools, an in-memory bucket): migration drift; no tested bucket refused; parts and audit; idempotency across replicas; refused types swept; another member's, another session's, an expired or a consumed file refused; the per-message total; delivery with files, download only by the delivered epoch, fencing; the `message.user` files and their removal after the acknowledgement, the expiry or a rejection; the unsent, session and daily quotas under concurrent uploads. `CloudConversationRoutesTest`: the file routes' rights, statuses and headers, streamed limits, the runner without `acceptsFiles`, and a server without files behaving as before.
 - `CloudConversationRulesTest`: credential shapes masked; ordinary text (`task-management-…`, `max_tokens=4096`) kept; bounds.
 - `AgentProcessTest` (JVM and native macOS): line pipes to a real `/bin/sh` child, removed variables, bounded long lines that never eat the next line, exit code.

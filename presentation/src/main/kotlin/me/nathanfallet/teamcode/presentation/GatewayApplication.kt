@@ -254,6 +254,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else null,
                         if (cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.permissions.v1", "cloud.transcript.live.v1", "cloud.sessions.waiting.v1") else null,
                         if (cloudSessions != null && cloudConversation?.events != null) listOf("cloud.events.v1") else null,
+                        // Files need the runner channel their hosts download them from; whether a team has a bucket is its policy's business.
+                        if (cloudSessions != null && cloudRunner != null && cloudConversation?.files != null) listOf("cloud.files.v1") else null,
                         if (cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else null,
                         if (cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else null,
                         if (cloudSessions != null && cloudRunner?.variables != null) listOf("cloud.variables.v1") else null,

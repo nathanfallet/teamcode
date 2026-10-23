@@ -7,6 +7,8 @@ data class AuditEvent(
     val effectiveMemberId: String? = null, val credentialId: String? = null,
     /** Cloud transfers: the other member concerned, the former owner when a session changed owner. */
     val relatedMemberId: String? = null,
+    /** A short JSON object of labels for actions that need them (`cloud.file.uploaded`: `sessionId`, `name`, `size`, `contentType`). */
+    val details: String? = null,
 )
 data class AuditPage(val events: List<AuditEvent>, val nextBeforeId: Long?)
 

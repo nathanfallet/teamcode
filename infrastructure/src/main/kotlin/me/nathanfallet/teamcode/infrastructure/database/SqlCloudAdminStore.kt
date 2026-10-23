@@ -109,6 +109,7 @@ class SqlCloudAdminStore(private val database: Database, private val cipher: Cre
             it[transferPendingInputs] = settings.transferPendingInputs.wire
             it[permissionDeadlineMinutes] = settings.permissionDeadlineMinutes
             it[remoteIdleTimeoutMinutes] = settings.remoteIdleTimeoutMinutes
+            it[fileMaxMebibytes] = settings.fileMaxMebibytes; it[messageFileMebibytes] = settings.messageFileMebibytes
         }
         audit(actor.teamId, actor.member.id, "cloud.settings.updated", actor.teamId, null, actor.tokenId)
         settings
@@ -174,6 +175,7 @@ internal fun readCloudSettings(teamId: String): CloudSettings = CloudSettingsTab
         it[CloudSettingsTable.transcriptRetentionDays],
         MemberTransfers.parse(it[CloudSettingsTable.memberTransfers]) ?: MemberTransfers.OFFER, it[CloudSettingsTable.transferOfferDays],
         TransferPendingInputs.parse(it[CloudSettingsTable.transferPendingInputs]) ?: TransferPendingInputs.CANCEL,
-        it[CloudSettingsTable.permissionDeadlineMinutes], it[CloudSettingsTable.remoteIdleTimeoutMinutes])
+        it[CloudSettingsTable.permissionDeadlineMinutes], it[CloudSettingsTable.remoteIdleTimeoutMinutes],
+        it[CloudSettingsTable.fileMaxMebibytes], it[CloudSettingsTable.messageFileMebibytes])
 } ?: CloudSettings()
 internal fun readMember(row: ResultRow) = Member(row[Members.id], row[Members.username], Role.valueOf(row[Members.role]), row[Members.disabled], row[Members.mustChangePassword])

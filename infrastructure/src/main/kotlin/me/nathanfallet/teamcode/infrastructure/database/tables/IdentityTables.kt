@@ -53,6 +53,8 @@ object AuditEvents : Table("audit_events") {
     val credentialId = varchar("credential_id", 36).nullable()
     /** Cloud transfers only: the other member concerned (the former owner when a session changed owner). */
     val relatedMemberId = varchar("related_member_id", 36).nullable()
+    /** A short JSON object of labels for actions that need them (`cloud.file.uploaded`: session, name, size, type); never content. */
+    val details = varchar("details", 512).nullable()
     override val primaryKey = PrimaryKey(id)
     init { index("audit_team_time", false, teamId, occurredAt); index("audit_team_id", false, teamId, id) }
 }

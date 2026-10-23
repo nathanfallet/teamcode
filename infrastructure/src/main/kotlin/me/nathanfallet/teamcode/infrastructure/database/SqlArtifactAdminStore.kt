@@ -119,8 +119,13 @@ class SqlArtifactAdminStore(private val database: Database, private val cipher: 
         readSettings(actor.teamId)
     }
 
-    override suspend fun connection(teamId: String): ArtifactStorageConnection? = database.query {
-        ArtifactStorageTable.selectAll().where { ArtifactStorageTable.teamId eq teamId }.singleOrNull()?.let {
+    override suspend fun connection(teamId: String): ArtifactStorageConnection? = read(teamId, tested = false)
+
+    /** The connection only when its current version passed a test: files sent to sessions need a bucket known to work. */
+    suspend fun testedConnection(teamId: String): ArtifactStorageConnection? = read(teamId, tested = true)
+
+    private suspend fun read(teamId: String, tested: Boolean): ArtifactStorageConnection? = database.query {
+        ArtifactStorageTable.selectAll().where { ArtifactStorageTable.teamId eq teamId }.singleOrNull()?.takeIf { !tested || it[ArtifactStorageTable.verifiedAt] != null }?.let {
             ArtifactStorageConnection(it[ArtifactStorageTable.endpoint], it[ArtifactStorageTable.region], it[ArtifactStorageTable.bucket], it[ArtifactStorageTable.prefix],
                 it[ArtifactStorageTable.pathStyle], it[ArtifactStorageTable.accessKeyId], cipher.decrypt(it[ArtifactStorageTable.secret], context(teamId)).decodeToString(),
                 ServerSideEncryption.parse(it[ArtifactStorageTable.serverSideEncryption]) ?: ServerSideEncryption.NONE, it[ArtifactStorageTable.version])

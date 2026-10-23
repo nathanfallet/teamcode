@@ -12,8 +12,8 @@ private val hookArtifactPath = Regex("/api/v1/hook-delivery/[a-z0-9-]{1,64}/[^/]
 private val teamReadPath = Regex("/api/v1/(quotas|accounts|pools/budgets|pools/size|members/[a-zA-Z0-9-]{1,36}/capacity)")
 private const val CLOUD_ID = "[a-zA-Z0-9-]{1,36}"
 /** Session, transcript, input and transfer reads open to `cloud:read`; clusters, settings and the access policy are not listed. */
-private val cloudReadPath = Regex("/api/v1/cloud/(profiles|sessions|sessions/$CLOUD_ID(/executions|/events|/events/stream|/messages|/messages/$CLOUD_ID)?|events/stream|transfers|transfers/$CLOUD_ID)")
-private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(pause|resume|transfer|messages|interrupt|permissions|attachments|attachments/$CLOUD_ID/renew)|transfers/$CLOUD_ID/(accept|decline|cancel))")
+private val cloudReadPath = Regex("/api/v1/cloud/(profiles|files/policy|sessions|sessions/$CLOUD_ID(/executions|/events|/events/stream|/messages|/messages/$CLOUD_ID)?|events/stream|transfers|transfers/$CLOUD_ID)")
+private val cloudWritePost = Regex("/api/v1/cloud/(sessions|sessions/$CLOUD_ID/(pause|resume|transfer|messages|files|interrupt|permissions|attachments|attachments/$CLOUD_ID/renew)|transfers/$CLOUD_ID/(accept|decline|cancel))")
 private val webhookRead = Regex("/api/v1/webhooks(/$CLOUD_ID(/deliveries)?)?")
 private val webhookWrite = Regex("/api/v1/webhooks(/$CLOUD_ID(/test|/rotate-secret)?)?")
 private const val ARTIFACT_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"

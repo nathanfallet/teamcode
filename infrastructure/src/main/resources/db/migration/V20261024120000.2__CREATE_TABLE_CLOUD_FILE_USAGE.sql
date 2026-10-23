@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS cloud_file_usage (team_id VARCHAR(36), member_id VARCHAR(36), `day` BIGINT, bytes BIGINT NOT NULL, files INT NOT NULL, CONSTRAINT pk_cloud_file_usage PRIMARY KEY (team_id, member_id, `day`));
+CREATE INDEX cloud_file_usage_day ON cloud_file_usage (`day`);

@@ -248,8 +248,10 @@ Administrators edit them through `PUT /api/v1/cloud/settings` or **Dashboard →
 | `transferOfferDays` | 7 | Days a recipient has to accept an offer (1 to 30). |
 | `transferPendingInputs` | `cancel` | Messages not yet consumed when the owner changes: `cancel` (reason `transferred`) or `keep` (delivered to the recipient's next execution). |
 | `permissionDeadlineMinutes` | 0 | Minutes a cloud agent's [permission request](cloud-conversations.md#permission-requests) waits for an answer before the runner denies it (1 to 1,440). 0 waits without a deadline. Read once per execution, so a change applies to sessions started or resumed afterwards. |
+| `fileMaxMebibytes` | 20 | Largest [file](cloud-conversations.md#files) a member may send to a session, in MiB (1 to 100). |
+| `messageFileMebibytes` | 25 | Largest total of the files of one message, in MiB (1 to 100). |
 
-In `PUT /cloud/settings`, an absent transfer field or `permissionDeadlineMinutes` keeps its stored value, so a client written before they existed does not reset them; responses always carry them. On the dashboard form, an empty deadline means no deadline.
+In `PUT /cloud/settings`, an absent transfer field, `permissionDeadlineMinutes` or file limit keeps its stored value, so a client written before they existed does not reset them; responses always carry them. On the dashboard form, an empty deadline means no deadline.
 
 `expiresAt` is computed when the session pauses, from the setting in force at that moment; changing the setting applies to sessions paused afterwards, so shortening it never deletes existing work by surprise. Resuming clears it. At expiry the session is terminated with reason `expired` and its workspace deleted as below. The 7-day and 1-day expiry notices need the transcript and feed, and are planned.
 

@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode
 
 import java.util.UUID
 import kotlinx.coroutines.*
+import me.nathanfallet.teamcode.domain.artifacts.ArtifactObjectStore
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
@@ -10,6 +11,8 @@ import me.nathanfallet.teamcode.infrastructure.cloud.ClusterApiException
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.database.Database
+import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudInferenceCredentialStore
@@ -33,7 +36,7 @@ import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
  * `404` and `cloud.*` capabilities are not advertised. The runner channel and the workers keep serving the sessions that
  * already exist, so turning cloud sessions off never kills a running agent; they stay idle until a runtime is stored.
  */
-class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: String) : AutoCloseable {
+class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: String, objects: ArtifactObjectStore? = null) : AutoCloseable {
     val runtime = CloudRuntimeService(SqlCloudRuntimeStore(database), publicOrigin)
     private val store = SqlCloudSessionStore(database)
     private val adminStore = SqlCloudAdminStore(database, cipher)
@@ -81,7 +84,20 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         AuthenticateRunnerUseCase(store, cluster, logins = { token -> logins.authenticate(token) }), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess),
         RunnerVariablesUseCase(store, variables), remoteHosts = true)
 
-    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)))
+    /**
+     * Files sent to sessions (`cloud.files.v1`), kept in the team's artifact bucket: without an object store the server
+     * serves no file route. A team without a tested bucket is refused `file_storage_not_configured`.
+     */
+    private val files = objects?.let { bucket ->
+        val artifactAdmin = SqlArtifactAdminStore(database, cipher)
+        CloudFileService(SqlCloudFileStore(database), store, conversationService, object : CloudFileStorage {
+            override suspend fun active(teamId: String) = artifactAdmin.testedConnection(teamId)
+            override suspend fun any(teamId: String) = artifactAdmin.connection(teamId)
+        }, bucket)
+    }
+
+    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore),
+        me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)), files = files)
 
     /**
      * Seeds the runtime from the former deployment variables, only if nothing is stored yet; the database stays the
@@ -144,6 +160,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
                 try {
                     work.runDue("cloud-maintenance", intervalMillis = 60_000) { store.maintain(); transferStore.maintain(); transfers.expireOffers(); inferenceCredentials.purge(500) }
                     work.runDue("cloud-gc", intervalMillis = 10 * 60_000, timeoutMillis = 240_000) { collectGarbage() }
+                    // Bytes of files their host received, that expired or whose upload failed, then their rows.
+                    files?.let { work.runDue("cloud-files-sweep", intervalMillis = 60_000, timeoutMillis = 120_000) { it.sweep() } }
                 }
                 // runDue's deadline is a cancellation of the block only; the loop must survive it.
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode cloud maintenance deadline exceeded.") }
