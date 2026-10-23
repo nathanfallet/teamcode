@@ -43,6 +43,11 @@ class NewSessionViewModelTest {
         assertEquals("p1", model.uiState.value.profileId)
         assertFalse(model.uiState.value.acceptsMessage)
         model.onName("Fix"); model.onMessage("ignored")
+        // While the profiles load again, their answer may change what is sent: no creation until it is in.
+        model.reload()
+        assertFalse(model.uiState.value.canCreate)
+        settle()
+        assertTrue(model.uiState.value.canCreate)
         sessions.createResult = { throw CompanionException.Unreachable() }
         model.create(); settle()
         assertNotNull(model.uiState.value.error)

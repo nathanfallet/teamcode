@@ -30,7 +30,8 @@ data class NewSessionUiState(
     val error: String? = null,
     val created: CloudSession? = null,
 ) {
-    val canCreate: Boolean get() = !creating && created == null && profileId != null && name.isNotBlank()
+    // Not while the profiles load: their answer can change what is sent, and so the key a retry must reuse.
+    val canCreate: Boolean get() = !creating && !loadingProfiles && created == null && profileId != null && name.isNotBlank()
 }
 
 /**

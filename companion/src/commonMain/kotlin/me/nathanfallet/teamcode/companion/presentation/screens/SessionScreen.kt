@@ -158,7 +158,8 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
     val listState = rememberLazyListState()
     // Follow the newest event while the member is at the bottom; leave the position alone when reading older ones.
     val atBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
-    LaunchedEffect(items.lastOrNull()?.key, state.running, state.pending.size) {
+    // Keyed on the newest event, not the last item: a tool's result or a folded run grows the tail under the same item.
+    LaunchedEffect(state.transcript.events.lastOrNull()?.seq, state.running, state.pending.size) {
         // The bottom item's index from the new items, not from the last layout, which has not measured them yet.
         if (atBottom) listState.scrollToItem(items.size + 1)
     }
