@@ -18,10 +18,24 @@
         <activity
                 android:exported="true"
                 android:name=".MainActivity"
+                android:launchMode="singleTask"
                 android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- "Open in app" on the viewer page: teamcode://open?url=<viewer URL>. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="teamcode" android:host="open"/>
+            </intent-filter>
+            <!-- A link shared from another app ("Open in TeamCode"). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
     </application>

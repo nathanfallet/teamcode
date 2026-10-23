@@ -15,6 +15,8 @@ The hooks run at `UserPromptSubmit` and `PreToolUse`, using Claude's supported [
 
 Only the session ID and delivery stage reach the TeamCode management API. The local proxy discards prompts, tool inputs, working directories and transcript paths from hook payloads. The server hashes the session ID using the same identity as inference affinity, scopes lookup to the authenticated member and requires recent admitted activity. The first request of a new session may precede any advice; the controller must first collect a valid context and quota history.
 
+When the server records [activity](agent-sessions.md#waiting-for-a-person), the plugin also registers `Stop`, `Notification` and `PostToolUse` HTTP hooks on the same local service, which report only whether the agent works or waits for a person (`teamcode run --no-activity` leaves them out).
+
 The same session-only plugin carries the [team hooks](hooks.md) the member approved, as command hooks on their events; `--no-guidance` removes only the guidance hooks, `--no-team-hooks` only the team hooks.
 
 Explicit `--bare` skips automatic guidance and team hooks. Claude's managed hook restrictions, HTTP allowlists and disabled hooks remain authoritative and can prevent delivery. The launcher does not override those choices. Failure to prepare the optional plugin reports a short notice and continues with server-side limits.
@@ -31,6 +33,8 @@ The launcher adds invocation-only command hooks for `UserPromptSubmit` and `PreT
 Each hook invokes the native `teamcode agents hook --config /absolute/path/to/config.json` command. It reads at most 64 KiB of redirected stdin, requires EOF within one second, validates the event/session and discards all other fields. Lookup has a 2.5-second deadline and acknowledgment a separate 750-millisecond deadline; the Codex hook timeout is five seconds. Malformed input, missing configuration, expired advice and outages emit `{}` without diagnostics. A terminal is never read. The command uses the same SDK and durable delivery contract as Claude's local HTTP hook.
 
 Only the executable/configuration paths appear in the hook definition. No credentials, transient port or token appear in the command. The definition therefore stays stable across launches and token rotation. POSIX paths are shell-quoted; Windows invokes an encoded PowerShell script to preserve literal Unicode paths. The launcher adds the Windows PowerShell directory under `SystemRoot` to the child process PATH, so hooks also work when a terminal supplies only a minimal PATH; no machine or user environment setting is changed. The hook reads the private configuration itself, so a Codex daemon does not need to inherit an ephemeral proxy credential.
+
+With activity recorded, the same command is also registered on `Stop` and reports whether the agent works or waits for a person from `Stop` and `UserPromptSubmit` (the launch's `TEAMCODE_RUN_ID`; nothing else leaves the computer).
 
 Approved [team hooks](hooks.md) are added the same way, in the same per-event arrays (Codex has no `Notification` event, so a hook listening only to it is left out for Codex), and need the same `/hooks` trust.
 

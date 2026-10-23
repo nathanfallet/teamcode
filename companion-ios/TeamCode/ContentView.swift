@@ -15,5 +15,7 @@ struct ContentView: View {
     var body: some View {
         ComposeView()
             .ignoresSafeArea()
+            // "Open in app" on the viewer page: teamcode://open?url=<viewer URL>, checked by the app before anything opens.
+            .onOpenURL { url in MainViewControllerKt.openLink(link: url.absoluteString) }
     }
 }

@@ -13,6 +13,16 @@ sealed class CompanionException(message: String) : Exception(message) {
     class PasswordRejected(val code: String?) : CompanionException("The server refused this password.")
     /** The password was changed but the sign-in that follows failed: the temporary session is gone, sign in again. */
     class PasswordChanged : CompanionException("Your password was changed. Sign in with the new one.")
+    /** The session (or artifact) does not exist or is not visible to this member any more. */
+    class NotFound : CompanionException("This no longer exists, or you can no longer see it.")
+    /** A followed stream was ended by the server: the credential or the access to what it follows was withdrawn. */
+    class AccessRevoked : CompanionException("Your access to this was withdrawn.")
+    /** The server sent an event this version of the app cannot read; reconnecting would replay it. */
+    class UnreadableEvent : CompanionException("The server sent an event this version of the app cannot read. Update the app.")
+    /** The server does not offer what the screen needs ([feature] is the missing capability). */
+    class Unsupported(val feature: String) : CompanionException("This server does not offer this yet.")
+    /** A view ticket for another origin than the account's: the server's public origin is not the address signed in to. */
+    class ForeignContent : CompanionException("The server shows artifacts on another address than the one you signed in with. Sign in with its public address.")
     class CredentialStorage : CompanionException("This device's secure storage refused to read or keep the sign-in. Unlock the device and try again.")
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")

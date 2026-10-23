@@ -1,0 +1,6 @@
+# The companion app's store identifiers: the same on both stores.
+app_identifier("me.nathanfallet.teamcode")
+
+for_platform :android do
+  package_name("me.nathanfallet.teamcode")
+end

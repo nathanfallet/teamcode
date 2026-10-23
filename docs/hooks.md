@@ -101,6 +101,10 @@ The runner installs the owner's hooks at every Claude Code start, with the owner
 
 **Codex cloud sessions run no team hook.** Codex runs only hooks a person trusted in `/hooks`, and TeamCode never bypasses that trust (`--dangerously-bypass-hook-trust`), so the runner does not add them.
 
+## Waiting for a person
+
+Separately from team hooks, TeamCode's own hooks report whether a launch's agent works or waits for a person, from `Stop` and `Notification` (Claude Code) and `Stop` (Codex), without content. They are not team hooks: nothing is published, pinned or approved, and a team `Stop` hook runs beside them in the same event. See [Waiting for a person](agent-sessions.md#waiting-for-a-person). Cloud sessions already know their turns and permission waits, so their pods run no such hook.
+
 ## Audit
 
 Catalog writes append metadata-only events in the same team-locked transaction: `hook.created`, `hook.version.published` (subject: version ID; `credentialId`: the publishing key, empty for an administrator), `hook.pinned` (subject: version ID), `hook.unpinned`, `hook.access.allowed`, `hook.access.denied`, `hook.access.cleared` (subject: the assignment ID). No content, path, digest, label or definition is written to the journal.
@@ -111,7 +115,6 @@ Four additive tables, `hooks`, `hook_versions`, `hook_files` and `hook_assignmen
 
 ## What is planned
 
-- **"Waiting for a human" observation**: report, from `Stop` and `Notification` hooks, that a session waits for a person, on the run or cloud session, without content. A second pull request.
 - **Approval status reported to the server**, so an administrator sees which members approved or refused a version (as skill installation status).
 - **Retiring** a hook or a version, and pruning old version directories on the computer.
 - **Windows** support (hook commands run by the agents' shells there) and **Codex cloud sessions**, which need a trust path that does not bypass Codex's.

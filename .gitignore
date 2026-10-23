@@ -23,4 +23,12 @@ staged/
 *.p12
 *.mobileprovision
 **/fastlane/*.json
+# Store listings are kept in the stores, never here; build outputs and fastlane reports stay local
+fastlane/metadata/
+fastlane/screenshots/
+fastlane/report.xml
+fastlane/README.md
+*.ipa
+*.dSYM.zip
+Gemfile.lock
 companion-ios/**/xcuserdata/

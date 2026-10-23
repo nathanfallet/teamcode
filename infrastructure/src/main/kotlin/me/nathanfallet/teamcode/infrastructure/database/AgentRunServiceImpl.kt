@@ -36,8 +36,40 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
         val now = nowMillis()
-        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now }
+        // A `working` reported before a silence is not carried over it (it would be a guess); one reported during it is current.
+        // `waiting_for_human` is kept: a person still has to answer, whatever the wrapper's connection did, until the next event or the end.
+        val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
+        val guess = silent && row[AgentRuns.activity] == RunActivity.WORKING.wire &&
+            (row[AgentRuns.activityAt] ?: 0) <= row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
+        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (guess) { it[activity] = null; it[activityAt] = null } }
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
+    }
+
+    /** Reads and writes under the team lock that [writeActor] takes, like `end` and `heartbeat`: replicas apply reports one at a time. */
+    override suspend fun activity(actor: Principal, id: String, activity: RunActivity, observedAtMillis: Long?): RunActivityChange = database.query {
+        writeActor(this, actor); val row = creator(actor, id)
+        if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
+        val stored = row[AgentRuns.activity]?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } }
+        val previous = row[AgentRuns.activityAt]
+        val storedObservedAt = row[AgentRuns.activityObservedAt]
+        val now = nowMillis()
+        // Bounded by the server's clock plus a skew allowance: a reporter clock far ahead cannot freeze the launch's state once corrected.
+        val observed = observedAtMillis?.coerceAtMost(now + AgentRunService.ACTIVITY_CLOCK_SKEW_MILLIS)
+        // A slow report the client gave up on can land after a newer one: by the reporter's clock it is older, so it changes nothing.
+        if (observed != null && storedObservedAt != null && observed < storedObservedAt)
+            return@query RunActivityChange(id, stored, previous.takeIf { stored != null }, superseded = true)
+        // The same state keeps its time, except a `working` during a silence older than the silence: the heartbeat that ends it would clear it.
+        val silenceBegan = row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
+        val stale = activity == RunActivity.WORKING && now > silenceBegan && (previous ?: 0) <= silenceBegan
+        val same = stored == activity && previous != null && !stale
+        if (same && observed == null) return@query RunActivityChange(id, activity, previous)
+        val written = AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) {
+            if (!same) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now }
+            // The newest observation is kept even for a repeated state, so an older one arriving later is still recognised; a report without one leaves it.
+            if (observed != null) it[activityObservedAt] = observed
+        }
+        if (written == 0) throw TeamFailure("run_ended", 409, "This run has ended.")
+        RunActivityChange(id, activity, if (same) previous else now)
     }
 
     override suspend fun end(actor: Principal, id: String, exitCode: Int?): RunLease = database.query {
@@ -139,8 +171,12 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         return rows.map { row -> with(AgentRuns) {
             val member = members.getValue(row[memberId])
             val state = RunStateUseCase().state(row[endedAt], row[heartbeatAt], now, row[tokenId] in validTokens && !member[Members.disabled] && !member[Members.mustChangePassword])
+            val shown = row[activity]?.takeIf { state == RunState.RUNNING }?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } }
             AgentRun(row[id], row[memberId], member[Members.username], row[agent], row[workload], row[deviceId], row[startedAt], row[heartbeatAt], row[lastRequestAt], row[endedAt], row[exitCode],
-                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty())
+                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty(),
+                // Only a launch with a live wrapper has a current state: after STALE or the end it would be a guess.
+                shown,
+                shown?.let { row[activityAt] })
         } }
     }
     private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else

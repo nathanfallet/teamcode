@@ -1,0 +1,1 @@
+ALTER TABLE agent_runs ADD activity VARCHAR(24) NULL, ADD activity_at BIGINT NULL, ADD activity_observed_at BIGINT NULL;

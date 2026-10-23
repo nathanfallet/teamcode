@@ -68,6 +68,8 @@ class ApiDocsTest {
             apiPrices = stub(), poolSizing = stub(),
             artifactAdmin = me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(stub(), stub()),
             artifacts = me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),
+            artifactViewing = me.nathanfallet.teamcode.domain.artifacts.ArtifactViewing(me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),
+                stub(), stub(), stub(), me.nathanfallet.teamcode.domain.artifacts.ArtifactTickets(ByteArray(32))),
         )
     }
 

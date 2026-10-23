@@ -155,6 +155,14 @@ class TeamCodeClient(
     /** Register one local wrapper launch. The UUID makes a repeated start idempotent. */
     override suspend fun startRun(input: StartRunRequest): RunLeaseView { identifier(input.id); return request("/api/v1/runs", HttpMethod.Post, input) }
     override suspend fun heartbeatRun(id: String): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/heartbeat", HttpMethod.Post) }
+    /**
+     * What the agent's hooks report, never content: [state] is `working` or `waiting_for_human`, [observedAtMillis] when the
+     * hook fired by this computer's clock, so the server can ignore a slow report that lands after a newer one.
+     */
+    suspend fun reportRunActivity(id: String, state: String, observedAtMillis: Long? = null): RunActivityView {
+        identifier(id)
+        return request("/api/v1/runs/$id/activity", HttpMethod.Post, RunActivityRequest(state, observedAtMillis))
+    }
     override suspend fun endRun(id: String, exitCode: Int?): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/end", HttpMethod.Post, EndRunRequest(exitCode)) }
     suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null, labels: Map<String, String> = emptyMap()): RunPageView {
         require(!all || memberId == null) { "Choose one member or all members." }
@@ -319,6 +327,10 @@ class TeamCodeClient(
     suspend fun artifact(id: String): ArtifactView { identifier(id); return request("/api/v1/artifacts/$id", HttpMethod.Get) }
     suspend fun artifactVersions(id: String): List<ArtifactVersionView> { identifier(id); return request("/api/v1/artifacts/$id/versions", HttpMethod.Get) }
     suspend fun artifactVersion(id: String, number: Int): ArtifactVersionView { identifier(id); return request("/api/v1/artifacts/$id/versions/$number", HttpMethod.Get) }
+    /** A view ticket for [version] (the current one when null), to show the content in an app (`artifacts.tickets.v1`, interactive logins). */
+    suspend fun issueArtifactTicket(id: String, version: Int? = null): ArtifactTicketView {
+        identifier(id); return request("/api/v1/artifacts/$id/tickets", HttpMethod.Post, IssueArtifactTicketRequest(version))
+    }
     /** The bytes of one file of a version, at most [maxBytes]. */
     suspend fun artifactFile(id: String, number: Int, path: String, maxBytes: Long = 16L * 1024 * 1024): ByteArray {
         identifier(id)
@@ -448,12 +460,12 @@ class TeamCodeClient(
      * revoked access mid-stream. Throws when the stream closes ([TeamCodeException] with status `0`) or on a network
      * failure (the engine's exception), so the caller reconnects from its last sequence; and on an unreadable event
      * ([TeamCodeException] with status `0` and code [MALFORMED_EVENT]), which a reconnection would replay, so the caller
-     * stops instead.
+     * stops instead. [onOpen] is called once the server accepted the stream, before any event.
      */
-    suspend fun followCloudEvents(id: String, after: Long, onEvent: suspend (CloudEventView) -> Unit): CloudStreamEnd {
+    suspend fun followCloudEvents(id: String, after: Long, onOpen: suspend () -> Unit = {}, onEvent: suspend (CloudEventView) -> Unit): CloudStreamEnd {
         identifier(id)
         require(after >= 0)
-        return followStream("/api/v1/cloud/sessions/$id/events/stream", after, endEvent = "end") { frame ->
+        return followStream("/api/v1/cloud/sessions/$id/events/stream", after, endEvent = "end", onOpen) { frame ->
             if (frame.data.isNotEmpty()) onEvent(decodeFrame<CloudEventView>(frame))
         }
     }
@@ -468,18 +480,21 @@ class TeamCodeClient(
      * ends on its own: returns [CloudStreamEnd.DENIED] when the server stopped accepting the credential and throws
      * when the stream closes ([TeamCodeException] with status `0`), on a network failure (the engine's exception) or
      * on an unreadable event ([TeamCodeException] with code [MALFORMED_EVENT]). Event types are an open list; unknown ones reach
-     * [onEvent] like the others. `gap` and `denied` are the feed's control frames, never event types.
+     * [onEvent] like the others. `gap` and `denied` are the feed's control frames, never event types. [onOpen] is called
+     * once the server accepted the stream, before any frame: from then on the cursor is fixed, so a caller that opened
+     * with `null` can load what it shows without missing a change made in between.
      */
     suspend fun followTeamEvents(
         after: Long?,
         types: Set<String> = emptySet(),
         onGap: suspend (oldestSeq: Long) -> Unit = {},
+        onOpen: suspend () -> Unit = {},
         onEvent: suspend (TeamEventView) -> Unit,
     ): CloudStreamEnd {
         require(after == null || after >= 0)
         require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) && it != "gap" && it != "denied" }) { "Invalid event type." }
         val query = if (types.isEmpty()) "" else "?types=" + types.sorted().joinToString(",").encodeURLQueryComponent()
-        return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null) { frame ->
+        return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null, onOpen) { frame ->
             when (frame.event) {
                 "gap" -> onGap(decodeFrame<TeamEventGapView>(frame).oldestSeq)
                 else -> if (frame.data.isNotEmpty()) onEvent(decodeFrame<TeamEventView>(frame))
@@ -492,7 +507,7 @@ class TeamCodeClient(
      * [endEvent] when the stream has one) ending it, unnamed frames skipped and every other frame handed to [onFrame].
      * A stream that closes, breaks a bound or carries an undecodable event throws [TeamCodeException] with status `0`.
      */
-    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
+    private suspend fun followStream(path: String, after: Long?, endEvent: String?, onOpen: suspend () -> Unit = {}, onFrame: suspend (ServerSentEvent) -> Unit): CloudStreamEnd =
         http.prepareGet("$origin$path") {
             authenticate()
             after?.let { header("Last-Event-ID", it.toString()) }
@@ -500,6 +515,7 @@ class TeamCodeClient(
             timeout { requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS; socketTimeoutMillis = 60_000 }
         }.execute { response ->
             if (!response.status.isSuccess()) throw failure(response)
+            onOpen()
             var end: CloudStreamEnd? = null
             readServerSentEvents(response.bodyAsChannel()) { frame ->
                 val name = frame.event

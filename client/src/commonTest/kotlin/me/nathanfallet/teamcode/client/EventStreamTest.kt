@@ -60,6 +60,18 @@ class EventStreamTest {
         assertNull(request.url.parameters["types"])
     }
 
+    @Test fun onOpenRunsOnceAcceptedBeforeAnyFrameAndNeverForARefusal() = runTest {
+        val order = mutableListOf<String>()
+        val body = "retry: 2000\n\nevent: gap\ndata: {\"oldestSeq\":3}\n\n" + teamEvent(3) + "event: denied\ndata: {}\n\n"
+        client(body).use { client ->
+            client.followTeamEvents(after = 1, onGap = { order += "gap" }, onOpen = { order += "open" }) { order += "event ${it.seq}" }
+        }
+        assertEquals(listOf("open", "gap", "event 3"), order)
+        client("{\"error\":{\"type\":\"invalid_cursor\",\"message\":\"No.\"}}", status = HttpStatusCode.BadRequest).use { client ->
+            assertFailsWith<TeamCodeException> { client.followTeamEvents(after = 999, onOpen = { fail("A refused feed never opens.") }) { } }
+        }
+    }
+
     @Test fun aGapIsReportedBeforeTheEventsThatFollowIt() = runTest {
         val order = mutableListOf<String>()
         val body = "retry: 2000\n\nevent: gap\ndata: {\"oldestSeq\":120}\n\n" + teamEvent(120) + teamEvent(121) + "event: denied\ndata: {}\n\n"

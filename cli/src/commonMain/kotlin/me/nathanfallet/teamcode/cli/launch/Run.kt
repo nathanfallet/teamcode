@@ -40,6 +40,7 @@ class Run : SuspendingNoOpCliktCommand(name = "run") {
 }
 
 private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(name = agent) {
+    private val noActivity by option("--no-activity", help = "Do not report to the server whether the agent works or waits for you.").flag()
     private val noGuidance by option("--no-guidance", help = "Disable automatic session guidance for this launch.").flag()
     private val noMcp by option("--no-mcp", help = "Do not connect the team MCP servers assigned to you for this launch.").flag()
     private val noTeamHooks by option("--no-team-hooks", help = "Do not install the team hooks you approved for this launch.").flag()
@@ -76,12 +77,14 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val servers = assignedMcpServers(client, capabilities)
             val hooks = approvedTeamHooks(client, capabilities)
             val artifacts = artifactsAvailable(client, capabilities)
+            // Whether the agent works or waits for a person: a state only, reported by the hooks that carry guidance.
+            val activity = !noActivity && RUN_ACTIVITY_CAPABILITY in capabilities.features
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
-                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts)) {
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts)
+                    launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
@@ -90,7 +93,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(port, token, runId, servers, claudeLogin, hooks, artifacts)
+                        launch(port, token, runId, servers, claudeLogin, hooks, artifacts, activity)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -157,11 +160,13 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         if (active.isNotEmpty()) echo("Team hooks: ${active.joinToString(", ") { "${it.name} ${it.version}" }}.", err = true)
         return active
     }
-    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean): Int {
+    /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
+    private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
+    private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean): Int {
         val options = arguments.takeWhile { it != "--" }
-        val guided = agent == "claude" && !noGuidance && "--bare" !in options
+        val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
-            GuidancePlugin.create(configPath(), if (guided) port else null, teamHooks)
+            GuidancePlugin.create(configPath(), if (guided) port else null, teamHooks, runId.takeIf { activity })
         } catch (_: Exception) {
             echo("Automatic guidance and team hooks could not be prepared; continuing with server-side limits.", err = true)
             null
@@ -172,7 +177,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         }
         val codexGuided = agent == "codex" && !noGuidance && !customCodexHooks
         val guidance = if (agent == "codex" && (codexGuided || teamHooks.isNotEmpty())) try {
-            codexGuidance(servicePlatform(), configPath(), teamHooks, guidance = codexGuided).also {
+            codexGuidance(servicePlatform(), configPath(), teamHooks, guidance = codexGuided, activity = codexGuided && runId != null && activity).also {
                 echo("TeamCode ${if (codexGuided) "guidance hooks are" else "team hooks are"} available. Review and trust them in Codex /hooks before first use.", err = true)
             }
         } catch (_: Exception) {
@@ -189,7 +194,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer)
-            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + guidance.environment) }
+            return try { runInteractiveProcess(agent, plan.arguments, plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment) }
             catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
         } finally {
             try { plugin?.close() } catch (_: Exception) { echo("The temporary guidance plugin could not be removed.", err = true) }
@@ -198,6 +203,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
 }
 
 private const val RUN_LABELS_CAPABILITY = "team.runs.labels.v1"
+private const val RUN_ACTIVITY_CAPABILITY = "team.runs.activity.v1"
 private const val ARTIFACTS_POLICY_CAPABILITY = "artifacts.policy.v1"
 
 /**

@@ -13,6 +13,7 @@ import me.nathanfallet.teamcode.infrastructure.gateway.SessionAffinityKey
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
+import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
 import org.junit.jupiter.api.Timeout
 import org.testcontainers.mysql.MySQLContainer
 import kotlin.test.*
@@ -216,6 +217,85 @@ class AgentRunPersistenceTest {
         }
     }
 
+    @Test @Timeout(120)
+    fun activityIsReportedByTheCreatingCredentialOnlyAndShownOnlyWhileTheWrapperLives() = runBlocking {
+        fixture { f ->
+            f.a.query {
+                val drift = MigrationUtils.statementsRequiredForDatabaseMigration(AgentRuns, AgentRunLabels, withLogs = false)
+                assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
+            }
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b); val id = id()
+            a.start(f.member.principal, id, "claude", "interactive")
+            assertNull(b.get(f.member.principal, id).run.activity, "Nothing reported yet")
+            val first = a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, first.activity)
+            // The same state from the other replica writes nothing and keeps the time it began.
+            assertEquals(first, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN))
+            val shown = b.get(f.member.principal, id).run
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, shown.activity); assertEquals(first.sinceMillis, shown.activitySinceMillis)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.list(f.member.principal).runs.single { it.id == id }.activity)
+            val working = b.activity(f.member.principal, id, RunActivity.WORKING)
+            assertTrue(working.sinceMillis!! >= first.sinceMillis!!)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // Another login, another member, a key that cannot write: none can report for this launch.
+            val anotherLogin = f.team.login("developer", MEMBER_PASSWORD, "another login")
+            failure("run_credential_changed") { b.activity(anotherLogin.principal, id, RunActivity.WORKING) }
+            failure("run_not_found") { b.activity(f.admin.principal, id(), RunActivity.WORKING) }
+            val reader = assertNotNull(f.team.authenticate(SqlServiceKeyService(f.a).create(f.member.principal, f.member.principal.member.id, "Reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
+            failure("credential_scope") { b.activity(reader, id, RunActivity.WAITING_FOR_HUMAN) }
+            // Silence makes the state unknown, not stale-but-shown; the end does too and refuses further reports.
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 60_000 } }
+            assertEquals(RunState.STALE, b.get(f.member.principal, id).run.state)
+            assertNull(b.get(f.member.principal, id).run.activity); assertNull(b.get(f.member.principal, id).run.activitySinceMillis)
+            a.heartbeat(f.member.principal, id)
+            assertNull(b.get(f.member.principal, id).run.activity, "A state reported before a silence is not carried over it")
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN).activity)
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity, "A heartbeat without a silence keeps it")
+            // A state reported during a silence is current: the heartbeat that ends the silence keeps it.
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - 10_000 } }
+            b.activity(f.member.principal, id, RunActivity.WORKING)
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WORKING, b.get(f.member.principal, id).run.activity)
+            // Waiting for a person outlives a silence of the wrapper: it is still true until the next event or the end.
+            b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000; it[activityAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 60_000 } }
+            val waitingSince = b.get(f.member.principal, id).run.let { assertNull(it.activity, "Hidden while STALE"); f.a.query { AgentRuns.selectAll().where { AgentRuns.id eq id }.single()[AgentRuns.activityAt] } }
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity, "A silence does not clear a wait for a person")
+            assertEquals(waitingSince, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN).sinceMillis, "Nor does a repeated wait reset when it began")
+            assertEquals(waitingSince, b.get(f.member.principal, id).run.activitySinceMillis)
+            a.end(f.member.principal, id, 0)
+            assertNull(b.get(f.member.principal, id).run.activity)
+            failure("run_ended") { b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN) }
+        }
+    }
+    @Test @Timeout(120)
+    fun aReportObservedBeforeTheStoredOneChangesNothingWhenItLandsLate() = runBlocking {
+        fixture { f ->
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b); val id = id()
+            a.start(f.member.principal, id, "claude", "interactive")
+            val working = a.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 2_000)
+            // A `waiting` the client gave up on (observed at 1,000) lands after the `working` observed at 2,000.
+            val late = b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 1_000)
+            assertTrue(late.superseded); assertEquals(RunActivity.WORKING, late.activity); assertEquals(working.sinceMillis, late.sinceMillis)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // A repeated state still moves the stored observation forward, so an older change arriving after it is refused too.
+            assertFalse(a.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 3_000).superseded)
+            assertTrue(b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 2_500).superseded)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // A newer one is applied.
+            val waiting = b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 3_500)
+            assertFalse(waiting.superseded); assertEquals(RunActivity.WAITING_FOR_HUMAN, a.get(f.member.principal, id).run.activity)
+            // A report without a time does not erase the guard: the late older one is still refused after it.
+            a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            assertTrue(b.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 3_000).superseded)
+            // A reporter clock far ahead counts as the server's now plus the skew allowance, so a corrected clock catches up.
+            b.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = Long.MAX_VALUE / 2)
+            assertFalse(a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = System.currentTimeMillis() + AgentRunService.ACTIVITY_CLOCK_SKEW_MILLIS + 60_000).superseded)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity)
+        }
+    }
     private fun input(id: String, units: Long) = AdmissionInput(units, "claude-test", "anthropic", runId = id)
     private fun id() = UUID.randomUUID().toString()
     private suspend fun failure(code: String, block: suspend () -> Any?) { assertEquals(code, assertFailsWith<TeamFailure> { block() }.code) }

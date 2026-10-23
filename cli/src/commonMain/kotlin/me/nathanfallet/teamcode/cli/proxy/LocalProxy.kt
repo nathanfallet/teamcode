@@ -27,7 +27,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
     require(localToken.length >= 32) { "A local proxy token of at least 32 characters is required." }
     val refusals = RefusalNotices(report)
     routing {
-        guidanceHook(client, localToken)
+        guidanceHook(client, localToken, report)
         if (serviceId != null) get("/_teamcode/service") {
             if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
                 call.respond(HttpStatusCode.Unauthorized)
@@ -37,7 +37,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
                     put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }

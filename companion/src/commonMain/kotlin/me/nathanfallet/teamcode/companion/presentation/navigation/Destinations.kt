@@ -16,3 +16,19 @@ object HomeRoute
 
 @Serializable
 object SettingsRoute
+
+/** One cloud session of an account: header and live transcript. */
+@Serializable
+data class SessionRoute(val accountId: String, val sessionId: String)
+
+/** The new-session form of an account. */
+@Serializable
+data class NewSessionRoute(val accountId: String)
+
+/** An account's artifact gallery; [sessionId] keeps those one cloud session published. */
+@Serializable
+data class ArtifactsRoute(val accountId: String, val sessionId: String? = null)
+
+/** One artifact of an account, at [version] (the current one when null). */
+@Serializable
+data class ArtifactRoute(val accountId: String, val artifactId: String, val version: Int? = null)

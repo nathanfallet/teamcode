@@ -52,7 +52,7 @@ static inline int teamcode_windows_hook_input(unsigned char *buffer, int capacit
             return GetLastError() == ERROR_BROKEN_PIPE ? total : -1;
         if (count == 0) return total;
         total += (int)count;
-        if (total >= capacity) return -1;
+        if (total >= capacity) return total; /* Full buffer: the caller treats more than 64 KiB as oversized. */
     }
 }
 

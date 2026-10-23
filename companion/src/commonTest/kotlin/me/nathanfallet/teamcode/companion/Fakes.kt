@@ -89,3 +89,86 @@ fun account(id: String = "a1", origin: String = "https://team.example", memberId
 fun credentials() = MemoryCredentialStore()
 
 fun unauthorized(): Member = throw CompanionException.Unauthorized()
+
+fun cloudSession(
+    id: String,
+    state: me.nathanfallet.teamcode.companion.domain.models.SessionState = me.nathanfallet.teamcode.companion.domain.models.SessionState.READY,
+    ownerId: String = "m1",
+    createdAt: Long = 1_000,
+) = me.nathanfallet.teamcode.companion.domain.models.CloudSession(
+    id = id, name = "Session $id", ownerId = ownerId, state = state, phase = null, agentKind = "claude", model = "opus", effort = null,
+    profileId = "p1", repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = null,
+)
+
+class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1")) :
+    me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository {
+    val refreshes = mutableListOf<Boolean>()
+    override suspend fun features(accountId: String, refresh: Boolean): Set<String> { refreshes += refresh; return features }
+}
+
+/** Sessions answered from a map; the feed is whatever [changes] emits. */
+class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository {
+    val calls = mutableListOf<String>()
+    var pages: (me.nathanfallet.teamcode.companion.domain.models.SessionGroup, String?) -> me.nathanfallet.teamcode.companion.domain.models.SessionPage =
+        { _, _ -> me.nathanfallet.teamcode.companion.domain.models.SessionPage(emptyList(), null) }
+    val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.CloudSession>()
+    var sessionFailure: Exception? = null
+    var changes: kotlinx.coroutines.flow.Flow<me.nathanfallet.teamcode.companion.domain.models.LiveUpdate<me.nathanfallet.teamcode.companion.domain.models.SessionChange>> =
+        kotlinx.coroutines.flow.emptyFlow()
+    /** Suspends each list load until released, to change things while it is in flight. */
+    var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, group: me.nathanfallet.teamcode.companion.domain.models.SessionGroup, before: String?): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
+        calls += "list $scope $group $before"
+        gate?.await()
+        return pages(group, before)
+    }
+    override suspend fun session(accountId: String, sessionId: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "get $sessionId"
+        sessionFailure?.let { throw it }
+        return byId[sessionId] ?: throw CompanionException.NotFound()
+    }
+    var profileList = emptyList<me.nathanfallet.teamcode.companion.domain.models.Profile>()
+    override suspend fun profiles(accountId: String) = profileList.also { calls += "profiles" }
+    /** Each action's answer; throw from it to fail. */
+    var sendResult: (String) -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("in-$it", "queued", false, null) }
+    var interruptResult: () -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("int", "queued", false, null) }
+    var createResult: (me.nathanfallet.teamcode.companion.domain.models.NewSession) -> me.nathanfallet.teamcode.companion.domain.models.CloudSession = { cloudSession("new") }
+    override suspend fun create(accountId: String, session: me.nathanfallet.teamcode.companion.domain.models.NewSession, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "create ${session.name} $idempotencyKey"
+        return createResult(session)
+    }
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
+        calls += "send $sessionId $text $clientMessageId"
+        return sendResult(clientMessageId)
+    }
+    override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
+    override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
+    override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
+    override fun sessionChanges(accountId: String) = changes.also { calls += "feed" }
+}
+
+fun artifact(id: String, title: String = "Report $id", version: Int = 1, updatedAt: Long = 1_000) = me.nathanfallet.teamcode.companion.domain.models.Artifact(
+    id = id, url = "https://team.example/artifact/$id", title = title, description = "", icon = "chart", access = "team", ownerName = "ada",
+    currentVersion = version, originKind = "api", originSessionId = null, updatedAt = updatedAt,
+)
+
+/** Artifacts answered from [byId]; [pages] answers the gallery, [tickets] each ticket request. */
+class FakeArtifactRepository : me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository {
+    val calls = mutableListOf<String>()
+    val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.Artifact>()
+    var pages: (me.nathanfallet.teamcode.companion.domain.models.ArtifactScope, String?) -> me.nathanfallet.teamcode.companion.domain.models.ArtifactPage =
+        { _, _ -> me.nathanfallet.teamcode.companion.domain.models.ArtifactPage(emptyList(), null) }
+    var tickets: (String, Int?) -> me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket = { id, version ->
+        me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket(id, version ?: 1, "https://team.example/artifact/$id/t${calls.size}/", 9_000_000)
+    }
+    override suspend fun artifacts(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.ArtifactScope, sessionId: String?, before: String?) =
+        pages(scope, before).also { calls += "list ${scope.wire} $sessionId $before" }
+    override suspend fun artifact(accountId: String, artifactId: String) = (byId[artifactId] ?: throw CompanionException.NotFound()).also { calls += "get $artifactId" }
+    override suspend fun versions(accountId: String, artifactId: String): List<me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion> {
+        calls += "versions $artifactId"
+        val current = byId[artifactId]?.currentVersion ?: throw CompanionException.NotFound()
+        return (current downTo 1).map { me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion(it, it * 1_000L, 1, 10) }
+    }
+    override suspend fun ticket(accountId: String, artifactId: String, version: Int?) = tickets(artifactId, version).also { calls += "ticket $artifactId $version" }
+}
