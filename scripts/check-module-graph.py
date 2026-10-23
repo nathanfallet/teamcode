@@ -14,6 +14,8 @@ for module, dependencies in allowed.items():
     build = (root / module / 'build.gradle.kts').read_text()
     # Test-only integration of the typed client and HTTP routes is intentional.
     build = re.sub(r'^.*testImplementation\(projects\..*$', '', build, flags=re.M)
+    # The same for a multiplatform test source set (`jvmTest.dependencies { ... }`).
+    build = re.sub(r'^\s*\w+Test\.dependencies \{.*?^\s*\}', '', build, flags=re.M | re.S)
     actual = set(re.findall(r'projects\.([A-Za-z]+)', build))
     assert actual == dependencies, f'{module}: expected {dependencies}, got {actual}'
     for source in (root / module / 'src').rglob('*.kt'):
