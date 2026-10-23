@@ -86,7 +86,7 @@ class ArtifactViewModelsTest {
         assertEquals("https://team.example/artifact/$id?v=1", model.uiState.value.versionUrl)
         val reload = model.uiState.value.reload
         // A 404 with a ticket still valid: a link to a page the version lacks, nothing reloads by itself.
-        model.contentMissing()
+        model.contentMissing("https://team.example/artifact/$id/t0/missing.html")
         settle()
         assertTrue(model.uiState.value.missingPage)
         assertEquals(reload, model.uiState.value.reload)
@@ -95,15 +95,23 @@ class ArtifactViewModelsTest {
         assertEquals(reload + 1, model.uiState.value.reload)
         // Expired: the new ticket differs and loads, whatever the device clock says.
         expired = 1
-        model.contentMissing()
+        model.contentMissing("https://team.example/artifact/$id/t0/notes.html")
         settle()
         assertEquals("https://team.example/artifact/$id/t1/", model.uiState.value.opened?.ticket?.contentUrl)
         assertEquals(reload + 2, model.uiState.value.reload)
         assertNull(model.uiState.value.error)
         assertFalse(model.uiState.value.missingPage)
+        // The page that answered is asked again under the new ticket, not the entry page: a ticket older than the
+        // rounding step differs without having expired, so only a second 404, on a fresh ticket, says the page is missing.
+        assertEquals("https://team.example/artifact/$id/t1/notes.html", model.uiState.value.page)
+        model.contentMissing("https://team.example/artifact/$id/t1/notes.html")
+        settle()
+        assertTrue(model.uiState.value.missingPage)
+        model.restart()
+        assertNull(model.uiState.value.page)
         // A renewal that fails for a passing reason keeps the version shown, its ticket still good.
         artifacts.tickets = { _, _ -> throw me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server(429, "artifact_ticket_rate_limited") }
-        model.contentMissing()
+        model.contentMissing("https://team.example/artifact/$id/t1/notes.html")
         settle()
         assertEquals("https://team.example/artifact/$id/t1/", model.uiState.value.opened?.ticket?.contentUrl)
         assertTrue(model.uiState.value.missingPage)

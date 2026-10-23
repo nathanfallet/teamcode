@@ -32,13 +32,13 @@ actual val embedsArtifacts: Boolean = true
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: (String) -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
     val crashed by rememberUpdatedState(onCrashed)
     // Held here: the web view keeps its delegates weakly.
-    val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing() }, { crashed() }) }
+    val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing(it) }, { crashed() }) }
     // A new web view per URL and reload: a renewed ticket may have the same URL.
     key(contentUrl, reload) { UIKitView(
         factory = {
@@ -63,7 +63,7 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, 
 private class ArtifactNavigation(
     private val prefix: () -> String,
     private val onExternal: (String) -> Unit,
-    private val onMissing: () -> Unit,
+    private val onMissing: (String) -> Unit,
     private val onCrashed: () -> Unit,
 ) : NSObject(), WKNavigationDelegateProtocol, WKUIDelegateProtocol {
     @ObjCSignatureOverride
@@ -86,7 +86,8 @@ private class ArtifactNavigation(
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, decidePolicyForNavigationResponse: WKNavigationResponse, decisionHandler: (WKNavigationResponsePolicy) -> Unit) {
         val status = (decidePolicyForNavigationResponse.response as? NSHTTPURLResponse)?.statusCode
-        if (decidePolicyForNavigationResponse.forMainFrame && status == 404L) onMissing()
+        val url = decidePolicyForNavigationResponse.response.URL?.absoluteString
+        if (decidePolicyForNavigationResponse.forMainFrame && status == 404L && url != null) onMissing(url)
         decisionHandler(WKNavigationResponsePolicy.WKNavigationResponsePolicyAllow)
     }
 

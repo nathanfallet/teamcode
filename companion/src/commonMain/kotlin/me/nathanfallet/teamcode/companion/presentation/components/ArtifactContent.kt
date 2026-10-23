@@ -13,4 +13,4 @@ expect val embedsArtifacts: Boolean
  * expired ticket, or a link to a file the version lacks); a dead renderer calls [onCrashed]. A new [reload] builds a new web view, even for the same URL. The content's own sandbox comes from the server's `Content-Security-Policy: sandbox`.
  */
 @Composable
-expect fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, onCrashed: () -> Unit, modifier: Modifier = Modifier)
+expect fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: (String) -> Unit, onCrashed: () -> Unit, modifier: Modifier = Modifier)

@@ -37,6 +37,8 @@ data class ArtifactUiState(
     val gone: Boolean = false,
     /** A link inside the content led to a page the version does not have (a `404` on a ticket still valid). */
     val missingPage: Boolean = false,
+    /** The page to load in place of the entry page: the one that answered `404`, asked again under a renewed ticket. */
+    val page: String? = null,
     val error: String? = null,
 ) {
     /** The viewer page of the version shown: copied and opened in the browser, pinned when it is not the current one. */
@@ -125,14 +127,17 @@ class ArtifactViewModel(
     }
 
     /**
-     * The page answered `404`: a new ticket is asked for. A different one means the old one expired, and it loads; the
-     * same one (the server rounds its expiry, so a ticket still valid comes back unchanged) means a link led to a file
-     * the version lacks: the screen says so and offers the entry page again ([restart]). No device clock involved.
+     * The page at [url] answered `404`: a new ticket is asked for. The same one (the server rounds its expiry, so a ticket
+     * asked again soon comes back unchanged) means a link led to a file the version lacks: the screen says so and offers
+     * the entry page again ([restart]). A different one (the old one expired, or was only older than the rounding step)
+     * loads that same page under the new ticket: if it is missing, its `404` then comes back with a fresh ticket, which
+     * renews to itself. No device clock involved.
      */
-    fun contentMissing() {
+    fun contentMissing(url: String) {
         val version = state.value.version ?: return
-        val shown = state.value.opened?.ticket?.contentUrl ?: return
-        open(version, missingIfSame = shown)
+        val opened = state.value.opened ?: return
+        val page = url.takeIf { OpenArtifactUseCase.allows(opened.prefix, it) }?.removePrefix(opened.prefix)
+        open(version, missingIfSame = opened.ticket.contentUrl, page = page)
     }
 
     /** The page's renderer or content process died: loaded again once, in a new web view; a second time, an error. */
@@ -146,7 +151,7 @@ class ArtifactViewModel(
     }
 
     /** Back to the version's entry page. */
-    fun restart() = state.update { it.copy(missingPage = false, reload = it.reload + 1) }
+    fun restart() = state.update { it.copy(missingPage = false, page = null, reload = it.reload + 1) }
 
     /** True when a silent reload already happened within a minute (so a failing page never loops); marks this one otherwise. */
     private fun recentlyRenewed(): Boolean {
@@ -155,7 +160,7 @@ class ArtifactViewModel(
         return false
     }
 
-    private fun open(version: Int, missingIfSame: String? = null) {
+    private fun open(version: Int, missingIfSame: String? = null, page: String? = null) {
         ticket?.cancel()
         ticket = viewModelScope.launch {
             try {
@@ -164,7 +169,7 @@ class ArtifactViewModel(
                     when {
                         it.version != version -> it
                         opened.ticket.contentUrl == missingIfSame -> it.copy(missingPage = true)
-                        else -> it.copy(opened = opened, reload = it.reload + 1, missingPage = false, loading = false)
+                        else -> it.copy(opened = opened, page = page?.let { path -> opened.prefix + path }, reload = it.reload + 1, missingPage = false, loading = false)
                     }
                 }
             } catch (error: CancellationException) {

@@ -24,7 +24,7 @@ actual val embedsArtifacts: Boolean = true
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: (String) -> Unit, onCrashed: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
@@ -61,7 +61,7 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, 
                     }
 
                     override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
-                        if (request.isForMainFrame && errorResponse.statusCode == 404) missing()
+                        if (request.isForMainFrame && errorResponse.statusCode == 404) missing(request.url.toString())
                     }
 
                     /** The page's renderer died (memory, a heavy script): the app lives on, and the screen reloads it once. */

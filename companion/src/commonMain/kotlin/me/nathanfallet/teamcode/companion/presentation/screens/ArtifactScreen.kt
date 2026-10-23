@@ -130,7 +130,7 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit) {
                 }
                 opened != null -> ConfirmingLinks {
                     val confirm = LocalUriHandler.current
-                    ArtifactContentView(opened.ticket.contentUrl, opened.prefix, state.reload, onExternal = confirm::openUri, onMissing = viewModel::contentMissing, onCrashed = viewModel::contentCrashed,
+                    ArtifactContentView(state.page ?: opened.ticket.contentUrl, opened.prefix, state.reload, onExternal = confirm::openUri, onMissing = viewModel::contentMissing, onCrashed = viewModel::contentCrashed,
                         modifier = Modifier.fillMaxWidth().weight(1f).testTag("artifact-content"))
                 }
             }

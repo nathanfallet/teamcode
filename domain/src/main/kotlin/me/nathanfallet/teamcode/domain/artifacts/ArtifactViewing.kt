@@ -84,8 +84,10 @@ data class ArtifactShell(val artifact: Artifact, val version: ArtifactVersion, v
     /** Signed in and allowed to read the artifact as a member (not only through its public link). */
     val member: Boolean)
 
-/** A member's ticket for one version, handed to an app that shows the content itself; [expiresAt] in epoch milliseconds. */
-/** A ticket for an app: [entry] is the version's entry page, which the content URL names so its relative links resolve. */
+/**
+ * A member's ticket for one version, handed to an app that shows the content itself; [expiresAt] in epoch milliseconds.
+ * [entry] is the version's entry page, which the content URL names so its relative links resolve.
+ */
 data class IssuedTicket(val version: Int, val ticket: String, val expiresAt: Long, val entry: String = "")
 
 /** One file to send, or only its metadata when the viewer's cached copy is current. */
