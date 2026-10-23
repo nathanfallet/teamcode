@@ -71,7 +71,7 @@ All endpoints require an interactive administrator. Service/CI keys are refused,
 | `PUT /api/v1/members/{memberId}/variant-exclusions` | Exclude the member from a slot (`kind`, `target`) |
 | `DELETE /api/v1/members/{memberId}/variant-exclusions/{kind}/{target}` | Remove the exclusion |
 
-Capabilities advertise `team.variants.v1`. The dashboard page is `/dashboard/variants`: list, creation, deletion, bulk assignment, assignment, exclusions and effective assignments per member. Its forms use the existing origin and CSRF checks. It is not yet linked from the navigation bar, to avoid conflicting with concurrent dashboard work. Editing an existing variant is available through the API only.
+Capabilities advertise `team.variants.v1`. The dashboard page is `/dashboard/variants`: list, creation, deletion, bulk assignment, assignment, exclusions and effective assignments per member. Its forms use the existing origin and CSRF checks. The page opens with an explanation of what a variant is, how it is assigned and where it reaches a session. The creation form shows only the fields of the selected type (environment variable: name and value; MCP server: name, endpoint, configuration and optional credential) and, for a per-member variant, hides the shared value. The server reads only the selected type's fields and drops the others, then applies the per-type validation described above. It is not yet linked from the navigation bar, to avoid conflicting with concurrent dashboard work. Editing an existing variant is available through the API only.
 
 ## Persistence
 
