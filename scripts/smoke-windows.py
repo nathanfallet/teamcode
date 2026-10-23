@@ -151,8 +151,9 @@ try:
         def powershell_command(script, variables, executable=powershell):
             if executable == 'powershell.exe':
                 variables = dict(variables, PSModulePath=str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules'))
+            # Windows PowerShell 5.1 can take over 30 s to start cold on a hosted runner (a 0.8.0 release timed out in Get-Acl).
             result = subprocess.run([executable, '-NoProfile', '-NonInteractive', '-Command', script],
-                                    env=variables, capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+                                    env=variables, capture_output=True, encoding='utf-8', errors='replace', timeout=120)
             assert all(secret not in result.stdout + result.stderr for secret in
                        (team_token, local_token, initial_team_token, initial_password, replacement_password))
             assert result.returncode == 0, 'Synthetic PowerShell fixture failed: ' + result.stderr
