@@ -2,6 +2,8 @@ package me.nathanfallet.teamcode.cli.cloud
 
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.terminal.printable
+import me.nathanfallet.teamcode.cli.terminal.quoted
 
 /** What `teamcode cloud attach` does with a line typed while it follows a session. */
 internal sealed interface AttachAction {
@@ -61,6 +63,27 @@ internal class AttachRequests {
         return null
     }
 
+    /** The newest request waiting for the member, for a picker: its id, kind, tool and shown questions. */
+    data class Waiting(val id: String, val question: Boolean, val toolName: String, val questions: List<JsonObject>?)
+    fun waiting(): Waiting? = target?.let { Waiting(it.id, it.question, it.toolName, it.questions) }
+
+    /** The answer to every question of [requestId] at once, as a picker collects them. */
+    fun answer(requestId: String, answers: List<CloudQuestionAnswer>): AttachAction.Answer? {
+        val questions = open[requestId]?.questions ?: return null
+        return AttachAction.Answer(AnswerCloudPermissionRequest(requestId, "allow", answers = answers), summary(questions, answers))
+    }
+
+    /** Declines [requestId] (a question) or denies it (a tool use). */
+    fun decline(requestId: String, reason: String? = null): AttachAction.Answer? {
+        val request = open[requestId] ?: return null
+        return AttachAction.Answer(AnswerCloudPermissionRequest(request.id, "deny", reason), if (request.question) "Declined the question." else "Denied ${request.toolName.printable()}.")
+    }
+
+    private fun summary(questions: List<JsonObject>, answers: List<CloudQuestionAnswer>) = "Answered: " + answers.joinToString("; ") { a ->
+        val q = questions[a.question]
+        (q.string("question") ?: "").quoted() + " = " + (a.text?.quoted() ?: a.options.joinToString(", ") { q.options()[it].quoted() })
+    }.printable()
+
     /** The server accepted the answer to [requestId] as input [inputId]: lines are messages again until it is settled. */
     fun sent(requestId: String, inputId: String) { open[requestId]?.sent = inputId }
 
@@ -103,10 +126,7 @@ internal class AttachRequests {
         val request = target
         when (command) {
             "/message" -> return if (rest.isEmpty()) AttachAction.Notice("Use /message TEXT.") else AttachAction.Message(rest)
-            "/deny" -> {
-                request ?: return AttachAction.Notice("Nothing waits for an answer.")
-                return AttachAction.Answer(AnswerCloudPermissionRequest(request.id, "deny", rest.ifEmpty { null }), if (request.question) "Declined the question." else "Denied ${request.toolName.printable()}.")
-            }
+            "/deny" -> return request?.let { decline(it.id, rest.ifEmpty { null }) } ?: AttachAction.Notice("Nothing waits for an answer.")
             "/allow" -> return when {
                 request == null -> AttachAction.Notice("Nothing waits for an answer.")
                 request.question -> AttachAction.Notice("A question is answered by typing the answer, not with /allow.")
@@ -125,14 +145,10 @@ internal class AttachRequests {
         } else CloudQuestionAnswer(request.answers.size, text = trimmed)
         request.answers += answer
         if (request.answers.size < questions.size) return AttachAction.Notice(prompt()!!)
-        val summary = request.answers.joinToString("; ") { a ->
-            val q = questions[a.question]
-            (q.string("question") ?: "").quoted() + " = " + (a.text?.quoted() ?: a.options.joinToString(", ") { q.options()[it].quoted() })
-        }
-        return AttachAction.Answer(AnswerCloudPermissionRequest(request.id, "allow", answers = request.answers.toList()), "Answered: $summary".printable())
+        return AttachAction.Answer(AnswerCloudPermissionRequest(request.id, "allow", answers = request.answers.toList()), summary(questions, request.answers))
     }
-
-    private fun JsonObject.string(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
-    private fun JsonObject.options() = (this["options"] as? JsonArray).orEmpty().map { (((it as? JsonObject)?.get("label") as? JsonPrimitive)?.contentOrNull ?: "") }
-    private fun JsonObject.multiSelect() = (this["multiSelect"] as? JsonPrimitive)?.booleanOrNull == true
 }
+
+internal fun JsonObject.string(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+internal fun JsonObject.options() = (this["options"] as? JsonArray).orEmpty().map { (((it as? JsonObject)?.get("label") as? JsonPrimitive)?.contentOrNull ?: "") }
+internal fun JsonObject.multiSelect() = (this["multiSelect"] as? JsonPrimitive)?.booleanOrNull == true
