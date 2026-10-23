@@ -111,7 +111,7 @@ class SessionsViewModel(
         val running = follow?.isActive == true
         state.update { it.copy(list = SessionList(scope, group, account.memberId, finishedTurns = it.list?.finishedTurns.orEmpty()), loading = running, error = null) }
         // The loop reads the command; stopped after an error, it is started again, and the feed's opening loads the list.
-        if (running) commands.trySend(Command.Reload) else restart()
+        if (!running || !commands.trySend(Command.Reload).isSuccess) restart()
     }
 
     private fun restart() {

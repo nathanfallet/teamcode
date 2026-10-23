@@ -258,7 +258,7 @@ class SessionViewModel(
         if (event !is TranscriptEvent.Turn) return this
         val next = when {
             event.phase == TurnPhase.STARTED && session.state == SessionState.READY -> SessionState.ACTIVE
-            event.phase != TurnPhase.STARTED && session.state == SessionState.ACTIVE -> SessionState.READY
+            event.phase.finished && session.state == SessionState.ACTIVE -> SessionState.READY
             else -> return this
         }
         return copy(session = session.copy(state = next))

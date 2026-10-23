@@ -34,6 +34,9 @@ sealed interface TranscriptEvent {
 enum class TurnPhase(val wire: String) {
     STARTED("started"), COMPLETED("completed"), INTERRUPTED("interrupted"), FAILED("failed"), UNKNOWN("unknown");
 
+    /** The turn is over. A phase this version does not know says nothing either way. */
+    val finished: Boolean get() = this == COMPLETED || this == INTERRUPTED || this == FAILED
+
     companion object {
         fun of(wire: String?): TurnPhase = entries.firstOrNull { it.wire == wire && it != UNKNOWN } ?: UNKNOWN
     }

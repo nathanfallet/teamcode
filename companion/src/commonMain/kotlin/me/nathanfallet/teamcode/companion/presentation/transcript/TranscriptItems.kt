@@ -1,7 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.transcript
 
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
-import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 
 /** What the transcript list shows, built from the events; [key] is stable across merges (a sequence number). */
 sealed interface TranscriptItem {
@@ -64,7 +63,7 @@ fun transcriptItems(events: List<TranscriptEvent>): List<TranscriptItem> {
             is TranscriptEvent.ToolResult -> if (event.id.isNotEmpty() && event.id in calls) null else TranscriptItem.Tool(null, event)
             is TranscriptEvent.UserMessage -> TranscriptItem.User(event)
             is TranscriptEvent.AgentMessage -> if (event.text.isBlank()) null else TranscriptItem.Agent(event)
-            is TranscriptEvent.Turn -> if (event.phase == TurnPhase.STARTED) null else TranscriptItem.TurnEnd(event)
+            is TranscriptEvent.Turn -> if (event.phase.finished) TranscriptItem.TurnEnd(event) else null
             is TranscriptEvent.InputChanged -> if (event.status == "rejected" || event.status == "cancelled") TranscriptItem.System(event) else null
             is TranscriptEvent.Unknown -> null
             else -> TranscriptItem.System(event)

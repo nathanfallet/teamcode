@@ -20,6 +20,8 @@ class TranscriptItemsTest {
             call(8, "c"),
             TranscriptEvent.Turn(9, 9, TurnPhase.COMPLETED, 2_000, 3),
             TranscriptEvent.Unknown(10, 10, "something.new"),
+            // A phase this version does not know does not end the turn.
+            TranscriptEvent.Turn(11, 11, TurnPhase.of("paused"), null, null),
         ))
         assertEquals(listOf("User", "Tools", "Agent", "Tool", "TurnEnd"), items.map { it::class.simpleName })
         val folded = assertIs<TranscriptItem.Tools>(items[1])

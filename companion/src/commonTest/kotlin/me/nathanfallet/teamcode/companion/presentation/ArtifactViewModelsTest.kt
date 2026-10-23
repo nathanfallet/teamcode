@@ -101,6 +101,13 @@ class ArtifactViewModelsTest {
         assertEquals(reload + 2, model.uiState.value.reload)
         assertNull(model.uiState.value.error)
         assertFalse(model.uiState.value.missingPage)
+        // A renewal that fails for a passing reason keeps the version shown, its ticket still good.
+        artifacts.tickets = { _, _ -> throw me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server(429, "artifact_ticket_rate_limited") }
+        model.contentMissing()
+        settle()
+        assertEquals("https://team.example/artifact/$id/t1/", model.uiState.value.opened?.ticket?.contentUrl)
+        assertTrue(model.uiState.value.missingPage)
+        assertNull(model.uiState.value.error)
     }
 
     @Test fun aCrashedPageIsLoadedAgainOnce() = runTest(dispatcher) {

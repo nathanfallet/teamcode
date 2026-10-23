@@ -87,8 +87,9 @@ class OpenArtifactUseCase(
             val canonical = canonical(url) ?: return false
             if (!canonical.startsWith(prefix)) return false
             val path = canonical.removePrefix(prefix).substringBefore('#').substringBefore('?').lowercase()
-            // Dots, slashes and backslashes, escaped or not, and any escaped percent (a double encoding).
-            return path.split('/').none { it == ".." || it == "." } && listOf("%2e", "%2f", "%5c", "%25").none { it in path } && '\\' !in path
+            // Dots, slashes and backslashes, escaped or not, once or twice (`%252e`); a plain escaped percent is a file name.
+            val once = path.replace("%25", "%")
+            return path.split('/').none { it == ".." || it == "." } && listOf("%2e", "%2f", "%5c").none { it in once } && '\\' !in path
         }
 
         /** [url] with its origin normalized (lower-case host, default port dropped); null without a valid web origin. */

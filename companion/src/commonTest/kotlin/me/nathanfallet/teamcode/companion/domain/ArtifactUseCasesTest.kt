@@ -70,6 +70,9 @@ class ArtifactUseCasesTest {
             "https://team.example/artifact/$id/tk%2F1/", "https://team.example.evil/artifact/$id/tk/", "https://u@team.example/artifact/$id/tk/", "https://team.example"))
             assertNull(OpenArtifactUseCase.contentPrefix("https://team.example", id, url), url)
         assertTrue(OpenArtifactUseCase.allows(prefix, "${prefix}img/a.png?x=1#top"))
+        // A percent in a file name is a page; escaped twice, a dot or a slash is not.
+        assertTrue(OpenArtifactUseCase.allows(prefix, "${prefix}chart%20100%25.png"))
+        assertFalse(OpenArtifactUseCase.allows(prefix, "${prefix}%252f..%252fx"))
         for (url in listOf("${prefix}../other/", "${prefix}%2e%2e/x", "https://team.example/dashboard", "${prefix}a\\..\\b", "${prefix}..%5c..%5cx", "${prefix}%252e%252e/x", "https://team.example/artifact/$id/tk_2/"))
             assertFalse(OpenArtifactUseCase.allows(prefix, url), url)
     }

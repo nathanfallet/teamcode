@@ -167,6 +167,11 @@ class ArtifactViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                // A renewal after a missing page that fails for a passing reason keeps the version shown: its ticket is still good.
+                if (missingIfSame != null && error !is CompanionException.NotFound) {
+                    state.update { if (it.version == version) it.copy(missingPage = true) else it }
+                    return@launch
+                }
                 state.update { it.copy(loading = false, opened = null, gone = error is CompanionException.NotFound, error = error.userMessage()) }
             }
         }
