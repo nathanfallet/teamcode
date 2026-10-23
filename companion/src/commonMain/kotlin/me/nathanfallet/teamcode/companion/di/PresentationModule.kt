@@ -27,7 +27,7 @@ val presentationModule = module {
     viewModelOf(::HomeViewModel)
     viewModelOf(::SettingsViewModel)
     viewModelOf(::SessionsViewModel)
-    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get(), get(), get(), get(), get()) }
     viewModel { (route: NewSessionRoute) -> NewSessionViewModel(route, get(), get(), get()) }
     viewModel { (route: ArtifactsRoute) -> ArtifactsViewModel(route, get()) }
     viewModel { (route: ArtifactRoute) -> ArtifactViewModel(route, get(), get(), embedsArtifacts) }

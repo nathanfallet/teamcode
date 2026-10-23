@@ -18,7 +18,18 @@ object CloudTranscriptLimits {
 /** Normalized transcript event types. Clients must tolerate unknown types and unknown `data` fields. */
 object CloudEventTypes {
     const val USER_MESSAGE = "message.user"
+    /**
+     * The agent's text (`data.text`). With `messageId` (the agent's API message id) and `index` (the content block, when
+     * known), it replaces the [AGENT_MESSAGE_DELTA] text received for that block, or for every block of the message
+     * when `index` is absent.
+     */
     const val AGENT_MESSAGE = "message.agent"
+    /**
+     * Live text of an agent message while it is written (`data.messageId`, `index`, `text`, `parentToolUseId`): `text`
+     * is what the block gained since its previous delta. Replaced by the [AGENT_MESSAGE] of the same block; a client
+     * that does not show live text ignores it. Claude Code sessions only.
+     */
+    const val AGENT_MESSAGE_DELTA = "message.agent.delta"
     const val TOOL_CALL = "tool.call"
     const val TOOL_RESULT = "tool.result"
     const val TURN = "turn"
@@ -36,7 +47,7 @@ object CloudEventTypes {
      * `deadlineMinutes`, `message`, the text the agent read).
      */
     const val PERMISSION_EXPIRED = "permission.expired"
-    val all = listOf(USER_MESSAGE, AGENT_MESSAGE, TOOL_CALL, TOOL_RESULT, TURN, STATUS, ERROR, INPUT, PERMISSION_REQUEST, PERMISSION_EXPIRED)
+    val all = listOf(USER_MESSAGE, AGENT_MESSAGE, AGENT_MESSAGE_DELTA, TOOL_CALL, TOOL_RESULT, TURN, STATUS, ERROR, INPUT, PERMISSION_REQUEST, PERMISSION_EXPIRED)
 }
 
 /**
@@ -167,12 +178,13 @@ data class RunnerAgentRequest(val teamId: String, val sessionId: String, val epo
 /**
  * [permissionRelay]: the server takes `permission.request` events and their answers, so the runner may relay them.
  * [permissionDeadlineMinutes]: how long a request waits for an answer before the runner denies it; 0 waits without a deadline.
+ * [liveText]: the server takes `message.agent.delta` events, so the runner may stream the agent's text as it is written.
  * [permissionMode]: a remote session's mode on its host (`ask` or `bypass`); null for a cloud session, whose pod is its sandbox.
  */
 @Serializable
 data class RunnerAgentView(
     val kind: String, val version: String? = null, val model: String? = null, val effort: String? = null, val conversation: String,
-    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val permissionMode: String? = null,
+    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false, val permissionMode: String? = null,
 )
 /** [sequence] is the runner's own counter for this epoch, starting at 1; a retried batch is deduplicated on it. */
 @Serializable

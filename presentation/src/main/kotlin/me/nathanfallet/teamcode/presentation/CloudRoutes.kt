@@ -30,6 +30,7 @@ internal fun CloudSession.view() = CloudSessionView(
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
     environment = environment.view(), kind = kind.wire,
     host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire) },
+    waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
 )
 /** The profile id and image reference of a remote session, which has neither. */
 internal const val REMOTE_PLACEHOLDER = "remote"

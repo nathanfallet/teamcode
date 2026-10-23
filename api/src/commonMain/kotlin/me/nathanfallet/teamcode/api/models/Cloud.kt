@@ -82,6 +82,8 @@ data class CloudSessionView(
     /** The accepted transfer the session is moving toward (`cloud.transfer.v1`); null otherwise. */
     val transferId: String? = null,
     val environment: CloudEnvironmentView = CloudEnvironmentView(),
+    /** Set while the agent waits for a person (`cloud.sessions.waiting.v1`); null when nothing waits. */
+    val waiting: CloudWaitingView? = null,
     /** `cloud` (a pod started by the server) or `remote` (a member's device); a server without this field has cloud sessions only. */
     val kind: String = CloudSessionKinds.CLOUD,
     /** Where a remote session runs; null for cloud sessions. */
@@ -110,6 +112,16 @@ data class CloudSessionHostView(
     val lastHeartbeatAt: Long? = null,
     val permissionMode: String? = null,
 )
+/**
+ * What the agent of a session waits for: the open `permission.request` at [eventSeq] in its transcript, since [since]
+ * (server time, milliseconds). [reason] is `permission` (a tool use to approve) or `question` (a question to answer);
+ * [requestId] is what `POST /cloud/sessions/{id}/permissions` takes: always present in this version (a request with an id
+ * that route would refuse is denied by the runner at once and never shows), optional for later reasons to wait.
+ * When several requests are open, the most recent one.
+ */
+@Serializable
+data class CloudWaitingView(val reason: String, val requestId: String? = null, val since: Long, val eventSeq: Long)
+
 object RemotePermissionModes {
     const val ASK = "ask"
     const val BYPASS = "bypass"

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -57,6 +60,7 @@ import com.adamglin.phosphoricons.regular.Pause
 import com.adamglin.phosphoricons.regular.Play
 import com.adamglin.phosphoricons.regular.Stop
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
@@ -67,6 +71,9 @@ import me.nathanfallet.teamcode.companion.presentation.components.ConfirmingLink
 import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
+import me.nathanfallet.teamcode.companion.presentation.components.KindChips
+import me.nathanfallet.teamcode.companion.presentation.components.hostName
+import me.nathanfallet.teamcode.companion.presentation.components.systemOf
 import me.nathanfallet.teamcode.companion.presentation.components.LinkButton
 import me.nathanfallet.teamcode.companion.presentation.components.NavBar
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
@@ -92,6 +99,13 @@ import me.nathanfallet.teamcode.companion.resources.composer_ended
 import me.nathanfallet.teamcode.companion.resources.composer_hint
 import me.nathanfallet.teamcode.companion.resources.composer_send
 import me.nathanfallet.teamcode.companion.resources.notice_nothing_running
+import me.nathanfallet.teamcode.companion.resources.notice_permission_answered
+import me.nathanfallet.teamcode.companion.resources.notice_permission_denied
+import me.nathanfallet.teamcode.companion.resources.notice_permission_ended
+import me.nathanfallet.teamcode.companion.resources.notice_permission_expired
+import me.nathanfallet.teamcode.companion.resources.notice_permission_input_unseen
+import me.nathanfallet.teamcode.companion.resources.notice_permission_invalid
+import me.nathanfallet.teamcode.companion.resources.notice_permission_rejected
 import me.nathanfallet.teamcode.companion.resources.pending_discard
 import me.nathanfallet.teamcode.companion.resources.pending_failed
 import me.nathanfallet.teamcode.companion.resources.pending_refused
@@ -107,6 +121,15 @@ import me.nathanfallet.teamcode.companion.resources.session_detail_model
 import me.nathanfallet.teamcode.companion.resources.session_detail_phase
 import me.nathanfallet.teamcode.companion.resources.session_detail_repositories
 import me.nathanfallet.teamcode.companion.resources.session_details
+import me.nathanfallet.teamcode.companion.resources.session_detail_folder
+import me.nathanfallet.teamcode.companion.resources.session_detail_permissions
+import me.nathanfallet.teamcode.companion.resources.session_detail_runs_on
+import me.nathanfallet.teamcode.companion.resources.session_detail_system
+import me.nathanfallet.teamcode.companion.resources.session_host_offline
+import me.nathanfallet.teamcode.companion.resources.session_kind_cloud
+import me.nathanfallet.teamcode.companion.resources.session_paused_remote_dock
+import me.nathanfallet.teamcode.companion.resources.session_permissions_ask
+import me.nathanfallet.teamcode.companion.resources.session_permissions_bypass
 import me.nathanfallet.teamcode.companion.resources.session_empty
 import me.nathanfallet.teamcode.companion.resources.session_ended
 import me.nathanfallet.teamcode.companion.resources.session_live
@@ -143,7 +166,13 @@ fun SessionScreen(
         Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.session?.let { Summary(it, state) }
-                state.session?.problemCode?.let { Banner(stringResource(Res.string.session_problem, it), Tone.DANGER, Modifier.testTag("problem")) }
+                state.session?.let { session ->
+                    when {
+                        // Not a failure of the session: its device went quiet, and it goes on once the device is back.
+                        session.hostOffline -> Banner(stringResource(Res.string.session_host_offline, hostName(session.host)), Tone.WARN, Modifier.testTag("host-offline"))
+                        session.problemCode != null -> Banner(stringResource(Res.string.session_problem, session.problemCode), Tone.DANGER, Modifier.testTag("problem"))
+                    }
+                }
                 state.error?.let { error ->
                     Banner(error, Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
                         { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::retry, kind = ButtonKind.SECONDARY, small = true) }
@@ -153,6 +182,15 @@ fun SessionScreen(
                     val text = when (notice) {
                         is SessionNotice.Text -> notice.text
                         SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
+                        is SessionNotice.PermissionClosed -> stringResource(when (notice.code) {
+                            "permission_request_answered" -> Res.string.notice_permission_answered
+                            "permission_request_expired" -> Res.string.notice_permission_expired
+                            else -> Res.string.notice_permission_ended
+                        })
+                        is SessionNotice.PermissionInvalid -> if (notice.code == "permission_input_unseen") stringResource(Res.string.notice_permission_input_unseen)
+                            else stringResource(Res.string.notice_permission_invalid, notice.code ?: "400")
+                        SessionNotice.PermissionDenied -> stringResource(Res.string.notice_permission_denied)
+                        is SessionNotice.PermissionRejected -> stringResource(Res.string.notice_permission_rejected, notice.reason ?: "rejected")
                     }
                     Banner(text, Tone.WARN, Modifier.testTag("notice"))
                 }
@@ -198,15 +236,25 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StateChip(session.state)
+            if (session.remote) KindChips(session)
             LiveLabel(state)
             Spacer(Modifier.weight(1f))
             Text(stringResource(Res.string.session_details), style = MetaStyle.copy(fontSize = 11.5.sp), color = colors.muted)
             Icon(if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(14.dp))
         }
         if (!expanded) {
-            val line = listOfNotNull(session.agentKind, session.model, session.effort, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })
+            val line = listOfNotNull(session.agentKind, session.model, session.effort, session.host?.directoryName, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })
             Text(line.joinToString(" · "), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         } else {
+            Detail(stringResource(Res.string.session_detail_runs_on), if (session.remote) hostName(session.host) else stringResource(Res.string.session_kind_cloud))
+            session.host?.let { host ->
+                systemOf(host)?.let { Detail(stringResource(Res.string.session_detail_system), it) }
+                host.directoryName?.let { Detail(stringResource(Res.string.session_detail_folder), it) }
+                when (host.permissionMode) {
+                    SessionHost.ASK -> Detail(stringResource(Res.string.session_detail_permissions), stringResource(Res.string.session_permissions_ask))
+                    SessionHost.BYPASS -> Detail(stringResource(Res.string.session_detail_permissions), stringResource(Res.string.session_permissions_bypass))
+                }
+            }
             Detail(stringResource(Res.string.session_detail_agent), session.agentKind)
             session.model?.let { Detail(stringResource(Res.string.session_detail_model), it) }
             session.effort?.let { Detail(stringResource(Res.string.session_detail_effort), it) }
@@ -286,13 +334,20 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).testTag("composer-ended"))
                     return@Column
                 }
+                // The agent waits on it: shown above everything else, scrolled within a bounded height.
+                state.permission?.let { card ->
+                    Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) { PermissionCardView(card, viewModel) }
+                }
                 val paused = session.state == SessionState.PAUSED || session.state == SessionState.PAUSING
                 when {
                     state.running -> DockStatus(stringResource(Res.string.session_working), colors.accentText, dot = true, tag = "running") {
                         TcButton(stringResource(Res.string.action_interrupt), onClick = viewModel::interrupt, enabled = !state.acting, busy = state.acting, kind = ButtonKind.SECONDARY, small = true,
                             icon = PhosphorIcons.Regular.Stop, modifier = Modifier.testTag("interrupt"))
                     }
-                    paused -> DockStatus(stringResource(Res.string.session_paused_dock), colors.warn, dot = false, tag = "paused") {
+                    paused -> DockStatus(
+                        if (session.remote) stringResource(Res.string.session_paused_remote_dock, hostName(session.host)) else stringResource(Res.string.session_paused_dock),
+                        colors.warn, dot = false, tag = "paused",
+                    ) {
                         if (state.canControl && ControlSessionUseCase.canResume(session)) {
                             TcButton(stringResource(Res.string.action_resume), onClick = viewModel::resume, enabled = !state.acting, busy = state.acting, kind = ButtonKind.SECONDARY, small = true,
                                 icon = PhosphorIcons.Regular.Play, modifier = Modifier.testTag("dock-resume"))

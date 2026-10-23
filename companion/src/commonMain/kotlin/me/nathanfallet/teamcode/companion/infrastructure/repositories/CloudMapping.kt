@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.companion.infrastructure.repositories
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -11,11 +12,15 @@ import me.nathanfallet.teamcode.api.models.CloudEventPageView
 import me.nathanfallet.teamcode.api.models.CloudEventTypes
 import me.nathanfallet.teamcode.api.models.CloudEventView
 import me.nathanfallet.teamcode.api.models.CloudProfileView
+import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CloudSessionView
 import me.nathanfallet.teamcode.api.models.TeamEventView
+import me.nathanfallet.teamcode.companion.domain.models.AgentQuestion
+import me.nathanfallet.teamcode.companion.domain.models.AgentQuestionOption
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
@@ -39,6 +44,9 @@ internal fun CloudSessionView.domain() = CloudSession(
     updatedAt = updatedAt,
     problemCode = (failure ?: resumeBlocked)?.code,
     kind = SessionKind.of(kind),
+    host = host?.takeIf { kind == CloudSessionKinds.REMOTE }?.let {
+        SessionHost(it.deviceName, it.platform, it.osVersion, it.directoryName, it.online, removed = it.deviceId == null, permissionMode = it.permissionMode)
+    },
 )
 
 internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)
@@ -54,6 +62,7 @@ internal fun TeamEventView.sessionChange(): SessionChange? {
         at = at,
         state = data.text("state")?.let(SessionState::of),
         turnPhase = if (type == "cloud.turn") data.text("phase") ?: "unknown" else null,
+        kind = data.text("kind")?.let(SessionKind::of),
     )
 }
 
@@ -76,12 +85,39 @@ internal fun CloudEventView.domain(): TranscriptEvent {
         CloudEventTypes.TURN -> TranscriptEvent.Turn(seq, at, TurnPhase.of(data.text("phase")), data["durationMs"].long(), data["steps"].int())
         CloudEventTypes.STATUS -> TranscriptEvent.Status(seq, at, data.text("agent"), data.text("model"), data["exitCode"].int())
         CloudEventTypes.ERROR -> TranscriptEvent.Error(seq, at, data.text("code"), data.text("message"))
-        CloudEventTypes.INPUT -> TranscriptEvent.InputChanged(seq, at, data.text("inputId"), data.text("status"), data.text("reason"))
-        CloudEventTypes.PERMISSION_REQUEST -> TranscriptEvent.PermissionRequest(seq, at, data.text("requestId"), data.text("toolName"), data["question"].boolean() == true)
+        CloudEventTypes.INPUT -> TranscriptEvent.InputChanged(seq, at, data.text("inputId"), data.text("status"), data.text("reason"), data.text("requestId"))
+        CloudEventTypes.PERMISSION_REQUEST -> permissionRequest(seq, at, data)
         CloudEventTypes.PERMISSION_EXPIRED -> TranscriptEvent.PermissionExpired(seq, at, data.text("requestId"))
         "transfer" -> TranscriptEvent.Transferred(seq, at, data.text("fromMemberId"), data.text("toMemberId"))
         else -> TranscriptEvent.Unknown(seq, at, type)
     }
+}
+
+/**
+ * A permission request. An input that is not an object counts as left out, as the server reads it: such a request can
+ * only be denied. Questions keep their index in `input.questions`, the one the server takes back, even when one of them
+ * cannot be read; a repeated question text is kept once (Claude Code keys answers by text).
+ */
+private fun permissionRequest(seq: Long, at: Long, data: JsonObject): TranscriptEvent.PermissionRequest {
+    val input = data["input"] as? JsonObject
+    val question = data["question"].boolean() == true
+    val questions = if (!question || input == null) emptyList() else (input["questions"] as? JsonArray).orEmpty().mapIndexedNotNull { index, element ->
+        val fields = element as? JsonObject ?: return@mapIndexedNotNull null
+        val text = fields.text("question") ?: return@mapIndexedNotNull null
+        val options = (fields["options"] as? JsonArray).orEmpty().map { option ->
+            val o = option as? JsonObject
+            AgentQuestionOption(o?.text("label").orEmpty(), o?.text("description")?.takeIf(String::isNotBlank))
+        }
+        AgentQuestion(index, text, fields.text("header")?.takeIf(String::isNotBlank), options, fields["multiSelect"].boolean() == true)
+    }.distinctBy { it.text }
+    return TranscriptEvent.PermissionRequest(
+        seq, at, data.text("requestId"), data.text("toolName"), question,
+        questions = questions,
+        input = input?.let { (it as JsonElement).pretty() },
+        inputLeftOut = data["inputTruncated"].boolean() == true || input == null,
+        inputPreview = data.text("inputPreview"),
+        description = data.text("description")?.takeIf(String::isNotBlank),
+    )
 }
 
 private val prettyJson = Json { prettyPrint = true }

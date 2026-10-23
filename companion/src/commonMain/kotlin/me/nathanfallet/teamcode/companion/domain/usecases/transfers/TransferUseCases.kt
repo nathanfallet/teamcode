@@ -15,6 +15,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TransferRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
 
 /** The server's transfer rules the screens check before asking, so an action that would be refused is not offered. */
 object TransferRules {
@@ -28,7 +29,7 @@ object TransferRules {
      * or prepared (it runs with the owner's recipe), not ended, not already changing owner.
      */
     fun canTransfer(account: Account, session: CloudSession): Boolean =
-        (account.isAdministrator || session.ownerId == account.memberId) && !session.remote && session.state in TRANSFERABLE
+        (account.isAdministrator || session.ownerId == account.memberId) && ControlSessionUseCase.canTransfer(session) && session.state in TRANSFERABLE
 
     private val TRANSFERABLE = setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSING, SessionState.PAUSED, SessionState.RESUMING)
 

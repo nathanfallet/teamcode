@@ -142,10 +142,22 @@ data class CloudSession(
     val transferId: String? = null,
     /** The resolved preparation recipe, fixed at creation (profile version merged with the request). */
     val environment: CloudEnvironmentSpec = CloudEnvironmentSpec(),
+    /**
+     * The newest open permission request, as the transcript writes left it (see [CloudHumanWait]); read-only here: only
+     * the conversation store writes it. [waitingForHuman] tells whether it still holds.
+     */
+    val humanWait: CloudHumanWait? = null,
     val kind: CloudSessionKind = CloudSessionKind.CLOUD,
     /** Set for remote sessions only. */
     val host: CloudSessionHost? = null,
 ) {
+    /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
+    val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
+    /**
+     * The wait, while its execution still runs and can take an answer ([takesAnswers], same epoch). The store also
+     * clears it when the session stops taking answers; this check covers a read between the two.
+     */
+    val waitingForHuman: CloudHumanWait? get() = humanWait?.takeIf { it.epoch == currentEpoch && takesAnswers }
     /** The runner reported a failed preparation; the reconciler fails the session or blocks the resume. */
     val preparationFailed get() = failure?.code == CloudEnvironmentRules.PREPARATION_FAILED && (state == CloudSessionState.PREPARING || state == CloudSessionState.RESUMING)
 }
@@ -267,6 +279,18 @@ enum class TransferPendingInputs(val wire: String) {
     /** Kept queued and delivered to the next execution, under the new owner. */
     KEEP("keep");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
+
+/**
+ * The agent waits for a person: the `permission.request` at [eventSeq], stored at [since] by the execution [epoch].
+ * Set when such a request is stored; moved to the next request still open when it is answered or expires; cleared when
+ * its turn ends. [requestId] is null when the runner sent one a member could not answer with.
+ */
+data class CloudHumanWait(val reason: Reason, val requestId: String?, val since: Long, val eventSeq: Long, val epoch: Int) {
+    enum class Reason(val wire: String) {
+        PERMISSION("permission"), QUESTION("question");
+        companion object { fun parse(value: String?) = entries.singleOrNull { it.wire == value } }
+    }
 }
 
 data class CloudSessionQuery(

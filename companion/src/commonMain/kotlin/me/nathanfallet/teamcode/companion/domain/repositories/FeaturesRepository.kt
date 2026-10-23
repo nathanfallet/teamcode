@@ -15,7 +15,11 @@ object Features {
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
+    /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
+    const val PERMISSIONS = "cloud.permissions.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
     const val ARTIFACTS = "artifacts.v1"
     const val ARTIFACT_TICKETS = "artifacts.tickets.v1"
+    /** Sessions on a member's device: the list and the feed take `kind`, sessions carry their host. */
+    const val REMOTE_SESSIONS = "cloud.sessions.remote.v1"
 }
