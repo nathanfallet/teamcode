@@ -4,6 +4,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -32,7 +33,7 @@ import kotlin.test.*
  * here through [RunnerChannelUseCase].
  */
 class KindSmokeTest {
-    @Test fun lifecycleOnARealCluster(): Unit = runBlocking {
+    @Test fun lifecycleOnARealCluster(): Unit = runBlocking(Dispatchers.Default) {
         val dir = System.getenv("TEAMCODE_KIND_SMOKE_DIR")
         assumeTrue(dir != null, "Set TEAMCODE_KIND_SMOKE_DIR (see scripts/smoke-cloud-kind.py).")
         fun read(name: String) = File(dir, name).readText().trim()
@@ -118,19 +119,21 @@ class KindSmokeTest {
                         runner.checkpoint(principal.teamId, created.id, 1, completed = true)
                         val paused = until("paused") { it.state == PAUSED }
                         assertEquals(WorkspaceResume.CONSISTENT, paused.resumeWorkspace)
+                        for (attempt in 0 until 60) { if (sessionPods(kubeconfig, namespace, created.id).isEmpty()) break; delay(500) }
                         assertNull(port.pod(cluster.id, namespace, pod), "A paused session keeps no pod")
                         assertNotNull(port.claim(cluster.id, namespace, paused.workspace.claimName), "A paused session keeps its workspace")
-                        repeat(60) { if (sessionPods(kubeconfig, namespace, created.id).isNotEmpty()) delay(500) }
-                        assertEquals(emptyList(), sessionPods(kubeconfig, namespace, created.id), "No pod of the session exists on the cluster while paused")
+                                                assertEquals(emptyList(), sessionPods(kubeconfig, namespace, created.id), "No pod of the session exists on the cluster while paused")
 
                         // Resume, requested twice at once (two API replicas), lands in a new pod of epoch 2.
-                        val resumes = coroutineScope { listOf(
-                            async { runCatching { sessions.resume(principal, null, created.id) } },
-                            async { runCatching { secondSessions.resume(principal, null, created.id) } },
+                        // A request refused by the race is a conflict (TeamFailure 409); anything else is an error and fails the test.
+                        suspend fun refusal(request: suspend () -> CloudSession): TeamFailure? =
+                            try { request(); null } catch (failure: TeamFailure) { failure }
+                        val refusals = coroutineScope { listOf(
+                            async { refusal { sessions.resume(principal, null, created.id) } },
+                            async { refusal { secondSessions.resume(principal, null, created.id) } },
                         ).map { it.await() } }
-                        // One of the two may lose the race with a conflict; at least one must be accepted, and none may fail otherwise.
-                        assertTrue(resumes.any { it.isSuccess }, "At least one resume request is accepted: $resumes")
-                        resumes.mapNotNull { it.exceptionOrNull() }.forEach { assertTrue(it is TeamFailure && it.status == 409, "A refused resume is a conflict: $it") }
+                        assertTrue(refusals.any { it == null }, "At least one resume request is accepted: $refusals")
+                        refusals.filterNotNull().forEach { assertEquals(409, it.status, "A refused resume is a conflict: $it") }
                         val secondPod = CloudSessionService.podName(created.id, 2)
                         val resumed = until("the pod of epoch 2 to run") { it.currentEpoch == 2 && port.pod(cluster.id, namespace, secondPod)?.phase == PodPhase.RUNNING }
                         assertEquals(paused.workspace.claimName, resumed.workspace.claimName, "The same workspace claim")
@@ -177,8 +180,14 @@ class KindSmokeTest {
             .lines().filter { it.isNotBlank() }.map { it.removePrefix("pod/") }
 
     private fun kubectl(kubeconfig: String, vararg arguments: String): String {
-        val process = ProcessBuilder(listOf("kubectl", "--kubeconfig", kubeconfig) + arguments).redirectErrorStream(false).start()
-        check(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0) { "kubectl ${arguments.first()} failed" }
-        return process.inputStream.bufferedReader().readText().trim()
+        val output = File.createTempFile("kubectl", ".out")
+        try {
+            val process = ProcessBuilder(listOf("kubectl", "--kubeconfig", kubeconfig) + arguments)
+                .redirectErrorStream(true).redirectOutput(output).start()
+            val finished = process.waitFor(60, TimeUnit.SECONDS)
+            if (!finished) process.destroyForcibly()
+            check(finished && process.exitValue() == 0) { "kubectl ${arguments.joinToString(" ").take(80)} failed: ${output.readText().take(300)}" }
+            return output.readText().trim()
+        } finally { output.delete() }
     }
 }
