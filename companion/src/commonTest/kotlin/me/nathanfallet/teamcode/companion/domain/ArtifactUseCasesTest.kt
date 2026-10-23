@@ -32,6 +32,8 @@ class ArtifactUseCasesTest {
         assertEquals(LinkTarget.Artifact("a2", id, null), resolve("https://other.example:8443/artifact/$id"))
         // As chat apps and browsers copy them: an upper-case scheme, a fragment, a tracker.
         assertEquals(LinkTarget.Artifact("a1", id, 2), resolve("HTTPS://team.example/artifact/$id?utm_source=chat&v=2#top"))
+        // A raw character outside the basic plane in the encoded URL survives decoding.
+        assertEquals(LinkTarget.Artifact("a1", id, null), resolve("teamcode://open?url=https%3A%2F%2Fteam.example%2Fartifact%2F$id%3Fnote%3D\uD83D\uDE80"))
     }
 
     @Test fun aServerWithoutAccountIsNamedAndAnythingElseIsNoLink() {

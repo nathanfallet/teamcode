@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactVersion
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
-import me.nathanfallet.teamcode.companion.domain.services.Clock
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.GetArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenedArtifact
@@ -44,20 +43,19 @@ data class ArtifactUiState(
 /**
  * One artifact: its versions, and a ticket for the version shown when the platform embeds the content ([embedded]).
  * While visible ([start], [stop]), the artifact is read again every 30 s to offer a newer version, never to reload it
- * by itself. An expired ticket is renewed in silence, at most once a minute.
+ * by itself. An expired ticket is renewed in silence.
  */
 class ArtifactViewModel(
     private val route: ArtifactRoute,
     private val getArtifact: GetArtifactUseCase,
     private val openArtifact: OpenArtifactUseCase,
     private val embedded: Boolean,
-    private val clock: Clock,
 ) : ViewModel() {
     private val state = MutableStateFlow(ArtifactUiState(version = route.version))
     val uiState: StateFlow<ArtifactUiState> = state.asStateFlow()
     private var ticket: Job? = null
     private var watch: Job? = null
-    /** When the last silent renewal happened: at most one a minute, so a page that is really missing never loops. */
+    /** When the last silent reload of a crashed page happened: at most one a minute, so a failing page never loops. */
     private var renewedAt: TimeMark? = null
 
     init { load() }
@@ -121,21 +119,14 @@ class ArtifactViewModel(
     }
 
     /**
-     * The page answered `404`. With the ticket expired (or about to), a new one in silence; with a valid ticket, a link
-     * led to a file the version lacks: the screen says so and offers to go back to the entry page ([restart]).
+     * The page answered `404`: a new ticket is asked for. A different one means the old one expired, and it loads; the
+     * same one (the server rounds its expiry, so a ticket still valid comes back unchanged) means a link led to a file
+     * the version lacks: the screen says so and offers the entry page again ([restart]). No device clock involved.
      */
     fun contentMissing() {
         val version = state.value.version ?: return
-        val ticket = state.value.opened?.ticket ?: return
-        if (clock.nowMillis() < ticket.expiresAt - EXPIRY_MARGIN_MILLIS) {
-            state.update { it.copy(missingPage = true) }
-            return
-        }
-        if (recentlyRenewed()) {
-            state.update { it.copy(opened = null, error = CompanionException.NotFound().userMessage()) }
-            return
-        }
-        open(version)
+        val shown = state.value.opened?.ticket?.contentUrl ?: return
+        open(version, missingIfSame = shown)
     }
 
     /** The page's renderer or content process died: loaded again once, in a new web view; a second time, an error. */
@@ -158,12 +149,18 @@ class ArtifactViewModel(
         return false
     }
 
-    private fun open(version: Int) {
+    private fun open(version: Int, missingIfSame: String? = null) {
         ticket?.cancel()
         ticket = viewModelScope.launch {
             try {
                 val opened = openArtifact(route.accountId, route.artifactId, version)
-                state.update { if (it.version == version) it.copy(opened = opened, reload = it.reload + 1, missingPage = false, loading = false) else it }
+                state.update {
+                    when {
+                        it.version != version -> it
+                        opened.ticket.contentUrl == missingIfSame -> it.copy(missingPage = true)
+                        else -> it.copy(opened = opened, reload = it.reload + 1, missingPage = false, loading = false)
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -175,6 +172,5 @@ class ArtifactViewModel(
     private companion object {
         const val WATCH_MILLIS = 30_000L
         val RENEWAL_WINDOW = 1.minutes
-        const val EXPIRY_MARGIN_MILLIS = 60_000L
     }
 }

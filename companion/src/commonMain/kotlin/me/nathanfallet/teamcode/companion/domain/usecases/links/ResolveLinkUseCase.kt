@@ -65,7 +65,12 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
                         i += 3
                     }
                     c == '+' -> { bytes += ' '.code.toByte(); i++ }
-                    else -> { c.toString().encodeToByteArray().forEach { bytes += it }; i++ }
+                    else -> {
+                        // The whole unescaped run at once, so a surrogate pair is encoded as one character.
+                        val end = (i until value.length).firstOrNull { value[it] == '%' || value[it] == '+' } ?: value.length
+                        value.substring(i, end).encodeToByteArray().forEach { bytes += it }
+                        i = end
+                    }
                 }
             }
             return try { bytes.toByteArray().decodeToString(throwOnInvalidSequence = true) } catch (_: CharacterCodingException) { null }
