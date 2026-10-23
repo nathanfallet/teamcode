@@ -68,6 +68,9 @@ import me.nathanfallet.teamcode.companion.resources.settings_app_version
 import me.nathanfallet.teamcode.companion.resources.settings_device
 import me.nathanfallet.teamcode.companion.resources.settings_device_rename
 import me.nathanfallet.teamcode.companion.resources.settings_license
+import me.nathanfallet.teamcode.companion.resources.accounts_cli
+import me.nathanfallet.teamcode.companion.resources.account_cli_hint
+import me.nathanfallet.teamcode.companion.resources.account_cli_sign_out
 import me.nathanfallet.teamcode.companion.resources.settings_no_keyring
 import me.nathanfallet.teamcode.companion.resources.settings_server_version
 import me.nathanfallet.teamcode.companion.resources.settings_sign_out
@@ -113,7 +116,12 @@ fun AccountScreen(
                                 Text(account.username, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                                 Text(account.origin, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
+                            if (account.usedByCli) Chip(stringResource(Res.string.accounts_cli), tone = Tone.ACCENT, modifier = Modifier.testTag("cli-badge"))
                             if (account.signedIn) Chip(account.role.lowercase()) else Chip(stringResource(Res.string.accounts_signed_out), tone = Tone.WARN)
+                        }
+                        if (account.usedByCli) state.cliConfigPath?.let { path ->
+                            GroupDivider()
+                            GroupRow { Text(stringResource(Res.string.account_cli_hint, path), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.testTag("cli-config-path")) }
                         }
                         GroupDivider()
                         GroupRow {
@@ -121,6 +129,10 @@ fun AccountScreen(
                             else TcButton(stringResource(Res.string.home_sign_in_again), onClick = { onSignInAgain(account) }, modifier = Modifier.weight(1f).testTag("sign-in-again"))
                             TcButton(stringResource(Res.string.settings_sign_out), onClick = { viewModel.signOut(account) }, enabled = !state.working, kind = ButtonKind.DANGER,
                                 modifier = Modifier.weight(1f).testTag("sign-out"))
+                        }
+                        // Said before the tap: signing this account out runs teamcode logout as well.
+                        if (account.usedByCli) GroupRow {
+                            Text(stringResource(Res.string.account_cli_sign_out), color = colors.muted, fontSize = 12.5.sp, modifier = Modifier.testTag("cli-sign-out-warning"))
                         }
                     }
                 }
@@ -149,6 +161,7 @@ fun AccountScreen(
                                 Text(account.username, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                                 Text(hostOf(account.origin), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
+                            if (account.usedByCli) Chip(stringResource(Res.string.accounts_cli), tone = Tone.ACCENT)
                             if (account.signedIn) Chip(account.role.lowercase()) else Chip(stringResource(Res.string.accounts_signed_out), tone = Tone.WARN)
                         }
                         GroupDivider()

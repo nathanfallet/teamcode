@@ -8,7 +8,7 @@ allowed = {
     'api': set(), 'client': {'api'}, 'config': set(), 'cli': {'client', 'config'}, 'domain': set(),
     'infrastructure': {'domain'}, 'presentation': {'api', 'domain'},
     'app': {'api', 'domain', 'infrastructure', 'presentation'},
-    'companion': {'client'}, 'companion-android': {'companion'},
+    'companion': {'client'}, 'companion-android': {'companion'}, 'companion-desktop': {'companion', 'config', 'client'},
 }
 for module, dependencies in allowed.items():
     build = (root / module / 'build.gradle.kts').read_text()
@@ -22,7 +22,7 @@ for module, dependencies in allowed.items():
         if any('Test' in part or part == 'test' for part in source.parts):
             continue
         for imported in re.findall(r'^import me\.nathanfallet\.teamcode\.([a-z]+)', source.read_text(), re.M):
-            transitive = dependencies | {'api'} if module in ('cli', 'companion') else dependencies
+            transitive = dependencies | {'api'} if module in ('cli', 'companion', 'companion-desktop') else dependencies
             assert imported == module or imported in transitive, f'{source}: forbidden import {imported}'
 # Inside the companion app, as in the server: the domain knows neither the API contracts nor the typed client, and
 # screens and view models reach implementations only through the di package.

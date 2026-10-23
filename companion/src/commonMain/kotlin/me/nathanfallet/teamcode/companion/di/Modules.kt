@@ -29,6 +29,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.AnswerPermissionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateSessionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.StartLocalSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
@@ -85,6 +86,8 @@ val domainModule = module {
     single { AnswerPermissionUseCase(get(), get(), get(), get()) }
     single { LoadProfilesUseCase(get(), get(), get()) }
     single { CreateSessionUseCase(get(), get(), get()) }
+    // Resolved only where a LocalHost exists (the desktop's platform module).
+    single { StartLocalSessionUseCase(get(), get(), get()) }
     single { LoadArtifactsUseCase(get(), get(), get()) }
     single { GetArtifactUseCase(get(), get(), get()) }
     single { OpenArtifactUseCase(get(), get(), get(), get()) }

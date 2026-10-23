@@ -45,6 +45,7 @@ import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.accounts_manage
 import me.nathanfallet.teamcode.companion.resources.accounts_sign_in
 import me.nathanfallet.teamcode.companion.resources.accounts_signed_out
+import me.nathanfallet.teamcode.companion.resources.accounts_cli
 import me.nathanfallet.teamcode.companion.resources.accounts_title
 import me.nathanfallet.teamcode.companion.resources.settings_add_account
 import org.jetbrains.compose.resources.stringResource
@@ -97,6 +98,7 @@ private fun AccountOption(account: Account, active: Boolean, onSwitch: () -> Uni
             Text(account.username, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(hostOf(account.origin), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (account.usedByCli) Chip(stringResource(Res.string.accounts_cli), tone = Tone.ACCENT, modifier = Modifier.testTag("cli-badge-${account.username}"))
         if (account.signedIn) {
             Chip(account.role.lowercase())
             Box(Modifier.size(20.dp)) {

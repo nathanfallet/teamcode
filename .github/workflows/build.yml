@@ -61,7 +61,7 @@ jobs:
       - name: Install the Android platform the app compiles against
         # `yes` ends on SIGPIPE once sdkmanager exits; that status must not fail the step under pipefail.
         run: '{ yes || true; } | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" > /dev/null'
-      - run: ./gradlew :companion:jvmTest :companion:testAndroidHostTest :companion-android:assembleDebug
+      - run: ./gradlew :companion:jvmTest :companion-desktop:test :companion:testAndroidHostTest :companion-android:assembleDebug
   helm:
     timeout-minutes: 10
     runs-on: ubuntu-latest

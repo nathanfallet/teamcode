@@ -67,4 +67,53 @@ class LoginScreenTest {
         onNodeWithText("Retry").assertExists()
         onNodeWithTag("password").assertDoesNotExist()
     }
+
+    @Test fun aSignInGivesTheCliItsAccountWhenItHasNone() = runComposeUiTest {
+        val auth = FakeAuthRepository()
+        val accounts = InMemoryAccountRepository()
+        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds())
+        val linked = mutableListOf<String>()
+        val link = object : me.nathanfallet.teamcode.companion.domain.services.CliAccountLink {
+            override val configPath = "/home/ada/.config/teamcode/config.json"
+            override suspend fun canLink() = true
+            override suspend fun link(accountId: String) { linked += accountId }
+        }
+        val viewModel = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform, link)
+        var signedIn = false
+        setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = { signedIn = true }, viewModel = viewModel) } }
+        waitUntil { viewModel.uiState.value.cliLinkOffered }
+        onNodeWithText("Also use for the TeamCode CLI").assertExists()
+        onNodeWithTag("username").performTextInput("ada")
+        onNodeWithTag("password").performTextInput("password")
+        onNodeWithTag("submit").performClick()
+        waitUntil { signedIn }
+        assertEquals(listOf(accounts.accounts.value.single().id), linked)
+    }
+
+    @Test fun theCliOptionIsHiddenWhenTheCliHasAnAccountOrIsTurnedOff() = runComposeUiTest {
+        val auth = FakeAuthRepository()
+        val accounts = InMemoryAccountRepository()
+        val signIn = SignInUseCase(auth, accounts, credentials(), FixedInstallation, SequenceIds())
+        var offered = false
+        val linked = mutableListOf<String>()
+        val link = object : me.nathanfallet.teamcode.companion.domain.services.CliAccountLink {
+            override val configPath = "/home/ada/.config/teamcode/config.json"
+            override suspend fun canLink() = offered
+            override suspend fun link(accountId: String) { linked += accountId }
+        }
+        val viewModel = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform, link)
+        setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = {}, viewModel = viewModel) } }
+        waitUntil { viewModel.uiState.value.server != null }
+        onNodeWithTag("use-for-cli").assertDoesNotExist()
+
+        offered = true
+        val second = LoginViewModel(LoginRoute("https://team.example"), InspectServerUseCase(auth), signIn, ChangePasswordUseCase(auth, signIn), FakePlatform, link)
+        waitUntil { second.uiState.value.cliLinkOffered }
+        second.onUseForCliChange(false)
+        second.onUsernameChange("ada"); second.onPasswordChange("password")
+        waitUntil { second.uiState.value.canSubmit }
+        second.submit()
+        waitUntil { second.uiState.value.signedIn }
+        assertTrue(linked.isEmpty())
+    }
 }

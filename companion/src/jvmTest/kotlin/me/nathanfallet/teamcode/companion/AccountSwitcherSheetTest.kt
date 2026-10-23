@@ -40,4 +40,12 @@ class AccountSwitcherSheetTest {
         onNodeWithTag("accounts-manage").performClick()
         assertTrue(managed)
     }
+
+    @Test fun theClisAccountCarriesItsBadge() = runComposeUiTest {
+        val cli = account(Account.CLI_ACCOUNT_ID, username = "ada")
+        val other = account("a2", origin = "https://other.example", memberId = "m2", username = "grace")
+        setContent { TeamCodeTheme { AccountSwitcherSheet(listOf(cli, other), activeAccountId = "a2", onSwitch = {}, onSignInAgain = {}, onAddAccount = {}, onManage = {}, onDismiss = {}) } }
+        onNodeWithTag("cli-badge-ada", useUnmergedTree = true).assertExists()
+        onNodeWithTag("cli-badge-grace", useUnmergedTree = true).assertDoesNotExist()
+    }
 }

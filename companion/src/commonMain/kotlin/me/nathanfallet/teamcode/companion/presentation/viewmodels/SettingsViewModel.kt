@@ -28,6 +28,8 @@ data class SettingsUiState(
     val persistentCredentials: Boolean = true,
     val working: Boolean = false,
     val message: String? = null,
+    /** On the desktop, where the CLI's `config.json` is (shown with the CLI's account). */
+    val cliConfigPath: String? = null,
 ) {
     val activeAccount: Account? get() = accounts.firstOrNull { it.id == activeAccountId }
 }
@@ -39,8 +41,9 @@ class SettingsViewModel(
     private val renameDevice: RenameDeviceUseCase,
     private val credentials: CredentialStore,
     platform: PlatformInfo,
+    cliConfigPath: String? = null,
 ) : ViewModel() {
-    private val status = MutableStateFlow(SettingsUiState(appVersion = platform.appVersion, persistentCredentials = credentials.persistent))
+    private val status = MutableStateFlow(SettingsUiState(appVersion = platform.appVersion, persistentCredentials = credentials.persistent, cliConfigPath = cliConfigPath))
     // Read again whenever the accounts change: a sign-in that fell back to memory (locked keyring) shows at once.
     val uiState: StateFlow<SettingsUiState> = combine(accounts.accounts, accounts.activeAccountId, preferences.theme, status) { list, active, theme, status ->
         status.copy(accounts = list, activeAccountId = active, theme = theme, persistentCredentials = credentials.persistent)

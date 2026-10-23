@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -54,6 +55,9 @@ import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionViewModel
+import me.nathanfallet.teamcode.companion.domain.services.LocalHost
+import org.koin.compose.getKoin
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
@@ -87,6 +91,11 @@ fun MainScreen(
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
     var newSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // The desktop alone hosts sessions on the device: there, a new session first asks where it runs.
+    val koin = getKoin()
+    val localHost = remember { koin.getOrNull<LocalHost>() }
+    var chooserFor by rememberSaveable { mutableStateOf<String?>(null) }
+    var localSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
     var switcher by rememberSaveable { mutableStateOf(false) }
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val settingsState by settings.uiState.collectAsStateWithLifecycle()
@@ -98,7 +107,7 @@ fun MainScreen(
                 MainTab.SESSIONS -> SessionsScreen(
                     onSignInAgain = onSignInAgain,
                     onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
-                    onNewSession = { newSessionFor = it.id },
+                    onNewSession = { if (localHost != null) chooserFor = it.id else newSessionFor = it.id },
                     onSwitchAccount = { switcher = true },
                     titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
                     viewModel = home,
@@ -120,6 +129,22 @@ fun MainScreen(
             NewSessionSheet(viewModel, onDismiss = { newSessionFor = null }, onCreated = { session ->
                 newSessionFor = null
                 onOpenSession(accountId, session.id)
+            })
+        }
+    }
+    chooserFor?.let { accountId ->
+        NewSessionChooserSheet(
+            onHere = { chooserFor = null; localSessionFor = accountId },
+            onCloud = { chooserFor = null; newSessionFor = accountId },
+            onDismiss = { chooserFor = null },
+        )
+    }
+    localSessionFor?.let { accountId ->
+        SheetViewModels {
+            val viewModel: LocalSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId)) }
+            LocalSessionSheet(viewModel, onDismiss = { localSessionFor = null }, onStarted = { sessionId ->
+                localSessionFor = null
+                onOpenSession(accountId, sessionId)
             })
         }
     }

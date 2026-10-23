@@ -1,10 +1,12 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -13,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,6 +48,8 @@ import me.nathanfallet.teamcode.companion.resources.login_password_only_here
 import me.nathanfallet.teamcode.companion.resources.login_signing_in_to
 import me.nathanfallet.teamcode.companion.resources.login_submit
 import me.nathanfallet.teamcode.companion.resources.login_title
+import me.nathanfallet.teamcode.companion.resources.login_use_for_cli
+import me.nathanfallet.teamcode.companion.resources.login_use_for_cli_hint
 import me.nathanfallet.teamcode.companion.resources.login_username
 import me.nathanfallet.teamcode.companion.resources.password_change_confirm
 import me.nathanfallet.teamcode.companion.resources.password_change_hint
@@ -104,6 +109,13 @@ fun LoginScreen(
                 value = state.deviceName, onValueChange = viewModel::onDeviceNameChange, label = stringResource(Res.string.login_device_name),
                 hint = stringResource(Res.string.login_device_hint), tag = "device",
             )
+            if (state.cliLinkOffered) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(Res.string.login_use_for_cli), color = colors.text, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(Res.string.login_use_for_cli_hint), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                }
+                Switch(state.useForCli, viewModel::onUseForCliChange, modifier = Modifier.testTag("use-for-cli"))
+            }
         } else {
             PasswordField(state.newPassword, viewModel::onNewPasswordChange, stringResource(Res.string.password_change_new), "new-password", ContentType.NewPassword,
                 hint = stringResource(Res.string.password_change_hint))

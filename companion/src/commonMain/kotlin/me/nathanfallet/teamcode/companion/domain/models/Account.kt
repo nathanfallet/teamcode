@@ -21,4 +21,12 @@ data class Account(
     val signedIn: Boolean = true,
 ) {
     val isAdministrator: Boolean get() = role.uppercase() in setOf("ADMIN", "OWNER")
+
+    /** The desktop's account of the CLI's `config.json`: its token is the CLI's, and signing it out signs the CLI out too. */
+    val usedByCli: Boolean get() = id == CLI_ACCOUNT_ID
+
+    companion object {
+        /** The id of the CLI's account on the desktop; drawn ids are UUIDs, so it never collides with one. */
+        const val CLI_ACCOUNT_ID = "cli"
+    }
 }
