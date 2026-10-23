@@ -217,7 +217,7 @@ fun main() {
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
-            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing) }.start(wait = true)
+            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); artifactHttp.close(); database?.close() }
 }
 

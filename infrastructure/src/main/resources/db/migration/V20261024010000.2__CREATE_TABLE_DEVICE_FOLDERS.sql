@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS device_folders (device_id VARCHAR(36), folder_id VARCHAR(64) NOT NULL, `name` VARCHAR(255) NOT NULL, label VARCHAR(512) NULL, `position` INT, CONSTRAINT pk_device_folders PRIMARY KEY (device_id, `position`), CONSTRAINT device_folders_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE);
+ALTER TABLE device_folders ADD CONSTRAINT device_folder_id UNIQUE (device_id, folder_id);

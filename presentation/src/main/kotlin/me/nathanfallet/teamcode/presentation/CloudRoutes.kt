@@ -29,7 +29,7 @@ internal fun CloudSession.view() = CloudSessionView(
         else CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
     environment = environment.view(), kind = kind.wire,
-    host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire) },
+    host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire, it.folderId) },
     waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
 )
 /** The profile id and image reference of a remote session, which has neither. */
@@ -167,7 +167,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val idempotency = IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical))
             val outcome = when (input.kind ?: CloudSessionKind.CLOUD.wire) {
                 CloudSessionKind.CLOUD.wire -> {
-                    if (input.directoryName != null || input.permissionMode != null || input.agent?.kind != null)
+                    if (input.directoryName != null || input.permissionMode != null || input.agent?.kind != null || input.deviceId != null || input.folderId != null)
                         throw TeamFailure("invalid_session", 400, "A cloud session takes its agent from its profile and has no directory or permission mode.")
                     val draft = CloudSessionDraft(input.name, input.profileId ?: throw TeamFailure("invalid_session", 400, "Send the profileId of a cloud session."),
                         input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes,
@@ -179,9 +179,9 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
                         throw TeamFailure("invalid_session", 400, "A remote session has no profile, image, idle timeout or environment: it runs in a directory of the caller's device.")
                     val mode = input.permissionMode?.let { RemotePermissionMode.parse(it) ?: throw TeamFailure("invalid_permission_mode", 400, "Use the permission mode ask or bypass.") }
                         ?: RemotePermissionMode.ASK
+                    if (input.deviceId == null && input.directoryName == null) throw TeamFailure("invalid_directory_name", 400, "Send the name of the session's directory.")
                     val draft = RemoteSessionDraft(input.name, input.agent?.kind ?: throw TeamFailure("invalid_agent", 400, "Send the agent of a remote session: claude or codex."),
-                        input.agent?.model, input.agent?.effort, input.labels,
-                        input.directoryName ?: throw TeamFailure("invalid_directory_name", 400, "Send the name of the session's directory."), mode, input.initialMessage)
+                        input.agent?.model, input.agent?.effort, input.labels, input.directoryName, mode, input.initialMessage, input.deviceId, input.folderId)
                     sessions.createRemote(call.principal, onBehalfOf, draft, idempotency)
                 }
                 else -> throw TeamFailure("invalid_kind", 400, "Use kind cloud or remote.")

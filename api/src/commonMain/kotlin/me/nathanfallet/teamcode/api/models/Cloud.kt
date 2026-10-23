@@ -111,6 +111,8 @@ data class CloudSessionHostView(
     val online: Boolean = false,
     val lastHeartbeatAt: Long? = null,
     val permissionMode: String? = null,
+    /** The published folder the device's daemon started the session in (`cloud.sessions.remote.daemon.v1`); null otherwise. */
+    val folderId: String? = null,
 )
 /**
  * What the agent of a session waits for: the open `permission.request` at [eventSeq] in its transcript, since [since]
@@ -151,6 +153,13 @@ data class CreateCloudSessionRequest(
     val kind: String? = null,
     val directoryName: String? = null,
     val permissionMode: String? = null,
+    /**
+     * With [kind] `remote` (`cloud.sessions.remote.daemon.v1`): one of the caller's own devices, whose daemon starts the
+     * session in [folderId], one of the folders it published (`GET /devices/{id}/folders`). Omit [directoryName]: it is
+     * the folder's name. Without [deviceId], the session runs on the caller's own device.
+     */
+    val deviceId: String? = null,
+    val folderId: String? = null,
 )
 /**
  * The execution a remote session's host just started (`POST /api/v1/cloud/sessions/{id}/host`): the host calls the

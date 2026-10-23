@@ -41,6 +41,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         hookOperations()
         variantOperations()
         cloudOperations()
+        deviceDaemonOperations()
         webhookOperations()
         artifactOperations()
         artifactTicketOperations()

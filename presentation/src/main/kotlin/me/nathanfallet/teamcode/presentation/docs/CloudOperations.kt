@@ -185,7 +185,11 @@ private fun ApiCatalog.cloudSessions() {
             "(`cloud.sessions.remote.v1`), the session runs on the caller's own device instead: no profile, image, idle " +
             "timeout or environment; `agent.kind` (`claude` or `codex`), `directoryName` (the directory's last segment, " +
             "never its path) and `permissionMode` (`ask`, the default, or `bypass`). Its device is the one of the caller's " +
-            "login session; its host (`teamcode remote`) then starts it with `POST /api/v1/cloud/sessions/{id}/host`."
+            "login session; its host (`teamcode remote`) then starts it with `POST /api/v1/cloud/sessions/{id}/host`. With " +
+            "`deviceId` and `folderId` (`cloud.sessions.remote.daemon.v1`), it runs on that device instead, one of the " +
+            "caller's own, started by its daemon in one of the folders it published (`GET /api/v1/devices/{id}/folders`); " +
+            "omit `directoryName`, which is the folder's name. Only the device's owner, signed in interactively, starts " +
+            "one, and only while its daemon is online: nothing is queued for a device that is offline."
         parameters {
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
             onBehalfOf()
@@ -193,11 +197,11 @@ private fun ApiCatalog.cloudSessions() {
         body<CreateCloudSessionRequest>("The session's name, profile and optional overrides.")
         responses {
             ok<CloudSessionView>("Accepted: the session is being created.", HttpStatusCode.Accepted)
-            badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`, `invalid_kind`, `invalid_agent`, `invalid_directory_name`, `invalid_permission_mode`).")
+            badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`, `invalid_kind`, `invalid_agent`, `invalid_directory_name`, `invalid_permission_mode`, `invalid_folder`, `device_target_unsupported`).")
             error(HttpStatusCode.Forbidden, "The profile exists but is not assigned to the effective member (`profile_unassigned`), or a remote session was asked on behalf of another member (`on_behalf_forbidden`).")
-            notFound("No profile has this id (`profile_not_found`). `profileId` is an id: list the usable ones with `GET /api/v1/cloud/profiles`.")
-            conflict("The member's session limit is reached (`cloud_session_limit`), or the profile's cluster or namespace is gone (`cluster_unavailable`, `namespace_not_allowed`).")
-            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), the effective member cannot own sessions (`invalid_effective_member`), or a remote session was asked with a service key or a login without a device (`remote_requires_device`).")
+            notFound("No profile has this id (`profile_not_found`). `profileId` is an id: list the usable ones with `GET /api/v1/cloud/profiles`. Or `deviceId` is not one of the caller's devices (`device_not_found`), whoever the caller is.")
+            conflict("The member's session limit is reached (`cloud_session_limit`), the profile's cluster or namespace is gone (`cluster_unavailable`, `namespace_not_allowed`), or the device's daemon is offline (`device_offline`).")
+            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), the effective member cannot own sessions (`invalid_effective_member`), a remote session was asked with a service key or a login without a device (`remote_requires_device`), a session on a device was asked with a service key (`remote_requires_login`), or the device did not publish the folder (`folder_not_published`).")
         }
     }
     post("/api/v1/cloud/sessions/{id}/host") {

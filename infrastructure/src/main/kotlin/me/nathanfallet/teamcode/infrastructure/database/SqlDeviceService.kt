@@ -33,11 +33,12 @@ internal fun registerDevice(c: JdbcTransaction, member: Member, installation: St
 class SqlDeviceService(private val database: Database) : DeviceService {
     override suspend fun devices(actor: Principal, memberId: String): List<Device> = database.query {
         requireActor(this, actor); requireMember(actor, memberId)
-        val sessions = sessionRows(memberId, nowMillis())
+        val now = nowMillis()
+        val sessions = sessionRows(memberId, now)
         val current = sessions.find { it[Tokens.id] == actor.tokenId }?.get(Tokens.deviceId)
         Devices.selectAll().where { Devices.memberId eq memberId }.orderBy(Devices.lastLoginAt to SortOrder.DESC, Devices.id to SortOrder.ASC)
             .limit(DeviceService.DEVICE_LIMIT.toInt()).map { row ->
-                row.device(sessions.count { it[Tokens.deviceId] == row[Devices.id] }, current == row[Devices.id])
+                row.device(sessions.count { it[Tokens.deviceId] == row[Devices.id] }, current == row[Devices.id], now)
             }
     }
     override suspend fun sessions(actor: Principal, memberId: String): List<MemberSession> = database.query {
@@ -55,8 +56,9 @@ class SqlDeviceService(private val database: Database) : DeviceService {
             requireMember(actor, row[Devices.memberId], lock = true)
             Devices.update({ Devices.id eq deviceId }) { it[Devices.name] = name }
             audit(actor.teamId, actor.member.id, "device.renamed", deviceId)
-            val sessions = sessionRows(row[Devices.memberId], nowMillis())
-            deviceRow(actor, deviceId).device(sessions.count { it[Tokens.deviceId] == deviceId }, sessions.any { it[Tokens.id] == actor.tokenId && it[Tokens.deviceId] == deviceId })
+            val now = nowMillis()
+            val sessions = sessionRows(row[Devices.memberId], now)
+            deviceRow(actor, deviceId).device(sessions.count { it[Tokens.deviceId] == deviceId }, sessions.any { it[Tokens.id] == actor.tokenId && it[Tokens.deviceId] == deviceId }, now)
         }
     }
     override suspend fun revokeDevice(actor: Principal, deviceId: String): String = database.query {
@@ -67,7 +69,7 @@ class SqlDeviceService(private val database: Database) : DeviceService {
         // Explicit deletion documents the invariant; the FK also protects against orphan tokens.
         Tokens.deleteWhere { Tokens.deviceId eq deviceId }
         // The device's remote sessions end with it, in this transaction: they could only ever run there. The reconciler
-        // finishes the termination; transcripts are kept and the sessions lose their host (the foreign key's own index finds them).
+        // finishes the termination; transcripts are kept and the sessions lose their host (`cloud_session_host_waiting`, which starts with the device, finds them).
         val now = nowMillis()
         CloudSessions.update({
             (CloudSessions.hostDeviceId eq deviceId) and (CloudSessions.state neq "terminated") and (CloudSessions.desiredState neq "terminated")
@@ -106,7 +108,7 @@ class SqlDeviceService(private val database: Database) : DeviceService {
     private fun sessionRows(member: String, now: Long) = Tokens.select(Tokens.id, Tokens.memberId, Tokens.device, Tokens.deviceId, Tokens.createdAt, Tokens.expiresAt)
         .where { (Tokens.memberId eq member) and (Tokens.expiresAt greater now) and Tokens.serviceScopes.isNull() }
         .orderBy(Tokens.expiresAt to SortOrder.DESC, Tokens.id to SortOrder.ASC).limit(50).toList()
-    private fun ResultRow.device(active: Int, current: Boolean) = Device(get(Devices.id), get(Devices.memberId), get(Devices.name), get(Devices.createdAt), get(Devices.lastLoginAt), active, current,
-        get(Devices.platform), get(Devices.osVersion))
+    private fun ResultRow.device(active: Int, current: Boolean, now: Long) = Device(get(Devices.id), get(Devices.memberId), get(Devices.name), get(Devices.createdAt), get(Devices.lastLoginAt), active, current,
+        get(Devices.platform), get(Devices.osVersion), DaemonPresence.of(get(Devices.daemonSeenAt), get(Devices.daemonVersion), now))
     private fun missing() = TeamFailure("not_found", 404, "Device or session not found.")
 }

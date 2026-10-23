@@ -574,6 +574,97 @@ class CloudRoutesTest {
         refused("execution_fenced", runner("register", laptop), HttpStatusCode.Conflict)
     }
 
+    /** In memory, as the SQL store: presence by device, folders by device, the queue read from the sessions. */
+    private class Daemons(val store: Store) : DeviceDaemonStore {
+        val seen = mutableMapOf<String, Pair<Long, String?>>()
+        val folders = mutableMapOf<String, List<DeviceFolder>>()
+        val owners = mapOf("laptop-id" to "colleague-id", "desktop-id" to "colleague-id", "admin-device" to "admin-id")
+        override suspend fun now() = store.clock
+        override suspend fun deviceOf(principal: Principal) = store.deviceOf(principal)
+        override suspend fun touch(deviceId: String, version: String?) { seen[deviceId] = store.clock to version }
+        override suspend fun offline(deviceId: String) { seen.remove(deviceId) }
+        override suspend fun publish(deviceId: String, folders: List<DeviceFolder>) { this.folders[deviceId] = folders }
+        override suspend fun owned(teamId: String, memberId: String, deviceId: String) = deviceId.takeIf { owners[it] == memberId }?.let {
+            OwnedDevice(it, it, seen[it]?.let { (at, version) -> DaemonPresence.of(at, version, store.clock) }, folders[it].orEmpty())
+        }
+        override suspend fun orders(deviceId: String, limit: Int) = store.sessions.values.filter {
+            it.host?.deviceId == deviceId && it.host?.folderId != null && it.phase == CloudSessionService.WAITING_HOST && it.desiredState == DesiredState.RUNNING
+        }.take(limit).map { DaemonOrder(it.id, it.host!!.folderId!!, it.host!!.directoryName!!, it.agentKind, it.host!!.permissionMode, it.state, it.updatedAt) }
+    }
+
+    @Test fun remoteSessionsStartOnTheOwnersOnlineDeviceThroughItsDaemon() = testApplication {
+        val store = Store()
+        val daemons = Daemons(store)
+        val sessions = CloudSessionService(store, daemons = daemons)
+        val logins = team()
+        // Never called here: the conversation is mounted only because the capability needs it.
+        val conversations = java.lang.reflect.Proxy.newProxyInstance(CloudConversationStore::class.java.classLoader, arrayOf(CloudConversationStore::class.java)) { _, method, _ ->
+            if (method.name == "toString") "stub" else error("unused: ${method.name}")
+        } as CloudConversationStore
+        val access = CloudAccessService(conversations, store)
+        application {
+            configureGateway(gateway, team = logins, cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, FakeCluster, logins = { logins.authenticate(it) }), remoteHosts = true),
+                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations)),
+                deviceDaemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemons, sleep = {}), sessions), publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.sessions.remote.daemon.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        suspend fun json(method: HttpMethod, path: String, token: String, body: String) = client.request(path) {
+            this.method = method; bearerAuth(token); contentType(ContentType.Application.Json); setBody(body)
+        }
+        suspend fun create(token: String, body: String) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody(body); header(CloudHeaders.IDEMPOTENCY_KEY, body.hashCode().toString() + token)
+        }
+        val start = """{"name":"From the phone","kind":"remote","agent":{"kind":"claude"},"deviceId":"laptop-id","folderId":"api","permissionMode":"bypass"}"""
+
+        // The daemon channel is interactive and bound to a device.
+        runCatchingAssert("credential_scope", json(HttpMethod.Post, "/api/v1/devices/current/daemon/poll", "colleague-write", "{}"), HttpStatusCode.Forbidden)
+        runCatchingAssert("device_offline", create("colleague-desktop", start), HttpStatusCode.Conflict)
+        val published = json(HttpMethod.Put, "/api/v1/devices/current/folders", "colleague", """{"folders":[{"id":"api","name":"api","label":"~/work/api"}]}""")
+        assertEquals(listOf(DeviceFolderView("api", "api", "~/work/api")), Serialization.json.decodeFromString<List<DeviceFolderView>>(published.bodyAsText()))
+        runCatchingAssert("invalid_folders", json(HttpMethod.Put, "/api/v1/devices/current/folders", "colleague", """{"folders":[{"id":"x","name":"/home/x"}]}"""), HttpStatusCode.BadRequest)
+        val empty = Serialization.json.decodeFromString<DaemonPollView>(json(HttpMethod.Post, "/api/v1/devices/current/daemon/poll", "colleague", """{"waitMillis":0,"version":"1.0.0"}""").bodyAsText())
+        assertEquals(DaemonPollView(emptyList(), DeviceDaemonRules.ONLINE_TTL_MILLIS, DeviceDaemonRules.MAX_WAIT_MILLIS), empty)
+
+        // Only the owner reads the folders and starts a session there; the device's folder is checked.
+        val folders = Serialization.json.decodeFromString<DeviceFoldersView>(client.get("/api/v1/devices/laptop-id/folders") { bearerAuth("colleague-desktop") }.bodyAsText())
+        assertEquals("laptop-id" to true, folders.deviceId to folders.daemon!!.online)
+        runCatchingAssert("device_not_found", client.get("/api/v1/devices/laptop-id/folders") { bearerAuth("admin") }, HttpStatusCode.NotFound)
+        runCatchingAssert("device_not_found", create("admin", start), HttpStatusCode.NotFound)
+        runCatchingAssert("remote_requires_login", create("colleague-write", start), HttpStatusCode.UnprocessableEntity)
+        runCatchingAssert("folder_not_published", create("colleague-desktop", start.replace("\"api\"", "\"web\"")), HttpStatusCode.UnprocessableEntity)
+        runCatchingAssert("invalid_session", create("colleague", """{"name":"Task","profileId":"profile-id","deviceId":"laptop-id"}"""), HttpStatusCode.BadRequest)
+        val created = create("colleague-desktop", start)
+        assertEquals(HttpStatusCode.Accepted, created.status)
+        val view = Serialization.json.decodeFromString<CloudSessionView>(created.bodyAsText())
+        assertEquals(CloudSessionHostView("laptop-id", directoryName = "api", permissionMode = "bypass", folderId = "api"), view.host)
+
+        val poll = Serialization.json.decodeFromString<DaemonPollView>(json(HttpMethod.Post, "/api/v1/devices/current/daemon/poll", "colleague", """{"waitMillis":20000}""").bodyAsText())
+        assertEquals(listOf(DaemonOrderView(view.id, "api", "api", "claude", "bypass", "creating", poll.orders.single().requestedAt)), poll.orders)
+        runCatchingAssert("remote_host_mismatch", json(HttpMethod.Post, "/api/v1/devices/current/daemon/sessions/${view.id}/refuse", "colleague-desktop", """{"reason":"folder_missing"}"""), HttpStatusCode.Conflict)
+        val refused = Serialization.json.decodeFromString<CloudSessionView>(json(HttpMethod.Post, "/api/v1/devices/current/daemon/sessions/${view.id}/refuse", "colleague", """{"reason":"folder_missing"}""").bodyAsText())
+        assertEquals("host_refused", refused.failure?.code)
+        assertEquals(emptyList(), Serialization.json.decodeFromString<DaemonPollView>(json(HttpMethod.Post, "/api/v1/devices/current/daemon/poll", "colleague", "{}").bodyAsText()).orders)
+
+        assertEquals(HttpStatusCode.NoContent, client.delete("/api/v1/devices/current/daemon") { bearerAuth("colleague") }.status)
+        runCatchingAssert("device_offline", create("colleague-desktop", start.replace("From the phone", "Again")), HttpStatusCode.Conflict)
+
+        // The same flow through the client SDK: the daemon with the laptop's login, the app with another device's.
+        val device = TeamCodeClient("http://localhost", { "colleague" }) { config -> createClient { config(this) } }
+        val app = TeamCodeClient("http://localhost", { "colleague-desktop" }) { config -> createClient { config(this) } }
+        try {
+            assertEquals(listOf(DeviceFolderView("web", "web")), device.publishDeviceFolders(listOf(DeviceFolderView("web", "web"))))
+            assertEquals(emptyList(), device.pollDeviceDaemon(0, "1.0.0").orders)
+            assertEquals(listOf("web"), app.deviceFolders("laptop-id").folders.map { it.id })
+            val session = app.createCloudSession(CreateCloudSessionRequest("SDK", agent = CloudAgentRequest(kind = "codex"), kind = "remote", deviceId = "laptop-id", folderId = "web"))
+            assertEquals("ask" to "web", session.host?.permissionMode to session.host?.directoryName)
+            assertEquals(listOf(session.id), device.pollDeviceDaemon(0).orders.map { it.sessionId })
+            assertEquals("host_refused", device.refuseDeviceDaemonSession(session.id, "agent_missing").failure?.code)
+            device.stopDeviceDaemon()
+            assertNull(app.deviceFolders("laptop-id").daemon)
+        } finally { device.close(); app.close() }
+    }
+
     private suspend fun runCatchingAssert(code: String, response: HttpResponse, status: HttpStatusCode) {
         val text = response.bodyAsText()
         assertEquals(status, response.status, text)

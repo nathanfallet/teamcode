@@ -158,6 +158,8 @@ object CloudSessions : Table("cloud_sessions") {
     val hostDirectoryName = varchar("host_directory_name", 255).nullable()
     /** A remote session's permission mode on its host (`ask` or `bypass`); null for cloud sessions. */
     val permissionMode = varchar("permission_mode", 16).nullable()
+    /** The published folder a device's daemon was asked to start the session in (its key, never a path); null otherwise. */
+    val hostFolderId = varchar("host_folder_id", 64).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)
@@ -167,6 +169,8 @@ object CloudSessions : Table("cloud_sessions") {
         index("cloud_session_team_kind", false, teamId, kind, createdAt)
         index("cloud_session_due", false, reconcileAfter)
         index("cloud_session_cluster_waiting", false, clusterId, waitingSince)
+        // The daemon's queue: a device's sessions waiting for their host, oldest request first.
+        index("cloud_session_host_waiting", false, hostDeviceId, phase, desiredState, updatedAt)
     }
 }
 object CloudSessionLabels : Table("cloud_session_labels") {

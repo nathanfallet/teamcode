@@ -51,7 +51,20 @@ All allowances, weighted shares, reservations and spend remain keyed by member. 
 | Own authentication sessions | `GET /api/v1/auth/sessions` |
 | Member authentication sessions (owner or administrator) | `GET /api/v1/members/{memberId}/auth/sessions` |
 | Revoke one authentication session | `DELETE /api/v1/auth/sessions/{id}` |
+| A device's folders and daemon (owner only) | `GET /api/v1/devices/{id}/folders` |
+| Daemon: wait for sessions to host | `POST /api/v1/devices/current/daemon/poll` |
+| Daemon: publish the folders | `PUT /api/v1/devices/current/folders` |
+| Daemon: refuse a session | `POST /api/v1/devices/current/daemon/sessions/{id}/refuse` |
+| Daemon: going offline | `DELETE /api/v1/devices/current/daemon` |
 
 Device/session reads require completed password setup. Another member's inaccessible object ID returns 404 on mutations. Administrative reads remain team-scoped. The `team.devices` capability advertises these operations. Registration adds optional `installationId` to the password-login request; requests without it retain the legacy login behavior.
+
+## Device daemon
+
+With `cloud.sessions.remote.daemon.v1`, a device's TeamCode daemon (the local service, signed in with the CLI's `config.json`) connects to the server so that its owner can start a [remote session](cloud-sessions.md#sessions-started-by-a-devices-daemon) on it from any other client.
+
+- **Presence.** Each poll marks the daemon seen (`devices.daemon_seen_at`, at most one write per 5 s); the device is online for 60 s after its last poll and offline at once after `DELETE /devices/current/daemon`. `GET /devices` returns `daemon {online, lastSeenAt, version}`, or null when the daemon never connected or said it stopped.
+- **Folders.** The daemon publishes the folders its owner allowed, as a whole (`PUT /devices/current/folders`, at most 64): `id` is the daemon's own key for the folder (1 to 64 characters from `A-Z a-z 0-9 _ -`), `name` its last segment, `label` how the owner recognizes it (for example `~/git/teamcode`, at most 512 characters). The server never receives a path it relies on, and removing the device removes its folders. Only the device's owner reads them (`GET /devices/{id}/folders`); anyone else, an administrator included, gets `404 device_not_found`.
+- **Who.** The daemon routes take an interactive login bound to the device: a service key, a browser session or a login without an installation gets `422 daemon_requires_device`, and each call acts on the caller's own device only.
 
 Groups, additional roles, scoped CI/service credentials, the agent-run registry and complete audit browsing remain separate V1 work. This feature does not replace those requirements.

@@ -30,6 +30,11 @@ data class CloudSessionHost(
     val permissionMode: RemotePermissionMode = RemotePermissionMode.ASK,
     val online: Boolean = false,
     val lastHeartbeatAt: Long? = null,
+    /**
+     * The folder the device's daemon published and the session was started in (`cloud.sessions.remote.daemon.v1`): the
+     * daemon's own key, never a path. Null for a session started on the device itself (`teamcode remote start`).
+     */
+    val folderId: String? = null,
 )
 /**
  * How a remote session's agent asks for permission on the member's own files, fixed at creation: [ASK] relays Claude
@@ -325,10 +330,17 @@ data class RemoteSessionDraft(
     val agentModel: String?,
     val agentEffort: String?,
     val labels: Map<String, String>,
-    /** The last segment of the directory the agent works in, never its path (which holds the member's user name). */
-    val directoryName: String,
+    /**
+     * The last segment of the directory the agent works in, never its path (which holds the member's user name). With
+     * [deviceId], it is the published folder's name: null, or equal to it.
+     */
+    val directoryName: String?,
     val permissionMode: RemotePermissionMode,
     val initialMessage: String? = null,
+    /** Another device of the caller (or this one), whose daemon starts the session; null: the caller's own device hosts it. */
+    val deviceId: String? = null,
+    /** One of the folders [deviceId]'s daemon published; required with it. */
+    val folderId: String? = null,
 )
 
 /** Idempotency of a mutating request: scope is team + initiator + route + key, compared on a body digest. */

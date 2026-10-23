@@ -5,6 +5,8 @@ data class Device(
     val createdAt: Long, val lastLoginAt: Long, val activeSessions: Int, val current: Boolean,
     /** The operating system the installation reported at its latest login (`macos`, `windows`, `linux`, `ios`, `android`); null until one did. */
     val platform: String? = null, val osVersion: String? = null,
+    /** The device's daemon (`cloud.sessions.remote.daemon.v1`); null when it never connected or said it stopped. */
+    val daemon: DaemonPresence? = null,
 )
 data class MemberSession(
     val id: String, val memberId: String, val name: String, val deviceId: String?,

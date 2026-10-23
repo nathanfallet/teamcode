@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlCloudInferenceCredent
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudSessionStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudRuntimeStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudTransferStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlDeviceDaemonStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlGitHubStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlMemberAllowance
 import me.nathanfallet.teamcode.infrastructure.database.SqlVariantService
@@ -26,6 +27,7 @@ import me.nathanfallet.teamcode.infrastructure.secrets.CipherSecretSealer
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import me.nathanfallet.teamcode.presentation.CloudConversation
 import me.nathanfallet.teamcode.presentation.CloudRunnerChannel
+import me.nathanfallet.teamcode.presentation.DeviceDaemonChannel
 
 /**
  * Cloud sessions. Built whenever the server has a database, so administrators can configure them from the dashboard;
@@ -55,7 +57,10 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     // Groups do not exist in TeamCode yet; a group directory plugs in here when they land.
     private val access = CloudAccessService(conversationStore, store, CloudGroupDirectory.NONE)
     private val conversationService = CloudConversationService(conversationStore, store, access)
-    val sessions = CloudSessionService(store, access = access, initialMessages = conversationService)
+    private val daemonStore = SqlDeviceDaemonStore(database)
+    val sessions = CloudSessionService(store, access = access, initialMessages = conversationService, daemons = daemonStore)
+    /** Members' device daemons: presence, published folders and the queue of sessions to host. */
+    val daemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemonStore), sessions)
 
     // Transfers recheck the recipient with the same rules as creation, plus model policy and quota. Environment
     // variables, MCP servers and skills reach cloud sessions in other branches; their assignment checks join this list.

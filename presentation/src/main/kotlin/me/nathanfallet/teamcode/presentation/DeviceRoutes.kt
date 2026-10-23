@@ -7,7 +7,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.team.*
 import java.time.Instant
 
-private fun Device.view() = DeviceView(id, memberId, name, createdAt, lastLoginAt, activeSessions, current, platform, osVersion)
+private fun Device.view() = DeviceView(id, memberId, name, createdAt, lastLoginAt, activeSessions, current, platform, osVersion, daemon?.view())
 private val platformNames = mapOf("macos" to "macOS", "windows" to "Windows", "linux" to "Linux", "ios" to "iOS", "android" to "Android")
 /** "macOS 15.1", or null until the installation reported its system. */
 internal fun systemName(platform: String?, osVersion: String?): String? =

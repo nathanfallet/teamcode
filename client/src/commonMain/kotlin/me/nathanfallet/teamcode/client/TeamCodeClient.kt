@@ -219,6 +219,28 @@ class TeamCodeClient(
     }
     suspend fun revokeDevice(id: String) = revoke("devices", id)
     suspend fun revokeAuthSession(id: String) = revoke("auth/sessions", id)
+    /** The folders one of the caller's own devices offers, and whether its daemon is online (`cloud.sessions.remote.daemon.v1`). */
+    suspend fun deviceFolders(id: String): DeviceFoldersView { identifier(id); return request("/api/v1/devices/$id/folders", HttpMethod.Get) }
+    /**
+     * The daemon's channel, with this device's own login: marks the daemon online and waits up to [waitMillis] (at most
+     * 20 s on the server) for sessions to host. Call it again at once after each answer.
+     */
+    suspend fun pollDeviceDaemon(waitMillis: Long = 20_000, version: String? = null): DaemonPollView {
+        require(waitMillis >= 0) { "Invalid wait." }
+        return request("/api/v1/devices/current/daemon/poll", HttpMethod.Post, DaemonPollRequest(waitMillis, version))
+    }
+    /** Marks this device's daemon offline at once, when it stops. */
+    suspend fun stopDeviceDaemon() {
+        checkResponse(http.delete("$origin/api/v1/devices/current/daemon") { authenticate(); timeout { requestTimeoutMillis = 10_000 } })
+    }
+    /** Replaces the folders this device's daemon offers: its own keys and the folders' names, never paths the server relies on. */
+    suspend fun publishDeviceFolders(folders: List<DeviceFolderView>): List<DeviceFolderView> =
+        request("/api/v1/devices/current/folders", HttpMethod.Put, PublishDeviceFoldersRequest(folders))
+    /** Refuses a session of this device's queue that the daemon's own check rejected, with a stable [reason] code. */
+    suspend fun refuseDeviceDaemonSession(id: String, reason: String): CloudSessionView {
+        identifier(id)
+        return request("/api/v1/devices/current/daemon/sessions/$id/refuse", HttpMethod.Post, RefuseDaemonOrderRequest(reason))
+    }
     private suspend fun revoke(resource: String, id: String) {
         identifier(id)
         checkResponse(http.delete("$origin/api/v1/$resource/$id") { authenticate(); timeout { requestTimeoutMillis = 10_000 } })
