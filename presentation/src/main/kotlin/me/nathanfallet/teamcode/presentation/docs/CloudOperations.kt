@@ -205,12 +205,13 @@ private fun ApiCatalog.cloudSessions() {
             queryText("owner", "A member's identifier, or `all`.")
             queryList("state", "Only these states: `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
             queryList("label", "Only sessions with these labels, each as `key=value`.")
+            queryList("kind", "Only these kinds: `cloud` (a pod) or `remote` (a member's device). Without it, `cloud` only, so a client that predates remote sessions never receives one.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "The page size, 1 to 50.")
         }
         responses {
             ok<CloudSessionPageView>("A page of sessions.")
-            badRequest("An invalid filter or limit (`invalid_query`, `invalid_state`, `invalid_label`, `invalid_limit`).")
+            badRequest("An invalid filter or limit (`invalid_query`, `invalid_state`, `invalid_label`, `invalid_kind`, `invalid_limit`).")
         }
     }
     get("/api/v1/cloud/sessions/{id}") {

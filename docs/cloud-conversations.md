@@ -146,7 +146,7 @@ teamcode cloud attach SESSION [--tail N] [--read-only] [--no-wake]
 
 | Event (`event:` field) | When | `data` (besides `sessionId` or `runId`) |
 | --- | --- | --- |
-| `cloud.session.created` | A session was created | `name`, `state` |
+| `cloud.session.created` | A session was created | `name`, `state`, `kind` (`cloud` or `remote`), `hostDeviceId` for a remote session; every session event carries the last two |
 | `cloud.session.paused` | It reached `paused` | `state`, `previousState`, `reason` (`paused`, `idle_paused`, ...) |
 | `cloud.session.woken` | A message asked a paused session to wake up | `state`, `reason` |
 | `cloud.session.resumed` | A resuming session is `ready` again | `state`, `previousState` |

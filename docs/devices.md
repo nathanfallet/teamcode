@@ -28,6 +28,10 @@ The server registers the installation only after verifying the member's password
 
 A device is a logical installation, not hardware attestation. Copying a configuration can share its existing session/device association; it cannot grant a fresh member allowance. A password login after device removal registers the installation again with a new server device ID. Password replacement/reset, role changes and account disablement retain the existing session-revocation behavior. Device names/history do not confer authorization.
 
+**Operating system.** A login may also send `platform` (`macos`, `windows`, `linux`, `ios` or `android`) and `osVersion` (1 to 64 printable characters, only with a platform; otherwise `400 invalid_platform` or `invalid_os_version`). They are recorded on the device and returned by the device API as `platform` and `osVersion`, so a client can say which machine a [remote session](cloud-sessions.md#create-request-and-view) runs on. A login without them, from an older client, keeps what was recorded before. The native CLI sends its platform; existing devices show none until their next login.
+
+Removing a device keeps the remote sessions that ran on it, with their transcript, but without a host device.
+
 ## Shared persistence and revocation
 
 Exposed stores device metadata and a nullable device reference/creation time on login tokens. Existing tokens remain valid after the additive migration, with no invented device or creation timestamp. Older clients and browser sessions appear separately and remain individually revocable. Upgrade the server and sign in with the current CLI to register an installation; configuring an existing bearer token does not prove a new installation identity.

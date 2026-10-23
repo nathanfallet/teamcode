@@ -10,6 +10,9 @@ object Devices : Table("devices") {
     val name = varchar("name", 120)
     val createdAt = long("created_at")
     val lastLoginAt = long("last_login_at")
+    /** Reported by the installation at login: `macos`, `windows`, `linux`, `ios` or `android`; null until a client reports it. */
+    val platform = varchar("platform", 16).nullable()
+    val osVersion = varchar("os_version", 64).nullable()
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("device_member_installation", memberId, installationId) }
 }

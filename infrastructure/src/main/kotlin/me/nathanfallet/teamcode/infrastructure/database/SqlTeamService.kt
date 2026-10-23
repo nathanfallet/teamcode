@@ -28,9 +28,12 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         audit("default", "system", "member.bootstrap", adminId)
         password
     }
-    override suspend fun login(username: String, password: String, device: String, installationId: String?): LoginSession {
+    override suspend fun login(username: String, password: String, device: String, installationId: String?): LoginSession =
+        login(username, password, device, installationId, null, null)
+    override suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?): LoginSession {
         DeviceService.validateInstallation(installationId)
         if (installationId != null) DeviceService.validateName(device)
+        DeviceService.validatePlatform(platform, osVersion)
         if (!loginBudget.admit()) throw TeamFailure("login_rate_limit", 429, "Too many login attempts. Try again in a minute.")
         if (username.length !in 1..64 || password.length !in 1..1024) throw denied()
         val outcome = hashing.withPermit { database.query {
@@ -53,7 +56,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
             }
             val token = Passwords.secret()
             val id = UUID.randomUUID().toString()
-            val registeredDevice = installationId?.let { registerDevice(this, member, it, device, now) }
+            val registeredDevice = installationId?.let { registerDevice(this, member, it, device, now, platform, osVersion) }
             val expires = now + if (device == "Web dashboard") 8 * 3_600_000L else 30 * 86_400_000L
             Tokens.insert { it[Tokens.id] = id; it[memberId] = member.id; it[tokenHash] = Passwords.digest(token); it[Tokens.device] = device.filter { char -> !char.isISOControl() }.take(120); it[deviceId] = registeredDevice; it[createdAt] = now; it[expiresAt] = expires }
             audit("default", member.id, "session.login", id)

@@ -10,6 +10,18 @@ enum class CloudSessionState(val wire: String) {
     val terminal get() = this == TERMINATED || this == FAILED
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }
+/**
+ * Where a session's agent runs: `cloud` in a pod the server starts, `remote` on a member's own device (started by the
+ * desktop app or the CLI). Fixed at creation.
+ */
+enum class CloudSessionKind(val wire: String) {
+    CLOUD("cloud"), REMOTE("remote");
+    companion object { fun parse(value: String) = entries.single { it.wire == value } }
+}
+/** The device a remote session runs on; [device] is null once the device was removed or when it was not read with the session. */
+data class CloudSessionHost(val deviceId: String?, val directoryName: String?, val device: HostDevice? = null)
+/** What a client shows about a host device: its name and, once reported, its operating system. */
+data class HostDevice(val name: String, val platform: String?, val osVersion: String?)
 enum class DesiredState(val wire: String) {
     RUNNING("running"), PAUSED("paused"), TERMINATED("terminated");
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
@@ -105,6 +117,9 @@ data class CloudSession(
     val transferId: String? = null,
     /** The resolved preparation recipe, fixed at creation (profile version merged with the request). */
     val environment: CloudEnvironmentSpec = CloudEnvironmentSpec(),
+    val kind: CloudSessionKind = CloudSessionKind.CLOUD,
+    /** Set for remote sessions only. */
+    val host: CloudSessionHost? = null,
 ) {
     /** The runner reported a failed preparation; the reconciler fails the session or blocks the resume. */
     val preparationFailed get() = failure?.code == CloudEnvironmentRules.PREPARATION_FAILED && (state == CloudSessionState.PREPARING || state == CloudSessionState.RESUMING)
@@ -234,6 +249,8 @@ data class CloudSessionQuery(
     val labels: Map<String, String> = emptyMap(),
     val beforeId: String? = null,
     val limit: Int = 50,
+    /** Empty: every kind. */
+    val kinds: Set<CloudSessionKind> = emptySet(),
 )
 data class CloudSessionPage(val sessions: List<CloudSession>, val nextBeforeId: String?)
 

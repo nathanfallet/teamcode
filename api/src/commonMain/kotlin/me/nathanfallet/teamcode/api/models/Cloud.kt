@@ -82,6 +82,27 @@ data class CloudSessionView(
     /** The accepted transfer the session is moving toward (`cloud.transfer.v1`); null otherwise. */
     val transferId: String? = null,
     val environment: CloudEnvironmentView = CloudEnvironmentView(),
+    /** `cloud` (a pod started by the server) or `remote` (a member's device); a server without this field has cloud sessions only. */
+    val kind: String = CloudSessionKinds.CLOUD,
+    /** Where a remote session runs; null for cloud sessions. */
+    val host: CloudSessionHostView? = null,
+)
+object CloudSessionKinds {
+    const val CLOUD = "cloud"
+    const val REMOTE = "remote"
+}
+/**
+ * The device of a remote session. [deviceId] is null once the device was removed; [deviceName], [platform] and
+ * [osVersion] describe the device as it is now ([platform]: `macos`, `windows`, `linux`, `ios` or `android`, null
+ * until the installation reported it). [directoryName] is the last segment of the session's directory, never its path.
+ */
+@Serializable
+data class CloudSessionHostView(
+    val deviceId: String? = null,
+    val deviceName: String? = null,
+    val platform: String? = null,
+    val osVersion: String? = null,
+    val directoryName: String? = null,
 )
 @Serializable
 data class CloudSessionPageView(val sessions: List<CloudSessionView>, val nextBefore: String? = null)

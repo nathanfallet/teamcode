@@ -38,7 +38,7 @@ class CloudSessionPersistenceTest {
                 coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
                 a.query {
                     val drift = MigrationUtils.statementsRequiredForDatabaseMigration(CloudSettingsTable, CloudClusters, CloudProfiles, CloudProfileVersions,
-                        CloudProfileAssignments, CloudSessions, CloudSessionLabels, CloudExecutions, CloudIdempotency, AuditEvents, withLogs = false)
+                        CloudProfileAssignments, CloudSessions, CloudSessionLabels, CloudExecutions, CloudIdempotency, AuditEvents, Devices, withLogs = false)
                     assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
                 }
                 val cluster = FakeClusterPort()
@@ -57,6 +57,7 @@ class CloudSessionPersistenceTest {
                 retentionExpiryAndLimits(ra, rb, admin, colleague, profile)
                 failureModesAndEarlyCheckpoint(ra, rb, admin, profile)
                 environmentPreparation(ra, rb, admin, colleague, connected)
+                kindsAndHosts(ra, rb, admin, colleague, profile)
             } }
         }
     }
@@ -533,5 +534,48 @@ class CloudSessionPersistenceTest {
         repeat(40) { if (done()) return; pass(r) }
         assertTrue(done(), "The reconciler converged")
     }
+    /**
+     * Every existing session is a cloud session; a remote one carries its device, read with the device's current name
+     * and system, and loses it when the device is removed. Runs last: no reconciler pass sees the remote session.
+     */
+    private suspend fun kindsAndHosts(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile) {
+        val team = SqlTeamService(ra.database)
+        val installation = "0f0e0d0c-0b0a-4009-8807-060504030201"
+        val laptop = team.login("cloud-colleague", "cloud colleague replacement password", "Work laptop", installation, "macos", "15.1").principal
+        failure("invalid_platform") { team.login("cloud-colleague", "cloud colleague replacement password", "Work laptop", installation, "beos", null) }
+        failure("invalid_os_version") { team.login("cloud-colleague", "cloud colleague replacement password", "Work laptop", installation, null, "15.1") }
+        val devices = SqlDeviceService(rb.database)
+        val device = devices.devices(laptop, colleague.member.id).single { it.current }
+        assertEquals("macos" to "15.1", device.platform to device.osVersion)
+        // An older client reports no system: the device keeps the one reported before.
+        team.login("cloud-colleague", "cloud colleague replacement password", "Work laptop", installation)
+        assertEquals("macos", devices.devices(laptop, colleague.member.id).single { it.id == device.id }.platform)
+
+        val draft = CloudSessionDraft("Kinds", profile.id, null, null, null, emptyMap(), null)
+        val cloud = (ra.sessions.create(colleague, null, draft, null) as CloudCreateOutcome.Created).session
+        assertEquals(CloudSessionKind.CLOUD, rb.sessions.get(colleague, cloud.id).kind)
+        assertNull(rb.sessions.get(colleague, cloud.id).host)
+        val remote = cloud.copy(id = java.util.UUID.randomUUID().toString(), name = "On the laptop", labels = emptyMap(), kind = CloudSessionKind.REMOTE,
+            host = CloudSessionHost(device.id, "teamcode"))
+        ra.store.insert(remote, CloudActor(colleague, colleague.member.id), null, 100)
+        val read = rb.sessions.get(colleague, remote.id)
+        assertEquals(CloudSessionKind.REMOTE, read.kind)
+        assertEquals(CloudSessionHost(device.id, "teamcode", HostDevice("Work laptop", "macos", "15.1")), read.host)
+        val event = ra.database.query { TeamEvents.selectAll().where { (TeamEvents.subjectId eq remote.id) and (TeamEvents.type eq "cloud.session.created") }.single()[TeamEvents.data] }
+        assertTrue("\"kind\":\"remote\"" in event && "\"hostDeviceId\":\"${device.id}\"" in event, event)
+
+        suspend fun ids(vararg kinds: CloudSessionKind) = rb.sessions.list(colleague, CloudSessionQuery(kinds = kinds.toSet())).sessions.map { it.id }
+        assertEquals(listOf(remote.id), ids(CloudSessionKind.REMOTE))
+        assertTrue(cloud.id in ids(CloudSessionKind.CLOUD) && remote.id !in ids(CloudSessionKind.CLOUD))
+        assertEquals(ids(), ids(CloudSessionKind.CLOUD, CloudSessionKind.REMOTE))
+        assertTrue(cloud.id in ids() && remote.id in ids())
+        assertEquals(read.host, rb.sessions.list(colleague, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single().host)
+        assertEquals(listOf(remote.id), rb.sessions.list(admin, CloudSessionQuery(owner = "*", kinds = setOf(CloudSessionKind.REMOTE))).sessions.map { it.id })
+
+        // Removing the device keeps the session and its directory, without a host device.
+        devices.revokeDevice(colleague, device.id)
+        assertEquals(CloudSessionHost(null, "teamcode"), rb.sessions.get(colleague, remote.id).host)
+    }
+
     private suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)
 }

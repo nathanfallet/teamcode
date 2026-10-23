@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode.domain.team
 data class Device(
     val id: String, val memberId: String, val name: String,
     val createdAt: Long, val lastLoginAt: Long, val activeSessions: Int, val current: Boolean,
+    /** The operating system the installation reported at its latest login (`macos`, `windows`, `linux`, `ios`, `android`); null until one did. */
+    val platform: String? = null, val osVersion: String? = null,
 )
 data class MemberSession(
     val id: String, val memberId: String, val name: String, val deviceId: String?,
@@ -28,6 +30,14 @@ interface DeviceService {
         fun validateName(name: String) {
             if (name.isBlank() || name.length > 120 || name.any(Char::isISOControl))
                 throw TeamFailure("invalid_device_name", 400, "Use a device name of 1–120 characters without control characters.")
+        }
+        val PLATFORMS = setOf("macos", "windows", "linux", "ios", "android")
+        /** An installation reports its operating system with its login; both values are optional, for older clients. */
+        fun validatePlatform(platform: String?, osVersion: String?) {
+            if (platform != null && platform !in PLATFORMS)
+                throw TeamFailure("invalid_platform", 400, "Use a platform among ${PLATFORMS.joinToString(", ")}.")
+            if (osVersion != null && (platform == null || osVersion.isBlank() || osVersion.length > 64 || osVersion.any { it.isISOControl() || it.isWhitespace() && it != ' ' }))
+                throw TeamFailure("invalid_os_version", 400, "Send an operating system version of 1–64 printable characters, with its platform.")
         }
     }
 }

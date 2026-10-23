@@ -3,7 +3,13 @@ package me.nathanfallet.teamcode.api.models
 import kotlinx.serialization.Serializable
 
 @Serializable
-class LoginRequest(val username: String, val password: String, val device: String = "TeamCode CLI", val installationId: String? = null) {
+class LoginRequest(
+    val username: String, val password: String, val device: String = "TeamCode CLI", val installationId: String? = null,
+    /** The installation's operating system, recorded on its device: `macos`, `windows`, `linux`, `ios` or `android`. */
+    val platform: String? = null,
+    /** Its version as the system reports it, for example `15.1`; only with [platform]. */
+    val osVersion: String? = null,
+) {
     override fun toString() = "LoginRequest([REDACTED])"
 }
 @Serializable

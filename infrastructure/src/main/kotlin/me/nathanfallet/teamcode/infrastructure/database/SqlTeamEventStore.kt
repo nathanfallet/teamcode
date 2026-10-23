@@ -53,7 +53,8 @@ internal fun publishSessionChange(before: CloudSession, after: CloudSession, act
 }
 
 internal fun sessionData(session: CloudSession, previous: me.nathanfallet.teamcode.domain.cloud.CloudSessionState?, action: String?) = buildJsonObject {
-    put("sessionId", session.id); put("name", session.name); put("state", session.state.wire)
+    put("sessionId", session.id); put("name", session.name); put("state", session.state.wire); put("kind", session.kind.wire)
+    session.host?.deviceId?.let { put("hostDeviceId", it) }
     if (previous != null) put("previousState", previous.wire)
     // The audit action names why, for example `idle_paused` or `expired`.
     action?.removePrefix("cloud.session.")?.let { put("reason", it) }
