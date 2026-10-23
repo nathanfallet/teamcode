@@ -61,6 +61,7 @@ internal class SqlQuotaObservations(private val database: Database) {
                 it[sampleMinute] = minute
             }
         }
+        refreshNextReset(accountId, now)
         val binding = update.modelLimit?.takeIf { codex && validModel(it.model) && validLimit(it.limit) }
         if (binding != null) {
             val model = binding.model.lowercase()
@@ -78,6 +79,13 @@ internal class SqlQuotaObservations(private val database: Database) {
                 .limit(128).offset(32).map { it[QuotaModelLimits.modelName] }
             if (excess.isNotEmpty()) QuotaModelLimits.deleteWhere { (QuotaModelLimits.accountId eq accountId) and (modelName inList excess) }
         }
+    }
+    /** Keeps `accounts.next_reset_at` equal to the earliest still-future reset of a shared window, in the observation's transaction. */
+    private fun refreshNextReset(accountId: String, now: Long) {
+        val earliest = QuotaWindows.select(QuotaWindows.resetsAt).where {
+            (QuotaWindows.accountId eq accountId) and (QuotaWindows.windowName notLike "model:%") and (QuotaWindows.resetsAt greater now)
+        }.mapNotNull { it[QuotaWindows.resetsAt] }.minOrNull() ?: NO_KNOWN_RESET
+        Accounts.update({ (Accounts.id eq accountId) and (Accounts.nextResetAt neq earliest) }) { it[nextResetAt] = earliest }
     }
     private fun validModel(value: String) = Regex("[a-zA-Z0-9][a-zA-Z0-9._/:-]{0,127}").matches(value)
     private fun validLimit(value: String) = Regex("[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}").matches(value)

@@ -105,6 +105,10 @@ First step of [artifacts](artifacts.md): the contract, every artifact table (mig
 
 Evidence: `SigV4Test`, `S3ObjectStoreTest`, `S3GatewayTest` (Versity S3 Gateway in Testcontainers, since MinIO no longer publishes server images), `ArtifactAdministrationTest`, `ArtifactStoragePersistenceTest` (MySQL 8.4, two pools), `ArtifactSettingsRoutesTest`, `ApiDocsTest`; details in [artifacts](artifacts.md#evidence).
 
+## Accounts ordered by next quota reset (2026-10-23)
+
+`GET /api/v1/pools/accounts` and `GET /api/v1/accounts` return accounts soonest quota reset first, accounts with no known reset last, ties by id. The order is a stored, indexed column (`accounts.next_reset_at`, index `accounts_team_next_reset (team_id, next_reset_at, id)`) that quota observation keeps equal to the earliest future `resets_at` of an account's shared windows. `teamcode status`, `--json` and the dashboard accounts page show the server's order. Evidence: `AccountResetOrderPersistenceTest` (real MySQL 8.4), `PoolAccountRoutesTest`, `StatusRenderTest`, `PoolAccountStatusTest`; journey of the native macOS ARM64 debug CLI against the server jar with six accounts on MySQL 8.4, in the pull request.
+
 ## Visual quotas in `teamcode status` (2026-10-22)
 
 `teamcode status` draws the remaining allowance and every account's 5-hour and weekly window as ten-cell bars, with green/yellow/red on a color terminal (mordant detection, so `NO_COLOR` and pipes stay plain). Evidence: `StatusRenderTest` (bar proportions, plain output without escape codes, colored output equal to the plain table once the codes are removed so columns stay aligned) and the CLI JVM status tests pass. Native macOS/Windows output was not run for this change.

@@ -36,8 +36,9 @@ class PoolAccountStatusTest {
     @Test fun membersGetStableNeutralLabelsWithoutIdentifiers() {
         val observed = listOf(PoolAccountObservation(account("z", 1), 0, emptyList()), PoolAccountObservation(account("y", 1), 0, emptyList()), PoolAccountObservation(account("x", 9), 0, emptyList()))
         val hidden = DescribePoolAccountsUseCase().describe(observed, now, revealIdentity = false)
-        assertEquals(listOf("Account 1", "Account 2", "Account 3"), hidden.map { it.label })
+        // The listing keeps the order it is given (the store sorts by next reset); the number follows priority, then id.
+        assertEquals(listOf("Account 3", "Account 2", "Account 1"), hidden.map { it.label })
         assertTrue(hidden.all { it.accountId == null && it.name == null })
-        assertEquals(listOf("Name x", "Name y", "Name z"), DescribePoolAccountsUseCase().describe(observed, now, revealIdentity = true).map { it.label })
+        assertEquals(listOf("Name z", "Name y", "Name x"), DescribePoolAccountsUseCase().describe(observed, now, revealIdentity = true).map { it.label })
     }
 }

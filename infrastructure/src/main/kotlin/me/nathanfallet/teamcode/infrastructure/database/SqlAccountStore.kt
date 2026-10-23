@@ -73,7 +73,7 @@ class SqlAccountStore(private val database: Database, private val cipher: Creden
     override suspend fun recordEmail(identity: AccountIdentity, accountId: String, email: String): Boolean = database.query {
         Accounts.update({ (Accounts.id eq accountId) and identityFilter(identity) and Accounts.email.isNull() }) { it[Accounts.email] = email } == 1
     }
-    override suspend fun list(teamId: String): List<AccountRecord> = database.query { Accounts.selectAll().where { Accounts.teamId eq teamId }.orderBy(Accounts.displayName).limit(1000).map(::accountRecord) }
+    override suspend fun list(teamId: String): List<AccountRecord> = database.query { Accounts.selectAll().where { Accounts.teamId eq teamId }.orderBy(Accounts.nextResetAt to SortOrder.ASC, Accounts.id to SortOrder.ASC).limit(1000).map(::accountRecord) }
     override suspend fun configure(author: AccountMutationActor, teamId: String, id: String, displayName: String, disabled: Boolean, priority: Int, poolId: String?): AccountRecord = database.query {
         val actorId = authorizeMutation(this, author, teamId)
         Accounts.update({ (Accounts.teamId eq teamId) and (Accounts.id eq id) }) {

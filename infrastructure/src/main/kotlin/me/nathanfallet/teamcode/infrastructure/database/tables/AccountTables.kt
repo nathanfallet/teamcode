@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode.infrastructure.database.tables
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 
+const val NO_KNOWN_RESET = Long.MAX_VALUE
+
 object Accounts : Table("accounts") {
     val id = varchar("id", 36)
     val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "accounts_ibfk_1")
@@ -22,8 +24,17 @@ object Accounts : Table("accounts") {
     val refreshStartedAt = long("refresh_started_at").default(0)
     /** Member who first added the account (like `tokens.created_by`, no foreign key so member history stays deletable). */
     val enrolledBy = varchar("enrolled_by", 36).nullable()
+    /**
+     * The earliest `resets_at` among the account's shared (not `model:`) quota windows as of its last observation, or
+     * [NO_KNOWN_RESET] (the largest long) when none reports one. Stored so that the listings can `ORDER BY` it on an index:
+     * "no reset" sorts last without a `NULL` or an expression. Written only by quota observation.
+     */
+    val nextResetAt = long("next_reset_at").default(NO_KNOWN_RESET)
     override val primaryKey = PrimaryKey(id)
-    init { uniqueIndex("provider_identity", teamId, provider, providerAccountId, organizationId) }
+    init {
+        uniqueIndex("provider_identity", teamId, provider, providerAccountId, organizationId)
+        index("accounts_team_next_reset", false, teamId, nextResetAt, id)
+    }
 }
 object EnrollmentOperations : Table("enrollment_operations") {
     val teamId = varchar("team_id", 36)

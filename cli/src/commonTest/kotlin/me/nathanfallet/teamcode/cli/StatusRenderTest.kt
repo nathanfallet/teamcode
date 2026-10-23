@@ -11,6 +11,20 @@ class StatusRenderTest {
     private val capacity = CapacityView("member-id", 41_666, 3, "dev", 14_300, 2, now + 24 * hour, weight = 5, poolTotalWeight = 12,
         poolDailyUnits = 100_000, queuedRequests = 1, groups = listOf(GroupAllowanceView("g", "Developers", 100_000, 4, false, 30_000, 2)), reservedUnits = 2_000)
 
+    @Test fun accountsAreShownAndPrintedInTheOrderTheServerSent() {
+        // The server sorts by next reset (unknown last); the CLI neither re-sorts the table nor the JSON, whatever the labels or resets say.
+        val accounts = listOf(
+            PoolAccountStatusView("Account 3", "anthropic", "READY", false, true, windows = listOf(AccountWindowView("five_hour", .1, now, now + hour))),
+            PoolAccountStatusView("Account 1", "anthropic", "READY", false, true, windows = listOf(AccountWindowView("five_hour", .1, now, now + 2 * hour))),
+            PoolAccountStatusView("Account 2", "anthropic", "READY", false, true, windows = listOf(AccountWindowView("five_hour", .1, now, now + 2 * hour))),
+            PoolAccountStatusView("Account 4", "anthropic", "READY", false, true),
+        )
+        val report = StatusReport(GatewayStatus("pool", 0, 0, 0), null, null, accounts)
+        val rows = renderStatus(report, now).lines().filter { it.startsWith("Account ") }
+        assertEquals(listOf("Account 3", "Account 1", "Account 2", "Account 4"), rows.map { it.take(9) })
+        assertEquals(listOf("Account 3", "Account 1", "Account 2", "Account 4"), Regex("\"label\":\"([^\"]+)\"").findAll(statusJson(report)).map { it.groupValues[1] }.toList())
+    }
+
     @Test fun memberSeesOwnAllowanceAndNeutralAccounts() {
         val report = StatusReport(GatewayStatus("pool", 2, 10, 1), capacity, null, listOf(
             PoolAccountStatusView("Account 1", "anthropic", "READY", false, true, windows = listOf(

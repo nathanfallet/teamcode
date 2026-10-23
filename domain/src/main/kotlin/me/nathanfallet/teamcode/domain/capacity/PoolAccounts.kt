@@ -26,8 +26,8 @@ data class PoolAccountObservation(val account: AccountRecord, val cooldownUntilM
 
 /**
  * One subscription account as the caller may see it. [accountId], [name], [email] and [poolId] are null unless identities
- * are revealed; [label] then is a neutral "Account N", numbered in this listing's priority order (it can change when
- * accounts or priorities change, so it names a row, not an account). [windows] holds only current observations.
+ * are revealed; [label] then is a neutral "Account N", numbered in priority order (it can change when
+ * accounts or priorities change, so it names a row, not an account); the listing itself keeps the order it is given. [windows] holds only current observations.
  */
 data class PoolAccountStatus(
     val accountId: String?, val name: String?, val label: String, val provider: String, val poolId: String?,
@@ -42,8 +42,10 @@ data class PoolAccountStatus(
  */
 class DescribePoolAccountsUseCase {
     fun describe(accounts: List<PoolAccountObservation>, now: Long, revealIdentity: Boolean, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD): List<PoolAccountStatus> =
-        accounts.sortedWith(compareByDescending<PoolAccountObservation> { it.account.priority }.thenBy { it.account.id })
-            .mapIndexed { index, observed ->
+        // The caller's order is the listing's order (the store sorts by next reset); only the neutral numbering follows priority.
+        accounts.sortedWith(compareByDescending<PoolAccountObservation> { it.account.priority }.thenBy { it.account.id }).map { it.account.id }.let { byPriority ->
+            accounts.map { observed ->
+                val index = byPriority.indexOf(observed.account.id)
                 val account = observed.account
                 val windows = observed.windows.filter { it.accountId == account.id && it.isCurrent(now) }.sortedBy { it.window }
                 val cooling = observed.cooldownUntilMillis.takeIf { it > now }
@@ -58,4 +60,5 @@ class DescribePoolAccountsUseCase {
                     email = account.email.takeIf { revealIdentity },
                 )
             }
+        }
 }

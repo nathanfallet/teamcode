@@ -21,6 +21,22 @@ import kotlinx.serialization.json.jsonObject
 import kotlin.test.*
 
 class PoolAccountRoutesTest {
+    @Test fun theRoutesAndThePageKeepTheStoresResetOrderWhateverThePriority() = testApplication {
+        val admission = PoolAdmission(reversed = true)
+        val gateway = object : GatewayService {
+            override suspend fun status() = GatewaySnapshot("test", 0, 0)
+            override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = error("No inference")
+        }
+        val verifier = object : AccountVerifier { override suspend fun verify(teamId: String, credentials: ProviderCredentials) = error("unused") }
+        application { configureGateway(gateway, team = FakeTeam(), admission = admission, accounts = AccountManagement(NamedAccounts(admission.records), verifier), publicOrigin = "http://localhost") }
+        fun sdk(token: String) = TeamCodeClient("http://localhost", { token }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        // The store hands over Spare before Work (Work has the higher priority): nothing re-sorts it, and the neutral number still follows priority.
+        sdk("admin").use { assertEquals(listOf("spare-id", "work-id"), it.poolAccounts().map { account -> account.id }) }
+        sdk("member").use { assertEquals(listOf("Account 2", "Account 1"), it.poolAccounts().map { account -> account.label }) }
+        val page = client.get("/dashboard/accounts") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(page.indexOf("account-spare-id") in 0 until page.indexOf("account-work-id"), "The accounts page lists accounts in the order the store returns them")
+    }
+
     @Test fun membersReadTheirAllowanceAndNeutralAccountsWhileAdministratorsSeeNames() = testApplication {
         val team = object : TeamService by FakeTeam() {
             override suspend fun authenticate(token: String): Principal? = when (token) {
@@ -101,7 +117,7 @@ private class NamedAccounts(private val records: List<AccountRecord>) : AccountS
     override suspend fun find(identity: AccountIdentity): AccountRecord? = null
     override suspend fun upsert(author: AccountMutationActor, verified: VerifiedProviderAccount, credentials: ProviderCredentials, expectedVersion: Long?, operationId: String, origin: EnrollmentOrigin): EnrollmentResult = error("unused")
 }
-private class PoolAdmission : AdmissionStore {
+private class PoolAdmission(reversed: Boolean = false) : AdmissionStore {
     val records get() = observed.map { it.account }
     private val now = System.currentTimeMillis()
     private fun account(id: String, name: String, priority: Int, email: String? = null) =
@@ -110,7 +126,7 @@ private class PoolAdmission : AdmissionStore {
         PoolAccountObservation(account("work-id", "Work", 10, "work@example.com"), 0, listOf(
             AccountQuota("work-id", "seven_day", .5, now, now + 86_400_000), AccountQuota("work-id", "five_hour", .2, now, now + 3_600_000))),
         PoolAccountObservation(account("spare-id", "Spare", 0), 0, listOf(AccountQuota("spare-id", "five_hour", .99, now, now + 3_600_000))),
-    )
+    ).let { if (reversed) it.reversed() else it }
     override suspend fun poolAccounts(actor: Principal): List<PoolAccountStatus> {
         actor.requireScope(ServiceScope.USAGE_READ)
         return DescribePoolAccountsUseCase().describe(observed, now, revealIdentity = actor.serviceScopes == null && actor.member.role.isAdministrator)

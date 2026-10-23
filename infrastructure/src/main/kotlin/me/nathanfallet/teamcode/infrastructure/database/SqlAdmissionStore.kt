@@ -200,7 +200,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             (Accounts.poolId eq policy.poolId) or (Accounts.poolId inList overflow)
         }
         val rows = Accounts.selectAll().where { (Accounts.teamId eq actor.teamId) and visible }
-            .orderBy(Accounts.priority to SortOrder.DESC, Accounts.id to SortOrder.ASC).limit(POOL_ACCOUNTS_LIMIT)
+            .orderBy(Accounts.nextResetAt to SortOrder.ASC, Accounts.id to SortOrder.ASC).limit(POOL_ACCOUNTS_LIMIT)
             .map { accountRecord(it) to it[Accounts.cooldownUntil] }
         val ids = rows.map { it.first.id }
         val windows = if (ids.isEmpty()) emptyList() else QuotaWindows.selectAll().where { QuotaWindows.accountId inList ids }.map(::quotaRecord)

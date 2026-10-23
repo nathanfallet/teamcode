@@ -19,8 +19,9 @@ private fun ApiCatalog.accountOperations() {
         summary = "List the subscription accounts"
         description = "The team's provider accounts with their state: `READY` and `ACCESS_ONLY` serve requests, " +
             "`PENDING_HANDOVER` waits for `POST /api/v1/accounts/{id}/handover`, `RECONNECT_REQUIRED` must be added " +
-            "again. No credential is ever returned. Administrators and `team:read` keys only."
-        responses { ok<List<AccountView>>("The accounts.") }
+            "again. No credential is ever returned. Administrators and `team:read` keys only. Accounts come ordered by " +
+            "next quota reset, soonest first (see `GET /api/v1/pools/accounts`), accounts with no known reset last, ties by id."
+        responses { ok<List<AccountView>>("The accounts, by next quota reset.") }
     }
     post("/api/v1/accounts") {
         operationId = "enrollAccount"; tag(ApiTags.ACCOUNTS)
@@ -138,8 +139,11 @@ private fun ApiCatalog.allowanceOperations() {
         description = "The subscription accounts of the caller's pool and of the shared overflow pools it opted into, " +
             "with their current provider windows and whether they can serve now. `unavailableReason` is one of `disabled`, " +
             "`pending_handover`, `reconnect_required`, `cooling_down` or `quota_exhausted`. Interactive administrators and " +
-            "`team:read` keys see every account with its name and email; members and other service keys see neutral labels."
-        responses { ok<List<PoolAccountStatusView>>("The accounts, by priority.") }
+            "`team:read` keys see every account with its name and email; members and other service keys see neutral labels. " +
+            "Accounts are ordered by next quota reset, soonest first: the earliest still-future `resetsAtMillis` among an " +
+            "account's shared windows (`five_hour`, `seven_day`; model-scoped `model:` windows do not count). Accounts with no " +
+            "known reset come last and ties break by account id, so the order is stable. Clients show this order and do not re-sort."
+        responses { ok<List<PoolAccountStatusView>>("The accounts, by next quota reset.") }
     }
     get("/api/v1/usage/tokens") {
         operationId = "listTokenUsage"; tag(ApiTags.CAPACITY)

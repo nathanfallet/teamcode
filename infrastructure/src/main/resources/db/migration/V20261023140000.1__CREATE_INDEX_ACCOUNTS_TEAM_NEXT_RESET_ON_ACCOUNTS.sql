@@ -1,0 +1,1 @@
+CREATE INDEX accounts_team_next_reset ON accounts (team_id, next_reset_at, id);
