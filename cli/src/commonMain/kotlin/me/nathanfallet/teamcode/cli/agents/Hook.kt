@@ -17,6 +17,7 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
     private val config by option("--config", help = "Absolute path to the private TeamCode configuration.")
     override fun help(context: Context) = "Read a bounded Codex/Claude hook payload from stdin and emit session guidance as JSON."
     override suspend fun run() {
+        // Input of 65,537 bytes means "larger than 64 KiB": guidance skips it, the activity state is still read from its head.
         var written = false
         try {
             val input = readHookInput() ?: return
@@ -39,7 +40,7 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
                             bridge.acknowledge(emission)
                         }
                     } catch (error: CancellationException) { throw error } catch (_: Exception) { }
-                    // Nothing to say to the agent: answer now, the report finishes after.
+                    // Nothing to say to the agent: answer, then wait for the bounded report.
                     if (!written) { println("{}"); written = true }
                     report?.await()
                 }

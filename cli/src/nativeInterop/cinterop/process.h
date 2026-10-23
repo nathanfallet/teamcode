@@ -33,7 +33,7 @@ static inline int teamcode_hook_input(unsigned char *buffer, int capacity) {
         if (count < 0) return -1;
         if (count == 0) return total;
         total += (int)count;
-        if (total >= capacity) return -1;
+        if (total >= capacity) return total; /* Full buffer: the caller treats more than 64 KiB as oversized. */
     }
 }
 #ifdef __APPLE__
