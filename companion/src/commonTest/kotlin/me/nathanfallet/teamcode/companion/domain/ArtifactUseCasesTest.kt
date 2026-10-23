@@ -47,6 +47,13 @@ class ArtifactUseCasesTest {
         assertEquals(LinkTarget.Artifact("a3", id, null), ResolveLinkUseCase(shared)("https://team.example/artifact/$id"))
     }
 
+    @Test fun aSignedOutAccountAsksToSignInAgain() {
+        val out = InMemoryAccountRepository(listOf(account("a1", signedIn = false)))
+        assertEquals(LinkTarget.SignInAgain("https://team.example", "ada"), ResolveLinkUseCase(out)("https://team.example/artifact/$id"))
+        val mixed = InMemoryAccountRepository(listOf(account("a1", signedIn = false), account("a3", username = "bob")))
+        assertEquals(LinkTarget.Artifact("a3", id, null), ResolveLinkUseCase(mixed)("https://team.example/artifact/$id"))
+    }
+
     @Test fun theViewerStaysUnderItsTicket() {
         val prefix = "https://team.example/artifact/$id/tk_1/"
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, prefix))

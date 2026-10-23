@@ -9,6 +9,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.normalizeOrigin
 sealed interface LinkTarget {
     /** An artifact of an account signed in to the link's server. */
     data class Artifact(val accountId: String, val artifactId: String, val version: Int?) : LinkTarget
+    /** The link's server has only signed-out accounts: sign in again as [username] first. */
+    data class SignInAgain(val origin: String, val username: String) : LinkTarget
     /** No account on the link's server: offer to sign in to it, saying it is a new server. */
     data class UnknownServer(val origin: String) : LinkTarget
 }
@@ -33,8 +35,10 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
         if (!ARTIFACT_ID.matches(artifactId)) return null
         val version = match.groupValues[3].takeIf { it.isNotEmpty() }?.let { it.toIntOrNull()?.takeIf { v -> v >= 1 } ?: return null }
         val candidates = accounts.accounts.value.filter { it.origin == origin }
-        val account = candidates.firstOrNull { it.id == accounts.activeAccountId.value } ?: candidates.firstOrNull { it.signedIn } ?: candidates.firstOrNull()
-            ?: return LinkTarget.UnknownServer(origin)
+        if (candidates.isEmpty()) return LinkTarget.UnknownServer(origin)
+        val signedIn = candidates.filter { it.signedIn }
+        val account = signedIn.firstOrNull { it.id == accounts.activeAccountId.value } ?: signedIn.firstOrNull()
+            ?: return LinkTarget.SignInAgain(origin, (candidates.firstOrNull { it.id == accounts.activeAccountId.value } ?: candidates.first()).username)
         return LinkTarget.Artifact(account.id, artifactId, version)
     }
 

@@ -29,6 +29,8 @@ data class ArtifactUiState(
     /** The version shown, or asked for while its ticket comes. */
     val version: Int? = null,
     val opened: OpenedArtifact? = null,
+    /** Grows with each ticket, so the content view loads again even when a renewed ticket has the same URL. */
+    val reload: Int = 0,
     val loading: Boolean = true,
     /** A version newer than the newest listed was published since the screen opened; shown only on request. */
     val newerVersion: Int? = null,
@@ -115,8 +117,8 @@ class ArtifactViewModel(
     }
 
     /**
-     * The page answered `404`: a new ticket in silence (it expired, or a link led to a file the version lacks: the
-     * entry page loads again). A second `404` within a minute means the version is gone.
+     * The page answered `404` or crashed: a new ticket in silence, in a new web view (it expired, or a link led to a
+     * file the version lacks: the entry page loads again). A second time within a minute, the version is shown as gone.
      */
     fun contentMissing() {
         val version = state.value.version ?: return
@@ -133,7 +135,7 @@ class ArtifactViewModel(
         ticket = viewModelScope.launch {
             try {
                 val opened = openArtifact(route.accountId, route.artifactId, version)
-                state.update { if (it.version == version) it.copy(opened = opened, loading = false) else it }
+                state.update { if (it.version == version) it.copy(opened = opened, reload = it.reload + 1, loading = false) else it }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

@@ -54,6 +54,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     /** Opens an artifact link; false when it is not one. */
     fun openLink(link: String): Boolean = when (val target = resolveLink(link)) {
         is LinkTarget.Artifact -> { navController.navigate(ArtifactRoute(target.accountId, target.artifactId, target.version)); true }
+        is LinkTarget.SignInAgain -> { navController.navigate(LoginRoute(target.origin, target.username)); true }
         is LinkTarget.UnknownServer -> { newServer = target.origin; true }
         null -> false
     }

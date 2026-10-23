@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.companion.presentation.components
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -31,15 +32,14 @@ actual val embedsArtifacts: Boolean = true
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
     // Held here: the web view keeps its delegates weakly.
     val delegate = remember { ArtifactNavigation({ currentPrefix }, { external(it) }, { missing() }) }
-    // The URL the web view was last asked to load.
-    val shown = remember { arrayOfNulls<String>(1) }
-    UIKitView(
+    // A new web view per URL and reload: a renewed ticket may have the same URL.
+    key(contentUrl, reload) { UIKitView(
         factory = {
             val configuration = WKWebViewConfiguration().apply {
                 // Nothing kept between viewers: no cookie, no storage, no cache on disk.
@@ -49,19 +49,12 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (
             WKWebView(frame = CGRectZero.readValue(), configuration = configuration).apply {
                 navigationDelegate = delegate
                 UIDelegate = delegate
-                shown[0] = contentUrl
                 NSURL.URLWithString(contentUrl)?.let { loadRequest(NSURLRequest.requestWithURL(it)) }
             }
         },
         modifier = modifier,
-        update = { view ->
-            if (shown.lastOrNull() != contentUrl) {
-                shown[0] = contentUrl
-                NSURL.URLWithString(contentUrl)?.let { view.loadRequest(NSURLRequest.requestWithURL(it)) }
-            }
-        },
         onRelease = { view -> view.navigationDelegate = null; view.UIDelegate = null; view.stopLoading() },
-    )
+    ) }
 }
 
 /** Keeps the main frame under the ticket's prefix, sends pop-ups and user links outside, and reports a missing page. */
@@ -89,6 +82,9 @@ private class ArtifactNavigation(
         if (decidePolicyForNavigationResponse.forMainFrame && status == 404L) onMissing()
         decisionHandler(WKNavigationResponsePolicy.WKNavigationResponsePolicyAllow)
     }
+
+    /** The page's content process died: the screen reloads it once, in a new web view. */
+    override fun webViewWebContentProcessDidTerminate(webView: WKWebView) = onMissing()
 
     /** A pop-up never opens a second web view: a link the member followed is offered to the browser. */
     override fun webView(

@@ -5,6 +5,7 @@ import android.os.Message
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -13,6 +14,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -22,11 +24,12 @@ actual val embedsArtifacts: Boolean = true
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
+actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, onExternal: (String) -> Unit, onMissing: () -> Unit, modifier: Modifier) {
     val currentPrefix by rememberUpdatedState(prefix)
     val external by rememberUpdatedState(onExternal)
     val missing by rememberUpdatedState(onMissing)
-    AndroidView(
+    // A new web view per URL and reload: a renewed ticket may have the same URL, and a crashed renderer is never reused.
+    key(contentUrl, reload) { AndroidView(
         modifier = modifier,
         factory = { context ->
             CookieManager.getInstance().setAcceptCookie(false)
@@ -57,6 +60,12 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (
                     override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
                         if (request.isForMainFrame && errorResponse.statusCode == 404) missing()
                     }
+
+                    /** The page's renderer died (memory, a heavy script): the app lives on, and the screen reloads it once. */
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        missing()
+                        return true
+                    }
                 }
                 webChromeClient = object : WebChromeClient() {
                     override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
@@ -69,11 +78,9 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, onExternal: (
 
                     override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: GeolocationPermissions.Callback) = callback.invoke(origin, false, false)
                 }
-                tag = contentUrl
                 loadUrl(contentUrl)
             }
         },
-        update = { view -> if (view.tag != contentUrl) { view.tag = contentUrl; view.loadUrl(contentUrl) } },
         onRelease = { view -> view.clearCache(true); view.destroy() },
-    )
+    ) }
 }

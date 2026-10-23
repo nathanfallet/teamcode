@@ -79,10 +79,12 @@ class ArtifactViewModelsTest {
         model.selectVersion(1)
         settle()
         assertEquals(1, model.uiState.value.opened?.ticket?.version)
-        val first = model.uiState.value.opened?.ticket?.contentUrl
+        val first = model.uiState.value.reload
+        // The renewed ticket may have the same URL (the server rounds its expiry): the view loads again all the same.
+        artifacts.tickets = { a, v -> me.nathanfallet.teamcode.companion.domain.models.ArtifactTicket(a, v ?: 1, "https://team.example/artifact/$a/same/", 9_000_000) }
         model.contentMissing()
         settle()
-        assertNotEquals(first, model.uiState.value.opened?.ticket?.contentUrl)
+        assertEquals(first + 1, model.uiState.value.reload)
         assertNull(model.uiState.value.error)
         // A second 404 on the same version: it is gone, no endless renewal.
         model.contentMissing()
