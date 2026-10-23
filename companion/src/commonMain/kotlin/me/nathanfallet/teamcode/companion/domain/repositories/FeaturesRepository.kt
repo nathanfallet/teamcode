@@ -8,6 +8,8 @@ interface FeaturesRepository {
 /** Capabilities the app reads. */
 object Features {
     const val SESSIONS = "cloud.sessions.v1"
+    /** Ownership transfers: an administrator's transfer, an owner's offer, accept, decline and cancel. */
+    const val TRANSFERS = "cloud.transfer.v1"
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
