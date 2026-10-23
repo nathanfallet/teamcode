@@ -999,37 +999,65 @@ class CloudAgentTest {
         } finally { scratch.close() }
     }
 
-    @Test fun uploadsAreRemovedWhenTheHostEndsAndSweptAtStart() = runTest {
+    @Test fun aMessageFileSurvivesAPauseAndAResumeOnTheRemoteHost() = runTest {
         val scratch = Scratch()
         try {
             val root = scratch.temporary / "teamcode-501"
-            // Left by earlier executions: this session's own files, and another session's.
-            FileSystem.SYSTEM.createDirectories(root / "s-1"); FileSystem.SYSTEM.write(root / "s-1" / "old-a.txt") { writeUtf8("a") }
-            FileSystem.SYSTEM.createDirectories(root / "s-2"); FileSystem.SYSTEM.write(root / "s-2" / "old-b.txt") { writeUtf8("b") }
-            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary).prepare {})
-            assertFalse(FileSystem.SYSTEM.exists(root / "s-1" / "old-a.txt"), "This session starts empty")
-            assertTrue(FileSystem.SYSTEM.exists(root / "s-2" / "old-b.txt"), "Another session's recent files stay: its host may be running")
-            val week = SessionUploads.MAX_AGE_MILLIS
-            val later = Clock.System.now().toEpochMilliseconds() + week + 60_000
-            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary, now = { later }).prepare {})
-            assertFalse(FileSystem.SYSTEM.exists(root / "s-2"), "Anything older than a week is removed")
-
-            // The host's own exit removes its files; a fenced one leaves them to the execution that took over.
-            val channel = FileChannel(FakeChannel())
-            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
-            val uploads = SessionUploads.remote("s-1", "501", scratch.temporary)
-            val host = fileHost(channel, scratch, started, uploads)
+            val first = FileChannel(FakeChannel())
+            val host = fileHost(first, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
             val job = launch { host.run() }
+            first.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(first.serve("f1", "a.png", png)))))
+            until { first.channel.acks.isNotEmpty() }
+            // The pause: the agent drains, the host checkpoints and stops (as RunnerLoop does on its way out).
+            host.drain(null)
+            host.stop()
+            job.cancel()
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"), "A pause keeps the file")
+
+            // The resume: a new execution of the same session finds it, and still writes the next file next to it.
+            val second = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val resumed = fileHost(second, scratch, started, SessionUploads.remote("s-1", "501", scratch.temporary))
+            val resumedJob = launch { resumed.run() }
+            second.channel.inputs.send(listOf(RunnerInputView("in-2", "message", "y", 1, listOf(second.serve("f2", "b.png", png)))))
+            until { second.channel.acks.isNotEmpty() }
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"), "The resumed conversation can read the first file again")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"))
+            // A message an earlier execution received but never acknowledged, offered again: the same bytes are reused, never rewritten.
+            second.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 2, listOf(second.serve("f1", "a.png", png)))))
+            until { second.channel.acks.size == 2 }
+            assertEquals(CloudInputStatuses.CONSUMED, second.channel.acks[1].status)
+            resumed.stop()
+            resumedJob.cancel()
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"), "Stopping without the session ending keeps the files")
+        } finally { scratch.close() }
+    }
+
+    @Test fun messageFilesAreRemovedWhenTheSessionEnds() = runTest {
+        val scratch = Scratch()
+        try {
+            val root = scratch.temporary / "teamcode-501"
+            val channel = FileChannel(FakeChannel())
+            val host = fileHost(channel, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
+            val heartbeats = Channel<String>(Channel.UNLIMITED)
+            val loop = RunnerLoop(object : RunnerCalls {
+                override suspend fun register() = RunnerInstructionView("running", null, 1)
+                override suspend fun heartbeat(ready: Boolean) = RunnerInstructionView(heartbeats.receive(), null, 1)
+                override suspend fun checkpoint(completed: Boolean) = RunnerInstructionView("paused", null, 1)
+            }, agent = host)
+            val job = async { loop.run() }
+            heartbeats.send("running")
             channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(channel.serve("f1", "a.png", png)))))
             until { channel.channel.acks.isNotEmpty() }
             assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"))
-            host.stop()
-            job.cancel()
-            assertFalse(FileSystem.SYSTEM.exists(root / "s-1"), "Removed when the host ends")
+            // The server terminated the session: the runner loop exits and the session's directory goes with it.
+            heartbeats.send("terminated")
+            assertEquals(RunnerLoop.EXIT_FENCED_OR_DONE, job.await())
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-1"), "Removed at the end of the session")
 
+            // A fenced host never removes anything, even for a session that ends: the execution that fenced it may use the directory.
             val fencedChannel = FileChannel(FakeChannel())
-            val fencedUploads = SessionUploads.remote("s-1", "501", scratch.temporary)
-            val fencedHost = fileHost(fencedChannel, scratch, mutableListOf(), fencedUploads)
+            val fencedHost = fileHost(fencedChannel, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
             val fencedJob = launch { fencedHost.run() }
             fencedChannel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(fencedChannel.serve("f2", "b.png", png)))))
             until { fencedChannel.channel.acks.isNotEmpty() }
@@ -1037,8 +1065,27 @@ class CloudAgentTest {
             fencedChannel.channel.inputs.send(listOf(RunnerInputView("in-2", "message", "x", 1, listOf(fencedChannel.serve("f3", "c.png", png)))))
             until { fencedHost.fenced }
             fencedJob.join()
+            fencedHost.sessionEnded(); fencedHost.stop()
             assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"), "A fenced host leaves the files")
             assertEquals(1, fencedChannel.channel.acks.size, "and acknowledges nothing more")
+        } finally { scratch.close() }
+    }
+
+    @Test fun uploadsOlderThanAWeekAreSweptAtStart() = runTest {
+        val scratch = Scratch()
+        try {
+            val root = scratch.temporary / "teamcode-501"
+            // Left by earlier executions: this session's own files, and another session's (which may have ended while no host ran).
+            FileSystem.SYSTEM.createDirectories(root / "s-1"); FileSystem.SYSTEM.write(root / "s-1" / "old-a.txt") { writeUtf8("a") }
+            FileSystem.SYSTEM.createDirectories(root / "s-2"); FileSystem.SYSTEM.write(root / "s-2" / "old-b.txt") { writeUtf8("b") }
+            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary).prepare {})
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "old-a.txt"), "This session's recent files stay")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-2" / "old-b.txt"), "Another session's recent files stay: its host may be running")
+            val later = Clock.System.now().toEpochMilliseconds() + SessionUploads.MAX_AGE_MILLIS + 60_000
+            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary, now = { later }).prepare {})
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-2"), "Anything older than a week is removed")
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-1" / "old-a.txt"), "This session's too: a week at most")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1"), "and its directory is ready again")
         } finally { scratch.close() }
     }
 

@@ -20,8 +20,10 @@ import okio.blackholeSink
  * mounts read-only ([pod], files 0640: the agent runs under another UID, in the pod's group).
  *
  * Each file is written once, by file id, at `<fileId>-<name>` with `O_EXCL`, checked against its size and SHA-256,
- * and must resolve inside the directory. Files live for the execution: [prepare] removes what a previous one left,
- * and anything older than [MAX_AGE_MILLIS] in [root]; [clear] removes them when the host ends without being fenced.
+ * and must resolve inside the directory. Files live until the session ends, [MAX_AGE_MILLIS] at most: a pause, a
+ * host restart and a resume keep them, so a resumed conversation reads them again; [clear] removes them once the
+ * server terminated the session, and [prepare] (with each new file) removes anything in [root] older than
+ * [MAX_AGE_MILLIS], which also covers a session that ended while no host ran. A pod's volume ends with the pod.
  */
 internal class SessionUploads(
     directory: String,
@@ -48,8 +50,7 @@ internal class SessionUploads(
             val rootPath = root.toPath()
             privateDirectory(rootPath)
             sweep(rootPath, keepNewer = true)
-            // A previous execution's files: this one starts empty, like a new pod's volume.
-            if (fileSystem.metadataOrNull(configured) != null) fileSystem.deleteRecursively(configured)
+            // A previous execution's files stay: the resumed conversation may name them.
             privateDirectory(configured)
         } else {
             val status = pathStatus(configured.toString())
@@ -76,7 +77,10 @@ internal class SessionUploads(
         sweep(base, keepNewer = true)
         if (bytes + file.size > maxBytes) throw Refused(FULL)
         val target = base / "${file.id}-${safeName(file.name)}"
-        val output = try { createExclusiveFile(target.toString(), fileMode) } catch (_: Exception) { throw Refused(WRITE_FAILED) } ?: throw Refused(WRITE_FAILED)
+        val output = try { createExclusiveFile(target.toString(), fileMode) } catch (_: Exception) { throw Refused(WRITE_FAILED) }
+            // Already there: a message an earlier execution received but never acknowledged, offered again. Kept only
+            // when it is this user's own regular file, in the directory, with the very bytes announced; never rewritten.
+            ?: return existing(target, base, file) ?: throw Refused(WRITE_FAILED)
         var complete = false
         try {
             // The name holds no separator and the file was created without following a link; checked once more.
@@ -102,7 +106,20 @@ internal class SessionUploads(
         return target
     }
 
-    /** Removes this execution's files: the session's directory on a member's device, the volume's content in a pod. */
+    /** [target] when it is a regular file of this user inside [base] whose size and SHA-256 are [file]'s, else null. */
+    private fun existing(target: Path, base: Path, file: RunnerFileView): Path? = try {
+        val status = pathStatus(target.toString())
+        if (status == null || status.directory || status.symlink || !status.ownedByCurrentUser || fileSystem.canonicalize(target).parent != base) null
+        else if (fileSystem.metadataOrNull(target)?.size != file.size) null
+        else {
+            val hash = HashingSink.sha256(blackholeSink())
+            fileSystem.read(target) { readAll(hash) }
+            if (!hash.hash.hex().equals(file.sha256, ignoreCase = true)) null
+            else target.also { written[file.id] = it; bytes += file.size }
+        }
+    } catch (_: Exception) { null }
+
+    /** Removes the session's files: its directory on a member's device, the volume's content in a pod. */
     fun clear() {
         written.clear(); bytes = 0
         try {

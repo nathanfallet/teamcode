@@ -38,7 +38,8 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
  * under `teamcode run`, for a registered run labelled with the session; it gets the team's MCP servers, the member's
  * approved team hooks (Claude Code), the artifact tools and the member's environment variables. Nothing is written in
  * the session's directory by TeamCode itself; the conversation id stays beside `config.json`, and the files members
- * attach to messages go to `<user temp>/teamcode-<uid>/<sessionId>/` ([SessionUploads]), removed when the host ends.
+ * attach to messages go to `<user temp>/teamcode-<uid>/<sessionId>/` ([SessionUploads]), kept across pauses and
+ * removed when the session ends (a week at most).
  *
  * SIGINT or SIGTERM asks the server for a pause: the agent finishes its turn (up to the drain deadline), the host
  * checkpoints and exits. Returns the process exit code.

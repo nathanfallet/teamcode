@@ -115,7 +115,7 @@ internal class RunnerLoop(
                 Outcome.Conflict -> null
             }
             when (instruction?.desiredState) {
-                "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
+                "terminated" -> { log("The session is being deleted."); agent?.sessionEnded(); return EXIT_FENCED_OR_DONE }
                 // Nothing to checkpoint before the environment is ready: the server stops a resume it cancels.
                 "paused" -> if (ready) {
                     val drain = draining ?: (if (agent == null) CompletableDeferred(true)

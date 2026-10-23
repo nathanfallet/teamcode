@@ -28,6 +28,8 @@ internal interface RunnerAgent {
     suspend fun stop()
     /** Registers [changed], called when the agent learns that the session's desired state changed (a pause, a resume). */
     fun onInstructionChange(changed: () -> Unit) {}
+    /** The server terminated the session: it never runs again, so what it keeps on this host can go at [stop]. */
+    fun sessionEnded() {}
 }
 
 /** The agent half of the runner channel, bound to one session epoch. */
@@ -119,6 +121,10 @@ internal class AgentHost(
 
     override fun onInstructionChange(changed: () -> Unit) { instructionChanged = changed }
 
+    /** Set when the server terminated the session; only then does [stop] remove its files. */
+    private var ended = false
+    override fun sessionEnded() { ended = true }
+
     /** Runs input delivery and uploads until cancelled or fenced. */
     override suspend fun run() = coroutineScope {
         scope = this
@@ -169,9 +175,10 @@ internal class AgentHost(
             reader?.cancel()
             lock.withLock { cancelDeadlines(null) }
         } finally {
-            // The host ends (the session ended, paused or was stopped): its files go with it. A fenced execution leaves
-            // them, since the execution that fenced it may run on this device and use the same directory.
-            if (!fenced) uploads?.clear()
+            // Files stay until the session ends (a week at most): a pause, a host restart or a resume keeps them, so
+            // the resumed conversation can read them again. A fenced execution never removes them, since the execution
+            // that fenced it may run on this device and use the same directory.
+            if (ended && !fenced) uploads?.clear()
         }
     }
 
