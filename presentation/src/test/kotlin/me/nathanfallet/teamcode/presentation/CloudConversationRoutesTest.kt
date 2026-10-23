@@ -194,7 +194,7 @@ class CloudConversationRoutesTest {
             store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
 
             val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
-            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1", "cloud.permissions.v1").all { it in features })
+            assertTrue(listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.sessions.initial-message.v1", "cloud.permissions.v1", "cloud.transcript.live.v1", "cloud.sessions.waiting.v1").all { it in features })
 
             // An initial message of the full 32,000 characters fits the creation body and is queued (replay: CloudIdlePersistenceTest).
             val longest = "é".repeat(CloudConversationRules.MAX_MESSAGE_CHARS)
@@ -235,8 +235,8 @@ class CloudConversationRoutesTest {
             val runner = sdk("projected-pod-token-1")
             val member = sdk("colleague")
             try {
-                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
-                    "This server takes permission requests, so the runner relays them, without a deadline by default")
+                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true, liveText = true), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
+                    "This server takes permission requests and live text deltas, so the runner relays them, without a deadline by default")
                 store.settings = CloudSettings(permissionDeadlineMinutes = 15)
                 assertEquals(15, runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)).permissionDeadlineMinutes, "The team's deadline reaches the runner")
                 store.settings = CloudSettings()
@@ -298,6 +298,14 @@ class CloudConversationRoutesTest {
                 assertEquals(3, runner.runnerEvents(RunnerEventsRequest("default", "s1", 1, events)).acceptedThrough)
                 assertEquals(3, runner.runnerEvents(RunnerEventsRequest("default", "s1", 1, events)).acceptedThrough, "A retried batch is idempotent")
                 assertEquals(CloudSessionState.ACTIVE, store.sessions.getValue("s1").state, "A started turn makes the session active")
+                // A session waiting for a person says so in its view, in the list as in a read; a wait of an older execution does not show.
+                assertNull(member.cloudSession("s1").waiting)
+                store.sessions["s1"] = store.sessions.getValue("s1").copy(humanWait = CloudHumanWait(CloudHumanWait.Reason.QUESTION, "req-1", since = 7, eventSeq = 9, epoch = 1))
+                assertEquals(CloudWaitingView("question", "req-1", since = 7, eventSeq = 9), member.cloudSession("s1").waiting)
+                assertEquals(CloudWaitingView("question", "req-1", since = 7, eventSeq = 9), member.cloudSessions().sessions.single { it.id == "s1" }.waiting)
+                store.sessions["s1"] = store.sessions.getValue("s1").copy(humanWait = CloudHumanWait(CloudHumanWait.Reason.PERMISSION, null, since = 7, eventSeq = 9, epoch = 0))
+                assertNull(member.cloudSession("s1").waiting)
+                store.sessions["s1"] = store.sessions.getValue("s1").copy(humanWait = null)
                 assertEquals(409, assertFailsWith<TeamCodeException> { runner.runnerEvents(RunnerEventsRequest("default", "s1", 2, events)) }.statusCode)
                 assertEquals(400, assertFailsWith<TeamCodeException> { runner.runnerEvents(RunnerEventsRequest("default", "s1", 1, listOf(RunnerEventView(4, "input", JsonObject(emptyMap()))))) }.statusCode)
 

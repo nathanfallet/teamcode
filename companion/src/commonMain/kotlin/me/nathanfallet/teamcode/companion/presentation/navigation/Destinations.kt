@@ -29,3 +29,11 @@ data class ArtifactsRoute(val accountId: String, val sessionId: String? = null)
 /** One artifact of an account, at [version] (the current one when null). */
 @Serializable
 data class ArtifactRoute(val accountId: String, val artifactId: String, val version: Int? = null)
+
+/** The transfer sheet's session (a sheet over the session, not a destination of its own). */
+@Serializable
+data class TransferRoute(val accountId: String, val sessionId: String, val ownerId: String)
+
+/** An account's incoming and outgoing session transfers. */
+@Serializable
+data class TransfersRoute(val accountId: String)

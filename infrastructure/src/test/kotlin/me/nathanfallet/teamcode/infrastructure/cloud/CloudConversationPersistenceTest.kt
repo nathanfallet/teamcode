@@ -161,6 +161,12 @@ class CloudConversationPersistenceTest {
         // waking anything, and recorded with who answered which request and how.
         ra.agent.events(team, s.id, 1, listOf(RunnerEvent(5, CloudEventType.PERMISSION_REQUEST,
             """{"requestId":"req-1","toolName":"AskUserQuestion","input":{"questions":[{"question":"Red or blue?","options":[{"label":"Red"},{"label":"Blue"}]}]},"question":true}""")))
+        // The session row says it waits for a person, read with the session itself (the list reads no other table for it).
+        val asking = ra.conversations.lastSeq(s.id)
+        val wait = rb.store.find(team, s.id)!!.waitingForHuman!!
+        assertEquals(listOf<Any?>(CloudHumanWait.Reason.QUESTION, "req-1", asking, 1), listOf(wait.reason, wait.requestId, wait.eventSeq, wait.epoch))
+        assertTrue(wait.since > 0)
+        assertEquals(wait, ra.store.list(team, CloudSessionQuery(limit = 10)).sessions.single { it.id == s.id }.waitingForHuman)
         val waiting = ra.conversation.send(colleague, s.id, InputRequest("After the question", true, null, null, null))
         val text = """{"requestId":"req-1","behavior":"allow","answers":[{"question":0,"options":[1]}]}"""
         failure("invalid_permission_answer") { ra.conversation.answer(colleague, s.id, PermissionAnswer("req 1", true, null, emptyList()), InputRequest(text, false, null, null, null)) }
@@ -174,6 +180,7 @@ class CloudConversationPersistenceTest {
         assertEquals(listOf(CloudInputKind.PERMISSION, CloudInputKind.MESSAGE), both.map { it.kind }, "The answer concerns the running turn")
         assertEquals(text, both.first().text)
         ra.agent.acknowledge(team, s.id, 1, listOf(RunnerInputAck(answer.input.id, true, null), RunnerInputAck(waiting.input.id, true, null)))
+        assertNull(rb.store.find(team, s.id)!!.humanWait, "The consumed answer ended the wait, in the acknowledgement's transaction")
         val answered = ra.conversation.events(colleague, s.id, null, Long.MAX_VALUE, 2).events.first()
         assertEquals(CloudEventType.INPUT, answered.type)
         for (part in listOf("\"requestId\":\"req-1\"", "\"behavior\":\"allow\"", "\"authorId\":\"${colleague.member.id}\"", "\"kind\":\"permission\""))
@@ -200,6 +207,7 @@ class CloudConversationPersistenceTest {
         val oneBatch = SqlTeamEventStore(ra.database).read(team, TeamEventAudience(colleague.member.id, sessions = true, runs = false, teamSessions = false, teamRuns = false),
             before, setOf(TeamEventType.SESSION_WAITING, TeamEventType.CLOUD_TURN), 100).events.filter { it.subjectId == s.id }
         assertEquals(listOf(TeamEventType.SESSION_WAITING, TeamEventType.CLOUD_TURN), oneBatch.map { it.type })
+        assertNull(ra.store.find(team, s.id)!!.humanWait, "The end of the turn ended the wait set earlier in the same batch")
         val plain = Json.parseToJsonElement(oneBatch.first().data).jsonObject
         assertEquals("permission", plain["reason"]!!.jsonPrimitive.content); assertNull(plain["requestId"])
 
@@ -209,8 +217,14 @@ class CloudConversationPersistenceTest {
         ra.agent.events(team, s.id, 1, listOf(
             RunnerEvent(8, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-1","toolName":"Bash","input":{"command":"deploy"},"question":false}"""),
             RunnerEvent(9, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-2","toolName":"Bash","inputTruncated":true,"question":false}"""),
+        ))
+        // Two requests open at once: the newest shows. When it closes, the one still open shows again.
+        val toolOne = ra.conversations.lastSeq(s.id) - 1
+        assertEquals(listOf<Any?>("tool-2", CloudHumanWait.Reason.PERMISSION, toolOne + 1), ra.store.find(team, s.id)!!.humanWait!!.let { listOf(it.requestId, it.reason, it.eventSeq) })
+        ra.agent.events(team, s.id, 1, listOf(
             RunnerEvent(10, CloudEventType.PERMISSION_EXPIRED, """{"requestId":"tool-2","deadlineMinutes":5,"message":"No answer within 5 minutes: the request was denied."}"""),
         ))
+        assertEquals(listOf<Any?>("tool-1", CloudHumanWait.Reason.PERMISSION, toolOne, 1), rb.store.find(team, s.id)!!.humanWait!!.let { listOf(it.requestId, it.reason, it.eventSeq, it.epoch) })
         // A request denied at the deadline ends the wait like an answer: `cloud.session.answered`, behavior deny, reason expired.
         val expiry = SqlTeamEventStore(ra.database).read(team, TeamEventAudience(colleague.member.id, sessions = true, runs = false, teamSessions = false, teamRuns = false),
             before, setOf(TeamEventType.SESSION_ANSWERED), 100).events.filter { it.subjectId == s.id }.single().let { Json.parseToJsonElement(it.data).jsonObject }
@@ -225,6 +239,7 @@ class CloudConversationPersistenceTest {
         assertIs<InputOutcome.Accepted>(denied)
         assertEquals(listOf(denied.input.id), rb.agent.inputs(team, s.id, 1, 0).map { it.id })
         ra.agent.acknowledge(team, s.id, 1, listOf(RunnerInputAck(denied.input.id, true, null)))
+        assertNull(ra.store.find(team, s.id)!!.humanWait, "Nothing else is open: tool-2 expired, req-1 was answered, `has space` ended with its turn")
         ra.agent.events(team, s.id, 1, listOf(
             RunnerEvent(11, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-3","toolName":"Bash","input":{},"question":false}"""),
             RunnerEvent(12, CloudEventType.TURN, """{"phase":"started"}""", turn = TurnMarker.STARTED),
@@ -232,6 +247,23 @@ class CloudConversationPersistenceTest {
             RunnerEvent(14, CloudEventType.TURN, """{"phase":"interrupted"}""", turn = TurnMarker.ENDED),
         ))
         failure("permission_request_ended") { ra.conversation.answer(admin, s.id, PermissionAnswer("tool-3", true, null, emptyList()), InputRequest("""{"requestId":"tool-3","behavior":"allow"}""", false, null, null, null)) }
+        assertNull(ra.store.find(team, s.id)!!.humanWait, "Messages queued during the turn add started markers; its end still ends the wait")
+
+        // Live text deltas are stored like any other event, and a later status write never clears a wait.
+        ra.agent.events(team, s.id, 1, listOf(
+            RunnerEvent(15, CloudEventType.AGENT_MESSAGE_DELTA, """{"messageId":"msg_1","index":0,"text":"Half a"}"""),
+            RunnerEvent(16, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-4","toolName":"Bash","input":{},"question":false}"""),
+        ))
+        assertEquals(CloudEventType.AGENT_MESSAGE_DELTA, ra.conversations.events(s.id, ra.conversations.lastSeq(s.id) - 2, null, 1).events.single().type)
+        val held = ra.store.find(team, s.id)!!.humanWait
+        assertEquals("tool-4", held?.requestId)
+        // A turn marker writes the session row through the session store (ready to active): the wait it never writes stays.
+        rb.agent.events(team, s.id, 1, listOf(RunnerEvent(17, CloudEventType.TURN, """{"phase":"started"}""", turn = TurnMarker.STARTED)))
+        assertEquals(ACTIVE, ra.store.find(team, s.id)!!.state)
+        assertEquals(held, ra.store.find(team, s.id)!!.waitingForHuman, "The session store never sets the wait columns, so a write keeps them")
+        rb.agent.events(team, s.id, 1, listOf(RunnerEvent(18, CloudEventType.TURN, """{"phase":"completed"}""", turn = TurnMarker.ENDED)))
+        assertNull(ra.store.find(team, s.id)!!.humanWait)
+        assertEquals(READY, ra.store.find(team, s.id)!!.state)
 
         // The team's deadline for unanswered requests is a stored cloud setting that reaches the runner; none by default.
         assertEquals(0, ra.agent.agent(team, s.id, 1).permissionDeadlineMinutes)
@@ -294,11 +326,21 @@ class CloudConversationPersistenceTest {
         val unconsumed = ra.conversation.send(colleague, s.id, InputRequest("Survives the pod", true, null, null, null)).let { (it as InputOutcome.Accepted).input }
         assertEquals(unconsumed.id, rb.agent.inputs(team, s.id, 1, 0).single().id)
 
+        // A request open when a pause is asked: the runner denies it while draining, so the pause write ends the wait.
+        rb.agent.events(team, s.id, 1, listOf(RunnerEvent(19, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-5","toolName":"Bash","input":{},"question":false}""")))
+        assertEquals("tool-5", ra.store.find(team, s.id)!!.waitingForHuman?.requestId)
+        // An id no member could answer with: the runner denies that request at once, so it never shows.
+        rb.agent.events(team, s.id, 1, listOf(RunnerEvent(20, CloudEventType.PERMISSION_REQUEST, """{"requestId":"bad id","toolName":"Bash","input":{},"question":false}""")))
+        assertEquals("tool-5", ra.store.find(team, s.id)!!.waitingForHuman?.requestId, "A request nobody can answer leaves the wait as it was")
+
         // Pausing: a message sent now wakes the session at once; with the checkpoint already taken, it resumes as soon
         // as the pause completes.
         ra.sessions.pause(colleague, null, s.id, false)
+        assertNull(ra.store.find(team, s.id)!!.humanWait, "Asking for a pause cleared the wait in the same write")
         pass(ra)
         assertEquals(PAUSING, ra.store.find(team, s.id)!!.state)
+        rb.agent.events(team, s.id, 1, listOf(RunnerEvent(21, CloudEventType.PERMISSION_REQUEST, """{"requestId":"tool-6","toolName":"Bash","input":{},"question":false}""")))
+        assertNull(ra.store.find(team, s.id)!!.humanWait, "A request raised while pausing (the runner denies it) never shows as waiting")
         assertEquals(emptyList(), ra.agent.inputs(team, s.id, 1, 0), "A pausing session receives no new input")
         val polled = ra.agent.poll(team, s.id, 1, 20_000, "running")
         assertEquals(DesiredState.PAUSED, polled.desiredState, "The pause ends the runner's open poll, which knew it running")

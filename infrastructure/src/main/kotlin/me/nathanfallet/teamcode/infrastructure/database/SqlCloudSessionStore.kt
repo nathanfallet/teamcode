@@ -303,6 +303,7 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
         problem(row[CloudSessions.deletionCode], row[CloudSessions.deletionMessage], false)),
     createdAt = row[CloudSessions.createdAt], updatedAt = row[CloudSessions.updatedAt], transferId = row[CloudSessions.transferId],
     environment = decodeEnvironment(row[CloudSessions.environment]),
+    humanWait = readHumanWait(row),
     kind = CloudSessionKind.parse(row[CloudSessions.kind]),
     host = readHost(row),
 )
@@ -317,6 +318,12 @@ private fun readHost(row: ResultRow): CloudSessionHost? {
     return CloudSessionHost(row[CloudSessions.hostDeviceId], row[CloudSessions.hostDirectoryName], device,
         RemotePermissionMode.parse(row[CloudSessions.permissionMode]) ?: RemotePermissionMode.ASK,
         online = execution == ExecutionState.RUNNING.wire, lastHeartbeatAt = row.getOrNull(CloudExecutions.lastHeartbeatAt))
+}
+/** The wait columns of a session row, null when nothing was set or the row holds a reason this version does not know. */
+internal fun readHumanWait(row: ResultRow): CloudHumanWait? {
+    val reason = CloudHumanWait.Reason.parse(row[CloudSessions.awaitingReason]) ?: return null
+    return CloudHumanWait(reason, row[CloudSessions.awaitingRequestId], row[CloudSessions.awaitingSince] ?: return null,
+        row[CloudSessions.awaitingEventSeq] ?: return null, row[CloudSessions.awaitingEpoch] ?: return null)
 }
 internal fun readExecution(row: ResultRow) = CloudExecution(
     row[CloudExecutions.sessionId], row[CloudExecutions.epoch], row[CloudExecutions.podName], ExecutionState.parse(row[CloudExecutions.state]), row[CloudExecutions.createdAt],
@@ -346,6 +353,13 @@ internal fun writeSessionMutable(it: UpdateBuilder<*>, s: CloudSession) {
     it[CloudSessions.claimDeletedAt] = w.claimDeletedAt; it[CloudSessions.volumeDeletedAt] = w.volumeDeletedAt
     it[CloudSessions.deletionCode] = w.deletionProblem?.code; it[CloudSessions.deletionMessage] = w.deletionProblem?.message?.take(512)
     it[CloudSessions.updatedAt] = s.updatedAt; it[CloudSessions.transferId] = s.transferId
+    // The wait is only ever cleared here, never set (only the conversation store sets it, under the row lock): leaving
+    // the states that take an answer ends it, since a pausing runner denies its open requests without an event, and a
+    // pause cancelled on the same execution must not bring back a request already denied.
+    if (!s.takesAnswers) {
+        it[CloudSessions.awaitingReason] = null; it[CloudSessions.awaitingRequestId] = null; it[CloudSessions.awaitingSince] = null
+        it[CloudSessions.awaitingEventSeq] = null; it[CloudSessions.awaitingEpoch] = null
+    }
 }
 internal fun writeExecution(it: UpdateBuilder<*>, e: CloudExecution) {
     it[CloudExecutions.podName] = e.podName; it[CloudExecutions.state] = e.state.wire

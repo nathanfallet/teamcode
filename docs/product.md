@@ -13,7 +13,7 @@ Target commands (not all implemented):
 ```text
 teamcode login --server https://teamcode.example.org
 teamcode whoami
-teamcode accounts add --provider claude-max
+teamcode accounts add   # numbered selector; or --type anthropic-subscription|codex-subscription
 teamcode accounts import --from teamclaude
 teamcode accounts import --from teamclaude --config /path/to/config.json
 teamcode accounts list

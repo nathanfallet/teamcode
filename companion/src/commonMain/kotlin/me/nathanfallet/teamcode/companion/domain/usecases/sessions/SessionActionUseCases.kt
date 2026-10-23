@@ -112,7 +112,13 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         /** Pause and resume are offered to the owner and to administrators. */
         fun canControl(account: Account, session: CloudSession): Boolean = account.isAdministrator || session.ownerId == account.memberId
         fun canPause(session: CloudSession): Boolean = session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)
-        fun canResume(session: CloudSession): Boolean = session.state == SessionState.PAUSED || session.state == SessionState.PAUSING
+        /**
+         * A remote session resumes only from its own device, which this app never is: a message asks the device to
+         * resume it instead (the server refuses an explicit resume from elsewhere).
+         */
+        fun canResume(session: CloudSession): Boolean = !session.remote && (session.state == SessionState.PAUSED || session.state == SessionState.PAUSING)
+        /** A remote session is never transferred (`409 remote_not_transferable`): its files stay on its device. */
+        fun canTransfer(session: CloudSession): Boolean = !session.remote
         fun canMessage(session: CloudSession): Boolean = session.state.group != SessionGroup.ENDED && session.state != SessionState.TRANSFERRING
     }
 }

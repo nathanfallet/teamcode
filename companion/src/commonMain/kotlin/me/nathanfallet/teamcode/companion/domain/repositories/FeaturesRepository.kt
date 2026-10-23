@@ -8,10 +8,14 @@ interface FeaturesRepository {
 /** Capabilities the app reads. */
 object Features {
     const val SESSIONS = "cloud.sessions.v1"
+    /** Ownership transfers: an administrator's transfer, an owner's offer, accept, decline and cancel. */
+    const val TRANSFERS = "cloud.transfer.v1"
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
     const val ARTIFACTS = "artifacts.v1"
     const val ARTIFACT_TICKETS = "artifacts.tickets.v1"
+    /** Sessions on a member's device: the list and the feed take `kind`, sessions carry their host. */
+    const val REMOTE_SESSIONS = "cloud.sessions.remote.v1"
 }

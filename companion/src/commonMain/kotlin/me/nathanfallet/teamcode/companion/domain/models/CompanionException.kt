@@ -24,6 +24,12 @@ sealed class CompanionException(message: String) : Exception(message) {
     /** A view ticket for another origin than the account's: the server's public origin is not the address signed in to. */
     class ForeignContent : CompanionException("The server shows artifacts on another address than the one you signed in with. Sign in with its public address.")
     class CredentialStorage : CompanionException("This device's secure storage refused to read or keep the sign-in. Unlock the device and try again.")
+    /**
+     * The server refused a transfer or a decision on one ([code]: `transfer_pending`, `recipient_ineligible`, ...);
+     * [problems] are the recipient's failed checks for `recipient_ineligible`. The screens word each code.
+     */
+    class TransferRefused(val code: String, val problems: List<String> = emptyList()) :
+        CompanionException("The server refused the transfer" + (code.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
 }

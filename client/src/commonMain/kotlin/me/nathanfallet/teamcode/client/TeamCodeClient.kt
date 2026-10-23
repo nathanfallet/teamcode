@@ -649,23 +649,31 @@ class TeamCodeClient(
     /**
      * The failure of a non-success response, with only safe, validated fields: the API error `type` (never its
      * message or the raw body, which a proxy or provider may fill with secrets), `Retry-After` in seconds and a
-     * proxy-assigned request id.
+     * proxy-assigned request id. For `422 recipient_ineligible`, the problem codes the message names, each checked
+     * against the same alphabet as the code (the rest of the message is dropped).
      */
     private suspend fun failure(response: HttpResponse): TeamCodeException {
-        val code = try {
+        val error = try {
             // Bounded: an error envelope is small, and a proxy's large or slow body must not be buffered whole.
             val bytes = response.bodyAsChannel().readRemaining(MAX_ERROR_BODY + 1L).readByteArray()
             if (bytes.size > MAX_ERROR_BODY) null
-            else Serialization.json.decodeFromString(ApiError.serializer(), bytes.decodeToString()).error.type.takeIf { ERROR_CODE.matches(it) }
+            else Serialization.json.decodeFromString(ApiError.serializer(), bytes.decodeToString()).error.takeIf { ERROR_CODE.matches(it.type) }
         } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
-        return failure(response, code)
+        val problems = if (error?.type == RECIPIENT_INELIGIBLE) problemCodes(error.message) else emptyList()
+        return failure(response, error?.type, problems)
     }
 
     /** The failure of [response] whose body was already read for its [code]. */
-    private fun failure(response: HttpResponse, code: String?): TeamCodeException {
+    private fun failure(response: HttpResponse, code: String?, problems: List<String> = emptyList()): TeamCodeException {
         return TeamCodeException(response.status.value, "TeamCode returned HTTP ${response.status.value}.", code,
             retryAfterSeconds(response.headers[HttpHeaders.RetryAfter]),
-            REQUEST_ID_HEADERS.flatMap { response.headers.getAll(it).orEmpty() }.firstOrNull { REQUEST_ID.matches(it) })
+            REQUEST_ID_HEADERS.flatMap { response.headers.getAll(it).orEmpty() }.firstOrNull { REQUEST_ID.matches(it) }, problems)
+    }
+
+    /** `The recipient cannot own this session: profile_unassigned, recipient_no_quota.`: the codes after the colon, nothing else. */
+    private fun problemCodes(message: String): List<String> {
+        val list = message.substringAfterLast(": ", "").removeSuffix(".")
+        return list.split(", ").filter { ERROR_CODE.matches(it) }.distinct().take(MAX_PROBLEMS)
     }
 
     private suspend inline fun <reified R> request(path: String, method: HttpMethod, timeoutMillis: Long = 10_000): R {
@@ -825,6 +833,9 @@ class TeamCodeClient(
         private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
         private const val MAX_TEAM_EVENT_TYPES = 64
         private val ERROR_CODE = Regex("[a-z_]{1,64}")
+        /** `422`: the recipient of a transfer fails checks; the problem codes are kept ([TeamCodeException.problems]). */
+        const val RECIPIENT_INELIGIBLE = "recipient_ineligible"
+        private const val MAX_PROBLEMS = 16
         private const val MAX_ERROR_BODY = 16 * 1024
         /** A conflict carries the live manifest: up to 511 files. */
         private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
@@ -850,6 +861,8 @@ class TeamCodeException(
     val code: String? = null,
     val retryAfterSeconds: Long? = null,
     val requestId: String? = null,
+    /** For [TeamCodeClient.RECIPIENT_INELIGIBLE]: every check the recipient failed (`profile_unassigned`, ...). */
+    val problems: List<String> = emptyList(),
 ) : Exception(message)
 
 /** `409 artifact_conflict`: the artifact changed; [current] is the live version to merge before publishing again. */

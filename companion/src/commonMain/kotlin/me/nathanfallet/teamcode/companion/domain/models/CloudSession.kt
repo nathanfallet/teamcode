@@ -30,6 +30,42 @@ enum class SessionGroup {
 /** Whose sessions the list shows: the member's own, or the whole team's (administrators). */
 enum class SessionScope { MINE, TEAM }
 
+/** Where a session runs: a pod the server started, or a member's device (`cloud.sessions.remote.v1`). */
+enum class SessionKind(val wire: String) {
+    CLOUD("cloud"), REMOTE("remote");
+
+    companion object {
+        /** A server without remote sessions sends no kind: its sessions are cloud sessions. */
+        fun of(wire: String?): SessionKind = if (wire == REMOTE.wire) REMOTE else CLOUD
+    }
+}
+
+/** The list's filter by where sessions run; shown only when the server announces remote sessions. */
+enum class KindFilter(val kinds: Set<SessionKind>) {
+    ALL(setOf(SessionKind.CLOUD, SessionKind.REMOTE)), CLOUD(setOf(SessionKind.CLOUD)), REMOTE(setOf(SessionKind.REMOTE))
+}
+
+/**
+ * The device a remote session runs on, as the server describes it now. [removed]: the device was removed, so the
+ * session has no host any more. [online]: the host runs the session now. [directoryName] is the folder's name only.
+ */
+data class SessionHost(
+    val deviceName: String?,
+    val platform: String?,
+    val osVersion: String?,
+    val directoryName: String?,
+    val online: Boolean,
+    val removed: Boolean,
+    /** [ASK] or [BYPASS]. */
+    val permissionMode: String?,
+) {
+    companion object {
+        /** Claude Code's permission requests come to the team's clients; Codex stays in its sandbox. */
+        const val ASK = "ask"
+        const val BYPASS = "bypass"
+    }
+}
+
 /** A cloud session as the screens need it; nothing of it is secret. */
 data class CloudSession(
     val id: String,
@@ -48,7 +84,19 @@ data class CloudSession(
     val updatedAt: Long,
     /** The stable code of the failure or of what blocks a resume, when there is one. */
     val problemCode: String?,
-)
+    val kind: SessionKind = SessionKind.CLOUD,
+    /** Where a remote session runs; null for a cloud session. */
+    val host: SessionHost? = null,
+) {
+    val remote: Boolean get() = kind == SessionKind.REMOTE
+
+    /** A remote session paused because its device stopped answering (the server's `host_offline`). */
+    val hostOffline: Boolean get() = remote && problemCode == HOST_OFFLINE
+
+    companion object {
+        const val HOST_OFFLINE = "host_offline"
+    }
+}
 
 data class SessionPage(val sessions: List<CloudSession>, val nextBefore: String?)
 
@@ -64,4 +112,6 @@ data class SessionChange(
     val state: SessionState?,
     /** For `cloud.turn`: `started`, `completed`, `interrupted` or `failed`. */
     val turnPhase: String?,
+    /** Null when the event does not say (a server without remote sessions). */
+    val kind: SessionKind? = null,
 )

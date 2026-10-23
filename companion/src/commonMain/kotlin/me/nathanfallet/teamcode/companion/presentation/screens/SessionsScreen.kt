@@ -55,6 +55,7 @@ import com.adamglin.phosphoricons.regular.Warning
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
@@ -66,6 +67,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
+import me.nathanfallet.teamcode.companion.presentation.components.KindChips
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
 import me.nathanfallet.teamcode.companion.presentation.components.Segmented
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
@@ -93,6 +95,9 @@ import me.nathanfallet.teamcode.companion.resources.sessions_empty_ended_body
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_paused
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_paused_body
 import me.nathanfallet.teamcode.companion.resources.sessions_ended
+import me.nathanfallet.teamcode.companion.resources.sessions_kind_all
+import me.nathanfallet.teamcode.companion.resources.sessions_kind_cloud
+import me.nathanfallet.teamcode.companion.resources.sessions_kind_remote
 import me.nathanfallet.teamcode.companion.resources.sessions_load_more
 import me.nathanfallet.teamcode.companion.resources.sessions_loading
 import me.nathanfallet.teamcode.companion.resources.sessions_mine
@@ -122,6 +127,8 @@ fun SessionsScreen(
     onOpenSession: (Account, CloudSession) -> Unit,
     onNewSession: (Account) -> Unit = {},
     onSwitchAccount: () -> Unit = {},
+    /** More buttons of the title for a signed-in account (the transfers list). */
+    titleActions: @Composable (Account) -> Unit = {},
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
     clock: Clock = koinInject(),
@@ -143,6 +150,7 @@ fun SessionsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             LargeTitle(stringResource(Res.string.sessions_title)) {
+                if (account != null && account.signedIn) titleActions(account)
                 if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { onNewSession(account) },
                     kind = IconButtonKind.FILLED, modifier = Modifier.testTag("new-session"))
             }
@@ -154,6 +162,12 @@ fun SessionsScreen(
                 )
                 if (account.isAdministrator) ScopePill(state.scope, sessionsViewModel::setScope)
             }
+            // Only from a server with remote sessions: an older one has cloud sessions only.
+            if (account != null && account.signedIn && state.remoteSessions) Segmented(
+                listOf(KindFilter.ALL to stringResource(Res.string.sessions_kind_all), KindFilter.CLOUD to stringResource(Res.string.sessions_kind_cloud),
+                    KindFilter.REMOTE to stringResource(Res.string.sessions_kind_remote)),
+                selected = state.kind, onSelect = sessionsViewModel::setKind, modifier = Modifier.fillMaxWidth(), tag = { "kind-${it.name.lowercase()}" },
+            )
         }
 
         val list = state.list
@@ -189,7 +203,7 @@ fun SessionsScreen(
                 items(3, key = { "skeleton-$it" }) { index -> SkeletonCard(index) }
             }
             items(sessions, key = { it.id }) { session ->
-                SessionCard(session, finished = list?.finishedTurns?.contains(session.id) == true, now = now, dimmed = error != null) {
+                SessionCard(session, finished = list?.finishedTurns?.contains(session.id) == true, now = now, dimmed = error != null, showKind = state.remoteSessions) {
                     sessionsViewModel.opened(session.id)
                     account?.let { onOpenSession(it, session) }
                 }
@@ -272,9 +286,12 @@ private fun ScopePill(scope: SessionScope, onScope: (SessionScope) -> Unit) {
     }
 }
 
-/** A session: name and state, agent and model, repositories and age; a finished turn not seen yet is marked. */
+/**
+ * A session: name and state, agent and model, where it runs ([showKind], once the server has remote sessions),
+ * repositories or folder and age; a finished turn not seen yet is marked.
+ */
 @Composable
-private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dimmed: Boolean, onClick: () -> Unit) {
+private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dimmed: Boolean, showKind: Boolean, onClick: () -> Unit) {
     val colors = TeamCode.colors
     TcCard(Modifier.alpha(if (dimmed) 0.7f else 1f).testTag("session-${session.id}"), borderColor = if (finished) colors.accentDim else colors.line, onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -284,8 +301,11 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
         }
         val details = listOfNotNull(session.agentKind, session.model, session.effort, session.phase).joinToString(" · ")
         if (details.isNotEmpty()) Text(details, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (showKind || session.remote) KindChips(session)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(session.repositories.joinToString(", "), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            // A remote session has no repository to clone: the folder it runs in tells it apart instead.
+            val where = if (session.remote) session.host?.directoryName.orEmpty() else session.repositories.joinToString(", ")
+            Text(where, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (finished) Text(stringResource(Res.string.sessions_turn_finished), color = colors.accentText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             Text(relativeTime(session.lastActivityAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)
         }

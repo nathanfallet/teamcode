@@ -6,9 +6,11 @@ import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
@@ -16,10 +18,19 @@ import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 
+/**
+ * One page of the list. [kind] is sent only to a server that announces remote sessions; an older one is asked as before
+ * and answers its cloud sessions, so "remote only" is empty there.
+ */
 class LoadSessionsUseCase(private val sessions: SessionRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
-    suspend operator fun invoke(accountId: String, scope: SessionScope, group: SessionGroup, before: String? = null): SessionPage = guard(accountId) {
-        if (Features.SESSIONS !in features.features(accountId)) throw CompanionException.Unsupported(Features.SESSIONS)
-        sessions.sessions(accountId, scope, group, before)
+    suspend operator fun invoke(accountId: String, scope: SessionScope, group: SessionGroup, before: String? = null, kind: KindFilter = KindFilter.ALL): SessionPage = guard(accountId) {
+        val announced = features.features(accountId)
+        if (Features.SESSIONS !in announced) throw CompanionException.Unsupported(Features.SESSIONS)
+        when {
+            Features.REMOTE_SESSIONS in announced -> sessions.sessions(accountId, scope, group, before, kind.kinds)
+            SessionKind.CLOUD !in kind.kinds -> SessionPage(emptyList(), null)
+            else -> sessions.sessions(accountId, scope, group, before)
+        }
     }
 }
 
@@ -27,8 +38,12 @@ class GetSessionUseCase(private val sessions: SessionRepository, private val gua
     suspend operator fun invoke(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.session(accountId, sessionId) }
 }
 
-/** What the sessions list does next: load everything again, apply one change, or show the connection's state. */
+/**
+ * What the sessions list does next: load everything again, apply one change, or show the connection's state.
+ * [RemoteSessions] comes first, once the server's capabilities are read: whether it has remote sessions.
+ */
 sealed interface SessionListSignal {
+    data class RemoteSessions(val supported: Boolean) : SessionListSignal
     data object Reload : SessionListSignal
     data class Changed(val change: SessionChange) : SessionListSignal
     data class Connection(val reconnecting: Boolean) : SessionListSignal
@@ -46,8 +61,12 @@ class FollowSessionListUseCase(
     private val pollMillis: Long = 15_000,
 ) {
     operator fun invoke(accountId: String): Flow<SessionListSignal> = guard.flow(accountId, flow {
-        if (Features.EVENTS in featuresWhenReachable(accountId)) {
-            sessions.sessionChanges(accountId).collect { update ->
+        val announced = featuresWhenReachable(accountId)
+        val remote = Features.REMOTE_SESSIONS in announced
+        emit(SessionListSignal.RemoteSessions(remote))
+        if (Features.EVENTS in announced) {
+            // Every kind: the list filters the events itself, so changing its filter never reopens the feed.
+            sessions.sessionChanges(accountId, if (remote) KindFilter.ALL.kinds else emptySet()).collect { update ->
                 when (update) {
                     is LiveUpdate.Opened -> {
                         emit(SessionListSignal.Connection(reconnecting = false))

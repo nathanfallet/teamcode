@@ -45,6 +45,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
 import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
+import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
@@ -79,6 +80,7 @@ fun MainScreen(
     onOpenArtifact: (accountId: String, artifactId: String) -> Unit,
     onOpenLink: (String) -> Boolean,
     onAddAccount: () -> Unit,
+    onOpenTransfers: (accountId: String) -> Unit = {},
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
 ) {
@@ -97,6 +99,7 @@ fun MainScreen(
                     onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
                     onNewSession = { newSessionFor = it.id },
                     onSwitchAccount = { switcher = true },
+                    titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
                     viewModel = home,
                 )
                 MainTab.ARTIFACTS -> if (account != null && account.signedIn) key(account.id) {
