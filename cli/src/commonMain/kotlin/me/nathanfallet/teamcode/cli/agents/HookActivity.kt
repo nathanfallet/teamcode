@@ -101,6 +101,8 @@ internal class ActivityReporter(
     private class Pending(val state: String, val observedAtMillis: Long, val attempt: Int = 0, val notBefore: TimeMark? = null)
     private val pendingLock = Mutex()
     private val pending = LinkedHashMap<String, Pending>()
+    /** The latest hook time seen per launch, sent or not. */
+    private val newest = LinkedHashMap<String, Long>()
     /** Wakes a sender waiting for a retry when a new state arrives, so it is not held behind the delay. */
     private val arrived = Channel<Unit>(Channel.CONFLATED)
     /**
@@ -108,9 +110,16 @@ internal class ActivityReporter(
      * flight leaves its state for the one in flight to send after it (the latest per launch wins), so a slow server never
      * piles up one waiting handler per hook.
      */
-    suspend fun report(runId: String, state: String) {
-        val observed = HookActivity.observedNow()
-        pendingLock.withLock { enqueue(runId, Pending(state, observed)) }
+    suspend fun report(runId: String, state: String, observed: Long = HookActivity.observedNow()) {
+        // [observed] is when the hook reached the service, before its guidance work: a slow hook that gets here after a later
+        // one is older and is dropped, even when the later one was not sent again because its state had already been reported.
+        val fresh = pendingLock.withLock {
+            if ((newest[runId] ?: Long.MIN_VALUE) > observed) return@withLock false
+            newest.remove(runId); newest[runId] = observed
+            if (newest.size > MAX_RUNS) newest.remove(newest.keys.first())
+            enqueue(runId, Pending(state, observed)); true
+        }
+        if (!fresh) return
         arrived.trySend(Unit)
         // Enqueue first, then try to be the sender: a state queued while another report finishes is picked up by the loop.
         while (lock.tryLock()) {

@@ -45,6 +45,8 @@ interface AgentRunService {
         const val MAX_MEMBER_RUNS = 10_000L
         const val MAX_TEAM_RUNS = 100_000L
         const val HEARTBEAT_TTL_MILLIS = 90_000L
+        /** How far ahead of the server a reporter's `observedAtMillis` may be; later values count as now plus this. */
+        const val ACTIVITY_CLOCK_SKEW_MILLIS = 300_000L
         fun validateStart(id: String, agent: String, workload: String, labels: Map<String, String> = emptyMap()) {
             identifier(id)
             LabelRules.validate(labels)

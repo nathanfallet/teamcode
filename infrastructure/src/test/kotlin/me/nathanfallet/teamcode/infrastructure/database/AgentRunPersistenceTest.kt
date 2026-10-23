@@ -287,6 +287,13 @@ class AgentRunPersistenceTest {
             // A newer one is applied.
             val waiting = b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = 3_500)
             assertFalse(waiting.superseded); assertEquals(RunActivity.WAITING_FOR_HUMAN, a.get(f.member.principal, id).run.activity)
+            // A report without a time does not erase the guard: the late older one is still refused after it.
+            a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            assertTrue(b.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = 3_000).superseded)
+            // A reporter clock far ahead counts as the server's now plus the skew allowance, so a corrected clock catches up.
+            b.activity(f.member.principal, id, RunActivity.WORKING, observedAtMillis = Long.MAX_VALUE / 2)
+            assertFalse(a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN, observedAtMillis = System.currentTimeMillis() + AgentRunService.ACTIVITY_CLOCK_SKEW_MILLIS + 60_000).superseded)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity)
         }
     }
     private fun input(id: String, units: Long) = AdmissionInput(units, "claude-test", "anthropic", runId = id)

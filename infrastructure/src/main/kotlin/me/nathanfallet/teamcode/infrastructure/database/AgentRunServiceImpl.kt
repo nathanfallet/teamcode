@@ -52,18 +52,21 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         val stored = row[AgentRuns.activity]?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } }
         val previous = row[AgentRuns.activityAt]
         val storedObservedAt = row[AgentRuns.activityObservedAt]
-        // A slow report the client gave up on can land after a newer one: by the reporter's clock it is older, so it changes nothing.
-        if (observedAtMillis != null && storedObservedAt != null && observedAtMillis < storedObservedAt)
-            return@query RunActivityChange(id, stored, previous.takeIf { stored != null }, superseded = true)
         val now = nowMillis()
+        // Bounded by the server's clock plus a skew allowance: a reporter clock far ahead cannot freeze the launch's state once corrected.
+        val observed = observedAtMillis?.coerceAtMost(now + AgentRunService.ACTIVITY_CLOCK_SKEW_MILLIS)
+        // A slow report the client gave up on can land after a newer one: by the reporter's clock it is older, so it changes nothing.
+        if (observed != null && storedObservedAt != null && observed < storedObservedAt)
+            return@query RunActivityChange(id, stored, previous.takeIf { stored != null }, superseded = true)
         // The same state keeps its time, except a `working` during a silence older than the silence: the heartbeat that ends it would clear it.
         val silenceBegan = row[AgentRuns.heartbeatAt] + AgentRunService.HEARTBEAT_TTL_MILLIS
         val stale = activity == RunActivity.WORKING && now > silenceBegan && (previous ?: 0) <= silenceBegan
         val same = stored == activity && previous != null && !stale
+        if (same && observed == null) return@query RunActivityChange(id, activity, previous)
         val written = AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) {
             if (!same) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now }
-            // The newest observation is kept even for a repeated state, so an older one arriving later is still recognised.
-            it[activityObservedAt] = observedAtMillis
+            // The newest observation is kept even for a repeated state, so an older one arriving later is still recognised; a report without one leaves it.
+            if (observed != null) it[activityObservedAt] = observed
         }
         if (written == 0) throw TeamFailure("run_ended", 409, "This run has ended.")
         RunActivityChange(id, activity, if (same) previous else now)

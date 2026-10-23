@@ -69,4 +69,17 @@ class ActivityReporterTest {
         }
         assertEquals(2, reports.size)
     }
+
+    @Test fun aHookThatReachesTheReporterAfterALaterOneIsDropped() = runBlocking {
+        val reports = mutableListOf<Report>()
+        client(reports) { index -> ok(if (index == 0) "waiting_for_human" else "working") }.use { sdk ->
+            val reporter = ActivityReporter(sdk, retryDelays = emptyList())
+            reporter.report(run, "waiting_for_human", observed = 1_000)
+            // The same state again, deduplicated (not sent), but it is the newest hook of the launch.
+            reporter.report(run, "waiting_for_human", observed = 3_000)
+            // A slow hook that fired at 2,000 finishes its guidance work only now: sending it would show `working` while the agent waits.
+            reporter.report(run, "working", observed = 2_000)
+        }
+        assertEquals(listOf("waiting_for_human"), reports.map { it.state })
+    }
 }

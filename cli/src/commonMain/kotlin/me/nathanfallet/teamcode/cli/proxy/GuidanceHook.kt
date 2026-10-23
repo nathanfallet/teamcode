@@ -29,6 +29,8 @@ internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String, noti
             call.respond(HttpStatusCode.Forbidden); return@post
         }
         call.response.header(HttpHeaders.CacheControl, "no-store")
+        // When the hook fired, as near as the service can tell: before the guidance lookup, which may take seconds.
+        val observed = HookActivity.observedNow()
         val bridge = HookGuidance(client)
         var emitted: HookGuidance.Emission? = null
         var output = "{}"
@@ -57,6 +59,6 @@ internal fun Route.guidanceHook(client: TeamCodeClient, localToken: String, noti
         emitted?.let { bridge.acknowledge(it) }
         // After the answer: the agent never waits for this report, and a failure leaves no trace in its context.
         val run = HookActivity.runId(call.request.header("X-TeamCode-Run"))
-        if (state != null && run != null) try { activity.report(run, state!!) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+        if (state != null && run != null) try { activity.report(run, state!!, observed) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
     }
 }
