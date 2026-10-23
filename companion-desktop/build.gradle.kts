@@ -55,7 +55,42 @@ val generateAppResources by tasks.registering {
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(generateAppResources) }
 
+// The macOS keyring's native library (osxkeychain.so) sits inside the jkeychain jar, where jpackage does not sign it and
+// notarization rejects the app. On a Mac that signs, the app takes a copy of that jar whose native library is signed with
+// the Developer ID (hardened runtime, secure timestamp) instead of the original one.
+val macosSigningIdentity = providers.environmentVariable("TEAMCODE_MACOS_SIGNING_IDENTITY").orNull
+val macosSigningKeychain = providers.environmentVariable("TEAMCODE_MACOS_SIGNING_KEYCHAIN").orNull
+val jkeychainOriginal by configurations.creating { isTransitive = false }
+dependencies { jkeychainOriginal(libs.jkeychain) }
+val jkeychainSignedDirectory = layout.buildDirectory.dir("signed-jkeychain/content")
+val signJkeychainNatives by tasks.registering(Sync::class) {
+    onlyIf { macosSigningIdentity != null }
+    from(jkeychainOriginal.elements.map { files -> files.map { zipTree(it.asFile) } })
+    into(jkeychainSignedDirectory)
+    doLast {
+        val identity = checkNotNull(macosSigningIdentity)
+        destinationDir.walkTopDown().filter { it.isFile && it.extension in setOf("so", "dylib", "jnilib") }.forEach { library ->
+            val command = mutableListOf("codesign", "--force", "--timestamp", "--options", "runtime", "--sign", "Developer ID Application: $identity")
+            macosSigningKeychain?.let { command += listOf("--keychain", it) }
+            command += library.absolutePath
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { "codesign failed on ${library.name}: $output" }
+        }
+    }
+}
+val signedJkeychainJar by tasks.registering(Jar::class) {
+    onlyIf { macosSigningIdentity != null }
+    archiveFileName.set("jkeychain-signed.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("signed-jkeychain"))
+    from(signJkeychainNatives.map { jkeychainSignedDirectory })
+}
+if (macosSigningIdentity != null) {
+    configurations.runtimeClasspath { exclude(group = "pt.davidafsilva.apple", module = "jkeychain") }
+}
+
 dependencies {
+    if (macosSigningIdentity != null) runtimeOnly(files(signedJkeychainJar))
     implementation(projects.companion)
     implementation(projects.config)
     implementation(projects.client)

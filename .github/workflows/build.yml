@@ -553,6 +553,27 @@ jobs:
             linux-*) tasks=(createDistributable packageDeb packageRpm) ;;
           esac
           ./gradlew "${tasks[@]/#/:companion-desktop:}" "-PteamcodeInstallShSha256=$INSTALL_SH_SHA256" "-PteamcodeInstallPs1Sha256=$INSTALL_PS1_SHA256"
+      - name: Check that no jar of the macOS app hides an unsigned native library
+        if: runner.os == 'macOS' && env.DESKTOP_SIGNED == 'true'
+        env:
+          TEAM_ID: ${{ vars.TEAMCODE_MACOS_TEAM_ID }}
+        run: |
+          # jpackage signs the files of the app, not the native libraries inside its jars, and notarization rejects those.
+          app="$BINARIES/app/TeamCode.app"
+          scratch="$(mktemp -d)"
+          failed=0
+          while IFS= read -r -d '' jar; do
+            while IFS= read -r entry; do
+              rm -rf "$scratch/entry" && mkdir "$scratch/entry"
+              unzip -q -o "$jar" "$entry" -d "$scratch/entry"
+              details="$(codesign -dvv "$scratch/entry/$entry" 2>&1 || true)"
+              if ! grep -q "^TeamIdentifier=$TEAM_ID\$" <<< "$details" || ! grep -q '^Timestamp=' <<< "$details" || ! grep -q 'flags=.*runtime' <<< "$details"; then
+                echo "::error::$(basename "$jar")!$entry is not signed with the Developer ID, a secure timestamp and the hardened runtime."
+                failed=1
+              fi
+            done < <(unzip -Z1 "$jar" | grep -E '\.(so|dylib|jnilib)$' || true)
+          done < <(find "$app" -name '*.jar' -print0)
+          exit "$failed"
       - name: Notarize, staple and check the macOS app and disk image
         if: runner.os == 'macOS' && env.DESKTOP_SIGNED == 'true'
         env:
