@@ -38,6 +38,8 @@ class RunnerInferenceUseCase(private val sessions: CloudSessionStore, private va
     suspend fun issue(teamId: String, sessionId: String, epoch: Int): IssuedInferenceCredential {
         val session = sessions.find(teamId, sessionId) ?: throw fenced()
         if (session.currentEpoch != epoch || session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw fenced()
+        // A remote host's inference goes through its own member login, never through an execution credential.
+        if (session.kind == CloudSessionKind.REMOTE) throw TeamFailure("inference_unavailable", 409, "A remote session's host runs inference with its member login.")
         val execution = sessions.execution(sessionId, epoch) ?: throw fenced()
         if (execution.state != ExecutionState.RUNNING) throw fenced()
         // A draining execution still finishes its turn, so `pausing` keeps its inference until the pod stops.

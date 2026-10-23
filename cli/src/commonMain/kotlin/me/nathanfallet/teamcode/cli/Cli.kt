@@ -31,7 +31,7 @@ class Cli : SuspendingNoOpCliktCommand(name = "teamcode") {
     override fun help(context: Context) = "A self-hosted team gateway. First use: teamcode login."
     // Read by main() before parsing, so a failure in any command can print it; declared here for --help.
     @Suppress("unused") private val debug by option("--debug", help = "On failure, also print the error type, HTTP status and codes (never secrets). Same as TEAMCODE_DEBUG=1.").flag()
-    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Sessions(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install(), me.nathanfallet.teamcode.cli.cloud.Cloud(), me.nathanfallet.teamcode.cli.github.GitHub(), me.nathanfallet.teamcode.cli.hooks.Hooks(), me.nathanfallet.teamcode.cli.artifacts.Artifacts(), me.nathanfallet.teamcode.cli.mcp.Mcp()) }
+    init { subcommands(Login(), Logout(), Configure(), Status(), Version(), Proxy(), Accounts(), Agents(), Run(), Sessions(), Service(), WhoAmI(), Auth(), Devices(), ServiceKeys(), VerifyRelease(), Update(), me.nathanfallet.teamcode.cli.update.Install(), me.nathanfallet.teamcode.cli.cloud.Cloud(), me.nathanfallet.teamcode.cli.remote.Remote(), me.nathanfallet.teamcode.cli.github.GitHub(), me.nathanfallet.teamcode.cli.hooks.Hooks(), me.nathanfallet.teamcode.cli.artifacts.Artifacts(), me.nathanfallet.teamcode.cli.mcp.Mcp()) }
 }
 
 private class Version : SuspendingCliktCommand(name = "version") {

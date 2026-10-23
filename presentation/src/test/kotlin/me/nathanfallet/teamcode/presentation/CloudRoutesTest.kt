@@ -63,6 +63,15 @@ class CloudRoutesTest {
             runs[sessionId to epoch] = run.copy(lastHeartbeatAt = clock, runnerReady = runnerReady)
             return true
         }
+        /** Login sessions with an installation, by token id: two devices of the colleague's. */
+        val devices = mapOf("colleague-session" to "laptop-id", "colleague-desktop-session" to "desktop-id", "admin-session" to "admin-device")
+        override suspend fun deviceOf(principal: Principal) = if (principal.serviceScopes != null) null else devices[principal.tokenId]
+        override suspend fun startHostExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? {
+            if (sessions[expected.id]?.generation != expected.generation) return null
+            ended?.let { runs[it.sessionId to it.epoch] = it }
+            runs[execution.sessionId to execution.epoch] = execution
+            return next.copy(generation = expected.generation + 1).also { sessions[it.id] = it }
+        }
         override suspend fun liveObjects(clusterId: String) = LiveObjects(emptySet(), emptySet())
         override suspend fun namespaces(clusterId: String) = emptySet<String>()
         override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = Unit
@@ -82,6 +91,11 @@ class CloudRoutesTest {
         override suspend fun authenticate(token: String): Principal? = when (token) {
             "admin" -> Principal(admin, "admin-session", "default")
             "colleague" -> Principal(colleague, "colleague-session", "default")
+            "colleague-desktop" -> Principal(colleague, "colleague-desktop-session", "default")
+            // Login tokens of realistic length, for the runner channel.
+            "colleague-laptop-login-0123456789" -> Principal(colleague, "colleague-session", "default")
+            "colleague-desktop-login-0123456789" -> Principal(colleague, "colleague-desktop-session", "default")
+            "admin-login-token-0123456789" -> Principal(admin, "admin-session", "default")
             "service-admin" -> Principal(admin, "admin-key", "default", ServiceScope.entries.toSet() - setOf(ServiceScope.CLOUD_READ, ServiceScope.CLOUD_WRITE, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ))
             "colleague-read" -> Principal(colleague, "colleague-read-key", "default", setOf(ServiceScope.CLOUD_READ))
             "colleague-write" -> Principal(colleague, "colleague-write-key", "default", setOf(ServiceScope.CLOUD_WRITE))
@@ -161,7 +175,9 @@ class CloudRoutesTest {
         assertTrue(ids("").all { it.kind == "cloud" && it.host == null })
         val remote = ids("&kind=remote").single()
         assertEquals("remote-one", remote.id)
-        assertEquals(CloudSessionHostView("device-1", "Work laptop", "macos", "15.1", "teamcode"), remote.host)
+        assertEquals(CloudSessionHostView("device-1", "Work laptop", "macos", "15.1", "teamcode", permissionMode = "ask"), remote.host)
+        assertEquals("remote" to "remote", remote.profile.id to remote.image.reference, "Reserved placeholders where a remote session has no profile or image")
+        assertEquals("not_applicable", remote.workspaceDeletion.state)
         assertEquals(setOf("admin-only", "remote-one"), ids("&kind=cloud&kind=remote").map { it.id }.filter { it in setOf("admin-only", "remote-one") }.toSet())
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?kind=laptop") { bearerAuth("admin") }.status)
         store.sessions.remove("remote-one")
@@ -467,6 +483,71 @@ class CloudRoutesTest {
             }.statusCode, "No checkpoint before a pause is requested")
         } finally { runner.close() }
         assertEquals(1, reviews.count { it == "projected-pod-token-1" }, "Token reviews are cached")
+    }
+
+    @Test fun remoteSessionsAreCreatedOnTheCallersDeviceAndHostedWithItsOwnLogin() = testApplication {
+        val store = Store()
+        val sessions = CloudSessionService(store)
+        val logins = team()
+        application {
+            configureGateway(gateway, team = logins, cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, FakeCluster, logins = { logins.authenticate(it) }), remoteHosts = true),
+                publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.sessions.remote.v1" !in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features,
+            "Advertised only with the conversation its host relays")
+        suspend fun create(token: String, json: String, key: String = json.hashCode().toString()) = client.post("/api/v1/cloud/sessions") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody(json); header(CloudHeaders.IDEMPOTENCY_KEY, key)
+        }
+        val body = """{"name":"Refactor","kind":"remote","agent":{"kind":"codex","model":"gpt-5"},"directoryName":"teamcode","permissionMode":"bypass"}"""
+        suspend fun refused(code: String, response: HttpResponse, status: HttpStatusCode) = runCatchingAssert(code, response, status)
+        refused("remote_requires_device", create("colleague-write", body), HttpStatusCode.UnprocessableEntity)
+        refused("invalid_session", create("colleague", """{"name":"Refactor","kind":"remote","profileId":"profile-id","agent":{"kind":"codex"},"directoryName":"teamcode"}"""), HttpStatusCode.BadRequest)
+        refused("invalid_session", create("colleague", """{"name":"Task","profileId":"profile-id","directoryName":"teamcode"}"""), HttpStatusCode.BadRequest)
+        refused("invalid_agent", create("colleague", """{"name":"Refactor","kind":"remote","directoryName":"teamcode"}"""), HttpStatusCode.BadRequest)
+        refused("invalid_directory_name", create("colleague", """{"name":"Refactor","kind":"remote","agent":{"kind":"claude"},"directoryName":"/Users/someone/teamcode"}"""), HttpStatusCode.BadRequest)
+        refused("invalid_permission_mode", create("colleague", """{"name":"Refactor","kind":"remote","agent":{"kind":"claude"},"directoryName":"teamcode","permissionMode":"yolo"}"""), HttpStatusCode.BadRequest)
+        refused("invalid_kind", create("colleague", """{"name":"Refactor","kind":"laptop"}"""), HttpStatusCode.BadRequest)
+        refused("on_behalf_forbidden", client.post("/api/v1/cloud/sessions") {
+            bearerAuth("admin"); contentType(ContentType.Application.Json); setBody(body); header(CloudHeaders.IDEMPOTENCY_KEY, "behalf"); header(CloudHeaders.ON_BEHALF_OF, "colleague-id")
+        }, HttpStatusCode.Forbidden)
+        assertTrue(store.sessions.isEmpty())
+        val created = create("colleague", body)
+        assertEquals(HttpStatusCode.Accepted, created.status)
+        val view = Serialization.json.decodeFromString<CloudSessionView>(created.bodyAsText())
+        assertEquals("remote" to "creating", view.kind to view.state)
+        assertEquals(CloudAgentView("codex", null, "gpt-5"), view.agent)
+        assertEquals(CloudSessionHostView("laptop-id", directoryName = "teamcode", permissionMode = "bypass"), view.host)
+        assertEquals(60, view.activity.idleTimeoutMinutes)
+
+        // The host starts it from the same device only, then uses the runner channel with that login.
+        refused("remote_host_mismatch", client.post("/api/v1/cloud/sessions/${view.id}/host") { bearerAuth("colleague-desktop") }, HttpStatusCode.Conflict)
+        refused("credential_scope", client.post("/api/v1/cloud/sessions/${view.id}/host") { bearerAuth("colleague-write") }, HttpStatusCode.Forbidden)
+        refused("remote_host_mismatch", client.post("/api/v1/cloud/sessions/${view.id}/resume") { bearerAuth("colleague-desktop") }, HttpStatusCode.Conflict)
+        val hosted = Serialization.json.decodeFromString<CloudHostView>(client.post("/api/v1/cloud/sessions/${view.id}/host") { bearerAuth("colleague") }.bodyAsText())
+        assertEquals("default" to 1, hosted.teamId to hosted.epoch)
+        suspend fun runner(path: String, token: String, epoch: Int = 1) = client.post("/api/v1/cloud/runner/$path") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"${view.id}","epoch":$epoch}""")
+        }
+        val laptop = "colleague-laptop-login-0123456789"
+        assertEquals(HttpStatusCode.Unauthorized, runner("register", "colleague-desktop-login-0123456789").status, "Another device of the owner is not the host")
+        assertEquals(HttpStatusCode.Unauthorized, runner("register", "admin-login-token-0123456789").status)
+        assertEquals(HttpStatusCode.Conflict, runner("register", laptop, epoch = 2).status)
+        assertEquals(HttpStatusCode.OK, runner("register", laptop).status)
+        assertEquals(CloudSessionState.PREPARING, store.sessions.getValue(view.id).state)
+        assertEquals(HttpStatusCode.OK, client.post("/api/v1/cloud/runner/heartbeat") {
+            bearerAuth(laptop); contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"${view.id}","epoch":1,"ready":true}""")
+        }.status)
+        assertEquals(CloudSessionState.READY, store.sessions.getValue(view.id).state)
+        // A second host fences the first.
+        client.post("/api/v1/cloud/sessions/${view.id}/host") { bearerAuth("colleague") }
+        refused("execution_fenced", runner("register", laptop), HttpStatusCode.Conflict)
+    }
+
+    private suspend fun runCatchingAssert(code: String, response: HttpResponse, status: HttpStatusCode) {
+        val text = response.bodyAsText()
+        assertEquals(status, response.status, text)
+        assertTrue("\"$code\"" in text, text)
     }
 
     @Test fun runnerReceivesAnInferenceCredentialForItsOwnExecutionOnly() = testApplication {

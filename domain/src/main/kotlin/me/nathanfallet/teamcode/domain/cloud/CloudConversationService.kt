@@ -178,8 +178,11 @@ class CloudConversationService(
         if (session.transferId != null || session.state == TRANSFERRING) return false
         val owner = sessions.member(teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired) return false
-        val profile = sessions.profile(teamId, session.profileId)
-        if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds)) return false
+        // A remote session has no profile: it wakes into waiting for its host, which the desktop app of that device starts.
+        if (session.kind != CloudSessionKind.REMOTE) {
+            val profile = sessions.profile(teamId, session.profileId)
+            if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds)) return false
+        } else if (session.host?.deviceId == null) return false
         var woke = false
         transition(teamId, sessionId) { current ->
             if (current.state.terminal || current.desiredState == DesiredState.TERMINATED) return@transition null

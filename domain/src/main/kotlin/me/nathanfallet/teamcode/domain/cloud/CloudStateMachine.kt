@@ -8,8 +8,9 @@ object CloudStateMachine {
     private val allowed: Map<CloudSessionState, Set<CloudSessionState>> = mapOf(
         CREATING to setOf(PREPARING, FAILED, TERMINATED),
         PREPARING to setOf(READY, FAILED, TERMINATED),
-        READY to setOf(ACTIVE, PAUSING, PAUSED, TERMINATED),
-        ACTIVE to setOf(READY, PAUSING, PAUSED, TERMINATED),
+        // To resuming: a remote session's host started again, and its new execution replaces the live one.
+        READY to setOf(ACTIVE, PAUSING, PAUSED, RESUMING, TERMINATED),
+        ACTIVE to setOf(READY, PAUSING, PAUSED, RESUMING, TERMINATED),
         // Back to ready: a resume cancelled the pause before the runner checkpointed.
         PAUSING to setOf(READY, PAUSED, TERMINATED),
         // Ownership changes only at a paused boundary: no pod, every execution ended.

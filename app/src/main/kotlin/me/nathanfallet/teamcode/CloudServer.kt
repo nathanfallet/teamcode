@@ -75,9 +75,11 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     /** The owner's environment variables come from the variants, resolved at every preparation. */
     private val variables = ResolveCloudVariablesUseCase(ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher)))
     private val githubAccess = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)
+    /** A remote session's host presents its owner's login; it is resolved like any API call's. */
+    private val logins = me.nathanfallet.teamcode.infrastructure.database.SqlTeamService(database)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),
-        AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess),
-        RunnerVariablesUseCase(store, variables))
+        AuthenticateRunnerUseCase(store, cluster, logins = { token -> logins.authenticate(token) }), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess),
+        RunnerVariablesUseCase(store, variables), remoteHosts = true)
 
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)))
 

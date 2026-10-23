@@ -27,6 +27,8 @@ class CloudSessionPersistenceTest {
         /** The reconciler of a server whose cloud sessions are turned off. */
         val off = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { false })
         val runner = RunnerChannelUseCase(store)
+        val logins = SqlTeamService(database)
+        val authenticate = AuthenticateRunnerUseCase(store, cluster, logins = { logins.authenticate(it) })
         val garbage = CollectCloudGarbageUseCase(store, cluster)
     }
 
@@ -58,6 +60,7 @@ class CloudSessionPersistenceTest {
                 failureModesAndEarlyCheckpoint(ra, rb, admin, profile)
                 environmentPreparation(ra, rb, admin, colleague, connected)
                 kindsAndHosts(ra, rb, admin, colleague, profile)
+                remoteLifecycle(ra, rb, admin, colleague)
             } }
         }
     }
@@ -572,9 +575,119 @@ class CloudSessionPersistenceTest {
         assertEquals(read.host, rb.sessions.list(colleague, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single().host)
         assertEquals(listOf(remote.id), rb.sessions.list(admin, CloudSessionQuery(owner = "*", kinds = setOf(CloudSessionKind.REMOTE))).sessions.map { it.id })
 
-        // Removing the device keeps the session and its directory, without a host device.
+        // Removing the device ends its remote sessions in the same transaction; they keep their transcript and directory name.
         devices.revokeDevice(colleague, device.id)
-        assertEquals(CloudSessionHost(null, "teamcode"), rb.sessions.get(colleague, remote.id).host)
+        val removed = rb.sessions.get(colleague, remote.id)
+        assertEquals(CloudSessionHost(null, "teamcode"), removed.host)
+        assertEquals(DesiredState.TERMINATED to "device_removed", removed.desiredState to removed.terminatedReason)
+        assertEquals(cloud.state, rb.sessions.get(colleague, cloud.id).state, "Cloud sessions are not touched")
+        pass(ra)
+        assertEquals(TERMINATED, ra.store.find(admin.teamId, remote.id)!!.state)
+        ra.sessions.delete(colleague, null, cloud.id)
+    }
+
+    /**
+     * A remote session from creation to removal, on real MySQL: created on the caller's device, started by its host with
+     * the member's login, fenced when a second host starts, paused by a checkpoint and by a silent host, resumed only on
+     * its device, never transferred, and never a cluster call.
+     */
+    private suspend fun remoteLifecycle(ra: Replica, rb: Replica, admin: Principal, colleague: Principal) {
+        val team = SqlTeamService(ra.database)
+        val password = "cloud colleague replacement password"
+        val laptop = team.login("cloud-colleague", password, "Laptop", "1f0e0d0c-0b0a-4009-8807-060504030201", "linux", "6.8")
+        val desktop = team.login("cloud-colleague", password, "Desktop", "2f0e0d0c-0b0a-4009-8807-060504030201", "windows", "11")
+        val noDevice = team.login("cloud-colleague", password, "Script")
+        val device = ra.store.deviceOf(laptop.principal)!!
+        val draft = RemoteSessionDraft("Refactor", "claude", "opus", null, mapOf("area" to "cli"), "teamcode", RemotePermissionMode.ASK)
+        failure("remote_requires_device") { ra.sessions.createRemote(noDevice.principal, null, draft, null) }
+        failure("on_behalf_forbidden") { ra.sessions.createRemote(admin, colleague.member.id, draft, null) }
+        failure("invalid_directory_name") { ra.sessions.createRemote(laptop.principal, null, draft.copy(directoryName = "/home/someone/teamcode"), null) }
+        failure("invalid_agent") { ra.sessions.createRemote(laptop.principal, null, draft.copy(agentKind = "gemini"), null) }
+        val created = (ra.sessions.createRemote(laptop.principal, null, draft, IdempotencyRequest("POST /cloud/sessions", "remote-1", "d")) as CloudCreateOutcome.Created).session
+        assertEquals(created.id, (ra.sessions.createRemote(laptop.principal, null, draft, IdempotencyRequest("POST /cloud/sessions", "remote-1", "d")) as CloudCreateOutcome.Replayed).session.id)
+        var s = rb.sessions.get(colleague, created.id)
+        assertEquals(CloudSessionKind.REMOTE to CREATING, s.kind to s.state)
+        assertEquals(CloudSessionHost(device, "teamcode", HostDevice("Laptop", "linux", "6.8"), RemotePermissionMode.ASK), s.host)
+        assertEquals(60, s.idleTimeoutMinutes, "The team's remote idle pause applies")
+        assertEquals("" to "", s.profileId to s.clusterId)
+        // The reconciler has nothing to do until a host starts it.
+        pass(ra)
+        assertEquals(CREATING to 0, ra.store.find(admin.teamId, s.id)!!.let { it.state to it.currentEpoch })
+
+        failure("remote_host_mismatch") { rb.sessions.host(desktop.principal, s.id) }
+        failure("not_found") { rb.sessions.host(admin, s.id) }
+        failure("remote_not_transferable") { CloudTransferService.transferable(s) }
+        val hosted = rb.sessions.host(laptop.principal, s.id)
+        assertEquals(1, hosted.currentEpoch)
+        // The runner channel takes the owner's login from the session's device only.
+        failure("runner_unauthenticated") { ra.authenticate(desktop.token, admin.teamId, s.id, 1) }
+        failure("runner_unauthenticated") { ra.authenticate(noDevice.token, admin.teamId, s.id, 1) }
+        failure("execution_fenced") { ra.authenticate(laptop.token, admin.teamId, s.id, 2) }
+        val identity = ra.authenticate(laptop.token, admin.teamId, s.id, 1)
+        ra.runner.register(identity.teamId, identity.sessionId, identity.epoch, identity.podName)
+        assertEquals(PREPARING, ra.store.find(admin.teamId, s.id)!!.state)
+        rb.runner.heartbeat(admin.teamId, s.id, 1, ready = true)
+        s = rb.sessions.get(colleague, s.id)
+        assertEquals(READY, s.state)
+        assertTrue(s.host!!.online && s.host!!.lastHeartbeatAt != null, "The host is online while it heartbeats")
+        val listed = rb.sessions.list(colleague, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single { it.id == s.id }
+        assertTrue(listed.host!!.online)
+
+        // A second host on the same device takes a new epoch: the first one is fenced and exits.
+        rb.sessions.host(laptop.principal, s.id)
+        failure("execution_fenced") { ra.authenticate(laptop.token, admin.teamId, s.id, 1) }
+        assertEquals("replaced", ra.store.execution(s.id, 1)!!.exitReason)
+        assertEquals(RESUMING, ra.store.find(admin.teamId, s.id)!!.state)
+        ra.authenticate(laptop.token, admin.teamId, s.id, 2).let { ra.runner.register(it.teamId, it.sessionId, it.epoch, it.podName) }
+        ra.runner.heartbeat(admin.teamId, s.id, 2, ready = true)
+        assertEquals(READY, ra.store.find(admin.teamId, s.id)!!.state)
+
+        // A pause drains on the host and completes at its checkpoint: nothing is deleted.
+        rb.sessions.pause(laptop.principal, null, s.id, false)
+        pass(ra)
+        assertEquals(PAUSING, ra.store.find(admin.teamId, s.id)!!.state)
+        rb.runner.checkpoint(admin.teamId, s.id, 2, completed = true)
+        pass(ra)
+        s = ra.store.find(admin.teamId, s.id)!!
+        assertEquals(PAUSED to WorkspaceResume.CONSISTENT, s.state to s.resumeWorkspace)
+        assertEquals(DeletionState.NONE, s.workspace.deletion)
+        assertFalse(rb.sessions.get(colleague, s.id).host!!.online)
+
+        // Only the host device resumes it; a message's wake elsewhere leaves it waiting for that host.
+        failure("remote_host_mismatch") { rb.sessions.resume(desktop.principal, null, s.id) }
+        rb.sessions.resume(laptop.principal, null, s.id)
+        pass(ra)
+        s = ra.store.find(admin.teamId, s.id)!!
+        assertEquals(RESUMING to CloudSessionService.WAITING_HOST, s.state to s.phase)
+        rb.sessions.host(laptop.principal, s.id)
+        ra.runner.register(admin.teamId, s.id, 3, CloudSessionService.hostExecutionName(3))
+        ra.runner.heartbeat(admin.teamId, s.id, 3, ready = true)
+
+        // A silent host (device asleep, network down) pauses the session after 90 s, "host offline".
+        ra.database.query { CloudExecutions.update({ (CloudExecutions.sessionId eq s.id) and (CloudExecutions.epoch eq 3) }) { it[lastHeartbeatAt] = 1 } }
+        pass(ra)
+        s = ra.store.find(admin.teamId, s.id)!!
+        assertEquals(PAUSED to ReconcileCloudSessionsUseCase.HOST_OFFLINE, s.state to s.failure?.code)
+        assertEquals("heartbeat_lost", ra.store.execution(s.id, 3)!!.exitReason)
+        failure("execution_fenced") { ra.runner.heartbeat(admin.teamId, s.id, 3, ready = true) }
+        // The host starting again resumes it and clears the failure.
+        assertNull(rb.sessions.host(laptop.principal, s.id).failure)
+
+        // All kinds at once: one page per kind, merged in creation order, with a cursor across both.
+        val all = rb.sessions.list(colleague, CloudSessionQuery(limit = 1, kinds = CloudSessionKind.entries.toSet()))
+        val everything = rb.sessions.list(colleague, CloudSessionQuery(limit = 50)).sessions
+        assertEquals(everything.sortedWith(compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id }).map { it.id }, everything.map { it.id })
+        assertEquals(everything.first().id, all.sessions.single().id)
+        assertEquals(everything[1].id, rb.sessions.list(colleague, CloudSessionQuery(limit = 1, beforeId = all.nextBeforeId)).sessions.single().id)
+        assertTrue(everything.any { it.kind == CloudSessionKind.REMOTE } && everything.any { it.kind == CloudSessionKind.CLOUD })
+
+        // Deleting it ends it without any cleanup: the directory is the member's.
+        rb.sessions.delete(laptop.principal, null, s.id)
+        pass(ra)
+        s = ra.store.find(admin.teamId, s.id)!!
+        assertEquals(TERMINATED to DeletionState.NONE, s.state to s.workspace.deletion)
+        assertEquals(ExecutionState.ENDED, ra.store.execution(s.id, 4)!!.state)
+        assertTrue(cluster(ra).podNames().none { s.id in it } && cluster(ra).claims.keys.none { s.id in it }, "A remote session never reaches the cluster")
     }
 
     private suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)

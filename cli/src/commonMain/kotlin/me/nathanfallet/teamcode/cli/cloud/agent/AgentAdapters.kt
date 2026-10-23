@@ -6,6 +6,7 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.CloudEventTypes
 import me.nathanfallet.teamcode.api.models.CloudQuestionAnswer
 import me.nathanfallet.teamcode.api.models.CloudTranscriptLimits
+import me.nathanfallet.teamcode.api.models.RemotePermissionModes
 
 /** A normalized transcript event before upload. The server masks and bounds it again. */
 data class AgentEvent(val type: String, val data: JsonObject)
@@ -19,7 +20,16 @@ data class AgentCommand(val command: String, val arguments: List<String>)
  * Agent settings from the server (`runner/agent`). [permissionRelay]: the server takes permission requests and their
  * answers. [permissionDeadlineMinutes]: how long a request waits before the host denies it; 0 for no deadline.
  */
-data class AgentSettings(val kind: String, val version: String?, val model: String?, val effort: String?, val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0)
+data class AgentSettings(val kind: String, val version: String?, val model: String?, val effort: String?, val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0,
+    /**
+     * A remote session's mode on its host's files (`ask` or `bypass`); null in a cloud pod, which is its own sandbox and
+     * always bypasses. With `ask`, Claude Code keeps its permission checks (each request is relayed) and Codex runs in
+     * its `workspace-write` sandbox, limited to the session's directory.
+     */
+    val permissionMode: String? = null) {
+    /** Whether the agent skips its own permission checks and sandbox. */
+    val bypass get() = permissionMode != RemotePermissionModes.ASK
+}
 
 /**
  * The lines answering a permission request, or the rejection reason when there are none ([UNKNOWN] or [INVALID]);
@@ -90,6 +100,9 @@ private fun resultText(content: JsonElement?): String = when (content) {
  * `parentToolUseId`. A finished turn carries Claude Code's own cost estimate and the turn's tokens from its `result`
  * line.
  *
+ * On a member's own device in `ask` mode ([AgentSettings.bypass] false), `--dangerously-skip-permissions` is left out:
+ * every tool use Claude Code would ask about becomes a relayed request.
+ *
  * With [AgentSettings.permissionRelay], Claude Code also gets `--permission-prompt-tool stdio`. Bypass mode still
  * skips ordinary permission checks; what remains, an `ask` permission rule or a question to the user
  * (`AskUserQuestion`), arrives as a `can_use_tool` control request. It becomes a `permission.request` event, and the
@@ -106,7 +119,8 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
     override val turnActive get() = pending > 0
 
     override fun command(resume: String?) = AgentCommand("claude", buildList {
-        addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"))
+        addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
+        if (settings.bypass) add("--dangerously-skip-permissions")
         if (settings.permissionRelay) addAll(listOf("--permission-prompt-tool", "stdio"))
         settings.model?.let { addAll(listOf("--model", it)) }
         settings.effort?.let { addAll(listOf("--effort", it)) }
@@ -328,7 +342,9 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
     private var workingDirectory = "/workspace"
     override val turnActive get() = activeTurn != null || turnStarting
 
-    override fun command(resume: String?) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"danger-full-access\""))
+    /** `danger-full-access` in a pod or in bypass mode; on a member's device otherwise, writes stay inside the session's directory. */
+    private val sandbox = if (settings.bypass) "danger-full-access" else "workspace-write"
+    override fun command(resume: String?) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"$sandbox\""))
 
     private fun request(method: String, params: JsonObject): String {
         val id = nextId++
@@ -336,7 +352,7 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
         return buildJsonObject { put("id", id); put("method", method); put("params", params) }.toString()
     }
     private fun threadParams(extra: JsonObjectBuilder.() -> Unit) = buildJsonObject {
-        put("approvalPolicy", "never"); put("sandbox", "danger-full-access"); put("cwd", workingDirectory)
+        put("approvalPolicy", "never"); put("sandbox", sandbox); put("cwd", workingDirectory)
         settings.model?.let { put("model", it) }
         extra()
     }

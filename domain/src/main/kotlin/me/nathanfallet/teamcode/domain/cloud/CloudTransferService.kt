@@ -179,6 +179,9 @@ class CloudTransferService(
         /** States a transfer may start from: anything but creation, preparation and the end of the session. */
         fun transferable(session: CloudSession, allowing: String? = null) {
             when {
+                // It runs on its owner's own device, in a directory of theirs: nobody else could resume it.
+                session.kind == CloudSessionKind.REMOTE ->
+                    throw TeamFailure("remote_not_transferable", 409, "A remote session runs on its owner's device and cannot be transferred.")
                 session.state.terminal || session.desiredState == DesiredState.TERMINATED -> throw ended()
                 session.state == CREATING || session.state == PREPARING ->
                     throw TeamFailure("session_preparing", 409, "The session is still being prepared. Transfer it once it is ready.")

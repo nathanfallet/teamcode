@@ -167,11 +167,12 @@ data class RunnerAgentRequest(val teamId: String, val sessionId: String, val epo
 /**
  * [permissionRelay]: the server takes `permission.request` events and their answers, so the runner may relay them.
  * [permissionDeadlineMinutes]: how long a request waits for an answer before the runner denies it; 0 waits without a deadline.
+ * [permissionMode]: a remote session's mode on its host (`ask` or `bypass`); null for a cloud session, whose pod is its sandbox.
  */
 @Serializable
 data class RunnerAgentView(
     val kind: String, val version: String? = null, val model: String? = null, val effort: String? = null, val conversation: String,
-    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0,
+    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val permissionMode: String? = null,
 )
 /** [sequence] is the runner's own counter for this epoch, starting at 1; a retried batch is deduplicated on it. */
 @Serializable

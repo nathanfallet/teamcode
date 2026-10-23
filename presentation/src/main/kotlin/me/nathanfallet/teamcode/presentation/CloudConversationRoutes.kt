@@ -86,6 +86,18 @@ private fun ApplicationCall.eventTypes(): Set<TeamEventType>? = request.queryPar
     names.map { TeamEventType.parse(it) ?: throw TeamFailure("invalid_event_type", 400, "Unknown event type '${it.take(64)}'.") }.toSet()
 }
 
+/**
+ * `?kind=cloud&kind=remote`: the session kinds whose events the feed carries, as for the session list; without it, only
+ * cloud sessions', so a client written before remote sessions never hears of one it cannot show. Run events pass.
+ */
+private fun ApplicationCall.sessionKinds(): Set<String> = request.queryParameters.getAll("kind")?.map { value ->
+    CloudSessionKind.entries.find { it.wire == value }?.wire ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud or kind=remote.")
+}?.toSet() ?: setOf(CloudSessionKind.CLOUD.wire)
+
+/** Whether a session event belongs to one of [kinds]; events from before kinds existed are cloud sessions'. */
+private fun TeamEventView.ofKinds(kinds: Set<String>) = subject != TeamEventSubject.SESSION.wire ||
+    ((data["kind"] as? JsonPrimitive)?.contentOrNull ?: CloudSessionKind.CLOUD.wire) in kinds
+
 /** The caller-wide feed; a plain function so a server without the journal does not mount it. */
 internal fun Route.teamEventRoutes(events: TeamEventService) {
     get("/api/v1/cloud/events/stream") {
@@ -94,13 +106,18 @@ internal fun Route.teamEventRoutes(events: TeamEventService) {
         val after = resume ?: call.longQuery("after")
         // Authorize and check the cursor before committing the response, so a refusal is still a JSON error.
         val feed = events.open(call.principal, after, call.eventTypes())
+        val kinds = call.sessionKinds()
         call.response.header("X-Accel-Buffering", "no")
         call.respondBytesWriter(ContentType.Text.EventStream) {
             writeStringUtf8("retry: 2000\n\n"); flush()
             try {
                 feed.oldestRetained?.let { writeStringUtf8("event: gap\ndata: {\"oldestSeq\":$it}\n\n"); flush() }
                 feed.follow(emit = { batch ->
-                    for (event in batch) writeStringUtf8("id: ${event.seq}\nevent: ${event.type.wire}\ndata: ${Serialization.json.encodeToString(event.view())}\n\n")
+                    for (event in batch) {
+                        val view = event.view()
+                        if (!view.ofKinds(kinds)) continue
+                        writeStringUtf8("id: ${event.seq}\nevent: ${event.type.wire}\ndata: ${Serialization.json.encodeToString(view)}\n\n")
+                    }
                     flush()
                 }, idle = { writeStringUtf8(": keep-alive\n\n"); flush() })
             } catch (error: TeamFailure) {
@@ -209,7 +226,7 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val body = call.boundedJson<RunnerAgentRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val agent = runner.agent(pod.teamId, pod.sessionId, pod.epoch)
-        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes))
+        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, permissionMode = agent.permissionMode?.wire))
     }
     post(RUNNER_PATH + "events") {
         val body = call.boundedJson<RunnerEventsRequest>(RUNNER_BODY_BYTES)

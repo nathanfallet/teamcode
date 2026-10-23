@@ -18,8 +18,28 @@ enum class CloudSessionKind(val wire: String) {
     CLOUD("cloud"), REMOTE("remote");
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }
-/** The device a remote session runs on; [device] is null once the device was removed or when it was not read with the session. */
-data class CloudSessionHost(val deviceId: String?, val directoryName: String?, val device: HostDevice? = null)
+/**
+ * The device a remote session runs on; [device] is null once the device was removed or when it was not read with the
+ * session. [online]: the current execution is registered and not ended (the reconciler ends it 90 s after the host's
+ * last heartbeat), with [lastHeartbeatAt] from that execution; both are only read with the session.
+ */
+data class CloudSessionHost(
+    val deviceId: String?,
+    val directoryName: String?,
+    val device: HostDevice? = null,
+    val permissionMode: RemotePermissionMode = RemotePermissionMode.ASK,
+    val online: Boolean = false,
+    val lastHeartbeatAt: Long? = null,
+)
+/**
+ * How a remote session's agent asks for permission on the member's own files, fixed at creation: [ASK] relays Claude
+ * Code's permission requests to the team's clients and keeps Codex in its `workspace-write` sandbox limited to the
+ * directory; [BYPASS] skips both, as in a cloud pod.
+ */
+enum class RemotePermissionMode(val wire: String) {
+    ASK("ask"), BYPASS("bypass");
+    companion object { fun parse(value: String?) = entries.singleOrNull { it.wire == value } }
+}
 /** What a client shows about a host device: its name and, once reported, its operating system. */
 data class HostDevice(val name: String, val platform: String?, val osVersion: String?)
 enum class DesiredState(val wire: String) {
@@ -75,6 +95,11 @@ data class CloudWorkspace(
     val deletionProblem: CloudProblem? = null,
 )
 
+/**
+ * A session. A remote session has no profile, cluster, namespace, image or workspace claim: those fields are empty
+ * strings (`0` for [profileVersion] and the workspace size), stored as NULL, and no code path that reaches a cluster
+ * is taken for it ([kind]).
+ */
 data class CloudSession(
     val id: String,
     val teamId: String,
@@ -229,6 +254,8 @@ data class CloudSettings(
      * waits without a deadline. Read by the runner once per execution.
      */
     val permissionDeadlineMinutes: Int = 0,
+    /** Minutes without activity before a remote session pauses (its host drains, checkpoints and exits); 0 never pauses. */
+    val remoteIdleTimeoutMinutes: Int = 60,
 )
 enum class MemberTransfers(val wire: String) {
     DISABLED("disabled"), OFFER("offer");
@@ -264,6 +291,19 @@ data class CloudSessionDraft(
     val idleTimeoutMinutes: Int?,
     val environment: CloudEnvironmentOverride? = null,
     /** The first message for the agent, queued with the session and delivered once it is ready. */
+    val initialMessage: String? = null,
+)
+
+/** A session on the caller's own device: no profile, the agent and the directory's name come from the request. */
+data class RemoteSessionDraft(
+    val name: String,
+    val agentKind: String,
+    val agentModel: String?,
+    val agentEffort: String?,
+    val labels: Map<String, String>,
+    /** The last segment of the directory the agent works in, never its path (which holds the member's user name). */
+    val directoryName: String,
+    val permissionMode: RemotePermissionMode,
     val initialMessage: String? = null,
 )
 

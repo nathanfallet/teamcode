@@ -66,7 +66,15 @@ class SqlDeviceService(private val database: Database) : DeviceService {
         requireMember(actor, memberId, lock = true)
         // Explicit deletion documents the invariant; the FK also protects against orphan tokens.
         Tokens.deleteWhere { Tokens.deviceId eq deviceId }
-        // Remote sessions keep their transcript but lose their host (the foreign key's own index finds them).
+        // The device's remote sessions end with it, in this transaction: they could only ever run there. The reconciler
+        // finishes the termination; transcripts are kept and the sessions lose their host (the foreign key's own index finds them).
+        val now = nowMillis()
+        CloudSessions.update({
+            (CloudSessions.hostDeviceId eq deviceId) and (CloudSessions.state neq "terminated") and (CloudSessions.desiredState neq "terminated")
+        }) {
+            it[desiredState] = "terminated"; it[terminatedReason] = "device_removed"; it[generation] = generation + 1L
+            it[updatedAt] = now; it[reconcileAfter] = now; it[reconcileRequested] = true
+        }
         CloudSessions.update({ CloudSessions.hostDeviceId eq deviceId }) { it[hostDeviceId] = null }
         Devices.deleteWhere { Devices.id eq deviceId }
         audit(actor.teamId, actor.member.id, "device.revoked", deviceId)

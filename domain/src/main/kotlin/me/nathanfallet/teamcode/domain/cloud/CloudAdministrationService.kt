@@ -127,8 +127,9 @@ class CloudAdministrationService(
                 settings.maxRunningSessionsPerMember !in 1..100 || settings.maxRetainedSessionsPerMember !in 1..1000 ||
                 settings.maxRetainedSessionsPerMember < settings.maxRunningSessionsPerMember ||
                 (settings.transcriptRetentionDays != null && settings.transcriptRetentionDays !in 1..3650) || settings.transferOfferDays !in 1..30 ||
-                settings.permissionDeadlineMinutes !in 0..CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES)
-                throw TeamFailure("invalid_cloud_settings", 400, "Use a paused retention of 1–3650 days (or indefinite), a transcript retention of 1–3650 days (or indefinite), a failed-workspace retention of 0–365 days, running/retained caps of 1–100/1–1000 with retained ≥ running, a transfer offer validity of 1–30 days, and a permission request deadline of 1–${CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES} minutes (or 0, no deadline).")
+                settings.permissionDeadlineMinutes !in 0..CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES ||
+                settings.remoteIdleTimeoutMinutes !in 0..CloudIdleRules.MAX_TIMEOUT_MINUTES)
+                throw TeamFailure("invalid_cloud_settings", 400, "Use a paused retention of 1–3650 days (or indefinite), a transcript retention of 1–3650 days (or indefinite), a failed-workspace retention of 0–365 days, running/retained caps of 1–100/1–1000 with retained ≥ running, a transfer offer validity of 1–30 days, a permission request deadline of 1–${CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES} minutes (or 0, no deadline), and a remote session idle pause of 1–${CloudIdleRules.MAX_TIMEOUT_MINUTES} minutes (or 0, never).")
         }
         fun validate(input: CloudClusterInput, creating: Boolean) {
             val url = input.apiUrl
