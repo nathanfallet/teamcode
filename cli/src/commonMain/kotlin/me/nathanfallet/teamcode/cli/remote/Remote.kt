@@ -10,6 +10,8 @@ import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.default
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
+import com.github.ajalt.clikt.parameters.types.int
+import me.nathanfallet.teamcode.cli.daemon.homeDirectory
 import kotlin.uuid.Uuid
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
@@ -49,8 +51,10 @@ private const val DETACH_HELP = "Host the session in the background and return: 
 private const val ATTACH_HELP = "Host the session in the background and attach this terminal to it (as teamcode attach); /detach leaves it running."
 
 private class RemoteStart : SuspendingCliktCommand(name = "start") {
-    override fun help(context: Context) = "Start a session in DIRECTORY (the current one by default) and host it on this device. In the foreground (the default), " +
-        "Ctrl-C pauses it: the agent finishes its turn, the host checkpoints and exits; teamcode remote resume SESSION resumes it."
+    override fun help(context: Context) = "Start a session in DIRECTORY (the current one by default) and host it on this device. When this device's daemon runs " +
+        "(teamcode service), it hosts the session and DIRECTORY becomes one of its folders (teamcode folders); this terminal attaches to the session " +
+        "unless --detach. Otherwise the command hosts it: in the foreground (the default), Ctrl-C pauses it: the agent finishes its turn, " +
+        "the host checkpoints and exits; teamcode remote resume SESSION resumes it."
     private val directory by argument("DIRECTORY", help = "The directory the agent works in.").default(".")
     private val agent by option("--agent", help = "The agent to run.").choice("claude", "codex").default("claude")
     private val name by option("--name", help = "The session's name; the directory's name by default.")
@@ -69,12 +73,26 @@ private class RemoteStart : SuspendingCliktCommand(name = "start") {
         val path = remoteDirectory(directory)
         val config = loadConfig()
         val code = sdk(config).use { client ->
-            requireRemote(client)
+            val features = requireRemote(client)
             if (bypass) echo("Warning: the agent acts on your files without asking for permission.", err = true)
-            val session = client.createCloudSession(CreateCloudSessionRequest(
+            val request = CreateCloudSessionRequest(
                 name = name ?: path.name, kind = CloudSessionKinds.REMOTE, agent = CloudAgentRequest(model, effort, agent), labels = parseLabels(labels),
                 directoryName = path.name, permissionMode = if (bypass) RemotePermissionModes.BYPASS else RemotePermissionModes.ASK, initialMessage = message,
-            ), idempotencyKey = Uuid.random().toString())
+            )
+            val windows = servicePlatform().os == "windows"
+            daemonDevice(client, features, windows)?.let { device ->
+                val report: (String) -> Unit = { echo(it, err = true) }
+                val session = startThroughDaemon(client, device, path, request, agent, homeDirectory(), windows, environment("PATH"), report)
+                if (json) echo(Serialization.json.encodeToString(session))
+                echo("Remote session ${session.id} on this device, in ${path}; this device's daemon hosts it.", err = true)
+                awaitDaemonHost(client, session.id, session.currentEpoch, report)
+                if (detach) {
+                    report("Follow it with teamcode attach ${session.id}; teamcode remote stop ${session.id} pauses it.")
+                    return@use 0
+                }
+                attachSession(client, session.id, { echo(it) }, report)
+            }
+            val session = client.createCloudSession(request, idempotencyKey = Uuid.random().toString())
             val local = RemoteSessionRecord(session.id, path.toString(), agent)
             RemoteSessions().save(local)
             if (json) echo(Serialization.json.encodeToString(session))
@@ -96,8 +114,16 @@ private class RemoteResume : SuspendingCliktCommand(name = "resume") {
         if (detach && attach) throw UsageError("Use --detach or --attach, not both.")
         val local = RemoteSessions().load(session) ?: throw notRecorded(session)
         val code = sdk(loadConfig()).use { client ->
-            requireRemote(client)
+            val features = requireRemote(client)
             val current = client.cloudSession(session)
+            // A session started through the daemon is the daemon's to host: resuming puts it back in its queue.
+            if (current.host?.folderId != null && daemonDevice(client, features, servicePlatform().os == "windows") != null &&
+                !(current.host?.online == true && current.desiredState == "running")) {
+                val report: (String) -> Unit = { echo(it, err = true) }
+                if (current.desiredState != "running") client.resumeCloudSession(session)
+                awaitDaemonHost(client, session, current.currentEpoch, report)
+                return@use if (attach) attachSession(client, session, { echo(it) }, report) else 0
+            }
             if (current.host?.online == true && current.desiredState == "running") {
                 echo("Session $session is already hosted on this device.", err = true)
                 if (attach) attachSession(client, session, { echo(it) }) { echo(it, err = true) } else 0
@@ -111,12 +137,16 @@ private class RemoteResume : SuspendingCliktCommand(name = "resume") {
 private class RemoteHost : SuspendingCliktCommand(name = "host") {
     override fun help(context: Context) = "Host a remote session of this device in the foreground until it pauses (what teamcode remote resume --detach runs in the background)."
     private val session by argument("SESSION")
+    private val acceptedEpoch by option("--accepted-epoch", hidden = true, help = "The epoch this device's daemon opened for the session.").int()
+    private val team by option("--team", hidden = true, help = "The session's team, with --accepted-epoch.")
 
     override suspend fun run() {
+        if ((acceptedEpoch == null) != (team == null)) throw UsageError("Use --accepted-epoch and --team together.")
         val local = RemoteSessions().load(session) ?: throw notRecorded(session)
+        val accepted = acceptedEpoch?.let { epoch -> AcceptedHost(requireNotNull(team).also { if (!TEAM_ID.matches(it)) throw UsageError("Invalid --team.") }, epoch) }
         val code = sdk(loadConfig()).use { client ->
             requireRemote(client)
-            hostRemoteSession(client, local, report = { echo(it, err = true) })
+            hostRemoteSession(client, local, report = { echo(it, err = true) }, accepted = accepted)
         }
         if (code != 0) SystemExit.exit(code)
     }
@@ -198,10 +228,15 @@ private suspend fun host(client: me.nathanfallet.teamcode.client.TeamCodeClient,
     attachSession(client, record.sessionId, out, report)
 }
 
-private suspend fun requireRemote(client: me.nathanfallet.teamcode.client.TeamCodeClient) {
-    if (REMOTE_CAPABILITY !in client.capabilities().features)
+/** The server's features, once it runs remote sessions. */
+private suspend fun requireRemote(client: me.nathanfallet.teamcode.client.TeamCodeClient): List<String> {
+    val features = client.capabilities().features
+    if (REMOTE_CAPABILITY !in features)
         throw CliktError("This server does not run remote sessions (cloud.sessions.remote.v1): update it, or ask an administrator to turn cloud sessions on.")
+    return features
 }
+
+private val TEAM_ID = Regex("[a-zA-Z0-9_-]{1,64}")
 
 /**
  * What this device keeps about one of its remote sessions, never sent to the server: the directory's full path (which

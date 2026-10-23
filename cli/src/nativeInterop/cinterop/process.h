@@ -13,6 +13,14 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/file.h>
+
+/* A whole-file BSD lock without waiting: 0 when taken, otherwise -1 with errno (EWOULDBLOCK when another holder has it). */
+static inline int teamcode_try_flock(int fd) {
+    int result;
+    do { result = flock(fd, LOCK_EX | LOCK_NB); } while (result != 0 && errno == EINTR);
+    return result;
+}
 
 /* Hook commands receive a pipe, never interactive input. Bound both input and wait. */
 static inline int teamcode_hook_input(unsigned char *buffer, int capacity) {

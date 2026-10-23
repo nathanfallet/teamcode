@@ -43,13 +43,18 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
  * checkpoints and exits. Returns the process exit code.
  */
 internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSessionRecord, report: (String) -> Unit,
-    stopRequested: () -> Boolean = ::serviceStopRequested): Int = coroutineScope {
+    stopRequested: () -> Boolean = ::serviceStopRequested, accepted: AcceptedHost? = null): Int = coroutineScope {
     val features = client.capabilities().features
-    val hosted = takeSession(client, record.sessionId, report)
-    val team = hosted.teamId; val session = record.sessionId; val epoch = hosted.epoch
-    report("Hosting ${hosted.session.name} (epoch $epoch) in ${record.directory}.")
-    // An update of the CLI waits for this host to end before it replaces the binary under it.
-    val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(loadService(configPath())?.executable, report)
+    val session = record.sessionId
+    val (team, epoch) = if (accepted != null) accepted.teamId to accepted.epoch else takeSession(client, session, report).let { hosted ->
+        report("Hosting ${hosted.session.name} (epoch ${hosted.epoch}) in ${record.directory}.")
+        hosted.teamId to hosted.epoch
+    }
+    if (accepted != null) report("Hosting session $session (epoch $epoch) for this device's daemon, in ${record.directory}.")
+    // Started by `remote start` or `resume`, the host holds the installation lease: an update defers the local service's
+    // restart until it ends, as for `teamcode run`. Started by the daemon, it holds none (decision 12): it does not use the
+    // service's proxy, and that restart is what pauses it, before the new daemon resumes it on the new version.
+    val lease = if (accepted != null) null else me.nathanfallet.teamcode.cli.update.agentInstallationLease(loadService(configPath())?.executable, report)
     try {
         trackedRun(client, record.agent, "interactive", "team.runs.v1" in features, report = report, labels = mapOf(SESSION_RUN_LABEL to session)) { runId ->
             hostExecution(client, record, team, epoch, runId, features, report, stopRequested)
@@ -60,6 +65,9 @@ internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSes
         }
     }
 }
+
+/** An epoch the device's daemon already opened (`POST /cloud/sessions/{id}/host`) for this host to run. */
+internal data class AcceptedHost(val teamId: String, val epoch: Int)
 
 private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionRecord, team: String, epoch: Int, runId: String?, features: List<String>,
     report: (String) -> Unit, stopRequested: () -> Boolean): Int = coroutineScope {

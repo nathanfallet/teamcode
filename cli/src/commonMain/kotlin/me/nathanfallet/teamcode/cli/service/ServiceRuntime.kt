@@ -15,6 +15,7 @@ import me.nathanfallet.teamcode.cli.platform.*
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import kotlin.time.Clock
+import kotlin.time.TimeSource
 import okio.FileSystem
 import okio.Path.Companion.toPath
 
@@ -59,8 +60,19 @@ internal fun serviceMatches(body: JsonObject, id: String, origin: String, backgr
         (!activityRelay || capabilities?.contains(JsonPrimitive("activity-relay-v1")) == true)
 }
 
+/**
+ * The local service: the loopback proxy and the device's daemon ([runDaemon]). One per configuration: `daemon.lock` is
+ * held for the whole run, and a second instance exits before writing anything (not even the log, which it would replace).
+ * On stop, the daemon pauses the sessions it hosts and goes offline first, then the proxy drains its requests.
+ */
 internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
     installServiceSignalHandlers()
+    val instance = holdExclusiveLock(me.nathanfallet.teamcode.cli.daemon.daemonLockPath(settings.config))
+        ?: throw com.github.ajalt.clikt.core.CliktError("Another TeamCode service already runs for this configuration.")
+    try { serveLocked(settings) } finally { instance.close() }
+}
+
+private suspend fun serveLocked(settings: ServiceSettings) = coroutineScope {
     val logs = Channel<String>(64)
     val writer = launch {
         val lines = ArrayDeque<String>()
@@ -86,6 +98,8 @@ internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
         }) { configure -> HttpClient { configure(this) } }
         val server = proxyServer(client, settings.localToken, settings.port, settings.id, origin, report = ::report)
         var updates: Job? = null
+        var daemon: Job? = null
+        var drainMillis = 600_000L
         try {
             server.start(wait = false)
             // Ktor's Native startup registers its own signal handler. The service owns both
@@ -93,10 +107,19 @@ internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
             installServiceSignalHandlers()
             report("Local proxy is listening. Upstream connectivity and authentication are checked on each request.")
             updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(::report) }
+            daemon = launch {
+                try { me.nathanfallet.teamcode.cli.daemon.runDaemon(client, settings.config, settings.executable, ::report) { stopRequested(settings) } }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { report("The daemon stopped after an unexpected error; the local proxy keeps running.") }
+            }
             while (!stopRequested(settings)) delay(250)
-            report("Stopping: draining existing requests for up to ten minutes.")
+            // The daemon pauses its sessions and goes offline first (bounded), then the proxy drains in the time left.
+            val stopping = TimeSource.Monotonic.markNow()
+            daemon.join()
+            drainMillis = (600_000L - stopping.elapsedNow().inWholeMilliseconds).coerceAtLeast(10_000L)
+            report("Stopping: draining existing requests for up to ${drainMillis / 1_000} seconds.")
         } finally {
-            withContext(NonCancellable) { updates?.cancelAndJoin(); server.stop(600_000, 610_000); client.close() }
+            withContext(NonCancellable) { daemon?.cancelAndJoin(); updates?.cancelAndJoin(); server.stop(drainMillis, drainMillis + 10_000); client.close() }
         }
         report("Local proxy stopped.")
     } catch (error: CancellationException) { throw error }

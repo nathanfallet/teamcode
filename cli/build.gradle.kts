@@ -103,7 +103,7 @@ kotlin {
             implementation(libs.ktor.server.core)
             implementation(libs.ktor.server.cio)
         }
-        commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test) }
+        commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test); implementation(libs.ktor.client.mock) }
         jvmTest.dependencies {
             runtimeOnly(libs.junit)
             implementation(libs.ktor.server.tests)

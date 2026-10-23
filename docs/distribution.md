@@ -147,6 +147,7 @@ A persistent OS writer lock serializes installers. A separate activity lock is s
 
 1. It downloads, verifies, probes and **selects** the new payload at once. Payloads under `versions/` are immutable, so running sessions keep executing their own binary; new sessions and commands started through the launcher run the new one.
 2. The local service is what sessions depend on, so its restart is **deferred** while any session holds the shared activity lease. `service.json` records the payload the service was last started from; it differs from `current.json` exactly while a restart is pending. The last session to end restarts the service (drained as usual, so no in-flight request is cut). If nothing is running then, the next `teamcode run`, `teamcode update` or automatic attempt applies it. A service already announcing the selected version (for example after `teamcode service restart`) or a stopped one is not restarted again.
+   The remote sessions the service's own [daemon](services.md#device-daemon) hosts hold no lease and never defer it: they do not use the service's proxy, and the restart is what pauses them (each agent finishes its turn and its host checkpoints), before the daemon of the new version resumes them by itself. If the new version does not start, the previous one is selected again and its daemon resumes them. Only local sessions through the proxy (`teamcode run`, and `teamcode remote start` or `resume` hosting a session in the terminal) keep the deferral.
 3. The command says what happened, for example:
 
 ```text

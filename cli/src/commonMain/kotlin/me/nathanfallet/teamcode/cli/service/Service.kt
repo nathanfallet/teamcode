@@ -14,7 +14,8 @@ import okio.FileSystem
 import okio.Path.Companion.toPath
 
 class Service : SuspendingNoOpCliktCommand(name = "service") {
-    override fun help(context: Context) = "Manage automatic local proxy startup at login or, explicitly, at boot."
+    override fun help(context: Context) = "Manage the local service (the authenticated proxy and this device's daemon, which hosts the remote sessions " +
+        "you start on it from your other devices): automatic startup at login or, explicitly, at boot."
     init { subcommands(Install(), Print(), Manage("start"), Manage("stop"), Manage("restart"), Manage("uninstall"), Status(), Logs(), Serve()) }
 }
 
@@ -48,6 +49,8 @@ private class Install : SuspendingCliktCommand(name = "install") {
     private val port by option("--port").int()
     private val binary by option("--binary", help = "Stable absolute path; defaults to the running executable.")
     override suspend fun run() {
+        // Decision 9: one pod runs one session, so a cloud session never installs a service that would make it a device.
+        if (me.nathanfallet.teamcode.cli.daemon.insideCloudRunner()) { echo(me.nathanfallet.teamcode.cli.daemon.CLOUD_RUNNER_REFUSAL); return }
         val config = configPath()
         if (configStore(config).load() == null) throw CliktError("Run teamcode login before installing a service.")
         val existing = loadService(config)
@@ -248,13 +251,16 @@ private class Serve : SuspendingCliktCommand(name = "serve") {
     private val config by option("--config", help = "Absolute saved configuration path, supplied by the service manager.").required()
     override suspend fun run() {
         require(config.toPath().isAbsolute)
+        if (me.nathanfallet.teamcode.cli.daemon.insideCloudRunner()) { echo(me.nathanfallet.teamcode.cli.daemon.CLOUD_RUNNER_REFUSAL, err = true); return }
         serve(requireNotNull(loadService(config)) { "Service settings are missing." })
     }
 }
 
 
 // Automatic installation recovery runs before arbitrary CLI commands, including JSON/version output.
-internal suspend fun startManagedService(settings: ServiceSettings) = start(settings, quiet = true)
+internal suspend fun startManagedService(settings: ServiceSettings) {
+    if (!me.nathanfallet.teamcode.cli.daemon.insideCloudRunner()) start(settings, quiet = true)
+}
 internal suspend fun stopManagedService(settings: ServiceSettings) = stop(settings, quiet = true)
 internal suspend fun managedServiceRunning(settings: ServiceSettings): Boolean =
     manager(settings, if (settings.os == "windows") "active" else "status", false) == 0
