@@ -37,7 +37,8 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
  * own login instead of a pod's token. The agent's inference goes through a loopback proxy in this process, exactly as
  * under `teamcode run`, for a registered run labelled with the session; it gets the team's MCP servers, the member's
  * approved team hooks (Claude Code), the artifact tools and the member's environment variables. Nothing is written in
- * the session's directory by TeamCode itself; the conversation id stays beside `config.json`.
+ * the session's directory by TeamCode itself; the conversation id stays beside `config.json`, and the files members
+ * attach to messages go to `<user temp>/teamcode-<uid>/<sessionId>/` ([SessionUploads]), removed when the host ends.
  *
  * SIGINT or SIGTERM asks the server for a pause: the agent finishes its turn (up to the drain deadline), the host
  * checkpoints and exits. Returns the process exit code.
@@ -73,8 +74,10 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         override suspend fun agent() = client.runnerAgent(RunnerAgentRequest(team, session, epoch))
         override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
         override suspend fun inputs(waitMillis: Long) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis)).inputs
-        override suspend fun poll(waitMillis: Long, desiredState: String) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState))
+        override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean) =
+            client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState, acceptsFiles))
         override suspend fun acknowledge(acks: List<RunnerInputAckView>) = client.runnerAcknowledge(RunnerInputAckRequest(team, session, epoch, acks))
+        override suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit) = client.runnerFile(team, session, epoch, fileId, maxBytes, receive)
     }
     val hooks = if (record.agent == "claude") approvedHooks(client, features, report) else emptyList()
     val plugin = if (hooks.isEmpty()) null else try { GuidancePlugin.create(configPath(), null, hooks) }
@@ -91,7 +94,7 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         val variables = if (ENVIRONMENT_CAPABILITY in features) AgentVariables { _ -> memberVariables(client, report) } else null
         val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
-            inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables)
+            inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report))
         val loop = RunnerLoop(calls, log = report, agent = agent)
         val work = async {
             try { loop.run() }
@@ -148,6 +151,10 @@ private suspend fun pauseOnSignal(client: TeamCodeClient, session: String, stopR
     catch (error: CancellationException) { throw error }
     catch (_: Exception) { report("The pause could not be requested; stopping now."); abort() }
 }
+
+/** The session's uploads in this user's temporary directory, never under the session's directory; null turns files off. */
+private fun uploads(session: String, report: (String) -> Unit): SessionUploads? = try { SessionUploads.remote(session, servicePlatform().userId) }
+    catch (_: Exception) { report("Message files are off for this session: no uploads directory."); null }
 
 /** The member's environment variables for each agent start; a failed read starts the agent without them. Only names are printed. */
 private suspend fun memberVariables(client: TeamCodeClient, report: (String) -> Unit): Map<String, String> = try {
