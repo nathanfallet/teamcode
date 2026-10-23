@@ -54,6 +54,8 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, 
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val url = request.url.toString()
                         if (OpenArtifactUseCase.allows(currentPrefix, url)) return false
+                        // A frame of the page's own making (srcdoc, a blob or data document) stays inside its sandbox.
+                        if (!request.isForMainFrame && request.url.scheme in FRAME_SCHEMES) return false
                         if (request.isForMainFrame && request.hasGesture() && isWebLink(url)) external(url)
                         return true
                     }
@@ -85,3 +87,5 @@ actual fun ArtifactContentView(contentUrl: String, prefix: String, reload: Int, 
         onRelease = { view -> view.clearCache(true); view.destroy() },
     ) }
 }
+
+private val FRAME_SCHEMES = setOf("about", "blob", "data")

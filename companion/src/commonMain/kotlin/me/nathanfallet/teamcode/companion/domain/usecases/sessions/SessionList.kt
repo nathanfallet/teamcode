@@ -79,9 +79,11 @@ data class SessionList(
     fun upserted(session: CloudSession): SessionList {
         val others = sessions.filterNot { it.id == session.id }
         if (!belongs(session)) return copy(sessions = others, outside = remembered(session.id))
-        // Older than the last loaded session while pages remain: it will come with the next page.
+        // A new row older than the last loaded session while pages remain: it will come with the next page. A row already
+        // shown stays, even the last one (the next page's cursor starts after it).
+        val known = others.size < sessions.size
         val last = others.lastOrNull()
-        if (nextBefore != null && last != null && NEWEST_FIRST.compare(session, last) > 0) return copy(sessions = others, outside = remembered(session.id))
+        if (!known && nextBefore != null && last != null && NEWEST_FIRST.compare(session, last) > 0) return copy(sessions = others, outside = remembered(session.id))
         return copy(sessions = (others + session).sortedWith(NEWEST_FIRST), outside = outside - session.id)
     }
 

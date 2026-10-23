@@ -74,6 +74,11 @@ private class ArtifactNavigation(
             return
         }
         val mainFrame = decidePolicyForNavigationAction.targetFrame?.mainFrame ?: true
+        // A frame of the page's own making (srcdoc, a blob or data document) stays inside its sandbox.
+        if (!mainFrame && (url == null || url.substringBefore(':').lowercase() in FRAME_SCHEMES)) {
+            decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyAllow)
+            return
+        }
         if (url != null && mainFrame && decidePolicyForNavigationAction.navigationType == WKNavigationTypeLinkActivated && isWebLink(url)) onExternal(url)
         decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
     }
@@ -100,3 +105,5 @@ private class ArtifactNavigation(
         return null
     }
 }
+
+private val FRAME_SCHEMES = setOf("about", "blob", "data")

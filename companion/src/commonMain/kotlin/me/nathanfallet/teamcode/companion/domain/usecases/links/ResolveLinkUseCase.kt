@@ -29,11 +29,14 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
             val encoded = query.split('&').firstOrNull { it.startsWith("url=") }?.removePrefix("url=") ?: return null
             decode(encoded) ?: return null
         } else trimmed
-        val match = VIEWER.matchEntire(url) ?: return null
+        val match = VIEWER.matchEntire(url.substringBefore('#')) ?: return null
         val origin = try { normalizeOrigin(match.groupValues[1]) } catch (_: CompanionException.InvalidOrigin) { return null }
         val artifactId = match.groupValues[2]
         if (!ARTIFACT_ID.matches(artifactId)) return null
-        val version = match.groupValues[3].takeIf { it.isNotEmpty() }?.let { it.toIntOrNull()?.takeIf { v -> v >= 1 } ?: return null }
+        // Other query parameters (a tracker added by a chat app) are ignored; `v` must be a version when present.
+        val versions = match.groupValues[3].split('&').filter { it.startsWith("v=") }.map { it.removePrefix("v=") }
+        if (versions.size > 1) return null
+        val version = versions.singleOrNull()?.let { v -> v.takeIf { it.length <= 9 }?.toIntOrNull()?.takeIf { it >= 1 } ?: return null }
         val candidates = accounts.accounts.value.filter { it.origin == origin }
         if (candidates.isEmpty()) return LinkTarget.UnknownServer(origin)
         val signedIn = candidates.filter { it.signedIn }
@@ -44,7 +47,7 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
 
     private companion object {
         const val SCHEME = "teamcode://open?"
-        val VIEWER = Regex("""(https?://[^/?#@\s]+)/artifact/([0-9a-f-]{36})/?(?:\?v=([0-9]{1,9}))?""")
+        val VIEWER = Regex("""(https?://[^/?#@\s]+)/artifact/([0-9a-f-]{36})/?(?:\?([^#\s]*))?""", RegexOption.IGNORE_CASE)
 
         /** Percent-decoding of one query value; null for a malformed escape or bytes that are not UTF-8. */
         fun decode(value: String): String? {

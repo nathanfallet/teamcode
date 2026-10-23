@@ -24,9 +24,12 @@ class MainActivity : ComponentActivity() {
 
     /** An artifact link from the viewer page or shared as text; the app checks it before opening anything. */
     private fun handle(intent: Intent?) {
-        val link = when (intent?.action) {
+        // Relaunched from Recents, the activity gets its first intent again: that link was already opened.
+        if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        val link = when (intent.action) {
             Intent.ACTION_VIEW -> intent.dataString
-            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.split(Regex("\\s+"))?.firstOrNull { it.startsWith("https://") || it.startsWith("http://") || it.startsWith("teamcode://") }
+            // Some apps share styled text, which getStringExtra would not return.
+            Intent.ACTION_SEND -> intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.trim()?.split(Regex("\\s+"))?.firstOrNull { it.startsWith("https://") || it.startsWith("http://") || it.startsWith("teamcode://") }
             else -> null
         }
         link?.take(MAX_LINK)?.let(IncomingLinks::open)

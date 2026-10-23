@@ -144,6 +144,15 @@ class SessionUseCasesTest {
         )
     }
 
+    @Test fun theLastLoadedRowStaysWhenItChanges() {
+        val list = me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionList(
+            me.nathanfallet.teamcode.companion.domain.models.SessionScope.MINE, me.nathanfallet.teamcode.companion.domain.models.SessionGroup.ACTIVE, "m1")
+            .refreshed(me.nathanfallet.teamcode.companion.domain.models.SessionPage(listOf(cloudSession("a", createdAt = 3), cloudSession("b", createdAt = 2), cloudSession("c", createdAt = 1)), "c"))
+        val updated = list.upserted(cloudSession("c", state = me.nathanfallet.teamcode.companion.domain.models.SessionState.ACTIVE, createdAt = 1))
+        assertEquals(listOf("a", "b", "c"), updated.sessions.map { it.id })
+        assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionState.ACTIVE, updated.sessions.last().state)
+    }
+
     @Test fun withoutTheFeedTheListIsReloadedEveryFifteenSeconds() = runTest {
         val sessions = FakeSessionRepository()
         val start = testScheduler.currentTime
