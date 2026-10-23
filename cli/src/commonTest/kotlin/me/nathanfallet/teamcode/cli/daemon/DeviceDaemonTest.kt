@@ -63,7 +63,7 @@ class DeviceDaemonTest {
         waitUntil { f.hosts.started.size == 1 }
         assertEquals(Triple("s1", 1, "t1"), f.hosts.started.single(), "Hosted on the epoch its acceptance opened, with the session's team")
         assertEquals("publish ${folder.id}", f.server.events.first(), "The folders are published before anything else")
-        assertEquals(listOf(DeviceFolderViewOf(folder.id, "project", "~/project")), f.server.folders.map { DeviceFolderViewOf(it.id, it.name, it.label) })
+        assertEquals(listOf(DeviceFolderViewOf(folder.id, "project", "~${Path.DIRECTORY_SEPARATOR}project")), f.server.folders.map { DeviceFolderViewOf(it.id, it.name, it.label) })
         assertEquals((f.home / "project").toString(), f.records.load("s1")?.directory, "The session's local record, as remote start writes it")
         assertEquals(listOf(DaemonSession("s1", 1, DaemonSession.HOSTING)), f.state.read())
         assertEquals("1.0.0", f.server.versions.last())

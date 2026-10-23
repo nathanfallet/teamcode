@@ -4,6 +4,7 @@ import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.platform.holdExclusiveLock
 import okio.FileSystem
+import okio.Path
 import okio.Path.Companion.toPath
 import kotlin.test.*
 
@@ -72,13 +73,25 @@ class FolderRulesTest {
         val other = store.add(root / "srv", null).first
         assertEquals("/usr/bin:/opt/bin", store.read().searchPath)
         assertEquals(listOf(first.id to "teamcode", other.id to "srv"), published(store.read(), home).map { it.id to it.name })
-        assertEquals("~/git/teamcode", published(store.read(), home).first().label)
+        val separator = Path.DIRECTORY_SEPARATOR
+        assertEquals("~${separator}git${separator}teamcode", published(store.read(), home).first().label, "The platform's own separator")
         assertEquals((root / "srv").toString(), published(store.read(), home).last().label)
         assertEquals(first, store.remove(first.id))
         assertEquals(other, store.remove((root / "srv").toString()), "By path too")
         assertNull(store.remove("unknown"))
         assertTrue(store.read().folders.isEmpty())
         assertTrue(FileSystem.SYSTEM.exists(root / "config" / "config.lock"), "Written under config.lock")
+    }
+
+    @Test fun onWindowsAFolderKeepsItsIdWhateverTheSeparatorSpelling() = scratch { root, _ ->
+        val store = FolderStore(root / "config" / "folders.json", configStore((root / "config" / "config.json").toString()), windows = true)
+        val (first, added) = store.add("C:\\Users\\me\\git\\app".toPath(), null)
+        assertTrue(added)
+        val (again, addedAgain) = store.add("C:/Users/me/git/app".toPath(), null)
+        assertFalse(addedAgain, "The same folder spelled with forward slashes")
+        assertEquals(first.id, again.id)
+        assertEquals(first, store.remove("C:/Users/me/git/app/"), "Removed by either spelling")
+        assertTrue(store.read().folders.isEmpty())
     }
 
     @Test fun onlyOneDaemonHoldsTheLock() = scratch { root, _ ->

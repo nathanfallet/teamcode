@@ -16,7 +16,6 @@ import me.nathanfallet.teamcode.cli.config.CliPrivateFiles
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.platform.environment
-import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.remote.describe
 import me.nathanfallet.teamcode.cli.remote.refuseDirectory
 import me.nathanfallet.teamcode.cli.sdk
@@ -118,7 +117,11 @@ internal data class FoldersFile(val folders: List<LocalFolder> = emptyList(), va
 internal class FolderStore(
     val file: Path = configSibling(configPath(), "folders.json").toPath(),
     private val lock: ConfigStore = configStore(),
+    private val windows: Boolean = isWindows(),
 ) {
+    /** Windows accepts both separators: `C:/git/app` and `C:\git\app` are one folder, with one id. */
+    private fun key(path: String) = if (windows) path.replace('/', '\\').trimEnd('\\') else path
+
     fun read(): FoldersFile {
         val metadata = FileSystem.SYSTEM.metadataOrNull(file) ?: return FoldersFile()
         if (metadata.symlinkTarget != null || !metadata.isRegularFile || (metadata.size ?: 0) > MAX_BYTES)
@@ -130,7 +133,7 @@ internal class FolderStore(
     /** Adds [path] (already checked by [folderPath]) with a new id, or finds it; true when it was added. */
     fun add(path: Path, searchPath: String?): Pair<LocalFolder, Boolean> = lock.locked {
         val current = read()
-        val existing = current.folders.firstOrNull { it.path == path.toString() }
+        val existing = current.folders.firstOrNull { key(it.path) == key(path.toString()) }
         val folder = existing ?: LocalFolder(randomHex(8), path.toString())
         if (existing == null && current.folders.size >= MAX_FOLDERS) throw CliUserException("A device offers at most $MAX_FOLDERS folders; remove one first.")
         write(FoldersFile(if (existing == null) current.folders + folder else current.folders, searchPath?.takeIf { it.isNotBlank() } ?: current.searchPath))
@@ -141,7 +144,7 @@ internal class FolderStore(
     fun remove(value: String): LocalFolder? = lock.locked {
         val current = read()
         val canonical = try { FileSystem.SYSTEM.canonicalize(value.toPath()).toString() } catch (_: Exception) { value }
-        val folder = current.folders.firstOrNull { it.id == value || it.path == value || it.path == canonical } ?: return@locked null
+        val folder = current.folders.firstOrNull { it.id == value || key(it.path) == key(value) || key(it.path) == key(canonical) } ?: return@locked null
         write(current.copy(folders = current.folders - folder))
         folder
     }
@@ -222,4 +225,4 @@ private val SUPPORTED_AGENTS = setOf("claude", "codex")
 
 internal fun homeDirectory(): Path? = (environment("HOME") ?: environment("USERPROFILE"))?.let { runCatching { FileSystem.SYSTEM.canonicalize(it.toPath()) }.getOrNull() }
 
-internal fun isWindows(): Boolean = servicePlatform().os == "windows"
+internal fun isWindows(): Boolean = Path.DIRECTORY_SEPARATOR == "\\"
