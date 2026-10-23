@@ -28,6 +28,9 @@ class ChangePasswordUseCase(
             signIn(pending.server, pending.username, replacement, pending.deviceName)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: CompanionException.UnsupportedApi) {
+            // Signing in again with the new password would end the same way: said now.
+            throw error
         } catch (_: Exception) {
             throw CompanionException.PasswordChanged()
         }

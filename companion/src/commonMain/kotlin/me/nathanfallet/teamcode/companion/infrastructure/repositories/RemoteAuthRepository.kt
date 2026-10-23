@@ -92,9 +92,9 @@ class RemoteAuthRepository(
         translateFailures(credentialsFailure) { clients.detached(origin, token).use { call(it) } }
 }
 
-internal fun MemberView.domain() = Member(id, username, role, passwordChangeRequired)
 /** The error code of every TeamCode server for a call without a credential. */
 private const val AUTHENTICATION_REQUIRED = "authentication_required"
 
-internal fun Capabilities.domain() = ServerCapabilities(serverVersion, apiVersion, features.toSet())
+internal fun MemberView.domain() = Member(id, username, role, passwordChangeRequired)
 internal fun LoginResponse.domain() = LoginSession(accessToken, expiresAt, member.domain())
+internal fun Capabilities.domain() = ServerCapabilities(serverVersion, apiVersion, features.toSet())

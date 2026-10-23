@@ -15,10 +15,13 @@ interface AuthRepository {
      * authentication: an anonymous refusal carrying a TeamCode error code is a TeamCode server asking for a sign-in.
      */
     suspend fun discover(origin: String): ServerInfo
+
     /** `GET /api/v1/capabilities` with a session that was just created and is not stored yet. */
     suspend fun capabilities(origin: String, token: String): ServerCapabilities
+
     /** `GET /api/v1/capabilities` with the token stored for the account. */
     suspend fun capabilities(accountId: String): ServerCapabilities
+
     suspend fun login(origin: String, username: String, password: String, deviceName: String, installationId: String): LoginSession
     suspend fun changePassword(origin: String, token: String, current: String, replacement: String)
     suspend fun me(accountId: String): Member

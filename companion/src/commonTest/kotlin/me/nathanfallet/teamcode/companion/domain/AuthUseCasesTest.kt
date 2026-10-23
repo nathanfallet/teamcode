@@ -73,7 +73,10 @@ class AuthUseCasesTest {
 
     @Test fun signingInStoresTheTokenAndTheAccountButNeverThePassword() = runTest {
         val result = assertIs<SignInResult.SignedIn>(signIn(server, " ada ", "secret password", "TeamCode Test · Bench"))
-        assertEquals("login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111", auth.calls.first())
+        assertEquals(listOf(
+            "login https://team.example ada secret password TeamCode Test · Bench 11111111-1111-4111-8111-111111111111",
+            "capabilities https://team.example token-1",
+        ), auth.calls)
         assertEquals("token-1", store.read(result.account.id))
         assertEquals(listOf(result.account), accounts.accounts.value)
         assertEquals(result.account.id, accounts.activeAccountId.value)
@@ -134,6 +137,17 @@ class AuthUseCasesTest {
         // Retrying the change would reuse the revoked temporary session: the user signs in again instead.
         assertFailsWith<CompanionException.PasswordChanged> { ChangePasswordUseCase(auth, signIn)(pending, "temporary-pw", "a new long password", "a new long password") }
         assertTrue(accounts.accounts.value.isEmpty())
+    }
+
+    @Test fun anUnsupportedApiFoundAfterThePasswordChangeIsSaidAsSuch() = runTest {
+        auth.sessions.clear()
+        auth.sessions += LoginSession("temporary", 2_000_000L, member(passwordChangeRequired = true))
+        auth.sessions += LoginSession("token-2", 2_000_000L, member())
+        val pending = assertIs<SignInResult.PasswordChangeRequired>(signIn(server, "ada", "temporary-pw", "Phone"))
+        auth.announced = capabilities.copy(apiVersion = 2)
+        assertFailsWith<CompanionException.UnsupportedApi> { ChangePasswordUseCase(auth, signIn)(pending, "temporary-pw", "a new long password", "a new long password") }
+        assertTrue(accounts.accounts.value.isEmpty())
+        assertEquals(listOf("https://team.example token-2"), auth.abandoned)
     }
 
     @Test fun signingOutRevokesThenForgetsEvenOffline() = runTest {
