@@ -18,7 +18,7 @@ class AgentRunRoutesTest {
         var writes = 0
         val calls = mutableListOf<String>()
         fun run() = AgentRun(id, "admin-id", "<member>", "claude", "background", null, 1000, 2000, null, null, null,
-            RunState.STALE, policy, 40, 1, 1, 0, false)
+            RunState.STALE, policy, 40, 1, 1, 0, false, activity = RunActivity.WAITING_FOR_HUMAN, activitySinceMillis = 2500)
         val service = object : AgentRunService {
             override suspend fun start(actor: Principal, id: String, agent: String, workload: String, labels: Map<String, String>): RunLease {
                 actor.requireScope(ServiceScope.INFERENCE); AgentRunService.validateStart(id, agent, workload, labels)
@@ -97,6 +97,8 @@ class AgentRunRoutesTest {
         }.status)
         val page = client.get("/dashboard/sessions/$id") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertTrue(page.contains("&lt;member&gt;")); assertFalse(page.contains("<member>"))
+        assertTrue(page.contains("waiting for a person</strong> since 1970-01-01T00:00:02.500Z"), "The reported state shows on the launch page")
+        assertTrue(client.get("/dashboard/sessions") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText().contains("waiting for a person"))
         assertTrue(page.contains("Observation-only mode")); assertTrue(page.contains("Save run limits"))
         assertFalse(client.get("/dashboard/sessions/$id") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText().contains("Save run limits"))
         for ((origin, csrf) in listOf("https://attacker.test" to "session", "http://localhost" to "wrong")) {
