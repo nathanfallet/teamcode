@@ -6,7 +6,7 @@ import com.github.ajalt.clikt.parameters.options.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.supervisorScope
-import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.readHookInput
@@ -23,7 +23,7 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
             val input = readHookInput() ?: return
             val path = config ?: configPath()
             require(path.toPath().isAbsolute)
-            val saved = ConfigStore(path).load() ?: return
+            val saved = configStore(path).load() ?: return
             sdk(saved).use { client ->
                 val bridge = HookGuidance(client)
                 val state = HookActivity.state(input)

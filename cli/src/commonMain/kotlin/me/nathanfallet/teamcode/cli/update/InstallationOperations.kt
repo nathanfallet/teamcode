@@ -6,7 +6,7 @@ import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.api.models.ReleaseFormat
 import me.nathanfallet.teamcode.api.models.ReleaseVersion
 import me.nathanfallet.teamcode.cli.CliOperationException
-import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.runInteractiveProcess
 import me.nathanfallet.teamcode.cli.sdk
@@ -105,7 +105,7 @@ internal class InstallationOperations(private val store: InstallationStore, priv
     }
 
     private suspend fun serverApiVersion(): Int {
-        val config = ConfigStore(configuration).load() ?: return 1
+        val config = configStore(configuration).load() ?: return 1
         return try { sdk(config).use { it.capabilities().apiVersion } }
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { throw CliOperationException("release_server_unavailable") }

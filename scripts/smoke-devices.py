@@ -173,6 +173,10 @@ def main():
                 list(pool.map(login, range(4)))
             identity = Path(directory) / 'teamcode/installation-id'
             assert len(installation_ids) == 4 and len(set(installation_ids)) == 1, 'Concurrent first logins changed installation identity'
+            # Each login revokes the session its configuration replaced (serialized by config.lock): one live session remains.
+            saved = json.loads((Path(directory) / 'teamcode/config.json').read_text())['accessToken']
+            with lock:
+                assert list(tokens) == [saved], 'Concurrent logins left orphan sessions'
             assert identity.read_text() == installation_ids[0]
             if os.name == 'posix':
                 assert stat.S_IMODE(identity.stat().st_mode) == 0o600
@@ -233,7 +237,7 @@ def main():
             command('devices', 'revoke', device)
             assert command('whoami', check=False).returncode != 0
             assert not errors, '\n'.join(errors)
-            assert {p.name for p in identity.parent.iterdir()} == {'installation-id', 'config.json'}, 'Temporary file leaked'
+            assert {p.name for p in identity.parent.iterdir()} == {'installation-id', 'config.json', 'config.lock'}, 'Temporary file leaked'
             print('Native devices passed: concurrent private identity creation, login/logout persistence, whoami, typed lists, rename, service-key creation/list/revocation and device revocation.')
     finally:
         server.shutdown(); server.server_close(); worker.join(timeout=5)

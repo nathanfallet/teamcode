@@ -9,6 +9,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.cli.config.*
+import me.nathanfallet.teamcode.config.CliConfig
+import me.nathanfallet.teamcode.config.validateServerUrl
 import me.nathanfallet.teamcode.cli.platform.*
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -47,10 +49,10 @@ private class Login : SuspendingCliktCommand(name = "login") {
             echo("$label: ", trailingNewline = false, err = true)
             return (if (passwordStdin) readlnOrNull() else terminal.readLineOrNull(hideInput = secret)) ?: throw CliUserException("Input ended before $label was entered.")
         }
-        val origin = validateServerUrl(server ?: ConfigStore().load()?.serverUrl ?: read("TeamCode server URL"))
+        val origin = validateServerUrl(server ?: configStore().load()?.serverUrl ?: read("TeamCode server URL"))
         val name = username ?: read("Username")
         var password = read("Password", secret = true)
-        val installation = InstallationStore().id()
+        val installation = installationId()
         var session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation) }
         if (session.member.passwordChangeRequired) {
             echo("Choose a new password with at least 14 characters. This will sign out all existing sessions.")
@@ -60,15 +62,25 @@ private class Login : SuspendingCliktCommand(name = "login") {
             password = replacement
             session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation) }
         }
-        ConfigStore().save(CliConfig(origin, session.accessToken))
+        val saved = CliConfig(origin, session.accessToken)
+        val replaced = configStore().replace(saved)
         echo("Signed in as ${session.member.username}. Configuration saved to ${configPath()}.")
+        // The replaced session is stored nowhere else on this machine: revoke it, so that two sign-ins (even concurrent
+        // ones, serialized by config.lock) leave no orphan session on the server. Best effort, after the lock is released.
+        if (replaced != null && replaced.serverUrl == saved.serverUrl && replaced.accessToken != saved.accessToken) {
+            try { sdk(replaced).use { it.logout() } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Already revoked or expired, or the server is unreachable: the new session is saved. */ }
+        }
     }
 }
 private class Logout : SuspendingCliktCommand(name = "logout") {
     override suspend fun run() {
-        sdk(loadConfig()).use { it.logout() }
-        ConfigStore().delete()
-        echo("Session revoked and local configuration removed.")
+        val config = loadConfig()
+        sdk(config).use { it.logout() }
+        // Another command may have saved a new session meanwhile: only remove the configuration this logout revoked.
+        if (configStore().deleteIf(config)) echo("Session revoked and local configuration removed.")
+        else echo("Session revoked. The configuration was replaced meanwhile by another sign-in and is kept.")
     }
 }
 
@@ -90,9 +102,10 @@ private class Configure : SuspendingCliktCommand(name = "configure") {
             if (error.statusCode != 401) throw error
             throw CliUserException("The server did not accept this access token (HTTP 401${error.code?.let { ", $it" } ?: ""}). Check the token, or sign in with teamcode login. Nothing was saved.")
         }
-        try { ConfigStore().save(config) }
+        try { configStore().let { store -> store.locked { store.save(config) } } }
         catch (error: CancellationException) { throw error }
         catch (error: CliOperationException) { throw error }
+        catch (error: CliUserException) { throw error } // config.lock held by another command.
         catch (error: Exception) { throw CliOperationException("configuration_write_${error::class.simpleName.orEmpty().filter { it.isLetterOrDigit() }}") }
         echo("Configuration saved to ${configPath()}.")
     }
@@ -121,7 +134,7 @@ private class ProxyStart : SuspendingCliktCommand(name = "start") {
     }
 }
 
-internal fun loadConfig() = ConfigStore().load() ?: throw CliUserException("No configuration found. Run teamcode login first.")
+internal fun loadConfig() = configStore().load() ?: throw CliUserException("No configuration found. Run teamcode login first.")
 internal fun sdk(config: CliConfig): TeamCodeClient {
     contactedServer = config.serverUrl
     return TeamCodeClient(config.serverUrl, { config.accessToken }) { configure -> HttpClient() { configure(this) } }
@@ -147,7 +160,7 @@ fun main(args: Array<String>): Unit = runBlocking {
     catch (error: CancellationException) { throw error }
     catch (error: Exception) {
         // describeFailure never prints exception messages or chains from TLS, JSON, files or servers: they may carry credentials.
-        val failure = describeFailure(error, contactedServer ?: try { ConfigStore().load()?.serverUrl } catch (_: Exception) { null })
+        val failure = describeFailure(error, contactedServer ?: try { configStore().load()?.serverUrl } catch (_: Exception) { null })
         SystemExit.fail(if (debug) "${failure.message}\n${failure.diagnostic}" else failure.message)
     }
 }
@@ -173,4 +186,4 @@ class CliOperationException(val code: String) : Exception(code) {
 }
 
 /** A failure whose message is written by TeamCode itself (never derived from a remote or platform error), so it is safe and useful to print. */
-class CliUserException(override val message: String) : Exception(message)
+typealias CliUserException = me.nathanfallet.teamcode.config.UserFacingException

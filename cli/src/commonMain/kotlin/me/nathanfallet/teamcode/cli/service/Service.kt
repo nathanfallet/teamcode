@@ -49,7 +49,7 @@ private class Install : SuspendingCliktCommand(name = "install") {
     private val binary by option("--binary", help = "Stable absolute path; defaults to the running executable.")
     override suspend fun run() {
         val config = configPath()
-        if (ConfigStore(config).load() == null) throw CliktError("Run teamcode login before installing a service.")
+        if (configStore(config).load() == null) throw CliktError("Run teamcode login before installing a service.")
         val existing = loadService(config)
         val selected = existing ?: settings(config, port ?: 8789, binary, atBoot)
         if (atBoot && !selected.atBoot) throw CliktError("Uninstall before switching from login to boot startup.")
@@ -222,7 +222,7 @@ private class Status : SuspendingCliktCommand(name = "status") {
         val selected = loadService(configPath())
         echo("Installed: ${selected != null && ownsRegistration(selected)}")
         if (selected != null) echo("Startup: ${if (selected.atBoot) "boot (before login)" else "user login"}")
-        val config = ConfigStore().load()
+        val config = configStore().load()
         echo("Running: ${selected != null && config != null && serviceResponds(selected, config.serverUrl)}")
         if (config == null) { echo("Authenticated: no saved login"); return }
         try {

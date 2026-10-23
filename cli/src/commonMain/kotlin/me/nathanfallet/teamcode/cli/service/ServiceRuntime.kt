@@ -10,7 +10,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
-import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.platform.*
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -72,7 +72,7 @@ internal suspend fun serve(settings: ServiceSettings) = coroutineScope {
     }
     fun report(message: String) { logs.trySend(message) }
     try {
-        val store = ConfigStore(settings.config)
+        val store = configStore(settings.config)
         var config = store.load()
         if (config == null) report("Waiting for saved authentication. Run teamcode login; no browser is opened by the service.")
         while (config == null && !stopRequested(settings)) { delay(1_000); config = store.load() }

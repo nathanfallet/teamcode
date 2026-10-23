@@ -141,7 +141,7 @@ See the [end-to-end testing playbook](docs/testing.md) for native, real-account/
 
 ```sh
 python3 scripts/check-module-graph.py
-./gradlew :api:jvmTest :client:jvmTest :domain:test :infrastructure:test :presentation:test :cli:jvmTest
+./gradlew :api:jvmTest :client:jvmTest :domain:test :infrastructure:test :presentation:test :config:jvmTest :cli:jvmTest
 python3 scripts/smoke-native.py \
   --binary cli/build/bin/macosArm64/debugExecutable/teamcode.kexe \
   --jar app/build/libs/app-all.jar
@@ -153,12 +153,13 @@ The smoke test starts and stops only its own processes, uses an isolated configu
 
 ```text
 cli -> client -> api
+cli -> config
 app -> presentation -> domain
 app -> infrastructure -> domain
 presentation -> api
 ```
 
-Seven modules, root package `me.nathanfallet.teamcode`. The CLI is Kotlin/Native, not a JVM wrapper. The server is Ktor/JVM. No private dependencies or ControlResell services are required.
+Seven modules, root package `me.nathanfallet.teamcode`. The CLI is Kotlin/Native, not a JVM wrapper. `config` holds the local `config.json`, `installation-id` and `config.lock`, shared by the CLI and the desktop app. The server is Ktor/JVM. No private dependencies or ControlResell services are required.
 
 Read [architecture](docs/architecture.md), [product](docs/product.md), [roadmap](docs/roadmap.md) and [contributing](CONTRIBUTING.md). Original code is Apache-2.0.
 

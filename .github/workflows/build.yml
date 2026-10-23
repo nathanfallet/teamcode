@@ -41,7 +41,7 @@ jobs:
       - run: python3 scripts/check-module-graph.py
       - run: python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'
       - run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
-      - run: ./gradlew :api:jvmTest :client:jvmTest :client:testAndroidHostTest :api:compileAndroidMain :domain:test :infrastructure:test :presentation:test :cli:jvmTest :app:test :app:buildFatJar
+      - run: ./gradlew :api:jvmTest :client:jvmTest :client:testAndroidHostTest :api:compileAndroidMain :domain:test :infrastructure:test :presentation:test :config:jvmTest :cli:jvmTest :app:test :app:buildFatJar
       - run: python3 scripts/smoke-replicas.py --jar app/build/libs/app-all.jar
       - uses: actions/upload-artifact@v4
         with:
@@ -153,8 +153,9 @@ jobs:
             echo "NATIVE_ASSET=$asset"
             echo "TEAMCODE_VERSION=${ORG_GRADLE_PROJECT_teamcodeVersion}"
           } >> "$GITHUB_ENV"
-      - run: ./gradlew ":cli:linkReleaseExecutable${NATIVE_TARGET}" ":cli:linkDebugTest${NATIVE_TARGET}" :app:buildFatJar
+      - run: ./gradlew ":cli:linkReleaseExecutable${NATIVE_TARGET}" ":cli:linkDebugTest${NATIVE_TARGET}" ":config:linkDebugTest${NATIVE_TARGET}" :app:buildFatJar
       - run: '"cli/build/bin/${NATIVE_DIRECTORY}/debugTest/test.kexe"'
+      - run: '"config/build/bin/${NATIVE_DIRECTORY}/debugTest/test.kexe"'
       - run: python3 scripts/smoke-release-verification.py --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe"
       - run: python3 scripts/smoke-native.py --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --jar app/build/libs/app-all.jar --expected-version "$TEAMCODE_VERSION"
       - run: python3 scripts/smoke-devices.py --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe"
@@ -212,8 +213,11 @@ jobs:
         with:
           node-version: '22'
       - uses: gradle/actions/setup-gradle@v4
-      - run: .\gradlew.bat :cli:linkReleaseExecutableMingwX64 :cli:linkDebugTestMingwX64
+      - run: .\gradlew.bat :cli:linkReleaseExecutableMingwX64 :cli:linkDebugTestMingwX64 :config:linkDebugTestMingwX64
       - run: .\cli\build\bin\mingwX64\debugTest\test.exe
+      - run: .\config\build\bin\mingwX64\debugTest\test.exe
+      # The desktop app's private files and lock on Windows: owner-only ACL entries written by the JVM.
+      - run: .\gradlew.bat :config:jvmTest
       - run: python scripts/smoke-release-verification.py --binary cli/build/bin/mingwX64/releaseExecutable/teamcode.exe
       - run: python scripts/smoke-windows.py --binary cli/build/bin/mingwX64/releaseExecutable/teamcode.exe --allow-machine-test-certificate
       - run: python scripts/smoke-devices.py --binary cli/build/bin/mingwX64/releaseExecutable/teamcode.exe

@@ -3,7 +3,7 @@ package me.nathanfallet.teamcode.cli.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.cli.CliOperationException
-import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.service.*
 import okio.Path.Companion.toPath
@@ -21,7 +21,7 @@ internal suspend fun installationService(store: InstallationStore, firstInstall:
 }
 
 internal suspend fun awaitInstallationService(service: InstallationService, version: String) {
-    val config = ConfigStore(service.settings.config).load() ?: throw CliOperationException("release_service_auth_missing")
+    val config = configStore(service.settings.config).load() ?: throw CliOperationException("release_service_auth_missing")
     withTimeout(30_000) {
         while (!serviceResponds(service.settings, config.serverUrl, expectedVersion = version)) delay(200)
     }

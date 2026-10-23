@@ -84,6 +84,7 @@ kotlin {
         commonMain { kotlin.srcDir(generateReleaseTrust) }
         commonMain.dependencies {
             implementation(projects.client)
+            implementation(projects.config)
             implementation(libs.clikt)
             implementation(libs.mordant)
             implementation(libs.okio)

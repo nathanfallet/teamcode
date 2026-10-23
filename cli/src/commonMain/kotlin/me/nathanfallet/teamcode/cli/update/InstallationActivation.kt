@@ -6,7 +6,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import me.nathanfallet.teamcode.cli.CliOperationException
-import me.nathanfallet.teamcode.cli.config.ConfigStore
+import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.service.ServiceSettings
 import me.nathanfallet.teamcode.cli.service.loadService
@@ -37,7 +37,7 @@ internal typealias ServiceControls = suspend (String) -> ManagedServiceControl?
 internal class SystemServiceControl(private val settings: ServiceSettings) : ManagedServiceControl {
     override suspend fun running() = managedServiceRunning(settings)
     override suspend fun serving(version: String): Boolean {
-        val config = ConfigStore(settings.config).load() ?: return false
+        val config = configStore(settings.config).load() ?: return false
         return serviceResponds(settings, config.serverUrl, expectedVersion = version)
     }
     override suspend fun stop() = stopManagedService(settings)

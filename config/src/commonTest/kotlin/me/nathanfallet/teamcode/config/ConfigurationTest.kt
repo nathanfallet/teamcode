@@ -1,17 +1,17 @@
-package me.nathanfallet.teamcode.cli
+package me.nathanfallet.teamcode.config
 
-import me.nathanfallet.teamcode.cli.config.*
 import kotlin.test.*
 
 class ConfigurationTest {
     @Test fun `configuration honors XDG or falls back to home dot config`() {
         assertEquals("/custom/teamcode/config.json", configPath { if (it == "XDG_CONFIG_HOME") "/custom" else null })
         assertEquals("/users/me/.config/teamcode/config.json", configPath { if (it == "HOME") "/users/me" else null })
-        assertFailsWith<CliUserException> { configPath { if (it == "XDG_CONFIG_HOME") "relative" else null } }
+        assertFailsWith<UserFacingException> { configPath { if (it == "XDG_CONFIG_HOME") "relative" else null } }
+        assertEquals("/custom/teamcode/config.lock", configSibling("/custom/teamcode/config.json", "config.lock"))
     }
     @Test fun `remote plaintext redirects and embedded credentials are not acceptable origins`() {
         for (value in listOf("", "   ", "http://team.example", "https://user:secret@team.example", "https://team.example/path", "https://team.example?token=secret", "https://team.example#fragment")) {
-            val error = assertFailsWith<CliUserException>(value) { validateServerUrl(value) }
+            val error = assertFailsWith<UserFacingException>(value) { validateServerUrl(value) }
             assertFalse(error.message.contains("secret"), "The refusal must not repeat the value")
         }
         assertEquals("https://self.hosted.example", validateServerUrl("https://self.hosted.example/"))

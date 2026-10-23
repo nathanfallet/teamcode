@@ -5,7 +5,7 @@ import re
 
 root = Path(__file__).resolve().parents[1]
 allowed = {
-    'api': set(), 'client': {'api'}, 'cli': {'client'}, 'domain': set(),
+    'api': set(), 'client': {'api'}, 'config': set(), 'cli': {'client', 'config'}, 'domain': set(),
     'infrastructure': {'domain'}, 'presentation': {'api', 'domain'},
     'app': {'api', 'domain', 'infrastructure', 'presentation'},
     'companion': {'client'}, 'companion-android': {'companion'},
