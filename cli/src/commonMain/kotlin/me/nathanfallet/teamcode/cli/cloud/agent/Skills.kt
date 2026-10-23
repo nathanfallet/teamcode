@@ -347,10 +347,16 @@ internal interface AgentTools {
 
     /** Installs the owner's team hooks for [agent] and returns those installed. Never throws except on cancellation. */
     suspend fun hooks(agent: String): List<CloudHook> = emptyList()
+
+    /** The artifact tools to start beside the agent when the owner may publish now, or null. Never throws except on cancellation. */
+    suspend fun artifacts(): me.nathanfallet.teamcode.cli.launch.ArtifactsMcp? = null
 }
 
 /** Where cloud sessions install team hooks, relative to the agent's home. */
 internal const val CLOUD_HOOKS_DIR = ".teamcode/hooks"
+
+/** The artifact tools' scratch directory in the agent's container, private to the agent's UID. */
+internal const val CLOUD_ARTIFACTS_SCRATCH = "/tmp/teamcode-artifacts"
 
 /** A team hook installed in the agent's home, under [CLOUD_HOOKS_DIR]`/<name>/`. */
 internal data class CloudHook(val name: String, val definition: HookDefinitionView)
@@ -412,12 +418,38 @@ internal class CloudHookSync(
     companion object { const val MAX_HOOKS = 50 }
 }
 
+/** The agent container's HOME below the workspace, as the session pod sets it (`KubernetesClusterPort.AGENT_HOME`). */
+internal const val CLOUD_AGENT_HOME_NAME = ".agent-home"
+
 internal class RunnerAgentTools(
     private val client: TeamCodeClient,
     private val start: suspend (List<String>) -> AgentProcess,
     private val log: (String) -> Unit = {},
     private val timeoutMillis: Long = 120_000,
+    /** This binary in the agent's container and the session's working directory, for `teamcode mcp artifacts`. */
+    private val binary: String? = null,
+    private val workspace: String = "/workspace",
+    /** The agent's home, with its sign-ins: never published, wherever it is. */
+    private val home: String? = null,
 ) : AgentTools {
+    /**
+     * `teamcode mcp artifacts` in the agent's container, under the agent's UID, rooted at the workspace, with its
+     * scratch directory in the container's own `/tmp` and the agent's home (`HOME`, by default `<workspace>/.home`) never published.
+     * Only when the execution's owner may publish now; the agent reaches the runner's relay with the local token.
+     */
+    override suspend fun artifacts(): me.nathanfallet.teamcode.cli.launch.ArtifactsMcp? {
+        val command = binary ?: return null
+        val allowed = try { withTimeout(20_000) { client.artifactPolicy() }.canPublish }
+            catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { false }
+        if (!allowed) return null
+        val root = workspace.trimEnd('/')
+        // The runner's home and the agent's own (its container sets HOME to `<workspace>/.agent-home`), wherever HOME points.
+        val homes = listOfNotNull("$root/.home", "$root/$CLOUD_AGENT_HOME_NAME", home?.trimEnd('/')?.takeIf { it.isNotEmpty() }).distinct()
+        return me.nathanfallet.teamcode.cli.launch.ArtifactsMcp(command, root, CLOUD_ARTIFACTS_SCRATCH, homes)
+    }
+
     override suspend fun prepare(agent: String): List<String> {
         val servers = try { withTimeout(20_000) { client.mcpServers() }.map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }.distinct() }
             catch (error: CancellationException) { throw error }

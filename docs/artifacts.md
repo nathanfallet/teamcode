@@ -13,11 +13,11 @@ This page is the contract and the record of what is implemented. It builds on [a
 | [Storage and settings](#storage-and-settings): admin API, typed client, **Dashboard → Settings → Artifacts**, connection test, sealed secret, [availability](#when-artifacts-are-active), audit | Implemented (PR 1) |
 | [Upload and publication API](#publication-api), versions, optimistic concurrency, quotas, secret scan, sharing, deletion with proof, retention and garbage collection, `artifacts:*` scopes, [CLI `teamcode artifacts`](#cli) with the shared file reader; migrations `V20261022180000*` | Implemented (PR 2) |
 | [Serving](#serving-and-access) under `/artifact/<id>/<ticket>/<path>`, view tickets, CSP sandbox on every response, the viewer and the gallery on the dashboard, public links (`artifacts.v1`) | Implemented (PR 3) |
-| `teamcode mcp artifacts`, the loopback relay of `teamcode run`, injection into Claude Code and Codex, `GET /api/v1/artifacts/policy` (`artifact-relay-v1`) | Planned (PR 4) |
-| Cloud sessions: `artifacts:write` on the execution credential, injection by the runner, session transfer | Planned (PR 5) |
-| Usage per member on the dashboard, filters by origin, links from session and run pages, operations guide | Planned (PR 6) |
+| [`teamcode mcp artifacts`](#agents), the [loopback relay](#the-loopback-relay) of `teamcode run` and the user service (`artifact-relay-v1`), injection into Claude Code and Codex, [`GET /api/v1/artifacts/policy`](#publication-policy) (`artifacts.policy.v1`), runs recorded as origins | Implemented (PR 4) |
+| [Cloud sessions](#cloud-sessions): `artifacts:write` on the execution credential, injection by the runner, the session and epoch recorded as origins, [session transfer](#cloud-sessions) | Implemented (PR 5) |
+| [Usage per member](#setting-up-a-bucket) on Settings → Artifacts, gallery filters by origin and access, links from runs and origins, the [bucket guide](#setting-up-a-bucket) | Implemented (PR 6) |
 
-`artifacts.v1` appears in `GET /api/v1/capabilities` since PR 3, when artifacts can be published, read and served; the agent parts (PR 4 and 5) will advertise their own capabilities, as [a planned command must not be advertised as implemented](architecture.md).
+`artifacts.v1` appears in `GET /api/v1/capabilities` since PR 3, when artifacts can be published, read and served; `artifacts.policy.v1` since PR 4, with the policy route; the local proxy announces `artifact-relay-v1` in `/_teamcode/service`. Each is advertised only once its part is complete, as [a planned command must not be advertised as implemented](architecture.md).
 
 ## When artifacts are active
 
@@ -29,7 +29,7 @@ Artifacts work only while all three hold: a bucket is stored, its current versio
 | `artifact_storage_unverified` | The bucket changed since its last passed test, or its last test failed | Test the connection |
 | `artifacts_disabled` | The bucket works but the switch is off | Turn artifacts on |
 
-Turning them on is refused with `409 artifact_storage_missing` without a bucket and `409 artifact_storage_unverified` without a passed test. Saving the bucket again (even a key rotation) or a failed test makes them inactive until a test passes; removing the bucket turns the switch off. While artifacts are inactive, every publication, read and sharing route of PR 2 answers `409` with the same reason as its error type (deletion still works, so an artifact can always be removed); as each later part lands: the publication policy answers `canPublish: false` with the reason (PR 4), `teamcode run` and the runner do not inject `teamcode mcp artifacts`, the CLI says the storage is not configured, `/artifact/*` answers `404`, and the dashboard shows the Artifacts menu only to administrators, pointing to Settings → Artifacts.
+Turning them on is refused with `409 artifact_storage_missing` without a bucket and `409 artifact_storage_unverified` without a passed test. Saving the bucket again (even a key rotation) or a failed test makes them inactive until a test passes; removing the bucket turns the switch off. While artifacts are inactive, every publication, read and sharing route answers `409` with the same reason as its error type (deletion still works, so an artifact can always be removed); the [publication policy](#publication-policy) answers `canPublish: false` with the reason, so `teamcode run` (and the cloud runner) do not connect `teamcode mcp artifacts`; the CLI says why; `/artifact/*` answers `404`; and the dashboard shows the Artifacts menu only to administrators, pointing to Settings → Artifacts.
 
 ## Storage and settings
 
@@ -73,6 +73,52 @@ A save names the `version` it replaces (`409 artifact_storage_conflict` otherwis
 
 A retention change applies to artifacts published afterwards, as for paused cloud sessions.
 
+### Setting up a bucket
+
+TeamCode needs one private bucket (or a prefix in one) and a key limited to it. It never creates a bucket, never sets a lifecycle rule and never makes an object public: the server reads and writes every file itself, so the bucket needs no public access, no CORS rule and no website hosting. Do not add a lifecycle rule that expires objects under the prefix: TeamCode deletes what it no longer references (pruned versions, deleted artifacts, files no version uses), and an object removed behind its back makes the versions that use it fail to load. With bucket versioning on, deleted objects stay billed as noncurrent versions until a lifecycle rule for noncurrent versions removes them; that rule is safe.
+
+Files live under `<prefix>/<team>/artifacts/<id>/` (`blobs/<sha256>` and `versions/<n>.json`) and the connection test writes `<prefix>/<team>/.teamcode-probe-<uuid>`, so the key needs these actions on `<prefix>/*` (the whole bucket without a prefix) and nothing else:
+
+| Action | Used for |
+| --- | --- |
+| `s3:PutObject` | Storing a file and a version manifest, the connection test |
+| `s3:GetObject` | Serving files, the connection test |
+| `s3:ListBucket` (limited to the prefix) | Emptying a deleted artifact's folder, the connection test |
+| `s3:DeleteObject` | Pruned versions, deleted artifacts, the connection test |
+
+The minimal policy, for a bucket `teamcode-artifacts` and the prefix `teamcode` (AWS IAM; OVHcloud and MinIO accept the same document):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::teamcode-artifacts/teamcode/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::teamcode-artifacts",
+      "Condition": { "StringLike": { "s3:prefix": ["teamcode/*"] } }
+    }
+  ]
+}
+```
+
+| Provider | Endpoint | Region | Path-style | Key |
+| --- | --- | --- | --- | --- |
+| AWS S3 | `https://s3.<region>.amazonaws.com` | the bucket's region, such as `eu-west-3` | off | An IAM user (or role credentials) with the policy above. Block Public Access stays on. |
+| OVHcloud Object Storage | `https://s3.<region>.io.cloud.ovh.net` | `gra`, `sbg`, ... | off (on for older endpoints that need it) | An Object Storage user with S3 credentials and the policy above imported as its access policy. |
+| Cloudflare R2 | `https://<account id>.r2.cloudflarestorage.com` | `auto` | either | An R2 API token with Object Read & Write limited to this bucket; R2 has no prefix-level permissions, so give TeamCode a bucket of its own. Server-side encryption: `none` (R2 always encrypts). |
+| MinIO | `https://<host>:<port>` (TLS required; private addresses are allowed) | `us-east-1` unless the server sets another | on | `mc admin policy create <alias> teamcode-artifacts policy.json`, `mc admin user add <alias> <access key> <secret>`, `mc admin policy attach <alias> teamcode-artifacts --user <access key>`. |
+
+Then, on Settings → Artifacts: save the storage, run **Test the connection** (each step names the S3 error code when it fails: `AccessDenied` usually means the policy misses an action or the prefix, `SignatureDoesNotMatch` a wrong secret or region, `NoSuchBucket` a wrong bucket or path-style setting), and turn artifacts on. To rotate the key, create the new key, save it in the same form (the endpoint, bucket and prefix stay) and test again; artifacts are off between the save and a passed test, so do it when nobody is publishing, then revoke the old key.
+
+**Usage.** Settings → Artifacts shows, above the storage form, what the team stores against its quota and, per member, the published artifacts they own and the bytes they hold (each file counted once per artifact, as the quotas count it; drafts and deleted artifacts are not counted), largest first.
+
+
 ## Model and bucket layout
 
 | Table | Content |
@@ -95,18 +141,39 @@ One folder per artifact, content-addressed inside it: a republication sends only
 
 ## Publication
 
-### Agents (planned, PR 4)
+### Agents
 
-Agents call the stdio MCP server `teamcode mcp artifacts`, which `teamcode run` (Claude Code and Codex) and the cloud runner add next to the gateway's servers. It runs as the agent (in a cloud session, the agent's UID in the agent's container), reads the files itself with the [same reader as the CLI](#file-reader) and sends them through the launcher's loopback proxy with the local token only; the proxy adds the member's device credential locally, or the execution's `tcex_` credential in the cloud. It has no TeamCode credential of its own. Outside `teamcode run` it uses the member's stored CLI login (the CLI's `config.json`, readable by its owner only, see [devices](devices.md); `origin_kind = api`); in a cloud container, which holds neither, it refuses to start without the proxy.
+Agents publish with the stdio MCP server `teamcode mcp artifacts`, which `teamcode run claude|codex` adds to the agent next to the team's gateway servers, under the name `teamcode_artifacts` (never a team server's label, which always starts with `teamcode-`). The agent starts it itself, so it runs as the agent, in the agent's directory: it reads the files with the [same reader as the CLI](#file-reader), below `--root` (the directory `teamcode run` was started in) and its private scratch directory, and it has no TeamCode credential of its own. It sends every call to the [loopback relay](#the-loopback-relay) of the proxy that launched the agent, at `TEAMCODE_ARTIFACTS_URL` (`http://127.0.0.1:<port>`, refused otherwise), with the local launch token only:
+
+| Agent | Configuration `teamcode run` adds |
+| --- | --- |
+| Claude Code | In `--mcp-config`: `{"type":"stdio","command":"<teamcode>","args":["mcp","artifacts","--root","<dir>","--run","<run>"],"env":{"TEAMCODE_ARTIFACTS_URL":"http://127.0.0.1:<port>","TEAMCODE_ARTIFACTS_TOKEN":"${TEAMCODE_MCP_TOKEN}"}}`; Claude Code expands the token from its environment; `TEAMCODE_ARTIFACTS_TOKEN_VAR` names the variable to read, so a token inherited from an outer launch is never used |
+| Codex | `-c mcp_servers.teamcode_artifacts={command=…,args=[…],env={TEAMCODE_ARTIFACTS_URL=…},env_vars=["TEAMCODE_LOCAL_TOKEN"]}`: Codex passes a stdio server only the variables it lists, here the token by name, and `TEAMCODE_ARTIFACTS_TOKEN_VAR=TEAMCODE_LOCAL_TOKEN` names it |
+
+The token is on no command line. `teamcode run` connects the server only when the server advertises `artifacts.policy.v1`, the [policy](#publication-policy) says the member may publish now, and the proxy relays artifacts (a user service older than `artifact-relay-v1` is left aside for a dedicated proxy, as for the MCP relay); `--no-artifacts` leaves it out. Otherwise the agent starts without it: no storage, an untested storage (named on stderr), artifacts turned off, or publication reserved to administrators (named on stderr). `--run` names the launch: the server records it as the origin of a new artifact (`local_run`) after checking that the run is the caller's own (`403 artifact_run_forbidden` otherwise).
+
+Outside `teamcode run` (`claude mcp add teamcode-artifacts -- teamcode mcp artifacts`, or another MCP client), the server has no relay address and uses the member's stored `teamcode login` instead (`origin_kind = api`).
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `publish` | `file_path` (the page: `.html`, `.htm` or `.md`); `files` `{published path → local path, or null to remove}`; `url`/`artifact_id` to update; `base_version`; `title`, `description`, `icon`; `access` (`personal` or `team`, never `public`) | `{id, url, version, access, filesUploaded, filesReused, warnings}`; on a conflict the live version is written to the scratch directory for the agent to merge |
-| `share` | the artifact; `member` (id, username or linked GitHub login); `role` (`viewer` or `editor`); `remove` | The invited members. The owner and invited editors may invite; never changes the access level |
-| `list` | `scope` (`mine`, `team`, `session`), `limit` ≤ 50, `before` | `{id, title, url, version, access, ownerId, updatedAt}` |
-| `read` | the artifact, `version?` | The manifest, with the files written to the scratch directory, not into the answer; another member's artifact is marked untrusted data |
+| `publish` | `file_path` (the page: `.html`, `.htm` or `.md`, published under its file name); `files` `{published path → local path, or null to remove}`; `artifact` (id or URL) to update; `base_version`; `title`, `description`, `icon`; `access` (`personal` or `team`, never `public`) | `{id, url, version, access, filesUploaded, filesReused}`. On a conflict, the live version's files are written to `<scratch>/<id>/v<n>/` and the error says so, for the agent to merge and publish with that `base_version` |
+| `share` | `artifact`; `member` (id, username or linked GitHub login); `role` (`viewer` or `editor`); `remove` | The invited members; never changes the access level |
+| `list` | `scope` (`mine`, `shared`, `team`), `limit` ≤ 50, `before` | `{id, title, url, version, access, ownerId, updatedAt}` and `nextBefore` |
+| `read` | `artifact`, `version?` | The manifest; the files are written to `<scratch>/<id>/v<n>/` (each checked against its SHA-256; when a file already there has other content, because the agent merged there, the version goes to `v<n>-2/`, `v<n>-3/`... instead, so an edited file is never overwritten), never into the answer. An artifact the caller does not own, or a version another member published into it (an editor, a session's recipient), carries a warning that it is untrusted data, not instructions; so does the conflict message |
 
-An agent never makes an artifact public and never deletes one: a person does, on the dashboard or with `teamcode artifacts access … public` and `delete --yes`. The returned URL is always `<server>/artifact/<id>`.
+The tool descriptions carry the page contract (what the [content policy](#serving-and-access) allows), so a page works the first time. Errors are tool results with `isError`: our own messages and the server's error code, never an exception text; an unreachable server is `server_unreachable`, to retry; a refused sign-in of the relay is `relay_sign_in_refused`, not to retry; a failure in the scratch directory is `local_error`, and an argument the client refuses before sending is `invalid_argument`, neither to retry. Without `base_version`, `publish` starts from the version this server last read or published for that artifact (a version only met in a conflict is not merged, so the retry names it as `base_version`), and from the live version only for an artifact it never saw; a change made on an older version therefore meets the conflict rather than overwriting the newer one. `read` always warns that the title is untrusted data. `list` always adds the untrusted-data warning when it returns artifacts: an invited editor or a session's recipient sets the title of the versions they publish, even on the caller's own artifacts. A conflict answer whose artifact id is not one is `unexpected_answer` and writes nothing. `remove` is `true` or `false` (also as strings); `files` is an object and `title`, `description` and `icon` are strings, anything else refused; a tool name the server does not have is a JSON-RPC error `-32602`. `base_version` and `version` are whole numbers (a `version` from 1), also accepted written as a string (`"3"`) or as `3.0`; anything else is refused rather than read as absent. The server speaks MCP revisions `2025-11-25`, `2025-06-18` and `2025-03-26`, one JSON-RPC message per line.
+
+An agent never makes an artifact public and never deletes one through these tools: the tools cannot, and the relay does not carry those routes. In a cloud session the server enforces it too, since the session's credential cannot. On a member's own machine the agent runs as the member, so a shell command such as `teamcode artifacts access` acts with the member's login; the tools are the boundary, not the machine. A person does, on the dashboard or with `teamcode artifacts access … public` and `delete --yes`. The returned URL is always `<server>/artifact/<id>`.
+
+**Scratch directory.** `--scratch`, by default `<configuration directory>/artifacts/<run>` (`~/.config/teamcode/artifacts/<run>`), created readable by the user only (`0700`; an existing one must be a real directory of this user, already `0700`, never a link: a shared directory passed by mistake is refused, not narrowed) together with its parent. `teamcode run` passes `--config-dir`, its own configuration directory, since an agent passes a stdio server only some variables (`XDG_CONFIG_HOME` may be missing). It is a second root of the reader, so a merged page can be published from there. It is not under the shared temporary directory, where another user could prepare the path first.
+
+### The loopback relay
+
+The proxy of `teamcode run` (and of the user service) relays `/api/v1/artifacts/*` to the server with its own credential, the member's device login. It reads no file and keeps no state, and it relays only the calls the MCP server makes: `GET` of the list, the policy, an artifact, its versions, a version, a file and its members; `POST` of an upload, a version and an invitation; `PUT` of a chunk; `DELETE` of an invitation (a member segment never `.` or `..`). Changing an artifact's access and deleting it are not relayed (`404`), so an agent cannot reach them whatever the credential would allow. The guards are those of the MCP relay: the local token compared in constant time (`401`), loopback only and no `Origin` header (`403`), at most one canonical `x-teamcode-run-id` (`400`), a bounded body, `Cache-Control: no-store`, an unreachable server as `502` with `Retry-After: 5`, and a refused sign-in (the server answered `401` to the proxy's credential: the member's login is gone, or a cloud execution ended) as `502` with the code `relay_sign_in_refused` in the body and `x-teamcode-error`, naming `teamcode login`; other refusals reach the caller with their code. Answers are bounded to 16 MiB and keep only `Retry-After`, `Content-Disposition`, `X-TeamCode-Sha256` and the request id.
+
+### Publication policy
+
+`GET /api/v1/artifacts/policy` → `{canPublish, reason?}`, for any member credential with `artifacts:read` (or `artifacts:write`, `team:read`). It answers even while artifacts are inactive: `reason` is then `artifact_storage_missing`, `artifact_storage_unverified` or `artifacts_disabled`, `artifact_publish_forbidden` when `whoCanPublish` is `admins` and the caller is not an administrator, and `credential_scope` for a key without `artifacts:write`, which its publish would be refused. It is one read of the settings and the storage row (both by primary key), done once per launch.
 
 ### Publication API
 
@@ -117,7 +184,7 @@ Implemented in PR 2. Every route needs a member credential; the [scopes](#scopes
 | `POST /api/v1/artifacts/uploads` `{artifactId?, files:[{sha256,size}]}` | Announce the distinct files of the next version → `201 {uploadId, artifactId, missing, chunkBytes, expiresAt}`. Without `artifactId` a draft artifact is created; `quotaArtifactsPerMember` counts published artifacts and is checked here and at the first commit. A member holds at most 16 open uploads and 20 unpublished drafts (`429 artifact_uploads_busy`). `missing` lists what the artifact's folder does not hold yet |
 | `PUT /api/v1/artifacts/uploads/{upload}/blobs/{sha256}/{n}` | One chunk (`application/octet-stream`, at most 1 MiB, under the chart's 2 MiB ingress limit) → `{complete, received, total}`. Chunks may be sent in any order and in parallel (they are counted under a lock on the upload) and wait in MySQL, the only bus between replicas; the last one assembles the file, checks its size and SHA-256 (`422 artifact_blob_mismatch`; the client sends the file again), scans it, and sends it to the bucket |
 | `POST /api/v1/artifacts/{id}/versions` `{uploadId, entry, files:{path:{sha256,size}}, baseVersion, title?, description?, icon?, access?}` | Commit → `201 {artifact, version, replayed:false}`; the same commit within 10 minutes (same credential, base version and manifest digest) answers `200` with the same version and `replayed:true` |
-| `GET /api/v1/artifacts?scope=&member=&session=&run=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue |
+| `GET /api/v1/artifacts?scope=&member=&session=&run=&origin=&access=&limit=&before=` | `mine`, `shared` (invited), `team` (everything the caller reads, default) or `all` (administrators), most recently changed first, at most 50, `nextBefore` to continue; `origin` is `local_run`, `cloud_session` or `api`, `access` is `personal`, `team` or `public` (`400 invalid_artifact_query` otherwise); `session` and `run` select the artifacts created in that cloud session or launch |
 | `GET /api/v1/artifacts/{id}`, `GET …/versions`, `GET …/versions/{n}` | The artifact (with the caller's `relation`: `owner`, `editor`, `viewer`, `team` or `admin`), its kept versions, one version's manifest |
 | `GET …/versions/{n}/file?path=` | One file, as `application/octet-stream` with `Content-Disposition: attachment` and `X-TeamCode-Sha256`: the API never serves a page as HTML on the server's origin (that is the [content prefix](#serving-and-access)) |
 | `PUT /api/v1/artifacts/{id}/access` `{access, publicFollowsLatest, publicVersion?}` | Change the access level; interactive only. Either `publicFollowsLatest: true` without a version, or `false` with `publicVersion` (`400 invalid_artifact_access` otherwise) |
@@ -164,16 +231,16 @@ A version published by an invited editor stays the owner's artifact and counts i
 | `artifacts:read` | List and read artifacts, versions, files and members |
 | `artifacts:write` | `artifacts:read`, plus uploads, commits, invitations and removals |
 
-`team:read` also reads every route of `artifacts:read`. No key changes an access level or deletes an artifact, whatever its scopes: those two routes need an interactive sign-in. The cloud execution credential gets `artifacts:write` in PR 5.
+`team:read` also reads every route of `artifacts:read`. No key changes an access level or deletes an artifact, whatever its scopes: those two routes need an interactive sign-in, and a member segment of `DELETE …/members/<member>` is never exactly `.` or `..`, so none can be collapsed into the artifact's own route. The [cloud execution credential](#cloud-sessions) (`tcex_`) has `artifacts:write`.
 
 ### File reader
 
-One reader in the CLI (`ArtifactSources`) reads every file to publish, for `teamcode artifacts publish` now and for `teamcode mcp artifacts` in PR 4. It runs as the user (or agent) who launched it and reads only below its roots (the working directory, and a scratch directory for the MCP server):
+One reader in the CLI (`ArtifactSources`) reads every file to publish, for `teamcode artifacts publish` and `teamcode mcp artifacts`. It runs as the user (or agent) who launched it and reads only below its roots (the working directory, and a scratch directory for the MCP server):
 
 - A relative path resolves against the first root; an absolute path must lie inside one. `..`, an empty path and NUL bytes are refused.
 - Every component below the root is opened without following links: `openat` with `O_NOFOLLOW` component by component on macOS and Linux (`O_DIRECTORY` for directories, then `fstat` on the leaf), `FILE_FLAG_OPEN_REPARSE_POINT` on Windows with reparse points refused and every handle kept open without delete sharing, `NOFOLLOW_LINKS` on the JVM. A link refuses the file even when it points inside the root.
 - Regular files only, at most 16 MiB read.
-- Refused by name: `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.gnupg/`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pypirc`, `.claude/.credentials.json`, `.codex/auth.json` and, in a cloud session, `/workspace/.home`.
+- Refused by name: `.git/`, `.ssh/`, `.aws/`, `.teamcode/`, `.gnupg/`, `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `.npmrc`, `.netrc`, `.pypirc`, `.claude/.credentials.json`, `.codex/auth.json`, the TeamCode configuration directory (where `teamcode login` keeps its credential; the scratch directory inside it stays readable), and every directory passed with `--refuse` (compared ignoring case, as macOS and Windows open them) (in a cloud session, the runner's home `/workspace/.home`, the agent's home `/workspace/.agent-home`, and `HOME` wherever else it points).
 - A refusal names the path and the rule, never the content.
 
 Published paths follow the [skill catalog](skills.md) rules (up to 8 segments of letters, digits, `.`, `_`, `+` and `-`, no hidden or Windows-reserved segment). Limits, checked again by the server: 15 MiB per binary file, 16 MiB per page or text file, 255 files and 64 MiB per publication, 511 files and 256 MiB per version.
@@ -192,7 +259,13 @@ Published paths follow the [skill catalog](skills.md) rules (up to 8 segments of
 
 The CLI uses the login stored by `teamcode login` in its `config.json`, like every other command. The typed client has `artifacts`, `artifact`, `artifactVersions`, `artifactVersion`, `artifactFile`, `startArtifactUpload`, `putArtifactChunk`, `commitArtifactVersion` (throwing `ArtifactConflictException` with the live version), `setArtifactAccess`, `artifactMembers`, `shareArtifact`, `unshareArtifact` and `deleteArtifact`.
 
-**Session transfer.** An artifact belongs to the member who created it; a session is only its origin. When a cloud session changes owner, the recipient is added as an `editor` (reason `session_transfer`) of every artifact created or updated in that session, in the transaction that accepts the transfer, so its agent can read and republish them. Publications of the new epoch belong to the recipient.
+### Cloud sessions
+
+The execution credential of a cloud session (`tcex_`, [cloud sessions](cloud-sessions.md)) carries `artifacts:write` next to inference, MCP, skills and hooks; it still never changes an access level or deletes an artifact. When the runner starts the agent, it asks the policy with that credential (20 s at most) and, when the session's owner may publish, adds `teamcode mcp artifacts` exactly as `teamcode run` does: `--root` the workspace, `--scratch /tmp/teamcode-artifacts` (the pod is single-user), `--refuse <workspace>/.home` (the runner's home), `--refuse <workspace>/.agent-home` (the agent's home and its sign-ins) and `--refuse $HOME` when it points elsewhere, the runner's own loopback relay and the local token only. A refused or unreachable policy starts the agent without it.
+
+The server takes the origin of a publication made with an execution credential from the credential, never from the call: a new artifact records `cloud_session` with the session and epoch (a claimed run is ignored), and every version records the session and epoch it was committed in (`artifact_versions.origin_session_id`, indexed). The artifact belongs to the member the execution runs for. The credential is revoked when the execution ends, so a paused session's agent can no longer publish (`401 authentication_required`).
+
+**Session transfer.** An artifact belongs to the member who created it; a session is only its origin. When a cloud session changes owner, at the paused boundary where its credentials are revoked, the recipient is added as an `editor` (reason `session_transfer`, the session recorded) of every published artifact (not a draft or a deleted one) of the former owner created in that session or with a version committed in it (a third member's artifact the session edited as their invited editor is left to its owner), and of those the former owner itself received from this session at an earlier transfer, so a chain of transfers keeps them, in the same transaction, so the recipient's agent can read and republish them; an existing viewer invitation becomes `editor` and keeps its reason and who added it, an editor stays as is, and each grant is audited as `artifact.member_added`. At most 500 artifacts per session are shared. The artifacts keep their owner; publications of the new epoch belong to the recipient.
 
 ## Serving and access
 
@@ -222,7 +295,7 @@ The sandbox gives the content an opaque origin even when opened directly: no coo
 
 **Entry page.** An HTML entry page with its own doctype (after whitespace and comments) is sent byte for byte; one without gets the skeleton agents expect (doctype, viewport, a small reset, and `utf-8` when the page is UTF-8). A Markdown entry page is rendered on the server into escaped HTML (headings, paragraphs, lists, quotes, code, emphasis, and links to `http`, `https`, `mailto` or relative targets); a Markdown file that is not the entry page is served as `text/plain`. Other files are served with the type recorded at publication.
 
-**Gallery.** **Dashboard → Artifacts** lists what the member can read, theirs, those shared with them, and for administrators every artifact of the team, newest first, with access, author, version, origin and date. While artifacts are inactive, `/artifact/*` answers `404` to everyone, the menu shows only to administrators and leads them to Settings → Artifacts, and members get `404` on the gallery.
+**Gallery.** **Dashboard → Artifacts** lists what the member can read, theirs, those shared with them, and for administrators every artifact of the team, newest first, with access, author, version, origin and date. A form filters by origin (local runs, cloud sessions, API and CLI) and access level; the tabs and the next page keep the filters. A card's origin links to everything the same launch or cloud session published (`?run=` or `?session=`), and a launch's page (**Agent sessions → launch**) links to its artifacts while artifacts are on. The dashboard has no page per cloud session yet, so a cloud session's artifacts are reached from the gallery. While artifacts are inactive, `/artifact/*` answers `404` to everyone, the menu shows only to administrators and leads them to Settings → Artifacts, and members get `404` on the gallery.
 
 | Access | Who reads | Who changes content | Who changes access or deletes |
 | --- | --- | --- | --- |
@@ -243,5 +316,11 @@ PR 1: `SigV4Test` (the four worked examples of the S3 SigV4 documentation, RFC 3
 PR 2: `ArtifactRulesTest` (chunking, announcements, manifests and paths, digest, text detection and the secret kinds, details), `ServiceKeyAuthorizationTest` (`artifacts:read` nested in `artifacts:write` and `team:read`, neither reaching access or deletion), `ArtifactPublicationPersistenceTest` (MySQL 8.4, two pools, an in-memory bucket: two replicas committing on the same base where exactly one wins and the other gets the live manifest, replays, a blob trusted only from this upload or the folder, chunks out of order and duplicated, size and hash mismatches, a secret refused before the bucket, sharing and the 404 of a personal artifact, admin reads audited, access and `publicSharing`, `whoCanPublish`, byte quotas and the hourly limit, pruning that keeps the pinned public version, `artifact_busy` while blobs are collected, expired uploads, drafts, retention, deletion proven by an empty listing and retried otherwise), `ArtifactRoutesTest` (the HTTP contract, keys by scope, access and deletion refused to every key before reaching the store, files as attachments, inactive storage), `ApiDocsTest`; in the CLI `ArtifactRulesCliTest` (names refused, published paths, titles, references), `ArtifactSourcesTest` (native, real system calls: a link as the file, as a directory and inside the root, `..`, absolute paths outside, missing files, directories, credentials by name, refused prefixes, the 16 MiB bound) and `ArtifactPublisherTest` (only missing files sent, in 1 MiB chunks, base files kept and removed).
 
 PR 3: `ArtifactViewingTest` (tickets bound to their artifact and key, forged, expired; the HKDF derivation against an independently computed value; byte ranges), `ArtifactViewerRoutesTest` (the content policy and companion headers on 200, 206, 304, 404, 416, 500 and a framework error; a ticket that is forged, of another artifact, expired, or whose grant was revoked, stopping within the 30-second recheck; the dashboard never served under the content prefix; `Sec-Fetch-Dest: iframe` refused; sign-in redirects, `next` limited to the viewer, both cookie paths; public links for visitors with the banner and without the author; `404` while inactive and the menu only for administrators, the gallery sending them to the settings; the forms with their origin check and the delete confirmation; `artifacts.v1`; Markdown escaped), `ArtifactPublicationPersistenceTest` (MySQL 8.4: a ticket's login session, access, public pin, public sharing off, availability, sign-out, a disabled member and deletion).
+
+PR 4: `ArtifactRoutesTest` (the policy in every availability state, from the store to the answer; the run header recorded as the origin, an invalid or repeated one refused before the store; a key without an artifacts scope refused), `ArtifactPublicationPersistenceTest` (MySQL 8.4, two pools: the policy through storage missing, untested, switched off, on, administrators only and a failed test; a run recorded as the origin, another member's or an unknown run refused before any draft), `ApiDocsTest`; in the CLI `ArtifactRelayTest` (the listed calls relayed with the proxy's credential, query, body, run and headers; access changes, deletion and unlisted paths `404` without reaching the server; no token, a wrong token, an `Origin`, an invalid or repeated run refused; a business refusal kept, a refused sign-in and an unreachable server turned into `502`; the service announcing `artifact-relay-v1` and an older one set aside), `AgentLaunchTest` (the Claude Code stdio entry and the Codex override, with the token on no command line, TOML escaping, a team server named `artifacts` kept apart, nothing added without the server), `ArtifactsMcpServerTest` (protocol negotiation, tools, notifications, parse and method errors; publishing from the root and refusing `.env`, a path outside the roots, a symbolic link and `public`; a conflict writing the live version to the scratch directory and the merged page published from there; reading into the scratch directory, untrusted content marked, files never overwritten; sharing and listing; an unreachable server as `server_unreachable` without the exception text). The native macOS ARM64 binary was run over stdio: initialize, tools, an unreachable relay answered as a tool error, the scratch directory created `0700`; the CLI compiles for macOS, Linux and Windows. Fixed on the way: the typed client's artifact list and file download called the resources `get` with a URL string, which failed at runtime; they now build plain requests.
+
+PR 6: `ArtifactViewerRoutesTest` (the filters passed to the store, shown in the form and kept by the tabs and the next page; origins linked to their run or session; titles escaped; an unknown origin or access refused, by the gallery and the API; the launch page linking to its artifacts only while they are on, with every member's for administrators), `ArtifactSettingsRoutesTest` (usage per member escaped, a removed member shown by id, the share of the member quota and the team total), `ArtifactPublicationPersistenceTest` (MySQL 8.4: the origin, access and run filters in each scope, another member's personal artifact left out; usage largest first, drafts and deleted artifacts not counted).
+
+PR 5: `CloudInferencePersistenceTest` (MySQL 8.4, two pools: the execution credential's scopes include `artifacts:write`; the policy for that credential; a publication with it records `cloud_session`, the session and epoch 1 whatever run the call claims, belongs to the session's member and records the session on its version; deleting is refused; after the execution ends the policy answers `authentication_required`), `CloudTransferPersistenceTest` (at the boundary the recipient becomes `editor` of the artifacts created in the session, updated in it and shared with them as viewer, an editor invitation is kept, a deleted artifact and the recipient's own are left out, owners unchanged, three audit events), `ArtifactStoragePersistenceTest` (the migration matches the tables with the new index); in the CLI `CloudToolsJvmTest` (the runner connects the artifact tools only when the policy says the owner may publish: not for any refusal reason, an older server without the policy, or without the runner's binary) and `CloudToolsTest` (the agent's configuration: the workspace root, the scratch directory, the refused home, the relay address and the local token only).
 
 MinIO no longer publishes server images, so the S3-compatible test server is the Versity S3 Gateway; real AWS, OVH and R2 buckets are not part of CI.

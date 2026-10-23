@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.infrastructure.cloud
 
 import kotlinx.coroutines.*
+import me.nathanfallet.teamcode.domain.artifacts.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.*
@@ -62,13 +63,31 @@ class CloudInferencePersistenceTest {
                 assertTrue(first.token.startsWith("tcex_")); assertFalse(first.toString().contains(first.token))
                 val principal = assertNotNull(ra.team.authenticate(first.token))
                 assertEquals(member.member.id, principal.member.id)
-                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ), principal.serviceScopes)
-                // The owner's inference, MCP gateway and skills; nothing that publishes, manages or reads usage or cloud sessions.
-                for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ)) AuthorizeCredentialUseCase().check(principal, action)
+                assertEquals(setOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE), principal.serviceScopes)
+                // The owner's inference, MCP gateway, skills and artifacts; nothing that publishes skills, manages or reads usage or cloud sessions.
+                for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ,
+                    CredentialAction.ARTIFACTS_READ, CredentialAction.ARTIFACTS_WRITE)) AuthorizeCredentialUseCase().check(principal, action)
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.SKILLS_PUBLISH) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.INTERACTIVE) }
                 failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, CredentialAction.USAGE_READ) }
                 ra.store.revalidate(principal) // The gateway's own recheck on every request and on its cancellation polls.
+
+                // The execution publishes artifacts as its owner; the session and epoch come from the credential, never from the call.
+                val artifactAdmin = SqlArtifactAdminStore(a, cipher)
+                artifactAdmin.saveStorage(admin, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
+                artifactAdmin.recordTest(admin, 1, passed = true)
+                artifactAdmin.saveSettings(admin, artifactAdmin.settings(admin).copy(enabled = true))
+                val artifacts = ArtifactService(SqlArtifactStore(b), SqlArtifactAdminStore(b, cipher), MemoryBucket())
+                assertEquals(ArtifactPolicy(true, null), artifacts.policy(principal))
+                val page = "<html>from the cloud</html>".encodeToByteArray()
+                val file = UploadFile(ArtifactRules.sha256(page), page.size.toLong())
+                val upload = artifacts.startUpload(principal, null, listOf(file), ArtifactOrigin("local_run", "11111111-2222-4333-8444-555555555555"))
+                artifacts.putChunk(principal, upload.uploadId, file.sha256, 0, page)
+                val published = artifacts.commit(principal, upload.artifactId, upload.uploadId, "index.html", mapOf("index.html" to file), 0, "Cloud", null, null, null, null)
+                assertEquals(ArtifactOrigin("cloud_session", null, created.id, 1), published.artifact.origin)
+                assertEquals(member.member.id, published.artifact.ownerId)
+                assertEquals(created.id to 1, published.version.originSessionId to published.version.originEpoch)
+                failure("credential_scope") { artifacts.delete(principal, upload.artifactId) }
                 failure("execution_fenced") { ra.inference.issue(teamId, created.id, 2) }
                 assertEquals(emptyList(), SqlServiceKeyService(a).list(member).map { it.id }, "Execution credentials are not service keys")
                 assertNull(a.query { Tokens.selectAll().where { Tokens.tokenHash eq first.token }.singleOrNull() }, "Only the digest is stored")
@@ -89,6 +108,7 @@ class CloudInferencePersistenceTest {
                 assertEquals(PAUSED, ra.store.find(teamId, created.id)!!.state)
                 for (token in listOf(second, third, draining)) assertNull(ra.team.authenticate(token.token), "Revoked when the execution ended")
                 failure("authentication_required") { ra.store.revalidate(principal) }
+                failure("authentication_required") { artifacts.policy(principal) }
                 failure("execution_fenced") { ra.inference.issue(teamId, created.id, 1) }
                 assertEquals(0L, a.query { CloudInferenceCredentials.selectAll().count() })
 
@@ -129,6 +149,16 @@ class CloudInferencePersistenceTest {
                 failure("execution_fenced") { ra.inference.issue(teamId, created.id, 3) }
             } }
         }
+    }
+
+    private class MemoryBucket : ArtifactObjectStore {
+        val objects = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+        override suspend fun put(connection: ArtifactStorageConnection, key: String, bytes: ByteArray, contentType: String) { objects[key] = bytes }
+        override suspend fun get(connection: ArtifactStorageConnection, key: String, range: LongRange?, maxBytes: Int) = objects[key]?.let { StoredObject(it, it.size.toLong(), null, null) }
+        override suspend fun head(connection: ArtifactStorageConnection, key: String) = objects[key]?.let { ObjectHead(it.size.toLong(), null) }
+        override suspend fun list(connection: ArtifactStorageConnection, prefix: String, continuationToken: String?, maxKeys: Int) =
+            ObjectListing(objects.keys.filter { it.startsWith(prefix) }.sorted().map { ListedObject(it, 0) }, null)
+        override suspend fun delete(connection: ArtifactStorageConnection, keys: List<String>): List<String> { keys.forEach(objects::remove); return emptyList() }
     }
 
     private suspend fun members(a: Database): Pair<Principal, Principal> {

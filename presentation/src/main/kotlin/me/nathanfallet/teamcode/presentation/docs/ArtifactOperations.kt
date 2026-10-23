@@ -81,17 +81,28 @@ internal fun ApiCatalog.artifactMemberOperations() {
             queryText("member", "Only artifacts owned by this member id.")
             queryText("session", "Only artifacts published from this cloud session.")
             queryText("run", "Only artifacts published from this agent run.")
+            queryText("origin", "Only artifacts with this origin: `local_run`, `cloud_session` or `api`.")
+            queryText("access", "Only artifacts with this access level: `personal`, `team` or `public`.")
             queryNumber("limit", "1–50, default 50.")
             queryText("before", "The `nextBefore` of the previous page.")
         }
         responses { ok<ArtifactListView>("A page of artifacts.") }
+    }
+    get("/api/v1/artifacts/policy") {
+        operationId = "getArtifactPolicy"; tag(ApiTags.ARTIFACTS)
+        summary = "Read the publication policy"
+        description = "Whether the caller may publish now. `teamcode run` and the cloud runner read it before they offer the artifact tools to an agent. " +
+            "Answers even while artifacts are inactive: `canPublish` is then false and `reason` is `artifact_storage_missing`, `artifact_storage_unverified` " +
+            "or `artifacts_disabled`; `artifact_publish_forbidden` when only administrators publish; `credential_scope` for a key without `artifacts:write`."
+        responses { ok<ArtifactPolicyView>("The policy.") }
     }
     post("/api/v1/artifacts/uploads") {
         operationId = "createArtifactUpload"; tag(ApiTags.ARTIFACTS)
         summary = "Start an upload"
         description = "Announces the distinct files (SHA-256 and size) of the version to publish; the answer lists the ones to send. Without `artifactId`, reserves a new " +
             "artifact (a draft deleted after a day if never committed). The upload is bound to the calling credential and expires after an hour. " +
-            "Limits: 511 files and 256 MiB per version, 16 MiB per file, 255 files and 64 MiB to send. $INACTIVE"
+            "Limits: 511 files and 256 MiB per version, 16 MiB per file, 255 files and 64 MiB to send. An optional `x-teamcode-run-id` header names the " +
+            "caller's own agent run as the origin of a new artifact (`local_run`); a run of another member is refused (`403 artifact_run_forbidden`). $INACTIVE"
         body<CreateArtifactUploadRequest>("The files and, to update an artifact, its id.")
         responses {
             ok<ArtifactUploadView>("The upload and the missing files.", HttpStatusCode.Created)

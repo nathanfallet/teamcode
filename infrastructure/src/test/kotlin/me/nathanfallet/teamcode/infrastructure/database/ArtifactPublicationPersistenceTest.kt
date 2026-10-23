@@ -437,6 +437,61 @@ class ArtifactPublicationPersistenceTest {
         }
     }
 
+    @Test @Timeout(240)
+    fun thePolicyFollowsAvailabilityAndPublishersAndRunsMustBeTheCallers() = runBlocking {
+        fixture { f ->
+            val a = Replica(f.a, cipher, Bucket()); val b = Replica(f.b, cipher, Bucket())
+            val owner = f.member.principal; val admin = f.admin.principal
+            assertEquals(ArtifactPolicy(false, "artifact_storage_missing"), b.service.policy(owner))
+            a.admin.saveStorage(admin, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
+            assertEquals(ArtifactPolicy(false, "artifact_storage_unverified"), b.service.policy(owner))
+            a.admin.recordTest(admin, 1, passed = true)
+            assertEquals(ArtifactPolicy(false, "artifacts_disabled"), b.service.policy(owner))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(enabled = true))
+            assertEquals(ArtifactPolicy(true, null), b.service.policy(owner))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(whoCanPublish = WhoCanPublish.ADMINS))
+            assertEquals(ArtifactPolicy(false, "artifact_publish_forbidden"), b.service.policy(owner))
+            assertEquals(ArtifactPolicy(true, null), b.service.policy(admin))
+            a.admin.saveSettings(admin, a.admin.settings(admin).copy(whoCanPublish = WhoCanPublish.EVERYONE))
+            // A failed test turns the policy off again.
+            a.admin.recordTest(admin, 1, passed = false)
+            assertEquals(ArtifactPolicy(false, "artifact_storage_unverified"), b.service.policy(owner))
+            a.admin.recordTest(admin, 1, passed = true)
+
+            // A new artifact records the caller's own run as its origin; another member's run is refused before any draft.
+            val runs = AgentRunServiceImpl(f.a)
+            val mine = "11111111-2222-4333-8444-555555555555"; val theirs = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+            runs.start(owner, mine, "claude", "interactive"); runs.start(admin, theirs, "codex", "interactive")
+            val page = bytes("<html>run</html>")
+            val upload = b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", mine))
+            assertEquals("local_run" to mine, f.a.query { Artifacts.selectAll().where { Artifacts.id eq upload.artifactId }.single().let { it[Artifacts.originKind] to it[Artifacts.originRunId] } })
+            val drafts = f.a.query { Artifacts.selectAll().count() }
+            assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", theirs)) }.code)
+            assertEquals("artifact_run_forbidden", assertFailsWith<TeamFailure> { b.service.startUpload(owner, null, listOf(ref(page)), ArtifactOrigin("local_run", "00000000-0000-4000-8000-000000000000")) }.code)
+            assertEquals(drafts, f.a.query { Artifacts.selectAll().count() })
+
+            // The gallery's filters and the usage per member.
+            send(b.service, owner, upload, listOf(page))
+            val fromRun = b.service.commit(owner, upload.artifactId, upload.uploadId, "index.html", mapOf("index.html" to ref(page)), 0, "Run", null, null, "team", null).artifact
+            val direct = publish(a.service, admin, null, mapOf("index.html" to bytes("<html>direct, a little longer</html>")), 0, title = "Direct").artifact
+            fun ids(actor: Principal, query: ArtifactQuery) = runBlocking { a.service.list(actor, query) }.artifacts.map { it.id }
+            assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(originKind = "local_run")))
+            assertEquals(listOf(fromRun.id), ids(owner, ArtifactQuery(runId = mine)))
+            assertEquals(emptyList(), ids(owner, ArtifactQuery(originKind = "api")), "Another member's personal artifact stays out")
+            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, originKind = "api")))
+            assertEquals(listOf(fromRun.id), ids(admin, ArtifactQuery(ArtifactScope.ALL, access = ArtifactAccess.TEAM)))
+            assertEquals(listOf(direct.id), ids(admin, ArtifactQuery(ArtifactScope.MINE, access = ArtifactAccess.PERSONAL)))
+            assertEquals("invalid_artifact_query", assertFailsWith<TeamFailure> { a.service.list(owner, ArtifactQuery(originKind = "elsewhere")) }.code)
+            val report = b.admin.usage(admin)
+            assertEquals(direct.storedBytes + page.size, report.teamBytes)
+            val usage = report.members
+            assertEquals(listOf(ArtifactMemberUsage(admin.member.id, admin.member.username, 1, direct.storedBytes), ArtifactMemberUsage(owner.member.id, owner.member.username, 1, page.size.toLong())), usage,
+                "Largest first; the drafts left by the refused uploads hold nothing")
+            a.service.delete(admin, direct.id)
+            assertEquals(listOf(owner.member.id), b.admin.usage(admin).members.map { it.memberId }, "A deleted artifact is no longer counted")
+        }
+    }
+
     private suspend fun activate(replica: Replica, f: Fixture) {
         replica.admin.saveStorage(f.admin.principal, 0, ArtifactStorageInput("https://s3.example.com", "us-east-1", "artifacts", "teamcode", true, "AKIAEXAMPLE", "synthetic-secret-key", ServerSideEncryption.NONE))
         replica.admin.recordTest(f.admin.principal, 1, passed = true)

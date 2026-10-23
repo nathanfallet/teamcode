@@ -1,0 +1,1 @@
+CREATE INDEX artifact_versions_session ON artifact_versions (origin_session_id);

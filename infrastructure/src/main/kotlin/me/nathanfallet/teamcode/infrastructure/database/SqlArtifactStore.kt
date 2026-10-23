@@ -13,6 +13,17 @@ import org.jetbrains.exposed.v1.jdbc.*
  * a blob is only trusted once it was checked and stored, and only within its upload or its artifact.
  */
 class SqlArtifactStore(private val database: Database) : ArtifactStore {
+    override suspend fun policy(actor: Principal): ArtifactPolicy = database.query {
+        requireCurrent(this, actor)
+        val settings = readSettings(actor.teamId)
+        val availability = ArtifactAvailability.of(settings, readStorage(actor.teamId))
+        when {
+            !availability.active -> ArtifactPolicy(false, availability.reason)
+            settings.whoCanPublish == WhoCanPublish.ADMINS && !actor.member.role.isAdministrator -> ArtifactPolicy(false, "artifact_publish_forbidden")
+            else -> ArtifactPolicy(true, null)
+        }
+    }
+
     override suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin): ArtifactUpload = database.query {
         lockTeam(actor.teamId); requireCurrent(this, actor)
         val settings = requireActive(actor.teamId)
@@ -24,6 +35,14 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         if (open >= ArtifactRules.MAX_OPEN_UPLOADS)
             throw TeamFailure("artifact_uploads_busy", 429, "You have ${ArtifactRules.MAX_OPEN_UPLOADS} publications in progress. Finish them or wait for them to expire.", retryAfterSeconds = 60, retryable = true)
         val id = if (artifactId == null) {
+            // A cloud execution's credential says which session and epoch it publishes from, whatever the call claims.
+            val execution = executionOf(actor)
+            val origin = if (execution != null) ArtifactOrigin("cloud_session", null, execution.first, execution.second) else origin
+            // A run named as the origin must be one of the caller's own (by primary key, one row at most).
+            if (execution == null) origin.runId?.let { run ->
+                val owned = AgentRuns.select(AgentRuns.id).where { (AgentRuns.id eq run) and (AgentRuns.teamId eq actor.teamId) and (AgentRuns.memberId eq actor.member.id) }.limit(1).any()
+                if (!owned) throw TeamFailure("artifact_run_forbidden", 403, "This run is not one of yours; publish from your own teamcode run.")
+            }
             requireArtifactSlot(actor, settings)
             // Drafts do not count in the quota; abandoned ones are bounded per day until they expire.
             val drafts = Artifacts.select(Artifacts.id).where {
@@ -199,10 +218,11 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         }
         ArtifactBlobs.update({ (ArtifactBlobs.artifactId eq artifactId) and (ArtifactBlobs.sha256 inList plan.files.map { it.sha256 }.distinct()) }) { it[lastReferencedVersion] = number }
         val versionId = UUID.randomUUID().toString()
+        val execution = executionOf(actor)
         ArtifactVersions.insert {
             it[id] = versionId; it[ArtifactVersions.artifactId] = artifactId; it[ArtifactVersions.number] = number; it[entryPath] = plan.entry; it[manifestDigest] = plan.digest
             it[fileCount] = plan.files.size; it[totalBytes] = plan.files.sumOf { file -> file.size }; it[createdBy] = actor.member.id; it[credentialId] = actor.tokenId
-            it[baseVersion] = plan.baseVersion; it[originSessionId] = null; it[originEpoch] = null; it[createdAt] = now
+            it[baseVersion] = plan.baseVersion; it[originSessionId] = execution?.first; it[originEpoch] = execution?.second; it[createdAt] = now
         }
         ArtifactVersionFiles.batchInsert(plan.files, shouldReturnGeneratedValues = false) { file ->
             this[ArtifactVersionFiles.versionId] = versionId; this[ArtifactVersionFiles.path] = file.path; this[ArtifactVersionFiles.sha256] = file.sha256
@@ -261,6 +281,8 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         query.ownerId?.let { condition = condition and (Artifacts.ownerId eq it) }
         query.sessionId?.let { condition = condition and (Artifacts.originSessionId eq it) }
         query.runId?.let { condition = condition and (Artifacts.originRunId eq it) }
+        query.originKind?.let { condition = condition and (Artifacts.originKind eq it) }
+        query.access?.let { condition = condition and (Artifacts.access eq it.wire) }
         query.before?.let { cursor ->
             val updated = cursor.substringBefore(':').toLongOrNull()
             val id = cursor.substringAfter(':', "")
@@ -492,6 +514,12 @@ class SqlArtifactStore(private val database: Database) : ArtifactStore {
         }
         Unit
     }
+
+    /** The cloud session and epoch of an execution credential (`tcex_`), by its primary key; null for any other credential. */
+    private fun executionOf(actor: Principal): Pair<String, Int>? =
+        CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId, CloudInferenceCredentials.epoch)
+            .where { CloudInferenceCredentials.tokenId eq actor.tokenId }.singleOrNull()
+            ?.let { it[CloudInferenceCredentials.sessionId] to it[CloudInferenceCredentials.epoch] }
 
     /** Refuses every member call while artifacts are not active, with the reason as the code. */
     private fun requireActive(teamId: String): ArtifactSettings {

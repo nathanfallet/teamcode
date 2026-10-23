@@ -113,6 +113,7 @@ object ArtifactVersions : Table("artifact_versions") {
     init {
         uniqueIndex("artifact_versions_number", artifactId, number)
         index("artifact_versions_replay", false, artifactId, baseVersion, manifestDigest)
+        index("artifact_versions_session", false, originSessionId)
     }
 }
 

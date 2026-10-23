@@ -128,17 +128,25 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
             if (principal.member.role.isAdministrator) return@get call.respondRedirect(ARTIFACT_SETTINGS_PATH)
             throw TeamFailure("not_found", 404, "Page not found.")
         }
-        val scope = call.request.queryParameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose mine, shared, team or all.") } ?: ArtifactScope.TEAM
-        val page = artifacts.list(principal, ArtifactQuery(scope, before = call.request.queryParameters["before"]))
+        val parameters = call.request.queryParameters
+        val scope = parameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose mine, shared, team or all.") } ?: ArtifactScope.TEAM
+        val filters = GalleryFilters(
+            parameters["origin"]?.takeIf { it.isNotEmpty() },
+            parameters["access"]?.takeIf { it.isNotEmpty() }?.let { ArtifactAccess.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose personal, team or public.") },
+            parameters["session"]?.takeIf { it.isNotEmpty() }, parameters["run"]?.takeIf { it.isNotEmpty() },
+        )
+        val page = artifacts.list(principal, ArtifactQuery(scope, sessionId = filters.session, runId = filters.run, before = parameters["before"],
+            originKind = filters.origin, access = filters.access))
         val tabs = listOfNotNull(ArtifactScope.TEAM to "Everything I can read", ArtifactScope.MINE to "Mine", ArtifactScope.SHARED to "Shared with me",
             (ArtifactScope.ALL to "All (administrators)").takeIf { principal.canReadTeam })
         val nav = """<p class="tabs">""" + tabs.joinToString(" · ") { (value, label) ->
-            if (value == scope) "<strong>${escape(label)}</strong>" else """<a href="$ARTIFACT_GALLERY_PATH?scope=${value.wire}">${escape(label)}</a>"""
+            if (value == scope) "<strong>${escape(label)}</strong>" else """<a href="${escape(filters.url(value))}">${escape(label)}</a>"""
         } + "</p>"
-        val cards = if (page.artifacts.isEmpty()) empty("No artifact here yet", "<p>Agents publish artifacts with <code>teamcode artifacts publish</code>; they appear here.</p>")
-        else """<div class="cards">""" + page.artifacts.joinToString("") { card(it) } + "</div>"
-        val more = page.nextBefore?.let { """<p><a href="$ARTIFACT_GALLERY_PATH?scope=${scope.wire}&amp;before=${escape(it.encodeURLParameter())}">Older artifacts</a></p>""" }.orEmpty()
-        call.respondText(call.page("Artifacts", nav + cards + more), ContentType.Text.Html)
+        val cards = if (page.artifacts.isEmpty()) empty(if (filters.any) "No artifact matches these filters" else "No artifact here yet",
+            if (filters.any) """<p><a href="${escape(GalleryFilters().url(scope))}">Clear the filters</a></p>""" else "<p>Agents publish artifacts with <code>teamcode artifacts publish</code>; they appear here.</p>")
+        else """<div class="cards">""" + page.artifacts.joinToString("") { card(it, scope) } + "</div>"
+        val more = page.nextBefore?.let { """<p><a href="${escape(filters.url(scope, it))}">Older artifacts</a></p>""" }.orEmpty()
+        call.respondText(call.page("Artifacts", nav + filterForm(scope, filters) + cards + more), ContentType.Text.Html)
     }
 
     get("$ARTIFACT_GALLERY_PATH/{id}/live") {
@@ -179,19 +187,49 @@ private fun time(millis: Long) = TIME.format(Instant.ofEpochMilli(millis))
 internal fun byteSize(bytes: Long): String = when {
     bytes < 1024 -> "$bytes B"
     bytes < 1024 * 1024 -> String.format(Locale.ROOT, "%.1f KiB", bytes / 1024.0)
-    else -> String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024))
+    bytes < 1024L * 1024 * 1024 -> String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024))
+    else -> String.format(Locale.ROOT, "%.1f GiB", bytes / (1024.0 * 1024 * 1024))
 }
-private fun originLabel(artifact: Artifact) = when (artifact.origin.kind) {
-    "local_run" -> "local run" + (artifact.origin.runId?.let { " ${it.take(8)}" } ?: "")
-    "cloud_session" -> "cloud session" + (artifact.origin.sessionId?.let { " ${it.take(8)}" } ?: "")
-    else -> "API"
+/** The gallery's filters, carried by its tabs, its pagination and its filter form. */
+private data class GalleryFilters(val origin: String? = null, val access: ArtifactAccess? = null, val session: String? = null, val run: String? = null) {
+    val any get() = origin != null || access != null || session != null || run != null
+    fun url(scope: ArtifactScope, before: String? = null) = ARTIFACT_GALLERY_PATH + "?" + listOfNotNull("scope" to scope.wire, origin?.let { "origin" to it },
+        access?.let { "access" to it.wire }, session?.let { "session" to it }, run?.let { "run" to it }, before?.let { "before" to it })
+        .joinToString("&") { (name, value) -> "$name=${value.encodeURLParameter()}" }
 }
 
-private fun card(artifact: Artifact): String {
+private fun filterForm(scope: ArtifactScope, filters: GalleryFilters): String {
+    fun option(value: String, label: String, selected: String?) = """<option value="${escape(value)}"${if (value == selected) " selected" else ""}>${escape(label)}</option>"""
+    val origins = option("", "Any origin", filters.origin ?: "") + option("local_run", "Local runs", filters.origin) + option("cloud_session", "Cloud sessions", filters.origin) + option("api", "API and CLI", filters.origin)
+    val access = option("", "Any access", filters.access?.wire ?: "") + option("personal", "Personal", filters.access?.wire) + option("team", "Team", filters.access?.wire) + option("public", "Public", filters.access?.wire)
+    val pinned = listOfNotNull(filters.session?.let { "session" to it }, filters.run?.let { "run" to it })
+    val hidden = pinned.joinToString("") { (name, value) -> """<input type="hidden" name="$name" value="${escape(value)}">""" }
+    val from = pinned.joinToString(" · ") { (name, value) -> (if (name == "session") "cloud session " else "local run ") + escape(value.take(8)) }
+    val clear = if (pinned.isEmpty()) "" else """<p>Published from $from · <a href="${escape(filters.copy(session = null, run = null).url(scope))}">Show every origin</a></p>"""
+    return clear + """<form class="filters" method="get" action="$ARTIFACT_GALLERY_PATH"><input type="hidden" name="scope" value="${scope.wire}">$hidden""" +
+        """<label>Origin <select name="origin">$origins</select></label><label>Access <select name="access">$access</select></label><button>Filter</button></form>"""
+}
+
+/** The origin, linked to the gallery of what the same run or session published. */
+private fun originLink(artifact: Artifact, scope: ArtifactScope): String {
+    val origin = artifact.origin
+    val run = origin.runId
+    val session = origin.sessionId
+    val (label, filters) = when {
+        origin.kind == "local_run" && run != null -> "local run ${run.take(8)}" to GalleryFilters(run = run)
+        origin.kind == "cloud_session" && session != null -> "cloud session ${session.take(8)}" to GalleryFilters(session = session)
+        origin.kind == "local_run" -> return "local run"
+        origin.kind == "cloud_session" -> return "cloud session"
+        else -> return "API"
+    }
+    return """<a href="${escape(filters.url(scope))}">${escape(label)}</a>"""
+}
+
+private fun card(artifact: Artifact, scope: ArtifactScope): String {
     val chips = listOfNotNull("""<span class="chip">${escape(artifact.access.wire)}</span>""", artifact.icon.takeIf { it.isNotEmpty() }?.let { """<span class="chip">${escape(it)}</span>""" }).joinToString(" ")
     return """<div class="card"><p class="card-title">$chips</p><h3><a href="/artifact/${escape(artifact.id)}">${escape(artifact.title.ifEmpty { "Untitled" })}</a></h3>""" +
         (artifact.description.takeIf { it.isNotEmpty() }?.let { "<p>${escape(it)}</p>" } ?: "") +
-        """<small>${escape(artifact.ownerName)} · v${artifact.currentVersion} · ${escape(originLabel(artifact))} · ${time(artifact.updatedAt)}</small></div>"""
+        """<small>${escape(artifact.ownerName)} · v${artifact.currentVersion} · ${originLink(artifact, scope)} · ${time(artifact.updatedAt)}</small></div>"""
 }
 
 /** User agents of the platforms the app runs on as a phone or tablet app; the desktop app opens links itself. */

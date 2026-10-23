@@ -24,7 +24,9 @@ class ArtifactSettingsRoutesTest {
                 .also { stored = it }
         }
         override suspend fun inUse(actor: Principal) = false
+        var usage = emptyList<ArtifactMemberUsage>()
         override suspend fun overview(actor: Principal) = ArtifactAdminOverview(stored, settings, false)
+        override suspend fun usage(actor: Principal) = ArtifactUsage(usage.sumOf { it.bytes }, usage)
         override suspend fun deleteStorage(actor: Principal) { stored ?: throw TeamFailure("artifact_storage_missing", 404, "None."); stored = null; settings = settings.copy(enabled = false) }
         override suspend fun recordTest(actor: Principal, version: Int, passed: Boolean): Boolean { stored = stored?.copy(verifiedAt = if (passed) 9 else null); return stored != null }
         override suspend fun settings(actor: Principal) = settings
@@ -152,6 +154,14 @@ class ArtifactSettingsRoutesTest {
         form("$ARTIFACT_SETTINGS_PATH/settings", "version=1&enabled=on&whoCanPublish=admins&publicSharing=off&quotaMemberGib=$typed&quotaMemberBytes=1572864&quotaTeamGib=20&quotaTeamBytes=${20 * ArtifactAdministrationService.GIB}&quotaArtifactsPerMember=100&quotaPublishesPerHour=30&personalRetentionDays=&sharedRetentionDays=60&maxVersionsPerArtifact=21")
         assertEquals(1_572_864, store.settings.quotas.memberBytes); assertEquals(21, store.settings.retention.maxVersionsPerArtifact)
         assertTrue("Artifacts are on" in client.get(ARTIFACT_SETTINGS_PATH) { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText())
+        assertTrue("No artifact is stored" in shown)
+        // Usage per member, escaped, against the member quota.
+        store.usage = listOf(ArtifactMemberUsage("bob-id", "<bob>", 3, 786_432), ArtifactMemberUsage("gone-id", "", 1, 1024))
+        val usage = client.get(ARTIFACT_SETTINGS_PATH) { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertFalse("<bob>" in usage)
+        assertTrue("""<tr><td>&lt;bob&gt;</td><td class="num">3</td><td class="num">768.0 KiB</td><td class="num">50 %</td></tr>""" in usage, usage)
+        assertTrue("<td>gone-id</td>" in usage, "A removed member is shown by id")
+        assertTrue("769.0 KiB of 20.0 GiB stored for the team" in usage)
         assertEquals(HttpStatusCode.Forbidden, client.post("$ARTIFACT_SETTINGS_PATH/storage/delete") {
             header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "https://evil.example"); contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=$csrf")
         }.status, "A form from another origin is refused")

@@ -302,12 +302,16 @@ class TeamCodeClient(
     suspend fun saveArtifactSettings(input: SaveArtifactSettingsRequest): ArtifactSettingsView = request("/api/v1/artifacts/settings", HttpMethod.Put, input)
 
     /** Artifacts the caller can read; `scope` is `mine`, `shared`, `team` (default) or `all` (administrators). */
-    suspend fun artifacts(scope: String? = null, memberId: String? = null, sessionId: String? = null, runId: String? = null, limit: Int? = null, before: String? = null): ArtifactListView {
+    suspend fun artifacts(scope: String? = null, memberId: String? = null, sessionId: String? = null, runId: String? = null, limit: Int? = null, before: String? = null,
+        originKind: String? = null, access: String? = null): ArtifactListView {
         listOfNotNull(memberId, sessionId, runId).forEach(::identifier)
-        val response = http.get("$origin/api/v1/artifacts") {
+        // request, not get: the explicitly imported resources `get` would take the URL string for a resource to encode.
+        val response = http.request("$origin/api/v1/artifacts") {
+            method = HttpMethod.Get
             authenticate(); timeout { requestTimeoutMillis = 30_000 }
             scope?.let { parameter("scope", it) }; memberId?.let { parameter("member", it) }; sessionId?.let { parameter("session", it) }
             runId?.let { parameter("run", it) }; limit?.let { parameter("limit", it) }; before?.let { parameter("before", it) }
+            originKind?.let { parameter("origin", it) }; access?.let { parameter("access", it) }
         }
         checkResponse(response)
         return response.body()
@@ -322,12 +326,36 @@ class TeamCodeClient(
     /** The bytes of one file of a version, at most [maxBytes]. */
     suspend fun artifactFile(id: String, number: Int, path: String, maxBytes: Long = 16L * 1024 * 1024): ByteArray {
         identifier(id)
-        val response = http.get("$origin/api/v1/artifacts/$id/versions/$number/file") { authenticate(); parameter("path", path); timeout { requestTimeoutMillis = 120_000 } }
+        val response = http.request("$origin/api/v1/artifacts/$id/versions/$number/file") { method = HttpMethod.Get; authenticate(); parameter("path", path); timeout { requestTimeoutMillis = 120_000 } }
         checkResponse(response)
         val bytes = response.bodyAsChannel().readRemaining(maxBytes + 1).readByteArray()
         if (bytes.size > maxBytes) throw TeamCodeException(413, "The artifact file is larger than expected.", "artifact_file_too_large")
         return bytes
     }
+    /** Whether the signed-in member may publish now; `teamcode run` reads it before offering the artifact tools to an agent. */
+    suspend fun artifactPolicy(): ArtifactPolicyView = request("/api/v1/artifacts/policy", HttpMethod.Get)
+
+    /**
+     * Relays one artifact API call received by the local proxy, with this client's credential: only `/api/v1/artifacts`
+     * paths, the run the caller named, and a bounded answer whose status, body and few headers are returned unchanged.
+     */
+    suspend fun forwardArtifact(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/artifacts" || path.startsWith("/api/v1/artifacts/")) { "Only artifact routes are relayed." }
+        require(runId == null || RunIdentifiers.isValid(runId)) { "Invalid run." }
+        return http.prepareRequest("$origin$path" + if (query.isEmpty()) "" else "?$query") {
+            this.method = method; authenticate()
+            runId?.let { header("x-teamcode-run-id", it) }
+            if (method != HttpMethod.Get && method != HttpMethod.Delete) setBody(io.ktor.http.content.ByteArrayContent(body, contentType ?: ContentType.Application.OctetStream))
+            timeout { requestTimeoutMillis = 120_000 }
+        }.execute { response ->
+            // Streamed and bounded: a file answer is at most 16 MiB, the largest the API sends.
+            val bytes = response.bodyAsChannel().readRemaining(ARTIFACT_RELAY_LIMIT + 1L).readByteArray()
+            if (bytes.size > ARTIFACT_RELAY_LIMIT) throw TeamCodeException(502, "The artifact answer exceeds the relay limit.")
+            ArtifactRelayResponse(response.status.value, response.contentType(),
+                ARTIFACT_RELAYED_HEADERS.mapNotNull { name -> response.headers[name]?.let { name to it } }.toMap(), bytes)
+        }
+    }
+
     /** Announces a version's distinct files; the answer lists the ones to send. */
     suspend fun startArtifactUpload(input: CreateArtifactUploadRequest): ArtifactUploadView = coded(HttpMethod.Post, "/api/v1/artifacts/uploads", input)
     /** One chunk of at most `chunkBytes`; a file holding a credential is refused with [ArtifactSecretException]. */
@@ -366,7 +394,7 @@ class TeamCodeClient(
     suspend fun artifactMembers(id: String): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Get) }
     suspend fun shareArtifact(id: String, input: ShareArtifactRequest): ArtifactMembersView { identifier(id); return request("/api/v1/artifacts/$id/members", HttpMethod.Post, input) }
     suspend fun unshareArtifact(id: String, member: String): ArtifactMembersView {
-        identifier(id); require(Regex("[A-Za-z0-9._@-]{1,64}").matches(member)) { "Invalid member." }
+        identifier(id); require(Regex("(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}").matches(member)) { "Invalid member." }
         return request("/api/v1/artifacts/$id/members/$member", HttpMethod.Delete)
     }
     /** Irreversible; interactive only. */
@@ -773,6 +801,8 @@ class TeamCodeClient(
         private const val MAX_ERROR_BODY = 16 * 1024
         /** A conflict carries the live manifest: up to 511 files. */
         private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
+        private const val ARTIFACT_RELAY_LIMIT = 16 * 1024 * 1024 + 64 * 1024
+        private val ARTIFACT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, HttpHeaders.ContentDisposition, "X-TeamCode-Sha256", "x-teamcode-error", "x-teamcode-request-id")
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */
@@ -807,3 +837,5 @@ internal fun retryAfterSeconds(value: String?): Long? = value?.trim()?.takeIf { 
 enum class CloudStreamEnd { ENDED, DENIED }
 /** A gateway MCP response relayed as is: HTTP status and JSON body (empty for an accepted notification). */
 class McpRelayResponse(val status: Int, val body: ByteArray)
+/** An artifact API answer relayed by the local proxy: status, content type, the few headers callers read, and the body. */
+class ArtifactRelayResponse(val status: Int, val contentType: ContentType?, val headers: Map<String, String>, val body: ByteArray)

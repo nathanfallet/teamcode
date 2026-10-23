@@ -255,7 +255,7 @@ internal class AgentHost(
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
         val hooks = tools?.hooks(kind).orEmpty().let(::cloudHookSettings)?.let { listOf("--settings", it) }.orEmpty()
-        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, mcpServers = servers)
+        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, mcpServers = servers, artifacts = tools?.artifacts())
         return AgentCommand(base.command, hooks + plan.arguments) to AGENT_ENVIRONMENT + plan.environment
     }
 

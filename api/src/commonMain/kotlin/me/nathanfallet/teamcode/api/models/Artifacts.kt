@@ -142,3 +142,10 @@ data class ArtifactMembersView(val ownerId: String, val members: List<ArtifactMe
 /** [member] is a member id, a username or a linked GitHub login. */
 @Serializable
 data class ShareArtifactRequest(val member: String, val role: String = "viewer")
+
+/**
+ * Whether the caller may publish artifacts now. When [canPublish] is false, [reason] says why: `artifact_storage_missing`,
+ * `artifact_storage_unverified`, `artifacts_disabled`, `artifact_publish_forbidden`, or `credential_scope` for a key without `artifacts:write`.
+ */
+@Serializable
+data class ArtifactPolicyView(val canPublish: Boolean, val reason: String? = null)

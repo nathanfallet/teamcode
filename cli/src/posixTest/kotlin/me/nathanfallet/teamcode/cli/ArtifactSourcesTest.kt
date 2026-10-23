@@ -51,7 +51,39 @@ class ArtifactSourcesTest {
         assertTrue(".git" in refusal(sources, ".git/config"))
         assertTrue(".env" in refusal(sources, ".env.local"))
         assertTrue("never published" in refusal(sources, ".home/notes.txt"))
+        assertTrue("never published" in refusal(sources, ".HOME/notes.txt"), "Another case opens the same directory on macOS and Windows")
         assertTrue("16 MiB" in refusal(sources, "huge.bin"))
         assertFalse(refusal(sources, ".env.local").contains("TOKEN"), "A refusal names the path and the rule, never the content")
+
+        // The configuration directory is refused, except the scratch directory inside it.
+        fs.createDirectories(root / "config" / "artifacts" / "run")
+        fs.write(root / "config" / "config.json") { writeUtf8("{}") }
+        fs.write(root / "config" / "artifacts" / "run" / "page.html") { writeUtf8("<html>merged</html>") }
+        fs.createDirectories(root / "config" / "artifacts" / "run" / "kept")
+        fs.write(root / "config" / "artifacts" / "run" / "kept" / "notes.txt") { writeUtf8("refused by the caller") }
+        val configured = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((root / "config" / "artifacts" / "run" / "kept").toString()),
+            refusedExcept = listOf((root / "config").toString() to (root / "config" / "artifacts" / "run").toString()))
+        assertTrue("never published" in refusal(configured, "config/config.json"))
+        assertTrue("never published" in refusal(configured, "CONFIG/config.json"))
+        assertEquals("<html>merged</html>", configured.read("config/artifacts/run/page.html", "page.html").bytes.decodeToString())
+        assertTrue("never published" in refusal(configured, "config/artifacts/run/kept/notes.txt"), "The exception never lifts another refusal")
+
+        // A refused directory named through a link is refused all the same.
+        fs.createSymlink(base / "home-link", root / ".home")
+        val linked = ArtifactSources(listOf(root.toString()), refusedPrefixes = listOf((base / "home-link").toString()))
+        assertTrue("never published" in refusal(linked, ".home/notes.txt"))
+    }
+
+    @Test fun privateDirectoriesAreCreatedOrAlreadyPrivate() {
+        fs.createDirectories(base)
+        val fresh = base / "fresh"
+        assertTrue(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(fresh.toString()))
+        assertTrue(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(fresh.toString()), "An existing 0700 directory of this user")
+        val shared = base / "shared"
+        fs.createDirectories(shared)
+        platform.posix.chmod(shared.toString(), 493u)
+        assertFalse(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory(shared.toString()), "A shared directory keeps its permissions and is refused")
+        fs.createSymlink(base / "link", fresh)
+        assertFalse(me.nathanfallet.teamcode.cli.artifacts.ensurePrivateDirectory((base / "link").toString()), "Never a link")
     }
 }

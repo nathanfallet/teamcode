@@ -2,6 +2,8 @@
 
 TeamCode's durable state is MySQL plus the exact provider-credential encryption key. Application pods have no state to copy. Keep encrypted database backups, the matching encryption-key version and the deployed image/schema version in your recovery records. Store key material in your secret manager separately from the dump. Password hashes, sessions and account metadata make the whole database sensitive even though provider credentials are encrypted.
 
+When [artifacts](artifacts.md) are on, their files are in the team's S3-compatible bucket and their versions, sharing and settings in MySQL. Back the bucket up with your provider's tools (replication or versioning) on the same schedule as the database. A database restored to an earlier point than the bucket only leaves files that nothing references, which are not served; a bucket restored to an earlier point than the database can miss files of the newer versions, which then fail to load until they are republished. The bucket's key is stored in MySQL, sealed with the same credential key. See [setting up a bucket](artifacts.md#setting-up-a-bucket) for the minimal permissions.
+
 ## Create a recovery checkpoint
 
 For a quiesced checkpoint, stop new inference/account changes, drain accepted streams and finish credential-refresh work before taking the database snapshot. Prevent application rollouts/migrations during the dump. The accepted fixture uses MySQL 8.4's vendor tools; application and test fixture mutations still use Exposed, with no hand-written SQL.

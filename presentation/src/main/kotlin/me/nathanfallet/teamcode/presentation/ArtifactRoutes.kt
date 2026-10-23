@@ -28,12 +28,24 @@ internal fun Route.artifactRoutes(artifacts: ArtifactService, publicOrigin: Stri
             val parameters = call.request.queryParameters
             val scope = parameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "The scope is mine, shared, team or all.") } ?: ArtifactScope.TEAM
             val limit = parameters["limit"]?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_artifact_query", 400, "Use a numeric limit.") } ?: ArtifactRules.MAX_LIST
-            val page = artifacts.list(call.principal, ArtifactQuery(scope, parameters["member"], parameters["session"], parameters["run"], limit, parameters["before"]))
+            val access = parameters["access"]?.let { ArtifactAccess.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "The access is personal, team or public.") }
+            val page = artifacts.list(call.principal, ArtifactQuery(scope, parameters["member"], parameters["session"], parameters["run"], limit, parameters["before"], parameters["origin"], access))
             call.respond(ArtifactListView(page.artifacts.map { it.view(origin) }, page.nextBefore))
+        }
+        get("/policy") {
+            val policy = artifacts.policy(call.principal)
+            call.respond(ArtifactPolicyView(policy.canPublish, policy.reason))
         }
         post("/uploads") {
             val input = call.jsonBody<CreateArtifactUploadRequest>(131_072)
-            val upload = artifacts.startUpload(call.principal, input.artifactId, input.files.map { UploadFile(it.sha256, it.size) })
+            // `teamcode mcp artifacts` names the run it publishes from; the store checks the run is the caller's.
+            val run = call.request.headers.getAll("x-teamcode-run-id")
+            val origin = when {
+                run.isNullOrEmpty() -> ArtifactOrigin()
+                run.size == 1 && me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(run.single()) -> ArtifactOrigin("local_run", run.single())
+                else -> throw TeamFailure("invalid_run", 400, "Name one canonical run UUID in x-teamcode-run-id.")
+            }
+            val upload = artifacts.startUpload(call.principal, input.artifactId, input.files.map { UploadFile(it.sha256, it.size) }, origin)
             call.respond(HttpStatusCode.Created, ArtifactUploadView(upload.uploadId, upload.artifactId, upload.missing, ArtifactRules.CHUNK_BYTES, upload.expiresAt))
         }
         put("/uploads/{upload}/blobs/{sha256}/{number}") {

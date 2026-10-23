@@ -180,7 +180,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
     })
     routing {
         if (team != null) { teamRoutes(team); dashboardRoutes(team, publicOrigin, githubLinks = github != null, OverviewSources(admission, runs, accounts)) }
-        if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin) }
+        if (team != null && runs != null) { agentRunRoutes(runs); agentRunDashboardRoutes(runs, publicOrigin, artifactViewing?.let { viewing -> { teamId: String -> viewing.availability(teamId).active } }) }
         if (team != null && groups != null) { groupRoutes(groups); groupDashboardRoutes(groups, team, publicOrigin) }
         if (accounts != null) accountRoutes(accounts, publicOrigin)
         if (admission != null && team != null) capacityRoutes(admission, team, publicOrigin, budgetOverrides != null, groups, accounts,
@@ -261,7 +261,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
                     (if (team != null && github != null) listOf("github.link.v1") else emptyList()) +
                     // Published, served and viewed: whether a team can use them right now is its settings' business.
-                    (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1", "artifacts.tickets.v1") else emptyList())))
+                    (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1", "artifacts.policy.v1", "artifacts.tickets.v1") else emptyList())))
         }
         get<StatusResource> {
             val status = gateway.status()

@@ -218,7 +218,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 val binary = environment("TEAMCODE_CLOUD_BINARY")?.takeIf { it.isNotBlank() } ?: "/opt/teamcode/teamcode"
                 val tools = RunnerAgentTools(inferenceClient, { arguments ->
                     startProcess(AgentCommand(binary, arguments), AgentHost.AGENT_ENVIRONMENT, environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace")
-                }, log = { echo(it, err = true) })
+                }, log = { echo(it, err = true) }, binary = binary,
+                    workspace = environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace", home = home)
                 val agent = AgentHost(agentChannel, startProcess,
                     FileAgentStateStore("$home/.teamcode/cloud-agent.json"), environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace",
                     BuildInfo.VERSION, log = { echo(it, err = true) }, inference = {

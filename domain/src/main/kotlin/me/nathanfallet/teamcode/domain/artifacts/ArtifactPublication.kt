@@ -10,6 +10,12 @@ data class ArtifactOrigin(val kind: String = "api", val runId: String? = null, v
 
 data class UploadFile(val sha256: String, val size: Long)
 
+/**
+ * Whether a member may publish right now: false with the inactive reason (`artifact_storage_missing`,
+ * `artifact_storage_unverified`, `artifacts_disabled`) or `artifact_publish_forbidden` when only administrators publish.
+ */
+data class ArtifactPolicy(val canPublish: Boolean, val reason: String?)
+
 data class ArtifactFile(val path: String, val sha256: String, val size: Long, val contentType: String, val role: String)
 
 /**
@@ -59,6 +65,8 @@ enum class ArtifactScope(val wire: String) {
 data class ArtifactQuery(
     val scope: ArtifactScope = ArtifactScope.TEAM, val ownerId: String? = null, val sessionId: String? = null, val runId: String? = null,
     val limit: Int = ArtifactRules.MAX_LIST, val before: String? = null,
+    /** `local_run`, `cloud_session` or `api`. */
+    val originKind: String? = null, val access: ArtifactAccess? = null,
 )
 
 /** `409 artifact_conflict`: the base version is not the live one. [current] is the live version, for the publisher to merge. */
@@ -77,6 +85,8 @@ data class CollectedBlob(val teamId: String, val artifactId: String, val sha256:
  * `artifacts_disabled`). Writes that count against quotas run under the team lock.
  */
 interface ArtifactStore {
+    /** The caller's [ArtifactPolicy], read in one transaction; never refused while artifacts are inactive. */
+    suspend fun policy(actor: Principal): ArtifactPolicy
     /**
      * Reserves a draft id (refused `409 artifact_quota_exceeded` past the per-member count) or checks that the caller may
      * publish to [artifactId], then records an upload bound to the caller's credential for an hour. `missing` are the
@@ -160,6 +170,15 @@ interface ArtifactStore {
  * interactive gestures; no key and no agent can do either.
  */
 class ArtifactService(private val store: ArtifactStore, private val admin: ArtifactAdminStore, private val objects: ArtifactObjectStore) {
+    /** Whether [actor] may publish now, for `teamcode run` and the runner before they offer the artifact tools to an agent. */
+    suspend fun policy(actor: Principal): ArtifactPolicy {
+        actor.requireArtifactRead()
+        val policy = store.policy(actor)
+        // A key that may only read gets the answer its publish would get: no tools offered that always fail.
+        val writes = actor.serviceScopes?.let { ServiceScope.ARTIFACTS_WRITE in it } ?: true
+        return if (policy.canPublish && !writes) ArtifactPolicy(false, "credential_scope") else policy
+    }
+
     suspend fun startUpload(actor: Principal, artifactId: String?, files: List<UploadFile>, origin: ArtifactOrigin = ArtifactOrigin()): ArtifactUpload {
         actor.requireArtifactWrite()
         ArtifactRules.validateAnnouncement(files)
@@ -239,6 +258,7 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
         if (query.scope == ArtifactScope.ALL && !actor.canReadTeam) throw TeamFailure("forbidden", 403, "Only administrators list every artifact.")
         if (listOfNotNull(query.ownerId, query.sessionId, query.runId).any { !FILTER.matches(it) })
             throw ArtifactRules.failure("invalid_artifact_query", "Filter by a member, session or run id: up to 36 letters, digits and dashes.")
+        if (query.originKind != null && query.originKind !in ORIGIN_KINDS) throw ArtifactRules.failure("invalid_artifact_query", "The origin is local_run, cloud_session or api.")
         return store.list(actor, query)
     }
 
@@ -296,6 +316,8 @@ class ArtifactService(private val store: ArtifactStore, private val admin: Artif
     companion object {
         val ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
         private val FILTER = Regex("[A-Za-z0-9-]{1,36}")
+        /** The origins an artifact records: a `teamcode run` launch, a cloud session, or a direct call. */
+        val ORIGIN_KINDS = listOf("local_run", "cloud_session", "api")
     }
 }
 

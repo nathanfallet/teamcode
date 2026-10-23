@@ -55,6 +55,24 @@ Measured with `EXPLAIN ANALYZE` on MySQL 8.4 seeded with 400,000 `reservations` 
 
 The Claude Code adapter of the cloud runner keeps what the stream-json `result` line reports: a finished `turn` event carries `totalCostMicros` (Claude Code's running estimate of the conversation's cost, `total_cost_usd`, in micro-dollars), `costMicros` (this turn's share, the difference with the previous `result` of the same process) and the turn's `inputTokens`, `outputTokens`, `cacheCreationInputTokens` and `cacheReadInputTokens`. Claude Code keeps its total across `--resume`, so after a restart in a new pod the first turn has the total but no `costMicros`, rather than a turn cost that would include every earlier turn. `teamcode cloud logs` and `attach` show the turn's cost. Codex turns and the team event feed are unchanged. Evidence: `CloudAgentTest.claudeTurnsCarryTheirCostAndTokens` (CLI JVM tests). The semantics were checked against Claude Code 2.1.308 `-p --input-format stream-json`: `total_cost_usd` grew from 0.0145 to 0.0177 over two turns of one process and continued from 0.0177 in a new process with `--resume`, while `usage` held the turn's own tokens; the fixtures are synthetic. No pod was run.
 
+## Artifact usage, filters and bucket guide (2026-10-22)
+
+Last step of [artifacts](artifacts.md): Settings → Artifacts shows the team's stored bytes and each member's artifacts and bytes against the quotas; the gallery filters by origin and access level and links each origin to what the same launch or cloud session published; a launch's page links to its artifacts; and [setting up a bucket](artifacts.md#setting-up-a-bucket) gives the minimal key policy and the settings for AWS S3, OVHcloud, Cloudflare R2 and MinIO. The backup guide now covers the bucket.
+
+Evidence: `ArtifactViewerRoutesTest`, `ArtifactSettingsRoutesTest`, `ArtifactPublicationPersistenceTest` (MySQL 8.4); details in [artifacts](artifacts.md#evidence).
+
+## Artifact tools in cloud sessions (2026-10-22)
+
+Fifth step of [artifacts](artifacts.md#cloud-sessions): the execution credential of a cloud session gets `artifacts:write`, and the runner adds `teamcode mcp artifacts` to the agent when the session's owner may publish. A publication made with that credential records the session and epoch as its origin, taken from the credential. When a session changes owner, the recipient becomes an editor of the artifacts created or updated in it, in the transaction of the boundary.
+
+Evidence: `CloudInferencePersistenceTest`, `CloudTransferPersistenceTest`, `ArtifactStoragePersistenceTest` (MySQL 8.4), `CloudToolsJvmTest`, `CloudToolsTest`; details in [artifacts](artifacts.md#evidence).
+
+## Artifact tools for agents (2026-10-22)
+
+Fourth step of [artifacts](artifacts.md#agents): `teamcode mcp artifacts`, a stdio MCP server with `publish`, `share`, `list` and `read`, that `teamcode run` adds to Claude Code and Codex when the new `GET /api/v1/artifacts/policy` says the member may publish now (`artifacts.policy.v1`). It runs as the agent, reads files with the shared reader below its root and a private scratch directory, and sends every call through the proxy's new loopback relay (`artifact-relay-v1`), which carries only the publication, reading and invitation calls, never access changes or deletion, with the proxy's credential. The token is on no command line. The run is recorded as the origin of new artifacts after the server checks it is the caller's.
+
+Evidence: `ArtifactRoutesTest`, `ArtifactPublicationPersistenceTest` (MySQL 8.4), `ApiDocsTest`, and in the CLI `ArtifactRelayTest`, `AgentLaunchTest`, `ArtifactsMcpServerTest`, plus the native macOS ARM64 binary over stdio; details in [artifacts](artifacts.md#evidence).
+
 ## Artifact serving, viewer and gallery (2026-10-22)
 
 Third step of [artifacts](artifacts.md#serving-and-access): `<server>/artifact/<id>` is the viewer and the one link people share; content is served on the same host under `/artifact/<id>/<ticket>/<path>`, authorized by a signed view ticket in the path (HKDF-derived key, 8 hours for members, 1 hour for public links, checked again against MySQL at most every 30 seconds per replica), with a CSP sandbox and companion headers on every response of the prefix, errors included. The viewer shows versions, files, sharing and deletion as the member's rights allow, and public links to anyone with a banner; signing in continues to the artifact. **Dashboard → Artifacts** is the gallery. While artifacts are inactive, `/artifact/*` answers `404` and only administrators see the menu, which leads to Settings → Artifacts. `artifacts.v1` is advertised.
