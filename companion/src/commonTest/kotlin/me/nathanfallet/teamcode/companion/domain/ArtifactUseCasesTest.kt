@@ -62,6 +62,8 @@ class ArtifactUseCasesTest {
         val prefix = "https://team.example/artifact/$id/tk_1/"
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, prefix))
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, "${prefix}index.html"))
+        // A content URL naming its entry page in a folder keeps the ticket's directory as the prefix.
+        assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, "${prefix}docs/index.html"))
         // The server's own spelling of its origin is accepted and kept.
         assertEquals(prefix, OpenArtifactUseCase.contentPrefix("https://team.example", id, "https://Team.Example:443/artifact/$id/tk_1/"))
         // Pages the web view reports in the canonical spelling, or the server's, are both under the prefix.

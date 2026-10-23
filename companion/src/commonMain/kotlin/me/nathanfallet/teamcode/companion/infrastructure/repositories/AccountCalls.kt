@@ -15,7 +15,7 @@ import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientPr
 
 /** Short calls with an account's client, their failures translated to the domain's (never a server message). */
 class AccountCalls(private val clients: TeamCodeClientProvider, private val accounts: AccountRepository) {
-    /** [resource]: the call reads one session or artifact, so a `403` or `404` means it is gone or hidden. */
+    /** [resource]: the call reads one session or artifact, so a `404` means it is gone or hidden (a `403` is a refusal, kept as such). */
     suspend fun <T> withAccount(accountId: String, resource: Boolean = false, call: suspend (TeamCodeClient) -> T): T =
         translateFailures(credentialsFailure = false, resource) { call(client(accountId)) }
 

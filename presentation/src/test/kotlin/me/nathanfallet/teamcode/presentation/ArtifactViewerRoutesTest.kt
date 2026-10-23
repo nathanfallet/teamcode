@@ -388,10 +388,11 @@ class ArtifactViewerRoutesTest {
         assertEquals(HttpStatusCode.OK, issued.status)
         val view = Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.ArtifactTicketView>(issued.bodyAsText())
         assertEquals(2, view.version)
-        assertTrue(view.contentUrl.startsWith("$origin/artifact/$id/") && view.contentUrl.endsWith("/"))
+        assertTrue(view.contentUrl.startsWith("$origin/artifact/$id/") && view.contentUrl.endsWith("/index.html"))
         val path = view.contentUrl.removePrefix(origin)
         assertEquals(HttpStatusCode.OK, client.get(path).status)
-        assertEquals(HttpStatusCode.OK, client.get(path + "site.css").status)
+        // The entry page by name, so its relative links resolve beside it.
+        assertEquals(HttpStatusCode.OK, client.get(path.substringBeforeLast('/') + "/site.css").status)
         assertEquals(0, view.expiresAt % ArtifactViewing.TICKET_STEP_MILLIS)
         // The same ticket as the viewer page: one version read, which is what audits an administrator's look.
         assertEquals(1, store.calls.count { it == "version:2" })

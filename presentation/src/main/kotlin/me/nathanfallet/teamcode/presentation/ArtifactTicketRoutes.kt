@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import io.ktor.http.encodeURLPathPart
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -29,7 +30,9 @@ internal fun Route.artifactTicketRoutes(viewing: ArtifactViewing, publicOrigin: 
             throw TeamFailure("invalid_request", 400, "The body is {\"version\": number} or nothing.")
         }
         val issued = viewing.ticket(call.principal, id, input.version)
-        call.respond(ArtifactTicketView(id, issued.version, "$origin/artifact/$id/${issued.ticket}/", issued.expiresAt))
+        // The entry page by name, as the viewer page's frame loads it: an entry in a folder resolves its relative links there.
+        val entry = issued.entry.split('/').joinToString("/") { it.encodeURLPathPart() }
+        call.respond(ArtifactTicketView(id, issued.version, "$origin/artifact/$id/${issued.ticket}/$entry", issued.expiresAt))
     }
 }
 

@@ -85,7 +85,8 @@ data class ArtifactShell(val artifact: Artifact, val version: ArtifactVersion, v
     val member: Boolean)
 
 /** A member's ticket for one version, handed to an app that shows the content itself; [expiresAt] in epoch milliseconds. */
-data class IssuedTicket(val version: Int, val ticket: String, val expiresAt: Long)
+/** A ticket for an app: [entry] is the version's entry page, which the content URL names so its relative links resolve. */
+data class IssuedTicket(val version: Int, val ticket: String, val expiresAt: Long, val entry: String = "")
 
 /** One file to send, or only its metadata when the viewer's cached copy is current. */
 class ArtifactContent(val file: ArtifactFile, val bytes: ByteArray?, val totalSize: Long, val range: LongRange?, val anonymous: Boolean, val entry: Boolean)
@@ -169,11 +170,11 @@ class ArtifactViewing(
         if (readable.currentVersion < 1) throw notFound()
         val number = requested ?: readable.currentVersion
         // The same version read as the viewer page's, which audits an administrator's look at a personal artifact.
-        try { artifacts.version(viewer, artifactId, number) } catch (error: TeamFailure) {
+        val shown = try { artifacts.version(viewer, artifactId, number) } catch (error: TeamFailure) {
             if (error.status == 404 || error.status == 409) throw notFound()
             throw error
         }
-        return memberTicket(viewer, artifactId, number, now)
+        return memberTicket(viewer, artifactId, number, now).copy(entry = shown.entry)
     }
 
     /** The artifact as [viewer] reads it as a member, or null when they may not (or artifacts are off): never says which. */
