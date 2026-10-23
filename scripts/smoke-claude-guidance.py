@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-claude-guidance-') as director
     (root / 'home').mkdir()
     (root / 'work').mkdir()
     token = secrets.token_hex(32)
-    state = {'version': 1, 'turns': 0, 'emitted': set(), 'claims': 0, 'errors': [], 'first_context': False, 'tool_context': False, 'tool_result': False, 'hook_sessions':set(), 'inference_sessions':set()}
+    state = {'version': 1, 'turns': 0, 'emitted': set(), 'claims': 0, 'errors': [], 'first_context': False, 'tool_context': False, 'tool_result': False, 'hook_sessions':set(), 'inference_sessions':set(), 'runs':[], 'activity':[]}
     lock = threading.Lock()
     # A team Stop hook, delivered by the fixture and approved with the native CLI before the run.
     stop_input = root / 'stop-hook-input.json'
@@ -62,13 +62,25 @@ with tempfile.TemporaryDirectory(prefix='teamcode-claude-guidance-') as director
             elif self.path == '/api/v1/hook-delivery/stop-guard/1':
                 self.reply(hook_artifact)
             else:
-                self.reply({'serverVersion':'synthetic','mode':'fixture','features':['team.hooks.v1']})
+                self.reply({'serverVersion':'synthetic','mode':'fixture','features':['team.hooks.v1', 'team.runs.v1', 'team.runs.activity.v1']})
         def do_POST(self):
             try:
                 assert self.headers.get('Authorization') == 'Bearer ' + token
                 size = int(self.headers.get('Content-Length', '0'))
                 assert size <= 2 * 1024 * 1024
                 body = json.loads(self.rfile.read(size))
+                if self.path == '/api/v1/runs' or self.path.startswith('/api/v1/runs/'):
+                    # The launch registry: the wrapper starts and ends it, the hooks report only whether the agent works or waits.
+                    now = int(time.time()*1000)
+                    if self.path == '/api/v1/runs':
+                        with lock: state['runs'].append(body['id'])
+                        self.reply({'id':body['id'],'startedAtMillis':now,'heartbeatAtMillis':now,'endedAtMillis':None,'state':'RUNNING'}); return
+                    run, action = self.path.split('/')[4:6]
+                    if action == 'activity':
+                        assert set(body) == {'state'} and body['state'] in ('working', 'waiting_for_human'), body
+                        with lock: state['activity'].append((run, body['state']))
+                        self.reply({'id':run,'state':body['state'],'sinceMillis':now}); return
+                    self.reply({'id':run,'startedAtMillis':now,'heartbeatAtMillis':now,'endedAtMillis':now if action == 'end' else None,'state':'ENDED' if action == 'end' else 'RUNNING'}); return
                 if self.path == '/api/v1/directives/claim':
                     assert set(body) == {'sessionId', 'stage'} and body['stage'] == 'EMITTED_TO_HOOK'
                     with lock:
@@ -153,7 +165,12 @@ with tempfile.TemporaryDirectory(prefix='teamcode-claude-guidance-') as director
         assert 'Team hooks: stop-guard 1' in result.stderr, result.stderr
         stop_event = json.loads(stop_input.read_text())
         assert stop_event['hook_event_name'] == 'Stop', 'The approved team Stop hook did not run'
+        # The real client's hooks told the server, through the local service, that it worked and then waited for a person.
+        assert len(state['runs']) == 1 and {run for run, _ in state['activity']} == set(state['runs']), state['activity']
+        reported = [value for _, value in state['activity']]
+        assert reported[0] == 'working' and reported[-1] == 'waiting_for_human', reported
+        assert all(a != b for a, b in zip(reported, reported[1:])), 'A repeated state was sent again'
         version = subprocess.run([claude,'--version'],capture_output=True,text=True,timeout=10).stdout.strip()
-        print(f'PASS: real {version}, native launcher, UserPromptSubmit and PreToolUse HTTP guidance, actual Bash tool round trip, context injection, receipts, an approved team Stop hook run from the session plugin, and plugin cleanup. No real provider calls.')
+        print(f'PASS: real {version}, native launcher, UserPromptSubmit and PreToolUse HTTP guidance, actual Bash tool round trip, context injection, receipts, an approved team Stop hook run from the session plugin, content-free activity reports (working, then waiting for a person) from the real Stop/PostToolUse hooks, and plugin cleanup. No real provider calls.')
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=5)

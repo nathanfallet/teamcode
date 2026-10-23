@@ -16,6 +16,8 @@ parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
 binary = str(args.binary.resolve())
 RUN = '11111111-2222-3333-4444-555555555555'
+# A launch's own identifier in the caller's environment must not turn the guidance cases into activity reports.
+BASE_ENV = {key: value for key, value in os.environ.items() if key != 'TEAMCODE_RUN_ID'}
 
 with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
     root = Path(directory)
@@ -66,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
     payload = {'session_id': 'native-session', 'hook_event_name': 'PreToolUse', 'tool_input': 'PRIVATE_TOOL_INPUT', 'transcript_path': 'PRIVATE_TOOL_INPUT'}
 
     def run(body, env=None):
-        result = subprocess.run(command, input=body, capture_output=True, timeout=6, env=env)
+        result = subprocess.run(command, input=body, capture_output=True, timeout=6, env=BASE_ENV if env is None else env)
         assert result.returncode == 0, 'Hook must never fail an agent operation'
         assert result.stderr == b'', 'Hook diagnostics must remain silent'
         assert token.encode() not in result.stdout and b'PRIVATE_' not in result.stdout
@@ -95,19 +97,19 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
             assert run(data) == {}
             assert time.monotonic() - started < 5, 'Guidance lookup exceeded its deadline'
         # With the launch's identifier, Stop and UserPromptSubmit report only whether the agent waits or works.
-        env = dict(os.environ, TEAMCODE_RUN_ID=RUN)
+        env = dict(BASE_ENV, TEAMCODE_RUN_ID=RUN)
         state['calls'].clear()
         assert run(b'{"session_id":"native-session","hook_event_name":"Stop","last_assistant_message":"PRIVATE_TOOL_INPUT"}', env) == {}
         assert state['calls'] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'waiting_for_human'})], state['calls']
         state['calls'].clear()
         assert run(b'{"session_id":"native-session","hook_event_name":"Notification","notification_type":"auth_success"}', env) == {}
-        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(os.environ, TEAMCODE_RUN_ID='../x')) == {}
+        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(BASE_ENV, TEAMCODE_RUN_ID='../x')) == {}
         assert state['calls'] == [], 'Only a canonical launch identifier and a state-bearing event are reported'
         state.update(mode='fresh', emitted=False)
         assert run(data, env)['hookSpecificOutput']['hookEventName'] == 'UserPromptSubmit'
         assert [call for call in state['calls'] if call[0].startswith('/api/v1/runs/')] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'working'})]
         # A writer holding stdin open cannot stall the agent, including an otherwise complete JSON body.
-        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=BASE_ENV)
         try:
             child.stdin.write(data); child.stdin.flush()
             child.wait(timeout=3)
