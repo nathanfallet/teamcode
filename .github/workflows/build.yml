@@ -566,6 +566,8 @@ jobs:
             while IFS= read -r entry; do
               rm -rf "$scratch/entry" && mkdir "$scratch/entry"
               unzip -q -o "$jar" "$entry" -d "$scratch/entry"
+              # Only Mach-O files matter to notarization: jars also carry the libraries of other systems.
+              file "$scratch/entry/$entry" | grep -q 'Mach-O' || continue
               details="$(codesign -dvv "$scratch/entry/$entry" 2>&1 || true)"
               if ! grep -q "^TeamIdentifier=$TEAM_ID\$" <<< "$details" || ! grep -q '^Timestamp=' <<< "$details" || ! grep -q 'flags=.*runtime' <<< "$details"; then
                 echo "::error::$(basename "$jar")!$entry is not signed with the Developer ID, a secure timestamp and the hardened runtime."
