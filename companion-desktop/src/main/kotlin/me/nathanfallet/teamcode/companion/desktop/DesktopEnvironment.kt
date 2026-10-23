@@ -8,13 +8,15 @@ import me.nathanfallet.teamcode.config.configPath
  * The environment the app shares with the CLI. An app opened from the Finder or a desktop launcher inherits neither the
  * shell's `PATH` nor its `XDG_CONFIG_HOME`: without care, the CLI and the app would read two different `config.json`.
  * So the app reads them once from a login shell ([loginShell]), and the CLI it runs gets the same values back.
- * [configOverride] is the `config.json` path given on the command line (`--config-path`, as `teamcode ui` passes it).
+ * [configOverride] is the `config.json` path given on the command line (`--config-path`, as `teamcode ui` passes it),
+ * [initialDirectory] the folder of `teamcode ui DIRECTORY` (`--directory`), where the app opens a new session.
  */
 class DesktopEnvironment(
     private val process: Map<String, String>,
     private val loginShell: Map<String, String> = emptyMap(),
     private val configOverride: String? = null,
     val os: Os = Os.current(),
+    val initialDirectory: String? = null,
 ) {
     enum class Os {
         MACOS, LINUX, WINDOWS;
@@ -54,12 +56,14 @@ class DesktopEnvironment(
 
         /** The app's environment: its arguments, its process, and on macOS and Linux a login shell read once. */
         fun detect(args: Array<String>, process: Map<String, String> = System.getenv()): DesktopEnvironment {
-            val override = args.indexOf("--config-path").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }?.takeIf { File(it).isAbsolute }
+            fun option(name: String) = args.indexOf(name).takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }?.takeIf { File(it).isAbsolute }
+            val override = option("--config-path")
+            val directory = option("--directory")?.takeIf { File(it).isDirectory }
             val os = Os.current()
             // Started from a terminal, the app already has the shell's variables: no shell to start.
             val shell = if (os == Os.WINDOWS || process.containsKey("XDG_CONFIG_HOME") || process["TERM_PROGRAM"] != null) emptyMap()
             else readLoginShell(process["SHELL"]?.takeIf { File(it).isAbsolute } ?: "/bin/sh")
-            return DesktopEnvironment(process, shell, override, os)
+            return DesktopEnvironment(process, shell, override, os, directory)
         }
 
         /**

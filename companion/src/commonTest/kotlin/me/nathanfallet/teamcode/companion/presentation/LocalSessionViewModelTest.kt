@@ -35,7 +35,14 @@ private class FakeLocalHost(var availability: LocalAvailability = LocalAvailabil
     val started = mutableListOf<LocalSessionRequest>()
     var picked: String? = "/Users/ada/git/paywall"
     var failure: Exception? = null
+    var installFailure: Exception? = null
     override suspend fun availability(accountId: String) = availability
+    override suspend fun installCli(output: (String) -> Unit) {
+        output("Downloading TeamCode 1.2.3…")
+        installFailure?.let { throw it }
+        output("Installed TeamCode 1.2.3.")
+        availability = LocalAvailability.Ready
+    }
     override suspend fun pickDirectory() = picked
     override suspend fun start(accountId: String, request: LocalSessionRequest): String {
         failure?.let { throw it }
@@ -124,6 +131,36 @@ class LocalSessionViewModelTest {
     @Test fun theDefaultNameIsTheFoldersOwnName() {
         assertEquals("paywall", StartLocalSessionUseCase.defaultName("/Users/ada/git/paywall/"))
         assertEquals("other", StartLocalSessionUseCase.defaultName("C:\\Users\\ada\\other"))
+    }
+
+    @Test fun installingTheCliShowsItsOutputThenChecksAgain() = runTest(dispatcher) {
+        val host = FakeLocalHost(LocalAvailability.CliMissing("curl … | sh", canInstall = true))
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        settle()
+        assertIs<LocalAvailability.CliMissing>(model.uiState.value.availability)
+        model.installCli(); settle()
+        assertEquals(listOf("Downloading TeamCode 1.2.3…", "Installed TeamCode 1.2.3."), model.uiState.value.installOutput)
+        assertFalse(model.uiState.value.installing)
+        assertEquals(LocalAvailability.Ready, model.uiState.value.availability)
+
+        val failing = FakeLocalHost(LocalAvailability.CliMissing("curl … | sh", canInstall = true)).apply {
+            installFailure = LocalHostException("The downloaded install script is not the one this app was built with. Nothing was run.")
+        }
+        val refused = LocalSessionViewModel(NewSessionRoute("cli"), useCase(failing), failing)
+        settle()
+        refused.installCli(); settle()
+        assertEquals("The downloaded install script is not the one this app was built with. Nothing was run.", refused.uiState.value.error)
+        assertIs<LocalAvailability.CliMissing>(refused.uiState.value.availability)
+        assertFalse(refused.uiState.value.installing)
+    }
+
+    @Test fun aFolderGivenByTeamcodeUiIsChosenAlready() = runTest(dispatcher) {
+        val host = FakeLocalHost()
+        val model = LocalSessionViewModel(NewSessionRoute("cli", "/Users/ada/git/paywall"), useCase(host), host)
+        settle()
+        assertEquals("/Users/ada/git/paywall", model.uiState.value.directory)
+        assertEquals("paywall", model.uiState.value.name)
+        assertTrue(model.uiState.value.canStart)
     }
 }
 

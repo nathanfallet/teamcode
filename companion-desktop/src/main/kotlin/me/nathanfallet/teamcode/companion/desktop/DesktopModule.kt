@@ -36,5 +36,6 @@ internal fun desktopOverrides(environment: DesktopEnvironment): Module = module 
     single {
         RemoteHostSupervisor(get(), get(), get(), get(), get(), get(), get(), get<PlatformInfo>().appVersion, RemoteHostSupervisor.recordsDirectory(environment.configPath))
     }
-    single<LocalHost> { DesktopLocalHost(get(), get(), get(), get(), get<PlatformInfo>().appVersion, get()) }
+    single { CliInstaller(get()) }
+    single<LocalHost> { DesktopLocalHost(get(), get(), get(), get(), get<PlatformInfo>().appVersion, get(), get()) }
 }

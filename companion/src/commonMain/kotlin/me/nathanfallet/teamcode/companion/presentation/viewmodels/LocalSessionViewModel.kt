@@ -31,6 +31,9 @@ data class LocalSessionUiState(
     val starting: Boolean = false,
     val error: String? = null,
     val started: LocalSessionStart? = null,
+    /** "Install" of a missing CLI is running; [installOutput] holds its last lines. */
+    val installing: Boolean = false,
+    val installOutput: List<String> = emptyList(),
 ) {
     val canStart: Boolean get() = availability == LocalAvailability.Ready && !starting && started == null && directory.isNotBlank() && name.isNotBlank()
 
@@ -44,7 +47,7 @@ class LocalSessionViewModel(
     private val start: StartLocalSessionUseCase,
     private val host: LocalHost,
 ) : ViewModel() {
-    private val state = MutableStateFlow(LocalSessionUiState())
+    private val state = MutableStateFlow(route.directory?.let { LocalSessionUiState(directory = it, name = StartLocalSessionUseCase.defaultName(it)) } ?: LocalSessionUiState())
     val uiState: StateFlow<LocalSessionUiState> = state.asStateFlow()
 
     init { check() }
@@ -60,6 +63,23 @@ class LocalSessionViewModel(
                 throw error
             } catch (error: Exception) {
                 state.update { it.copy(error = error.userMessage()) }
+            }
+        }
+    }
+
+    /** Installs the missing CLI (the app's own version), showing its output, then checks again. */
+    fun installCli() {
+        if (state.value.installing) return
+        state.update { it.copy(installing = true, installOutput = emptyList(), error = null) }
+        viewModelScope.launch {
+            try {
+                host.installCli { line -> state.update { it.copy(installOutput = (it.installOutput + line).takeLast(MAX_OUTPUT_LINES)) } }
+                state.update { it.copy(installing = false) }
+                check()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                state.update { it.copy(installing = false, error = error.userMessage()) }
             }
         }
     }
@@ -102,4 +122,6 @@ class LocalSessionViewModel(
             }
         }
     }
+
+    private companion object { const val MAX_OUTPUT_LINES = 200 }
 }

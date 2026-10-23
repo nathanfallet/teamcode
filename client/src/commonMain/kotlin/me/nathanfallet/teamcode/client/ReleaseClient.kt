@@ -9,6 +9,7 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.api.models.DesktopReleaseFormat
 import me.nathanfallet.teamcode.api.models.ReleaseFormat
 
 /** Raw metadata is deliberately not deserialized until the CLI has authenticated its exact bytes. */
@@ -80,6 +81,43 @@ class ReleaseClient(
             }
         }
         Unit
+    }
+
+    /** The desktop app's signed manifest of [version] (`desktop-manifest.json` and its signature), as raw bytes. */
+    suspend fun desktopMetadata(version: String): DownloadedReleaseMetadata = safe {
+        requireVersion(version)
+        withTimeout(30_000) {
+            DownloadedReleaseMetadata(
+                requireNotNull(fetch(assetUrl(version, DesktopReleaseFormat.MANIFEST), ReleaseFormat.MAX_MANIFEST_BYTES)),
+                requireNotNull(fetch(assetUrl(version, DesktopReleaseFormat.SIGNATURE), ReleaseFormat.MAX_SIGNATURE_BYTES)),
+            )
+        }
+    }
+
+    /**
+     * Streams exactly [size] bytes of the desktop package of [version] for [target]. Call only after authenticating the
+     * desktop manifest; the caller verifies its SHA-256 before opening it. Bounded to 15 minutes (packages are ~100 MB).
+     */
+    suspend fun desktopPackage(version: String, target: String, size: Long, receive: suspend (ByteArray, Int) -> Unit) = safe {
+        requireVersion(version)
+        if (target !in ReleaseFormat.targets || size !in 1..DesktopReleaseFormat.MAX_PACKAGE_BYTES)
+            throw ReleaseDownloadException("release_asset_invalid")
+        withTimeout(900_000) {
+            request(assetUrl(version, DesktopReleaseFormat.fileName(version, target)), api = false, absentAllowed = false) { response ->
+                read(response, size, exact = true, receive)
+            }
+        }
+        Unit
+    }
+
+    /**
+     * The install script ([name], `install.sh` or `install.ps1`) of [version] exactly, never the latest alias. Its bytes
+     * are not trusted here: the caller compares their SHA-256 with the one it was built with before running them.
+     */
+    suspend fun installScript(version: String, name: String): ByteArray = safe {
+        requireVersion(version)
+        if (name !in setOf("install.sh", "install.ps1")) throw ReleaseDownloadException("release_asset_invalid")
+        withTimeout(30_000) { requireNotNull(fetch(assetUrl(version, name), DesktopReleaseFormat.MAX_INSTALL_SCRIPT_BYTES)) }
     }
 
     private fun assetUrl(version: String, file: String) = "https://github.com/$repository/releases/download/$version/$file"

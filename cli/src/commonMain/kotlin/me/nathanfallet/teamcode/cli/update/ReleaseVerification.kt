@@ -46,7 +46,15 @@ internal class VerifiedRelease internal constructor(val manifest: ReleaseManifes
 internal class VerifyReleaseManifest(trustedKeys: List<ReleasePublicKey> = ShippedReleaseKeys.keys) {
     private val trustedKeys = trustedKeys.toList()
     init { require(trustedKeys.isNotEmpty() && trustedKeys.size <= 8 && trustedKeys.map { it.id }.distinct().size == trustedKeys.size) }
-    fun verify(manifest: ByteArray, signature: ByteArray): VerifiedRelease {
+    fun verify(manifest: ByteArray, signature: ByteArray): VerifiedRelease = verify(manifest, signature, desktop = false)
+
+    /**
+     * The desktop app's manifest (`desktop-manifest.json`): the same envelope, keys and checks, plus `product: desktop`,
+     * and its own package names and size bound. A CLI manifest is refused here, and a desktop manifest by [verify].
+     */
+    fun verifyDesktop(manifest: ByteArray, signature: ByteArray): VerifiedRelease = verify(manifest, signature, desktop = true)
+
+    private fun verify(manifest: ByteArray, signature: ByteArray, desktop: Boolean): VerifiedRelease {
         if (manifest.size !in 1..ReleaseFormat.MAX_MANIFEST_BYTES || signature.size !in 1..ReleaseFormat.MAX_SIGNATURE_BYTES)
             throw failure("release_metadata_size")
         val payload = manifest.copyOf()
@@ -59,22 +67,25 @@ internal class VerifyReleaseManifest(trustedKeys: List<ReleasePublicKey> = Shipp
         val raw = encoded.decodeBase64()?.toByteArray() ?: throw failure("release_signature_invalid")
         if (raw.size != 384 || !verifyReleaseRsaPss(key, payload, raw)) throw failure("release_signature_invalid")
         val data = parseObject(payload, "release_manifest_invalid")
-        if (data.keys != setOf("schemaVersion", "version", "tag", "sourceCommit", "assets") || data["schemaVersion"] != JsonPrimitive(1))
-            throw failure("release_manifest_invalid")
+        val keys = setOf("schemaVersion", "version", "tag", "sourceCommit", "assets") + if (desktop) setOf("product") else emptySet()
+        if (data.keys != keys || data["schemaVersion"] != JsonPrimitive(1)) throw failure("release_manifest_invalid")
+        if (desktop && data.string("product") != DesktopReleaseFormat.PRODUCT) throw failure("release_manifest_invalid")
         val version = data.string("version")?.takeIf(ReleaseFormat::validVersion) ?: throw failure("release_manifest_invalid")
         val tag = data.string("tag")?.takeIf { it == version } ?: throw failure("release_manifest_invalid")
         val commit = data.string("sourceCommit")?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: throw failure("release_manifest_invalid")
         val assets = data["assets"] as? JsonObject ?: throw failure("release_manifest_invalid")
         if (assets.size !in 1..32) throw failure("release_manifest_invalid")
+        val maximum = if (desktop) DesktopReleaseFormat.MAX_PACKAGE_BYTES else ReleaseFormat.MAX_BINARY_BYTES
         val decoded = assets.mapValues { (target, value) ->
             if (!ReleaseFormat.validTarget(target)) throw failure("release_manifest_invalid")
+            val fileName = if (desktop) DesktopReleaseFormat.fileName(version, target) else ReleaseFormat.fileName(version, target)
             val asset = value as? JsonObject ?: throw failure("release_manifest_invalid")
-            if (asset.keys != setOf("fileName", "sha256", "size") || asset.string("fileName") != ReleaseFormat.fileName(version, target))
+            if (asset.keys != setOf("fileName", "sha256", "size") || asset.string("fileName") != fileName)
                 throw failure("release_manifest_invalid")
             val hash = asset.string("sha256")?.takeIf { Regex("[0-9a-f]{64}").matches(it) } ?: throw failure("release_manifest_invalid")
             val size = (asset["size"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-                ?.takeIf { it in 1..ReleaseFormat.MAX_BINARY_BYTES } ?: throw failure("release_manifest_invalid")
-            ReleaseAsset(ReleaseFormat.fileName(version, target), hash, size)
+                ?.takeIf { it in 1..maximum } ?: throw failure("release_manifest_invalid")
+            ReleaseAsset(fileName, hash, size)
         }
         return VerifiedRelease(ReleaseManifest(1, version, tag, commit, decoded), key.id)
     }

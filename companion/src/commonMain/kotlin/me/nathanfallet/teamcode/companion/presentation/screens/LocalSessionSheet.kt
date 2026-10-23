@@ -65,10 +65,13 @@ import me.nathanfallet.teamcode.companion.resources.local_session_bypass_warning
 import me.nathanfallet.teamcode.companion.resources.local_session_check_again
 import me.nathanfallet.teamcode.companion.resources.local_session_checking
 import me.nathanfallet.teamcode.companion.resources.local_session_choose_folder
+import me.nathanfallet.teamcode.companion.resources.local_session_cli_command
 import me.nathanfallet.teamcode.companion.resources.local_session_cli_missing
+import me.nathanfallet.teamcode.companion.resources.local_session_cli_missing_install
 import me.nathanfallet.teamcode.companion.resources.local_session_cli_old
 import me.nathanfallet.teamcode.companion.resources.local_session_folder
 import me.nathanfallet.teamcode.companion.resources.local_session_folder_hint
+import me.nathanfallet.teamcode.companion.resources.local_session_install_cli
 import me.nathanfallet.teamcode.companion.resources.local_session_message_failed
 import me.nathanfallet.teamcode.companion.resources.local_session_no_cli_account
 import me.nathanfallet.teamcode.companion.resources.local_session_open
@@ -149,7 +152,7 @@ fun LocalSessionSheet(viewModel: LocalSessionViewModel, onDismiss: () -> Unit, o
                     BusyRow(true)
                 }
                 LocalAvailability.Ready -> Form(viewModel)
-                else -> Blocked(availability, viewModel::check)
+                else -> Blocked(availability, state.installing, state.installOutput, viewModel::check, viewModel::installCli)
             }
             state.started?.takeIf { state.messageFailed }?.let { started ->
                 Banner(stringResource(Res.string.local_session_message_failed), Tone.WARN, Modifier.testTag("local-message-failed"))
@@ -208,10 +211,11 @@ private fun Form(viewModel: LocalSessionViewModel) {
 }
 
 @Composable
-private fun Blocked(availability: LocalAvailability, onCheck: () -> Unit) {
+private fun Blocked(availability: LocalAvailability, installing: Boolean, installOutput: List<String>, onCheck: () -> Unit, onInstall: () -> Unit) {
     val colors = TeamCode.colors
+    val canInstall = availability is LocalAvailability.CliMissing && availability.canInstall
     val (text, command) = when (availability) {
-        is LocalAvailability.CliMissing -> stringResource(Res.string.local_session_cli_missing) to availability.installCommand
+        is LocalAvailability.CliMissing -> stringResource(if (canInstall) Res.string.local_session_cli_missing_install else Res.string.local_session_cli_missing) to availability.installCommand
         is LocalAvailability.CliTooOld -> stringResource(Res.string.local_session_cli_old, availability.found, availability.required) to availability.updateCommand
         is LocalAvailability.OtherAccount -> (availability.cliAccount?.let { stringResource(Res.string.local_session_other_account, it) }
             ?: stringResource(Res.string.local_session_no_cli_account)) to null
@@ -220,11 +224,19 @@ private fun Blocked(availability: LocalAvailability, onCheck: () -> Unit) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.testTag("local-blocked")) {
         Text(text, color = colors.text, fontSize = 14.sp, lineHeight = 20.sp)
+        if (canInstall) TcButton(stringResource(Res.string.local_session_install_cli), onClick = onInstall, busy = installing, enabled = !installing,
+            modifier = Modifier.testTag("local-install-cli"))
+        if (installOutput.isNotEmpty()) SelectionContainer {
+            // The last lines, like a terminal: the installer's progress and its final message.
+            Text(installOutput.takeLast(12).joinToString("\n"), style = MonospaceStyle, color = colors.muted, fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().background(colors.panelAlt).padding(12.dp).testTag("local-install-output"))
+        }
         command?.let {
+            if (canInstall) Text(stringResource(Res.string.local_session_cli_command), color = colors.muted, fontSize = 12.5.sp)
             SelectionContainer {
                 Text(it, style = MonospaceStyle, color = colors.text, modifier = Modifier.fillMaxWidth().background(colors.panelAlt).padding(12.dp).testTag("local-command"))
             }
         }
-        TcButton(stringResource(Res.string.local_session_check_again), onClick = onCheck, kind = ButtonKind.SECONDARY, modifier = Modifier.testTag("local-check-again"))
+        TcButton(stringResource(Res.string.local_session_check_again), onClick = onCheck, kind = ButtonKind.SECONDARY, enabled = !installing, modifier = Modifier.testTag("local-check-again"))
     }
 }

@@ -28,10 +28,20 @@ class DesktopLocalHost(
     private val environment: DesktopEnvironment,
     private val appVersion: String,
     private val supervisor: RemoteHostSupervisor? = null,
+    private val installer: CliInstaller? = null,
     private val picker: suspend () -> String? = { pickDirectory(environment.os) },
 ) : LocalHost {
+    @Volatile private var initialDirectory: String? = environment.initialDirectory
+
+    override fun takeInitialDirectory(): String? = synchronized(this) { initialDirectory.also { initialDirectory = null } }
+
+    override suspend fun installCli(output: (String) -> Unit) {
+        val installer = installer?.takeIf { it.available } ?: throw LocalHostException("Install the TeamCode CLI with the command shown.")
+        installer.install(output)
+    }
+
     override suspend fun availability(accountId: String): LocalAvailability {
-        val cli = locator.find() ?: return LocalAvailability.CliMissing(CliLocator.installCommand(environment.os, appVersion))
+        val cli = locator.find() ?: return LocalAvailability.CliMissing(CliLocator.installCommand(environment.os, appVersion), installer?.available == true)
         if (!CliLocator.compatible(cli.version, appVersion)) return LocalAvailability.CliTooOld(cli.version, appVersion, "teamcode update")
         val account = accounts.accounts.value.firstOrNull { it.id == accountId }
         if (account?.usedByCli != true || !account.signedIn) {

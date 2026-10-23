@@ -37,6 +37,8 @@ teamcode service install
 
 Agent installation and optional user-service registration remain explicit steps. Installing TeamCode does not start a proxy, enroll provider accounts or create a team login. Re-running the installer reuses its managed installation. A saved login causes the native installer to check compatibility with that self-hosted server before activation.
 
+The desktop app installs the CLI the same way, from the script of its own version, after checking the script's SHA-256 against the one it was built with. In the other direction, `teamcode ui` installs TeamCode Desktop of the CLI's version from its signed desktop manifest, then opens it ([companion](companion.md#desktop-sessions-on-this-device)).
+
 ## Requirements and locations
 
 No platform needs Java, Gradle, Python or Node to install TeamCode. POSIX bootstrap needs the system shell, curl and `sha256sum` or `shasum`; macOS selects ARM64 on Apple Silicon even when the shell uses Rosetta. Linux binaries additionally require glibc, libcurl, `libcrypt.so.1` and OpenSSL libcrypto 3 or a compatible libcrypto 4. Windows bootstrap uses PowerShell/.NET and a private current-user NTFS directory. Windows ARM64 and 32-bit operating systems are not advertised targets.

@@ -20,6 +20,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
@@ -96,6 +97,14 @@ fun MainScreen(
     val localHost = remember { koin.getOrNull<LocalHost>() }
     var chooserFor by rememberSaveable { mutableStateOf<String?>(null) }
     var localSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // `teamcode ui DIRECTORY`: the app opens on a new session there, with the CLI's account (sessions here use it).
+    var localDirectory by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(localHost) {
+        localHost?.takeInitialDirectory()?.let { directory ->
+            localDirectory = directory
+            localSessionFor = Account.CLI_ACCOUNT_ID
+        }
+    }
     var switcher by rememberSaveable { mutableStateOf(false) }
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val settingsState by settings.uiState.collectAsStateWithLifecycle()
@@ -134,16 +143,17 @@ fun MainScreen(
     }
     chooserFor?.let { accountId ->
         NewSessionChooserSheet(
-            onHere = { chooserFor = null; localSessionFor = accountId },
+            onHere = { chooserFor = null; localDirectory = null; localSessionFor = accountId },
             onCloud = { chooserFor = null; newSessionFor = accountId },
             onDismiss = { chooserFor = null },
         )
     }
     localSessionFor?.let { accountId ->
         SheetViewModels {
-            val viewModel: LocalSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId)) }
-            LocalSessionSheet(viewModel, onDismiss = { localSessionFor = null }, onStarted = { sessionId ->
+            val viewModel: LocalSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId, localDirectory)) }
+            LocalSessionSheet(viewModel, onDismiss = { localSessionFor = null; localDirectory = null }, onStarted = { sessionId ->
                 localSessionFor = null
+                localDirectory = null
                 onOpenSession(accountId, sessionId)
             })
         }

@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,4 +63,49 @@ def main():
     print('Public release verification vectors regenerated; disposable private keys removed.')
 
 
-if __name__ == '__main__': main()
+def desktop():
+    """Vectors of the desktop app's manifest (desktop-manifest.json), with their own disposable key."""
+    output = ROOT / 'cli/src/commonTest/kotlin/me/nathanfallet/teamcode/cli/update/DesktopReleaseFixtures.kt'
+    code = ['package me.nathanfallet.teamcode.cli.update', '', '// Public vectors generated from a disposable fixture key. No private key is retained.',
+            'internal object DesktopReleaseFixtures {', '    const val packageText = "TeamCode desktop package fixture"']
+    package = b'TeamCode desktop package fixture'
+    version = '1.2.3'
+    extensions = {'macos': 'zip', 'windows': 'msi', 'linux': 'tar.gz'}
+    targets = ('macos-arm64', 'macos-x64', 'linux-arm64', 'linux-x64', 'windows-x64')
+    assets = {target: {'fileName': f'teamcode-desktop-{version}-{target}.{extensions[target.split("-")[0]]}',
+                       'sha256': hashlib.sha256(package).hexdigest(), 'size': len(package)} for target in targets}
+    good = {'schemaVersion': 1, 'product': 'desktop', 'version': version, 'tag': version, 'sourceCommit': 'c' * 40, 'assets': assets}
+    cli = {'schemaVersion': 1, 'version': version, 'tag': version, 'sourceCommit': 'c' * 40,
+           'assets': {target: {**assets[target], 'fileName': f'teamcode-{version}-{target}' + ('.exe' if target.startswith('windows-') else '')} for target in targets}}
+    with tempfile.TemporaryDirectory(prefix='teamcode-public-crypto-vectors-') as directory:
+        root = Path(directory)
+        private = root / 'desktop.private'; public = root / 'desktop.public'
+        signing.openssl(['genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(private)])
+        signing.openssl(['pkey', '-in', str(private), '-pubout', '-out', str(public)])
+        spki = signing.openssl(['pkey', '-pubin', '-in', str(public), '-outform', 'DER'])
+        pkcs1 = signing.openssl(['rsa', '-pubin', '-in', str(public), '-RSAPublicKey_out', '-outform', 'DER'])
+        code.append(f'    val key = ReleasePublicKey("{base64.b64encode(spki).decode()}", "{base64.b64encode(pkcs1).decode()}")')
+
+        def vector(name, payload):
+            raw = (json.dumps(payload, sort_keys=True) + '\n').encode()
+            manifest = root / (name + '.json'); manifest.write_bytes(raw)
+            signature = root / (name + '.signature')
+            signing.openssl(['dgst', '-sha256', '-sign', str(private), '-out', str(signature), *signing.PSS, str(manifest)])
+            envelope = {'schemaVersion': 1, 'algorithm': signing.ALGORITHM, 'keyId': signing.key_id(public),
+                        'signature': base64.b64encode(signature.read_bytes()).decode()}
+            code.append(f'    const val {name}Payload = "{base64.b64encode(raw).decode()}"')
+            code.append(f'    const val {name}Envelope = "{base64.b64encode(json.dumps(envelope, sort_keys=True).encode()).decode()}"')
+
+        vector('valid', good)
+        vector('cli', cli)
+        vector('wrongProduct', {**good, 'product': 'cli'})
+        vector('cliNames', {**good, 'assets': cli['assets']})
+    output.write_text('\n'.join(code + ['}', '']))
+    print('Public desktop release verification vectors regenerated; the disposable private key was removed.')
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--desktop']: desktop()
+    else:
+        main()
+        desktop()

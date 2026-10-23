@@ -17,13 +17,22 @@ interface LocalHost {
      * returns its id. A refusal is a [LocalHostException] with the CLI's own explanation.
      */
     suspend fun start(accountId: String, request: LocalSessionRequest): String
+
+    /**
+     * Installs the CLI of the app's version when [LocalAvailability.CliMissing.canInstall] (its install script, checked
+     * against the hash the app was built with); [output] receives the installer's lines. A refusal is a [LocalHostException].
+     */
+    suspend fun installCli(output: (String) -> Unit): Unit = throw LocalHostException("Install the TeamCode CLI with the command shown.")
+
+    /** The folder the app was opened with (`teamcode ui DIRECTORY`), given once; null otherwise. */
+    fun takeInitialDirectory(): String? = null
 }
 
 /** What "On this device" needs, in the order the app checks it. */
 sealed interface LocalAvailability {
     data object Ready : LocalAvailability
-    /** No TeamCode CLI found; [installCommand] is the command for this system. */
-    data class CliMissing(val installCommand: String) : LocalAvailability
+    /** No TeamCode CLI found; [installCommand] is the command for this system, and [canInstall] whether the app runs it itself. */
+    data class CliMissing(val installCommand: String, val canInstall: Boolean = false) : LocalAvailability
     /** The CLI is older than this app's minor version: [updateCommand] updates it. */
     data class CliTooOld(val found: String, val required: String, val updateCommand: String) : LocalAvailability
     /** Sessions here run with the CLI's sign-in, and the CLI is signed in elsewhere (or not at all). */

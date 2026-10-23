@@ -28,3 +28,28 @@ object ReleaseFormat {
         return "teamcode-$version-$target" + if (target.startsWith("windows-")) ".exe" else ""
     }
 }
+
+/**
+ * The desktop app's packages, published next to the CLI under the same version, and the signed manifest that lists them
+ * (`desktop-manifest.json` and `desktop-manifest.sig`, same envelope and keys as the CLI's). Its `product` field is
+ * `desktop`, so neither manifest can stand in for the other. Targets are the CLI's.
+ */
+object DesktopReleaseFormat {
+    const val MANIFEST = "desktop-manifest.json"
+    const val SIGNATURE = "desktop-manifest.sig"
+    const val PRODUCT = "desktop"
+    const val MAX_PACKAGE_BYTES = 512L * 1024 * 1024
+    /** The install scripts of a release (`install.sh`, `install.ps1`) are a few kilobytes. */
+    const val MAX_INSTALL_SCRIPT_BYTES = 256 * 1024
+
+    /** The `.app` zipped with `ditto` on macOS, the per-user `.msi` on Windows, the app's folder as a `.tar.gz` on Linux. */
+    fun fileName(version: String, target: String): String {
+        require(ReleaseFormat.validVersion(version) && ReleaseFormat.validTarget(target))
+        val extension = when {
+            target.startsWith("macos-") -> "zip"
+            target.startsWith("windows-") -> "msi"
+            else -> "tar.gz"
+        }
+        return "teamcode-desktop-$version-$target.$extension"
+    }
+}

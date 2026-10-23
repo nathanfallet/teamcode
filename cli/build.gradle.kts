@@ -13,8 +13,14 @@ plugins {
 }
 val releasePublicKeys = rootProject.fileTree("release/trust") { include("*.pem") }
 val generatedReleaseTrust = layout.buildDirectory.dir("generated/release-trust")
+// The Apple Team ID that signs TeamCode Desktop for macOS (-PteamcodeMacosTeamId=…, given by the release pipeline):
+// `teamcode ui` installs a downloaded app only when its Developer ID signature names this team. Without it, the CLI
+// installs the desktop app everywhere but on macOS, where it points at the release page instead.
+val macosTeamId = providers.gradleProperty("teamcodeMacosTeamId").orNull
+    ?.also { require(Regex("[A-Z0-9]{10}").matches(it)) { "teamcodeMacosTeamId must be a 10-character Apple Team ID." } }
 val generateReleaseTrust by tasks.registering {
     inputs.files(releasePublicKeys)
+    inputs.property("macosTeamId", macosTeamId.orEmpty())
     outputs.dir(generatedReleaseTrust)
     doLast {
         fun der(tag: Int, content: ByteArray): ByteArray {
@@ -42,6 +48,10 @@ val generateReleaseTrust by tasks.registering {
         val output = generatedReleaseTrust.get().file("me/nathanfallet/teamcode/cli/update/ShippedReleaseKeys.kt").asFile
         output.parentFile.mkdirs()
         output.writeText("package me.nathanfallet.teamcode.cli.update\n\ninternal object ShippedReleaseKeys {\n    val keys = listOf(\n${keys.joinToString("\n")}\n    )\n}\n")
+        generatedReleaseTrust.get().file("me/nathanfallet/teamcode/cli/ui/DesktopPublisher.kt").asFile.apply {
+            parentFile.mkdirs()
+            writeText("package me.nathanfallet.teamcode.cli.ui\n\ninternal object DesktopPublisher {\n    val MACOS_TEAM_ID: String? = ${macosTeamId?.let { "\"$it\"" } ?: "null"}\n}\n")
+        }
     }
 }
 kotlin {

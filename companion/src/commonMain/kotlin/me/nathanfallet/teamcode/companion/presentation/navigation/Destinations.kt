@@ -20,7 +20,7 @@ data class SessionRoute(val accountId: String, val sessionId: String)
 
 /** The new-session sheet's account (a sheet over the Sessions tab, not a destination of its own). */
 @Serializable
-data class NewSessionRoute(val accountId: String)
+data class NewSessionRoute(val accountId: String, val directory: String? = null)
 
 /** An account's artifact gallery; [sessionId] keeps those one cloud session published. */
 @Serializable

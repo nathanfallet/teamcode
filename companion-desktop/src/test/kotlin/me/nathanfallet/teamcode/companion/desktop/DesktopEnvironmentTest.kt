@@ -33,4 +33,14 @@ class DesktopEnvironmentTest {
         val values = DesktopEnvironment.readLoginShell("/bin/sh")
         assertTrue(values["PATH"].orEmpty().isNotEmpty())
     }
+
+    @Test fun teamcodeUiGivesTheConfigurationAndAnExistingFolder() = withTemporaryDirectory { directory ->
+        val process = mapOf("HOME" to "/Users/ada", "XDG_CONFIG_HOME" to "/Users/ada/.xdg")
+        val opened = DesktopEnvironment.detect(arrayOf("--config-path", "/c/teamcode/config.json", "--directory", directory.absolutePath), process)
+        assertEquals("/c/teamcode/config.json", opened.configPath)
+        assertEquals(directory.absolutePath, opened.initialDirectory)
+        assertNull(DesktopEnvironment.detect(arrayOf("--directory", File(directory, "missing").absolutePath), process).initialDirectory)
+        assertNull(DesktopEnvironment.detect(arrayOf("--directory", "relative"), process).initialDirectory)
+        assertNull(DesktopEnvironment.detect(arrayOf("--directory"), process).initialDirectory)
+    }
 }

@@ -155,4 +155,40 @@ class ReleaseClientTest {
             assertFailsWith<CancellationException> { operation.await() }
         }
     }
+
+    @Test fun desktopMetadataPackagesAndInstallScriptsUseTheirCanonicalPinnedPaths() = runBlocking {
+        val paths = mutableListOf<String>()
+        client { request ->
+            paths += request.url.encodedPath
+            assertNull(request.headers[HttpHeaders.Authorization])
+            respond(if (request.url.encodedPath.endsWith(".tar.gz")) "package" else "bytes of ${request.url.encodedPath.substringAfterLast('/')}")
+        }.use { transport ->
+            val metadata = transport.desktopMetadata("1.2.3")
+            assertEquals("bytes of desktop-manifest.json", metadata.manifest.decodeToString())
+            assertEquals("bytes of desktop-manifest.sig", metadata.signature.decodeToString())
+            val received = mutableListOf<Byte>()
+            transport.desktopPackage("1.2.3", "linux-x64", 7) { data, size -> received.addAll(data.take(size)) }
+            assertEquals("package", received.toByteArray().decodeToString())
+            assertEquals("bytes of install.sh", transport.installScript("1.2.3", "install.sh").decodeToString())
+            assertEquals("bytes of install.ps1", transport.installScript("1.2.3", "install.ps1").decodeToString())
+        }
+        val base = "/nathanfallet/teamcode/releases/download/1.2.3/"
+        assertEquals(listOf("desktop-manifest.json", "desktop-manifest.sig", "teamcode-desktop-1.2.3-linux-x64.tar.gz", "install.sh", "install.ps1").map { base + it }, paths)
+    }
+
+    @Test fun desktopDownloadsRefuseOtherNamesOversizedPackagesAndInexactBodies() = runBlocking {
+        var requests = 0
+        client { requests++; respond("x".repeat(256 * 1024 + 1)) }.use { transport ->
+            failure("release_asset_invalid") { transport.installScript("1.2.3", "../install.sh") }
+            failure("release_asset_invalid") { transport.installScript("1.2.3", "manifest.json") }
+            failure("release_version_invalid") { transport.installScript("latest", "install.sh") }
+            failure("release_asset_invalid") { transport.desktopPackage("1.2.3", "linux-x64", 512L * 1024 * 1024 + 1) { _, _ -> error("must not receive") } }
+            failure("release_asset_invalid") { transport.desktopPackage("1.2.3", "../escape", 1) { _, _ -> error("must not receive") } }
+            assertEquals(0, requests)
+            failure("release_size_invalid") { transport.installScript("1.2.3", "install.sh") }
+        }
+        client { respond("one byte more") }.use { transport ->
+            failure("release_size_invalid") { transport.desktopPackage("1.2.3", "macos-arm64", 12) { _, _ -> } }
+        }
+    }
 }

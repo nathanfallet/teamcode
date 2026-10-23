@@ -135,9 +135,21 @@ private fun operationMessage(code: String): String = when {
     code.startsWith("release_") -> releaseFailureMessage(code)
     code.startsWith("configuration_write_") || code.startsWith("windows_private_file_") ->
         "Cannot write a private TeamCode file ($code). Check that your user owns ${configLocation()} and that no other user can access it, then try again."
+    code.startsWith("desktop_") -> desktopFailureMessage(code)
     code.startsWith("automatic_") ->
         "Automatic update setup failed ($code). Check `teamcode update --help`, then try again; the current installation is unchanged."
     else -> "TeamCode command failed ($code). $DEBUG_HINT"
+}
+
+/** `teamcode ui`: the previously installed desktop app, if any, is always left in place. */
+internal fun desktopFailureMessage(code: String): String = when {
+    code == "desktop_signature_invalid" ->
+        "The downloaded TeamCode Desktop is not signed by TeamCode's publisher ($code). Nothing was installed; download it from the GitHub release page."
+    code == "desktop_version_mismatch" || code == "desktop_package_layout" || code == "desktop_package_invalid" ->
+        "The TeamCode Desktop package is not the expected one ($code). Nothing was installed."
+    code == "desktop_launch_failed" -> "TeamCode Desktop is installed but could not be opened ($code). Open it from your applications."
+    code.startsWith("desktop_msiexec_") -> "The Windows installer of TeamCode Desktop failed ($code). Run teamcode ui again, or install the .msi from the release page."
+    else -> "TeamCode Desktop could not be installed ($code). The previous installation, if any, is unchanged. $DEBUG_HINT"
 }
 
 private fun networkMessage(failure: NetworkFailure, server: String): String = when (failure) {

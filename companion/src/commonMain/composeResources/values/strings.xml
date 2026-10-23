@@ -354,6 +354,9 @@
     <string name="local_session_checking">Checking the TeamCode CLI…</string>
     <string name="local_session_check_again">Check again</string>
     <string name="local_session_cli_missing">Sessions on this device run through the TeamCode CLI, which is not installed. Install it with this command in a terminal, then check again:</string>
+    <string name="local_session_cli_missing_install">Sessions on this device run through the TeamCode CLI, which is not installed. TeamCode can install it for you, without administrator rights.</string>
+    <string name="local_session_install_cli">Install the TeamCode CLI</string>
+    <string name="local_session_cli_command">Or run this command in a terminal, then check again:</string>
     <string name="local_session_cli_old">This TeamCode CLI (%1$s) is older than the app (%2$s). Update it with this command, then check again:</string>
     <string name="local_session_other_account">Sessions on this device run with the CLI's sign-in, which is %1$s. Switch to that account, or sign the CLI in to this one (teamcode login).</string>
     <string name="local_session_no_cli_account">Sessions on this device run with the CLI's sign-in, and the CLI is not signed in. Sign it in to this account with teamcode login.</string>
