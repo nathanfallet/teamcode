@@ -45,9 +45,7 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
 internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSessionRecord, report: (String) -> Unit,
     stopRequested: () -> Boolean = ::serviceStopRequested): Int = coroutineScope {
     val features = client.capabilities().features
-    val hosted = try { client.hostCloudSession(record.sessionId) }
-        catch (error: CancellationException) { throw error }
-        catch (error: TeamCodeException) { throw CliktError("The session cannot run here (${error.describe()}).") }
+    val hosted = takeSession(client, record.sessionId, report)
     val team = hosted.teamId; val session = record.sessionId; val epoch = hosted.epoch
     report("Hosting ${hosted.session.name} (epoch $epoch) in ${record.directory}.")
     // An update of the CLI waits for this host to end before it replaces the binary under it.
@@ -118,6 +116,25 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         }
     }
 }
+
+/**
+ * Opens the host's epoch. A session still pausing (a message woke it while its previous host drained its turn) is
+ * retried every [retryMillis] for up to [PAUSING_RETRIES] attempts; any other refusal is final.
+ */
+internal suspend fun takeSession(client: TeamCodeClient, session: String, report: (String) -> Unit, retryMillis: Long = 2_000): CloudHostView {
+    var attempt = 0
+    while (true) {
+        try { return client.hostCloudSession(session) }
+        catch (error: CancellationException) { throw error }
+        catch (error: TeamCodeException) {
+            if (error.code != "session_pausing" || ++attempt >= PAUSING_RETRIES) throw CliktError("The session cannot run here (${error.describe()}).")
+            if (attempt == 1) report("The session is still pausing; waiting for its previous execution to checkpoint.")
+            delay(retryMillis)
+        }
+    }
+}
+
+private const val PAUSING_RETRIES = 45
 
 /**
  * On SIGINT or SIGTERM, asks the server to pause the session: the runner loop sees it, drains the turn, checkpoints and

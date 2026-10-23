@@ -297,6 +297,50 @@ cleanup:
     for (int i = 0; i < 3; i++) if (handles[i] && handles[i] != INVALID_HANDLE_VALUE) CloseHandle(handles[i]);
     return child;
 }
+/*
+ * Starts a process that outlives this one and its console: no console of its own, a new process group, out of this
+ * process's job where the job allows it, stdin on NUL and stdout and stderr appended to [log] (created privately by
+ * the caller beforehand). Returns the process handle, or NULL.
+ */
+static inline void *teamcode_windows_spawn_detached(const wchar_t *application, wchar_t *command_line, const wchar_t *log) {
+    SECURITY_ATTRIBUTES inheritable = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, NULL);
+    HANDLE output = CreateFileW(log, FILE_APPEND_DATA | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    HANDLE handles[2] = { input, output };
+    STARTUPINFOEXW startup = {0};
+    PROCESS_INFORMATION process = {0};
+    SIZE_T size = 0;
+    int initialized = 0, started = 0;
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    if (input == INVALID_HANDLE_VALUE || output == INVALID_HANDLE_VALUE) goto cleanup;
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = input;
+    startup.StartupInfo.hStdOutput = output;
+    startup.StartupInfo.hStdError = output;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
+    if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size)) goto cleanup;
+    initialized = 1;
+    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, sizeof(handles), NULL, NULL)) goto cleanup;
+    /* A job that forbids breaking away keeps the child: it still runs without a console. */
+    started = CreateProcessW(application, command_line, NULL, NULL, TRUE, flags | CREATE_BREAKAWAY_FROM_JOB, NULL, NULL, &startup.StartupInfo, &process)
+        || CreateProcessW(application, command_line, NULL, NULL, TRUE, flags, NULL, NULL, &startup.StartupInfo, &process);
+cleanup:
+    if (process.hThread) CloseHandle(process.hThread);
+    if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
+    free(startup.lpAttributeList);
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
+    if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+    return started ? (void *)process.hProcess : NULL;
+}
+static inline int teamcode_windows_detached_poll(void *process, unsigned long *code) {
+    DWORD status = WaitForSingleObject((HANDLE)process, 0);
+    if (status == WAIT_TIMEOUT) return 0;
+    if (status != WAIT_OBJECT_0 || !GetExitCodeProcess((HANDLE)process, code)) return -1;
+    return 1;
+}
 static inline int teamcode_windows_poll(void *process, unsigned long *code) {
     teamcode_windows_child *child = (teamcode_windows_child *)process;
     DWORD status = WaitForSingleObject(child->process, 0);
