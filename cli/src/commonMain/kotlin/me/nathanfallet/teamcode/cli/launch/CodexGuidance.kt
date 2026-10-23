@@ -25,14 +25,15 @@ internal fun hasCodexHookOverrides(arguments: List<String>): Boolean {
 }
 
 /**
- * Codex hook overrides: TeamCode's guidance command on `UserPromptSubmit` and `PreToolUse` when [guidance] is set,
+ * Codex hook overrides: TeamCode's guidance command on `UserPromptSubmit` and `PreToolUse` when [guidance] is set
+ * (and on `Stop` when [activity] is too: the same command also reports whether the agent waits for a person),
  * and each approved team hook on the events Codex supports. One `-c hooks.<event>=[...]` per event, because Codex
  * replaces arrays within one CLI layer. A stable definition avoids re-review on every proxy port or token rotation;
  * a new team hook version has a new path, which Codex asks the member to trust again.
  */
-internal fun codexGuidance(platform: ServicePlatform, config: String, teamHooks: List<InstalledHook> = emptyList(), guidance: Boolean = true): AgentLaunch {
+internal fun codexGuidance(platform: ServicePlatform, config: String, teamHooks: List<InstalledHook> = emptyList(), guidance: Boolean = true, activity: Boolean = false): AgentLaunch {
     val team = teamHooks.flatMap { hook -> HookEvents.forAgent("codex", hook.definition).map { it to hook } }
-    if (!guidance) return AgentLaunch(codexHookOverrides(null, team), emptyMap())
+    if (!guidance) return AgentLaunch(codexHookOverrides(null, team, false), emptyMap())
     require(platform.executable.toPath().isAbsolute && config.toPath().isAbsolute)
     val arguments = listOf(platform.executable, "agents", "hook", "--config", config)
     require(arguments.none { '\u0000' in it })
@@ -56,11 +57,12 @@ internal fun codexGuidance(platform: ServicePlatform, config: String, teamHooks:
         // but lives below System32; make it discoverable without changing any persistent user setting.
         mapOf("PATH" to listOfNotNull(environment("PATH")?.takeIf { it.isNotBlank() }, powershell.toString()).joinToString(";"))
     } else emptyMap()
-    return AgentLaunch(codexHookOverrides(handler, team), overrides)
+    return AgentLaunch(codexHookOverrides(handler, team, activity), overrides)
 }
 
-private fun codexHookOverrides(guidance: String?, team: List<Pair<String, InstalledHook>>): List<String> {
-    val guided = if (guidance == null) emptyList() else listOf("UserPromptSubmit", "PreToolUse")
+/** Codex has no `Notification` event: for it the state comes from `Stop` (waiting) and `UserPromptSubmit` (working). */
+private fun codexHookOverrides(guidance: String?, team: List<Pair<String, InstalledHook>>, activity: Boolean): List<String> {
+    val guided = if (guidance == null) emptyList() else listOf("UserPromptSubmit", "PreToolUse") + (if (activity) listOf("Stop") else emptyList())
     return (guided + team.map { it.first }.sorted()).distinct().flatMap { event ->
         val groups = listOfNotNull(guidance?.takeIf { event in guided }) + team.filter { it.first == event }.map { (_, hook) ->
             val matcher = hook.definition.matcher?.let { "matcher=${JsonPrimitive(it)}," }.orEmpty()

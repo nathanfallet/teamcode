@@ -15,6 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
 binary = str(args.binary.resolve())
+RUN = '11111111-2222-3333-4444-555555555555'
 
 with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
     root = Path(directory)
@@ -30,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 state['calls'].append((self.path, body))
                 assert 'PRIVATE_TOOL_INPUT' not in json.dumps(body)
-                if self.path == '/api/v1/directives/claim':
+                if self.path.startswith('/api/v1/runs/'):
+                    response = {'id': RUN, 'state': body['state'], 'sinceMillis': 1}
+                elif self.path == '/api/v1/directives/claim':
                     assert body == {'sessionId': 'native-session', 'stage': 'EMITTED_TO_HOOK'}
                     if state['mode'] == 'outage':
                         self.send_error(503, 'PRIVATE_DIAGNOSTIC'); return
@@ -62,8 +65,8 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
     command = [binary, 'agents', 'hook', '--config', str(config)]
     payload = {'session_id': 'native-session', 'hook_event_name': 'PreToolUse', 'tool_input': 'PRIVATE_TOOL_INPUT', 'transcript_path': 'PRIVATE_TOOL_INPUT'}
 
-    def run(body):
-        result = subprocess.run(command, input=body, capture_output=True, timeout=6)
+    def run(body, env=None):
+        result = subprocess.run(command, input=body, capture_output=True, timeout=6, env=env)
         assert result.returncode == 0, 'Hook must never fail an agent operation'
         assert result.stderr == b'', 'Hook diagnostics must remain silent'
         assert token.encode() not in result.stdout and b'PRIVATE_' not in result.stdout
@@ -91,6 +94,18 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
             started = time.monotonic()
             assert run(data) == {}
             assert time.monotonic() - started < 5, 'Guidance lookup exceeded its deadline'
+        # With the launch's identifier, Stop and UserPromptSubmit report only whether the agent waits or works.
+        env = dict(os.environ, TEAMCODE_RUN_ID=RUN)
+        state['calls'].clear()
+        assert run(b'{"session_id":"native-session","hook_event_name":"Stop","last_assistant_message":"PRIVATE_TOOL_INPUT"}', env) == {}
+        assert state['calls'] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'waiting_for_human'})], state['calls']
+        state['calls'].clear()
+        assert run(b'{"session_id":"native-session","hook_event_name":"Notification","notification_type":"auth_success"}', env) == {}
+        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(os.environ, TEAMCODE_RUN_ID='../x')) == {}
+        assert state['calls'] == [], 'Only a canonical launch identifier and a state-bearing event are reported'
+        state.update(mode='fresh', emitted=False)
+        assert run(data, env)['hookSpecificOutput']['hookEventName'] == 'UserPromptSubmit'
+        assert [call for call in state['calls'] if call[0].startswith('/api/v1/runs/')] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'working'})]
         # A writer holding stdin open cannot stall the agent, including an otherwise complete JSON body.
         child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
@@ -104,6 +119,6 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
         config.unlink()
         assert run(data) == {}, 'Missing configuration must not surface in agent context'
         assert not state['errors'], state['errors']
-        print('PASS: native stdin guidance, both events, scoped receipts, deduplication, Unicode config path, privacy, byte bound, input/network deadlines and silent outages.')
+        print('PASS: native stdin guidance, both events, activity reports, scoped receipts, deduplication, Unicode config path, privacy, byte bound, input/network deadlines and silent outages.')
     finally:
         server.shutdown(); server.server_close(); worker.join(timeout=3)

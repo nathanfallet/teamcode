@@ -456,6 +456,22 @@ private fun ApiCatalog.runOperations() {
             conflict("The launch has ended (`run_ended`).")
         }
     }
+    post("/api/v1/runs/{id}/activity") {
+        operationId = "reportRunActivity"; tag(ApiTags.RUNS)
+        summary = "Report whether a launch waits for a person"
+        description = "Called by the hooks `teamcode run` installs (Claude Code: `Stop`, `Notification`, `UserPromptSubmit`, `PostToolUse`; " +
+            "Codex: `Stop`, `UserPromptSubmit`) through the creating credential. `state` is `waiting_for_human` or `working`; " +
+            "nothing else leaves the computer: no prompt, message, tool or path. A repeated state writes nothing. " +
+            "The launch view shows `activity` and `activitySinceMillis` only while the launch is RUNNING (`team.runs.activity.v1`)."
+        parameters { pathId("id", "The launch's UUID.") }
+        body<RunActivityRequest>("The reported state.")
+        responses {
+            ok<RunActivityView>("The launch's state and when it began.")
+            badRequest("Another state (`invalid_run_activity`).")
+            notFound("No such launch (`run_not_found`).")
+            conflict("The launch has ended (`run_ended`).")
+        }
+    }
     post("/api/v1/runs/{id}/end") {
         operationId = "endRun"; tag(ApiTags.RUNS)
         summary = "End a launch"

@@ -43,7 +43,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && path == "/api/v1/usage/tokens" -> CredentialAction.USAGE_READ
     method == "GET" && path == "/api/v1/policy/api-prices" -> CredentialAction.USAGE_READ
     method == "GET" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}").matches(path)) -> CredentialAction.USAGE_READ
-    method == "POST" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}/(heartbeat|end)").matches(path)) -> CredentialAction.INFERENCE
+    method == "POST" && (path == "/api/v1/runs" || Regex("/api/v1/runs/[0-9a-f-]{36}/(heartbeat|activity|end)").matches(path)) -> CredentialAction.INFERENCE
     method == "GET" && path == "/api/v1/directives/current" -> CredentialAction.GUIDANCE
     method == "POST" && path in setOf("/api/v1/directives/current", "/api/v1/directives/claim", "/api/v1/directives/receipt") -> CredentialAction.GUIDANCE
     method == "POST" && skillPublishPath.matches(path) -> CredentialAction.SKILLS_PUBLISH

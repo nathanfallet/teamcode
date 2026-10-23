@@ -13,6 +13,7 @@ import me.nathanfallet.teamcode.infrastructure.gateway.SessionAffinityKey
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
+import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
 import org.junit.jupiter.api.Timeout
 import org.testcontainers.mysql.MySQLContainer
 import kotlin.test.*
@@ -216,6 +217,43 @@ class AgentRunPersistenceTest {
         }
     }
 
+    @Test @Timeout(120)
+    fun activityIsReportedByTheCreatingCredentialOnlyAndShownOnlyWhileTheWrapperLives() = runBlocking {
+        fixture { f ->
+            f.a.query {
+                val drift = MigrationUtils.statementsRequiredForDatabaseMigration(AgentRuns, AgentRunLabels, withLogs = false)
+                assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
+            }
+            val a = AgentRunServiceImpl(f.a); val b = AgentRunServiceImpl(f.b); val id = id()
+            a.start(f.member.principal, id, "claude", "interactive")
+            assertNull(b.get(f.member.principal, id).run.activity, "Nothing reported yet")
+            val first = a.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, first.activity)
+            // The same state from the other replica writes nothing and keeps the time it began.
+            assertEquals(first, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN))
+            val shown = b.get(f.member.principal, id).run
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, shown.activity); assertEquals(first.sinceMillis, shown.activitySinceMillis)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.list(f.member.principal).runs.single { it.id == id }.activity)
+            val working = b.activity(f.member.principal, id, RunActivity.WORKING)
+            assertTrue(working.sinceMillis >= first.sinceMillis)
+            assertEquals(RunActivity.WORKING, a.get(f.member.principal, id).run.activity)
+            // Another login, another member, a key that cannot write: none can report for this launch.
+            val anotherLogin = f.team.login("developer", MEMBER_PASSWORD, "another login")
+            failure("run_credential_changed") { b.activity(anotherLogin.principal, id, RunActivity.WORKING) }
+            failure("run_not_found") { b.activity(f.admin.principal, id(), RunActivity.WORKING) }
+            val reader = assertNotNull(f.team.authenticate(SqlServiceKeyService(f.a).create(f.member.principal, f.member.principal.member.id, "Reader", setOf(ServiceScope.USAGE_READ), 1).accessToken))
+            failure("credential_scope") { b.activity(reader, id, RunActivity.WAITING_FOR_HUMAN) }
+            // Silence makes the state unknown, not stale-but-shown; the end does too and refuses further reports.
+            f.a.query { AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = nowMillis() - AgentRunService.HEARTBEAT_TTL_MILLIS - 5_000 } }
+            assertEquals(RunState.STALE, b.get(f.member.principal, id).run.state)
+            assertNull(b.get(f.member.principal, id).run.activity); assertNull(b.get(f.member.principal, id).run.activitySinceMillis)
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WORKING, b.get(f.member.principal, id).run.activity, "A heartbeat brings the last report back")
+            a.end(f.member.principal, id, 0)
+            assertNull(b.get(f.member.principal, id).run.activity)
+            failure("run_ended") { b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN) }
+        }
+    }
     private fun input(id: String, units: Long) = AdmissionInput(units, "claude-test", "anthropic", runId = id)
     private fun id() = UUID.randomUUID().toString()
     private suspend fun failure(code: String, block: suspend () -> Any?) { assertEquals(code, assertFailsWith<TeamFailure> { block() }.code) }

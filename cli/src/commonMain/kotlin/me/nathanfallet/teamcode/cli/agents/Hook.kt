@@ -6,6 +6,7 @@ import com.github.ajalt.clikt.parameters.options.*
 import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.cli.config.ConfigStore
 import me.nathanfallet.teamcode.cli.config.configPath
+import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.readHookInput
 import me.nathanfallet.teamcode.cli.sdk
 import okio.Path.Companion.toPath
@@ -22,10 +23,19 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
             val saved = ConfigStore(path).load() ?: return
             sdk(saved).use { client ->
                 val bridge = HookGuidance(client)
-                val emission = bridge.prepare(input) ?: return@use
-                println(emission.output)
-                written = true
-                bridge.acknowledge(emission)
+                val state = HookActivity.state(input)
+                val run = HookActivity.runId(environment("TEAMCODE_RUN_ID"))
+                val emission = bridge.prepare(input)
+                if (emission != null) {
+                    println(emission.output)
+                    written = true
+                }
+                // Printed first when there is advice, so a slow report never delays it; `{}` is printed by `finally` otherwise.
+                if (state != null && run != null) {
+                    if (!written) { println("{}"); written = true }
+                    HookActivity.report(client, run, state)
+                }
+                if (emission != null) bridge.acknowledge(emission)
             }
         } catch (error: CancellationException) { throw error }
         catch (_: Exception) { /* Optional advice must not block tools or reveal diagnostics. */ }

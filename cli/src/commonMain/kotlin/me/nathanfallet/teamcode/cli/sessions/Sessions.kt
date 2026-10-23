@@ -29,7 +29,7 @@ private class ListRuns : SuspendingCliktCommand(name = "list") {
                 throw CliktError("This server does not record run labels; list without --label.")
             val page = client.runs(member, all, before, filter)
             if (json) echo(Serialization.json.encodeToString(page)) else {
-                for (run in page.runs) echo("${run.id}\t${run.username}\t${run.agent}\t${run.workload}\t${run.state}\t${run.activeRequests} active / ${run.queuedRequests} waiting\t${formatUnits(run.chargedAndReservedUnits)} credits" +
+                for (run in page.runs) echo("${run.id}\t${run.username}\t${run.agent}\t${run.workload}\t${run.state}${run.activity?.let { " ($it)" }.orEmpty()}\t${run.activeRequests} active / ${run.queuedRequests} waiting\t${formatUnits(run.chargedAndReservedUnits)} credits" +
                     run.labels.entries.sortedBy { it.key }.joinToString("") { "\t${it.key}=${it.value}" })
                 page.nextBeforeId?.let { echo("Older launches: teamcode sessions list --before $it" + filter.entries.sortedBy { e -> e.key }.joinToString("") { e -> " --label ${e.key}=${e.value}" } + if (all) " --all" else member?.let { " --member $it" }.orEmpty(), err = true) }
             }

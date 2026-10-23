@@ -155,6 +155,11 @@ class TeamCodeClient(
     /** Register one local wrapper launch. The UUID makes a repeated start idempotent. */
     override suspend fun startRun(input: StartRunRequest): RunLeaseView { identifier(input.id); return request("/api/v1/runs", HttpMethod.Post, input) }
     override suspend fun heartbeatRun(id: String): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/heartbeat", HttpMethod.Post) }
+    /** What the agent's hooks report, never content: [state] is `working` or `waiting_for_human`. */
+    suspend fun reportRunActivity(id: String, state: String): RunActivityView {
+        identifier(id)
+        return request("/api/v1/runs/$id/activity", HttpMethod.Post, RunActivityRequest(state))
+    }
     override suspend fun endRun(id: String, exitCode: Int?): RunLeaseView { identifier(id); return request("/api/v1/runs/$id/end", HttpMethod.Post, EndRunRequest(exitCode)) }
     suspend fun runs(memberId: String? = null, all: Boolean = false, beforeId: String? = null, labels: Map<String, String> = emptyMap()): RunPageView {
         require(!all || memberId == null) { "Choose one member or all members." }

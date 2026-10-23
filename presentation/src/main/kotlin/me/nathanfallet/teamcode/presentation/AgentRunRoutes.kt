@@ -10,7 +10,8 @@ import me.nathanfallet.teamcode.domain.team.*
 
 internal fun RunPolicy.view() = RunPolicyView(budgetUnits, maxConcurrent, paused)
 internal fun AgentRun.view() = AgentRunView(id, memberId, username, agent, workload, deviceId, startedAtMillis, heartbeatAtMillis, lastRequestAtMillis,
-    endedAtMillis, exitCode, state.name, policy.view(), chargedAndReservedUnits, attempts, completed, activeRequests, contextsTruncated, queuedRequests, labels)
+    endedAtMillis, exitCode, state.name, policy.view(), chargedAndReservedUnits, attempts, completed, activeRequests, contextsTruncated, queuedRequests, labels,
+    activity?.wire, activitySinceMillis)
 internal fun RunLease.view() = RunLeaseView(id, startedAtMillis, heartbeatAtMillis, endedAtMillis, state.name)
 internal fun RunDetail.view() = RunDetailView(run.view(), conversations.map {
     RunConversationView(it.sessionKey, it.conversationKey, it.requestedModel, it.provider, it.model, it.lastSeenAtMillis, it.pace, it.directiveId, it.receivedByCliAtMillis, it.emittedToHookAtMillis)
@@ -27,6 +28,10 @@ internal fun Route.agentRunRoutes(runs: AgentRunService) {
     }
     get<RunsResource.Id> { call.respond(runs.get(call.principal, it.id).view()) }
     post<RunsResource.Id.Heartbeat> { call.respond(runs.heartbeat(call.principal, it.parent.id).view()) }
+    post<RunsResource.Id.Activity> {
+        val change = runs.activity(call.principal, it.parent.id, RunActivity.parse(call.jsonBody<RunActivityRequest>().state))
+        call.respond(RunActivityView(change.id, change.activity.wire, change.sinceMillis))
+    }
     post<RunsResource.Id.End> { call.respond(runs.end(call.principal, it.parent.id, call.jsonBody<EndRunRequest>().exitCode).view()) }
     put<RunsResource.Id.Policy> {
         val input = call.jsonBody<RunPolicyView>()

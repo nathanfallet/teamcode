@@ -24,6 +24,9 @@ object AgentRuns : Table("agent_runs") {
     val attempts = long("attempts").default(0)
     val completed = long("completed").default(0)
     val contextsTruncated = bool("contexts_truncated").default(false)
+    /** `working` or `waiting_for_human`, as the agent's hooks last reported (null until one did), and when it changed. */
+    val activity = varchar("activity", 24).nullable()
+    val activityAt = long("activity_at").nullable()
     /** When the feed last reported this run stale; older than [heartbeatAt] once a heartbeat followed, so a new silence is reported again. */
     val staleNotifiedAt = long("stale_notified_at").nullable()
     override val primaryKey = PrimaryKey(id)

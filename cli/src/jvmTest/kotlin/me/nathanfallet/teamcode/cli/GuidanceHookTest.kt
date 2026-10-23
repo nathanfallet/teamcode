@@ -7,6 +7,10 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.http.content.TextContent
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.cli.proxy.localProxy
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -61,6 +65,61 @@ class GuidanceHookTest {
             }
             assertEquals(HttpStatusCode.OK, response.status)
             assertEquals("{}", response.bodyAsText())
+        } finally { sdk.close() }
+    }
+    @Test fun activityIsReportedOnceFromTheLaunchHeaderWithoutAnyContent() = testApplication {
+        val run = "11111111-2222-3333-4444-555555555555"
+        val reports = mutableListOf<String>()
+        var failWith: HttpStatusCode? = null
+        val sdk = TeamCodeClient("https://team.example", { "server-secret" }) { configure -> HttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/v1/runs/$run/activity" -> {
+                    val text = (request.body as TextContent).text
+                    reports += text
+                    failWith?.let { return@MockEngine respond("""{"error":"x"}""", it, headersOf(HttpHeaders.ContentType, "application/json")) }
+                    respond("""{"id":"$run","state":"working","sinceMillis":1}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+                }
+                else -> respond("""{"directive":null}""", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+            }
+        }) { configure(this) } }
+        application { localProxy(sdk, localToken) }
+        suspend fun hook(payload: JsonObjectBuilder.() -> Unit, launch: String? = run) = client.post("/_teamcode/hooks/claude") {
+            bearerAuth(localToken); contentType(ContentType.Application.Json)
+            launch?.let { header("X-TeamCode-Run", it) }
+            setBody(buildJsonObject { put("session_id", "test-session"); put("transcript_path", "private-path"); payload() }.toString())
+        }
+        suspend fun settled(count: Int) = withContext(Dispatchers.Default) { withTimeout(5_000) { while (reports.size < count) delay(10) } }
+        try {
+            assertEquals("{}", hook({ put("hook_event_name", "Stop"); put("last_assistant_message", "private-message") }).bodyAsText())
+            settled(1)
+            assertEquals("""{"state":"waiting_for_human"}""", reports.single())
+            // The same state again, from any event, is not sent again.
+            hook({ put("hook_event_name", "Notification"); put("notification_type", "permission_prompt"); put("message", "private") })
+            hook({ put("hook_event_name", "Notification"); put("notification_type", "auth_success") })
+            hook({ put("hook_event_name", "PreToolUse"); put("tool_input", "private-tool-input") })
+            hook({ put("hook_event_name", "PostToolUse"); put("tool_name", "Bash"); put("tool_response", "private") })
+            settled(2)
+            assertEquals("""{"state":"working"}""", reports[1])
+            hook({ put("hook_event_name", "PostToolUse") })
+            hook({ put("hook_event_name", "Stop") })
+            settled(3)
+            assertEquals(3, reports.size)
+            // Neither a missing nor a malformed launch header reports anything.
+            hook({ put("hook_event_name", "Stop") }, launch = null)
+            hook({ put("hook_event_name", "Stop") }, launch = "../etc")
+            // A refusal the server will repeat is remembered; an outage is retried at the next hook.
+            failWith = HttpStatusCode.ServiceUnavailable
+            hook({ put("hook_event_name", "UserPromptSubmit") })
+            settled(4)
+            hook({ put("hook_event_name", "UserPromptSubmit") })
+            settled(5)
+            failWith = HttpStatusCode.Conflict
+            hook({ put("hook_event_name", "UserPromptSubmit") })
+            settled(6)
+            hook({ put("hook_event_name", "UserPromptSubmit") })
+            withContext(Dispatchers.Default) { delay(300) }
+            assertEquals(6, reports.size)
+            assertTrue(reports.none { "private" in it })
         } finally { sdk.close() }
     }
 }

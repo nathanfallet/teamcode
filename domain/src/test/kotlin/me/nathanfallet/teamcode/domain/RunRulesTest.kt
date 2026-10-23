@@ -21,6 +21,12 @@ class RunRulesTest {
         assertFailsWith<TeamFailure> { AgentRunService.validateStart("../other", "claude", "interactive") }
         assertFailsWith<TeamFailure> { AgentRunService.validateStart("11111111-1111-1111-1111-111111111111", "unknown", "interactive") }
     }
+    @Test fun activityIsOneOfTwoStatesAndNothingElse() {
+        assertEquals(RunActivity.WAITING_FOR_HUMAN, RunActivity.parse("waiting_for_human"))
+        assertEquals(RunActivity.WORKING, RunActivity.parse("working"))
+        for (value in listOf("", "idle", "WORKING", "waiting", "working "))
+            assertEquals("invalid_run_activity", assertFailsWith<TeamFailure> { RunActivity.parse(value) }.code)
+    }
     @Test fun lostHeartbeatsAreUnknownProcessStateAndConfirmedEndIsRetainedAfterRevocation() {
         val states = RunStateUseCase()
         assertEquals(RunState.RUNNING, states.state(null, 1000, 91000, true))

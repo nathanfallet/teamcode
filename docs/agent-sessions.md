@@ -42,6 +42,25 @@ Filter with `GET /api/v1/runs?label=key=value` (repeatable, every filter must ma
 
 Both `teamcode run claude` and `teamcode run codex` export `TEAMCODE_RUN_ID`, the launch UUID, in the agent's environment, so a hook, tool or script run by the agent can correlate its work with `teamcode sessions show "$TEAMCODE_RUN_ID"` or the API. It is metadata, not a credential. Without a registered launch (an older server) the variable is removed, so an outer launch's identifier is never inherited by mistake. The name contains none of `KEY`, `SECRET` or `TOKEN`, so Codex's default shell environment policy does not filter it from the commands it runs. Cloud sessions keep their session identifier out of the agent container by design, so it is not exported there.
 
+## Waiting for a person
+
+A launch says whether its agent works or waits for you, so a dashboard can tell a launch that needs attention from one that is busy. The state is `working` or `waiting_for_human`, and the launch view (`GET /api/v1/runs`, `sessions list`, **Dashboard → Agent sessions**) shows it, with when it began (`activity`, `activitySinceMillis`), **only while the launch is `RUNNING`**: after `STALE`, `ENDED` or `REVOKED` it would be a guess, so it is left out (a heartbeat brings the last report back).
+
+| Agent event | Reported | Agents |
+| --- | --- | --- |
+| `Stop` | `waiting_for_human`: the turn ended and the agent waits for your next message | Claude Code, Codex |
+| `Notification` of type `permission_prompt`, `idle_prompt` or `elicitation_dialog` (or without a type) | `waiting_for_human`: a permission request, an idle prompt or a question | Claude Code (Codex has no `Notification` event) |
+| `UserPromptSubmit` | `working` | Claude Code, Codex |
+| `PostToolUse` | `working`: the tool ran after an approval, so the permission wait is over | Claude Code |
+
+Nothing else leaves the computer: the hook reads the event name and, for a notification, its type, and drops the prompt, the message, the tool, the paths and the session identifier ([guidance](agent-guidance.md) keeps its own, separate use of the session identifier). A `Stop` that another hook refuses (a team hook that makes the agent continue) is corrected by the next tool use or prompt. Subagent events (`SubagentStop`) say nothing about the launch.
+
+- **Claude Code.** The session plugin that carries guidance also registers HTTP hooks for `Stop`, `Notification` and `PostToolUse` on the local TeamCode service, and names the launch in the `X-TeamCode-Run` header. The service answers `{}` first, then reports; it remembers the last state it sent per launch, so a turn with many tools costs one request. A temporary failure is retried at the next event; a refusal the server repeats (an ended launch) is not.
+- **Codex.** The guidance command (`teamcode agents hook`) is also registered on `Stop`, and reports from `UserPromptSubmit` and `Stop` with the launch identifier it reads from `TEAMCODE_RUN_ID`. Codex asks you to trust the new `Stop` definition in `/hooks`, like the other TeamCode hooks. With no `Notification` event and no per-tool hook, a Codex launch waiting for a permission shows `working` until its turn ends.
+- **Opting out.** `teamcode run --no-activity` reports nothing for that launch; `--no-guidance` and `--bare` also remove these hooks, which travel with guidance. A server without `team.runs.activity.v1`, a launch that is not registered, or custom Codex `-c hooks...` overrides get none, and never block the launch.
+- **API.** `POST /api/v1/runs/{id}/activity` with `{ "state": "waiting_for_human" | "working" }`, through the credential that created the launch (an inference key may, like heartbeats). A repeated state writes nothing and keeps its time. `409 run_ended` after the end; `400 invalid_run_activity` for another state.
+- **Cloud sessions.** They need no hook for this: the runner already sees the agent's turns (`ready` between turns, `active` during one) and a permission or a question is the [`cloud.session.waiting`](cloud-conversations.md) event. The team hooks of [cloud sessions](hooks.md#cloud-sessions) are separate and unchanged.
+
 ## Proxy association and compatibility
 
 Launch-specific loopback paths carry the run UUID and workload. The local proxy validates their syntax and conflicts, attaches `x-teamcode-run-id`/`x-teamcode-workload`, and forwards only canonical inference endpoints. Central admission verifies the creating team/member/token and registered workload. UUIDs are metadata, not bearer capabilities. Both team headers are removed before a provider transport is invoked; provider authentication still comes exclusively from the server's encrypted pool.

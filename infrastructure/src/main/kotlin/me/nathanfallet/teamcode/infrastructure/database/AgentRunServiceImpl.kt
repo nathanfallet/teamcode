@@ -40,6 +40,16 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 
+    override suspend fun activity(actor: Principal, id: String, activity: RunActivity): RunActivityChange = database.query {
+        writeActor(this, actor); val row = creator(actor, id)
+        if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
+        val previous = row[AgentRuns.activityAt]
+        if (row[AgentRuns.activity] == activity.wire && previous != null) return@query RunActivityChange(id, activity, previous)
+        val now = nowMillis()
+        AgentRuns.update({ AgentRuns.id eq id }) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now }
+        RunActivityChange(id, activity, now)
+    }
+
     override suspend fun end(actor: Principal, id: String, exitCode: Int?): RunLease = database.query {
         writeActor(this, actor); val row = creator(actor, id)
         val now = nowMillis()
@@ -140,7 +150,10 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
             val member = members.getValue(row[memberId])
             val state = RunStateUseCase().state(row[endedAt], row[heartbeatAt], now, row[tokenId] in validTokens && !member[Members.disabled] && !member[Members.mustChangePassword])
             AgentRun(row[id], row[memberId], member[Members.username], row[agent], row[workload], row[deviceId], row[startedAt], row[heartbeatAt], row[lastRequestAt], row[endedAt], row[exitCode],
-                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty())
+                state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty(),
+                // Only a launch with a live wrapper has a current state: after STALE or the end it would be a guess.
+                row[activity]?.takeIf { state == RunState.RUNNING }?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } },
+                row[activityAt]?.takeIf { state == RunState.RUNNING && row[activity] != null })
         } }
     }
     private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else

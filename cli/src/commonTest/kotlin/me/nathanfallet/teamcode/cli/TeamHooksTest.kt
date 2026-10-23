@@ -153,6 +153,36 @@ class TeamHooksTest {
             codexGuidance(platform, "/home/me/.config/teamcode/config.json").arguments.filterIndexed { i, _ -> i % 2 == 1 }.map { it.substringBefore('=') })
     }
 
+    @Test fun activityHooksShareTheGuidanceHookAndNameTheLaunch() {
+        val run = "11111111-2222-3333-4444-555555555555"
+        val guard = installed("stop-guard", stop)
+        val hooks = sessionHooks(41234, listOf(guard), run)["hooks"]!!.jsonObject
+        assertEquals(setOf("PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PostToolUse"), hooks.keys)
+        for (event in listOf("PreToolUse", "UserPromptSubmit", "Stop", "Notification", "PostToolUse")) {
+            val http = hooks[event]!!.jsonArray[0].jsonObject["hooks"]!!.jsonArray[0].jsonObject
+            assertEquals("http", http["type"]!!.jsonPrimitive.content)
+            assertEquals(run, http["headers"]!!.jsonObject["X-TeamCode-Run"]!!.jsonPrimitive.content)
+        }
+        // The team Stop hook follows TeamCode's report in the same event.
+        assertEquals(listOf("http", "command"), hooks["Stop"]!!.jsonArray.map { it.jsonObject["hooks"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content })
+        // Without a launch, or without guidance, no activity hook and no header.
+        assertEquals(setOf("PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop"), sessionHooks(41234, listOf(guard))["hooks"]!!.jsonObject.keys)
+        assertTrue("X-TeamCode-Run" !in sessionHooks(41234, emptyList())["hooks"].toString())
+        assertEquals(setOf("Stop", "SubagentStop"), sessionHooks(null, listOf(guard), run)["hooks"]!!.jsonObject.keys)
+        assertFailsWith<IllegalArgumentException> { sessionHooks(41234, emptyList(), "not-a-uuid") }
+    }
+
+    @Test fun codexReportsActivityFromTheGuidanceCommandOnStop() {
+        val platform = ServicePlatform("macos", "/usr/local/bin/teamcode", "501")
+        val arguments = codexGuidance(platform, "/home/me/.config/teamcode/config.json", activity = true).arguments
+        assertEquals(listOf("hooks.UserPromptSubmit", "hooks.PreToolUse", "hooks.Stop"), arguments.filterIndexed { i, _ -> i % 2 == 1 }.map { it.substringBefore('=') })
+        val stop = arguments[arguments.indexOfFirst { it.startsWith("hooks.Stop=") }]
+        assertTrue("agents" in stop && "hook" in stop && "--config" in stop)
+        // No Stop override unless the server records activity; never on its own without guidance.
+        assertEquals(2, codexGuidance(platform, "/home/me/.config/teamcode/config.json").arguments.size / 2)
+        assertTrue(codexGuidance(platform, "/home/me/.config/teamcode/config.json", guidance = false, activity = true).arguments.isEmpty())
+    }
+
     /** The installer behind a pair of lines, as the supervisor exposes it. */
     private class InstallerProcess(val installer: SkillInstaller) : AgentProcess {
         val replies = ArrayDeque<String>()
