@@ -127,7 +127,11 @@ class SessionViewModel(
                             // Beside the stream, so a slow header never holds up the events.
                             if (reconnected) { reconnected = false; viewModelScope.launch { refreshSessionQuietly() } }
                         }
-                        is LiveUpdate.Item -> state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).copy(live = LiveState.LIVE) }
+                        is LiveUpdate.Item -> {
+                            // A turn starting or ending settles any interruption kept for a retry: a later tap is a new one.
+                            if (update.value is TranscriptEvent.Turn) interruptKey = null
+                            state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).copy(live = LiveState.LIVE) }
+                        }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
                         LiveUpdate.Gap -> Unit
                         LiveUpdate.Ended -> {
@@ -220,7 +224,7 @@ class SessionViewModel(
         }
     }
 
-    /** Kept from a tap until the server answers: tapping again after a lost answer repeats the same interruption. */
+    /** Kept from a tap until the server answers or a turn starts or ends: tapping again after a lost answer repeats the same interruption, never a later turn's. */
     private var interruptKey: String? = null
 
     fun interrupt() = act {

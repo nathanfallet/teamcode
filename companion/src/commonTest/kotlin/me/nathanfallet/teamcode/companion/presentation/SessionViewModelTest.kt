@@ -129,6 +129,13 @@ class SessionViewModelTest {
         val keys = sessions.calls.filter { it.startsWith("interrupt s1") }.drop(1)
         assertEquals(3, keys.size)
         assertEquals(keys[0], keys[1]); assertNotEquals(keys[1], keys[2])
+        // A lost answer, then a new turn: the next tap interrupts that turn, under a new key.
+        sessions.interruptResult = { throw CompanionException.Unreachable() }
+        model.interrupt(); settle()
+        live.send(LiveUpdate.Item(me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent.Turn(50, 50, me.nathanfallet.teamcode.companion.domain.models.TurnPhase.STARTED, null, null))); settle()
+        model.interrupt(); settle()
+        val later = sessions.calls.filter { it.startsWith("interrupt s1") }.takeLast(2)
+        assertNotEquals(later[0], later[1])
         model.stop()
     }
 }
