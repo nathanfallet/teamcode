@@ -148,6 +148,15 @@ def main():
                 handle.write(DOCKERFILE)
             run("docker", "build", "-q", "-t", IMAGE, build)
             run("kind", "load", "docker-image", IMAGE, "--name", CLUSTER)
+            # A resumed session pins the image digest recorded by its first pod. A registry serves digests, but kind
+            # imports the image under its tag only, so containerd would try to pull `name@sha256:...` from Docker Hub.
+            # Give the imported image its digest name on the node, as a registry pull would have.
+            node = f"{CLUSTER}-control-plane"
+            inspected = json.loads(run("docker", "exec", node, "crictl", "inspecti", f"docker.io/library/{IMAGE}", capture=True))
+            # The digest the kubelet reports as the pod's image ID (kind names the import `import-<date>`).
+            image_id = next(d.split("@")[1] for d in inspected["status"]["repoDigests"] if "/import-" in d)
+            run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", f"docker.io/library/{IMAGE}",
+                f"docker.io/library/{IMAGE.split(':')[0]}@{image_id}")
             run(*kubectl, "apply", "-f", "-", stdin=RBAC)
             token = run(*kubectl, "create", "token", "teamcode-server", "-n", "teamcode-system", "--duration", "2h", capture=True)
             config = json.loads(run(*kubectl, "config", "view", "--raw", "--minify", "-o", "json", capture=True))
@@ -166,7 +175,7 @@ def main():
                 os.chmod(path, 0o600)
             env = dict(os.environ, TEAMCODE_KIND_SMOKE_DIR=work)
             run(os.path.join(root, "gradlew"), "--no-daemon", "-p", root, ":infrastructure:test", "--tests", "*KindSmokeTest*", "--rerun", env=env)
-            print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause and proven deletion on a real cluster.")
+            print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause, resume into a new pod with two replicas, and proven deletion on a real cluster.")
         finally:
             if not args.keep:
                 run("kind", "delete", "cluster", "--name", CLUSTER, "--kubeconfig", kubeconfig)
