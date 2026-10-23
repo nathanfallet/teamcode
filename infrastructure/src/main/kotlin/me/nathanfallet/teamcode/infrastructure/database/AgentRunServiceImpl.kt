@@ -42,6 +42,7 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 
+    /** Reads and writes under the team lock that [writeActor] takes, like `end` and `heartbeat`: replicas apply reports one at a time. */
     override suspend fun activity(actor: Principal, id: String, activity: RunActivity): RunActivityChange = database.query {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
