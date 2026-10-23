@@ -11,7 +11,7 @@ import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.Role
-import TeamFailure
+import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.CloudSessions
