@@ -156,11 +156,12 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         return rows.map { row -> with(AgentRuns) {
             val member = members.getValue(row[memberId])
             val state = RunStateUseCase().state(row[endedAt], row[heartbeatAt], now, row[tokenId] in validTokens && !member[Members.disabled] && !member[Members.mustChangePassword])
+            val shown = row[activity]?.takeIf { state == RunState.RUNNING }?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } }
             AgentRun(row[id], row[memberId], member[Members.username], row[agent], row[workload], row[deviceId], row[startedAt], row[heartbeatAt], row[lastRequestAt], row[endedAt], row[exitCode],
                 state, RunPolicy(row[budgetUnits], row[maxConcurrent], row[paused]), row[chargedUnits], row[attempts], row[completed], active[row[id]] ?: 0, row[contextsTruncated], queued[row[id]] ?: 0, labels[row[id]].orEmpty(),
                 // Only a launch with a live wrapper has a current state: after STALE or the end it would be a guess.
-                row[activity]?.takeIf { state == RunState.RUNNING }?.let { wire -> RunActivity.entries.firstOrNull { it.wire == wire } },
-                row[activityAt]?.takeIf { state == RunState.RUNNING && row[activity] != null })
+                shown,
+                shown?.let { row[activityAt] })
         } }
     }
     private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else

@@ -157,8 +157,8 @@ class TeamHooksTest {
         val run = "11111111-2222-3333-4444-555555555555"
         val guard = installed("stop-guard", stop)
         val hooks = sessionHooks(41234, listOf(guard), run)["hooks"]!!.jsonObject
-        assertEquals(setOf("PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PostToolUse"), hooks.keys)
-        for (event in listOf("PreToolUse", "UserPromptSubmit", "Stop", "Notification", "PostToolUse")) {
+        assertEquals(setOf("PreToolUse", "UserPromptSubmit", "Stop", "SubagentStop", "Notification", "PostToolUse", "PostToolUseFailure"), hooks.keys)
+        for (event in listOf("PreToolUse", "UserPromptSubmit", "Stop", "Notification", "PostToolUse", "PostToolUseFailure")) {
             val http = hooks[event]!!.jsonArray[0].jsonObject["hooks"]!!.jsonArray[0].jsonObject
             assertEquals("http", http["type"]!!.jsonPrimitive.content)
             assertEquals(run, http["headers"]!!.jsonObject["X-TeamCode-Run"]!!.jsonPrimitive.content)

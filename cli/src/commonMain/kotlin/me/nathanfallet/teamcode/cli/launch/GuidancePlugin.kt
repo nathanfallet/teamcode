@@ -34,7 +34,7 @@ internal class GuidancePlugin private constructor(val directory: Path) : AutoClo
 internal fun guidanceHooks(port: Int): JsonObject = sessionHooks(port, emptyList(), null)
 
 /** Events whose HTTP hook only reports whether the agent works or waits for a person (see `HookActivity`). */
-internal val CLAUDE_ACTIVITY_EVENTS = listOf("Stop", "Notification", "PostToolUse")
+internal val CLAUDE_ACTIVITY_EVENTS = listOf("Stop", "Notification", "PostToolUse", "PostToolUseFailure")
 
 /** POSIX single quoting: the agents run hook commands through a shell. */
 internal fun shellQuote(value: String) = "'" + value.replace("'", "'\"'\"'") + "'"

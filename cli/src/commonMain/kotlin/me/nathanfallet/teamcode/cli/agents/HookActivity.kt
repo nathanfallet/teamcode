@@ -31,7 +31,7 @@ internal object HookActivity {
             when (text("hook_event_name")) {
                 "Stop" -> WAITING
                 "Notification" -> WAITING.takeIf { text("notification_type") in ASKING }
-                "UserPromptSubmit", "PostToolUse" -> WORKING
+                "UserPromptSubmit", "PostToolUse", "PostToolUseFailure" -> WORKING
                 else -> null
             }
         }
@@ -70,18 +70,16 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
      * piles up one waiting handler per hook.
      */
     suspend fun report(runId: String, state: String) {
-        if (!lock.tryLock()) { pendingLock.withLock { pending[runId] = state }; return }
-        try {
-            var next: Pair<String, String>? = runId to state
-            while (next != null) {
-                send(next.first, next.second)
-                next = pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value }?.also { pending.remove(it.first) } }
-            }
-        } finally { lock.unlock() }
-        // A hook that found the lock taken just after the last drain left its state behind: send it now.
-        pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value } }?.let { (run, latest) ->
-            pendingLock.withLock { if (pending[run] == latest) pending.remove(run) }
-            report(run, latest)
+        pendingLock.withLock { pending[runId] = state }
+        // Enqueue first, then try to be the sender: a state queued while another report finishes is picked up by the loop.
+        while (lock.tryLock()) {
+            try {
+                while (true) {
+                    val next = pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value }?.also { pending.remove(it.first) } } ?: break
+                    send(next.first, next.second)
+                }
+            } finally { lock.unlock() }
+            if (pendingLock.withLock { pending.isEmpty() }) return
         }
     }
     private suspend fun send(runId: String, state: String) {

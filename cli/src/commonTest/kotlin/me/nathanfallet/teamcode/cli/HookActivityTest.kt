@@ -18,6 +18,7 @@ class HookActivityTest {
     @Test fun promptsAndToolResultsMeanTheAgentWorks() {
         assertEquals("working", state("""{"hook_event_name":"UserPromptSubmit","prompt":"secret"}"""))
         assertEquals("working", state("""{"hook_event_name":"PostToolUse","tool_name":"Bash"}"""))
+        assertEquals("working", state("""{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}"""))
     }
 
     @Test fun otherEventsAndBadPayloadsSayNothing() {
