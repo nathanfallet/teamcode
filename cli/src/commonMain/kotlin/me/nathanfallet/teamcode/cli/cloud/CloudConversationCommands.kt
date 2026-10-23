@@ -11,6 +11,7 @@ import com.github.ajalt.clikt.parameters.types.long
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
@@ -26,7 +27,7 @@ private fun JsonObject.text(name: String) = (this[name] as? JsonPrimitive)?.take
  * Agent-chosen text shown to whoever decides a request: control characters (escape sequences, carriage returns) and
  * invisible format characters (bidirectional overrides, zero-width marks, line separators) become spaces.
  */
-private fun String.printable(): String = buildString {
+internal fun String.printable(): String = buildString {
     var i = 0
     while (i < this@printable.length) {
         val c = this@printable[i]
@@ -47,7 +48,7 @@ private val BLANK_FILLERS = setOf('\u115F', '\u1160', '\u3164', '\uFFA0', '\u280
 /** The format characters outside the basic plane (Unicode 15). */
 private val HIDDEN_SUPPLEMENTARY = listOf(0x110BD..0x110BD, 0x110CD..0x110CD, 0x13430..0x1343F, 0x1BCA0..0x1BCA3, 0x1D173..0x1D17A, 0xE0000..0xE007F, 0xE0100..0xE01EF)
 /** Agent text quoted, so a label cannot pass for more options or indexes. */
-private fun String.quoted() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+internal fun String.quoted() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 private fun JsonElement?.isTrue() = (this as? JsonPrimitive)?.booleanOrNull == true
 private val HIDDEN = setOf(CharCategory.FORMAT, CharCategory.LINE_SEPARATOR, CharCategory.PARAGRAPH_SEPARATOR, CharCategory.SPACE_SEPARATOR)
 private fun String.preview(limit: Int) = replace('\n', ' ').let { if (it.length > limit) it.take(limit - 1) + "…" else it }
@@ -225,7 +226,9 @@ internal class CloudAnswer : SuspendingCliktCommand(name = "answer") {
  * detaches; the session keeps running. Network failures reconnect from the last printed event.
  */
 internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
-    override fun help(context: Context) = "Attach to a session: follow its transcript and send each input line as a message. /interrupt stops the current turn; /detach or end of input detaches."
+    override fun help(context: Context) = "Attach to a session: follow its transcript and send each input line as a message. While the agent asks a question, " +
+        "a line answers it: an option index (several separated by commas for a multi-select question) or your own answer. /allow or /deny [reason] " +
+        "decides a permission request, /message TEXT sends a message whatever waits, /interrupt stops the current turn; /detach or end of input detaches."
     private val id by argument()
     private val tail by option("--tail", help = "Recent events to show first (default 20).").int().default(20)
     private val readOnly by option("--read-only", help = "Only follow the transcript.").flag()
@@ -237,13 +240,16 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
             val canSend = !readOnly && CloudPermissions.MESSAGE in lease.permissions
             echo("Attached to $id." + if (canSend) " Type a message and press Enter; /interrupt, /detach." else " Read-only.", err = true)
             val notice: (String) -> Unit = { echo(it, err = true) }
+            // Requests and questions still open, so a typed line can answer them. Only touched from this thread.
+            val requests = AttachRequests()
             val last = client.cloudEvents(id, after = 0, limit = 1).lastSeq
             var cursor = (last - tail).coerceAtLeast(0)
             while (cursor < last) {
                 val page = client.cloudEvents(id, after = cursor, limit = 200)
-                page.events.forEach { echo(it.render()) }
+                page.events.forEach { echo(it.render()); requests.observe(it) }
                 cursor = page.events.lastOrNull()?.seq ?: break
             }
+            if (canSend) requests.prompt()?.let(notice)
             // False when the transcript stopped on an event this version cannot read: detach, then exit 1.
             var readable = true
             coroutineScope {
@@ -262,27 +268,41 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                             catch (_: Exception) { lease }
                     }
                 }
-                val follow = launch { readable = followEvents(client, id, cursor, { echo(it.render()) }, notice) }
+                val follow = launch {
+                    readable = followEvents(client, id, cursor, { event ->
+                        echo(event.render())
+                        requests.observe(event)?.takeIf { canSend }?.let(notice)
+                    }, notice)
+                }
                 // Not a child of this scope: a blocked stdin read cannot be cancelled and must not hold the detach.
-                val input = CoroutineScope(Dispatchers.Default).launch {
-                    while (isActive) {
-                        val line = withContext(Dispatchers.IO) { readlnOrNull() } ?: break
+                // It only reads; the lines are handled here, on the thread that follows the transcript.
+                val lines = Channel<String>()
+                val reader = CoroutineScope(Dispatchers.Default).launch {
+                    while (isActive) lines.send(withContext(Dispatchers.IO) { readlnOrNull() } ?: break)
+                    lines.close()
+                }
+                val input = launch {
+                    for (line in lines) {
                         when {
                             line.isBlank() -> Unit
                             line.trim() == "/detach" -> break
                             !canSend -> notice("This attachment is read-only.")
                             line.trim() == "/interrupt" -> try { notice(client.interruptCloudSession(id, Uuid.random().toString()).line()) }
                                 catch (error: TeamCodeException) { notice("Interrupt refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
-                            else -> try {
-                                val sent = sendWithRetry(client, id, SendCloudMessageRequest(line, wake = !noWake), Uuid.random().toString(), notice)
-                                if (sent.woke) notice("The session was paused and is resuming.")
-                            } catch (error: TeamCodeException) { notice("Message refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
+                            else -> when (val action = requests.handle(line)) {
+                                is AttachAction.Notice -> notice(action.text)
+                                is AttachAction.Answer -> answer(client, id, requests, action, notice)
+                                is AttachAction.Message -> try {
+                                    val sent = sendWithRetry(client, id, SendCloudMessageRequest(action.text, wake = !noWake), Uuid.random().toString(), notice)
+                                    if (sent.woke) notice("The session was paused and is resuming.")
+                                } catch (error: TeamCodeException) { notice("Message refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
+                            }
                         }
                     }
                 }
                 // Whichever ends first (the session ended, or the member detached) ends the attachment.
                 select(follow, input)
-                renew.cancel(); follow.cancel(); input.cancel()
+                renew.cancel(); follow.cancel(); input.cancel(); reader.cancel()
             }
             try { client.detachCloudSession(id, lease.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
             echo("Detached; the session keeps running.", err = true)
@@ -290,6 +310,36 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
         }
         // A blocked stdin read cannot be cancelled; leave without waiting for it.
         SystemExit.exit(0)
+    }
+
+    /**
+     * Sends a typed answer with one idempotency key, retrying network failures like a message. A refusal that leaves the
+     * request open (an index it does not have) lets the member type it again; one that closes it says why.
+     */
+    private suspend fun answer(client: TeamCodeClient, id: String, requests: AttachRequests, action: AttachAction.Answer, notice: (String) -> Unit) {
+        val request = action.request.requestId
+        val key = Uuid.random().toString()
+        var wait = 1_000L
+        repeat(5) { attempt ->
+            try {
+                val input = client.answerCloudPermission(id, action.request, key)
+                requests.sent(request, input.id)
+                notice(action.summary)
+                return
+            } catch (error: CancellationException) { throw error }
+            catch (error: TeamCodeException) {
+                if (error.statusCode in 400..499 && error.statusCode != 408 && error.statusCode != 429) {
+                    if (error.statusCode == 409 || error.statusCode == 404) requests.close(request) else requests.reopen(request)
+                    notice("Answer refused (${error.code ?: "HTTP ${error.statusCode}"}).")
+                    requests.prompt()?.let(notice)
+                    return
+                }
+            } catch (_: Exception) { }
+            if (attempt < 4) { notice("Answering failed; retrying."); delay(wait); wait *= 2 }
+        }
+        requests.reopen(request)
+        notice("The answer could not be sent.")
+        requests.prompt()?.let(notice)
     }
 
     /** A lease removed by a change of owner cannot be taken again: the caller lost access, like a denied stream. Null on a transient error. */
