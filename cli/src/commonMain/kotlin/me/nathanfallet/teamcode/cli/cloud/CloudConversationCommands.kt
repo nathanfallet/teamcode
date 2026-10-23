@@ -237,153 +237,163 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
     private val noWake by option("--no-wake", help = "Do not wake a paused session with messages.").flag()
     override suspend fun run() {
         if (tail !in 0..1_000) throw UsageError("Use --tail between 0 and 1000.")
-        sdk(loadConfig()).use { client ->
-            var lease = client.attachCloudSession(id)
-            val canSend = !readOnly && CloudPermissions.MESSAGE in lease.permissions
-            echo("Attached to $id." + if (canSend) " Type a message and press Enter; /interrupt, /detach." else " Read-only.", err = true)
-            // Requests and questions still open, so a typed line or a picker can answer them. Only touched from this thread.
-            val requests = AttachRequests()
-            val last = client.cloudEvents(id, after = 0, limit = 1).lastSeq
-            var cursor = tailStart(tail, last, { it.shown() }) { client.cloudEvents(id, before = it, limit = 200) }
-            while (cursor < last) {
-                val page = client.cloudEvents(id, after = cursor, limit = 200)
-                page.events.forEach { event -> event.printed()?.let { echo(it) }; requests.observe(event) }
-                cursor = page.events.lastOrNull()?.seq ?: break
-            }
-            // A terminal on both ends gets pickers in raw mode (Mordant, every platform); anything else reads lines
-            // and answers questions by index.
-            val terminal = Terminal()
-            val raw = if (canSend && terminal.terminalInfo.interactive) terminal.enterRawModeOrNull() else null
-            val keys = raw?.let { KeyAttach(requests, { terminal.updateSize().width }) { text -> terminal.rawPrint(text) } }
-            // Raw mode is left before any exit, so the shell gets its terminal back.
-            val leave: (Int) -> Nothing = { code -> keys?.close(); raw?.close(); SystemExit.exit(code) }
-            val notice: (String) -> Unit = keys?.let { it::print } ?: { echo(it, err = true) }
-            if (keys != null) keys.refresh() else if (canSend) requests.prompt()?.let(notice)
-            // False when the transcript stopped on an event this version cannot read: detach, then exit 1.
-            var readable = true
-            coroutineScope {
-                val renew = launch {
-                    while (isActive) {
-                        delay(20_000)
-                        lease = try { client.renewCloudAttachment(id, lease.id) }
-                            catch (error: CancellationException) { throw error }
-                            catch (error: TeamCodeException) {
-                                when {
-                                    error.statusCode == 403 || error.statusCode == 404 -> revoked(notice, leave)
-                                    error.code == "attachment_expired" -> reattach(client, id, notice, leave) ?: lease
-                                    else -> lease
-                                }
-                            }
-                            catch (_: Exception) { lease }
-                    }
-                }
-                val follow = launch {
-                    readable = followEvents(client, id, cursor, { event ->
-                        if (keys != null) { requests.observe(event); event.printed()?.let(keys::print) }
-                        else { event.printed()?.let { echo(it) }; requests.observe(event)?.takeIf { canSend }?.let(notice) }
-                    }, notice, leave)
-                }
-                /** Handles one typed line; false detaches. */
-                suspend fun line(line: String): Boolean {
-                    when {
-                        line.isBlank() -> Unit
-                        line.trim() == "/detach" -> return false
-                        !canSend -> notice("This attachment is read-only.")
-                        line.trim() == "/interrupt" -> try { notice(client.interruptCloudSession(id, Uuid.random().toString()).line()) }
-                            catch (error: TeamCodeException) { notice("Interrupt refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
-                        else -> when (val action = requests.handle(line)) {
-                            is AttachAction.Notice -> notice(action.text)
-                            is AttachAction.Answer -> answer(client, id, requests, action, notice, prompt = keys == null)
-                            is AttachAction.Message -> try {
-                                val sent = sendWithRetry(client, id, SendCloudMessageRequest(action.text, wake = !noWake), Uuid.random().toString(), notice)
-                                if (sent.woke) notice("The session was paused and is resuming.")
-                            } catch (error: TeamCodeException) { notice("Message refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
-                        }
-                    }
-                    return true
-                }
-                // Not a child of this scope: a blocked read cannot be cancelled and must not hold the detach. It only
-                // reads; the input is handled here, on the thread that follows the transcript.
-                val pressed = Channel<Key>(Channel.UNLIMITED)
-                val lines = Channel<String>()
-                val reader = CoroutineScope(Dispatchers.Default).launch {
-                    if (raw != null) withContext(Dispatchers.IO) {
-                        // Input that cannot be read any more ends the attachment like the end of input.
-                        while (isActive) { val event = try { raw.readKey() } catch (_: Exception) { break }; event.toKey()?.let { pressed.send(it) } }
-                    } else while (isActive) lines.send(withContext(Dispatchers.IO) { readlnOrNull() } ?: break)
-                    pressed.close(); lines.close()
-                }
-                val input = launch {
-                    if (keys == null) { for (typed in lines) if (!line(typed)) break; return@launch }
-                    for (key in pressed) {
-                        when (val step = keys.feed(key)) {
-                            KeyAttach.Step.Detach -> break
-                            is KeyAttach.Step.Line -> if (!line(step.text)) break
-                            is KeyAttach.Step.Send -> answer(client, id, requests, step.answer, notice, prompt = false)
-                            KeyAttach.Step.None -> Unit
-                        }
-                        keys.refresh()
-                    }
-                }
-                // Whichever ends first (the session ended, or the member detached) ends the attachment.
-                select(follow, input)
-                renew.cancel(); follow.cancel(); input.cancel(); reader.cancel()
-            }
-            keys?.close(); raw?.close()
-            try { client.detachCloudSession(id, lease.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
-            echo("Detached; the session keeps running.", err = true)
-            if (!readable) SystemExit.exit(1)
-        }
-        // A blocked stdin read cannot be cancelled; leave without waiting for it.
-        SystemExit.exit(0)
+        sdk(loadConfig()).use { client -> attachToSession(client, id, tail, readOnly, noWake, { echo(it) }, { echo(it, err = true) }) }
     }
+}
 
-    /**
-     * Sends a typed answer with one idempotency key, retrying network failures like a message. A refusal that leaves the
-     * request open (an index it does not have) lets the member type it again; one that closes it says why.
-     */
-    private suspend fun answer(client: TeamCodeClient, id: String, requests: AttachRequests, action: AttachAction.Answer, notice: (String) -> Unit, prompt: Boolean) {
-        val request = action.request.requestId
-        val key = Uuid.random().toString()
-        var wait = 1_000L
-        repeat(5) { attempt ->
-            try {
-                val input = client.answerCloudPermission(id, action.request, key)
-                requests.sent(request, input.id)
-                notice(action.summary)
+/**
+ * The attachment of [CloudAttach], also used by `teamcode remote start --attach` and `resume --attach`. Never returns:
+ * a blocked stdin read cannot be cancelled, so it exits the process once detached (1 when the transcript stopped on
+ * an event this version cannot read, or when access was revoked).
+ */
+internal suspend fun attachToSession(client: TeamCodeClient, id: String, tail: Int, readOnly: Boolean, noWake: Boolean,
+    echo: (String) -> Unit, notice: (String) -> Unit): Nothing {
+    var lease = client.attachCloudSession(id)
+    val canSend = !readOnly && CloudPermissions.MESSAGE in lease.permissions
+    notice("Attached to $id." + if (canSend) " Type a message and press Enter; /interrupt, /detach." else " Read-only.")
+    // A remote session of this device: a message that wakes it also starts its host here.
+    val wakeHost = if (canSend && !noWake) me.nathanfallet.teamcode.cli.remote.localHostWaker(client, id, notice) else null
+    // Requests and questions still open, so a typed line or a picker can answer them. Only touched from this thread.
+    val requests = AttachRequests()
+    val last = client.cloudEvents(id, after = 0, limit = 1).lastSeq
+    var cursor = tailStart(tail, last, { it.shown() }) { client.cloudEvents(id, before = it, limit = 200) }
+    while (cursor < last) {
+        val page = client.cloudEvents(id, after = cursor, limit = 200)
+        page.events.forEach { event -> event.printed()?.let { echo(it) }; requests.observe(event) }
+        cursor = page.events.lastOrNull()?.seq ?: break
+    }
+    // A terminal on both ends gets pickers in raw mode (Mordant, every platform); anything else reads lines and
+    // answers questions by index.
+    val terminal = Terminal()
+    val raw = if (canSend && terminal.terminalInfo.interactive) terminal.enterRawModeOrNull() else null
+    val keys = raw?.let { KeyAttach(requests, { terminal.updateSize().width }) { text -> terminal.rawPrint(text) } }
+    // Raw mode is left before any exit, so the shell gets its terminal back.
+    val leave: (Int) -> Nothing = { code -> keys?.close(); raw?.close(); SystemExit.exit(code) }
+    val say: (String) -> Unit = keys?.let { it::print } ?: notice
+    if (keys != null) keys.refresh() else if (canSend) requests.prompt()?.let(say)
+    // False when the transcript stopped on an event this version cannot read: detach, then exit 1.
+    var readable = true
+    coroutineScope {
+        val renew = launch {
+            while (isActive) {
+                delay(20_000)
+                lease = try { client.renewCloudAttachment(id, lease.id) }
+                    catch (error: CancellationException) { throw error }
+                    catch (error: TeamCodeException) {
+                        when {
+                            error.statusCode == 403 || error.statusCode == 404 -> revoked(say, leave)
+                            error.code == "attachment_expired" -> reattach(client, id, say, leave) ?: lease
+                            else -> lease
+                        }
+                    }
+                    catch (_: Exception) { lease }
+            }
+        }
+        val follow = launch {
+            readable = followEvents(client, id, cursor, { event ->
+                if (keys != null) { requests.observe(event); event.printed()?.let(keys::print) }
+                else { event.printed()?.let { echo(it) }; requests.observe(event)?.takeIf { canSend }?.let(say) }
+            }, say, leave)
+        }
+        /** Handles one typed line; false detaches. */
+        suspend fun line(line: String): Boolean {
+            when {
+                line.isBlank() -> Unit
+                line.trim() == "/detach" -> return false
+                !canSend -> say("This attachment is read-only.")
+                line.trim() == "/interrupt" -> try { say(client.interruptCloudSession(id, Uuid.random().toString()).line()) }
+                    catch (error: TeamCodeException) { say("Interrupt refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
+                else -> when (val action = requests.handle(line)) {
+                    is AttachAction.Notice -> say(action.text)
+                    is AttachAction.Answer -> answerRequest(client, id, requests, action, say, prompt = keys == null)
+                    is AttachAction.Message -> try {
+                        val sent = sendWithRetry(client, id, SendCloudMessageRequest(action.text, wake = !noWake), Uuid.random().toString(), say)
+                        if (sent.woke) { say("The session was paused and is resuming."); wakeHost?.invoke() }
+                    } catch (error: TeamCodeException) { say("Message refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
+                }
+            }
+            return true
+        }
+        // Not a child of this scope: a blocked read cannot be cancelled and must not hold the detach. It only reads;
+        // the input is handled here, on the thread that follows the transcript.
+        val pressed = Channel<Key>(Channel.UNLIMITED)
+        val lines = Channel<String>()
+        val reader = CoroutineScope(Dispatchers.Default).launch {
+            if (raw != null) withContext(Dispatchers.IO) {
+                // Input that cannot be read any more ends the attachment like the end of input.
+                while (isActive) { val event = try { raw.readKey() } catch (_: Exception) { break }; event.toKey()?.let { pressed.send(it) } }
+            } else while (isActive) lines.send(withContext(Dispatchers.IO) { readlnOrNull() } ?: break)
+            pressed.close(); lines.close()
+        }
+        val input = launch {
+            if (keys == null) { for (typed in lines) if (!line(typed)) break; return@launch }
+            for (key in pressed) {
+                when (val step = keys.feed(key)) {
+                    KeyAttach.Step.Detach -> break
+                    is KeyAttach.Step.Line -> if (!line(step.text)) break
+                    is KeyAttach.Step.Send -> answerRequest(client, id, requests, step.answer, say, prompt = false)
+                    KeyAttach.Step.None -> Unit
+                }
+                keys.refresh()
+            }
+        }
+        // Whichever ends first (the session ended, or the member detached) ends the attachment.
+        select(follow, input)
+        renew.cancel(); follow.cancel(); input.cancel(); reader.cancel()
+    }
+    keys?.close(); raw?.close()
+    try { client.detachCloudSession(id, lease.id) } catch (error: CancellationException) { throw error } catch (_: Exception) { }
+    notice("Detached; the session keeps running.")
+    if (!readable) SystemExit.exit(1)
+    // A blocked stdin read cannot be cancelled; leave without waiting for it.
+    SystemExit.exit(0)
+}
+
+/**
+ * Sends a typed answer with one idempotency key, retrying network failures like a message. A refusal that leaves the
+ * request open (an index it does not have) lets the member type it again; one that closes it says why.
+ */
+private suspend fun answerRequest(client: TeamCodeClient, id: String, requests: AttachRequests, action: AttachAction.Answer, notice: (String) -> Unit, prompt: Boolean) {
+    val request = action.request.requestId
+    val key = Uuid.random().toString()
+    var wait = 1_000L
+    repeat(5) { attempt ->
+        try {
+            val input = client.answerCloudPermission(id, action.request, key)
+            requests.sent(request, input.id)
+            notice(action.summary)
+            return
+        } catch (error: CancellationException) { throw error }
+        catch (error: TeamCodeException) {
+            if (error.statusCode in 400..499 && error.statusCode != 408 && error.statusCode != 429) {
+                if (error.statusCode == 409 || error.statusCode == 404) requests.close(request) else requests.reopen(request)
+                notice("Answer refused (${error.code ?: "HTTP ${error.statusCode}"}).")
+                if (prompt) requests.prompt()?.let(notice)
                 return
-            } catch (error: CancellationException) { throw error }
-            catch (error: TeamCodeException) {
-                if (error.statusCode in 400..499 && error.statusCode != 408 && error.statusCode != 429) {
-                    if (error.statusCode == 409 || error.statusCode == 404) requests.close(request) else requests.reopen(request)
-                    notice("Answer refused (${error.code ?: "HTTP ${error.statusCode}"}).")
-                    if (prompt) requests.prompt()?.let(notice)
-                    return
-                }
-            } catch (_: Exception) { }
-            if (attempt < 4) { notice("Answering failed; retrying."); delay(wait); wait *= 2 }
-        }
-        requests.reopen(request)
-        notice("The answer could not be sent.")
-        if (prompt) requests.prompt()?.let(notice)
+            }
+        } catch (_: Exception) { }
+        if (attempt < 4) { notice("Answering failed; retrying."); delay(wait); wait *= 2 }
     }
+    requests.reopen(request)
+    notice("The answer could not be sent.")
+    if (prompt) requests.prompt()?.let(notice)
+}
 
-    /** A lease removed by a change of owner cannot be taken again: the caller lost access, like a denied stream. Null on a transient error. */
-    private suspend fun reattach(client: TeamCodeClient, id: String, notice: (String) -> Unit, leave: (Int) -> Nothing): CloudAttachmentView? =
-        try { client.attachCloudSession(id) }
-        catch (error: CancellationException) { throw error }
-        catch (error: TeamCodeException) { if (error.statusCode == 403 || error.statusCode == 404) revoked(notice, leave) else null }
-        catch (_: Exception) { null }
+/** A lease removed by a change of owner cannot be taken again: the caller lost access, like a denied stream. Null on a transient error. */
+private suspend fun reattach(client: TeamCodeClient, id: String, notice: (String) -> Unit, leave: (Int) -> Nothing): CloudAttachmentView? =
+    try { client.attachCloudSession(id) }
+    catch (error: CancellationException) { throw error }
+    catch (error: TeamCodeException) { if (error.statusCode == 403 || error.statusCode == 404) revoked(notice, leave) else null }
+    catch (_: Exception) { null }
 
-    private fun revoked(notice: (String) -> Unit, leave: (Int) -> Nothing): Nothing {
-        notice("Access to this session was revoked.")
-        leave(1)
-    }
+private fun revoked(notice: (String) -> Unit, leave: (Int) -> Nothing): Nothing {
+    notice("Access to this session was revoked.")
+    leave(1)
+}
 
-    private suspend fun select(a: Job, b: Job) {
-        val done = CompletableDeferred<Unit>()
-        a.invokeOnCompletion { done.complete(Unit) }
-        b.invokeOnCompletion { done.complete(Unit) }
-        done.await()
-    }
+private suspend fun select(a: Job, b: Job) {
+    val done = CompletableDeferred<Unit>()
+    a.invokeOnCompletion { done.complete(Unit) }
+    b.invokeOnCompletion { done.complete(Unit) }
+    done.await()
 }

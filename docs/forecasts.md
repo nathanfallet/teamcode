@@ -52,4 +52,4 @@ For opt-in real-browser acceptance with Node 22+ and Chrome installed:
 
 Set `TEAMCODE_CHROME_BINARY` if Chrome is installed elsewhere. The task creates owned tmpfs MySQL/Netty fixtures and an isolated Chrome profile; an ephemeral test session travels through a private pipe, never command arguments or browser URLs. It tests actual CSP/script execution, escaped labels, connection rotation/reconnect, pause/resume, pending selection preservation, hidden-tab suspension and revocation through another database pool. Output is `app/build/preview/forecasts-live.png`, with a metadata-only test log beside it. All fixture servers, containers and the exact owned browser are closed afterward. It never reuses a personal browser profile or connects to a model provider. This optional task is not added to ordinary CI or any native matrix.
 
-See [current evidence](status.md). Sustained real-agent forecast accuracy, outside-spend attribution, wider browser acceptance and the other V1 requirements remain open.
+Sustained real-agent forecast accuracy, outside-spend attribution, wider browser acceptance and the other V1 requirements remain open.

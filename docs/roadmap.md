@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-This is the target sequence; see [V1 progress](progress.md) for the current overview and [status](status.md) for actual evidence. Estimates are planning ranges for a developer familiar with Kotlin/KMP, not a deadline or a claim about agent throughput.
+This is the target sequence; see [V1 progress](progress.md) for the current overview. Estimates are planning ranges for a developer familiar with Kotlin/KMP, not a deadline or a claim about agent throughput.
 
 | Milestone | Deliverable | Exit evidence | Rough effort |
 | --- | --- | --- | --- |
@@ -109,7 +109,7 @@ Acceptance direction: create sessions by API and CLI using a selected custom too
 
 ### API keys and proxy observability for automation
 
-Implemented (V2 code). See [service keys](service-keys.md), [cloud sessions](cloud-sessions.md), [`teamcode status`](capacity.md#teamcode-status) and the [audit journal](audit.md); evidence in [status](status.md#api-keys-and-status-json-acceptance-2026-10-22).
+Implemented (V2 code). See [service keys](service-keys.md), [cloud sessions](cloud-sessions.md), [`teamcode status`](capacity.md#teamcode-status) and the [audit journal](audit.md).
 
 - Members and administrators create, list and revoke keys through **Dashboard → Service keys**, `teamcode keys` and `/api/v1/service-keys` (administrators also for another member). A key has explicit scopes, an expiry of 1–90 days (or none, created by an administrator only), and metadata-only audit of its creator and owner. Personal scopes (`cloud:read`, `cloud:write`, `usage:read`, …) act as the key's owner alone, even on an administrator's key; supplying another member (`TeamCode-On-Behalf-Of`, `?member=`, `?owner=`) is refused. Only an administrator's key can hold `admin:cloud`, which creates, drives and transfers cloud sessions on behalf of any member, or `team:read`, the read-only operational view of the whole team.
 - A session created or transferred by an orchestrator's key records the initiator (the key's owner and the key's ID) separately from the effective member, who owns the session and is charged for its work; the journal keeps both. The key and its owner's role and state are rechecked in shared SQL state on every call, so a revocation, a role change, a disabled owner or a password reset ends the key at once on every replica. A running inference request and an open transcript stream also end at their next check after a revocation, and a former owner loses a transferred session's transcript.

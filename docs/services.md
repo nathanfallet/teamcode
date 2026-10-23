@@ -66,7 +66,7 @@ Each `run` invocation can select `--workload background` before the agent argume
 
 This test exercises the actual OS service manager. Add `--at-boot` to test an owned boot registration with pre-authorized sudo; macOS also verifies root-owned manifest installation and cleanup. Existing full native jobs run both modes on macOS/Linux. It does not reboot the workstation. Windows password-backed boot registration needs a separate authorized workstation check.
 
-`scripts/smoke-windows.py` separately runs the Windows executable, inspects real NTFS ACLs, checks Unicode paths/arguments and standard npm agent entry points, then exercises Task Scheduler installation, reuse, draining, restart and cleanup. Windows support is required for V1; its current evidence is recorded in [status](status.md).
+`scripts/smoke-windows.py` separately runs the Windows executable, inspects real NTFS ACLs, checks Unicode paths/arguments and standard npm agent entry points, then exercises Task Scheduler installation, reuse, draining, restart and cleanup. Windows support is required for V1.
 
 Platform references: [Apple LaunchAgents](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html), [systemd service execution](https://www.freedesktop.org/software/systemd/man/262/systemd.service.html). Ktor's [Native server startup](https://github.com/ktorio/ktor/blob/3.6.0/ktor-server/ktor-server-core/posix/src/io/ktor/server/engine/EmbeddedServer.posix.kt) installs its own signal callback; TeamCode installs its service handler after startup so shutdown also exits the outer CLI loop.
 
