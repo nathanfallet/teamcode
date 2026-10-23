@@ -94,8 +94,9 @@ private fun JsonElement?.pretty(): String = if (this == null) "" else prettyJson
 private fun toolSummary(input: JsonElement?): String? {
     val fields = input as? JsonObject ?: return null
     val value = SUMMARY_FIELDS.firstNotNullOfOrNull { fields.text(it)?.takeIf(String::isNotBlank) } ?: return null
-    val line = value.lineSequence().first().trim()
-    return if (line.length > 160 || value.trim().contains('\n')) line.take(160) + "…" else line
+    val trimmed = value.trim()
+    val line = trimmed.lineSequence().first().trim()
+    return if (line.length > 160 || trimmed.contains('\n')) line.take(160) + "…" else line
 }
 
 private val SUMMARY_FIELDS = listOf("command", "file_path", "path", "pattern", "url", "query", "description", "prompt")

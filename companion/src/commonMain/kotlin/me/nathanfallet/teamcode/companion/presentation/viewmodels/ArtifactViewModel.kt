@@ -57,6 +57,7 @@ class ArtifactViewModel(
     private val state = MutableStateFlow(ArtifactUiState(version = route.version))
     val uiState: StateFlow<ArtifactUiState> = state.asStateFlow()
     private var ticket: Job? = null
+    private var loading: Job? = null
     private var watch: Job? = null
     /** When the last silent reload of a crashed page happened: at most one a minute, so a failing page never loops. */
     private var renewedAt: TimeMark? = null
@@ -66,7 +67,9 @@ class ArtifactViewModel(
     fun load() {
         renewedAt = null
         state.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
+        // The latest load wins: an earlier, slower one never puts its older answer back.
+        loading?.cancel()
+        loading = viewModelScope.launch {
             try {
                 val (artifact, versions, viewerUrl) = getArtifact(route.accountId, route.artifactId)
                 val version = state.value.version ?: artifact.currentVersion

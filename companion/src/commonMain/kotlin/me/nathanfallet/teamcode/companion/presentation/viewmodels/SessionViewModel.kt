@@ -237,8 +237,8 @@ class SessionViewModel(
         interruptKey = null
         if (!interrupted) state.update { it.copy(notice = SessionNotice.NothingRunning) }
     }
-    fun pause() = act { val session = control.pause(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
-    fun resume() = act { val session = control.resume(route.accountId, route.sessionId); state.update { it.copy(session = session) } }
+    fun pause() = act { val session = control.pause(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
+    fun resume() = act { val session = control.resume(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
 
     private fun act(action: suspend () -> Unit) {
         if (state.value.acting) return
@@ -285,8 +285,13 @@ class SessionViewModel(
         const val HEADER_MILLIS = 30_000L
     }
 
+    /** Bumped by each action's answer: a header read that started before it is older and is dropped. */
+    private var actions = 0
+
     private suspend fun refreshSession() {
+        val asked = actions
         val session = getSession(route.accountId, route.sessionId)
+        if (asked != actions) return
         val account = accounts.accounts.value.firstOrNull { it.id == route.accountId }
         state.update { it.copy(session = session, canControl = account != null && ControlSessionUseCase.canControl(account, session)) }
     }
