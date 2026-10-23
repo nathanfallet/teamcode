@@ -68,7 +68,8 @@ platform :ios do
 
     # Automatic signing with the App Store Connect key (cloud signing): no certificate needs to be in the keychain.
     asc = JSON.parse(File.read(fastlane_file("api_key.json")))
-    # The export needs a distribution profile too: it gets the same key and may create it.
+    # gym passes xcargs to the export too, so the distribution profile gets the same key without export_xcargs
+    # (xcodebuild refuses an -authenticationKey* option given twice).
     authentication = [
       "-allowProvisioningUpdates",
       "-authenticationKeyPath #{fastlane_file('key.p8').shellescape}",
@@ -87,7 +88,6 @@ platform :ios do
         "ORG_GRADLE_PROJECT_teamcodeVersion=#{version}",
         *authentication,
       ].join(" "),
-      export_xcargs: authentication.join(" "),
     )
 
     upload_to_testflight(
