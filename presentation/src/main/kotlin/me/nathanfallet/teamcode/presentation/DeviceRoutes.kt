@@ -7,7 +7,11 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.team.*
 import java.time.Instant
 
-private fun Device.view() = DeviceView(id, memberId, name, createdAt, lastLoginAt, activeSessions, current)
+private fun Device.view() = DeviceView(id, memberId, name, createdAt, lastLoginAt, activeSessions, current, platform, osVersion)
+private val platformNames = mapOf("macos" to "macOS", "windows" to "Windows", "linux" to "Linux", "ios" to "iOS", "android" to "Android")
+/** "macOS 15.1", or null until the installation reported its system. */
+internal fun systemName(platform: String?, osVersion: String?): String? =
+    platform?.let { (platformNames[it] ?: it) + (osVersion?.let { version -> " $version" } ?: "") }
 private fun MemberSession.view() = AuthSessionView(id, memberId, name, deviceId, createdAt, expiresAt, current)
 private fun devicesPath(actor: Principal, member: String) = if (actor.member.id == member) "/dashboard/devices" else "/dashboard/members/$member/devices"
 private fun date(value: Long?) = value?.let { Instant.ofEpochMilli(it).toString() } ?: "Unknown (older session)"
@@ -30,7 +34,7 @@ internal fun Route.deviceRoutes(devices: DeviceService, origin: String) {
             val member = call.parameters["memberId"] ?: actor.member.id
             val path = devicesPath(actor, member)
             val rows = devices.devices(actor, member).joinToString("") { device ->
-                """<tr><td>${escape(device.name)}${if (device.current) " <small>Current device</small>" else ""}<br><small>Registered ${date(device.createdAt)}</small></td><td>${date(device.lastLoginAt)}<br><small>${device.activeSessions} active sessions</small></td><td><form method="post" action="$path/${escape(device.id)}/rename">${csrf(actor)}<label>Device name <input name="name" value="${escape(device.name)}" maxlength="120" required></label><button>Rename</button></form><form method="post" action="$path/${escape(device.id)}/revoke">${csrf(actor)}<button>Revoke and remove device</button></form></td></tr>"""
+                """<tr><td>${escape(device.name)}${if (device.current) " <small>Current device</small>" else ""}<br><small>${systemName(device.platform, device.osVersion)?.let { escape(it) + " · " } ?: ""}Registered ${date(device.createdAt)}</small></td><td>${date(device.lastLoginAt)}<br><small>${device.activeSessions} active sessions</small></td><td><form method="post" action="$path/${escape(device.id)}/rename">${csrf(actor)}<label>Device name <input name="name" value="${escape(device.name)}" maxlength="120" required></label><button>Rename</button></form><form method="post" action="$path/${escape(device.id)}/revoke">${csrf(actor)}<button>Revoke and remove device</button></form></td></tr>"""
             }
             val sessions = devices.sessions(actor, member).joinToString("") { session ->
                 """<tr><td>${escape(session.name)}${if (session.current) " <small>Current session</small>" else ""}<br><small>${if (session.deviceId == null) "Browser or older client" else "Registered device"}</small></td><td>${date(session.createdAt)}</td><td>${date(session.expiresAt)}</td><td><form method="post" action="$path/sessions/${escape(session.id)}/revoke">${csrf(actor)}<button>Revoke session</button></form></td></tr>"""

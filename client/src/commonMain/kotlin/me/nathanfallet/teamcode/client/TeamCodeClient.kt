@@ -63,8 +63,10 @@ class TeamCodeClient(
         return response.body()
     }
 
-    suspend fun login(username: String, password: String, device: String = "TeamCode CLI", installationId: String? = null): LoginResponse =
-        request("/api/v1/auth/login", HttpMethod.Post, LoginRequest(username, password, device, installationId))
+    /** [platform] and [osVersion] describe the installation's system on its device; an older server ignores them. */
+    suspend fun login(username: String, password: String, device: String = "TeamCode CLI", installationId: String? = null,
+        platform: String? = null, osVersion: String? = null): LoginResponse =
+        request("/api/v1/auth/login", HttpMethod.Post, LoginRequest(username, password, device, installationId, platform, osVersion))
     suspend fun me(): MemberView = request("/api/v1/auth/me", HttpMethod.Get)
     suspend fun changePassword(current: String, replacement: String): SuccessResponse =
         request("/api/v1/auth/password", HttpMethod.Post, PasswordRequest(current, replacement))

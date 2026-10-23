@@ -45,7 +45,8 @@ class CloudRoutesTest {
         }
         override suspend fun find(teamId: String, id: String) = sessions[id]
         override suspend fun list(teamId: String, query: CloudSessionQuery) =
-            CloudSessionPage(sessions.values.filter { query.owner == null || it.ownerId == query.owner }.filter { s -> query.labels.all { (k, v) -> s.labels[k] == v } }, null)
+            CloudSessionPage(sessions.values.filter { query.owner == null || it.ownerId == query.owner }.filter { s -> query.labels.all { (k, v) -> s.labels[k] == v } }
+                .filter { query.kinds.isEmpty() || it.kind in query.kinds }, null)
         override suspend fun executions(teamId: String, sessionId: String) = emptyList<CloudExecution>()
         val runs = mutableMapOf<Pair<String, Int>, CloudExecution>()
         override suspend fun execution(sessionId: String, epoch: Int): CloudExecution? = runs[sessionId to epoch]
@@ -146,6 +147,24 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions?owner=all&label=orchestrator.task=1234") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?state=sleeping") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?limit=51") { bearerAuth("admin") }.status)
+        kindsAndHosts(client, store)
+    }
+
+    /** A list without `kind` keeps to cloud sessions, so a client from before remote sessions never receives one. */
+    private suspend fun kindsAndHosts(client: io.ktor.client.HttpClient, store: Store) {
+        val cloud = store.sessions.getValue("admin-only")
+        store.sessions["remote-one"] = cloud.copy(id = "remote-one", kind = CloudSessionKind.REMOTE,
+            host = CloudSessionHost("device-1", "teamcode", HostDevice("Work laptop", "macos", "15.1")))
+        suspend fun ids(query: String) = Serialization.json.decodeFromString<CloudSessionPageView>(
+            client.get("/api/v1/cloud/sessions?owner=all$query") { bearerAuth("admin") }.bodyAsText()).sessions
+        assertFalse(ids("").any { it.id == "remote-one" })
+        assertTrue(ids("").all { it.kind == "cloud" && it.host == null })
+        val remote = ids("&kind=remote").single()
+        assertEquals("remote-one", remote.id)
+        assertEquals(CloudSessionHostView("device-1", "Work laptop", "macos", "15.1", "teamcode"), remote.host)
+        assertEquals(setOf("admin-only", "remote-one"), ids("&kind=cloud&kind=remote").map { it.id }.filter { it in setOf("admin-only", "remote-one") }.toSet())
+        assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?kind=laptop") { bearerAuth("admin") }.status)
+        store.sessions.remove("remote-one")
     }
 
     @Test fun profilesListWhatTheMemberCanUseAndCreationTellsAMissingProfileFromAnUnassignedOne() = testApplication {

@@ -7,10 +7,14 @@ import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
 /** Called only after password verification, while holding the member row lock. */
-internal fun registerDevice(c: JdbcTransaction, member: Member, installation: String, name: String, now: Long): String {
+internal fun registerDevice(c: JdbcTransaction, member: Member, installation: String, name: String, now: Long, platform: String? = null, osVersion: String? = null): String {
     val existing = Devices.select(Devices.id).where { (Devices.memberId eq member.id) and (Devices.installationId eq installation) }.singleOrNull()?.get(Devices.id)
     if (existing != null) {
-        Devices.update({ Devices.id eq existing }) { it[lastLoginAt] = now }
+        Devices.update({ Devices.id eq existing }) {
+            it[lastLoginAt] = now
+            // An older client reports nothing: keep what a newer one reported.
+            if (platform != null) { it[Devices.platform] = platform; it[Devices.osVersion] = osVersion }
+        }
         return existing // Preserve a name edited in the dashboard.
     }
     if (Devices.select(Devices.id).where { Devices.memberId eq member.id }.count() >= DeviceService.DEVICE_LIMIT)
@@ -19,6 +23,7 @@ internal fun registerDevice(c: JdbcTransaction, member: Member, installation: St
     Devices.insert {
         it[Devices.id] = id; it[memberId] = member.id; it[installationId] = installation
         it[Devices.name] = name; it[createdAt] = now; it[lastLoginAt] = now
+        it[Devices.platform] = platform; it[Devices.osVersion] = osVersion
     }
     c.audit("default", member.id, "device.registered", id)
     return id
@@ -61,6 +66,8 @@ class SqlDeviceService(private val database: Database) : DeviceService {
         requireMember(actor, memberId, lock = true)
         // Explicit deletion documents the invariant; the FK also protects against orphan tokens.
         Tokens.deleteWhere { Tokens.deviceId eq deviceId }
+        // Remote sessions keep their transcript but lose their host (the foreign key's own index finds them).
+        CloudSessions.update({ CloudSessions.hostDeviceId eq deviceId }) { it[hostDeviceId] = null }
         Devices.deleteWhere { Devices.id eq deviceId }
         audit(actor.teamId, actor.member.id, "device.revoked", deviceId)
         memberId
@@ -91,6 +98,7 @@ class SqlDeviceService(private val database: Database) : DeviceService {
     private fun sessionRows(member: String, now: Long) = Tokens.select(Tokens.id, Tokens.memberId, Tokens.device, Tokens.deviceId, Tokens.createdAt, Tokens.expiresAt)
         .where { (Tokens.memberId eq member) and (Tokens.expiresAt greater now) and Tokens.serviceScopes.isNull() }
         .orderBy(Tokens.expiresAt to SortOrder.DESC, Tokens.id to SortOrder.ASC).limit(50).toList()
-    private fun ResultRow.device(active: Int, current: Boolean) = Device(get(Devices.id), get(Devices.memberId), get(Devices.name), get(Devices.createdAt), get(Devices.lastLoginAt), active, current)
+    private fun ResultRow.device(active: Int, current: Boolean) = Device(get(Devices.id), get(Devices.memberId), get(Devices.name), get(Devices.createdAt), get(Devices.lastLoginAt), active, current,
+        get(Devices.platform), get(Devices.osVersion))
     private fun missing() = TeamFailure("not_found", 404, "Device or session not found.")
 }

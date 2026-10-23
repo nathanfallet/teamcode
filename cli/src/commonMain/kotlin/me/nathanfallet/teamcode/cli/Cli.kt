@@ -51,14 +51,14 @@ private class Login : SuspendingCliktCommand(name = "login") {
         val name = username ?: read("Username")
         var password = read("Password", secret = true)
         val installation = InstallationStore().id()
-        var session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation) }
+        var session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation, hostOs()) }
         if (session.member.passwordChangeRequired) {
             echo("Choose a new password with at least 14 characters. This will sign out all existing sessions.")
             val replacement = read("New password", secret = true)
             if (replacement != read("Confirm new password", secret = true)) throw CliUserException("Passwords do not match. Run teamcode login again.")
             sdk(CliConfig(origin, session.accessToken)).use { it.changePassword(password, replacement) }
             password = replacement
-            session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation) }
+            session = sdk(CliConfig(origin, "unauthenticated")).use { it.login(name, password, device, installation, hostOs()) }
         }
         ConfigStore().save(CliConfig(origin, session.accessToken))
         echo("Signed in as ${session.member.username}. Configuration saved to ${configPath()}.")

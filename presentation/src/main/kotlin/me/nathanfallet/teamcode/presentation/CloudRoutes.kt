@@ -21,7 +21,8 @@ internal fun CloudSession.view() = CloudSessionView(
     failure = failure?.view(), resumeBlocked = resumeBlocked?.view(),
     workspaceDeletion = CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
-    environment = environment.view(),
+    environment = environment.view(), kind = kind.wire,
+    host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName) },
 )
 internal fun CloudEnvironmentSpec.view() = CloudEnvironmentView(repositories.map { CloudRepositoryView(it.url, it.path, it.ref, it.branch) }, workingDirectory,
     CloudSetupView(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
@@ -167,7 +168,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val labels = LabelRules.parseFilter(q.getAll("label").orEmpty())
             val owner = single("owner")?.let { if (it == "all") "*" else it }
             val limit = single("limit")?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.") } ?: 50
-            val page = sessions.list(call.principal, CloudSessionQuery(owner, states, labels, single("before"), limit))
+            // Without `kind`, cloud sessions only: a client from before remote sessions never lists one it cannot show.
+            val kinds = q.getAll("kind")?.map { value -> CloudSessionKind.entries.find { it.wire == value } ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud or kind=remote.") }?.toSet()
+                ?: setOf(CloudSessionKind.CLOUD)
+            val page = sessions.list(call.principal, CloudSessionQuery(owner, states, labels, single("before"), limit, kinds))
             call.respond(CloudSessionPageView(page.sessions.map { it.view() }, page.nextBeforeId))
         }
         get("/sessions/{id}") { call.respond(sessions.get(call.principal, call.id()).view()) }
