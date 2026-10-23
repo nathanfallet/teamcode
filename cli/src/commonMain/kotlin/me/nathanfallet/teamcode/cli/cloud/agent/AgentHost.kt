@@ -244,7 +244,7 @@ internal class AgentHost(
         reader?.cancel()
         // That reader's tail, which cancels its process's timers, may never run now.
         cancelDeadlines(null)
-        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.permissionMode) }.also { settings = it }
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode) }.also { settings = it }
         val stored = state.read()
         val resume = stored?.takeIf { it.kind == config.kind && it.version == config.version }?.conversationId
         if (stored != null && resume == null) {
@@ -252,7 +252,7 @@ internal class AgentHost(
             state.clear()
             enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
         }
-        val next = agentAdapter(config, clientVersion)
+        val next = agentAdapter(config, clientVersion, now)
         val (command, environment) = launch(config.kind, next.command(resume))
         val child = start(command, environment, workingDirectory)
         process = child; adapter = next; resumed = resume

@@ -78,6 +78,27 @@ internal fun CloudEventView.render(): String {
     return "$time #$seq ${if (data.text("parentToolUseId") != null) "  ↳ " else ""}${body.lines().joinToString("\n") { it.printable() }}"
 }
 
+/** What `logs` and `attach` print for an event: nothing for live text deltas, whose final `message.agent` follows. */
+internal fun CloudEventView.printed(): String? = if (shown()) render() else null
+internal fun CloudEventView.shown() = type != CloudEventTypes.AGENT_MESSAGE_DELTA
+
+/**
+ * The sequence to start after so that the last [tail] events [shown] are printed: deltas are stored as events but
+ * not printed, so `last - tail` could print none. Walks back from [last] with `before` pages, at most
+ * `tail / 200 + 10` of them, then starts after the oldest event read.
+ */
+internal suspend fun tailStart(tail: Int, last: Long, shown: (CloudEventView) -> Boolean, before: suspend (Long) -> CloudEventPageView): Long {
+    if (tail == 0) return last
+    var cursor = last + 1
+    var counted = 0
+    repeat(tail / 200 + 10) {
+        val page = before(cursor)
+        for (event in page.events.asReversed()) if (shown(event) && ++counted == tail) return event.seq - 1
+        cursor = page.nextBefore ?: return 0
+    }
+    return cursor - 1
+}
+
 private fun CloudInputView.line() = listOfNotNull(id, kind, status, reason, if (woke) "woke the session" else null).joinToString("\t")
 
 internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
@@ -90,8 +111,8 @@ internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
     override suspend fun run() {
         if (tail !in 0..10_000) throw UsageError("Use --tail between 0 and 10000.")
         sdk(loadConfig()).use { client ->
-            val print: (CloudEventView) -> Unit = { echo(if (json) Serialization.json.encodeToString(it) else it.render()) }
-            var cursor = after ?: (client.cloudEvents(id, after = 0, limit = 1).lastSeq - tail).coerceAtLeast(0)
+            val print: (CloudEventView) -> Unit = { event -> (if (json) Serialization.json.encodeToString(event) else event.printed())?.let { echo(it) } }
+            var cursor = after ?: tailStart(tail, client.cloudEvents(id, after = 0, limit = 1).lastSeq, { json || it.shown() }) { client.cloudEvents(id, before = it, limit = 200) }
             while (true) {
                 val page = client.cloudEvents(id, after = cursor, limit = 200)
                 page.events.forEach(print)
@@ -223,10 +244,10 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
             // Requests and questions still open, so a typed line or a picker can answer them. Only touched from this thread.
             val requests = AttachRequests()
             val last = client.cloudEvents(id, after = 0, limit = 1).lastSeq
-            var cursor = (last - tail).coerceAtLeast(0)
+            var cursor = tailStart(tail, last, { it.shown() }) { client.cloudEvents(id, before = it, limit = 200) }
             while (cursor < last) {
                 val page = client.cloudEvents(id, after = cursor, limit = 200)
-                page.events.forEach { echo(it.render()); requests.observe(it) }
+                page.events.forEach { event -> event.printed()?.let { echo(it) }; requests.observe(event) }
                 cursor = page.events.lastOrNull()?.seq ?: break
             }
             // A terminal on both ends gets pickers in raw mode (Mordant, every platform); anything else reads lines
@@ -258,8 +279,8 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
                 }
                 val follow = launch {
                     readable = followEvents(client, id, cursor, { event ->
-                        if (keys != null) { requests.observe(event); keys.print(event.render()) }
-                        else { echo(event.render()); requests.observe(event)?.takeIf { canSend }?.let(notice) }
+                        if (keys != null) { requests.observe(event); event.printed()?.let(keys::print) }
+                        else { event.printed()?.let { echo(it) }; requests.observe(event)?.takeIf { canSend }?.let(notice) }
                     }, notice, leave)
                 }
                 /** Handles one typed line; false detaches. */

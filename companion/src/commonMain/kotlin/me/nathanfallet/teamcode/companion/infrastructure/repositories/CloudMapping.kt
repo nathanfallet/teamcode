@@ -12,6 +12,7 @@ import me.nathanfallet.teamcode.api.models.CloudEventPageView
 import me.nathanfallet.teamcode.api.models.CloudEventTypes
 import me.nathanfallet.teamcode.api.models.CloudEventView
 import me.nathanfallet.teamcode.api.models.CloudProfileView
+import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CloudSessionView
 import me.nathanfallet.teamcode.api.models.TeamEventView
 import me.nathanfallet.teamcode.companion.domain.models.AgentQuestion
@@ -19,6 +20,7 @@ import me.nathanfallet.teamcode.companion.domain.models.AgentQuestionOption
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
@@ -42,6 +44,9 @@ internal fun CloudSessionView.domain() = CloudSession(
     updatedAt = updatedAt,
     problemCode = (failure ?: resumeBlocked)?.code,
     kind = SessionKind.of(kind),
+    host = host?.takeIf { kind == CloudSessionKinds.REMOTE }?.let {
+        SessionHost(it.deviceName, it.platform, it.osVersion, it.directoryName, it.online, removed = it.deviceId == null, permissionMode = it.permissionMode)
+    },
 )
 
 internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)
@@ -57,6 +62,7 @@ internal fun TeamEventView.sessionChange(): SessionChange? {
         at = at,
         state = data.text("state")?.let(SessionState::of),
         turnPhase = if (type == "cloud.turn") data.text("phase") ?: "unknown" else null,
+        kind = data.text("kind")?.let(SessionKind::of),
     )
 }
 

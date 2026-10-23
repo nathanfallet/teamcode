@@ -141,6 +141,15 @@ object CloudSessions : Table("cloud_sessions") {
     val updatedAt = long("updated_at")
     /** The accepted transfer the session is moving toward, until its owner changed. */
     val transferId = varchar("transfer_id", 36).nullable()
+    /**
+     * The newest open permission request: written only by the conversation store, under the session row lock, with the
+     * transcript event that opens or closes it; the session store reads these columns and never writes them.
+     */
+    val awaitingReason = varchar("awaiting_reason", 16).nullable()
+    val awaitingRequestId = varchar("awaiting_request_id", 128).nullable()
+    val awaitingSince = long("awaiting_since").nullable()
+    val awaitingEventSeq = long("awaiting_event_seq").nullable()
+    val awaitingEpoch = integer("awaiting_epoch").nullable()
     /** `cloud` (a pod) or `remote` (a member's device); fixed at creation. */
     val kind = varchar("kind", 16).default("cloud")
     /** The device a remote session runs on; null for cloud sessions. */

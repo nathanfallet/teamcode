@@ -19,8 +19,10 @@ data class AgentCommand(val command: String, val arguments: List<String>)
 /**
  * Agent settings from the server (`runner/agent`). [permissionRelay]: the server takes permission requests and their
  * answers. [permissionDeadlineMinutes]: how long a request waits before the host denies it; 0 for no deadline.
+ * [liveText]: the server takes `message.agent.delta` events, so the agent's text is streamed while it is written.
  */
 data class AgentSettings(val kind: String, val version: String?, val model: String?, val effort: String?, val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0,
+    val liveText: Boolean = false,
     /**
      * A remote session's mode on its host's files (`ask` or `bypass`); null in a cloud pod, which is its own sandbox and
      * always bypasses. With `ask`, Claude Code keeps its permission checks (each request is relayed) and Codex runs in
@@ -107,8 +109,13 @@ private fun resultText(content: JsonElement?): String = when (content) {
  * skips ordinary permission checks; what remains, an `ask` permission rule or a question to the user
  * (`AskUserQuestion`), arrives as a `can_use_tool` control request. It becomes a `permission.request` event, and the
  * member's answer a `control_response`. A request is open until it is answered or its turn ends.
+ *
+ * With [AgentSettings.liveText], Claude Code also gets `--include-partial-messages`: the `text_delta` lines of a text
+ * block become `message.agent.delta` events, coalesced by [LiveText] on the clock [now]. Each `message.agent` carries
+ * its API message id (and its block index, when streamed), so a client replaces the deltas it showed with it.
  */
-class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapter {
+class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Long = { 0L }) : AgentAdapter {
+    private val live = LiveText(now)
     override var conversationId: String? = null; private set
     /**
      * Messages written since the last `result` line. Claude Code answers every message it has read with one `result`:
@@ -122,6 +129,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
         addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
         if (settings.bypass) add("--dangerously-skip-permissions")
         if (settings.permissionRelay) addAll(listOf("--permission-prompt-tool", "stdio"))
+        if (settings.liveText) add("--include-partial-messages")
         settings.model?.let { addAll(listOf("--model", it)) }
         settings.effort?.let { addAll(listOf("--effort", it)) }
         resume?.let { addAll(listOf("--resume", it)) }
@@ -137,6 +145,19 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
 
     /** A subagent's lines carry the `tool_use` id of the parent's Agent (Task) call; the main agent's carry null. */
     private fun JsonObjectBuilder.parent(line: JsonObject) { line["parent_tool_use_id"].string()?.let { put("parentToolUseId", it) } }
+
+    /**
+     * The final text's identity: its API message id, and the streamed block it ends when this line holds one text
+     * block (Claude Code writes one `assistant` line per block, before the block's `content_block_stop`). The deltas it
+     * replaces are dropped, so none goes out after it.
+     */
+    private fun JsonObjectBuilder.final(line: JsonObject) {
+        val message = line["message"].obj() ?: return
+        val id = message["id"].string() ?: return
+        put("messageId", id)
+        val single = message["content"].array().orEmpty().count { it.obj()?.get("type").string() == "text" } == 1
+        live.finish(id, single)?.let { put("index", it) }
+    }
 
     private val started = mutableListOf<AgentEvent>()
     /** Open permission requests by request id, with the tool input an `allow` passes back. */
@@ -224,7 +245,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
             "assistant" -> AgentOutput((if (pending == 0) listOf(turn("started")).also { pending = 1 } else emptyList()) + value["message"].obj()?.get("content").array().orEmpty().mapNotNull { block ->
                 val content = block.obj() ?: return@mapNotNull null
                 when (content["type"].string()) {
-                    "text" -> content["text"].string()?.takeIf { it.isNotBlank() }?.let { AgentEvent(CloudEventTypes.AGENT_MESSAGE, buildJsonObject { put("text", it); parent(value) }) }
+                    "text" -> content["text"].string()?.takeIf { it.isNotBlank() }?.let { AgentEvent(CloudEventTypes.AGENT_MESSAGE, buildJsonObject { put("text", it); final(value); parent(value) }) }
                     "tool_use" -> AgentEvent(CloudEventTypes.TOOL_CALL, buildJsonObject {
                         content["id"].string()?.let { put("id", it) }; put("name", content["name"].string() ?: "tool"); content["input"]?.let { put("input", it) }; parent(value)
                     })
@@ -271,9 +292,11 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
             }
             // Claude Code withdrew a request (its turn was interrupted): an answer to it is rejected.
             "control_cancel_request" -> { value["request_id"].string()?.let(permissions::remove); AgentOutput() }
+            "stream_event" -> if (settings.liveText) AgentOutput(listOfNotNull(live.parse(value))) else AgentOutput()
             "result" -> {
-                // A request cannot outlive its turn.
+                // A request cannot outlive its turn, nor live text that got no final message (an interrupted turn).
                 permissions.clear()
+                live.clear()
                 pending = 0
                 val failed = (value["is_error"] as? JsonPrimitive)?.booleanOrNull == true
                 val interrupted = value["subtype"].string() == "error_during_execution"
@@ -319,6 +342,72 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings) : AgentAdapte
             "input_tokens" to "inputTokens", "output_tokens" to "outputTokens",
             "cache_creation_input_tokens" to "cacheCreationInputTokens", "cache_read_input_tokens" to "cacheReadInputTokens",
         )
+    }
+}
+
+/**
+ * Coalesces Claude Code's `text_delta` lines (`--include-partial-messages`) into `message.agent.delta` events, per
+ * content block (API message id and block index): a delta goes out when [MIN_INTERVAL_MILLIS] passed since the block's
+ * previous one (or its start), when [MAX_HELD_CHARS] are held, or at the block's `content_block_stop`. The block's
+ * final `message.agent` drops what is still held ([finish]), and the end of a turn drops everything ([clear]): live
+ * text never goes out after the text that replaces it. Thinking and tool input deltas are never read.
+ */
+internal class LiveText(private val now: () -> Long) {
+    private class Block(val parent: String?, var sentAt: Long) { val held = StringBuilder() }
+    private val blocks = mutableMapOf<Pair<String, Int>, Block>()
+    /** The text blocks streaming now, by API message id: the block a single-block `assistant` line ends. */
+    private val open = mutableMapOf<String, Int>()
+    /** The message streaming now, by `parent_tool_use_id` (null for the main agent), from its `message_start`. */
+    private val current = mutableMapOf<String?, String>()
+
+    fun parse(line: JsonObject): AgentEvent? {
+        val event = line["event"].obj() ?: return null
+        val parent = line["parent_tool_use_id"].string()
+        if (event["type"].string() == "message_start") event["message"].obj()?.get("id").string()?.let { current[parent] = it }
+        // Claude Code 2.1.309 names the message on every line; the id of its `message_start` covers a version that does not.
+        val message = line["api_message_id"].string() ?: current[parent] ?: return null
+        val index = (event["index"] as? JsonPrimitive)?.intOrNull ?: return null
+        val key = message to index
+        when (event["type"].string()) {
+            "content_block_start" -> if (event["content_block"].obj()?.get("type").string() == "text") {
+                blocks[key] = Block(parent, now()); open[message] = index
+            }
+            "content_block_delta" -> {
+                val delta = event["delta"].obj()?.takeIf { it["type"].string() == "text_delta" } ?: return null
+                val block = blocks[key] ?: return null
+                block.held.append(delta["text"].string() ?: return null)
+                if (block.held.length >= MAX_HELD_CHARS || now() - block.sentAt >= MIN_INTERVAL_MILLIS) return send(key, block)
+            }
+            "content_block_stop" -> {
+                if (open[message] == index) open.remove(message)
+                return blocks.remove(key)?.let { send(key, it) }
+            }
+        }
+        return null
+    }
+
+    /** The block [messageId] ends with its final text, when [single] and known; drops what was held for it (every block of the message otherwise). */
+    fun finish(messageId: String, single: Boolean): Int? {
+        val index = open[messageId]?.takeIf { single }
+        if (index != null) blocks.remove(messageId to index) else blocks.keys.removeAll { it.first == messageId }
+        return index
+    }
+
+    fun clear() { blocks.clear(); open.clear(); current.clear() }
+
+    private fun send(key: Pair<String, Int>, block: Block): AgentEvent? {
+        if (block.held.isEmpty()) return null
+        // Never split a surrogate pair across two deltas: its high half waits for the next one.
+        val text = block.held.toString().let { if (it.last().isHighSurrogate()) it.dropLast(1) else it }.ifEmpty { return null }
+        block.held.deleteRange(0, text.length); block.sentAt = now()
+        return AgentEvent(CloudEventTypes.AGENT_MESSAGE_DELTA, buildJsonObject {
+            put("messageId", key.first); put("index", key.second); put("text", text); block.parent?.let { put("parentToolUseId", it) }
+        })
+    }
+
+    private companion object {
+        const val MIN_INTERVAL_MILLIS = 500L
+        const val MAX_HELD_CHARS = 2_000
     }
 }
 
@@ -507,8 +596,8 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
     }
 }
 
-fun agentAdapter(settings: AgentSettings, clientVersion: String): AgentAdapter = when (settings.kind) {
-    "claude" -> ClaudeStreamJsonAdapter(settings)
+fun agentAdapter(settings: AgentSettings, clientVersion: String, now: () -> Long = { 0L }): AgentAdapter = when (settings.kind) {
+    "claude" -> ClaudeStreamJsonAdapter(settings, now)
     "codex" -> CodexAppServerAdapter(settings, clientVersion)
     else -> throw IllegalArgumentException("Unsupported agent kind ${settings.kind}.")
 }

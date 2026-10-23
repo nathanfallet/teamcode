@@ -226,7 +226,7 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val body = call.boundedJson<RunnerAgentRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val agent = runner.agent(pod.teamId, pod.sessionId, pod.epoch)
-        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, permissionMode = agent.permissionMode?.wire))
+        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, liveText = agent.liveText, permissionMode = agent.permissionMode?.wire))
     }
     post(RUNNER_PATH + "events") {
         val body = call.boundedJson<RunnerEventsRequest>(RUNNER_BODY_BYTES)
@@ -263,8 +263,17 @@ internal object CloudTranscriptSanitizer {
         val clean = sanitize(data, 0) as JsonObject
         val encoded = clean.toString()
         if (encoded.encodeToByteArray().size <= CloudConversationRules.MAX_EVENT_BYTES) return encoded
-        return buildJsonObject { put("truncated", true); put("originalBytes", encoded.encodeToByteArray().size) }.toString()
+        // The marker keeps the short fields that link events together (a tool result to its call, a subagent's events
+        // to their parent, a message to its live deltas), taken from the sanitized event; never any other field.
+        return buildJsonObject {
+            put("truncated", true); put("originalBytes", encoded.encodeToByteArray().size)
+            for ((key, limit) in IDENTITY_STRINGS) (clean[key] as? JsonPrimitive)?.takeIf { it.isString && it.content.length <= limit }?.let { put(key, it) }
+            (clean["isError"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull?.let { put("isError", it) }
+            (clean["index"] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it >= 0 }?.let { put("index", it) }
+        }.toString()
     }
+    /** The identity fields a cut event keeps, with their longest kept length. */
+    private val IDENTITY_STRINGS = listOf("id", "parentToolUseId", "toolUseId", "requestId", "messageId", "inputId").map { it to 128 } + ("name" to 200)
     fun turn(type: CloudEventType, data: JsonObject): TurnMarker? = if (type != CloudEventType.TURN) null else when ((data["phase"] as? JsonPrimitive)?.contentOrNull) {
         "started" -> TurnMarker.STARTED
         in CloudConversationRules.TURN_END_PHASES -> TurnMarker.ENDED
