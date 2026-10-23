@@ -123,7 +123,8 @@ class RemoteHostSupervisorTest {
         f.record("s1")
         f.credentials.write(Account.CLI_ACCOUNT_ID, "tc-cli")
         f.supervisor.reconcile()
-        assertEquals(listOf("remote resume s1 --detach | "), f.resumes())
+        // The arguments only: the runner's own XDG_CONFIG_HOME, if any, is inherited by the fake CLI.
+        assertEquals(listOf("remote resume s1 --detach"), f.resumes().map { it.substringBefore(" |") })
         // Right after, the host is registering: not started twice.
         f.supervisor.reconcile()
         assertEquals(1, f.resumes().size)
