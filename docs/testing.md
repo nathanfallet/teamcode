@@ -1,6 +1,6 @@
 # End-to-end testing playbook
 
-This is the reproducible method used during V1 development, including real subscription tests. Use it with the [unfinished V1 brief](v2-validation-handoff.md), [current evidence](status.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
+This is the reproducible method used during V1 development, including real subscription tests. Use it with the [unfinished V1 brief](v2-validation-handoff.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
 
 ## Prerequisites and isolation
 
