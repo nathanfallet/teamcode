@@ -127,7 +127,11 @@ import org.jetbrains.compose.resources.stringResource
  * events downward while visible), and a dock with Interrupt or Resume and the message field.
  */
 @Composable
-fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> Unit, onOpenArtifacts: () -> Unit = {}, backLabel: String = stringResource(Res.string.sessions_title)) {
+fun SessionScreen(
+    viewModel: SessionViewModel, memberId: String?, onBack: () -> Unit, onOpenArtifacts: () -> Unit = {}, backLabel: String = stringResource(Res.string.sessions_title),
+    /** More items of the "…" menu for the loaded session (the transfer action); call `close` before acting. */
+    menuItems: @Composable (session: CloudSession, close: () -> Unit) -> Unit = { _, _ -> },
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LifecycleStartEffect(viewModel) {
         viewModel.start()
@@ -135,7 +139,7 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
     }
     val colors = TeamCode.colors
     Column(Modifier.fillMaxSize().background(colors.background)) {
-        NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts) }
+        NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts, menuItems) }
         Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.session?.let { Summary(it, state) }
@@ -161,7 +165,7 @@ fun SessionScreen(viewModel: SessionViewModel, memberId: String?, onBack: () -> 
 
 /** "…": pause or resume (owner and administrators), and the artifacts this session published. */
 @Composable
-private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit) {
+private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val session = state.session
     Box {
@@ -177,6 +181,7 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
             }
             DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(18.dp)) },
                 onClick = { open = false; onOpenArtifacts() }, modifier = Modifier.testTag("session-artifacts"))
+            if (session != null) menuItems(session) { open = false }
         }
     }
 }
