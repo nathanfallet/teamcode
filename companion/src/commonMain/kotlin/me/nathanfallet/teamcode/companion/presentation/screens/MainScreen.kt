@@ -1,0 +1,176 @@
+package me.nathanfallet.teamcode.companion.presentation.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.adamglin.PhosphorIcons
+import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.FileText
+import com.adamglin.phosphoricons.regular.TerminalWindow
+import com.adamglin.phosphoricons.regular.UserCircle
+import com.adamglin.phosphoricons.regular.Warning
+import me.nathanfallet.teamcode.companion.domain.models.Account
+import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
+import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
+import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
+import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
+import me.nathanfallet.teamcode.companion.presentation.components.TcButton
+import me.nathanfallet.teamcode.companion.presentation.components.hostOf
+import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
+import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
+import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.artifacts_title
+import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
+import me.nathanfallet.teamcode.companion.resources.home_signed_out
+import me.nathanfallet.teamcode.companion.resources.sessions_signed_out_title
+import me.nathanfallet.teamcode.companion.resources.tab_account
+import me.nathanfallet.teamcode.companion.resources.tab_artifacts
+import me.nathanfallet.teamcode.companion.resources.tab_sessions
+import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
+
+enum class MainTab { SESSIONS, ARTIFACTS, ACCOUNT }
+
+/**
+ * The signed-in app: three tabs over a bottom bar. The new-session sheet and the account switcher open over it;
+ * sessions and artifacts are pushed above it by the navigation.
+ */
+@Composable
+fun MainScreen(
+    onSignInAgain: (Account) -> Unit,
+    onOpenSession: (accountId: String, sessionId: String) -> Unit,
+    onOpenArtifact: (accountId: String, artifactId: String) -> Unit,
+    onOpenLink: (String) -> Boolean,
+    onAddAccount: () -> Unit,
+    home: HomeViewModel = koinViewModel(),
+    settings: SettingsViewModel = koinViewModel(),
+) {
+    var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
+    var newSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
+    var switcher by rememberSaveable { mutableStateOf(false) }
+    val homeState by home.uiState.collectAsStateWithLifecycle()
+    val settingsState by settings.uiState.collectAsStateWithLifecycle()
+    val account = homeState.account
+
+    Column(Modifier.fillMaxSize().background(TeamCode.colors.background)) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when (tab) {
+                MainTab.SESSIONS -> SessionsScreen(
+                    onSignInAgain = onSignInAgain,
+                    onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
+                    onNewSession = { newSessionFor = it.id },
+                    onSwitchAccount = { switcher = true },
+                    viewModel = home,
+                )
+                MainTab.ARTIFACTS -> if (account != null && account.signedIn) key(account.id) {
+                    val viewModel: ArtifactsViewModel = koinViewModel(key = "artifacts-${account.id}") { parametersOf(ArtifactsRoute(account.id)) }
+                    ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
+                } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
+                MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { switcher = true }, viewModel = settings)
+            }
+        }
+        TabBar(tab) { tab = it }
+    }
+
+    newSessionFor?.let { accountId ->
+        SheetViewModels {
+            val viewModel: NewSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId)) }
+            NewSessionSheet(viewModel, onDismiss = { newSessionFor = null }, onCreated = { session ->
+                newSessionFor = null
+                onOpenSession(accountId, session.id)
+            })
+        }
+    }
+    if (switcher) AccountSwitcherSheet(
+        accounts = settingsState.accounts,
+        activeAccountId = settingsState.activeAccountId,
+        onSwitch = { settings.switchTo(it); switcher = false },
+        onSignInAgain = { switcher = false; onSignInAgain(it) },
+        onAddAccount = { switcher = false; onAddAccount() },
+        onManage = { switcher = false; tab = MainTab.ACCOUNT },
+        onDismiss = { switcher = false },
+    )
+}
+
+/** A tab that needs a signed-in account while the active one is signed out. */
+@Composable
+private fun SignedOutTab(title: String, account: Account?, onSignInAgain: (Account) -> Unit) {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LargeTitle(title)
+            if (account != null) EmptyState(PhosphorIcons.Regular.Warning, stringResource(Res.string.sessions_signed_out_title), stringResource(Res.string.home_signed_out, hostOf(account.origin)),
+                dashed = false, iconTint = TeamCode.colors.warn) {
+                TcButton(stringResource(Res.string.home_sign_in_again), onClick = { onSignInAgain(account) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
+    val colors = TeamCode.colors
+    Column(Modifier.fillMaxWidth().background(colors.line).padding(top = 1.dp)) {
+        Row(
+            Modifier.fillMaxWidth().background(colors.panelAlt).navigationBarsPadding().padding(horizontal = 10.dp, vertical = 6.dp).selectableGroup(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Row(Modifier.widthIn(max = ContentWidth)) {
+                TabItem(MainTab.SESSIONS, PhosphorIcons.Regular.TerminalWindow, stringResource(Res.string.tab_sessions), selected, onSelect)
+                TabItem(MainTab.ARTIFACTS, PhosphorIcons.Regular.FileText, stringResource(Res.string.tab_artifacts), selected, onSelect)
+                TabItem(MainTab.ACCOUNT, PhosphorIcons.Regular.UserCircle, stringResource(Res.string.tab_account), selected, onSelect)
+            }
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.TabItem(tab: MainTab, icon: ImageVector, label: String, selected: MainTab, onSelect: (MainTab) -> Unit) {
+    val colors = TeamCode.colors
+    val on = tab == selected
+    val color = if (on) colors.accentText else colors.muted
+    Column(
+        Modifier.weight(1f).heightIn(min = 48.dp).selectable(on, role = Role.Tab) { onSelect(tab) }.testTag("tab-${tab.name.lowercase()}"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
+    ) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
+        Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}

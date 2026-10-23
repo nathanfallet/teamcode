@@ -10,18 +10,15 @@ object AddServerRoute
 @Serializable
 data class LoginRoute(val origin: String, val username: String? = null)
 
-/** The active account. */
+/** The three tabs of a signed-in app: Sessions, Artifacts, Account. */
 @Serializable
-object HomeRoute
-
-@Serializable
-object SettingsRoute
+object MainRoute
 
 /** One cloud session of an account: header and live transcript. */
 @Serializable
 data class SessionRoute(val accountId: String, val sessionId: String)
 
-/** The new-session form of an account. */
+/** The new-session sheet's account (a sheet over the Sessions tab, not a destination of its own). */
 @Serializable
 data class NewSessionRoute(val accountId: String)
 

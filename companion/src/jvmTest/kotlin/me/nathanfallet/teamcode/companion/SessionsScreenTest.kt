@@ -17,7 +17,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUse
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
-import me.nathanfallet.teamcode.companion.presentation.screens.HomeScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.SessionsScreen
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCodeTheme
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
@@ -42,7 +42,7 @@ class SessionsScreenTest {
         var opened: String? = null
         setContent {
             TeamCodeTheme {
-                HomeScreen(onOpenSettings = {}, onSignInAgain = {}, onOpenSession = { _, s -> opened = s.id }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
+                SessionsScreen(onSignInAgain = {}, onOpenSession = { _, s -> opened = s.id }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
             }
         }
         feed.trySend(LiveUpdate.Opened(false))
@@ -61,8 +61,40 @@ class SessionsScreenTest {
 
         onNodeWithTag("group-paused").performClick()
         waitUntil { sessions.calls.lastOrNull() == "list MINE PAUSED null" && !list.uiState.value.loading }
-        onNodeWithText("No paused session.").assertExists()
+        onNodeWithText("No paused session").assertExists()
         // A member sees no team filter.
         onNodeWithTag("scope-team").assertDoesNotExist()
+    }
+
+    @Test fun anAdministratorChoosesTheTeamFromTheScopePill() = runComposeUiTest {
+        val accounts = InMemoryAccountRepository(listOf(account("a1").copy(role = "ADMIN")))
+        val store = credentials().also { kotlinx.coroutines.runBlocking { it.write("a1", "token") } }
+        val auth = FakeAuthRepository().apply { meResult = { member(role = "ADMIN") } }
+        val sessions = FakeSessionRepository()
+        val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED)
+        sessions.changes = feed.receiveAsFlow()
+        sessions.pages = { _, _ -> SessionPage(emptyList(), null) }
+        val features = FakeFeatures()
+        val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
+        val guard = AccountGuard(refresh)
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        var newSession = false
+        setContent {
+            TeamCodeTheme {
+                SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, onNewSession = { newSession = true }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
+            }
+        }
+        feed.trySend(LiveUpdate.Opened(false))
+        waitUntil { list.uiState.value.list != null && !list.uiState.value.loading }
+        // The empty active list offers a new session, like the + button.
+        onNodeWithTag("sessions-empty").assertExists()
+        onNodeWithText("No active session").assertExists()
+        onNodeWithTag("new-session").performClick()
+        assertTrue(newSession)
+
+        onNodeWithTag("scope").assertExists().performClick()
+        onNodeWithTag("scope-team").performClick()
+        waitUntil { sessions.calls.lastOrNull() == "list TEAM ACTIVE null" && !list.uiState.value.loading }
+        onNodeWithText("Team").assertExists()
     }
 }

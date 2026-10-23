@@ -1,15 +1,14 @@
 package me.nathanfallet.teamcode.companion.presentation.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -17,15 +16,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
+import me.nathanfallet.teamcode.companion.presentation.theme.Radii
+import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
 import me.nathanfallet.teamcode.companion.resources.link_open_confirm
+import me.nathanfallet.teamcode.companion.resources.link_open_hint
 import me.nathanfallet.teamcode.companion.resources.link_open_refused
 import me.nathanfallet.teamcode.companion.resources.link_open_title
 import me.nathanfallet.teamcode.companion.resources.state_active
@@ -56,25 +62,17 @@ fun SessionState.label(): StringResource = when (this) {
     SessionState.UNKNOWN -> Res.string.state_unknown
 }
 
+/** Working shows the accent dot; passing states are muted, paused amber, failed red. */
 @Composable
 fun StateChip(state: SessionState, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val color = when (state) {
-        SessionState.ACTIVE -> colors.primary
-        SessionState.READY -> colors.secondary
-        SessionState.FAILED -> colors.error
-        SessionState.PAUSED, SessionState.PAUSING -> colors.tertiary
-        SessionState.TERMINATED -> colors.outline
-        else -> colors.tertiary
+    val tone = when (state) {
+        SessionState.ACTIVE -> Tone.ACCENT
+        SessionState.READY -> Tone.NEUTRAL
+        SessionState.PAUSED -> Tone.WARN
+        SessionState.FAILED -> Tone.DANGER
+        else -> Tone.MUTED
     }
-    Box(modifier.background(color.copy(alpha = 0.16f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 3.dp)) {
-        Text(stringResource(state.label()), color = color, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-@Composable
-fun Dot(color: Color, modifier: Modifier = Modifier) {
-    Box(modifier.size(9.dp).background(color, CircleShape))
+    Chip(stringResource(state.label()), modifier, tone = tone, dot = state == SessionState.ACTIVE)
 }
 
 /**
@@ -89,15 +87,26 @@ fun ConfirmingLinks(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalUriHandler provides handler) { content() }
     pending?.let { uri ->
         val allowed = isWebLink(uri)
-        AlertDialog(
-            onDismissRequest = { pending = null },
-            title = { Text(stringResource(Res.string.link_open_title)) },
-            text = { Text(if (allowed) uri else stringResource(Res.string.link_open_refused), style = MonospaceStyle) },
-            confirmButton = {
-                if (allowed) TextButton(onClick = { pending = null; system.openUri(uri) }) { Text(stringResource(Res.string.link_open_confirm)) }
-            },
-            dismissButton = { TextButton(onClick = { pending = null }) { Text(stringResource(Res.string.action_cancel)) } },
-        )
+        Dialog(onDismissRequest = { pending = null }) {
+            val colors = TeamCode.colors
+            Column(
+                Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("link-confirm"),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(stringResource(Res.string.link_open_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (allowed) uri else stringResource(Res.string.link_open_refused),
+                    style = MonospaceStyle,
+                    color = colors.text,
+                    modifier = Modifier.fillMaxWidth().clip(Radii.control).background(colors.panelAlt).border(1.dp, colors.line, Radii.control).padding(10.dp),
+                )
+                if (allowed) Text(stringResource(Res.string.link_open_hint), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TcButton(stringResource(Res.string.action_cancel), onClick = { pending = null }, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
+                    if (allowed) TcButton(stringResource(Res.string.link_open_confirm), onClick = { pending = null; system.openUri(uri) }, modifier = Modifier.weight(1f).testTag("link-open"))
+                }
+            }
+        }
     }
 }
 
@@ -112,3 +121,6 @@ fun isWebLink(uri: String): Boolean {
     val host = uri.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
     return host.isNotEmpty()
 }
+
+/** The text shown for a server: its host, without the scheme. */
+fun hostOf(origin: String): String = origin.substringAfter("://")

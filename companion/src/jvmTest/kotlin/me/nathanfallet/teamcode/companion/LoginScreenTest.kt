@@ -33,7 +33,7 @@ class LoginScreenTest {
         var signedIn = false
         setContent { TeamCodeTheme { LoginScreen(LoginRoute("https://team.example"), onBack = {}, onSignedIn = { signedIn = true }, viewModel = viewModel) } }
 
-        onNodeWithText("TeamCode server").assertExists()
+        onNodeWithText("Signing in to").assertExists()
         onNodeWithText("https://team.example").assertExists()
         onNodeWithTag("submit").assertIsNotEnabled()
         onNodeWithTag("username").performTextInput("ada")

@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.transcript
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -8,13 +9,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,15 +26,30 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import com.adamglin.PhosphorIcons
+import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.CaretDown
+import com.adamglin.phosphoricons.regular.CaretRight
+import com.adamglin.phosphoricons.regular.CaretUp
+import com.adamglin.phosphoricons.regular.ListBullets
 import com.mikepenz.markdown.m3.Markdown
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
+import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.transcript_a_tool
 import me.nathanfallet.teamcode.companion.resources.transcript_actions
 import me.nathanfallet.teamcode.companion.resources.transcript_agent_exited
 import me.nathanfallet.teamcode.companion.resources.transcript_agent_started
@@ -43,7 +61,6 @@ import me.nathanfallet.teamcode.companion.resources.transcript_input
 import me.nathanfallet.teamcode.companion.resources.transcript_input_cancelled
 import me.nathanfallet.teamcode.companion.resources.transcript_input_rejected
 import me.nathanfallet.teamcode.companion.resources.transcript_output
-import me.nathanfallet.teamcode.companion.resources.transcript_a_tool
 import me.nathanfallet.teamcode.companion.resources.transcript_permission
 import me.nathanfallet.teamcode.companion.resources.transcript_permission_expired
 import me.nathanfallet.teamcode.companion.resources.transcript_question
@@ -57,10 +74,12 @@ import me.nathanfallet.teamcode.companion.resources.transcript_turn_failed
 import me.nathanfallet.teamcode.companion.resources.transcript_turn_interrupted
 import org.jetbrains.compose.resources.stringResource
 
+private val UserBubbleShape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
+
 @Composable
 fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
     val indent = if (item.nested) Modifier.padding(start = 20.dp) else Modifier
-    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).then(indent)) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).then(indent)) {
         when (item) {
             is TranscriptItem.User -> UserBubble(item.event, memberId)
             is TranscriptItem.Agent -> SelectionContainer { Markdown(item.event.text, modifier = Modifier.fillMaxWidth().testTag("agent-${item.key}")) }
@@ -74,70 +93,104 @@ fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
 
 @Composable
 private fun UserBubble(event: TranscriptEvent.UserMessage, memberId: String?) {
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+    val colors = TeamCode.colors
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // Another member (or an administrator) wrote it: say who.
         if (event.authorId != null && event.authorId != memberId) {
-            Text(stringResource(Res.string.transcript_from), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(Res.string.transcript_from), fontSize = 11.5.sp, color = colors.muted)
         }
         SelectionContainer {
             Text(
                 event.text,
-                modifier = Modifier.widthIn(max = 560.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.widthIn(max = 560.dp).clip(UserBubbleShape).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
+                color = colors.onBubble,
+                fontSize = 14.5.sp,
+                lineHeight = 21.sp,
             )
         }
     }
 }
 
+/** One tool use: its name and summary; a tap shows the input, the output and a failing exit code. */
 @Composable
 private fun ToolCard(item: TranscriptItem.Tool) {
+    val colors = TeamCode.colors
     var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
     val result = item.result
     val failed = result?.isError == true || (result?.exitCode ?: 0) != 0
     Column(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).clickable { expanded = !expanded }.padding(10.dp).testTag("tool-${item.key}"),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(colors.panelAlt).border(1.dp, colors.line, RoundedCornerShape(10.dp))
+            .clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 10.dp).testTag("tool-${item.key}"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(item.call?.name ?: stringResource(Res.string.transcript_output), style = MaterialTheme.typography.labelLarge, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-            item.call?.summary?.let { Text(it, style = MonospaceStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text(item.call?.name ?: stringResource(Res.string.transcript_output), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (failed) colors.danger else colors.text)
+            Text(item.call?.summary.orEmpty(), style = MetaStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.muted, modifier = Modifier.weight(1f))
+            Icon(if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
         }
         if (expanded) {
             item.call?.let { call ->
-                Text(stringResource(Res.string.transcript_input), style = MaterialTheme.typography.labelSmall)
+                Label(stringResource(Res.string.transcript_input), colors.muted)
                 Code(call.input)
             }
             if (result != null) {
-                Text(stringResource(if (result.isError) Res.string.transcript_error else Res.string.transcript_output), style = MaterialTheme.typography.labelSmall, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                Label(stringResource(if (result.isError) Res.string.transcript_error else Res.string.transcript_output), if (failed) colors.danger else colors.muted)
                 Code(result.output)
-                result.exitCode?.takeIf { it != 0 }?.let { Text(stringResource(Res.string.transcript_exit_code, it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall) }
+                result.exitCode?.takeIf { it != 0 }?.let { Text(stringResource(Res.string.transcript_exit_code, it), color = colors.danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
             }
         }
     }
 }
 
+/** A run of tool uses without text between them: "4 actions · Read · Bash · Grep", unfolded on a tap. */
 @Composable
 private fun ToolGroup(item: TranscriptItem.Tools) {
+    val colors = TeamCode.colors
     var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
+    val names = item.tools.mapNotNull { it.call?.name }.distinct()
+    val summary = names.take(3).joinToString(" · ") + if (names.size > 3) " · …" else ""
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            stringResource(Res.string.transcript_actions, item.tools.size) + if (expanded) " ▾" else " ▸",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable { expanded = !expanded }.padding(vertical = 4.dp).testTag("tools-${item.key}"),
-        )
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(10.dp)).background(colors.panelAlt).border(1.dp, colors.line, RoundedCornerShape(10.dp))
+                .clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 12.dp).testTag("tools-${item.key}"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(PhosphorIcons.Regular.ListBullets, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+            Text(stringResource(Res.string.transcript_actions, item.tools.size), fontSize = 13.sp, color = colors.muted, modifier = Modifier.weight(1f))
+            Text(summary, style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Icon(if (expanded) PhosphorIcons.Regular.CaretDown else PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+        }
         if (expanded) item.tools.forEach { ToolCard(it) }
     }
 }
 
 @Composable
+private fun Label(text: String, color: Color) {
+    Text(text.uppercase(), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.1.em, color = color)
+}
+
+@Composable
 private fun Code(text: String) {
+    val colors = TeamCode.colors
     SelectionContainer {
         Text(
             text,
-            style = MonospaceStyle,
-            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(6.dp)).horizontalScroll(rememberScrollState()).padding(8.dp),
+            style = MonospaceStyle.copy(fontSize = 12.sp),
+            color = colors.text,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(colors.code).border(1.dp, colors.line, RoundedCornerShape(8.dp))
+                .horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 7.dp),
         )
+    }
+}
+
+/** A centered monospace line between two hairlines: turn ends, the start of what the server keeps. */
+@Composable
+fun TranscriptSeparator(text: String, color: Color = TeamCode.colors.muted, inset: androidx.compose.ui.unit.Dp = 16.dp) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = inset, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.weight(1f).height(1.dp).background(TeamCode.colors.line))
+        Text(text, style = MetaStyle.copy(fontSize = 11.sp), color = color, textAlign = TextAlign.Center)
+        Box(Modifier.weight(1f).height(1.dp).background(TeamCode.colors.line))
     }
 }
 
@@ -154,12 +207,8 @@ private fun TurnSeparator(event: TranscriptEvent.Turn) {
         event.durationMs?.let { stringResource(Res.string.transcript_seconds, (it / 1000).toInt()) },
         event.steps?.let { stringResource(Res.string.transcript_steps, it) },
     ).joinToString(" · ")
-    val color = if (event.phase == TurnPhase.FAILED || event.phase == TurnPhase.INTERRUPTED) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
-        Text(details, style = MaterialTheme.typography.labelSmall, color = color)
-        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
-    }
+    val colors = TeamCode.colors
+    TranscriptSeparator(details, if (event.phase == TurnPhase.FAILED) colors.danger else if (event.phase == TurnPhase.INTERRUPTED) colors.warn else colors.muted, inset = 0.dp)
 }
 
 @Composable
@@ -174,6 +223,6 @@ private fun SystemLine(event: TranscriptEvent) {
         is TranscriptEvent.Truncated -> stringResource(Res.string.transcript_truncated, event.type)
         else -> return
     }
-    val color = if (event is TranscriptEvent.Error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-    Text(text, style = MaterialTheme.typography.bodySmall, color = color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().testTag("system-${event.seq}"))
+    val color = if (event is TranscriptEvent.Error) TeamCode.colors.danger else TeamCode.colors.muted
+    Text(text, fontSize = 13.sp, color = color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().testTag("system-${event.seq}"))
 }
