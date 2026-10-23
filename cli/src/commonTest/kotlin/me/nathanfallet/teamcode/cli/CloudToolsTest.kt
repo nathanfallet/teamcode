@@ -249,7 +249,20 @@ class CloudToolsTest {
         assertFalse(claude.arguments.joinToString().contains(local), "The token is not on the command line")
         assertFalse(environment.values.any { it?.startsWith("tcex_") == true } || claude.arguments.any { "tcex_" in it || "TOKEN_FILE" in it },
             "Neither the execution credential nor its file reaches the artifact server")
+        // Claude Code's own artifact tools are denied and the agent is told to publish through teamcode_artifacts.
+        assertTrue("--disallowedTools=Artifact,ArtifactComments,ArtifactData,ArtifactCheck" in claude.arguments, claude.arguments.toString())
+        assertEquals(me.nathanfallet.teamcode.cli.launch.ARTIFACTS_INSTRUCTIONS, claude.arguments[claude.arguments.indexOf("--append-system-prompt") + 1])
+        assertTrue(claude.arguments.indexOf("--append-system-prompt") < claude.arguments.indexOf("--mcp-config"))
         val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, local), tools))
         assertTrue(codex.arguments.any { it.startsWith("mcp_servers.teamcode_artifacts={command=\"/opt/teamcode/teamcode\"") }, codex.arguments.toString())
+        assertTrue(codex.arguments.any { it.startsWith("developer_instructions=\"TeamCode artifacts are connected") }, codex.arguments.toString())
+    }
+
+    @Test fun cloudAgentsWithoutTheArtifactToolsKeepTheirNativeTools() = runTest {
+        val tools = object : AgentTools { override suspend fun prepare(agent: String) = emptyList<String>() }
+        val (claude, _) = assertNotNull(started("claude", AgentInferenceEndpoint(41234, "l".repeat(64)), tools))
+        assertFalse(claude.arguments.any { it.startsWith("--disallowedTools") || it == "--append-system-prompt" }, claude.arguments.toString())
+        val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, "l".repeat(64)), tools))
+        assertFalse(codex.arguments.any { it.startsWith("developer_instructions=") }, codex.arguments.toString())
     }
 }

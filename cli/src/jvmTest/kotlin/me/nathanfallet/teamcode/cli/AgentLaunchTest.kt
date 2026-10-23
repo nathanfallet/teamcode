@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.cli
 
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.cli.launch.ARTIFACTS_INSTRUCTIONS
 import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import kotlin.test.*
@@ -104,5 +105,47 @@ class AgentLaunchTest {
         assertFalse(claude.arguments.any { "teamcode_artifacts" in it }); assertNull(claude.environment["TEAMCODE_MCP_TOKEN"])
         val codex = agentLaunch("codex", listOf("exec"), 4242, token)
         assertFalse(codex.arguments.any { "teamcode_artifacts" in it })
+        val own = listOf("--append-system-prompt", "mine", "--disallowedTools", "Bash", "-p", "hi")
+        assertEquals(own, agentLaunch("claude", own, 4242, token).arguments, "The caller's own options are untouched")
+        assertEquals(own, agentLaunch("claude", own, 4242, token, mcpServers = listOf("wiki")).arguments.filterNot { it == "--mcp-config" || it.startsWith("{") },
+            "A team server alone does not turn off the native artifact tools")
+        assertFalse(codex.arguments.any { it.startsWith("developer_instructions=") })
+    }
+
+    private val artifactServer = ArtifactsMcp("/opt/teamcode/teamcode", "/work/repo")
+
+    @Test fun claudeWithTheArtifactServerDeniesItsNativeArtifactToolsAndIsToldToPublishThroughTeamCode() {
+        // Measured on Claude Code 2.1.309: --disallowedTools Bash prompt swallows the prompt (variadic), while
+        // --disallowedTools=Bash prompt keeps it; repeated --disallowedTools add up.
+        val launch = agentLaunch("claude", listOf("-p", "publish a page"), 4242, token, artifacts = artifactServer)
+        assertEquals(listOf("-p", "publish a page", "--append-system-prompt", ARTIFACTS_INSTRUCTIONS,
+            "--disallowedTools=Artifact,ArtifactComments,ArtifactData,ArtifactCheck", "--mcp-config"), launch.arguments.dropLast(1),
+            "TeamCode's options come after the caller's and none of them is followed by a value it could swallow")
+        assertTrue("`teamcode_artifacts`" in ARTIFACTS_INSTRUCTIONS && "/artifact/<id>" in ARTIFACTS_INSTRUCTIONS)
+        val delimited = agentLaunch("claude", listOf("--model", "opus", "--", "a prompt"), 4242, token, artifacts = artifactServer)
+        assertEquals(listOf("--", "a prompt"), delimited.arguments.takeLast(2), "The prompt after -- stays last")
+        assertEquals(listOf("--model", "opus", "--append-system-prompt"), delimited.arguments.take(3))
+    }
+
+    @Test fun claudeKeepsTheCallersOwnPromptAndDeniedTools() {
+        // Claude Code keeps only the last --append-system-prompt (measured on 2.1.309), so the caller's text is merged.
+        val launch = agentLaunch("claude", listOf("--append-system-prompt", "first", "--disallowedTools", "Bash", "--append-system-prompt=Be brief.",
+            "--append-system-prompt-file", "notes.txt", "--", "--append-system-prompt", "literal"), 4242, token, artifacts = artifactServer)
+        assertEquals(listOf("--disallowedTools", "Bash", "--append-system-prompt-file", "notes.txt", "--append-system-prompt",
+            "Be brief.\n\n$ARTIFACTS_INSTRUCTIONS", "--disallowedTools=Artifact,ArtifactComments,ArtifactData,ArtifactCheck", "--mcp-config"),
+            launch.arguments.take(8), "The caller's denied tools and prompt file are kept, and their last appended prompt comes first")
+        assertEquals(listOf("--", "--append-system-prompt", "literal"), launch.arguments.takeLast(3), "Arguments after -- are not options")
+    }
+
+    @Test fun codexWithTheArtifactServerReceivesTheInstructionUnlessTheCallerSetsTheirOwn() {
+        val launch = agentLaunch("codex", listOf("exec", "--", "prompt"), 4242, token, artifacts = artifactServer)
+        val overrides = launch.arguments.zipWithNext().filter { it.first == "-c" }.map { it.second }
+        val instructions = overrides.single { it.startsWith("developer_instructions=") }
+        assertEquals("developer_instructions=\"" + ARTIFACTS_INSTRUCTIONS.replace("\"", "\\\"") + "\"", instructions)
+        assertEquals(listOf("--", "prompt"), launch.arguments.takeLast(2))
+        for (own in listOf(listOf("-c", "developer_instructions=\"mine\""), listOf("--config=developer_instructions='mine'"), listOf("-cdeveloper_instructions=\"x\"")))
+            assertFalse(agentLaunch("codex", listOf("exec") + own, 4242, token, artifacts = artifactServer).arguments.any { it.startsWith("developer_instructions=") && "TeamCode" in it }, own.toString())
+        assertFalse(agentLaunch("codex", listOf("exec"), 4242, token, artifacts = artifactServer, codexInstructions = false).arguments.any { it.startsWith("developer_instructions=") },
+            "Instructions from the user's config.toml are not replaced")
     }
 }

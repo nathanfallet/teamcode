@@ -9,7 +9,10 @@ import okio.Path.Companion.toPath
 import kotlin.io.encoding.Base64
 
 /** Codex merges files/layers, but repeated CLI assignments replace arrays within that layer. */
-internal fun hasCodexHookOverrides(arguments: List<String>): Boolean {
+internal fun hasCodexHookOverrides(arguments: List<String>): Boolean = hasCodexOverride(arguments, "hooks")
+
+/** Whether the caller's own `-c`/`--config` overrides, before a literal `--`, set [key] or one of its children. */
+internal fun hasCodexOverride(arguments: List<String>, key: String): Boolean {
     val options = arguments.takeWhile { it != "--" }
     return options.indices.any { index ->
         val argument = options[index]
@@ -19,8 +22,8 @@ internal fun hasCodexHookOverrides(arguments: List<String>): Boolean {
             argument.startsWith("-c") -> argument.removePrefix("-c").removePrefix("=")
             else -> null
         }
-        val key = value?.substringBefore('=')?.filterNot { it.isWhitespace() || it == '"' || it == '\'' }
-        key == "hooks" || key?.startsWith("hooks.") == true
+        val name = value?.substringBefore('=')?.filterNot { it.isWhitespace() || it == '"' || it == '\'' }
+        name == key || name?.startsWith("$key.") == true
     }
 }
 

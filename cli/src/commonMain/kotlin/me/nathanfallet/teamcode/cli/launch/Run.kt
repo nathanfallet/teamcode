@@ -191,9 +191,16 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             echo("The artifact tools could not be prepared; continuing without them.", err = true)
             null
         } else null
+        val codexInstructions = agent != "codex" || artifactServer == null || when {
+            hasCodexOverride(arguments, "developer_instructions") -> false
+            codexConfigSetsDeveloperInstructions() -> false
+            else -> true
+        }
+        if (!codexInstructions) echo("Your Codex developer_instructions are kept; publish pages with the teamcode_artifacts tools.", err = true)
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
-                claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer)
+                claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer,
+                codexInstructions = codexInstructions)
             return try { runInteractiveProcess(agent, plan.arguments, plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment) }
             catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
         } finally {
@@ -216,6 +223,47 @@ internal class ArtifactsMcp(val command: String, val root: String, val scratch: 
 
 /** The agent-side name of the artifact tools; never a team server's label, which always starts with `teamcode-`. */
 internal const val ARTIFACTS_MCP_LABEL = "teamcode_artifacts"
+
+/** Claude Code's built-in artifact tools, which publish to claude.ai; denied while the TeamCode artifact tools are connected. */
+internal val CLAUDE_NATIVE_ARTIFACT_TOOLS = listOf("Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck")
+
+/** Appended to the agent's instructions while the TeamCode artifact tools are connected. */
+internal const val ARTIFACTS_INSTRUCTIONS = "TeamCode artifacts are connected to this session through the `$ARTIFACTS_MCP_LABEL` MCP server. " +
+    "Whenever you make a page for people to read (an HTML page, a document, a report, a plan, a dashboard), publish it with the " +
+    "`publish` tool of `$ARTIFACTS_MCP_LABEL`, and share or list it with that server's other tools; never use another artifact " +
+    "system. Give the person the link the tool returns, `<server>/artifact/<id>`."
+
+/**
+ * The caller's options without `--append-system-prompt`, and the text Claude Code would have used (the last one), so it
+ * can be merged into TeamCode's. `--append-system-prompt-file` is left alone: Claude Code combines it with the text.
+ */
+internal fun withoutAppendedPrompt(options: List<String>): Pair<List<String>, String?> {
+    val kept = mutableListOf<String>()
+    var appended: String? = null
+    var index = 0
+    while (index < options.size) {
+        val option = options[index]
+        when {
+            option == "--append-system-prompt" && index + 1 < options.size -> { appended = options[index + 1]; index += 2; continue }
+            option.startsWith("--append-system-prompt=") -> appended = option.removePrefix("--append-system-prompt=")
+            else -> kept += option
+        }
+        index++
+    }
+    return kept to appended
+}
+
+/**
+ * Whether the user's Codex configuration (`$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`) sets
+ * `developer_instructions`, at the top level or in a profile: a `-c` override would replace them, so TeamCode adds none.
+ * An unreadable file counts as not setting them.
+ */
+private fun codexConfigSetsDeveloperInstructions(): Boolean = try {
+    val home = environment("CODEX_HOME")?.takeIf { it.isNotBlank() }
+        ?: (environment("HOME") ?: environment("USERPROFILE"))?.let { "$it/.codex" }
+    home != null && okio.FileSystem.SYSTEM.read("$home/config.toml".toPath()) { readUtf8() }
+        .lineSequence().any { line -> line.trimStart().removePrefix("\"").startsWith("developer_instructions") && '=' in line }
+} catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 
 /** A TOML basic string, for Codex `-c` overrides. */
 private fun toml(value: String) = buildString {
@@ -251,7 +299,7 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -296,7 +344,16 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         val headers = if (keepLogin) (inheritedHeaders.orEmpty().lines().filter {
             it.isNotBlank() && !it.substringBefore(':').trim().equals(LOCAL_TOKEN_HEADER, ignoreCase = true)
         } + "$LOCAL_TOKEN_HEADER: $token").joinToString("\n") else inheritedHeaders
-        AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + arguments.take(delimiter) + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
+        // With the artifact tools connected, Claude Code's own artifact tools (which publish to claude.ai) are denied and
+        // the agent is told to publish through teamcode_artifacts. The `=` form is not variadic, and repeated
+        // --disallowedTools add up, so the caller's own list is kept. Claude Code keeps only the last
+        // --append-system-prompt, so the caller's text is moved into ours rather than replaced.
+        val (options, appended) = if (artifacts == null) arguments.take(delimiter) to null else withoutAppendedPrompt(arguments.take(delimiter))
+        val artifactOptions = if (artifacts == null) emptyList() else listOf(
+            "--append-system-prompt", appended?.let { "$it\n\n$ARTIFACTS_INSTRUCTIONS" } ?: ARTIFACTS_INSTRUCTIONS,
+            "--disallowedTools=" + CLAUDE_NATIVE_ARTIFACT_TOOLS.joinToString(","),
+        )
+        AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + options + artifactOptions + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
         "TEAMCODE_RUN_ID" to runId,
         "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty() || artifacts != null) token else null,
@@ -310,7 +367,11 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         ) + mcp.flatMap { (label, server) -> listOf("-c", "mcp_servers.$label={url=\"${mcpUrl(server)}\",bearer_token_env_var=\"TEAMCODE_LOCAL_TOKEN\"}") } +
             // Codex passes a stdio server only the variables it lists: the local token by name, never its value.
             (if (artifacts == null) emptyList() else listOf("-c", "mcp_servers.$ARTIFACTS_MCP_LABEL={command=${toml(artifacts.command)}," +
-                "args=[${artifactArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_ARTIFACTS_URL=${toml(relay)},TEAMCODE_ARTIFACTS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}"))
+                "args=[${artifactArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_ARTIFACTS_URL=${toml(relay)},TEAMCODE_ARTIFACTS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
+            // Codex has no artifact tool of its own; it only gets the instruction, unless the caller set its own
+            // developer instructions, which an override would replace.
+            (if (artifacts == null || !codexInstructions || hasCodexOverride(arguments, "developer_instructions")) emptyList()
+            else listOf("-c", "developer_instructions=${toml(ARTIFACTS_INSTRUCTIONS)}"))
         // Put overrides in the leaf command scope (exec/resume/review), before any literal delimiter.
         // Root overrides can be discarded by exec --ignore-user-config in some Codex versions.
         AgentLaunch(arguments.take(delimiter) + overrides + arguments.drop(delimiter),
