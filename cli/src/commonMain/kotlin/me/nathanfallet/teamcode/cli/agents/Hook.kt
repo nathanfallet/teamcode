@@ -24,18 +24,18 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
             sdk(saved).use { client ->
                 val bridge = HookGuidance(client)
                 val state = HookActivity.state(input)
-                val run = HookActivity.runId(environment("TEAMCODE_RUN_ID"))
+                val run = HookActivity.runId(environment("TEAMCODE_RUN_ID")).takeIf { environment("TEAMCODE_ACTIVITY") == "1" }
                 val emission = bridge.prepare(input)
                 if (emission != null) {
                     println(emission.output)
                     written = true
                 }
-                // Printed first when there is advice, so a slow report never delays it; `{}` is printed by `finally` otherwise.
+                if (emission != null) bridge.acknowledge(emission)
+                // Last, and after the output: guidance never waits for it. The agent still waits for this process to exit (at most 1.5 s).
                 if (state != null && run != null) {
                     if (!written) { println("{}"); written = true }
                     HookActivity.report(client, run, state)
                 }
-                if (emission != null) bridge.acknowledge(emission)
             }
         } catch (error: CancellationException) { throw error }
         catch (_: Exception) { /* Optional advice must not block tools or reveal diagnostics. */ }

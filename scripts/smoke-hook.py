@@ -97,14 +97,17 @@ with tempfile.TemporaryDirectory(prefix='teamcode-hook-') as directory:
             assert run(data) == {}
             assert time.monotonic() - started < 5, 'Guidance lookup exceeded its deadline'
         # With the launch's identifier, Stop and UserPromptSubmit report only whether the agent waits or works.
-        env = dict(BASE_ENV, TEAMCODE_RUN_ID=RUN)
+        env = dict(BASE_ENV, TEAMCODE_RUN_ID=RUN, TEAMCODE_ACTIVITY='1')
         state['calls'].clear()
         assert run(b'{"session_id":"native-session","hook_event_name":"Stop","last_assistant_message":"PRIVATE_TOOL_INPUT"}', env) == {}
         assert state['calls'] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'waiting_for_human'})], state['calls']
         state['calls'].clear()
         assert run(b'{"session_id":"native-session","hook_event_name":"Notification","notification_type":"auth_success"}', env) == {}
-        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(BASE_ENV, TEAMCODE_RUN_ID='../x')) == {}
+        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(BASE_ENV, TEAMCODE_RUN_ID='../x', TEAMCODE_ACTIVITY='1')) == {}
         assert state['calls'] == [], 'Only a canonical launch identifier and a state-bearing event are reported'
+        # The identifier alone, without the launch asking for reports (opt-out, older server), reports nothing.
+        assert run(b'{"session_id":"native-session","hook_event_name":"Stop"}', dict(BASE_ENV, TEAMCODE_RUN_ID=RUN)) == {}
+        assert state['calls'] == [], state['calls']
         state.update(mode='fresh', emitted=False)
         assert run(data, env)['hookSpecificOutput']['hookEventName'] == 'UserPromptSubmit'
         assert [call for call in state['calls'] if call[0].startswith('/api/v1/runs/')] == [(f'/api/v1/runs/{RUN}/activity', {'state': 'working'})]

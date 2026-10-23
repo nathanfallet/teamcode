@@ -36,7 +36,9 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         writeActor(this, actor); val row = creator(actor, id)
         if (row[AgentRuns.endedAt] != null) throw TeamFailure("run_ended", 409, "This run has ended.")
         val now = nowMillis()
-        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now }
+        // A state reported before a silence is not carried over it: after missed heartbeats it would be a guess.
+        val silent = now - row[AgentRuns.heartbeatAt] > AgentRunService.HEARTBEAT_TTL_MILLIS
+        AgentRuns.update({ AgentRuns.id eq id }) { it[heartbeatAt] = now; if (silent) { it[activity] = null; it[activityAt] = null } }
         RunLease(id, row[AgentRuns.startedAt], now, null, RunState.RUNNING)
     }
 
@@ -46,7 +48,8 @@ class AgentRunServiceImpl(private val database: Database) : AgentRunService {
         val previous = row[AgentRuns.activityAt]
         if (row[AgentRuns.activity] == activity.wire && previous != null) return@query RunActivityChange(id, activity, previous)
         val now = nowMillis()
-        AgentRuns.update({ AgentRuns.id eq id }) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now }
+        if (AgentRuns.update({ (AgentRuns.id eq id) and AgentRuns.endedAt.isNull() }) { it[AgentRuns.activity] = activity.wire; it[activityAt] = now } == 0)
+            throw TeamFailure("run_ended", 409, "This run has ended.")
         RunActivityChange(id, activity, now)
     }
 

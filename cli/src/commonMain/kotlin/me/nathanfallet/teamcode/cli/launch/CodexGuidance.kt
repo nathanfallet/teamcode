@@ -57,7 +57,8 @@ internal fun codexGuidance(platform: ServicePlatform, config: String, teamHooks:
         // but lives below System32; make it discoverable without changing any persistent user setting.
         mapOf("PATH" to listOfNotNull(environment("PATH")?.takeIf { it.isNotBlank() }, powershell.toString()).joinToString(";"))
     } else emptyMap()
-    return AgentLaunch(codexHookOverrides(handler, team, activity), overrides)
+    // The command reports only when this launch asked for it: opt-out, an older server and custom hooks leave it unset.
+    return AgentLaunch(codexHookOverrides(handler, team, activity), overrides + (if (activity) mapOf("TEAMCODE_ACTIVITY" to "1") else emptyMap()))
 }
 
 /** Codex has no `Notification` event: for it the state comes from `Stop` (waiting) and `UserPromptSubmit` (working). */

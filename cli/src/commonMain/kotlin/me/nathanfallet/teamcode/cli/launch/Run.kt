@@ -82,7 +82,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
-                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts)) {
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && agent == "claude")) {
                     echo("Running $agent through the TeamCode user service.", err = true)
                     launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity)
                 } else {

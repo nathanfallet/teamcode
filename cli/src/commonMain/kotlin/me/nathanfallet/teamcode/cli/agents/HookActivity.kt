@@ -17,7 +17,7 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 internal object HookActivity {
     const val WORKING = "working"
     const val WAITING = "waiting_for_human"
-    /** Claude Code's notification types that ask for a person; `auth_success` and others do not. A missing type does too. */
+    /** Claude Code's notification types that ask for a person; `auth_success`, an unknown or a missing type do not. */
     private val ASKING = setOf("permission_prompt", "idle_prompt", "elicitation_dialog")
 
     /** The state this payload reports, or null for an event that says nothing about it (or a payload that is not a hook event). */
@@ -27,7 +27,7 @@ internal object HookActivity {
             fun text(key: String) = (body[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
             when (text("hook_event_name")) {
                 "Stop" -> WAITING
-                "Notification" -> WAITING.takeIf { text("notification_type")?.let { it in ASKING } ?: true }
+                "Notification" -> WAITING.takeIf { text("notification_type") in ASKING }
                 "UserPromptSubmit", "PostToolUse" -> WORKING
                 else -> null
             }
@@ -38,11 +38,14 @@ internal object HookActivity {
     /** The run identifier a hook may report to: the canonical UUID of the launch, or null. */
     fun runId(value: String?): String? = value?.takeIf { RunIdentifiers.isValid(it) }
 
-    /** One report, never a diagnostic. A refusal the server will repeat ([TeamCodeException] 4xx) returns true, like a success. */
+    /** Refusals that will repeat for this launch: not yours (403), unknown (404), ended or changed (409). 401, 408 and 429 are retried. */
+    private val PERMANENT = setOf(403, 404, 409)
+
+    /** One report, never a diagnostic. A refusal the server will repeat returns true, like a success. */
     suspend fun report(client: TeamCodeClient, runId: String, state: String): Boolean = try {
         withTimeoutOrNull(1_500) { client.reportRunActivity(runId, state); true } ?: false
     } catch (error: CancellationException) { throw error }
-    catch (error: TeamCodeException) { error.statusCode in 400..499 }
+    catch (error: TeamCodeException) { error.statusCode in PERMANENT }
     catch (_: Exception) { false }
 }
 
@@ -52,12 +55,13 @@ internal object HookActivity {
  */
 internal class ActivityReporter(private val client: TeamCodeClient) {
     private val lock = Mutex()
-    private val last = mutableMapOf<String, String>()
-    suspend fun report(runId: String, state: String) {
-        if (lock.withLock { last[runId] } == state) return
-        if (HookActivity.report(client, runId, state)) lock.withLock {
-            if (last.size >= MAX_RUNS && runId !in last) last.clear()
-            last[runId] = state
+    private val last = LinkedHashMap<String, String>()
+    /** One report at a time, so two hooks of a launch reach the server in the order they came; the oldest launch is forgotten first. */
+    suspend fun report(runId: String, state: String) = lock.withLock {
+        if (last[runId] == state) return@withLock
+        if (HookActivity.report(client, runId, state)) {
+            last.remove(runId); last[runId] = state
+            if (last.size > MAX_RUNS) last.remove(last.keys.first())
         }
     }
     private companion object { const val MAX_RUNS = 256 }

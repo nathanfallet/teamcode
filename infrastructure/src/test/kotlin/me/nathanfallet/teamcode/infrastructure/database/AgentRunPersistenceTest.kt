@@ -248,7 +248,10 @@ class AgentRunPersistenceTest {
             assertEquals(RunState.STALE, b.get(f.member.principal, id).run.state)
             assertNull(b.get(f.member.principal, id).run.activity); assertNull(b.get(f.member.principal, id).run.activitySinceMillis)
             a.heartbeat(f.member.principal, id)
-            assertEquals(RunActivity.WORKING, b.get(f.member.principal, id).run.activity, "A heartbeat brings the last report back")
+            assertNull(b.get(f.member.principal, id).run.activity, "A state reported before a silence is not carried over it")
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN).activity)
+            a.heartbeat(f.member.principal, id)
+            assertEquals(RunActivity.WAITING_FOR_HUMAN, b.get(f.member.principal, id).run.activity, "A heartbeat without a silence keeps it")
             a.end(f.member.principal, id, 0)
             assertNull(b.get(f.member.principal, id).run.activity)
             failure("run_ended") { b.activity(f.member.principal, id, RunActivity.WAITING_FOR_HUMAN) }

@@ -10,8 +10,9 @@ class HookActivityTest {
         assertEquals("waiting_for_human", state("""{"hook_event_name":"Stop","session_id":"s","last_assistant_message":"secret"}"""))
         for (type in listOf("permission_prompt", "idle_prompt", "elicitation_dialog"))
             assertEquals("waiting_for_human", state("""{"hook_event_name":"Notification","notification_type":"$type","message":"secret"}"""), type)
-        // A client that does not say the type still asked for something.
-        assertEquals("waiting_for_human", state("""{"hook_event_name":"Notification","message":"secret"}"""))
+        // Only the types known to ask for a person: an untyped or unknown notice is information.
+        assertNull(state("""{"hook_event_name":"Notification","message":"secret"}"""))
+        assertNull(state("""{"hook_event_name":"Notification","notification_type":"progress"}"""))
     }
 
     @Test fun promptsAndToolResultsMeanTheAgentWorks() {

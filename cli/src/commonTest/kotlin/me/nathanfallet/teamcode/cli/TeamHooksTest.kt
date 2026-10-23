@@ -178,6 +178,8 @@ class TeamHooksTest {
         assertEquals(listOf("hooks.UserPromptSubmit", "hooks.PreToolUse", "hooks.Stop"), arguments.filterIndexed { i, _ -> i % 2 == 1 }.map { it.substringBefore('=') })
         val stop = arguments[arguments.indexOfFirst { it.startsWith("hooks.Stop=") }]
         assertTrue("agents" in stop && "hook" in stop && "--config" in stop)
+        assertEquals("1", codexGuidance(platform, "/home/me/.config/teamcode/config.json", activity = true).environment["TEAMCODE_ACTIVITY"])
+        assertNull(codexGuidance(platform, "/home/me/.config/teamcode/config.json").environment["TEAMCODE_ACTIVITY"])
         // No Stop override unless the server records activity; never on its own without guidance.
         assertEquals(2, codexGuidance(platform, "/home/me/.config/teamcode/config.json").arguments.size / 2)
         assertTrue(codexGuidance(platform, "/home/me/.config/teamcode/config.json", guidance = false, activity = true).arguments.isEmpty())

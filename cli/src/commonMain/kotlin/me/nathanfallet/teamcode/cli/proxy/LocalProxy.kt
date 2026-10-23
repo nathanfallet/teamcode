@@ -37,7 +37,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
                     put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
