@@ -15,6 +15,7 @@ import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.platform.environment
+import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
@@ -216,6 +217,24 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 }
                 // Skills are installed by this binary in the agent's container, under the agent's UID, in its home.
                 val binary = environment("TEAMCODE_CLOUD_BINARY")?.takeIf { it.isNotBlank() } ?: "/opt/teamcode/teamcode"
+                // The owner's environment variables: in the agent's environment at each start and, for Claude Code,
+                // asked of this process again before each Bash command through a script that holds no value.
+                val variables = RunnerVariables({ client.runnerVariables(RunnerVariablesRequest(team, session, epoch)) }, log = { echo(it, err = true) })
+                val environmentScript = environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { credential ->
+                    try {
+                        val socket = EnvironmentBroker.socketFor(credential)
+                        val broker = EnvironmentBroker(listenUnix(socket), variables, log = { message -> echo(message, err = true) })
+                        scope.launch { broker.serve() }
+                        EnvironmentBroker.scriptFor(credential).also { path ->
+                            FileSystem.SYSTEM.write(path.toPath()) { writeUtf8(AgentEnvironment.cloudScript(binary, socket)) }
+                        }
+                    } catch (error: CancellationException) { throw error } catch (_: Exception) {
+                        echo("The environment socket could not be opened; the agent gets its variables when it starts only.", err = true); null
+                    }
+                }
+                val agentVariables = AgentVariables { kind ->
+                    variables.forStart() + (environmentScript?.takeIf { kind == "claude" }?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it) }.orEmpty())
+                }
                 val tools = RunnerAgentTools(inferenceClient, { arguments ->
                     startProcess(AgentCommand(binary, arguments), AgentHost.AGENT_ENVIRONMENT, environment("TEAMCODE_CLOUD_WORKDIR")?.takeIf { it.isNotBlank() } ?: "/workspace")
                 }, log = { echo(it, err = true) }, binary = binary,
@@ -226,7 +245,7 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                         // Fetched before the agent starts, so a server without the route is known and the agent keeps its own configuration.
                         inference.available()
                         if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
-                    }, tools = tools)
+                    }, tools = tools, variables = agentVariables)
                 val prepare: suspend () -> Boolean = {
                     val prepared = EnvironmentPreparation(preparation, commands, workspace, log = log).run()
                     // The first write happens here, after registration and before the agent starts, so its first `gh` is authenticated.

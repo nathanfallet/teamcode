@@ -69,6 +69,8 @@ internal class AgentHost(
     private val inference: (suspend () -> AgentInferenceEndpoint?)? = null,
     /** The owner's team MCP servers and skills, prepared before each agent start; needs [inference], whose proxy relays the MCP messages. */
     private val tools: AgentTools? = null,
+    /** The owner's environment variables, read again at each agent start (see [AgentVariables]). */
+    private val variables: AgentVariables? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
@@ -248,15 +250,17 @@ internal class AgentHost(
      * Points the agent at the runner's loopback proxy exactly as `teamcode run` does for a local session: the agent
      * receives only the proxy's random local token, and its own provider credentials are removed from its environment.
      * The owner's team MCP servers are connected through the same proxy, one agent-side server per assignment, and
-     * the owner's team hooks installed in the agent's home are added to Claude Code's settings.
+     * the owner's team hooks installed in the agent's home are added to Claude Code's settings. The owner's environment
+     * variables come first, so none of these settings can be replaced by one.
      */
     private suspend fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
-        val endpoint = inference?.invoke() ?: return base to AGENT_ENVIRONMENT
+        val owner = variables?.launch(kind).orEmpty()
+        val endpoint = inference?.invoke() ?: return base to owner + AGENT_ENVIRONMENT
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
         val hooks = tools?.hooks(kind).orEmpty().let(::cloudHookSettings)?.let { listOf("--settings", it) }.orEmpty()
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, mcpServers = servers, artifacts = tools?.artifacts())
-        return AgentCommand(base.command, hooks + plan.arguments) to AGENT_ENVIRONMENT + plan.environment
+        return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 
     private suspend fun readLoop(child: AgentProcess, active: AgentAdapter) {

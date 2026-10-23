@@ -156,6 +156,9 @@ fun main() {
     val skills = database?.let { me.nathanfallet.teamcode.domain.skills.SkillCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlSkillStore(it)) }
     val hooks = database?.let { me.nathanfallet.teamcode.domain.hooks.HookCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlHookStore(it)) }
     val variants = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(it, cipher!!) }
+    /** A member's own environment variables, for `teamcode run`: resolved from the variants on every read. */
+    val environment = variants?.let { me.nathanfallet.teamcode.domain.variants.ResolveOwnEnvironmentUseCase(
+        me.nathanfallet.teamcode.domain.cloud.ResolveCloudVariablesUseCase(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(it))) }
     val mcpLimits = mcpLimits()
     val mcpHttp = HttpClient(CIO) {
         followRedirects = false
@@ -212,7 +215,7 @@ fun main() {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
             apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); artifactHttp.close(); database?.close() }

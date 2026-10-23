@@ -76,7 +76,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
     private val variables = ResolveCloudVariablesUseCase(ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher)))
     private val githubAccess = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),
-        AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess))
+        AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess),
+        RunnerVariablesUseCase(store, variables))
 
     val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore), me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)))
 

@@ -4,6 +4,9 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.subcommands
+import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.options.required
+import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.SystemExit
 import okio.FileSystem
 import okio.Path.Companion.toPath
@@ -53,3 +56,19 @@ private class CredentialIgnore(name: String) : SuspendingCliktCommand(name = nam
     override fun help(context: Context) = "Ignored: the runner holds the tokens."
     override suspend fun run() { generateSequence(::readlnOrNull).count() }
 }
+
+/**
+ * `teamcode cloud environment --socket PATH`: prints shell code setting the session owner's current environment
+ * variables, asked of the runner. The agent's `CLAUDE_ENV_FILE` evaluates it before each Bash command. Without an
+ * answer it prints nothing and succeeds, so the command runs with what it already has.
+ */
+internal class CloudEnvironment : SuspendingCliktCommand(name = "environment") {
+    override val hiddenFromHelp = true
+    override fun help(context: Context) = "Print the session owner's environment variables as shell code (run by the agent's shell, not by hand)."
+    private val socket by option("--socket", help = "The runner's environment socket.").required()
+    override suspend fun run() {
+        val answer = requestEnvironment(socket) ?: return
+        echo(AgentEnvironment.script(answer.variables, answer.withdrawn.toSet()), trailingNewline = false)
+    }
+}
+

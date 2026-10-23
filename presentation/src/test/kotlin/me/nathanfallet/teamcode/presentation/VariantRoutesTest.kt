@@ -146,4 +146,27 @@ class VariantRoutesTest {
         val personalId = registry.variants.keys.last()
         assertEquals(HttpStatusCode.BadRequest, client.put("/api/v1/members/admin-id/variants") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"variantId":"$personalId","memberSecret":""}""") }.status)
     }
+
+    @Test fun membersReadTheirOwnEnvironmentWithAnInteractiveLoginOnly() = testApplication {
+        val asked = mutableListOf<Pair<String, String>>()
+        val source = me.nathanfallet.teamcode.domain.cloud.CloudVariableSource { team, member ->
+            asked += team to member
+            me.nathanfallet.teamcode.domain.cloud.CloudVariables(mapOf("NPM_TOKEN" to "synthetic-npm-value"), listOf("BROKEN_VALUE"))
+        }
+        application { configureGateway(gateway, team = team(), environment = ResolveOwnEnvironmentUseCase(source)) }
+        assertTrue("team.environment.v1" in client.get("/api/v1/capabilities") { bearerAuth("member") }.bodyAsText())
+        // A service key never carries a member's secrets, and a temporary password reads nothing either.
+        for (token in listOf("service", "temporary")) assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/environment") { bearerAuth(token) }.status, token)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/api/v1/environment").status)
+        assertTrue(asked.isEmpty(), "Refused callers are never resolved")
+        // Naming another member is not possible: the header acting for someone else is ignored, the caller's own are read.
+        val response = client.get("/api/v1/environment") { bearerAuth("member"); header("TeamCode-On-Behalf-Of", "someone-else") }
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("no-store, no-transform", response.headers[HttpHeaders.CacheControl])
+        val view = me.nathanfallet.teamcode.api.Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.EnvironmentVariablesView>(response.bodyAsText())
+        assertEquals(mapOf("NPM_TOKEN" to "synthetic-npm-value"), view.variables)
+        assertEquals(listOf("BROKEN_VALUE"), view.unavailable)
+        assertFalse("synthetic-npm-value" in view.toString())
+        assertEquals(listOf("default" to "admin-id"), asked)
+    }
 }
