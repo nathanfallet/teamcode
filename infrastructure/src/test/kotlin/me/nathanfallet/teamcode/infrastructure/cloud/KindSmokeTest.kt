@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.infrastructure.cloud
 
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -10,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState.*
 import me.nathanfallet.teamcode.domain.team.Role
+import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.CloudSessions
@@ -71,22 +73,33 @@ class KindSmokeTest {
                         val profile = admin.saveProfile(principal, null, 0, "smoke", CloudProfileSpec(cluster.id, namespace, read("image"),
                             resources = CloudResources(100, 128), workspaceSizeGibibytes = 1), emptySet())
                         val created = (sessions.create(principal, null, CloudSessionDraft("Smoke", profile.id, null, null, null, mapOf("smoke" to "kind"), null), null) as CloudCreateOutcome.Created).session
-                        // Both replicas reconcile at the same moment; each claims sessions through its own lease owner.
+                        // Both replicas reconcile at the same moment; each keeps its own lease owner.
                         // A transient database error of one replica under the deliberate contention is retried at the next round.
-                        val roundFailures = java.util.concurrent.atomic.AtomicInteger()
+                        val roundFailures = AtomicInteger()
                         suspend fun tolerant(name: String, round: suspend () -> Int) {
                             try { round() } catch (error: CancellationException) { throw error } catch (error: Exception) {
                                 println("$name round failed: $error")
                                 check(roundFailures.incrementAndGet() <= 5) { "Too many failed reconciliation rounds: the replicas did not really reconcile" }
                             }
                         }
-                        suspend fun both() = coroutineScope { listOf(async { tolerant("replica 1") { reconciler() } }, async { tolerant("replica 2") { secondReconciler() } }).forEach { it.await() } }
+                        suspend fun both() = coroutineScope { listOf(async { tolerant("replica 1") { reconciler("replica-1") } }, async { tolerant("replica 2") { secondReconciler("replica-2") } }).forEach { it.await() } }
+                        // Both replicas also act on the very same session snapshot at once, without the lease: the guards behind it
+                        // (compare-and-set on the generation, the epoch advance, the stale-pod cleanup) are what must stop a second launch.
+                        suspend fun contend() {
+                            val snapshot = store.find(principal.teamId, created.id) ?: return
+                            if (snapshot.state != CREATING && snapshot.state != RESUMING) return
+                            coroutineScope { listOf(async { tolerant("replica 1") { reconciler.reconcile(snapshot, "replica-1"); 0 } },
+                                async { tolerant("replica 2") { secondReconciler.reconcile(snapshot, "replica-2"); 0 } }).forEach { it.await() } }
+                        }
                         suspend fun until(what: String, timeoutSeconds: Int = 180, done: suspend (CloudSession) -> Boolean): CloudSession {
                             repeat(timeoutSeconds) {
                                 val s = store.find(principal.teamId, created.id)!!
                                 if (done(s)) return s
                                 database.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }
-                                both()
+                                contend()
+                                contend()
+                                contend()
+                            both()
                                 delay(1_000)
                             }
                             fail("Timed out waiting for $what: ${store.find(principal.teamId, created.id)}")
@@ -118,6 +131,7 @@ class KindSmokeTest {
                         assertEquals(WorkspaceResume.CONSISTENT, paused.resumeWorkspace)
                         assertNull(port.pod(cluster.id, namespace, pod), "A paused session keeps no pod")
                         assertNotNull(port.claim(cluster.id, namespace, paused.workspace.claimName), "A paused session keeps its workspace")
+                        repeat(60) { if (sessionPods(kubeconfig, namespace, created.id).isNotEmpty()) delay(500) }
                         assertEquals(emptyList(), sessionPods(kubeconfig, namespace, created.id), "No pod of the session exists on the cluster while paused")
 
                         // Resume, requested twice at once (two API replicas), lands in a new pod of epoch 2.
@@ -127,7 +141,7 @@ class KindSmokeTest {
                         ).map { it.await() } }
                         // One of the two may lose the race with a conflict; at least one must be accepted, and none may fail otherwise.
                         assertTrue(resumes.any { it.isSuccess }, "At least one resume request is accepted: $resumes")
-                        resumes.mapNotNull { it.exceptionOrNull() }.forEach { assertTrue(it is me.nathanfallet.teamcode.domain.team.TeamFailure && it.status == 409, "A refused resume is a conflict: $it") }
+                        resumes.mapNotNull { it.exceptionOrNull() }.forEach { assertTrue(it is TeamFailure && it.status == 409, "A refused resume is a conflict: $it") }
                         val secondPod = CloudSessionService.podName(created.id, 2)
                         val resumed = until("the pod of epoch 2 to run") { it.currentEpoch == 2 && port.pod(cluster.id, namespace, secondPod)?.phase == PodPhase.RUNNING }
                         assertEquals(paused.workspace.claimName, resumed.workspace.claimName, "The same workspace claim")

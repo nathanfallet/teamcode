@@ -157,10 +157,11 @@ def main():
             # the one the kubelet reports as the pod's image ID), so any of them resolves locally.
             if not inspected["status"].get("repoDigests"):
                 sys.exit("Kind smoke setup failed: the node reports no repository digest for the imported image.")
-            digests = {inspected["status"]["id"]} | {d.split("@")[1] for d in inspected["status"].get("repoDigests", []) if "@" in d}
+            digests = {inspected["status"]["id"]} | {d.split("@")[1] for d in inspected["status"]["repoDigests"] if "@" in d}
             for digest in sorted(digests):
-                run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", "--force", f"docker.io/library/{IMAGE}",
-                    f"docker.io/library/{IMAGE.split(':')[0]}@{digest}")
+                # With and without the tag: the server keeps the tag of the image reference when it pins the digest.
+                for name in (f"docker.io/library/{IMAGE.split(':')[0]}@{digest}", f"docker.io/library/{IMAGE}@{digest}"):
+                    run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", "--force", f"docker.io/library/{IMAGE}", name)
             run(*kubectl, "apply", "-f", "-", stdin=RBAC)
             token = run(*kubectl, "create", "token", "teamcode-server", "-n", "teamcode-system", "--duration", "2h", capture=True)
             config = json.loads(run(*kubectl, "config", "view", "--raw", "--minify", "-o", "json", capture=True))
