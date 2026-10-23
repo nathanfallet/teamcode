@@ -155,6 +155,8 @@ def main():
             inspected = json.loads(run("docker", "exec", node, "crictl", "inspecti", f"docker.io/library/{IMAGE}", capture=True))
             # Name the image by every digest the runtime knows for it (its ID and its repository digests, among them
             # the one the kubelet reports as the pod's image ID), so any of them resolves locally.
+            if not inspected["status"].get("repoDigests"):
+                sys.exit("Kind smoke setup failed: the node reports no repository digest for the imported image.")
             digests = {inspected["status"]["id"]} | {d.split("@")[1] for d in inspected["status"].get("repoDigests", []) if "@" in d}
             for digest in sorted(digests):
                 run("docker", "exec", node, "ctr", "-n", "k8s.io", "images", "tag", "--force", f"docker.io/library/{IMAGE}",
