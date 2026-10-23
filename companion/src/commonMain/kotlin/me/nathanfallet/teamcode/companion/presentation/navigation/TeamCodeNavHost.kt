@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -104,7 +105,9 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 route = entry.toRoute(),
                 onBack = { navController.popBackStack() },
                 onSignedIn = {
-                    navController.navigate(MainRoute) { popUpTo(0) { inclusive = true } }
+                    // The first account's arrival may already have opened the tabs.
+                    if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() != true)
+                        navController.navigate(MainRoute) { popUpTo(0) { inclusive = true } }
                 },
             )
         }
@@ -179,7 +182,10 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     // time keeps the login screen).
     var hadAccounts by rememberSaveable { mutableStateOf(hasAccounts) }
     LaunchedEffect(hasAccounts) {
-        destinationAfterAccountsChange(hadAccounts, hasAccounts)?.let { navController.navigate(it) { popUpTo(0) { inclusive = true } } }
+        destinationAfterAccountsChange(hadAccounts, hasAccounts)
+            // The sign-in that saved the account may already have opened the tabs.
+            ?.takeUnless { it == MainRoute && navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true }
+            ?.let { navController.navigate(it) { popUpTo(0) { inclusive = true } } }
         hadAccounts = hasAccounts
     }
 }
@@ -188,5 +194,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
 internal fun destinationAfterAccountsChange(had: Boolean, has: Boolean): Any? = when {
     // The last account signed out: back to adding a server.
     had && !has -> AddServerRoute
+    // A first account, saved by a sign-in or from outside it (the desktop's CLI account, described after the window
+    // opened on adding a server): the tabs.
+    !had && has -> MainRoute
     else -> null
 }
