@@ -25,10 +25,13 @@ import kotlin.test.*
 /** The daemon against a fake server: orders, refusals, supervision, pause on stop and resume on start (decision 5). */
 class DeviceDaemonTest {
     internal class Fixture(val root: Path, val home: Path, val server: FakeDaemonServer) {
-        private val lock = configStore((root / "config.json").toString())
-        val folders = FolderStore(root / "folders.json", lock)
-        val records = RemoteSessions(root / "remote", lock)
-        val state = DaemonSessions(root / "daemon-sessions.json", lock)
+        // Not created beforehand: on Windows the private writes create it with the user as its owner, and refuse a directory
+        // owned by someone else (an elevated runner's Administrators).
+        private val config = root / "config"
+        private val lock = configStore((config / "config.json").toString())
+        val folders = FolderStore(config / "folders.json", lock)
+        val records = RemoteSessions(config / "remote", lock)
+        val state = DaemonSessions(config / "daemon-sessions.json", lock)
         val hosts = server.Hosts()
         val reports = mutableListOf<String>()
         var stop = false

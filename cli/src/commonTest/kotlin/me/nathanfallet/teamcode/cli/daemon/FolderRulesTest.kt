@@ -59,7 +59,8 @@ class FolderRulesTest {
     }
 
     @Test fun foldersKeepAStableIdAndPublishOnlyNamesAndLabels() = scratch { root, home ->
-        val store = FolderStore(root / "folders.json", configStore((root / "config.json").toString()))
+        // The private directory is created by the store's own writes (on Windows, owned by the user).
+        val store = FolderStore(root / "config" / "folders.json", configStore((root / "config" / "config.json").toString()))
         FileSystem.SYSTEM.createDirectories(home / "git" / "teamcode")
         FileSystem.SYSTEM.createDirectories(root / "srv")
         val (first, added) = store.add(home / "git" / "teamcode", "/usr/bin:/opt/bin")
@@ -77,7 +78,7 @@ class FolderRulesTest {
         assertEquals(other, store.remove((root / "srv").toString()), "By path too")
         assertNull(store.remove("unknown"))
         assertTrue(store.read().folders.isEmpty())
-        assertTrue(FileSystem.SYSTEM.exists(root / "config.lock"), "Written under config.lock")
+        assertTrue(FileSystem.SYSTEM.exists(root / "config" / "config.lock"), "Written under config.lock")
     }
 
     @Test fun onlyOneDaemonHoldsTheLock() = scratch { root, _ ->
