@@ -257,7 +257,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else null,
                         if (cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else null,
                         if (cloudSessions != null && cloudRunner?.variables != null) listOf("cloud.variables.v1") else null,
-                        if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1") else null,
+                        if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1", "cloud.transfer.recipients.v1") else null,
                         // Remote sessions need their host's runner channel and the conversation it relays.
                         if (cloudSessions != null && cloudRunner?.remoteHosts == true && cloudConversation != null) listOf("cloud.sessions.remote.v1") else null,
                         if (cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else null,

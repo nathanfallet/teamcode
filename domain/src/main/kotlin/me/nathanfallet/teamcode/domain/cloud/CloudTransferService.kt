@@ -54,6 +54,20 @@ class CloudTransferService(
         return transfers.open(transfer, actor, if (admin) "cloud.transfer.requested" else "cloud.transfer.offered", change)
     }
 
+    /**
+     * Who the caller can give a session to, for a picker: the team's enabled members who completed password setup
+     * (the caller included: an administrator may take a session over), at most [MAX_RECIPIENTS]. Open to whoever may
+     * request a transfer: administrators, and members while `memberTransfers` is `offer`. A recipient listed here can
+     * still be refused for a given session (profile, access policy, models, quota), with `422 recipient_ineligible`.
+     */
+    suspend fun recipients(principal: Principal): List<CloudTransferRecipient> {
+        principal.requireCloudWrite()
+        store.revalidate(principal)
+        if (!principal.isCloudAdministrator && store.settings(principal.teamId).memberTransfers == MemberTransfers.DISABLED)
+            throw TeamFailure("transfer_disabled", 403, "Your team does not allow members to transfer their sessions. Ask an administrator.")
+        return transfers.recipients(principal.teamId, MAX_RECIPIENTS)
+    }
+
     /** The recipient (or an administrator) accepts an offer; the session then pauses and changes owner. Idempotent. */
     /** [resume] `null` keeps what the offer asked for. */
     suspend fun accept(principal: Principal, onBehalfOf: String?, id: String, resume: Boolean?): CloudTransfer {
@@ -173,6 +187,8 @@ class CloudTransferService(
 
     companion object {
         const val DAY_MILLIS = 86_400_000L
+        /** A picker's bound; a larger team names the recipient by member ID. */
+        const val MAX_RECIPIENTS = 500
         private const val ATTEMPTS = 5
         private val endedProblem = CloudProblem("session_not_running", "The cloud session is terminated or being deleted.")
 

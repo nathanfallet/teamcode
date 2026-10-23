@@ -93,12 +93,20 @@ sealed interface TransferCompletion {
 }
 
 /** Transfers in shared persistence. Every write that touches a session is a compare-and-set on its generation. */
+/** A member a session may be given to, as a picker shows them: nothing else of the member is read. */
+data class CloudTransferRecipient(val id: String, val username: String, val administrator: Boolean)
+
 interface CloudTransferStore {
     suspend fun find(teamId: String, id: String): CloudTransfer?
     /** The transfer created by [initiatorId] with this idempotency key, while the key is kept (24 hours). */
     suspend fun byKey(teamId: String, initiatorId: String, key: String): CloudTransfer?
     /** [memberId] is the caller: their incoming and outgoing transfers, unless the query asks for the whole team. */
     suspend fun list(teamId: String, memberId: String, query: CloudTransferQuery): CloudTransferPage
+    /**
+     * Members who can receive a session at all: enabled, password setup completed; ordered by username, at most
+     * [limit]. Only identifiers, usernames and roles are read.
+     */
+    suspend fun recipients(teamId: String, limit: Int): List<CloudTransferRecipient>
 
     /**
      * Inserts [transfer] under the session row lock. A repeated idempotency key replays the stored transfer (or fails

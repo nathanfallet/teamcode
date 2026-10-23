@@ -1,0 +1,1 @@
+CREATE INDEX member_recipients ON members (team_id, disabled, must_change_password, username, `role`, is_owner);

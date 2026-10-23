@@ -32,7 +32,8 @@ class CloudRoutesTest {
         override suspend fun profile(teamId: String, profileId: String) = listOf(profile, reserved).find { it.id == profileId }
         override suspend fun profileVersion(teamId: String, profileId: String, version: Int) = profile.spec
         override suspend fun cluster(teamId: String, clusterId: String) = CloudCluster("cluster-id", "default", "lab", "https://k8s.example.test", listOf("teamcode"), 10, "standard", 1, 0, null, 1, 1)
-        override suspend fun settings(teamId: String) = CloudSettings()
+        var cloudSettings = CloudSettings()
+        override suspend fun settings(teamId: String) = cloudSettings
         override suspend fun insert(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int): CloudCreateOutcome {
             if (idempotency != null) keys[actor.principal.member.id + idempotency.key]?.let { (digest, id) ->
                 if (digest != idempotency.requestDigest) throw TeamFailure("idempotency_conflict", 422, "conflict")
@@ -321,6 +322,35 @@ class CloudRoutesTest {
         override suspend fun complete(expected: CloudSession, next: CloudSession, transfer: CloudTransfer, leaseOwner: String, retainedLimit: Int) = TransferCompletion.Conflict
         override suspend fun expireOffers(limit: Int) = 0
         override suspend fun maintain() = Unit
+        val recipientLimits = mutableListOf<Int>()
+        override suspend fun recipients(teamId: String, limit: Int): List<CloudTransferRecipient> {
+            recipientLimits += limit
+            return listOf(store.member(teamId, "admin-id")!!, store.member(teamId, "colleague-id")!!).map { CloudTransferRecipient(it.id, it.username, it.role.isAdministrator) }
+        }
+    }
+
+    @Test fun recipientsAreListedToWhoeverMayRequestATransfer() = testApplication {
+        val store = Store()
+        val sessions = CloudSessionService(store)
+        val transferStore = Transfers(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
+                cloudTransfers = CloudTransferService(store, transferStore, sessions, CloudRecipientPolicy(store)), publicOrigin = "http://localhost")
+        }
+        assertTrue("cloud.transfer.recipients.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        val member = TeamCodeClient("http://localhost", { "colleague" }) { config -> createClient { config(this) } }
+        try {
+            // Only what a picker needs: no role name, no state, nothing else of the member.
+            assertEquals(listOf(CloudTransferRecipientView("admin-id", "admin", true), CloudTransferRecipientView("colleague-id", "colleague", false)), member.cloudTransferRecipients())
+            val body = client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("colleague") }.bodyAsText()
+            assertEquals("""{"recipients":[{"id":"admin-id","username":"admin","administrator":true},{"id":"colleague-id","username":"colleague","administrator":false}]}""", body)
+            assertEquals(listOf(CloudTransferService.MAX_RECIPIENTS), transferStore.recipientLimits.distinct())
+            assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("service-admin") }.status, "A key without a cloud write scope lists nobody")
+            // A team that keeps transfers to administrators does not show members its directory.
+            store.cloudSettings = CloudSettings(memberTransfers = MemberTransfers.DISABLED)
+            assertEquals("transfer_disabled", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { member.cloudTransferRecipients() }.code)
+            assertEquals(2, Serialization.json.decodeFromString<CloudTransferRecipientsView>(client.get("/api/v1/cloud/transfer-recipients") { bearerAuth("admin") }.bodyAsText()).recipients.size)
+        } finally { member.close() }
     }
 
     @Test fun transfersAreOffersForMembersAndImmediateForAdministrators() = testApplication {

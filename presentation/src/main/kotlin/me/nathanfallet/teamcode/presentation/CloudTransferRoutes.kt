@@ -37,6 +37,9 @@ internal fun Route.cloudTransferRoutes(transfers: CloudTransferService) {
             if (outcome is CloudTransferOutcome.Replayed) call.response.header(CloudHeaders.IDEMPOTENCY_REPLAYED, "true")
             call.respond(HttpStatusCode.Accepted, outcome.transfer.view())
         }
+        get("/transfer-recipients") {
+            call.respond(CloudTransferRecipientsView(transfers.recipients(call.principal).map { CloudTransferRecipientView(it.id, it.username, it.administrator) }))
+        }
         get("/transfers") {
             val q = call.request.queryParameters
             fun single(name: String) = q.getAll(name)?.let { it.singleOrNull() ?: throw TeamFailure("invalid_query", 400, "Send $name at most once.") }

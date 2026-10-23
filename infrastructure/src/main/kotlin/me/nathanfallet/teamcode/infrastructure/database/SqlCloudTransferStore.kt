@@ -45,6 +45,14 @@ class SqlCloudTransferStore(private val database: Database) : CloudTransferStore
         CloudTransferPage(page, if (rows.size > query.limit) page.last().id else null)
     }
 
+    // `member_recipients` covers the filter, the order and every column read: no row lookup, no sort.
+    override suspend fun recipients(teamId: String, limit: Int): List<CloudTransferRecipient> = database.query {
+        Members.select(Members.id, Members.username, Members.role, Members.isOwner)
+            .where { (Members.teamId eq teamId) and (Members.disabled eq false) and (Members.mustChangePassword eq false) }
+            .orderBy(Members.username).limit(limit)
+            .map { CloudTransferRecipient(it[Members.id], it[Members.username], readMemberRole(it).isAdministrator) }
+    }
+
     override suspend fun open(transfer: CloudTransfer, actor: CloudActor, auditAction: String, session: SessionChange?): CloudTransferOutcome = database.query {
         requireCurrent(this, actor.principal)
         lockSession(transfer.sessionId)

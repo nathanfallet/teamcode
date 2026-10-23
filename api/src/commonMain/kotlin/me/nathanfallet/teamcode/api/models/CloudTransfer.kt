@@ -46,5 +46,14 @@ data class CloudTransferView(
     val eventSeq: Long? = null,
     val failure: CloudProblemView? = null,
 )
+/**
+ * `GET /api/v1/cloud/transfer-recipients` (`cloud.transfer.recipients.v1`): the members a session can be given to,
+ * for a picker. Only the identifier, the username and whether the member is an administrator.
+ */
+@Serializable
+data class CloudTransferRecipientView(val id: String, val username: String, val administrator: Boolean)
+@Serializable
+data class CloudTransferRecipientsView(val recipients: List<CloudTransferRecipientView>)
+
 @Serializable
 data class CloudTransferPageView(val transfers: List<CloudTransferView>, val nextBefore: String? = null)

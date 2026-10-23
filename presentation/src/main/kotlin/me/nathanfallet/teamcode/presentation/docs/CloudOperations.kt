@@ -512,6 +512,18 @@ private fun ApiCatalog.cloudTransfers() {
             error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`).")
         }
     }
+    get("/api/v1/cloud/transfer-recipients") {
+        operationId = "listCloudTransferRecipients"; tag(ApiTags.CLOUD_TRANSFERS)
+        summary = "Members a session can be given to"
+        description = "For a recipient picker: the team's enabled members who completed password setup, by username, " +
+            "at most 500, the caller included. Only their identifier, username and whether they are an administrator. Open " +
+            "to administrators, and to members while the team lets them offer sessions. A listed member can still be " +
+            "refused for a given session (`422 recipient_ineligible` on the transfer)."
+        responses {
+            ok<CloudTransferRecipientsView>("The members, by username.")
+            error(HttpStatusCode.Forbidden, "Members may not offer sessions in this team (`transfer_disabled`).")
+        }
+    }
     get("/api/v1/cloud/transfers") {
         operationId = "listCloudTransfers"; tag(ApiTags.CLOUD_TRANSFERS)
         summary = "List transfers"

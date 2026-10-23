@@ -41,13 +41,14 @@ class CloudTransferPersistenceTest {
             Database(container.jdbcUrl, container.username, container.password).use { b ->
                 coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
                 a.query {
-                    val drift = MigrationUtils.statementsRequiredForDatabaseMigration(CloudSettingsTable, CloudSessions, CloudExecutions, CloudTransfers, AuditEvents, withLogs = false)
+                    val drift = MigrationUtils.statementsRequiredForDatabaseMigration(CloudSettingsTable, CloudSessions, CloudExecutions, CloudTransfers, AuditEvents, Members, withLogs = false)
                     assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
                 }
                 val cluster = FakeClusterPort()
                 val cipher = CredentialCipher(ByteArray(32) { 43 })
                 val ra = Replica(a, cluster, cipher); val rb = Replica(b, cluster, cipher)
                 val team = members(a)
+                recipientList(ra, team)
                 val profile = administration(ra, team.admin, setOf(team.owner.member.id, team.recipient.member.id))
                 val session = ready(ra, rb, team.owner, profile, "Offered")
                 offers(ra, rb, team, session)
@@ -442,6 +443,18 @@ class CloudTransferPersistenceTest {
             team.login(this@member, "$this@member replacement password", "test").principal
         }
         return Team(admin, "transfer-owner".member(), "transfer-recipient".member(), "transfer-outsider".member())
+    }
+
+    /** The picker's list: enabled members with their password set, by username, nothing about the others. */
+    private suspend fun recipientList(ra: Replica, t: Team) {
+        ra.team.createMember(t.admin, "transfer-pending", Role.MEMBER)
+        val disabled = ra.team.createMember(t.admin, "transfer-disabled", Role.MEMBER).member
+        ra.team.updateMember(t.admin, disabled.id, Role.MEMBER, disabled = true)
+        val listed = ra.transfers.recipients(t.owner)
+        assertEquals(listOf("admin", "transfer-outsider", "transfer-owner", "transfer-recipient"), listed.map { it.username })
+        assertEquals(listOf(true, false, false, false), listed.map { it.administrator })
+        assertEquals(t.owner.member.id, listed.single { it.username == "transfer-owner" }.id)
+        assertEquals(2, ra.transferStore.recipients(t.admin.teamId, 2).size, "Bounded")
     }
 
     private suspend fun administration(ra: Replica, admin: Principal, assigned: Set<String>): CloudProfile {

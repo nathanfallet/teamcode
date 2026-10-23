@@ -24,6 +24,8 @@ object Members : Table("members") {
     init {
         uniqueIndex("member_username", teamId, username)
         index("team_owners", false, teamId, isOwner, disabled, mustChangePassword)
+        // Transfer recipients: enabled members with their password set, by username (covering).
+        index("member_recipients", false, teamId, disabled, mustChangePassword, username, role, isOwner)
     }
 }
 object Tokens : Table("tokens") {

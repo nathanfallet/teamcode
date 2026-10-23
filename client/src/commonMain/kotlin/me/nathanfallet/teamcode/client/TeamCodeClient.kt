@@ -600,6 +600,9 @@ class TeamCodeClient(
             onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
         }
     }
+    /** The members a session can be given to, for a picker (`cloud.transfer.recipients.v1`). */
+    suspend fun cloudTransferRecipients(): List<CloudTransferRecipientView> =
+        coded<CloudTransferRecipientsView, Unit>(HttpMethod.Get, "/api/v1/cloud/transfer-recipients", null).recipients
     /** [direction] is `incoming`, `outgoing` or null for both; [team] lists every team transfer (administrators). */
     suspend fun cloudTransfers(direction: String? = null, team: Boolean = false, states: List<String> = emptyList(), session: String? = null, before: String? = null, limit: Int = 50): CloudTransferPageView {
         session?.let(::identifier); before?.let(::identifier)
