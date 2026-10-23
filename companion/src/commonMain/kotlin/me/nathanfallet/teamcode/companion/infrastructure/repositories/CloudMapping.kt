@@ -19,6 +19,7 @@ import me.nathanfallet.teamcode.companion.domain.models.AgentQuestionOption
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptPage
@@ -40,6 +41,7 @@ internal fun CloudSessionView.domain() = CloudSession(
     createdAt = createdAt,
     updatedAt = updatedAt,
     problemCode = (failure ?: resumeBlocked)?.code,
+    kind = SessionKind.of(kind),
 )
 
 internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)

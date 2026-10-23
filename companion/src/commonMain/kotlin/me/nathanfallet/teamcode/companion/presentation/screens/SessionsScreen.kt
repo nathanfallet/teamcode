@@ -122,6 +122,8 @@ fun SessionsScreen(
     onOpenSession: (Account, CloudSession) -> Unit,
     onNewSession: (Account) -> Unit = {},
     onSwitchAccount: () -> Unit = {},
+    /** More buttons of the title for a signed-in account (the transfers list). */
+    titleActions: @Composable (Account) -> Unit = {},
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
     clock: Clock = koinInject(),
@@ -143,6 +145,7 @@ fun SessionsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             LargeTitle(stringResource(Res.string.sessions_title)) {
+                if (account != null && account.signedIn) titleActions(account)
                 if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { onNewSession(account) },
                     kind = IconButtonKind.FILLED, modifier = Modifier.testTag("new-session"))
             }

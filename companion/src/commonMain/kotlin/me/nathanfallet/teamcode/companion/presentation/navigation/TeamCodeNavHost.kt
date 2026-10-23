@@ -38,6 +38,12 @@ import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
+import me.nathanfallet.teamcode.companion.presentation.screens.TransfersScreen
+import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
+import me.nathanfallet.teamcode.companion.presentation.components.TransferMenuItem
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.TransferViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.TransfersViewModel
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.Radii
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
@@ -107,6 +113,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenArtifact = { accountId, artifactId -> navController.navigate(ArtifactRoute(accountId, artifactId)) },
                 onOpenLink = ::openLink,
                 onAddAccount = { navController.navigate(AddServerRoute) },
+                onOpenTransfers = { accountId -> navController.navigate(TransfersRoute(accountId)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -125,8 +132,21 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val route = entry.toRoute<SessionRoute>()
             val viewModel: SessionViewModel = koinViewModel { parametersOf(route) }
             val accounts: AccountRepository = koinInject()
+            var transferring by remember { mutableStateOf<TransferRoute?>(null) }
             SessionScreen(viewModel, memberId = accounts.accounts.value.firstOrNull { it.id == route.accountId }?.memberId, onBack = { navController.popBackStack() },
-                onOpenArtifacts = { navController.navigate(ArtifactsRoute(route.accountId, route.sessionId)) })
+                onOpenArtifacts = { navController.navigate(ArtifactsRoute(route.accountId, route.sessionId)) },
+                menuItems = { session, close -> TransferMenuItem(route.accountId, session) { close(); transferring = TransferRoute(route.accountId, session.id, session.ownerId) } })
+            transferring?.let { transfer ->
+                SheetViewModels {
+                    val sheet: TransferViewModel = koinViewModel { parametersOf(transfer) }
+                    TransferSheet(sheet, onDismiss = { transferring = null })
+                }
+            }
+        }
+        composable<TransfersRoute> { entry ->
+            val route = entry.toRoute<TransfersRoute>()
+            val viewModel: TransfersViewModel = koinViewModel { parametersOf(route) }
+            TransfersScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) })
         }
     }
 
