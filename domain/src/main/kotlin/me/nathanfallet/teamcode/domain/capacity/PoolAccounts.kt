@@ -43,9 +43,9 @@ data class PoolAccountStatus(
 class DescribePoolAccountsUseCase {
     fun describe(accounts: List<PoolAccountObservation>, now: Long, revealIdentity: Boolean, pressureThreshold: Double = DEFAULT_QUOTA_PRESSURE_THRESHOLD): List<PoolAccountStatus> =
         // The caller's order is the listing's order (the store sorts by next reset); only the neutral numbering follows priority.
-        accounts.sortedWith(compareByDescending<PoolAccountObservation> { it.account.priority }.thenBy { it.account.id }).map { it.account.id }.let { byPriority ->
+        accounts.sortedWith(compareByDescending<PoolAccountObservation> { it.account.priority }.thenBy { it.account.id }).withIndex().associate { it.value.account.id to it.index }.let { byPriority ->
             accounts.map { observed ->
-                val index = byPriority.indexOf(observed.account.id)
+                val index = byPriority.getValue(observed.account.id)
                 val account = observed.account
                 val windows = observed.windows.filter { it.accountId == account.id && it.isCurrent(now) }.sortedBy { it.window }
                 val cooling = observed.cooldownUntilMillis.takeIf { it > now }

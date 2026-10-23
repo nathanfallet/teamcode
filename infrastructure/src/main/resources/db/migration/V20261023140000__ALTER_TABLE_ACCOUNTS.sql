@@ -1,2 +1,1 @@
 ALTER TABLE accounts ADD next_reset_at BIGINT DEFAULT 9223372036854775807 NOT NULL;
-UPDATE accounts SET next_reset_at = COALESCE((SELECT MIN(q.resets_at) FROM quota_windows q WHERE q.account_id = accounts.id AND q.window_name NOT LIKE 'model:%' AND q.resets_at > UNIX_TIMESTAMP() * 1000), 9223372036854775807);

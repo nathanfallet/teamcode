@@ -231,6 +231,8 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             val now = nowMillis()
             AdmissionWaiters.deleteWhere(limit = 1000) { expiresAt lessEq now }
             ConversationAffinities.deleteWhere(limit = 1000) { expiresAt lessEq now }
+            // A reset that has passed no longer describes the account: recompute it, so unobserved accounts do not stay first.
+            Accounts.select(Accounts.id).where { Accounts.nextResetAt less now }.limit(1000).map { it[Accounts.id] }.forEach { refreshNextReset(it, now) }
             QuotaHistory.deleteWhere(limit = 1000) { observedAt less now - 7 * DAY }
             // Unknown charges must remain reviewable, including after an expired process lease.
             Reservations.deleteWhere(limit = 1000) { (dayNumber less now / DAY - 90) and (state inList listOf("SETTLED", "RECONCILED")) }

@@ -49,6 +49,17 @@ class AccountResetOrderPersistenceTest {
                 admission.observe(soon, QuotaUpdate(listOf(AccountQuota(soon, "five_hour", .2, now + 20, null)), now + 20))
                 assertEquals(now + 24 * hour, stored(db, soon), "An unreported reset falls back to the next window that has one")
                 assertEquals(Long.MAX_VALUE, stored(db, never))
+
+                // A reset that passes without a new observation is swept by maintenance, so an unobserved account does not stay first.
+                val expiring = add(accounts, "Expiring")
+                val t = db.query { nowMillis() }
+                admission.observe(expiring, QuotaUpdate(listOf(AccountQuota(expiring, "five_hour", .1, t - 10, t + 1500)), t - 10))
+                assertEquals(t + 1500, stored(db, expiring))
+                assertEquals(expiring, admission.poolAccounts(admin).first().accountId)
+                Thread.sleep(2000)
+                admission.maintain()
+                assertEquals(Long.MAX_VALUE, stored(db, expiring))
+                assertNotEquals(expiring, admission.poolAccounts(admin).first().accountId)
             }
         }
     }
