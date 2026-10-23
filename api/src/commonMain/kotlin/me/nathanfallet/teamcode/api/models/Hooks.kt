@@ -10,8 +10,9 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class HookDefinitionView(val events: List<String>, val matcher: String? = null, val command: String, val timeoutSeconds: Int = 60)
 
+/** `allMembers` delivers the pinned version to every member without an explicit decision, including later members. */
 @Serializable
-data class HookView(val id: String, val name: String, val pinnedVersion: String? = null, val createdAt: Long, val updatedAt: Long)
+data class HookView(val id: String, val name: String, val pinnedVersion: String? = null, val createdAt: Long, val updatedAt: Long, val allMembers: Boolean = false)
 
 @Serializable
 data class HookVersionView(
@@ -28,15 +29,24 @@ data class HookVersionView(
 @Serializable
 data class HookDetailView(val hook: HookView, val versions: List<HookVersionView>)
 
-/** Publication never pins: an interactive administrator approves each version with `PUT /api/v1/hooks/{name}/pin`. */
+/**
+ * Publication never pins: an interactive administrator approves each version with `PUT /api/v1/hooks/{name}/pin`.
+ * With `allMembers`, the hook will be delivered to every member without an explicit decision once pinned; a key may ask
+ * for it only while the hook is not pinned (`403 hook_audience_requires_administrator` otherwise). `false` leaves the
+ * audience unchanged. Servers advertise `team.hooks.all-members.v1`.
+ */
 @Serializable
-data class PublishHookVersionRequest(val version: String, val definition: HookDefinitionView, val files: List<SkillFileUpload>)
+data class PublishHookVersionRequest(val version: String, val definition: HookDefinitionView, val files: List<SkillFileUpload>, val allMembers: Boolean = false)
 
 @Serializable
 data class PublishHookVersionResponse(val hook: HookView, val version: HookVersionView, val created: Boolean)
 
 @Serializable
 data class PinHookRequest(val version: String)
+
+/** `true`: every member without an explicit decision receives the pinned hook; `false`: only members set to *yes*. */
+@Serializable
+data class SetHookAudienceRequest(val allMembers: Boolean)
 
 @Serializable
 data class HookAssignmentView(val memberId: String, val decision: String, val updatedAt: Long)

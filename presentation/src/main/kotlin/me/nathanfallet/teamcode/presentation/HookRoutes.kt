@@ -20,7 +20,7 @@ import me.nathanfallet.teamcode.domain.team.*
 private const val MAX_PUBLISH_BODY_BYTES = 2 * 1024 * 1024
 
 private fun HookDefinition.view() = HookDefinitionView(events.map { it.wire }.sorted(), matcher, command, timeoutSeconds)
-private fun Hook.view() = HookView(id, name, pinnedVersion, createdAt, updatedAt)
+private fun Hook.view() = HookView(id, name, pinnedVersion, createdAt, updatedAt, allMembers)
 private fun HookVersion.view(pinned: String?) = HookVersionView(version, digest, definition.view(), sizeBytes, fileCount, publishedBy, publishedAt, version == pinned)
 private fun HookAssignment.view() = HookAssignmentView(memberId, decision.wire, updatedAt)
 private fun EffectiveHook.view() = EffectiveHookView(name, version, digest, definition.view(), sizeBytes, fileCount)
@@ -71,7 +71,7 @@ internal fun Route.hookRoutes(hooks: HookCatalog, team: TeamService, origin: Str
         val name = call.hookName
         hooks.publish.authorize(call.principal) // Before buffering the upload.
         val input = call.hookJson<PublishHookVersionRequest>(MAX_PUBLISH_BODY_BYTES)
-        val result = hooks.publish(call.principal, name, input.version, input.definition.domain(), input.files())
+        val result = hooks.publish(call.principal, name, input.version, input.definition.domain(), input.files(), input.allMembers)
         call.respond(if (result.created) HttpStatusCode.Created else HttpStatusCode.OK,
             PublishHookVersionResponse(result.hook.view(), result.version.view(result.hook.pinnedVersion), result.created))
     }
@@ -87,6 +87,11 @@ internal fun Route.hookRoutes(hooks: HookCatalog, team: TeamService, origin: Str
         call.principal.requireAdmin() // Refuse before reading the body; service keys never pin a hook.
         val input = call.hookJson<PinHookRequest>(4_096)
         call.respond(store.pin(call.principal, name, input.version).view())
+    }
+    put("/api/v1/hooks/{name}/audience") {
+        val name = call.hookName
+        val input = call.hookJson<SetHookAudienceRequest>(4_096)
+        call.respond(store.setAudience(call.principal, name, input.allMembers).view())
     }
     delete("/api/v1/hooks/{name}/pin") { call.respond(store.unpin(call.principal, call.hookName).view()) }
     get("/api/v1/hooks/{name}/assignments") { call.respond(store.assignments(call.principal, call.hookName).map { it.view() }) }
@@ -123,9 +128,9 @@ private fun Route.hookDashboard(hooks: HookCatalog, team: TeamService, origin: S
         val actor = call.principal
         if (!actor.member.role.isAdministrator) return@get call.respondRedirect("/dashboard/members/${actor.member.id}/hooks")
         val rows = store.catalog(actor).joinToString("") { hook ->
-            """<tr><td><a href="/dashboard/hooks/${escape(hook.name)}">${escape(hook.name)}</a></td><td>${hook.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td><small>${date(hook.updatedAt)}</small></td></tr>"""
+            """<tr><td><a href="/dashboard/hooks/${escape(hook.name)}">${escape(hook.name)}</a></td><td>${hook.pinnedVersion?.let { "<code>${escape(it)}</code>" } ?: "<small>Not pinned: not delivered</small>"}</td><td>${if (hook.allMembers) "All members" else "Members set to Yes"}</td><td><small>${date(hook.updatedAt)}</small></td></tr>"""
         }
-        call.respondText(call.page("Team hooks", """<details class='help'><summary>How this works</summary><p>A team hook is a script that the members' agents (Claude Code, and Codex for the events it supports) run on an event such as <code>Stop</code> or <code>PreToolUse</code>. It runs on the member's computer with the member's rights, so it is delivered with three locks: CI publishes versions with a <code>hooks:publish</code> key owned by an administrator, but only an administrator pins a version here; only members with an explicit <em>allow</em> decision receive it; and each member approves each version on their computer (<code>teamcode hooks</code>) before <code>teamcode run</code> installs it. Cloud sessions run the pinned version for allowed owners without a local approval.</p></details><table><thead><tr><th>Hook</th><th>Pinned version</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No hook has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/hooks">My delivered hooks</a></p>"""), ContentType.Text.Html)
+        call.respondText(call.page("Team hooks", """<details class='help'><summary>How this works</summary><p>A team hook is a script that the members' agents (Claude Code, and Codex for the events it supports) run on an event such as <code>Stop</code> or <code>PreToolUse</code>. It runs on the member's computer with the member's rights, so it is delivered with three locks: CI publishes versions with a <code>hooks:publish</code> key owned by an administrator, but only an administrator pins a version here; only members with an explicit <em>allow</em> decision receive it, or every member not set to <em>No</em> when its audience is <em>All members</em> (a key can ask for that audience only before the first pin, so the administrator's pin approves it); and each member approves each version on their computer (<code>teamcode hooks</code>) before <code>teamcode run</code> installs it. Cloud sessions run the pinned version for allowed owners without a local approval.</p></details><table><thead><tr><th>Hook</th><th>Pinned version</th><th>Audience</th><th>Updated (UTC)</th></tr></thead><tbody>$rows</tbody></table>${if (rows.isEmpty()) "<div class='empty'><strong>No hook has been published yet.</strong></div>" else ""}<p><a href="/dashboard/members/${escape(actor.member.id)}/hooks">My delivered hooks</a></p>"""), ContentType.Text.Html)
     }
     get("/dashboard/hooks/{name}") {
         val actor = call.principal
@@ -142,10 +147,10 @@ private fun Route.hookDashboard(hooks: HookCatalog, team: TeamService, origin: S
         val memberRows = team.members(actor).joinToString("") { member ->
             val current = decisions[member.id]
             fun option(value: String, label: String, selected: Boolean) = """<option value="$value" ${if (selected) "selected" else ""}>$label</option>"""
-            """<tr><td>${escape(member.username)}</td><td><form method="post" action="$base/assignments/${escape(member.id)}">${csrf(actor)}<select name="decision">${option("none", "Not assigned", current == null)}${option("allow", "Yes", current == SkillDecision.ALLOW)}${option("deny", "No", current == SkillDecision.DENY)}</select><button>Save</button></form></td></tr>"""
+            """<tr><td>${escape(member.username)}</td><td><form method="post" action="$base/assignments/${escape(member.id)}">${csrf(actor)}<select name="decision">${option("none", if (hook.allMembers) "Default (receives it)" else "Not assigned", current == null)}${option("allow", "Yes", current == SkillDecision.ALLOW)}${option("deny", "No", current == SkillDecision.DENY)}</select><button>Save</button></form></td></tr>"""
         }
         val controls = if (hook.pinnedVersion != null) """<form method="post" action="$base/unpin">${csrf(actor)}<button>Unpin (stop delivery)</button></form>""" else ""
-        call.respondText(call.page("Hook ${hook.name}", """<details class='help'><summary>How this works</summary><p>${hook.pinnedVersion?.let { "Delivering <code>${escape(it)}</code>." } ?: "No pinned version: nothing is delivered."} Pinning runs this version's script on the computers of every member with <em>Yes</em> once they approve it, and in their cloud sessions. Read the version's files before pinning it. Update or roll back by pinning another immutable version.</p></details>$controls<h2>Versions</h2><table><thead><tr><th>Version / digest</th><th>Definition</th><th>Content</th><th>Published by / UTC</th><th>Manage</th></tr></thead><tbody>$versionRows</tbody></table><h2>Access</h2><p>Only <em>Yes</em> delivers the pinned version.</p><table><thead><tr><th>Member</th><th>Decision</th></tr></thead><tbody>$memberRows</tbody></table><p><a href="/dashboard/hooks">Back to team hooks</a></p>"""), ContentType.Text.Html)
+        call.respondText(call.page("Hook ${hook.name}", """<details class='help'><summary>How this works</summary><p>${hook.pinnedVersion?.let { "Delivering <code>${escape(it)}</code>." } ?: "No pinned version: nothing is delivered."} Pinning runs this version's script on the computers of every member ${if (hook.allMembers) "not set to <em>No</em> (audience: all members, including members who join later)" else "with <em>Yes</em>"} once they approve it, and in their cloud sessions. Read the version's files before pinning it. Update or roll back by pinning another immutable version.</p></details>$controls<h2>Versions</h2><table><thead><tr><th>Version / digest</th><th>Definition</th><th>Content</th><th>Published by / UTC</th><th>Manage</th></tr></thead><tbody>$versionRows</tbody></table><h2>Access</h2>${audienceForm(actor, base, hook.allMembers)}<p>${if (hook.allMembers) "Every member receives the pinned version, including members who join later, except those set to <em>No</em>." else "Only <em>Yes</em> delivers the pinned version."} An explicit <em>Yes</em> or <em>No</em> always takes precedence.</p><table><thead><tr><th>Member</th><th>Decision</th></tr></thead><tbody>$memberRows</tbody></table><p><a href="/dashboard/hooks">Back to team hooks</a></p>"""), ContentType.Text.Html)
     }
     get("/dashboard/hooks/{name}/versions/{version}") {
         val (version, files) = store.read(call.principal, call.hookName, call.parameters["version"]!!)
@@ -162,6 +167,10 @@ private fun Route.hookDashboard(hooks: HookCatalog, team: TeamService, origin: S
         call.respondRedirect("/dashboard/hooks/${store.pin(call.principal, call.hookName, input["version"].orEmpty()).name}")
     }
     post("/dashboard/hooks/{name}/unpin") { call.form(origin); call.respondRedirect("/dashboard/hooks/${store.unpin(call.principal, call.hookName).name}") }
+    post("/dashboard/hooks/{name}/audience") {
+        val input = call.form(origin)
+        call.respondRedirect("/dashboard/hooks/${store.setAudience(call.principal, call.hookName, audience(input["audience"])).name}")
+    }
     post("/dashboard/hooks/{name}/assignments/{memberId}") {
         val input = call.form(origin)
         val name = call.hookName

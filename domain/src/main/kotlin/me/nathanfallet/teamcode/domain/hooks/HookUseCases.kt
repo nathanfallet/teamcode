@@ -24,20 +24,26 @@ fun Principal.requireHookReader(memberId: String) {
     if (serviceScopes == null) requireReady() else requireScope(ServiceScope.HOOKS_READ)
 }
 
-/** Validates a CI or administrator upload and stores it as an immutable version. It is not delivered until pinned. */
+/**
+ * Validates a CI or administrator upload and stores it as an immutable version. It is not delivered until pinned. With
+ * `allMembers`, it will be delivered to all members once pinned; a key may ask for it only before the first pin (see
+ * [HookStore.publish]), so no key widens what already runs on workstations.
+ */
 class PublishHookVersionUseCase(private val store: HookStore) {
     /** Lets transports refuse an unauthorized caller before reading the upload. */
     fun authorize(actor: Principal) = actor.requireHookPublisher()
 
-    suspend operator fun invoke(actor: Principal, name: String, version: String, definition: HookDefinition, files: List<SkillFile>): HookPublication {
+    suspend operator fun invoke(
+        actor: Principal, name: String, version: String, definition: HookDefinition, files: List<SkillFile>, allMembers: Boolean = false,
+    ): HookPublication {
         actor.requireHookPublisher()
         HookArtifacts.validateName(name)
         HookArtifacts.validateVersion(version)
-        return store.publish(actor, name, version, HookArtifacts.validate(definition, files))
+        return store.publish(actor, name, version, HookArtifacts.validate(definition, files), allMembers)
     }
 }
 
-/** The hooks a member receives: hooks with a pinned version that [SkillAccessPolicy] allows (an explicit *yes*). */
+/** The hooks a member receives: hooks with a pinned version that [SkillAccessPolicy] allows (a *yes*, or all members without a *no*). */
 class ResolveEffectiveHooksUseCase(private val store: HookStore) {
     suspend operator fun invoke(actor: Principal, memberId: String = actor.member.id): List<EffectiveHook> =
         resolve(actor, memberId).map { it.first }
@@ -46,7 +52,7 @@ class ResolveEffectiveHooksUseCase(private val store: HookStore) {
         actor.requireHookReader(memberId)
         return store.candidates(actor, memberId).mapNotNull { candidate ->
             val pinned = candidate.pinned ?: return@mapNotNull null
-            if (!SkillAccessPolicy.allowed(candidate.memberDecision)) return@mapNotNull null
+            if (!SkillAccessPolicy.allowed(candidate.memberDecision, allMembers = candidate.hook.allMembers)) return@mapNotNull null
             EffectiveHook(candidate.hook.name, pinned.version, pinned.digest, pinned.definition, pinned.sizeBytes, pinned.fileCount) to pinned
         }.sortedBy { it.first.name }
     }
@@ -85,6 +91,7 @@ class ManageHookCatalogUseCase(private val store: HookStore) {
     }
     suspend fun unpin(actor: Principal, name: String): Hook = admin(actor, name) { store.unpin(actor, name) }
     suspend fun assignments(actor: Principal, name: String): List<HookAssignment> = admin(actor, name) { store.assignments(actor, name) }
+    suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Hook = admin(actor, name) { store.setAudience(actor, name, allMembers) }
     suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?): HookAssignment? =
         admin(actor, name) { store.assign(actor, name, memberId, decision) }
     private inline fun <T> admin(actor: Principal, name: String, version: String? = null, block: () -> T): T {

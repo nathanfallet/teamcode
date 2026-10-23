@@ -41,7 +41,7 @@ class SqlHookStore(private val database: Database) : HookStore {
         }
     }
 
-    override suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact): HookPublication {
+    override suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact, allMembers: Boolean): HookPublication {
         actor.requireHookPublisher()
         var createdHere = false
         val hookId = database.query {
@@ -62,7 +62,7 @@ class SqlHookStore(private val database: Database) : HookStore {
                 }
         }
         try {
-            return publishVersion(actor, hookId, version, artifact)
+            return publishVersion(actor, hookId, version, artifact, allMembers)
         } catch (failure: Throwable) {
             // A first publication that fails must not leave an empty catalog entry that counts toward the limit.
             if (createdHere) withContext(NonCancellable) { discardEmpty(actor, hookId) }
@@ -84,15 +84,23 @@ class SqlHookStore(private val database: Database) : HookStore {
         // The original failure is the one to report; an empty entry left by a second failure is still harmless.
     }
 
-    private suspend fun publishVersion(actor: Principal, hookId: String, version: String, artifact: HookArtifact): HookPublication = database.query {
+    private suspend fun publishVersion(actor: Principal, hookId: String, version: String, artifact: HookArtifact, allMembers: Boolean): HookPublication = database.query {
         requireCurrent(this, actor)
         val row = Hooks.selectAll().where { Hooks.id eq hookId }.forUpdate().singleOrNull()
             ?: throw TeamFailure("hook_busy", 409, "This hook changed while it was being published. Retry the publication.")
+        // Read under the hook row lock, which pin and unpin also take: a key widens the audience only of a hook that no
+        // administrator has pinned yet, so the interactive pin approves the code and who runs it together.
+        val widen = allMembers && !row[Hooks.allMembers]
+        if (widen && actor.serviceScopes != null && row[Hooks.pinnedVersionId] != null)
+            throw TeamFailure("hook_audience_requires_administrator", 403,
+                "This hook is pinned: only an administrator can deliver it to all members. Publish without allMembers, or ask an administrator.")
         val existing = HookVersions.selectAll().where { (HookVersions.hookId eq hookId) and (HookVersions.version eq version) }.singleOrNull()
         if (existing != null) {
             if (existing[HookVersions.digest] != artifact.digest)
                 throw TeamFailure("hook_version_conflict", 409, "Version $version is already published with different content. Publish a new version.")
-            return@query HookPublication(hook(row), version(existing), created = false)
+            if (!widen) return@query HookPublication(hook(row), version(existing), created = false)
+            audienceLocked(actor, row, true, nowMillis())
+            return@query HookPublication(hook(Hooks.selectAll().where { Hooks.id eq hookId }.single()), version(existing), created = false)
         }
         if (HookVersions.select(HookVersions.id).where { HookVersions.hookId eq hookId }.count() >= HookStore.VERSION_LIMIT)
             throw TeamFailure("hook_version_limit", 409, "A hook keeps at most ${HookStore.VERSION_LIMIT} versions.")
@@ -112,7 +120,19 @@ class SqlHookStore(private val database: Database) : HookStore {
         }
         Hooks.update({ Hooks.id eq hookId }) { it[updatedAt] = now }
         audit(actor.teamId, actor.member.id, "hook.version.published", id, credential = keyId(actor))
+        if (widen) audienceLocked(actor, row, true, now)
         HookPublication(hook(Hooks.selectAll().where { Hooks.id eq hookId }.single()), version(versionRow(hookId, version)), created = true)
+    }
+
+    /** Sets the audience when it differs; the caller holds the hook row lock and read [row] with it. */
+    private fun JdbcTransaction.audienceLocked(actor: Principal, row: ResultRow, allMembers: Boolean, now: Long) {
+        if (row[Hooks.allMembers] == allMembers) return
+        Hooks.update({ Hooks.id eq row[Hooks.id] }) { it[Hooks.allMembers] = allMembers; it[updatedAt] = now }
+        audit(actor.teamId, actor.member.id, if (allMembers) "hook.audience.all_members" else "hook.audience.assigned_only", row[Hooks.id], credential = keyId(actor))
+    }
+
+    override suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Hook = write(actor, name) { row, now ->
+        audienceLocked(actor, row, allMembers, now)
     }
 
     /** The service key behind a publication, for its audit event; null for an interactive login. */
@@ -213,7 +233,7 @@ class SqlHookStore(private val database: Database) : HookStore {
     private fun hook(row: ResultRow): Hook = hook(row, row[Hooks.pinnedVersionId]?.let { id ->
         HookVersions.select(HookVersions.version).where { HookVersions.id eq id }.singleOrNull()?.get(HookVersions.version)
     })
-    private fun hook(row: ResultRow, pinned: String?) = Hook(row[Hooks.id], row[Hooks.name], pinned, row[Hooks.createdAt], row[Hooks.updatedAt])
+    private fun hook(row: ResultRow, pinned: String?) = Hook(row[Hooks.id], row[Hooks.name], pinned, row[Hooks.createdAt], row[Hooks.updatedAt], row[Hooks.allMembers])
     private fun version(row: ResultRow) = HookVersion(
         row[HookVersions.id], row[HookVersions.hookId], row[HookVersions.version], row[HookVersions.digest],
         HookDefinition(row[HookVersions.events].split(',').mapNotNull(HookEvent::of).toSet(), row[HookVersions.matcher],

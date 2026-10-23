@@ -25,9 +25,15 @@ class HookRoutesTest {
         private fun version(name: String, label: String) = versions[name]?.find { it.first.version == label }?.first ?: throw TeamFailure("not_found", 404, "Hook version not found.")
         override suspend fun catalog(actor: Principal): List<Hook> { actor.requireAdmin(); return hooks.values.toList() }
         override suspend fun versions(actor: Principal, name: String) = run { actor.requireAdmin(); hook(name) to versions[name].orEmpty().map { it.first } }
-        override suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact): HookPublication {
+        override suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact, allMembers: Boolean): HookPublication {
             actor.requireHookPublisher()
-            val hook = hooks.getOrPut(name) { Hook("id-$name", name, null, 1, 1) }
+            hooks.getOrPut(name) { Hook("id-$name", name, null, 1, 1) }
+            if (allMembers && !hooks.getValue(name).allMembers) {
+                if (actor.serviceScopes != null && hooks.getValue(name).pinnedVersion != null)
+                    throw TeamFailure("hook_audience_requires_administrator", 403, "Pinned.")
+                hooks[name] = hooks.getValue(name).copy(allMembers = true)
+            }
+            val hook = hooks.getValue(name)
             versions[name]?.find { it.first.version == version }?.let { (existing, _) ->
                 if (existing.digest != artifact.digest) throw TeamFailure("hook_version_conflict", 409, "Conflict.")
                 return HookPublication(hook, existing, false)
@@ -41,6 +47,9 @@ class HookRoutesTest {
             return hook(name).copy(pinnedVersion = version).also { hooks[name] = it }
         }
         override suspend fun unpin(actor: Principal, name: String): Hook { actor.requireAdmin(); return hook(name).copy(pinnedVersion = null).also { hooks[name] = it } }
+        override suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Hook {
+            actor.requireAdmin(); return hook(name).copy(allMembers = allMembers).also { hooks[name] = it }
+        }
         override suspend fun assignments(actor: Principal, name: String): List<HookAssignment> {
             actor.requireAdmin(); val id = hook(name).id
             return decisions.filterKeys { it.first == name }.map { (key, decision) -> HookAssignment(id, key.second, decision, 1) }
@@ -128,5 +137,46 @@ class HookRoutesTest {
         // Unpinning stops delivery at once.
         assertEquals(HttpStatusCode.OK, call(HttpMethod.Delete, "/api/v1/hooks/stop-guard/pin", "admin").status)
         assertEquals(emptyList(), Serialization.json.decodeFromString<HookManifestView>(call(HttpMethod.Get, "/api/v1/hook-delivery", "member").bodyAsText()).hooks)
+    }
+
+    @Test fun aKeyProposesAllMembersBeforeThePinAndOnlyAnAdministratorWidensAPinnedHook() = testApplication {
+        val store = MemoryStore()
+        application { configureGateway(NoGateway(), team = team(), publicOrigin = "http://localhost", hooks = HookCatalog(store)) }
+        suspend fun call(method: HttpMethod, path: String, token: String, body: String? = null) = client.request(path) {
+            this.method = method; bearerAuth(token)
+            if (body != null) { contentType(ContentType.Application.Json); setBody(body) }
+        }
+        fun forEveryone(version: String) = Serialization.json.encodeToString(
+            PublishHookVersionRequest(version, HookDefinitionView(listOf("Stop"), command = "bin/guard.sh"), listOf(script), allMembers = true))
+        assertTrue("team.hooks.all-members.v1" in call(HttpMethod.Get, "/api/v1/capabilities", "member").bodyAsText())
+
+        val created = call(HttpMethod.Post, "/api/v1/hooks/stop-guard/versions", "hooks-publish", forEveryone("1"))
+        assertEquals(HttpStatusCode.Created, created.status)
+        assertTrue(Serialization.json.decodeFromString<PublishHookVersionResponse>(created.bodyAsText()).hook.allMembers)
+        // Nothing runs before the pin, then everyone without a decision receives it.
+        assertEquals(emptyList(), Serialization.json.decodeFromString<HookManifestView>(call(HttpMethod.Get, "/api/v1/hook-delivery", "member").bodyAsText()).hooks)
+        call(HttpMethod.Put, "/api/v1/hooks/stop-guard/pin", "admin", """{"version":"1"}""")
+        assertEquals(listOf("stop-guard"), Serialization.json.decodeFromString<HookManifestView>(call(HttpMethod.Get, "/api/v1/hook-delivery", "member").bodyAsText()).hooks.map { it.name })
+
+        // On a pinned hook, the audience is an administrator's: no key reaches the route, and a key's publication is refused.
+        for (token in listOf("hooks-publish", "every-scope", "member"))
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/hooks/stop-guard/audience", token, """{"allMembers":false}""").status, token)
+        assertEquals(HttpStatusCode.OK, call(HttpMethod.Put, "/api/v1/hooks/stop-guard/audience", "admin", """{"allMembers":false}""").status)
+        val refused = call(HttpMethod.Post, "/api/v1/hooks/stop-guard/versions", "hooks-publish", forEveryone("2"))
+        assertEquals(HttpStatusCode.Forbidden, refused.status)
+        assertTrue(refused.bodyAsText().contains("hook_audience_requires_administrator"))
+        assertFalse(store.hooks.getValue("stop-guard").allMembers)
+
+        // The dashboard sets it back, behind the CSRF check.
+        val browser = createClient { followRedirects = false }
+        suspend fun form(body: String) = browser.post("/dashboard/hooks/stop-guard/audience") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody(body)
+        }
+        assertEquals(HttpStatusCode.Forbidden, form("csrf=wrong&audience=all").status)
+        assertEquals(HttpStatusCode.Found, form("csrf=session&audience=all").status)
+        assertTrue(store.hooks.getValue("stop-guard").allMembers)
+        val page = browser.get("/dashboard/hooks/stop-guard") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(page.contains("""<option value="all" selected>"""))
     }
 }

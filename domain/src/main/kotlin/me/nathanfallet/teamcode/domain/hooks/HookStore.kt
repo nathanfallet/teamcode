@@ -18,14 +18,22 @@ interface HookStore {
     /**
      * Creates the hook on its first publication and stores an immutable version. Republishing the same version with
      * the same digest is an idempotent success; a different digest is a conflict. Never pins.
+     *
+     * With [allMembers], the hook is also delivered to all members once an administrator pins it. A service key may
+     * ask for it only while no version is pinned (or when the hook already has that audience), so the interactive pin
+     * approves the audience along with the code; on a pinned hook it is refused with `hook_audience_requires_administrator`.
+     * Without it, the audience is left as it is.
      */
-    suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact): HookPublication
+    suspend fun publish(actor: Principal, name: String, version: String, artifact: HookArtifact, allMembers: Boolean = false): HookPublication
 
     /** Approves [version] as the delivered one (update or rollback). Interactive administrators only. */
     suspend fun pin(actor: Principal, name: String, version: String): Hook
     suspend fun unpin(actor: Principal, name: String): Hook
 
     suspend fun assignments(actor: Principal, name: String): List<HookAssignment>
+
+    /** All members without an explicit decision (true), or only members set to *yes* (false). Interactive administrators only. */
+    suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Hook
 
     /** Sets a member's explicit decision, or clears it with null. */
     suspend fun assign(actor: Principal, name: String, memberId: String, decision: SkillDecision?): HookAssignment?

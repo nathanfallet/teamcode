@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
+import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
 import org.testcontainers.mysql.MySQLContainer
 import kotlin.test.*
 
@@ -253,6 +254,65 @@ class SkillPersistenceTest {
                 assertFails { store.publish(publisher, "kept", "2.0.0", broken) }
                 assertEquals(1L, a.query { Skills.selectAll().count() })
             }
+        }
+    }
+
+    @Test fun aSkillForAllMembersReachesLaterMembersAndOnlyAnAssignKeyOrAnAdministratorSetsIt() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                a.migrate(); b.migrate()
+                a.query {
+                    val drift = MigrationUtils.statementsRequiredForDatabaseMigration(Skills, Hooks, withLogs = false)
+                    assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
+                }
+                val teamA = SqlTeamService(a); val teamB = SqlTeamService(b)
+                val initial = teamA.bootstrap()!!
+                teamA.changePassword(teamA.login("admin", initial, "fixture").principal, initial, "skill administrator password")
+                val admin = teamB.login("admin", "skill administrator password", "fixture").principal
+                val joined = teamA.createMember(admin, "early-member", Role.MEMBER)
+                teamA.changePassword(teamB.login("early-member", joined.temporaryPassword, "fixture").principal, joined.temporaryPassword, "early member password")
+                val early = joined.member
+                val keys = SqlServiceKeyService(a)
+                failure("invalid_service_key") { keys.create(admin, early.id, "member assigner", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN), 1) }
+                val publisher = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                val assigner = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI for everyone", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN), 1).accessToken)!!
+                val catalogA = SkillCatalog(SqlSkillStore(a)); val catalogB = SkillCatalog(SqlSkillStore(b))
+
+                // skills:publish alone can choose the version, never widen the audience.
+                failure("credential_scope") { catalogA.publish(publisher, "review", "1", files("one"), pin = true, allMembers = true) }
+                assertTrue(a.query { Skills.selectAll().empty() })
+                val first = catalogA.publish(assigner, "review", "1", files("one"), pin = true, allMembers = true)
+                assertTrue(first.skill.allMembers); assertEquals("1", first.skill.pinnedVersion)
+                assertEquals(listOf("review"), catalogB.effective(admin, early.id).map { it.name }, "No decision needed")
+                // A member who joins later receives it too, and an explicit no still excludes.
+                val late = teamB.createMember(admin, "late-member", Role.MEMBER).member
+                assertEquals(listOf("review"), catalogA.effective(admin, late.id).map { it.name })
+                catalogB.store.assign(admin, "review", late.id, SkillDecision.DENY)
+                assertEquals(emptyList(), catalogA.effective(admin, late.id))
+
+                // Retries converge and append nothing; publications without the flag leave the audience alone.
+                assertFalse(catalogB.publish(assigner, "review", "1", files("one"), pin = true, allMembers = true).created)
+                assertTrue(catalogA.publish(publisher, "review", "2", files("two"), pin = true).skill.allMembers)
+                assertEquals(listOf("2"), catalogB.effective(admin, early.id).map { it.version })
+
+                // An administrator narrows it back: only explicit yes delivers again.
+                catalogA.store.assign(admin, "review", admin.member.id, SkillDecision.ALLOW)
+                assertFalse(catalogB.manage.setAudience(admin, "review", false).allMembers)
+                assertFalse(catalogA.manage.setAudience(admin, "review", false).allMembers, "Idempotent")
+                assertEquals(emptyList(), catalogA.effective(admin, early.id))
+                assertEquals(listOf("review"), catalogA.effective(admin).map { it.name })
+                failure("credential_scope") { catalogA.manage.setAudience(assigner, "review", true) }
+
+                // One event per actual change; the key's names its credential, the administrator's does not.
+                val events = a.query {
+                    AuditEvents.select(AuditEvents.action, AuditEvents.credentialId)
+                        .where { AuditEvents.action inList listOf("skill.audience.all_members", "skill.audience.assigned_only") }
+                        .orderBy(AuditEvents.id to SortOrder.ASC).map { it[AuditEvents.action] to it[AuditEvents.credentialId] }
+                }
+                assertEquals(listOf("skill.audience.all_members" to assigner.tokenId, "skill.audience.assigned_only" to null), events)
+            } }
         }
     }
 }

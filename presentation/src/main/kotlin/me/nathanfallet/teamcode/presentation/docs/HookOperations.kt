@@ -27,14 +27,19 @@ internal fun ApiCatalog.hookOperations() {
         description = "Uploads an immutable version: its definition (events, optional matcher, the path of the " +
             "executable file to run, timeout) and 1 to 50 files, at most 1 MiB (the body is bounded at 2 MiB). The " +
             "first publication creates the hook. Publication never delivers: an interactive administrator pins each " +
-            "version. Republishing the same content is safe (200, `created: false`). A `hooks:publish` key must be " +
-            "owned by an administrator; it cannot pin, assign or read the catalog."
+            "version. With `allMembers: true`, the hook will be delivered to every member without an explicit decision " +
+            "once pinned, members who join later included; a key may ask for it only while the hook is not pinned, so " +
+            "the administrator's pin approves the audience with the code (servers advertising " +
+            "`team.hooks.all-members.v1` support it); `false` leaves the audience as it is. Republishing the same " +
+            "content is safe (200, `created: false`). A `hooks:publish` key must be owned by an administrator; it " +
+            "cannot pin, assign or read the catalog."
         parameters { hookName() }
         body<PublishHookVersionRequest>("The version label, its definition and its files, base64-encoded (`mode` is `file` or `executable`).")
         responses {
             ok<PublishHookVersionResponse>("The version already existed with the same content (`created: false`).")
             ok<PublishHookVersionResponse>("Published.", HttpStatusCode.Created)
             badRequest("An invalid name, version, definition, path, mode or base64 content (`invalid_hook_definition`, `invalid_hook_artifact`).")
+            error(HttpStatusCode.Forbidden, "A key asking for `allMembers` on a pinned hook (`hook_audience_requires_administrator`).")
             conflict("The version exists with other content (`hook_version_conflict`), or a catalog limit is reached (`hook_limit`, `hook_version_limit`).")
             error(HttpStatusCode.PayloadTooLarge, "The content exceeds 1 MiB (`hook_artifact_too_large`) or the body 2 MiB (`payload_too_large`).")
         }
@@ -63,6 +68,20 @@ internal fun ApiCatalog.hookOperations() {
         responses {
             ok<HookView>("The hook with its new pin.")
             notFound("No such hook or version (`not_found`).")
+        }
+    }
+    put("/api/v1/hooks/{name}/audience") {
+        operationId = "setHookAudience"; tag(ApiTags.HOOKS)
+        summary = "Deliver a hook to all members"
+        description = "With `allMembers: true`, every member without an explicit decision receives the pinned version, " +
+            "members who join later included; an explicit `deny` still excludes a member. With `false`, only members " +
+            "set to `allow` receive it. Each member still approves each version on their computer. Interactive " +
+            "administrators only."
+        parameters { hookName() }
+        body<SetHookAudienceRequest>("The audience.")
+        responses {
+            ok<HookView>("The hook with its audience.")
+            notFound("No such hook (`not_found`).")
         }
     }
     delete("/api/v1/hooks/{name}/pin") {

@@ -38,8 +38,8 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         }
     }
 
-    override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
-        actor.requireSkillPublisher()
+    override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
+        if (allMembers) actor.requireSkillAudienceWriter() else actor.requireSkillPublisher()
         // Short team-locked step: create the catalog entry once. The team lock also serializes admission, so the
         // content insert below holds only this skill's row lock.
         var createdHere = false
@@ -61,7 +61,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                 }
         }
         try {
-            return publishVersion(actor, skillId, name, version, artifact, pin)
+            return publishVersion(actor, skillId, name, version, artifact, pin, allMembers)
         } catch (failure: Throwable) {
             // A first publication that fails must not leave an empty catalog entry that counts toward the skill limit.
             if (createdHere) withContext(NonCancellable) { discardEmpty(actor, skillId) }
@@ -83,7 +83,9 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         // The original failure is the one to report; an empty entry left by a second failure is still harmless.
     }
 
-    private suspend fun publishVersion(actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact, pin: Boolean): SkillPublication {
+    private suspend fun publishVersion(
+        actor: Principal, skillId: String, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean,
+    ): SkillPublication {
         return database.query {
             requireCurrent(this, actor)
             // A concurrent first publication of the same name may have failed and discarded the empty entry just now.
@@ -98,9 +100,10 @@ class SqlSkillStore(private val database: Database) : SkillStore {
                     throw TeamFailure("skill_version_conflict", 409, "Version $version is already published with different content. Publish a new version.")
                 if (existing[SkillVersions.retiredAt] != null)
                     throw TeamFailure("skill_version_retired", 409, "Version $version is retired and cannot be pinned. Publish a new version.")
-                // A retried publication with pin converges on the same state; only an actual change is audited.
-                if (!pin) return@query SkillPublication(skill(row), version(existing), created = false)
-                pinLocked(actor, row, existing[SkillVersions.id], nowMillis())
+                // A retried publication with pin or allMembers converges on the same state; only an actual change is audited.
+                if (!pin && !allMembers) return@query SkillPublication(skill(row), version(existing), created = false)
+                if (pin) pinLocked(actor, row, existing[SkillVersions.id], nowMillis())
+                if (allMembers) audienceLocked(actor, row, true, nowMillis())
                 return@query SkillPublication(skill(skillRow(actor.teamId, name)), version(existing), created = false)
             }
             if (SkillVersions.select(SkillVersions.id).where { SkillVersions.skillId eq skillId }.count() >= SkillStore.VERSION_LIMIT)
@@ -120,6 +123,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
             audit(actor.teamId, actor.member.id, "skill.version.published", id, credential = keyId(actor))
             // Pinned in the publication transaction: the version is never visible as published-but-unpinned to CI.
             if (pin) pinLocked(actor, row, id, now)
+            if (allMembers) audienceLocked(actor, row, true, now)
             SkillPublication(skill(skillRow(actor.teamId, name)), version(versionRow(skillId, version)), created = true)
         }
     }
@@ -142,6 +146,20 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         if (row[Skills.pinnedVersionId] == versionId) return
         Skills.update({ Skills.id eq row[Skills.id] }) { it[pinnedVersionId] = versionId; it[updatedAt] = now }
         audit(actor.teamId, actor.member.id, "skill.pinned", versionId, credential = keyId(actor))
+    }
+
+    /**
+     * Sets the skill's audience when it differs. The caller holds the team lock or the skill row lock (and read [row]
+     * with it). A change made by a service key names that key in `credentialId`, as a pin does.
+     */
+    private fun JdbcTransaction.audienceLocked(actor: Principal, row: ResultRow, allMembers: Boolean, now: Long) {
+        if (row[Skills.allMembers] == allMembers) return
+        Skills.update({ Skills.id eq row[Skills.id] }) { it[Skills.allMembers] = allMembers; it[updatedAt] = now }
+        audit(actor.teamId, actor.member.id, if (allMembers) "skill.audience.all_members" else "skill.audience.assigned_only", row[Skills.id], credential = keyId(actor))
+    }
+
+    override suspend fun setAudience(actor: Principal, name: String, allMembers: Boolean): Skill = write(actor, name) { row, now ->
+        audienceLocked(actor, row, allMembers, now)
     }
 
     /** The service key behind a catalog write, for its audit event; null for an interactive login. */
@@ -319,7 +337,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         SkillVersions.select(SkillVersions.version).where { SkillVersions.id eq id }.singleOrNull()?.get(SkillVersions.version)
     })
     private fun skill(row: ResultRow, pinned: String?) =
-        Skill(row[Skills.id], row[Skills.name], pinned, row[Skills.retiredAt] != null, row[Skills.createdAt], row[Skills.updatedAt])
+        Skill(row[Skills.id], row[Skills.name], pinned, row[Skills.retiredAt] != null, row[Skills.createdAt], row[Skills.updatedAt], row[Skills.allMembers])
     private fun version(row: ResultRow) = SkillVersion(
         row[SkillVersions.id], row[SkillVersions.skillId], row[SkillVersions.version], row[SkillVersions.digest], row[SkillVersions.sizeBytes],
         row[SkillVersions.fileCount], row[SkillVersions.publishedBy], row[SkillVersions.publishedAt], row[SkillVersions.retiredAt] != null,

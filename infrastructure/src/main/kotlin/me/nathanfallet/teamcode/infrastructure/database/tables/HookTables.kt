@@ -11,6 +11,8 @@ object Hooks : Table("hooks") {
     val pinnedVersionId = varchar("pinned_version_id", 36).nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
+    /** Delivered to every member without an explicit decision, including later members, once pinned. */
+    val allMembers = bool("all_members").default(false)
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("hook_team_name", teamId, name) }
 }
