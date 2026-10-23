@@ -28,7 +28,7 @@ internal fun requireSupported(type: AccountType): AccountType {
 
 /** The selector text, one numbered line per kind. */
 internal fun accountTypeMenu(): List<String> =
-    listOf("Select the account type:", "") + AccountType.entries.mapIndexed { index, type ->
+    listOf("Which account type do you want to add?", "") + AccountType.entries.mapIndexed { index, type ->
         "  ${index + 1}. ${type.label}${if (type.supported) "" else " (not available yet)"}"
     } + ""
 
