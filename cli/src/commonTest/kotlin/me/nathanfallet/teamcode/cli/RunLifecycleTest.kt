@@ -41,7 +41,7 @@ class RunLifecycleTest {
         assertEquals(emptyMap(), parseLabels(emptyList()))
         assertEquals(mapOf("a" to "b=c"), parseLabels(listOf("a=b=c")))
         assertEquals(mapOf("a" to "2"), parseLabels(listOf("a=1", "a=2")), "The last value of a repeated key wins, as for cloud sessions")
-        for (bad in listOf("=value", "")) assertFailsWith<IllegalArgumentException> { parseLabels(listOf(bad)) }
+        for (bad in listOf("=value", "")) assertFailsWith<com.github.ajalt.clikt.core.UsageError> { parseLabels(listOf(bad)) }
     }
     @Test fun theRunIdentifierIsExportedToBothAgentsAndAnInheritedOneIsRemovedWithoutARun() {
         val id = "11111111-1111-1111-1111-111111111111"; val token = "synthetic-local-token-long-enough"

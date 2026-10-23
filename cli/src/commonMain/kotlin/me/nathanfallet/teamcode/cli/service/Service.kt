@@ -20,8 +20,8 @@ class Service : SuspendingNoOpCliktCommand(name = "service") {
 
 private fun settings(config: String, port: Int, executable: String?, atBoot: Boolean = false): ServiceSettings {
     val platform = servicePlatform()
-    require(platform.userId != "0") { "Run service installation as your user; TeamCode requests OS authorization only where needed." }
-    val home = requireNotNull(environment("HOME") ?: environment("USERPROFILE")) { "Cannot locate the user home directory." }
+    if (platform.userId == "0") throw CliktError("Run service installation as your user; TeamCode requests OS authorization only where needed.")
+    val home = environment("HOME") ?: environment("USERPROFILE") ?: throw CliktError("Cannot locate the user home directory.")
     val id = randomHex(16)
     val label = "me.nathanfallet.teamcode.$id"
     val registration = when (platform.os) {
@@ -38,7 +38,7 @@ private class Print : SuspendingCliktCommand(name = "print") {
     private val binary by option("--binary", help = "Stable absolute path to the native TeamCode executable.")
     override suspend fun run() {
         val selected = loadService(configPath()) ?: settings(configPath(), port, binary, atBoot)
-        require(!atBoot || selected.atBoot) { "Uninstall before switching startup modes." }
+        if (atBoot && !selected.atBoot) throw CliktError("Uninstall before switching startup modes.")
         echo(serviceDefinition(selected))
     }
 }
@@ -49,13 +49,13 @@ private class Install : SuspendingCliktCommand(name = "install") {
     private val binary by option("--binary", help = "Stable absolute path; defaults to the running executable.")
     override suspend fun run() {
         val config = configPath()
-        requireNotNull(ConfigStore(config).load()) { "Run teamcode login before installing a service." }
+        if (ConfigStore(config).load() == null) throw CliktError("Run teamcode login before installing a service.")
         val existing = loadService(config)
         val selected = existing ?: settings(config, port ?: 8789, binary, atBoot)
-        require(!atBoot || selected.atBoot) { "Uninstall before switching from login to boot startup." }
-        require(port == null || port == selected.port) { "Uninstall before changing the service port." }
-        require(binary == null || binary == selected.executable) { "Uninstall before changing the service executable." }
-        require(FileSystem.SYSTEM.metadataOrNull(selected.executable.toPath())?.isRegularFile == true) { "The executable must exist at a stable absolute path." }
+        if (atBoot && !selected.atBoot) throw CliktError("Uninstall before switching from login to boot startup.")
+        if (port != null && port != selected.port) throw CliktError("Uninstall before changing the service port.")
+        if (binary != null && binary != selected.executable) throw CliktError("Uninstall before changing the service executable.")
+        if (FileSystem.SYSTEM.metadataOrNull(selected.executable.toPath())?.isRegularFile != true) throw CliktError("The executable must exist at a stable absolute path.")
         if (existing == null) writePrivateFile(servicePath(config), Serialization.json.encodeToString(ServiceSettings.serializer(), selected))
         if (selected.atBoot) echo(when (selected.os) {
             "macos" -> "Installing a LaunchDaemon running as your user. macOS may request administrator authorization."
@@ -137,12 +137,12 @@ private suspend fun manager(settings: ServiceSettings, action: String, checkResu
             "PSModulePath" to "${requireNotNull(environment("SystemRoot"))}\\System32\\WindowsPowerShell\\v1.0\\Modules",
         ) else emptyMap(), quiet = quiet || action in setOf("status", "active"))
     }
-    if (checkResult) check(result == 0) { "The OS service manager rejected the operation." }
+    if (checkResult && result != 0) throw CliktError("The OS service manager rejected the operation.")
     return result
 }
 
 private suspend fun start(settings: ServiceSettings, quiet: Boolean = false) {
-    require(ownsRegistration(settings)) { "The service registration is missing. Run service install." }
+    if (!ownsRegistration(settings)) throw CliktError("The service registration is missing. Run service install.")
     if (settings.os == "windows") {
         when (manager(settings, "status", false)) {
             3 -> manager(settings, "load", quiet = quiet)
@@ -159,7 +159,7 @@ private suspend fun start(settings: ServiceSettings, quiet: Boolean = false) {
 }
 
 private suspend fun stop(settings: ServiceSettings, quiet: Boolean = false) {
-    require(ownsRegistration(settings)) { "The service registration is missing; refusing to stop an unknown service." }
+    if (!ownsRegistration(settings)) throw CliktError("The service registration is missing; refusing to stop an unknown service.")
     if (settings.os == "windows") {
         when (manager(settings, "status", false)) {
             3 -> return
@@ -188,7 +188,7 @@ private class Manage(private val operation: String) : SuspendingCliktCommand(nam
     override suspend fun run() {
         val selected = loadService(configPath())
         if (selected == null) {
-            require(operation == "uninstall" || operation == "stop") { "Run teamcode service install first." }
+            if (operation != "uninstall" && operation != "stop") throw CliktError("Run teamcode service install first.")
             echo("No TeamCode service is installed for this configuration.")
             return
         }
@@ -197,7 +197,7 @@ private class Manage(private val operation: String) : SuspendingCliktCommand(nam
             "stop" -> stop(selected)
             "restart" -> { echo("Draining the local proxy before restarting."); stop(selected); start(selected) }
             "uninstall" -> {
-                require(ownsRegistration(selected)) { "The registration is missing. Repair it with service install before uninstalling." }
+                if (!ownsRegistration(selected)) throw CliktError("The registration is missing. Repair it with service install before uninstalling.")
                 stop(selected)
                 if (selected.os == "linux") manager(selected, "disable")
                 if (selected.os == "windows") {

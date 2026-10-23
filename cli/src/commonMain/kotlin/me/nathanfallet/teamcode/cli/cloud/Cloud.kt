@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.cloud
 
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.CliktError
@@ -50,7 +51,7 @@ private fun CloudSessionView.details() = buildString {
 /** `--label key=value` options, shared with `teamcode run`; the server validates keys and values. */
 internal fun parseLabels(labels: List<String>) = labels.associate { label ->
     val key = label.substringBefore('=', "")
-    require(key.isNotEmpty()) { "Use --label key=value." }
+    if (key.isEmpty()) throw UsageError("Use --label key=value.")
     key to label.substringAfter('=')
 }
 
@@ -60,9 +61,9 @@ internal fun parseRepository(value: String): CloudRepositoryView {
     val rest = if (path != null) value.substringAfter('=') else value
     val url = rest.substringBefore('#')
     val ref = rest.substringAfter('#', "").takeIf { it.isNotEmpty() }
-    require(url.startsWith("https://")) { "Use --repo [PATH=]https://host/owner/name[#REF]." }
+    if (!url.startsWith("https://")) throw UsageError("Use --repo [PATH=]https://host/owner/name[#REF].")
     val name = url.trimEnd('/').substringAfterLast('/').removeSuffix(".git")
-    require(path != null || name.isNotEmpty()) { "Name the directory: --repo PATH=$url." }
+    if (path == null && name.isEmpty()) throw UsageError("Name the directory: --repo PATH=$url.")
     return CloudRepositoryView(url, path ?: name, ref)
 }
 
@@ -87,7 +88,7 @@ private class CloudCreate : SuspendingCliktCommand(name = "create") {
         val agent = if (model != null || effort != null) CloudAgentRequest(model, effort) else null
         val initial = message?.let { if (it == "-") generateSequence(::readlnOrNull).joinToString("\n") else it }
         if (initial != null && initial.isBlank()) throw CliktError("The --message text is empty.")
-        require(branch == null || repositories.isNotEmpty()) { "Use --branch with --repo." }
+        if (branch != null && repositories.isEmpty()) throw UsageError("Use --branch with --repo.")
         val environment = if (repositories.isNotEmpty() || workdir != null)
             CloudEnvironmentRequest(repositories.map { parseRepository(it).copy(branch = branch) }.takeIf { it.isNotEmpty() }, workdir) else null
         val session = sdk(loadConfig()).use {
@@ -155,7 +156,7 @@ private class CloudList : SuspendingCliktCommand(name = "list") {
     private val labels by option("--label", help = "key=value; repeatable.").multiple()
     private val json by option("--json").flag()
     override suspend fun run() {
-        require(!(all && member != null)) { "Use --all or --member, not both." }
+        if (all && member != null) throw UsageError("Use --all or --member, not both.")
         val parsed = parseLabels(labels)
         sdk(loadConfig()).use { client ->
             var before: String? = null
@@ -205,7 +206,7 @@ private class CloudDelete : SuspendingCliktCommand(name = "delete") {
     private val yes by option("--yes", help = "Confirm the deletion.").flag()
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")
     override suspend fun run() {
-        require(yes) { "Deleting $id also deletes its workspace and cannot be undone. Add --yes to confirm." }
+        if (!yes) throw CliktError("Deleting $id also deletes its workspace and cannot be undone. Add --yes to confirm.")
         sdk(loadConfig()).use { it.deleteCloudSession(id, onBehalfOf) }
         echo("Session $id is being deleted.")
     }

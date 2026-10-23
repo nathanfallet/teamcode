@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.service
 
+import com.github.ajalt.clikt.core.CliktError
 import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.cli.platform.ServicePlatform
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
@@ -26,7 +27,7 @@ internal suspend fun installServiceRegistration(settings: ServiceSettings) {
     writePrivateFile(staging.toString(), serviceDefinition(settings))
     try {
         privilegedServiceOperation(ServiceManagerInvocation("/usr/bin/sudo", listOf("/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "0644", staging.toString(), settings.registration)))
-        check(ownsRegistration(settings)) { "The installed boot registration differs from this configuration." }
+        if (!ownsRegistration(settings)) throw CliktError("The installed boot registration differs from this configuration.")
     } finally { FileSystem.SYSTEM.delete(staging, mustExist = false) }
 }
 
@@ -45,7 +46,7 @@ internal suspend fun enableLinuxBootStartup(settings: ServiceSettings) {
 
 private suspend fun privilegedServiceOperation(invocation: ServiceManagerInvocation) {
     val result = withTimeout(180_000) { runInteractiveProcess(invocation.command, invocation.arguments, emptyMap()) }
-    check(result == 0) { "OS authorization failed. Retry service install after checking administrator access." }
+    if (result != 0) throw CliktError("OS authorization failed. Retry service install after checking administrator access.")
 }
 
 /** Task Scheduler protects the password; it never enters TeamCode files, environment or arguments. */

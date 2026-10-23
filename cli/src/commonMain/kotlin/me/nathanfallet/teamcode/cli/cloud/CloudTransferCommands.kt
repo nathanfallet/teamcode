@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.cloud
 
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.Context
@@ -51,7 +52,7 @@ private class CloudTransfersList : SuspendingCliktCommand(name = "list") {
     private val session by option("--session", help = "Only transfers of this session.")
     private val json by option("--json").flag()
     override suspend fun run() {
-        require(listOf(incoming, outgoing, all).count { it } <= 1) { "Use at most one of --incoming, --outgoing and --all." }
+        if (listOf(incoming, outgoing, all).count { it } > 1) throw UsageError("Use at most one of --incoming, --outgoing and --all.")
         val direction = if (incoming) "incoming" else if (outgoing) "outgoing" else null
         sdk(loadConfig()).use { client ->
             var before: String? = null

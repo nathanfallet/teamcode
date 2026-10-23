@@ -43,7 +43,7 @@ private class Hint : SuspendingCliktCommand(name = "hint") {
     private val format by option("--format").default("text")
     override fun help(context: Context) = "Emit current guidance for an agent hook. --format claude emits PreToolUse additional context."
     override suspend fun run() {
-        require(format in setOf("text", "claude", "json"))
+        if (format !in setOf("text", "claude", "json")) throw UsageError("--format must be text, claude or json.")
         // A guidance outage must not block an agent hook; server-side admission remains authoritative.
         try {
             sdk(loadConfig()).use { client ->

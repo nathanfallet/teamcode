@@ -23,12 +23,12 @@ class TeamClaudeImportTest {
         assertFalse(parsed.toString().contains("hidden"))
     }
     @Test fun `malformed configuration error cannot echo credentials`() {
-        val error = assertFailsWith<IllegalArgumentException> { parseTeamClaudeConfig("{\"accessToken\":\"secret-value") }
+        val error = assertFailsWith<com.github.ajalt.clikt.core.CliktError> { parseTeamClaudeConfig("{\"accessToken\":\"secret-value") }
         assertFalse(error.toString().contains("secret-value"))
         assertNull(error.cause)
     }
     @Test fun `no accounts is different from missing account list`() {
         assertEquals(emptyList(), parseTeamClaudeConfig("""{"accounts":[]}"""))
-        assertFailsWith<IllegalArgumentException> { parseTeamClaudeConfig("{}") }
+        assertFailsWith<com.github.ajalt.clikt.core.CliktError> { parseTeamClaudeConfig("{}") }
     }
 }

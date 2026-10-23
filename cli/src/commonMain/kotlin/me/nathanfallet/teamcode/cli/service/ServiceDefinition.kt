@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.service
 
+import com.github.ajalt.clikt.core.CliktError
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.cli.platform.*
@@ -58,7 +59,7 @@ internal fun loadService(config: String): ServiceSettings? {
     val meta = FileSystem.SYSTEM.metadataOrNull(path) ?: return null
     require(meta.isRegularFile && meta.symlinkTarget == null && (meta.size ?: 0) <= 65_536)
     return Serialization.json.decodeFromString<ServiceSettings>(FileSystem.SYSTEM.read(path) { readUtf8() }).also {
-        require(it.config == config) { "The service belongs to a different configuration." }
+        if (it.config != config) throw CliktError("The service belongs to a different configuration.")
         if (it.atBoot) requireBootServiceIdentity(it)
     }
 }
@@ -129,8 +130,8 @@ internal fun ownsRegistration(settings: ServiceSettings): Boolean {
     val path = settings.registration.toPath()
     val meta = FileSystem.SYSTEM.metadataOrNull(path) ?: return false
     require(meta.isRegularFile && meta.symlinkTarget == null && (meta.size ?: 0) <= 65_536)
-    require(FileSystem.SYSTEM.read(path) { readByteArray() }.contentEquals(registrationBytes(settings))) {
-        "The service registration was modified externally; refusing to replace or remove it."
+    if (!FileSystem.SYSTEM.read(path) { readByteArray() }.contentEquals(registrationBytes(settings))) {
+        throw CliktError("The service registration was modified externally; refusing to replace or remove it.")
     }
     return true
 }

@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.cli.accounts
 
+import com.github.ajalt.clikt.core.CliktError
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.Serialization
 
@@ -18,12 +19,12 @@ sealed interface ImportEntry {
 
 /** Reads the account list only. Proxy keys, routing, policy and source identities are never trusted/imported. */
 fun parseTeamClaudeConfig(source: String): List<ImportEntry> {
-    require(source.encodeToByteArray().size <= MAX_IMPORT_BYTES) { "TeamClaude configuration is too large." }
+    if (source.encodeToByteArray().size > MAX_IMPORT_BYTES) throw CliktError("TeamClaude configuration is too large.")
     val root = try { Serialization.json.parseToJsonElement(source) as? JsonObject }
         catch (_: IllegalArgumentException) { null }
-    requireNotNull(root) { "TeamClaude configuration must be a JSON object." }
-    val accounts = root["accounts"] as? JsonArray ?: throw IllegalArgumentException("TeamClaude configuration must have an accounts array.")
-    require(accounts.size <= 1000) { "Too many accounts in TeamClaude configuration." }
+    if (root == null) throw CliktError("TeamClaude configuration must be a JSON object.")
+    val accounts = root["accounts"] as? JsonArray ?: throw CliktError("TeamClaude configuration must have an accounts array.")
+    if (accounts.size > 1000) throw CliktError("Too many accounts in TeamClaude configuration.")
     return accounts.mapIndexed { index, entry ->
         val account = entry as? JsonObject ?: return@mapIndexed ImportEntry.Rejected("Account ${index + 1}", "Account must be an object.")
         val label = account.string("name")?.let(::safeLabel)?.takeIf { it.isNotEmpty() } ?: "Account ${index + 1}"

@@ -93,11 +93,11 @@ private class ImportAccounts : SuspendingCliktCommand(name = "import") {
     private val takeOwnership by option("--take-ownership", help = "Confirm other refreshers have stopped and activate imported accounts.").flag()
     private val accessOnly by option("--access-only", help = "Activate imported access tokens without refreshing them; useful for temporary acceptance tests.").flag()
     override suspend fun run() {
-        require(from == "teamclaude") { "Only --from teamclaude is supported." }
-        require(!(takeOwnership && accessOnly)) { "Choose either refresh ownership or access-only activation." }
+        if (from != "teamclaude") throw UsageError("Only --from teamclaude is supported.")
+        if (takeOwnership && accessOnly) throw UsageError("Choose either refresh ownership or access-only activation.")
         val path = (config ?: sourceConfig()).toPath()
         val info = FileSystem.SYSTEM.metadata(path)
-        require(info.isRegularFile && (info.size ?: Long.MAX_VALUE) <= MAX_IMPORT_BYTES)
+        if (!info.isRegularFile || (info.size ?: Long.MAX_VALUE) > MAX_IMPORT_BYTES) throw CliktError("$path is not a regular TeamClaude configuration file of at most $MAX_IMPORT_BYTES bytes.")
         val source = FileSystem.SYSTEM.read(path) { readUtf8((MAX_IMPORT_BYTES + 1L).coerceAtMost(info.size!!)) }
         val entries = parseTeamClaudeConfig(source)
         if (dryRun) {
@@ -121,20 +121,20 @@ private class ImportAccounts : SuspendingCliktCommand(name = "import") {
         echo("Import complete: ${entries.size - failed} succeeded, $failed skipped or failed. Source configuration was not modified.")
         if (accessOnly) echo("Access-only mode: TeamCode will not refresh these tokens. Import again when they expire.")
         else if (!takeOwnership) echo("Stop the source refresher, then activate each account with accounts handover <id> --confirm.")
-        check(failed == 0) { "Some accounts were not imported." }
+        if (failed != 0) throw CliktError("Some accounts were not imported.")
     }
     private fun sourceConfig(): String {
         environment("TEAMROUTER_CONFIG")?.let { return it }
         environment("TEAMCLAUDE_CONFIG")?.let { return it }
-        val base = environment("XDG_CONFIG_HOME") ?: "${environment("HOME") ?: environment("USERPROFILE") ?: error("No home directory.")}/.config"
-        return listOf("$base/teamrouter.json", "$base/teamclaude.json").firstOrNull { FileSystem.SYSTEM.exists(it.toPath()) } ?: error("No TeamClaude configuration found. Use --config.")
+        val base = environment("XDG_CONFIG_HOME") ?: "${environment("HOME") ?: environment("USERPROFILE") ?: throw CliktError("No home directory.")}/.config"
+        return listOf("$base/teamrouter.json", "$base/teamclaude.json").firstOrNull { FileSystem.SYSTEM.exists(it.toPath()) } ?: throw CliktError("No TeamClaude configuration found. Use --config.")
     }
 }
 private class Handover : SuspendingCliktCommand(name = "handover") {
     private val id by argument()
     private val confirm by option("--confirm", help = "Confirm no other process will refresh this account's tokens.").flag()
     override suspend fun run() {
-        require(confirm) { "Stop other refreshers first, then pass --confirm." }
+        if (!confirm) throw CliktError("Stop other refreshers first, then pass --confirm.")
         sdk(loadConfig()).use { client -> client.handoverAccount(id).let { echo("${it.label}, id ${it.id}, is now owned by TeamCode.") } }
     }
 }

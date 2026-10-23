@@ -108,7 +108,7 @@ internal class CloudLogs : SuspendingCliktCommand(name = "logs") {
     private val follow by option("--follow", "-f").flag()
     private val json by option("--json", help = "Print events as JSON lines.").flag()
     override suspend fun run() {
-        require(tail in 0..10_000) { "Use --tail between 0 and 10000." }
+        if (tail !in 0..10_000) throw UsageError("Use --tail between 0 and 10000.")
         sdk(loadConfig()).use { client ->
             val print: (CloudEventView) -> Unit = { echo(if (json) Serialization.json.encodeToString(it) else it.render()) }
             var cursor = after ?: (client.cloudEvents(id, after = 0, limit = 1).lastSeq - tail).coerceAtLeast(0)
@@ -231,7 +231,7 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
     private val readOnly by option("--read-only", help = "Only follow the transcript.").flag()
     private val noWake by option("--no-wake", help = "Do not wake a paused session with messages.").flag()
     override suspend fun run() {
-        require(tail in 0..1_000) { "Use --tail between 0 and 1000." }
+        if (tail !in 0..1_000) throw UsageError("Use --tail between 0 and 1000.")
         sdk(loadConfig()).use { client ->
             var lease = client.attachCloudSession(id)
             val canSend = !readOnly && CloudPermissions.MESSAGE in lease.permissions

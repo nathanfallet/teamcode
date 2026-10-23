@@ -1119,3 +1119,9 @@ The [companion app](companion.md) exists on iOS, Android and the desktop: `:comp
 ## Companion app sessions (2026-10-22)
 
 The [companion app](companion.md) follows cloud sessions: a live list by state (and, for administrators, by owner) kept current by the caller-wide feed, and a session screen with its header, history pages and live transcript, reconnecting with back-off and closed in the background. It acts on them: messages sent idempotently with a pending bubble until the transcript records them, interrupt, pause and resume for the owner and administrators, and new sessions from an assigned profile. Evidence: the sessions and actions tests listed in [companion.md](companion.md#evidence).
+
+## CLI input mistakes are reported as such (2026-10-23)
+
+A mistake in what the user typed (`teamcode cloud delete <id>` without `--yes`, incompatible options, a malformed `--repo` or `--label`, a service change that needs an uninstall first, a TeamClaude file that cannot be imported) printed "TeamCode command failed unexpectedly" because the check threw `IllegalArgumentException`, which the top-level handler rightly treats as a bug. These checks now throw `UsageError` (a wrong option or combination) or `CliktError` (a refused operation), which Clikt prints as the message and exit code 1. The top-level handler is unchanged, so a real `require` failure (an invariant, a corrupted private file) still reads as an unexpected failure.
+
+Evidence: `UserInputErrorsTest`; the native macOS arm64 binary against a local server jar with MySQL 8.4 in a container: `cloud delete <id>` without `--yes` prints the confirmation hint and exits 1, with `--yes` it reaches the server (HTTP 404 for an unknown id); `:cli:jvmTest` 249 tests, zero failures.

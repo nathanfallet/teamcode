@@ -172,6 +172,6 @@ class CloudPreparationTest {
     @Test fun repositoryOptionsParse() {
         assertEquals(CloudRepositoryView("https://github.com/example/api.git", "api", "main"), parseRepository("https://github.com/example/api.git#main"))
         assertEquals(CloudRepositoryView("https://github.com/example/web", "apps/web", null), parseRepository("apps/web=https://github.com/example/web"))
-        assertFailsWith<IllegalArgumentException> { parseRepository("git@github.com:example/api.git") }
+        assertFailsWith<com.github.ajalt.clikt.core.UsageError> { parseRepository("git@github.com:example/api.git") }
     }
 }
