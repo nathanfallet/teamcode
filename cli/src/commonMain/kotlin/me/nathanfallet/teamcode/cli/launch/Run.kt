@@ -82,7 +82,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
             trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
-                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" })) {
+                if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
                     launch(service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity)
                 } else {
@@ -160,9 +160,11 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         if (active.isNotEmpty()) echo("Team hooks: ${active.joinToString(", ") { "${it.name} ${it.version}" }}.", err = true)
         return active
     }
+    /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
+    private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
     private suspend fun launch(port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean): Int {
         val options = arguments.takeWhile { it != "--" }
-        val guided = agent == "claude" && !noGuidance && "--bare" !in options
+        val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
             GuidancePlugin.create(configPath(), if (guided) port else null, teamHooks, runId.takeIf { activity })
         } catch (_: Exception) {

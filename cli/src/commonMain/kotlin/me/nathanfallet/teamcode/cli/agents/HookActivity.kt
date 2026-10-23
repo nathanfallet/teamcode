@@ -18,8 +18,8 @@ import me.nathanfallet.teamcode.client.TeamCodeException
  * the payload are dropped here and never reach TeamCode.
  */
 internal object HookActivity {
-    const val WORKING = "working"
-    const val WAITING = "waiting_for_human"
+    const val WORKING = RunIdentifiers.ACTIVITY_WORKING
+    const val WAITING = RunIdentifiers.ACTIVITY_WAITING
     /** Claude Code's notification types that ask for a person; `auth_success`, an unknown or a missing type do not. */
     private val ASKING = setOf("permission_prompt", "idle_prompt", "elicitation_dialog")
 
@@ -62,10 +62,26 @@ internal class ActivityReporter(private val client: TeamCodeClient) {
     private val lock = Mutex()
     private class Seen(val state: String?, val at: TimeMark)
     private val last = LinkedHashMap<String, Seen>()
-    /** One report at a time, so two hooks of a launch reach the server in the order they came. */
-    suspend fun report(runId: String, state: String) = lock.withLock {
+    private val pendingLock = Mutex()
+    private val pending = LinkedHashMap<String, String>()
+    /**
+     * One report at a time, so two hooks of a launch reach the server in the order they came. A hook that finds a report in
+     * flight leaves its state for the one in flight to send after it (the latest per launch wins), so a slow server never
+     * piles up one waiting handler per hook.
+     */
+    suspend fun report(runId: String, state: String) {
+        if (!lock.tryLock()) { pendingLock.withLock { pending[runId] = state }; return }
+        try {
+            var next: Pair<String, String>? = runId to state
+            while (next != null) {
+                send(next.first, next.second)
+                next = pendingLock.withLock { pending.entries.firstOrNull()?.let { it.key to it.value }?.also { pending.remove(it.first) } }
+            }
+        } finally { lock.unlock() }
+    }
+    private suspend fun send(runId: String, state: String) {
         val seen = last[runId]
-        if (seen != null && seen.at.elapsedNow() < REMEMBER && (seen.state == null || seen.state == state)) return@withLock
+        if (seen != null && seen.at.elapsedNow() < REMEMBER && (seen.state == null || seen.state == state)) return
         when (HookActivity.report(client, runId, state)) {
             HookActivity.Outcome.REPORTED -> remember(runId, Seen(state, TimeSource.Monotonic.markNow()))
             HookActivity.Outcome.REFUSED -> remember(runId, Seen(null, TimeSource.Monotonic.markNow()))

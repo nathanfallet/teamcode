@@ -4,6 +4,9 @@ import kotlinx.serialization.Serializable
 
 /** Wire syntax shared by the local proxy and launcher; ownership is always checked by the server. */
 object RunIdentifiers {
+    /** The two states a launch's hooks report; the server accepts exactly these. */
+    const val ACTIVITY_WORKING = "working"
+    const val ACTIVITY_WAITING = "waiting_for_human"
     fun isValid(id: String): Boolean = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").matches(id)
 }
 

@@ -69,7 +69,7 @@ class GuidanceHookTest {
     }
     @Test fun activityIsReportedOnceFromTheLaunchHeaderWithoutAnyContent() = testApplication {
         val run = "11111111-2222-3333-4444-555555555555"
-        val reports = mutableListOf<String>()
+        val reports = java.util.Collections.synchronizedList(mutableListOf<String>())
         var failWith: HttpStatusCode? = null
         val sdk = TeamCodeClient("https://team.example", { "server-secret" }) { configure -> HttpClient(MockEngine { request ->
             when (request.url.encodedPath) {

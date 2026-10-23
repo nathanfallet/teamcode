@@ -5,7 +5,7 @@ import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import me.nathanfallet.teamcode.cli.config.ConfigStore
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.environment
@@ -28,14 +28,17 @@ internal class Hook : SuspendingCliktCommand(name = "hook") {
                 val state = HookActivity.state(input)
                 val run = HookActivity.runId(environment("TEAMCODE_RUN_ID")).takeIf { environment("TEAMCODE_ACTIVITY") == "1" }
                 // Concurrent with the guidance lookup: the agent waits for the slower of the two, not their sum (the report is bounded at 1.5 s).
-                coroutineScope {
+                supervisorScope {
                     val report = if (state != null && run != null) async { HookActivity.report(client, run, state) } else null
-                    val emission = bridge.prepare(input)
-                    if (emission != null) {
-                        println(emission.output)
-                        written = true
-                        bridge.acknowledge(emission)
-                    }
+                    // The report does not depend on the guidance: a failure here (stdout closed) must not cancel it.
+                    try {
+                        val emission = bridge.prepare(input)
+                        if (emission != null) {
+                            println(emission.output)
+                            written = true
+                            bridge.acknowledge(emission)
+                        }
+                    } catch (error: CancellationException) { throw error } catch (_: Exception) { }
                     report?.await()
                 }
             }
