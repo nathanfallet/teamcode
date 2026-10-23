@@ -85,6 +85,97 @@ class CloudSessionService(
         return outcome
     }
 
+    /**
+     * Creates a session that runs on the caller's own device ([CloudSessionKind.REMOTE]): the device is the one of the
+     * caller's login session, so a service key or a login without an installation is refused
+     * (`422 remote_requires_device`), and nobody creates one on behalf of another member. No profile, cluster or
+     * workspace is involved; the session waits for its host (`teamcode remote`), which starts its first execution.
+     * Remote sessions count toward neither the retained nor the running cap of cloud sessions, and a device has no cap.
+     */
+    suspend fun createRemote(principal: Principal, onBehalfOf: String?, draft: RemoteSessionDraft, idempotency: IdempotencyRequest?): CloudCreateOutcome {
+        val actor = actor(principal, onBehalfOf)
+        if (actor.effectiveMemberId != principal.member.id)
+            throw TeamFailure("on_behalf_forbidden", 403, "A remote session runs on the caller's own device; it cannot be created on behalf of another member.")
+        validateRemote(draft)
+        val device = deviceOf(principal)
+        val owner = store.member(principal.teamId, principal.member.id)
+            ?: throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
+        access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
+        draft.initialMessage?.let { text ->
+            if (initialMessages == null) throw TeamFailure("initial_message_unsupported", 400, "This server does not accept an initial message.")
+            CloudConversationRules.validateMessage(text)
+        }
+        val settings = store.settings(principal.teamId)
+        val now = store.now()
+        val id = UUID.randomUUID().toString()
+        val session = CloudSession(
+            id = id, teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
+            agentKind = draft.agentKind, agentVersion = null, agentModel = draft.agentModel, agentEffort = draft.agentEffort, labels = draft.labels,
+            state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,
+            idleTimeoutMinutes = settings.remoteIdleTimeoutMinutes, lastActivityAt = now, resumeWorkspace = WorkspaceResume.CONSISTENT, resumeConversation = ConversationResume.NONE,
+            failure = null, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, pausedAt = null, expiresAt = null,
+            terminatedReason = null, waitingSince = null, workspace = CloudWorkspace("", null, 0), createdAt = now, updatedAt = now,
+            kind = CloudSessionKind.REMOTE, host = CloudSessionHost(device, draft.directoryName, permissionMode = draft.permissionMode),
+        )
+        val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
+        draft.initialMessage?.let { text ->
+            val created = when (outcome) { is CloudCreateOutcome.Created -> outcome.session; is CloudCreateOutcome.Replayed -> outcome.session }
+            initialMessages?.queue(principal, created, text)
+        }
+        return outcome
+    }
+
+    /**
+     * Starts the next execution of a remote session on its host (`POST /cloud/sessions/{id}/host`, called by
+     * `teamcode remote`): only the owner, from the session's device, with an interactive login. A new epoch fences
+     * the execution it replaces (a host started twice: the first one gets `409 execution_fenced` and exits). A paused
+     * session resumes; a creating one keeps preparing. Returns the session with its new epoch, which the host then
+     * uses on the runner channel with the same login.
+     */
+    suspend fun host(principal: Principal, id: String): CloudSession {
+        val actor = actor(principal, null)
+        val found = store.find(principal.teamId, id)
+        if (found == null || found.ownerId != principal.member.id) throw missing()
+        if (found.kind != CloudSessionKind.REMOTE) throw TeamFailure("not_remote", 409, "This is a cloud session; it runs in a pod the server starts.")
+        requireHost(principal, found)
+        repeat(5) {
+            val current = store.find(principal.teamId, id) ?: throw missing()
+            if (current.state.terminal || current.desiredState == DesiredState.TERMINATED) throw notRunning()
+            if (current.state == CloudSessionState.PAUSING)
+                throw TeamFailure("session_pausing", 409, "The session is still pausing on its host. Try again once it is paused.", retryable = true)
+            val now = store.now()
+            val live = if (current.currentEpoch > 0) store.execution(current.id, current.currentEpoch)?.takeIf { it.state != ExecutionState.ENDED } else null
+            val epoch = current.currentEpoch + 1
+            val state = when (current.state) {
+                CloudSessionState.CREATING, CloudSessionState.PREPARING -> current.state
+                else -> CloudSessionState.RESUMING
+            }
+            // A remote session's failure only ever says why its last execution ended (its host went offline).
+            val next = current.copy(state = state, phase = "starting_host", desiredState = DesiredState.RUNNING, currentEpoch = epoch, resumeBlocked = null, failure = null,
+                pauseRequestedAt = null, pauseForce = false, pausedAt = null, expiresAt = null, updatedAt = now)
+            val execution = CloudExecution(current.id, epoch, hostExecutionName(epoch), ExecutionState.PENDING, now, ownerId = current.ownerId)
+            val ended = live?.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = "replaced")
+            transition.startHost(current, next, execution, ended, actor)?.let { return it }
+        }
+        throw TeamFailure("session_busy", 409, "The cloud session changed concurrently. Retry the request.")
+    }
+
+    /** The caller's device, required for anything that runs a remote session. */
+    private suspend fun deviceOf(principal: Principal): String {
+        if (principal.serviceScopes != null) throw remoteRequiresDevice()
+        return store.deviceOf(principal) ?: throw remoteRequiresDevice()
+    }
+
+    /** A remote session runs, and resumes, only on its own device. */
+    private suspend fun requireHost(principal: Principal, session: CloudSession) {
+        val device = deviceOf(principal)
+        val host = session.host
+        if (host?.deviceId == null) throw TeamFailure("remote_host_removed", 409, "The device of this remote session was removed; the session cannot run again.")
+        if (host.deviceId != device)
+            throw TeamFailure("remote_host_mismatch", 409, "This remote session runs on ${host.device?.name ?: "another device"}; resume it there.")
+    }
+
     suspend fun list(principal: Principal, query: CloudSessionQuery): CloudSessionPage {
         principal.requireCloudRead()
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
@@ -133,9 +224,13 @@ class CloudSessionService(
         val owner = store.member(principal.teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired)
             throw TeamFailure("owner_unavailable", 403, "The session owner is disabled or has not completed password setup.")
-        val profile = store.profile(principal.teamId, session.profileId)
-        if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds))
-            throw TeamFailure("profile_unassigned", 403, "The session owner is no longer assigned to this profile.")
+        // A remote session has no profile; it resumes only from its own device (elsewhere, a message with `wake` asks its host).
+        if (session.kind == CloudSessionKind.REMOTE) requireHost(principal, session)
+        else {
+            val profile = store.profile(principal.teamId, session.profileId)
+            if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds))
+                throw TeamFailure("profile_unassigned", 403, "The session owner is no longer assigned to this profile.")
+        }
         return transition(principal.teamId, id) { current ->
             val now = store.now()
             when {
@@ -179,6 +274,20 @@ class CloudSessionService(
     }
 
     companion object {
+        /** The phase of a remote session waiting for its host to start an execution. */
+        const val WAITING_HOST = "waiting_host"
+        val REMOTE_AGENTS = setOf("claude", "codex")
+        /** The execution name of a remote session's host, in place of a pod name. */
+        fun hostExecutionName(epoch: Int) = "host-e$epoch"
+        fun validateRemote(draft: RemoteSessionDraft) {
+            validate(CloudSessionDraft(draft.name, "", null, draft.agentModel, draft.agentEffort, draft.labels, null))
+            if (draft.agentKind !in REMOTE_AGENTS) throw TeamFailure("invalid_agent", 400, "Use the agent claude or codex.")
+            val directory = draft.directoryName
+            if (directory.isBlank() || directory.length > 255 || directory == "." || directory == ".." || directory.any { it == '/' || it == '\\' || it.isISOControl() })
+                throw TeamFailure("invalid_directory_name", 400, "Send the directory's name (its last segment, 1–255 characters), never its path.")
+        }
+        private fun remoteRequiresDevice() = TeamFailure("remote_requires_device", 422,
+            "A remote session runs on the device of an interactive login. Sign in with teamcode login on this device; service keys cannot host one.")
         fun claimName(sessionId: String) = "tc-ws-$sessionId"
         fun podName(sessionId: String, epoch: Int) = "tc-$sessionId-e$epoch"
         fun validate(draft: CloudSessionDraft) {

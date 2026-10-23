@@ -95,6 +95,9 @@ object CloudSessionKinds {
  * The device of a remote session. [deviceId] is null once the device was removed; [deviceName], [platform] and
  * [osVersion] describe the device as it is now ([platform]: `macos`, `windows`, `linux`, `ios` or `android`, null
  * until the installation reported it). [directoryName] is the last segment of the session's directory, never its path.
+ * [online]: the host runs the session now (an execution registered and heartbeating; the server notices a silent host
+ * within 90 s), with [lastHeartbeatAt]. [permissionMode]: `ask` (Claude Code's permission requests come to the team's
+ * clients, Codex stays in its sandbox limited to the directory) or `bypass`.
  */
 @Serializable
 data class CloudSessionHostView(
@@ -103,16 +106,29 @@ data class CloudSessionHostView(
     val platform: String? = null,
     val osVersion: String? = null,
     val directoryName: String? = null,
+    val online: Boolean = false,
+    val lastHeartbeatAt: Long? = null,
+    val permissionMode: String? = null,
 )
+object RemotePermissionModes {
+    const val ASK = "ask"
+    const val BYPASS = "bypass"
+}
 @Serializable
 data class CloudSessionPageView(val sessions: List<CloudSessionView>, val nextBefore: String? = null)
 
+/** [kind]: the agent of a remote session (`claude` or `codex`); a cloud session takes its profile's agent. */
 @Serializable
-data class CloudAgentRequest(val model: String? = null, val effort: String? = null)
+data class CloudAgentRequest(val model: String? = null, val effort: String? = null, val kind: String? = null)
+/**
+ * A cloud session (with [profileId]) or, with [kind] `remote` (`cloud.sessions.remote.v1`), a session on the caller's own
+ * device: no profile, image, idle timeout or environment; [agent] names the agent, [directoryName] is the last segment
+ * of the directory it works in (never its path) and [permissionMode] is `ask` (the default) or `bypass`.
+ */
 @Serializable
 data class CreateCloudSessionRequest(
     val name: String,
-    val profileId: String,
+    val profileId: String? = null,
     val image: String? = null,
     val agent: CloudAgentRequest? = null,
     val labels: Map<String, String> = emptyMap(),
@@ -120,7 +136,16 @@ data class CreateCloudSessionRequest(
     val environment: CloudEnvironmentRequest? = null,
     /** The first message for the agent (`cloud.sessions.initial-message.v1`), delivered once the session is ready. */
     val initialMessage: String? = null,
+    val kind: String? = null,
+    val directoryName: String? = null,
+    val permissionMode: String? = null,
 )
+/**
+ * The execution a remote session's host just started (`POST /api/v1/cloud/sessions/{id}/host`): the host calls the
+ * runner channel for [teamId], the session and [epoch] with the same login, until it is fenced.
+ */
+@Serializable
+data class CloudHostView(val teamId: String, val epoch: Int, val session: CloudSessionView)
 @Serializable
 data class PauseCloudSessionRequest(val force: Boolean = false)
 
@@ -246,6 +271,11 @@ data class CloudSettingsView(
      * without a deadline (the default). Absent (null) in a `PUT` keeps the stored value.
      */
     val permissionDeadlineMinutes: Int? = null,
+    /**
+     * Minutes without activity before a remote session pauses (`cloud.sessions.remote.v1`; 1 to 1440, 60 by default);
+     * 0 never pauses one. Absent (null) in a `PUT` keeps the stored value.
+     */
+    val remoteIdleTimeoutMinutes: Int? = null,
 )
 
 /**

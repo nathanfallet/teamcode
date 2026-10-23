@@ -7,9 +7,10 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 /**
  * [permissionRelay]: the runner relays the agent's permission requests (Claude Code only; Codex's bypass mode produces
  * none). [permissionDeadlineMinutes]: the team's deadline for unanswered permission requests, 0 for none.
+ * [permissionMode]: a remote session's mode on its host's files; null for a cloud session, whose pod is its sandbox.
  */
 data class RunnerAgentConfig(val kind: String, val version: String?, val model: String?, val effort: String?, val conversation: ConversationResume,
-    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0)
+    val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val permissionMode: RemotePermissionMode? = null)
 
 /** Inputs delivered to the runner, and the session's desired state when they were read. */
 data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredState)
@@ -28,7 +29,8 @@ class RunnerConversationUseCase(
     suspend fun agent(teamId: String, sessionId: String, epoch: Int): RunnerAgentConfig {
         val session = live(teamId, sessionId, epoch)
         return RunnerAgentConfig(session.agentKind, session.agentVersion, session.agentModel, session.agentEffort, session.resumeConversation,
-            permissionRelay = session.agentKind == "claude", permissionDeadlineMinutes = sessions.settings(teamId).permissionDeadlineMinutes)
+            permissionRelay = session.agentKind == "claude", permissionDeadlineMinutes = sessions.settings(teamId).permissionDeadlineMinutes,
+            permissionMode = session.host?.permissionMode?.takeIf { session.kind == CloudSessionKind.REMOTE })
     }
 
     /**

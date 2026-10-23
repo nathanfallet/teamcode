@@ -350,6 +350,9 @@ internal interface AgentTools {
 
     /** The artifact tools to start beside the agent when the owner may publish now, or null. Never throws except on cancellation. */
     suspend fun artifacts(): me.nathanfallet.teamcode.cli.launch.ArtifactsMcp? = null
+
+    /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
+    suspend fun claudePlugin(): String? = null
 }
 
 /** Where cloud sessions install team hooks, relative to the agent's home. */

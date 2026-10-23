@@ -68,6 +68,21 @@ interface CloudSessionStore {
      */
     suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int): StartOutcome
 
+    /**
+     * The device of [principal]'s login session, or null for a service key or a login without an installation id. A
+     * remote session runs on this device.
+     */
+    suspend fun deviceOf(principal: Principal): String? = null
+
+    /**
+     * Starts the next epoch of a remote session on its host, in one transaction: the compare-and-set that advances
+     * `currentEpoch`, the end of [ended] (the execution it replaces, if one was still live) and the insert of
+     * [execution]. No cluster capacity applies. Revalidates [actor] in the transaction. Null when [expected] is no
+     * longer current.
+     */
+    suspend fun startHostExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? =
+        throw UnsupportedOperationException("This store does not host remote sessions.")
+
     /** Records a heartbeat for the current execution; false when the epoch is fenced. */
     suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean
 

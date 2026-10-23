@@ -244,7 +244,7 @@ internal class AgentHost(
         reader?.cancel()
         // That reader's tail, which cancels its process's timers, may never run now.
         cancelDeadlines(null)
-        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes) }.also { settings = it }
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.permissionMode) }.also { settings = it }
         val stored = state.read()
         val resume = stored?.takeIf { it.kind == config.kind && it.version == config.version }?.conversationId
         if (stored != null && resume == null) {
@@ -276,7 +276,9 @@ internal class AgentHost(
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
         val hooks = tools?.hooks(kind).orEmpty().let(::cloudHookSettings)?.let { listOf("--settings", it) }.orEmpty()
-        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, mcpServers = servers, artifacts = tools?.artifacts())
+        val plugin = if (kind == "claude") tools?.claudePlugin() else null
+        val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
+            hookToken = false, artifacts = tools?.artifacts())
         return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 
@@ -491,9 +493,12 @@ internal class AgentHost(
     }
 }
 
-/** The runner's loopback inference proxy: its port and the random local token the agent presents to it. */
-internal class AgentInferenceEndpoint(val port: Int, val token: String) {
-    override fun toString() = "AgentInferenceEndpoint(port=$port, token=[REDACTED])"
+/**
+ * The runner's loopback inference proxy: its port and the random local token the agent presents to it. [runId]: the
+ * registered run the agent's requests belong to, on a member's device (as under `teamcode run`); null in a pod.
+ */
+internal class AgentInferenceEndpoint(val port: Int, val token: String, val runId: String? = null) {
+    override fun toString() = "AgentInferenceEndpoint(port=$port, token=[REDACTED], runId=$runId)"
 }
 
 /** The state file on the workspace volume; a missing or unreadable file means "no conversation to resume". */

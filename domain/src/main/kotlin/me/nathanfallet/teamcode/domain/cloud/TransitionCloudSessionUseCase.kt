@@ -29,6 +29,16 @@ class TransitionCloudSessionUseCase(private val store: CloudSessionStore) {
         return store.startExecution(expected, next, execution, leaseOwner, memberRunningLimit)
     }
 
+    /** Advances the epoch of a remote session by exactly one on its host, ending the execution it replaces. */
+    suspend fun startHost(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? {
+        require(expected.kind == CloudSessionKind.REMOTE && next.id == expected.id && next.generation == expected.generation) { "Only a remote session starts on its host." }
+        CloudStateMachine.require(expected.state, next.state)
+        require(next.currentEpoch == expected.currentEpoch + 1 && execution.epoch == next.currentEpoch && execution.sessionId == expected.id) { "The epoch advances by one with its execution." }
+        require(next.ownerId == expected.ownerId && execution.ownerId == expected.ownerId) { "An execution runs for the session's current owner." }
+        require(ended == null || (ended.epoch == expected.currentEpoch && ended.state == ExecutionState.ENDED)) { "Only the current execution is replaced." }
+        return store.startHostExecution(expected, next, execution, ended, actor)
+    }
+
     /**
      * Reads the session, lets [decide] return a transition (or null for "already in the requested state"),
      * and retries on a lost race. Returns the committed or current row, or null when the session does not exist.

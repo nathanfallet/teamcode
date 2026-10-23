@@ -82,6 +82,31 @@ class TeamEventRoutesTest {
         return seen
     }
 
+    @Test fun feedCarriesCloudSessionsOnlyUnlessAskedForRemoteOnes() = runBlocking {
+        val journal = Journal()
+        journal.add(TeamEventType.SESSION_CREATED, "colleague-id", """{"sessionId":"s1","kind":"cloud"}""")
+        journal.add(TeamEventType.SESSION_CREATED, "colleague-id", """{"sessionId":"s2","kind":"remote","hostDeviceId":"d1"}""")
+        journal.add(TeamEventType.RUN_STARTED, "colleague-id", """{"runId":"r1"}""")
+        journal.add(TeamEventType.SESSION_PAUSED, "colleague-id", """{"sessionId":"s0"}""")
+        journal.add(TeamEventType.CLOUD_TURN, "colleague-id", """{"phase":"started","kind":"remote"}""")
+        journal.add(TeamEventType.SESSION_ENDED, "colleague-id", """{"sessionId":"s3","kind":"cloud"}""")
+        val service = TeamEventService(journal, sleep = { delay(20) })
+        val server = embeddedServer(io.ktor.server.cio.CIO, port = 0, host = "127.0.0.1") {
+            configureGateway(gateway, team = team(), publicOrigin = "http://localhost")
+            routing { teamEventRoutes(service) }
+        }.start()
+        val origin = "http://localhost:${server.engine.resolvedConnectors().first().port}"
+        val client = HttpClient(io.ktor.client.engine.cio.CIO) { expectSuccess = false; defaultRequest { url(origin) } }
+        try {
+            assertEquals(listOf(1L, 3L, 4L, 6L), client.read("colleague", 4, query = "?after=0").map { it.second.seq },
+                "Without kind: cloud sessions (and events from before kinds), runs; never a remote session")
+            assertEquals(listOf(2L, 3L, 5L), client.read("colleague", 3, query = "?after=0&kind=remote").map { it.second.seq })
+            assertEquals(listOf(1L, 2L, 3L, 4L, 5L, 6L), client.read("colleague", 6, query = "?after=0&kind=cloud&kind=remote").map { it.second.seq })
+            val invalid = client.get("/api/v1/cloud/events/stream?kind=pod") { bearerAuth("colleague") }
+            assertEquals(HttpStatusCode.BadRequest, invalid.status); assertTrue("invalid_kind" in invalid.bodyAsText())
+        } finally { client.close(); server.stop(0, 0) }
+    }
+
     @Test fun feedIsIsolatedResumableFilteredAndRefusesKeysWithoutScope() = runBlocking {
         val journal = Journal()
         journal.add(TeamEventType.SESSION_CREATED, "colleague-id", """{"sessionId":"s1"}""")

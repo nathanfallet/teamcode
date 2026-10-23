@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 
-/** The runner channel, authenticated by the pod's projected token (see [AuthenticateRunnerUseCase]). */
+/** The runner channel, authenticated by the pod's projected token, or a remote host's login (see [AuthenticateRunnerUseCase]). */
 class CloudRunnerChannel(
     val runner: RunnerChannelUseCase,
     val authenticate: AuthenticateRunnerUseCase,
@@ -19,6 +19,8 @@ class CloudRunnerChannel(
     val github: RunnerGitHubUseCase? = null,
     /** The owner's environment variables for the running agent; null where variants are not configured. */
     val variables: RunnerVariablesUseCase? = null,
+    /** Whether [authenticate] accepts a remote session's host (its owner's login from its device): `cloud.sessions.remote.v1`. */
+    val remoteHosts: Boolean = false,
 )
 
 internal const val RUNNER_PATH = "/api/v1/cloud/runner/"

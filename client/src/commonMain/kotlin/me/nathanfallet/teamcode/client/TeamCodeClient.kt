@@ -259,8 +259,12 @@ class TeamCodeClient(
         checkResponse(response)
         return response.body()
     }
-    /** [owner] is a member id or `all` (administrators); null lists the caller's own sessions. */
-    suspend fun cloudSessions(owner: String? = null, states: List<String> = emptyList(), labels: Map<String, String> = emptyMap(), before: String? = null, limit: Int = 50): CloudSessionPageView {
+    /**
+     * [owner] is a member id or `all` (administrators); null lists the caller's own sessions. [kinds]: `cloud` and or
+     * `remote`; empty lists cloud sessions only, as a server without remote sessions does.
+     */
+    suspend fun cloudSessions(owner: String? = null, states: List<String> = emptyList(), labels: Map<String, String> = emptyMap(), before: String? = null, limit: Int = 50,
+        kinds: List<String> = emptyList()): CloudSessionPageView {
         owner?.takeIf { it != "all" }?.let(::identifier)
         before?.let(::identifier)
         require(limit in 1..50)
@@ -272,6 +276,7 @@ class TeamCodeClient(
                 labels.forEach { (key, value) -> parameters.append("label", "$key=$value") }
                 before?.let { parameters.append("before", it) }
                 parameters.append("limit", limit.toString())
+                kinds.forEach { parameters.append("kind", it) }
             }
         }
         checkResponse(response)
@@ -282,6 +287,8 @@ class TeamCodeClient(
     suspend fun pauseCloudSession(id: String, force: Boolean = false, onBehalfOf: String? = null): CloudSessionView =
         cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
+    /** Starts a remote session's next execution on this device (`cloud.sessions.remote.v1`); the host then uses the runner channel. */
+    suspend fun hostCloudSession(id: String): CloudHostView = cloudAction("/api/v1/cloud/sessions/$id/host", id, null, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }
     suspend fun githubApp(): GitHubAppView = request("/api/v1/github/app", HttpMethod.Get)
     suspend fun saveGitHubApp(input: SaveGitHubAppRequest): GitHubAppView = request("/api/v1/github/app", HttpMethod.Put, input)
@@ -489,13 +496,18 @@ class TeamCodeClient(
     suspend fun followTeamEvents(
         after: Long?,
         types: Set<String> = emptySet(),
+        /** Session kinds whose events to carry (`cloud`, `remote`); empty for the server's default, cloud sessions only. */
+        kinds: Set<String> = emptySet(),
         onGap: suspend (oldestSeq: Long) -> Unit = {},
         onOpen: suspend () -> Unit = {},
         onEvent: suspend (TeamEventView) -> Unit,
     ): CloudStreamEnd {
         require(after == null || after >= 0)
         require(types.size <= MAX_TEAM_EVENT_TYPES && types.all { TEAM_EVENT_TYPE.matches(it) && it != "gap" && it != "denied" }) { "Invalid event type." }
-        val query = if (types.isEmpty()) "" else "?types=" + types.sorted().joinToString(",").encodeURLQueryComponent()
+        require(kinds.all { it == "cloud" || it == "remote" }) { "Invalid session kind." }
+        val parameters = (if (types.isEmpty()) emptyList() else listOf("types=" + types.sorted().joinToString(",").encodeURLQueryComponent())) +
+            kinds.sorted().map { "kind=$it" }
+        val query = if (parameters.isEmpty()) "" else "?" + parameters.joinToString("&")
         return followStream("/api/v1/cloud/events/stream$query", after, endEvent = null, onOpen) { frame ->
             when (frame.event) {
                 "gap" -> onGap(decodeFrame<TeamEventGapView>(frame).oldestSeq)

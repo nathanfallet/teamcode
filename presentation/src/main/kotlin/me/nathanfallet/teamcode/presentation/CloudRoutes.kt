@@ -12,18 +12,29 @@ import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
 
 internal fun CloudProblem.view() = CloudProblemView(code, message, retryable)
+/**
+ * A remote session has no profile or image: it carries the reserved [REMOTE_PLACEHOLDER] in their place, so a client
+ * from before remote sessions still decodes it, and a workspace deletion that does not apply (the server never touches
+ * the member's directory).
+ */
 internal fun CloudSession.view() = CloudSessionView(
     id = id, name = name, ownerId = ownerId, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
     state = state.wire, phase = phase, desiredState = desiredState.wire, generation = generation, currentEpoch = currentEpoch,
-    profile = CloudProfileRef(profileId, profileVersion), image = CloudImageView(imageReference, imageDigest),
+    profile = if (kind == CloudSessionKind.REMOTE) CloudProfileRef(REMOTE_PLACEHOLDER, 0) else CloudProfileRef(profileId, profileVersion),
+    image = if (kind == CloudSessionKind.REMOTE) CloudImageView(REMOTE_PLACEHOLDER) else CloudImageView(imageReference, imageDigest),
     agent = CloudAgentView(agentKind, agentVersion, agentModel, agentEffort), labels = labels,
     activity = CloudActivityView(lastActivityAt, idleTimeoutMinutes), resume = CloudResumeView(resumeWorkspace.wire, resumeConversation.wire),
     failure = failure?.view(), resumeBlocked = resumeBlocked?.view(),
-    workspaceDeletion = CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
+    workspaceDeletion = if (kind == CloudSessionKind.REMOTE) CloudWorkspaceDeletionView(NOT_APPLICABLE)
+        else CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
     environment = environment.view(), kind = kind.wire,
-    host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName) },
+    host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire) },
 )
+/** The profile id and image reference of a remote session, which has neither. */
+internal const val REMOTE_PLACEHOLDER = "remote"
+/** The workspace deletion state of a remote session: its directory is the member's, never deleted by the server. */
+internal const val NOT_APPLICABLE = "not_applicable"
 internal fun CloudEnvironmentSpec.view() = CloudEnvironmentView(repositories.map { CloudRepositoryView(it.url, it.path, it.ref, it.branch) }, workingDirectory,
     CloudSetupView(setup.create, setup.start), requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
 private fun CloudRepositoryView.domain() = CloudRepository(url, path, ref, branch)
@@ -36,13 +47,13 @@ private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespac
     workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.domain())
 private fun CloudProfile.view(clusterName: String? = null) = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt, clusterName)
 private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
-    memberTransfers.wire, transferOfferDays, transferPendingInputs.wire, permissionDeadlineMinutes)
+    memberTransfers.wire, transferOfferDays, transferPendingInputs.wire, permissionDeadlineMinutes, remoteIdleTimeoutMinutes)
 /** An absent transfer or permission deadline field keeps [current]'s value. */
 private fun CloudSettingsView.domain(current: CloudSettings) = CloudSettings(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
     memberTransfers?.let { MemberTransfers.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use memberTransfers offer or disabled.") } ?: current.memberTransfers,
     transferOfferDays ?: current.transferOfferDays,
     transferPendingInputs?.let { TransferPendingInputs.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Use transferPendingInputs cancel or keep.") } ?: current.transferPendingInputs,
-    permissionDeadlineMinutes ?: current.permissionDeadlineMinutes)
+    permissionDeadlineMinutes ?: current.permissionDeadlineMinutes, remoteIdleTimeoutMinutes ?: current.remoteIdleTimeoutMinutes)
 
 /** `TeamCode-On-Behalf-Of`: at most one value; the domain decides whether the caller may use it. */
 internal fun ApplicationCall.onBehalfOf(): String? {
@@ -86,6 +97,7 @@ internal fun cloudStartsWork(method: String, path: String): Boolean {
 private val WORK_ROUTES = listOf(
     arrayOf("api", "v1", "cloud", "sessions"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "resume"),
+    arrayOf("api", "v1", "cloud", "sessions", "*", "host"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "messages"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "attachments"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "transfer"),
@@ -151,9 +163,29 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             // Room for an initial message of 32,000 characters.
             val input = call.jsonBody<CreateCloudSessionRequest>(256 * 1024)
             val canonical = Serialization.json.encodeToString(input.copy(labels = input.labels.toSortedMap())) + "\n" + (onBehalfOf ?: call.principal.member.id)
-            val draft = CloudSessionDraft(input.name, input.profileId, input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes,
-                input.environment?.let { CloudEnvironmentOverride(it.repositories?.map { repository -> repository.domain() }, it.workingDirectory) }, input.initialMessage)
-            when (val outcome = sessions.create(call.principal, onBehalfOf, draft, IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical)))) {
+            val idempotency = IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical))
+            val outcome = when (input.kind ?: CloudSessionKind.CLOUD.wire) {
+                CloudSessionKind.CLOUD.wire -> {
+                    if (input.directoryName != null || input.permissionMode != null || input.agent?.kind != null)
+                        throw TeamFailure("invalid_session", 400, "A cloud session takes its agent from its profile and has no directory or permission mode.")
+                    val draft = CloudSessionDraft(input.name, input.profileId ?: throw TeamFailure("invalid_session", 400, "Send the profileId of a cloud session."),
+                        input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes,
+                        input.environment?.let { CloudEnvironmentOverride(it.repositories?.map { repository -> repository.domain() }, it.workingDirectory) }, input.initialMessage)
+                    sessions.create(call.principal, onBehalfOf, draft, idempotency)
+                }
+                CloudSessionKind.REMOTE.wire -> {
+                    if (input.profileId != null || input.image != null || input.idleTimeoutMinutes != null || input.environment != null)
+                        throw TeamFailure("invalid_session", 400, "A remote session has no profile, image, idle timeout or environment: it runs in a directory of the caller's device.")
+                    val mode = input.permissionMode?.let { RemotePermissionMode.parse(it) ?: throw TeamFailure("invalid_permission_mode", 400, "Use the permission mode ask or bypass.") }
+                        ?: RemotePermissionMode.ASK
+                    val draft = RemoteSessionDraft(input.name, input.agent?.kind ?: throw TeamFailure("invalid_agent", 400, "Send the agent of a remote session: claude or codex."),
+                        input.agent?.model, input.agent?.effort, input.labels,
+                        input.directoryName ?: throw TeamFailure("invalid_directory_name", 400, "Send the name of the session's directory."), mode, input.initialMessage)
+                    sessions.createRemote(call.principal, onBehalfOf, draft, idempotency)
+                }
+                else -> throw TeamFailure("invalid_kind", 400, "Use kind cloud or remote.")
+            }
+            when (outcome) {
                 is CloudCreateOutcome.Created -> call.respond(HttpStatusCode.Accepted, outcome.session.view())
                 is CloudCreateOutcome.Replayed -> {
                     call.response.header(CloudHeaders.IDEMPOTENCY_REPLAYED, "true")
@@ -180,6 +212,11 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val input = if (call.request.contentType().withoutParameters() == ContentType.Application.Json) call.jsonBody<PauseCloudSessionRequest>() else PauseCloudSessionRequest()
             call.respond(HttpStatusCode.Accepted, sessions.pause(call.principal, call.onBehalfOf(), call.id(), input.force).view())
         }
+        // A remote session's host (teamcode remote) starts its next execution here, from the session's device.
+        post("/sessions/{id}/host") {
+            val session = sessions.host(call.principal, call.id())
+            call.respond(CloudHostView(session.teamId, session.currentEpoch, session.view()))
+        }
         post("/sessions/{id}/resume") { call.respond(HttpStatusCode.Accepted, sessions.resume(call.principal, call.onBehalfOf(), call.id()).view()) }
         delete("/sessions/{id}") {
             sessions.delete(call.principal, call.onBehalfOf(), call.id())
@@ -194,7 +231,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             clustersSection(actor, clusters, admin.kubeconfigImports != null) + profilesSection(admin.profiles(actor), clusters,
                 call.request.queryParameters["published"]?.toIntOrNull()) +
             """<h2>GitHub</h2><p>The team's GitHub App, which gives each member's cloud sessions their own Git access, is configured on <a href="/dashboard/github">GitHub</a>.</p><h2>Retention, limits and transfers</h2>"""
-        call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><fieldset><legend>Permission requests</legend><p>A cloud agent waits for a person when a tool use matches an <code>ask</code> permission rule or when it asks the user a question. Without a deadline it waits until someone answers, interrupts the turn or pauses the session. With one, the runner denies a request nobody answered in time and the agent reads why. A change applies to sessions started or resumed afterwards.</p><label>Deny unanswered requests after, in minutes (empty or 0: no deadline) <input type="number" name="permissionDeadlineMinutes" min="0" max="${CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES}" value="${settings.permissionDeadlineMinutes.takeIf { it > 0 } ?: ""}"></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
+        call.respondText(call.page("Cloud sessions", sections + """<details class='help'><summary>How this works</summary><p>Paused sessions keep their workspace volume until the retention below expires; then the workspace claim and its provider volume are deleted and the session is terminated. Inactivity only pauses a session; it never deletes it. A change applies to sessions paused afterwards.</p></details><form method="post">${csrf(actor)}<label>Paused retention in days (empty keeps paused workspaces indefinitely) <input type="number" name="pausedRetentionDays" min="1" max="3650" value="${settings.pausedRetentionDays ?: ""}"></label><label>Failed workspace retention in days <input type="number" name="failedWorkspaceRetentionDays" min="0" max="365" value="${settings.failedWorkspaceRetentionDays}" required></label><label>Running sessions per member <input type="number" name="maxRunning" min="1" max="100" value="${settings.maxRunningSessionsPerMember}" required></label><label>Retained sessions per member <input type="number" name="maxRetained" min="1" max="1000" value="${settings.maxRetainedSessionsPerMember}" required></label><label>Transcript retention in days (empty keeps transcripts indefinitely; counted from each event, independently of pods and workspaces) <input type="number" name="transcriptRetentionDays" min="1" max="3650" value="${settings.transcriptRetentionDays ?: ""}"></label><fieldset><legend>Transfers</legend><p>Administrators can transfer any session. A session changes owner only once it is paused: a running session drains and checkpoints first, its pod is deleted, and the next pod runs with the recipient's credentials.</p><label>Members may offer their own sessions <select name="memberTransfers">${option("offer", "Yes, the recipient accepts", settings.memberTransfers.wire)}${option("disabled", "No, administrators only", settings.memberTransfers.wire)}</select></label><label>Days to accept an offer <input type="number" name="transferOfferDays" min="1" max="30" value="${settings.transferOfferDays}" required></label><label>Unconsumed messages at the change of owner <select name="transferPendingInputs">${option("cancel", "Cancel them", settings.transferPendingInputs.wire)}${option("keep", "Keep them for the recipient's agent", settings.transferPendingInputs.wire)}</select></label></fieldset><fieldset><legend>Permission requests</legend><p>A cloud agent waits for a person when a tool use matches an <code>ask</code> permission rule or when it asks the user a question. Without a deadline it waits until someone answers, interrupts the turn or pauses the session. With one, the runner denies a request nobody answered in time and the agent reads why. A change applies to sessions started or resumed afterwards.</p><label>Deny unanswered requests after, in minutes (empty or 0: no deadline) <input type="number" name="permissionDeadlineMinutes" min="0" max="${CloudConversationRules.MAX_PERMISSION_DEADLINE_MINUTES}" value="${settings.permissionDeadlineMinutes.takeIf { it > 0 } ?: ""}"></label></fieldset><fieldset><legend>Remote sessions</legend><p>A remote session runs on a member's own device, in a directory they chose. With no turn, message or attached client for this long, it pauses: its host drains the turn, checkpoints and exits, and the next message wakes it on that device. Pausing never deletes anything.</p><label>Pause idle remote sessions after, in minutes (0: never) <input type="number" name="remoteIdleTimeoutMinutes" min="0" max="${CloudIdleRules.MAX_TIMEOUT_MINUTES}" value="${settings.remoteIdleTimeoutMinutes}" required></label></fieldset><button>Save settings</button></form>"""), ContentType.Text.Html)
     }
     get("/dashboard/assets/profile-editor.js") {
         call.principal.requireAdmin()
@@ -287,7 +324,8 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             input["transferOfferDays"]?.let { it.toIntOrNull() ?: -1 } ?: current.transferOfferDays,
             input["transferPendingInputs"]?.let { TransferPendingInputs.parse(it) ?: throw TeamFailure("invalid_cloud_settings", 400, "Choose what happens to unconsumed messages.") } ?: current.transferPendingInputs,
             // Empty means no deadline; a form from before the deadline existed keeps the stored one.
-            input["permissionDeadlineMinutes"]?.let { if (it.isBlank()) 0 else it.toIntOrNull() ?: -1 } ?: current.permissionDeadlineMinutes))
+            input["permissionDeadlineMinutes"]?.let { if (it.isBlank()) 0 else it.toIntOrNull() ?: -1 } ?: current.permissionDeadlineMinutes,
+            input["remoteIdleTimeoutMinutes"]?.let { it.toIntOrNull() ?: -1 } ?: current.remoteIdleTimeoutMinutes))
         call.respondRedirect("/dashboard/cloud")
     }
 }

@@ -52,19 +52,24 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             }
             if (existing != null) CloudIdempotency.deleteWhere { scope }
         }
-        val retained = CloudSessions.select(CloudSessions.id).where {
-            (CloudSessions.teamId eq principal.teamId) and (CloudSessions.ownerId eq actor.effectiveMemberId) and
-                (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire))
-        }.count()
-        if (retained >= retainedLimit) throw TeamFailure("cloud_session_limit", 409, "The member already retains the maximum number of cloud sessions. Delete one first.")
+        // The cap bounds the workspaces a member keeps on clusters: remote sessions keep none, and a device has no cap.
+        if (session.kind == CloudSessionKind.CLOUD) {
+            val retained = CloudSessions.select(CloudSessions.id).where {
+                (CloudSessions.teamId eq principal.teamId) and (CloudSessions.ownerId eq actor.effectiveMemberId) and (CloudSessions.kind eq CloudSessionKind.CLOUD.wire) and
+                    (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire))
+            }.count()
+            if (retained >= retainedLimit) throw TeamFailure("cloud_session_limit", 409, "The member already retains the maximum number of cloud sessions. Delete one first.")
+        }
         val created = session.copy(generation = 1, createdAt = now, updatedAt = now, lastActivityAt = now)
         CloudSessions.insert {
             it[id] = created.id; it[teamId] = created.teamId; it[ownerId] = created.ownerId; it[name] = created.name
             it[initiatorId] = created.createdBy.initiatorId; it[credentialId] = created.createdBy.credentialId; it[effectiveMemberId] = created.createdBy.effectiveMemberId
-            it[profileId] = created.profileId; it[profileVersion] = created.profileVersion; it[clusterId] = created.clusterId; it[namespace] = created.namespace
+            val cloud = created.kind == CloudSessionKind.CLOUD
+            it[profileId] = created.profileId.takeIf { cloud }; it[profileVersion] = created.profileVersion; it[clusterId] = created.clusterId.takeIf { cloud }; it[namespace] = created.namespace.takeIf { cloud }
             it[claimName] = created.workspace.claimName; it[storageClass] = created.workspace.storageClass; it[workspaceSize] = created.workspace.sizeGibibytes
             it[environment] = encodeEnvironment(created.environment)
             it[kind] = created.kind.wire; it[hostDeviceId] = created.host?.deviceId; it[hostDirectoryName] = created.host?.directoryName
+            it[permissionMode] = created.host?.permissionMode?.wire
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
@@ -89,12 +94,16 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         var condition: Op<Boolean> = CloudSessions.teamId eq teamId
         query.owner?.let { owner -> condition = condition and (CloudSessions.ownerId eq owner) }
         if (query.states.isNotEmpty()) condition = condition and (CloudSessions.state inList query.states.map { it.wire })
-        // Every kind needs no condition; one kind reads the kind indexes.
-        if (query.kinds.isNotEmpty() && query.kinds != CloudSessionKind.entries.toSet()) condition = condition and (CloudSessions.kind inList query.kinds.map { it.wire })
         for ((key, value) in query.labels) condition = condition and (CloudSessions.id inSubQuery CloudSessionLabels.select(CloudSessionLabels.sessionId)
             .where { (CloudSessionLabels.key eq key) and (CloudSessionLabels.value eq value) })
         if (cursor != null) condition = condition and ((CloudSessions.createdAt less cursor) or ((CloudSessions.createdAt eq cursor) and (CloudSessions.id less query.beforeId!!)))
-        val rows = sessionsWithHost.selectAll().where { condition }.orderBy(CloudSessions.createdAt to SortOrder.DESC, CloudSessions.id to SortOrder.DESC).limit(query.limit + 1).toList()
+        // One bounded page per kind, each read in order from its kind index, merged here: without a kind condition the
+        // optimizer reads every session of the owner through the foreign key's index and sorts them.
+        val kinds = query.kinds.ifEmpty { CloudSessionKind.entries.toSet() }.sortedBy { it.ordinal }
+        val rows = kinds.flatMap { kind ->
+            sessionsWithHost.selectAll().where { condition and (CloudSessions.kind eq kind.wire) }
+                .orderBy(CloudSessions.createdAt to SortOrder.DESC, CloudSessions.id to SortOrder.DESC).limit(query.limit + 1).toList()
+        }.sortedWith(compareByDescending<ResultRow> { it[CloudSessions.createdAt] }.thenByDescending { it[CloudSessions.id] }).take(query.limit + 1)
         val page = rows.take(query.limit)
         val labels = labelsFor(page.map { it[CloudSessions.id] })
         val sessions = page.map { readSessionRow(it, labels[it[CloudSessions.id]].orEmpty()) }
@@ -187,6 +196,33 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         Unit
     }
 
+    override suspend fun deviceOf(principal: Principal): String? = database.query {
+        if (principal.serviceScopes != null) null
+        else Tokens.select(Tokens.deviceId).where { Tokens.id eq principal.tokenId }.singleOrNull()?.get(Tokens.deviceId)
+    }
+
+    override suspend fun startHostExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? = database.query {
+        requireCurrent(this, actor.principal)
+        val now = nowMillis()
+        val committed = next.copy(generation = expected.generation + 1)
+        val updated = CloudSessions.update({ sessionGuard(expected, null, now) }) {
+            writeSessionMutable(it, committed)
+            // The reconciler watches the new execution from now on (registration, heartbeats).
+            it[reconcileAfter] = now; it[reconcileRequested] = true
+        }
+        if (updated != 1) return@query null
+        ended?.let { previous ->
+            CloudExecutions.update({ (CloudExecutions.sessionId eq previous.sessionId) and (CloudExecutions.epoch eq previous.epoch) }) { writeExecution(it, previous) }
+        }
+        CloudExecutions.insert {
+            it[sessionId] = execution.sessionId; it[epoch] = execution.epoch; it[createdAt] = now
+            writeExecution(it, execution.copy(createdAt = now))
+        }
+        audit(expected.teamId, actor.principal.member.id, "cloud.session.host_started", expected.id, actor.effectiveMemberId, actor.principal.tokenId)
+        publishSessionChange(expected, next, "cloud.session.host_started", now)
+        committed
+    }
+
     override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean = database.query {
         val current = CloudSessions.select(CloudSessions.currentEpoch).where { CloudSessions.id eq sessionId }.singleOrNull()?.get(CloudSessions.currentEpoch)
         if (current != epoch) return@query false
@@ -209,7 +245,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     override suspend fun namespaces(clusterId: String): Set<String> = database.query {
         CloudSessions.select(CloudSessions.namespace).withDistinct().where {
             (CloudSessions.clusterId eq clusterId) and (CloudSessions.deletionState neq DeletionState.PROVEN.wire)
-        }.map { it[CloudSessions.namespace] }.toSet()
+        }.mapNotNull { it[CloudSessions.namespace] }.toSet()
     }
 
     override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = database.query {
@@ -238,8 +274,12 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
 private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else
     CloudSessionLabels.selectAll().where { CloudSessionLabels.sessionId inList ids }.groupBy({ it[CloudSessionLabels.sessionId] }) { it[CloudSessionLabels.key] to it[CloudSessionLabels.value] }
         .mapValues { (_, pairs) -> pairs.toMap() }
-/** Sessions with their host device's name and system, one primary-key lookup per row; cloud sessions have no host. */
+/**
+ * Sessions with their host device's name and system and their current execution (for a remote host's liveness), two
+ * primary-key lookups per row; cloud sessions have no host.
+ */
 internal val sessionsWithHost get() = CloudSessions.join(Devices, JoinType.LEFT, CloudSessions.hostDeviceId, Devices.id)
+    .join(CloudExecutions, JoinType.LEFT, additionalConstraint = { (CloudExecutions.sessionId eq CloudSessions.id) and (CloudExecutions.epoch eq CloudSessions.currentEpoch) })
 internal fun readSession(teamId: String, id: String): CloudSession? =
     sessionsWithHost.selectAll().where { (CloudSessions.id eq id) and (CloudSessions.teamId eq teamId) }.singleOrNull()?.let { readSessionRow(it, labelsFor(listOf(id))[id].orEmpty()) }
 
@@ -247,8 +287,8 @@ private fun problem(code: String?, message: String?, retryable: Boolean) = code?
 internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = CloudSession(
     id = row[CloudSessions.id], teamId = row[CloudSessions.teamId], ownerId = row[CloudSessions.ownerId], name = row[CloudSessions.name],
     createdBy = Attribution(row[CloudSessions.initiatorId], row[CloudSessions.credentialId], row[CloudSessions.effectiveMemberId]),
-    profileId = row[CloudSessions.profileId], profileVersion = row[CloudSessions.profileVersion], clusterId = row[CloudSessions.clusterId], namespace = row[CloudSessions.namespace],
-    imageReference = row[CloudSessions.imageReference], imageDigest = row[CloudSessions.imageDigest],
+    profileId = row[CloudSessions.profileId].orEmpty(), profileVersion = row[CloudSessions.profileVersion], clusterId = row[CloudSessions.clusterId].orEmpty(),
+    namespace = row[CloudSessions.namespace].orEmpty(), imageReference = row[CloudSessions.imageReference].orEmpty(), imageDigest = row[CloudSessions.imageDigest],
     agentKind = row[CloudSessions.agentKind], agentVersion = row[CloudSessions.agentVersion], agentModel = row[CloudSessions.agentModel], agentEffort = row[CloudSessions.agentEffort],
     labels = labels, state = CloudSessionState.parse(row[CloudSessions.state]), phase = row[CloudSessions.phase], desiredState = DesiredState.parse(row[CloudSessions.desiredState]),
     generation = row[CloudSessions.generation], currentEpoch = row[CloudSessions.currentEpoch],
@@ -266,11 +306,17 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     kind = CloudSessionKind.parse(row[CloudSessions.kind]),
     host = readHost(row),
 )
-/** The host of a remote session; the device's name and system only when [row] was read from [sessionsWithHost] and the device still exists. */
+/**
+ * The host of a remote session; the device's name and system, and the liveness of the current execution, only when
+ * [row] was read from [sessionsWithHost] (and the device still exists).
+ */
 private fun readHost(row: ResultRow): CloudSessionHost? {
     if (row[CloudSessions.kind] != CloudSessionKind.REMOTE.wire) return null
     val device = row.getOrNull(Devices.id)?.let { HostDevice(row[Devices.name], row[Devices.platform], row[Devices.osVersion]) }
-    return CloudSessionHost(row[CloudSessions.hostDeviceId], row[CloudSessions.hostDirectoryName], device)
+    val execution = row.getOrNull(CloudExecutions.state)
+    return CloudSessionHost(row[CloudSessions.hostDeviceId], row[CloudSessions.hostDirectoryName], device,
+        RemotePermissionMode.parse(row[CloudSessions.permissionMode]) ?: RemotePermissionMode.ASK,
+        online = execution == ExecutionState.RUNNING.wire, lastHeartbeatAt = row.getOrNull(CloudExecutions.lastHeartbeatAt))
 }
 internal fun readExecution(row: ResultRow) = CloudExecution(
     row[CloudExecutions.sessionId], row[CloudExecutions.epoch], row[CloudExecutions.podName], ExecutionState.parse(row[CloudExecutions.state]), row[CloudExecutions.createdAt],
@@ -285,7 +331,7 @@ internal fun sessionGuard(expected: CloudSession, leaseOwner: String?, now: Long
 }
 
 internal fun writeSessionMutable(it: UpdateBuilder<*>, s: CloudSession) {
-    it[CloudSessions.imageReference] = s.imageReference; it[CloudSessions.imageDigest] = s.imageDigest
+    it[CloudSessions.imageReference] = s.imageReference.takeIf { s.kind == CloudSessionKind.CLOUD }; it[CloudSessions.imageDigest] = s.imageDigest
     it[CloudSessions.agentKind] = s.agentKind; it[CloudSessions.agentVersion] = s.agentVersion; it[CloudSessions.agentModel] = s.agentModel; it[CloudSessions.agentEffort] = s.agentEffort
     it[CloudSessions.state] = s.state.wire; it[CloudSessions.phase] = s.phase?.take(64); it[CloudSessions.desiredState] = s.desiredState.wire
     it[CloudSessions.generation] = s.generation; it[CloudSessions.currentEpoch] = s.currentEpoch

@@ -58,6 +58,7 @@ class ReconcileCloudSessionsUseCase(
     suspend fun reconcile(session: CloudSession, owner: String): Long? {
         val now = store.now()
         val s = session
+        if (s.kind == CloudSessionKind.REMOTE) return remote(s, owner, now)
         return when {
             s.transferId != null && transfers != null && (s.state.terminal || s.desiredState == DesiredState.TERMINATED) -> transfers.abandon(s, owner, now)
             s.state == TERMINATED -> cleanup(s, owner, now)
@@ -76,6 +77,80 @@ class ReconcileCloudSessionsUseCase(
             s.state == PAUSING -> drain(s, owner, now)
             else -> now + MONITOR_MILLIS
         }
+    }
+
+    /**
+     * A remote session: no pod, no workspace claim and no capacity. Its host (`teamcode remote`) starts each execution
+     * itself, on its device; here only the server's side of the lifecycle moves. An execution silent for 90 s pauses the
+     * session ("host offline"); a pause completes on the host's checkpoint or at the drain deadline; deletion and expiry
+     * end the session without touching the member's directory, which the server never sees.
+     */
+    private suspend fun remote(s: CloudSession, owner: String, now: Long): Long? {
+        val execution = if (s.currentEpoch > 0) store.execution(s.id, s.currentEpoch)?.takeIf { it.state != ExecutionState.ENDED } else null
+        fun ended(reason: String) = execution?.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = reason)
+        val seen = execution?.let { it.lastHeartbeatAt ?: it.registeredAt ?: it.createdAt }
+        val silent = seen != null && now - seen > (if (execution.state == ExecutionState.PENDING) HOST_START_MILLIS else HEARTBEAT_LOSS_MILLIS)
+        return when {
+            s.state == TERMINATED || (s.state == FAILED && s.desiredState != DesiredState.TERMINATED) -> null
+            s.desiredState == DesiredState.TERMINATED -> {
+                commit(s, owner, s.copy(state = TERMINATED, phase = null, expiresAt = null, waitingSince = null, updatedAt = now), "cloud.session.terminated",
+                    updateExecution = ended(s.terminatedReason ?: "deleted"))
+                null
+            }
+            s.state == PAUSED -> when {
+                s.expiresAt != null && s.expiresAt <= now -> {
+                    commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "expired", updatedAt = now), "cloud.session.expired"); now
+                }
+                // Woken (a message with `wake`, or a resume on the host): wait for the host to start the next execution.
+                s.desiredState == DesiredState.RUNNING -> {
+                    commit(s, owner, s.copy(state = RESUMING, phase = CloudSessionService.WAITING_HOST, pausedAt = null, expiresAt = null, failure = null, updatedAt = now)); now
+                }
+                else -> s.expiresAt
+            }
+            // A first execution that is lost before it is ready leaves the session preparing, waiting for its host again.
+            s.state == CREATING || s.state == RESUMING || s.state == PREPARING -> when {
+                s.desiredState == DesiredState.PAUSED && s.state == RESUMING -> {
+                    commit(s, owner, pausedCopy(s, now, s.resumeWorkspace), updateExecution = ended("resume_cancelled")); now
+                }
+                // A host that took an epoch but never registered (or went silent while preparing) gives it back.
+                execution != null && silent -> {
+                    commit(s, owner, s.copy(phase = CloudSessionService.WAITING_HOST, updatedAt = now), updateExecution = ended("host_lost")); now
+                }
+                execution != null -> now + MONITOR_MILLIS
+                // Nothing to do until a host starts an execution, which writes the session and so schedules the next pass.
+                else -> null
+            }
+            s.state == READY || s.state == ACTIVE -> when {
+                execution == null || silent -> hostOffline(s, owner, now, ended("heartbeat_lost"))
+                s.desiredState == DesiredState.PAUSED && s.state != PREPARING -> {
+                    commit(s, owner, s.copy(state = PAUSING, phase = "draining", pauseRequestedAt = s.pauseRequestedAt ?: now, updatedAt = now), "cloud.session.pausing"); now
+                }
+                else -> idle(s, owner, now) ?: (now + MONITOR_MILLIS)
+            }
+            s.state == PAUSING -> {
+                val checkpointed = execution?.checkpoint == "completed"
+                val requested = s.pauseRequestedAt ?: now
+                when {
+                    execution != null && s.desiredState == DesiredState.RUNNING && execution.checkpoint == null && !silent -> {
+                        commit(s, owner, s.copy(state = READY, phase = null, pauseRequestedAt = null, pauseForce = false, lastActivityAt = now, updatedAt = now), "cloud.session.pause_cancelled"); now
+                    }
+                    // The host exits once its checkpoint is accepted; a silent or late host is paused crash-consistent.
+                    checkpointed || execution == null || silent || execution.checkpoint == "failed" || now - requested > PAUSING_DEADLINE_MILLIS -> {
+                        commit(s, owner, pausedCopy(s, now, if (checkpointed) WorkspaceResume.CONSISTENT else WorkspaceResume.CRASH_CONSISTENT).copy(desiredState = s.desiredState),
+                            "cloud.session.paused_checkpoint", updateExecution = ended(if (checkpointed) "paused" else "pause_forced")); now
+                    }
+                    else -> now + STEP_MILLIS
+                }
+            }
+            else -> now + MONITOR_MILLIS
+        }
+    }
+
+    /** The host stopped heartbeating (device asleep, network down, process killed): paused until it starts again. */
+    private suspend fun hostOffline(s: CloudSession, owner: String, now: Long, ended: CloudExecution?): Long? {
+        commit(s, owner, pausedCopy(s, now, WorkspaceResume.CRASH_CONSISTENT).copy(failure = CloudProblem(HOST_OFFLINE, "The host device stopped responding; the session resumes when its host starts again.", true)),
+            "cloud.session.execution_lost", updateExecution = ended)
+        return now
     }
 
     private suspend fun paused(s: CloudSession, owner: String, now: Long): Long? = when {
@@ -365,6 +440,10 @@ class ReconcileCloudSessionsUseCase(
         const val CAPACITY_MILLIS = 5_000L
         const val MONITOR_MILLIS = 15_000L
         const val HEARTBEAT_LOSS_MILLIS = 90_000L
+        /** How long a remote host may hold a new epoch without registering. */
+        const val HOST_START_MILLIS = 120_000L
+        /** The failure code of a remote session paused because its host went silent ("host offline"). */
+        const val HOST_OFFLINE = "host_offline"
         const val PAUSING_DEADLINE_MILLIS = 15 * 60_000L
         const val START_TIMEOUT_MILLIS = 15 * 60_000L
         const val PREPARE_TIMEOUT_MILLIS = 30 * 60_000L

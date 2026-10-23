@@ -63,6 +63,7 @@ object CloudSettingsTable : Table("cloud_settings") {
     val transferPendingInputs = varchar("transfer_pending_inputs", 16).default("cancel")
     /** Minutes a cloud agent's permission request waits before the runner denies it; 0 waits without a deadline. */
     val permissionDeadlineMinutes = integer("permission_deadline_minutes").default(0)
+    val remoteIdleTimeoutMinutes = integer("remote_idle_timeout_minutes").default(60)
     override val primaryKey = PrimaryKey(teamId)
 }
 /** Whether cloud sessions run and how their pods are built; no row until an administrator or the initial seed saves it. */
@@ -86,11 +87,12 @@ object CloudSessions : Table("cloud_sessions") {
     val initiatorId = varchar("initiator_id", 36)
     val credentialId = varchar("credential_id", 36)
     val effectiveMemberId = varchar("effective_member_id", 36)
-    val profileId = reference("profile_id", CloudProfiles.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_profile")
+    /** Null, like the cluster, namespace and image, for a remote session (its profile version and workspace size are 0, its claim name empty). */
+    val profileId = optReference("profile_id", CloudProfiles.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_profile")
     val profileVersion = integer("profile_version")
-    val clusterId = reference("cluster_id", CloudClusters.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_cluster")
-    val namespace = varchar("namespace", 63)
-    val imageReference = varchar("image_reference", 512)
+    val clusterId = optReference("cluster_id", CloudClusters.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_cluster")
+    val namespace = varchar("namespace", 63).nullable()
+    val imageReference = varchar("image_reference", 512).nullable()
     val imageDigest = varchar("image_digest", 100).nullable()
     val agentKind = varchar("agent_kind", 16)
     val agentVersion = varchar("agent_version", 64).nullable()
@@ -145,6 +147,8 @@ object CloudSessions : Table("cloud_sessions") {
     val hostDeviceId = optReference("host_device_id", Devices.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "cloud_sessions_host_device")
     /** The last segment of a remote session's directory, never its full path. */
     val hostDirectoryName = varchar("host_directory_name", 255).nullable()
+    /** A remote session's permission mode on its host (`ask` or `bypass`); null for cloud sessions. */
+    val permissionMode = varchar("permission_mode", 16).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)

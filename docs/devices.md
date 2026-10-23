@@ -30,7 +30,7 @@ A device is a logical installation, not hardware attestation. Copying a configur
 
 **Operating system.** A login may also send `platform` (`macos`, `windows`, `linux`, `ios` or `android`) and `osVersion` (1 to 64 printable characters, only with a platform; otherwise `400 invalid_platform` or `invalid_os_version`). They are recorded on the device and returned by the device API as `platform` and `osVersion`, so a client can say which machine a [remote session](cloud-sessions.md#create-request-and-view) runs on. A login without them, from an older client, keeps what was recorded before. The native CLI sends its platform; existing devices show none until their next login.
 
-Removing a device keeps the remote sessions that ran on it, with their transcript, but without a host device.
+Removing a device terminates the remote sessions that ran on it (`terminated_reason = device_removed`); they keep their transcript, without a host device, and their directory on the machine is never touched.
 
 ## Shared persistence and revocation
 

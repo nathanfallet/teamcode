@@ -181,7 +181,11 @@ private fun ApiCatalog.cloudSessions() {
         description = "Creates a session from a profile: TeamCode prepares a workspace and starts the agent in the " +
             "cluster. The answer comes at once (202) with the session `creating`; follow `state` with " +
             "`GET /api/v1/cloud/sessions/{id}` or the transcript. `initialMessage` is delivered once the session is " +
-            "ready (`cloud.sessions.initial-message.v1`). Requires the `create` permission."
+            "ready (`cloud.sessions.initial-message.v1`). Requires the `create` permission. With `kind: remote` " +
+            "(`cloud.sessions.remote.v1`), the session runs on the caller's own device instead: no profile, image, idle " +
+            "timeout or environment; `agent.kind` (`claude` or `codex`), `directoryName` (the directory's last segment, " +
+            "never its path) and `permissionMode` (`ask`, the default, or `bypass`). Its device is the one of the caller's " +
+            "login session; its host (`teamcode remote`) then starts it with `POST /api/v1/cloud/sessions/{id}/host`."
         parameters {
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
             onBehalfOf()
@@ -189,11 +193,27 @@ private fun ApiCatalog.cloudSessions() {
         body<CreateCloudSessionRequest>("The session's name, profile and optional overrides.")
         responses {
             ok<CloudSessionView>("Accepted: the session is being created.", HttpStatusCode.Accepted)
-            badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`).")
-            error(HttpStatusCode.Forbidden, "The profile exists but is not assigned to the effective member (`profile_unassigned`).")
+            badRequest("A missing or invalid `Idempotency-Key`, or an invalid field (`idempotency_key_required`, `invalid_idempotency_key`, `invalid_session`, `invalid_kind`, `invalid_agent`, `invalid_directory_name`, `invalid_permission_mode`).")
+            error(HttpStatusCode.Forbidden, "The profile exists but is not assigned to the effective member (`profile_unassigned`), or a remote session was asked on behalf of another member (`on_behalf_forbidden`).")
             notFound("No profile has this id (`profile_not_found`). `profileId` is an id: list the usable ones with `GET /api/v1/cloud/profiles`.")
             conflict("The member's session limit is reached (`cloud_session_limit`), or the profile's cluster or namespace is gone (`cluster_unavailable`, `namespace_not_allowed`).")
-            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), or the effective member cannot own sessions (`invalid_effective_member`).")
+            error(HttpStatusCode.UnprocessableEntity, "The key was used with another body (`idempotency_conflict`), the effective member cannot own sessions (`invalid_effective_member`), or a remote session was asked with a service key or a login without a device (`remote_requires_device`).")
+        }
+    }
+    post("/api/v1/cloud/sessions/{id}/host") {
+        operationId = "hostCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Start a remote session's host"
+        description = "Called by `teamcode remote` on the session's own device, with its owner's interactive login " +
+            "(`cloud.sessions.remote.v1`). Starts the session's next execution: a paused session resumes, a new one " +
+            "starts, and an execution still live (a host started twice) is replaced and fenced. The host then registers, " +
+            "heartbeats and checkpoints on the runner channel (`/api/v1/cloud/runner/*`) with the same login and the " +
+            "returned epoch. Nothing is deleted when the session pauses or ends: the directory is the member's."
+        parameters { sessionId() }
+        responses {
+            ok<CloudHostView>("The new execution's epoch and the session.")
+            notFound("No such session among the caller's own (`not_found`).")
+            conflict("A cloud session (`not_remote`), another device (`remote_host_mismatch`), a removed device (`remote_host_removed`), a pause still draining (`session_pausing`), or a session that ended (`session_not_running`, `session_busy`).")
+            error(HttpStatusCode.UnprocessableEntity, "A service key or a login without a device (`remote_requires_device`).")
         }
     }
     get("/api/v1/cloud/sessions") {
@@ -261,7 +281,7 @@ private fun ApiCatalog.cloudSessions() {
         responses {
             ok<CloudSessionView>("Accepted: the session is resuming.", HttpStatusCode.Accepted)
             notFound("No such session (`not_found`).")
-            conflict("The session cannot resume now (`invalid_transition`, `session_transferring`, `session_busy`).")
+            conflict("The session cannot resume now (`invalid_transition`, `session_transferring`, `session_busy`), or it is a remote session of another device (`remote_host_mismatch`, `remote_host_removed`); a message with `wake` asks its host instead.")
         }
     }
     delete("/api/v1/cloud/sessions/{id}") {
@@ -334,10 +354,11 @@ private fun ApiCatalog.cloudConversation() {
             queryNumber("after", "Start after this sequence number; 0 for the oldest retained event.")
             headerText("Last-Event-ID", "Resume after this sequence number; wins over `after`.")
             queryText("types", "Comma-separated event types to keep, for example `cloud.turn,run.stale`.")
+            queryText("kind", "Session kinds whose events to carry, repeatable: `cloud`, `remote`. Without it, only cloud sessions'; run events always pass.")
         }
         responses {
             HttpStatusCode.OK { description = "The event stream." }
-            badRequest("A negative cursor, a cursor ahead of the team's events (`invalid_cursor`) or an unknown type (`invalid_event_type`).")
+            badRequest("A negative cursor, a cursor ahead of the team's events (`invalid_cursor`) or an unknown type (`invalid_event_type`) or kind (`invalid_kind`).")
         }
     }
     post("/api/v1/cloud/sessions/{id}/messages") {
