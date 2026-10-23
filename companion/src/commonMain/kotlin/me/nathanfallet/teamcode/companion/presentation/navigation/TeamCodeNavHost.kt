@@ -175,11 +175,18 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
         }
     }
 
-    // The last account signed out: back to adding a server. Only on that change, not on every new composition (a
-    // rotation while signing in for the first time keeps the login screen).
+    // Only on a change of the account list, not on every new composition (a rotation while signing in for the first
+    // time keeps the login screen).
     var hadAccounts by rememberSaveable { mutableStateOf(hasAccounts) }
     LaunchedEffect(hasAccounts) {
-        if (hadAccounts && !hasAccounts) navController.navigate(AddServerRoute) { popUpTo(0) { inclusive = true } }
+        destinationAfterAccountsChange(hadAccounts, hasAccounts)?.let { navController.navigate(it) { popUpTo(0) { inclusive = true } } }
         hadAccounts = hasAccounts
     }
+}
+
+/** Where the whole stack goes when the account list goes from [had] accounts to [has]; null to stay where it is. */
+internal fun destinationAfterAccountsChange(had: Boolean, has: Boolean): Any? = when {
+    // The last account signed out: back to adding a server.
+    had && !has -> AddServerRoute
+    else -> null
 }
