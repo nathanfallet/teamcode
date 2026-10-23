@@ -54,6 +54,19 @@ class TeamCodeFailureTest {
         }
     }
 
+    @Test fun anIneligibleRecipientKeepsOnlyItsProblemCodes() = runBlocking {
+        val body = """{"error":{"type":"recipient_ineligible","message":"The recipient cannot own this session: profile_unassigned, Bearer tc_secret, recipient_no_quota."}}"""
+        failing(HttpStatusCode.UnprocessableEntity, body).use { client ->
+            val error = assertFailsWith<TeamCodeException> { client.transferCloudSession("s1", me.nathanfallet.teamcode.api.models.CreateCloudTransferRequest("m2"), "key") }
+            assertEquals("recipient_ineligible", error.code)
+            assertEquals(listOf("profile_unassigned", "recipient_no_quota"), error.problems)
+        }
+        // Another refusal's message is never read.
+        failing(HttpStatusCode.Conflict, """{"error":{"type":"transfer_pending","message":"Busy: profile_unassigned."}}""").use { client ->
+            assertEquals(emptyList(), assertFailsWith<TeamCodeException> { client.cloudTransfer("t1") }.problems)
+        }
+    }
+
     @Test fun errorCodesOutsideTheSafeAlphabetAreDropped() = runBlocking {
         failing(HttpStatusCode.BadRequest, """{"error":{"type":"Bearer tc_secret","message":"x"}}""").use { client ->
             assertNull(assertFailsWith<TeamCodeException> { client.accounts() }.code)
