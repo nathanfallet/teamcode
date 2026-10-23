@@ -19,8 +19,11 @@ on:
         type: boolean
         default: false
 env:
-  ORG_GRADLE_PROJECT_teamcodeVersion: ${{ github.ref_type == 'tag' && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.full_validation && inputs.validation_version) || '0.1.0-SNAPSHOT' }}
+  ORG_GRADLE_PROJECT_teamcodeVersion: ${{ github.ref_type == 'tag' && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.full_validation && inputs.validation_version) || '1.0.0-SNAPSHOT' }}
   TEAMCODE_INSTALLATION_VERSION: 0.0.0-installation.g${{ github.sha }}
+  # The Apple Team ID of the desktop app's Developer ID (public): compiled into the CLI, whose `teamcode ui` installs a
+  # macOS app only when its signature names this team. Empty when the repository variable is not set.
+  ORG_GRADLE_PROJECT_teamcodeMacosTeamId: ${{ vars.TEAMCODE_MACOS_TEAM_ID }}
 permissions:
   contents: read
 concurrency:
@@ -417,6 +420,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: [bundle]
     runs-on: ubuntu-latest
+    outputs:
+      install_sh_sha256: ${{ steps.installers.outputs.install_sh_sha256 }}
+      install_ps1_sha256: ${{ steps.installers.outputs.install_ps1_sha256 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -431,6 +437,11 @@ jobs:
         run: python3 scripts/release-signature.py verify --manifest dist/manifest.json --signature dist/manifest.sig --public-key release/trust/teamcode-release-2026.pem
       - name: Generate version-pinned one-command installers from the signed bundle
         run: python3 scripts/release-bootstrap.py --bundle dist --public-key release/trust/teamcode-release-2026.pem
+      - name: Expose the installers' SHA-256 to the desktop builds
+        id: installers
+        run: |
+          echo "install_sh_sha256=$(sha256sum dist/install.sh | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "install_ps1_sha256=$(sha256sum dist/install.ps1 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           name: teamcode-installation-bundle
@@ -449,9 +460,201 @@ jobs:
           name: teamcode-signed-installation-bundle
           path: installation-dist/*
           retention-days: 7
-  signed_installation:
-    timeout-minutes: 10
+  desktop:
+    # The desktop app of the same version, built on each OS once the install scripts it may run are known.
+    timeout-minutes: 60
     needs: [signed_bundle]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos-arm64
+          - os: macos-15-intel
+            target: macos-x64
+          - os: windows-latest
+            target: windows-x64
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      DESKTOP_TARGET: ${{ matrix.target }}
+      INSTALL_SH_SHA256: ${{ needs.signed_bundle.outputs.install_sh_sha256 }}
+      INSTALL_PS1_SHA256: ${{ needs.signed_bundle.outputs.install_ps1_sha256 }}
+      BINARIES: companion-desktop/build/compose/binaries/main
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install the Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm
+      - name: Import the Developer ID into a temporary keychain
+        if: runner.os == 'macOS'
+        env:
+          CERTIFICATE_P12: ${{ secrets.TEAMCODE_MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.TEAMCODE_MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.TEAMCODE_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.TEAMCODE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.TEAMCODE_NOTARY_ISSUER_ID }}
+          TEAM_ID: ${{ vars.TEAMCODE_MACOS_TEAM_ID }}
+          RELEASING: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        run: |
+          present=0
+          for value in "$CERTIFICATE_P12" "$CERTIFICATE_PASSWORD" "$NOTARY_KEY" "$NOTARY_KEY_ID" "$NOTARY_ISSUER_ID" "$TEAM_ID"; do
+            if [ -n "$value" ]; then present=$((present + 1)); fi
+          done
+          if [ "$present" -eq 0 ] && [ "$RELEASING" != true ]; then
+            echo "::warning::No Developer ID configured: this validation builds an unsigned macOS app, which teamcode ui must refuse."
+            echo "DESKTOP_SIGNED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$present" -ne 6 ]; then
+            echo "::error::A release needs the Developer ID and notarization secrets (TEAMCODE_MACOS_CERTIFICATE_P12, TEAMCODE_MACOS_CERTIFICATE_PASSWORD, TEAMCODE_NOTARY_KEY, TEAMCODE_NOTARY_KEY_ID, TEAMCODE_NOTARY_ISSUER_ID) and the TEAMCODE_MACOS_TEAM_ID variable, all of them."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/teamcode-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          umask 077
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          printf '%s\n' "$NOTARY_KEY" > "$RUNNER_TEMP/notary-key.p8"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security > /dev/null
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # one argument per keychain already in the search list
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"Developer ID Application: \(.*\)"$/\1/p' | head -n 1)"
+          case "$identity" in
+            *"($TEAM_ID)") ;;
+            *) echo "::error::The imported certificate is not a Developer ID Application of team $TEAM_ID."; exit 1 ;;
+          esac
+          {
+            echo "DESKTOP_SIGNED=true"
+            # Compose prefixes "Developer ID Application: " itself.
+            echo "TEAMCODE_MACOS_SIGNING_IDENTITY=$identity"
+            echo "TEAMCODE_MACOS_SIGNING_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+      - name: Build the desktop packages with the release's version and install-script hashes
+        run: |
+          case "$DESKTOP_TARGET" in
+            macos-*) tasks=(createDistributable packageDmg) ;;
+            windows-*) tasks=(packageMsi) ;;
+            linux-*) tasks=(createDistributable packageDeb packageRpm) ;;
+          esac
+          ./gradlew "${tasks[@]/#/:companion-desktop:}" "-PteamcodeInstallShSha256=$INSTALL_SH_SHA256" "-PteamcodeInstallPs1Sha256=$INSTALL_PS1_SHA256"
+      - name: Notarize, staple and check the macOS app and disk image
+        if: runner.os == 'macOS' && env.DESKTOP_SIGNED == 'true'
+        env:
+          NOTARY_KEY_ID: ${{ secrets.TEAMCODE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.TEAMCODE_NOTARY_ISSUER_ID }}
+          TEAM_ID: ${{ vars.TEAMCODE_MACOS_TEAM_ID }}
+        run: |
+          app="$BINARIES/app/TeamCode.app"
+          dmg="$(ls "$BINARIES"/dmg/*.dmg)"
+          notarize() {
+            local result
+            result="$(xcrun notarytool submit "$1" --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait --timeout 30m --output-format json)" || true
+            echo "$result" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("Notarization", r.get("id"), r.get("status"))'
+            if [ "$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status"))')" != Accepted ]; then
+              id="$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))')"
+              [ -n "$id" ] && xcrun notarytool log "$id" --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+              return 1
+            fi
+          }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -qx "TeamIdentifier=$TEAM_ID"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize-app.zip"
+          notarize "$RUNNER_TEMP/notarize-app.zip"
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          # The disk image carries its own signature, then its notarization ticket.
+          codesign --force --timestamp --keychain "$TEAMCODE_MACOS_SIGNING_KEYCHAIN" --sign "Developer ID Application: $TEAMCODE_MACOS_SIGNING_IDENTITY" "$dmg"
+          notarize "$dmg"
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+      - name: Stage the package teamcode ui installs and the hand-installed ones
+        run: |
+          version="$ORG_GRADLE_PROJECT_teamcodeVersion"
+          case "$DESKTOP_TARGET" in
+            macos-*)
+              package="$RUNNER_TEMP/teamcode-desktop.zip"
+              ditto -c -k --keepParent "$BINARIES/app/TeamCode.app" "$package"
+              extras=("$BINARIES"/dmg/*.dmg) ;;
+            windows-*)
+              package="$(ls "$BINARIES"/msi/*.msi)"
+              extras=() ;;
+            linux-*)
+              package="$RUNNER_TEMP/teamcode-desktop.tar.gz"
+              tar -czf "$package" -C "$BINARIES/app" TeamCode
+              extras=("$BINARIES"/deb/*.deb "$BINARIES"/rpm/*.rpm) ;;
+          esac
+          python3 scripts/release-desktop.py stage --package "$package" --target "$DESKTOP_TARGET" --version "$version" --commit "$GITHUB_SHA" --output desktop-staged
+          for extra in "${extras[@]}"; do
+            python3 scripts/release-desktop.py extra --package "$extra" --target "$DESKTOP_TARGET" --version "$version" --output desktop-extras
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-package-${{ matrix.target }}
+          path: desktop-staged/*
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: runner.os != 'Windows'
+        with:
+          name: desktop-extra-${{ matrix.target }}
+          path: desktop-extras/*
+          retention-days: 7
+      - name: Remove the temporary keychain and notarization key
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -n "${TEAMCODE_MACOS_SIGNING_KEYCHAIN:-}" ]; then security delete-keychain "$TEAMCODE_MACOS_SIGNING_KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/developer-id.p12"
+  desktop_manifest:
+    timeout-minutes: 10
+    # Signed with the publisher key, like the CLI's manifest: never for pull-request code.
+    if: github.event_name != 'pull_request'
+    needs: [desktop]
+    runs-on: ubuntu-latest
+    outputs:
+      macos_signed: ${{ steps.signed.outputs.macos_signed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-package-*
+          merge-multiple: true
+          path: desktop-staged
+      - name: Verify and assemble the five desktop packages
+        run: python3 scripts/release-desktop.py assemble --inputs desktop-staged --version "$ORG_GRADLE_PROJECT_teamcodeVersion" --commit "$GITHUB_SHA" --output desktop-dist
+      - name: Sign desktop-manifest.json with the independent publisher key
+        env:
+          TEAMCODE_RELEASE_SIGNING_KEY: ${{ secrets.TEAMCODE_RELEASE_SIGNING_KEY }}
+        run: python3 scripts/release-signature.py sign --manifest desktop-dist/desktop-manifest.json --signature desktop-dist/desktop-manifest.sig --public-key release/trust/teamcode-release-2026.pem
+      - name: Verify the signature against the pinned public key
+        run: python3 scripts/release-signature.py verify --manifest desktop-dist/desktop-manifest.json --signature desktop-dist/desktop-manifest.sig --public-key release/trust/teamcode-release-2026.pem
+      - name: Tell the acceptance whether the macOS app carries the Developer ID
+        id: signed
+        run: echo "macos_signed=${{ secrets.TEAMCODE_MACOS_CERTIFICATE_P12 != '' && vars.TEAMCODE_MACOS_TEAM_ID != '' }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamcode-signed-desktop-bundle
+          path: desktop-dist/*
+          retention-days: 7
+  signed_installation:
+    timeout-minutes: 20
+    needs: [signed_bundle, desktop_manifest]
     strategy:
       fail-fast: false
       matrix:
@@ -528,12 +731,29 @@ jobs:
           if [[ "$INSTALLATION_TARGET" == windows-* ]]; then suffix=".exe"; fi
           binary="installation-fixtures/second/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}-${INSTALLATION_TARGET}${suffix}"
           python scripts/smoke-automatic-updates.py --binary "$binary" --first-bundle installation-fixtures/first --second-bundle installation-fixtures/second
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamcode-signed-desktop-bundle
+          path: desktop-dist
+      - name: Install the signed desktop app with the signed CLI of the same release
+        shell: bash
+        env:
+          INSTALLATION_TARGET: ${{ matrix.target }}
+          MACOS_SIGNED: ${{ needs.desktop_manifest.outputs.macos_signed }}
+        run: |
+          suffix=""
+          if [[ "$INSTALLATION_TARGET" == windows-* ]]; then suffix=".exe"; fi
+          cli="dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}-${INSTALLATION_TARGET}${suffix}"
+          chmod 755 "$cli"
+          flags=()
+          if [[ "$INSTALLATION_TARGET" == macos-* && "$MACOS_SIGNED" != true ]]; then flags+=(--expect-macos-refusal); fi
+          python scripts/smoke-desktop-install.py --binary "$cli" --bundle desktop-dist "${flags[@]}"
   release:
     timeout-minutes: 10
     if: >-
       (github.event_name == 'push' && github.ref_type == 'tag') ||
       (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')
-    needs: [image, signed_bundle, signed_installation]
+    needs: [image, signed_bundle, desktop_manifest, signed_installation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -547,10 +767,25 @@ jobs:
         with:
           name: teamcode-helm-chart
           path: dist
-      - name: Verify the exact accepted signature before publication
-        run: python3 scripts/release-signature.py verify --manifest dist/manifest.json --signature dist/manifest.sig --public-key release/trust/teamcode-release-2026.pem
+      - uses: actions/download-artifact@v4
+        with:
+          name: teamcode-signed-desktop-bundle
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-extra-*
+          merge-multiple: true
+          path: dist
+      - name: Verify the exact accepted signatures before publication
+        run: |
+          python3 scripts/release-signature.py verify --manifest dist/manifest.json --signature dist/manifest.sig --public-key release/trust/teamcode-release-2026.pem
+          python3 scripts/release-signature.py verify --manifest dist/desktop-manifest.json --signature dist/desktop-manifest.sig --public-key release/trust/teamcode-release-2026.pem
       - name: Bind accepted files to this exact source and version
-        run: python3 scripts/release-request.py --manifest dist/manifest.json
+        run: |
+          python3 scripts/release-request.py --manifest dist/manifest.json
+          python3 scripts/release-request.py --manifest dist/desktop-manifest.json
+      - name: List every published file in SHA256SUMS
+        run: python3 scripts/release-desktop.py sums --directory dist
       - name: Create the exact tag after all acceptance and image publication
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -571,9 +806,13 @@ jobs:
           releaseVersion="$ORG_GRADLE_PROJECT_teamcodeVersion"
           flags=()
           if [[ "$releaseVersion" == *-* ]]; then flags+=(--prerelease); fi
-          notes=(--generate-notes)
+          notes="$RUNNER_TEMP/release-notes.md"
           if [[ -f "docs/releases/$releaseVersion.md" ]]; then
-            notes=(--notes-file "docs/releases/$releaseVersion.md")
+            cp "docs/releases/$releaseVersion.md" "$notes"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$releaseVersion" --jq .body > "$notes"
           fi
-          gh release create "$releaseVersion" dist/* --verify-tag "${notes[@]}" --title "$releaseVersion" "${flags[@]}" --draft
+          # The desktop downloads, read from the signed desktop manifest and the attached files.
+          python3 scripts/release-desktop.py notes --directory dist --notes "$notes"
+          gh release create "$releaseVersion" dist/* --verify-tag --notes-file "$notes" --title "$releaseVersion" "${flags[@]}" --draft
           gh release edit "$releaseVersion" --draft=false

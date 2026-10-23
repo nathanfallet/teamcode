@@ -15,8 +15,9 @@ val releasePublicKeys = rootProject.fileTree("release/trust") { include("*.pem")
 val generatedReleaseTrust = layout.buildDirectory.dir("generated/release-trust")
 // The Apple Team ID that signs TeamCode Desktop for macOS (-PteamcodeMacosTeamId=…, given by the release pipeline):
 // `teamcode ui` installs a downloaded app only when its Developer ID signature names this team. Without it, the CLI
-// installs the desktop app everywhere but on macOS, where it points at the release page instead.
-val macosTeamId = providers.gradleProperty("teamcodeMacosTeamId").orNull
+// installs the desktop app everywhere but on macOS, where it points at the release page instead. An empty value (the
+// pipeline's repository variable when it is not set) counts as none.
+val macosTeamId = providers.gradleProperty("teamcodeMacosTeamId").orNull?.takeIf { it.isNotBlank() }
     ?.also { require(Regex("[A-Z0-9]{10}").matches(it)) { "teamcodeMacosTeamId must be a 10-character Apple Team ID." } }
 val generateReleaseTrust by tasks.registering {
     inputs.files(releasePublicKeys)
