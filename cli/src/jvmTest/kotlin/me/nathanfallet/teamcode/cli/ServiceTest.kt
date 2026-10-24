@@ -162,6 +162,7 @@ class ServiceTest {
         assertTrue(olderRelease("0.9.0", "1.0.0")); assertTrue(olderRelease("1.2.3", "1.2.10")); assertTrue(olderRelease("v1.2.3", "1.3.0-beta"))
         assertFalse(olderRelease("1.2.3", "1.2.3")); assertFalse(olderRelease("1.10.0", "1.9.9")); assertFalse(olderRelease("2.0.0", "1.0.0"))
         assertFalse(olderRelease("1.2", "1.3.0")); assertFalse(olderRelease("1.2.x", "1.3.0")); assertFalse(olderRelease("0.1.0", "unknown"))
+        assertTrue(olderRelease("1.2.3-rc1", "1.2.3")); assertFalse(olderRelease("1.2.3", "1.2.3-rc1")); assertFalse(olderRelease("1.2.3-rc1", "1.2.3-rc2"))
     }
 
     @Test fun windowsTaskUsesTheCurrentUserWithoutEmbeddingCredentialsOrRequiringElevation() {

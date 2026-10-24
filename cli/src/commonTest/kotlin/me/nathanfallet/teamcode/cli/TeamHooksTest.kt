@@ -158,6 +158,7 @@ class TeamHooksTest {
         assertEquals("tag<U+E0041>", HookText.visible("tag\uDB40\uDC41"), "Invisible tag characters outside the basic plane")
         assertEquals("<U+110BD><U+110CD><U+13430><U+1343F><U+1BCA0><U+1D173>", HookText.visible("\uD804\uDCBD\uD804\uDCCD\uD80D\uDC30\uD80D\uDC3F\uD82F\uDCA0\uD834\uDD73"),
             "Every format character outside the basic plane")
+        assertEquals("<U+E01EF><U+F0000><U+10FFFD>\uD83D\uDE00", HookText.visible("\uDB40\uDDEF\uDB80\uDC00\uDBFF\uDFFD\uD83D\uDE00"), "Planes 14 to 16 escaped whole, emoji kept")
         assertEquals("caf\u00e9 \uD83D\uDE00", HookText.visible("caf\u00e9 \uD83D\uDE00"), "Ordinary text is untouched")
         assertEquals("a<U+000A>b", HookText.visible("a\nb", keepLines = false), "One-line fields escape line feeds too")
         assertEquals("echo a\r\necho b<U+000D>", HookText.visible("echo a\r\necho b\r"), "CRLF line endings stay readable")

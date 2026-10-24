@@ -29,10 +29,11 @@ internal object HookText {
     }
 
     private fun hidden(code: Int, c: Char, pair: Boolean): Boolean = when {
-        // Common Kotlin has no category for code points above U+FFFF, so every supplementary format character
-        // (Unicode 17) is listed: tags and variation selectors, Kaithi number signs, Egyptian hieroglyph format
-        // controls, shorthand format controls, musical symbol formatting.
-        pair -> code in 0xE0000..0xE0FFF || code == 0x110BD || code == 0x110CD || code in 0x13430..0x1343F ||
+        // Common Kotlin has no category for code points above U+FFFF, so the supplementary format characters of
+        // Unicode 17 are listed (Kaithi number signs, Egyptian hieroglyph format controls, shorthand format controls,
+        // musical symbol formatting), and planes 14 to 16 are escaped whole: tags, variation selectors, future format
+        // characters of the special-purpose plane, and private-use characters, which render as any font decides.
+        pair -> code >= 0xE0000 || code == 0x110BD || code == 0x110CD || code in 0x13430..0x1343F ||
             code in 0x1BCA0..0x1BCA3 || code in 0x1D173..0x1D17A
         c.isSurrogate() -> true
         c.isISOControl() -> true

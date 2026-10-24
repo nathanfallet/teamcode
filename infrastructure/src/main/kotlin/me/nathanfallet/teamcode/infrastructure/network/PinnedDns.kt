@@ -4,6 +4,7 @@ import java.net.InetAddress
 import java.net.UnknownHostException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -26,21 +27,26 @@ object PinnedDns {
     private const val LOOKUP_DEADLINE_MILLIS = 5_000L
 
     /**
-     * Abandoned lookups keep their thread until the system resolver gives up: a dedicated bound keeps a name server
-     * that never answers from taking the whole I/O pool (database, files) with it. Shared by every client.
+     * Each resolver (one per client: webhooks, MCP, cluster, artifacts) runs its lookups on its own bound of 16
+     * threads. Abandoned lookups keep their thread until the system resolver gives up, so a name server that never
+     * answers, reachable through a webhook URL say, can fill that client's bound, never the I/O pool (database, files)
+     * nor another client's DNS.
      */
-    private val lookups = Dispatchers.IO.limitedParallelism(16)
-
     fun resolver(
         allowed: (ByteArray) -> Boolean,
         lookup: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() },
-    ): suspend (String) -> List<String> = { name ->
-        val host = name.removePrefix("[").removeSuffix("]")
-        // A lookup cannot be interrupted, so it runs outside the caller's scope and is abandoned after the deadline.
-        // A timeout is reported as an I/O failure: a CancellationException here would look like the caller's own cancellation.
-        val addresses = withTimeoutOrNull(LOOKUP_DEADLINE_MILLIS) { CoroutineScope(lookups).async { lookup(host) }.await() }
-            ?: throw PinnedDnsTimeout(host)
-        if (addresses.isEmpty() || addresses.any { !allowed(it.address) }) throw PinnedDnsRefusal(host)
-        addresses.map { it.hostAddress }
+    ): suspend (String) -> List<String> {
+        val lookups = CoroutineScope(Dispatchers.IO.limitedParallelism(16) + SupervisorJob())
+        return { name ->
+            val host = name.removePrefix("[").removeSuffix("]")
+            // A lookup cannot be interrupted, so it runs outside the caller's scope and is abandoned after the deadline;
+            // cancelling it drops one still waiting for a thread. A timeout is reported as an I/O failure: a
+            // CancellationException here would look like the caller's own cancellation.
+            val pending = lookups.async { lookup(host) }
+            val addresses = try { withTimeoutOrNull(LOOKUP_DEADLINE_MILLIS) { pending.await() } } finally { if (!pending.isCompleted) pending.cancel() }
+                ?: throw PinnedDnsTimeout(host)
+            if (addresses.isEmpty() || addresses.any { !allowed(it.address) }) throw PinnedDnsRefusal(host)
+            addresses.map { it.hostAddress }
+        }
     }
 }

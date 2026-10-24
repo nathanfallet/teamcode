@@ -117,11 +117,11 @@ class WebhookService(
         write(actor); validate(url, types, description, checkTarget = false)
         // A subscription kept on its URL can still be paused, relabeled or deleted after the operator withdrew private
         // targets (its deliveries are refused meanwhile); a new URL must pass the address rule, and a paused one on a
-        // refused URL cannot be enabled again. Saving an enabled one unchanged (the dashboard form sends enabled=true)
-        // stays possible: it delivers nothing either way.
+        // refused URL cannot be enabled again. Saving an enabled one unchanged (the dashboard form sends its checkbox,
+        // so enabled=true) stays possible: it delivers nothing either way.
         if (!targetAllowed(url)) {
-            val current = store.find(actor.teamId, id)
-            if (current != null && (current.url != url || (enabled == true && !current.enabled))) throw hostNotAllowed()
+            val current = store.find(actor.teamId, id) ?: throw missing()
+            if (current.url != url || (enabled == true && !current.enabled)) throw hostNotAllowed()
         }
         return store.update(actor, id, version, url, types, description, enabled)
     }

@@ -71,12 +71,17 @@ internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, 
     }
 } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 
-/** Whether [candidate] is a strictly older `major.minor.patch` release than [current]; `false` when either does not parse. */
+/**
+ * Whether [candidate] is a strictly older `major.minor.patch` release than [current]; a pre-release is older than its
+ * release (`1.2.3-rc1` before `1.2.3`). `false` when either does not parse: the build enforces that format for
+ * [me.nathanfallet.teamcode.cli.VERSION], and an unparsable awaited version gets no token.
+ */
 internal fun olderRelease(candidate: String, current: String): Boolean {
     fun parse(version: String): List<Int>? = version.removePrefix("v").substringBefore('+').substringBefore('-').split('.')
         .takeIf { it.size == 3 }?.map { part -> part.takeIf { it.isNotEmpty() && it.length <= 9 && it.all(Char::isDigit) }?.toInt() ?: return null }
     val (older, newer) = (parse(candidate) ?: return false) to (parse(current) ?: return false)
-    val difference = older.zip(newer).firstOrNull { (a, b) -> a != b } ?: return false
+    val difference = older.zip(newer).firstOrNull { (a, b) -> a != b }
+        ?: return '-' in candidate.substringBefore('+') && '-' !in current.substringBefore('+')
     return difference.first < difference.second
 }
 
