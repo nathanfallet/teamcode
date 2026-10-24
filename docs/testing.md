@@ -132,6 +132,14 @@ python3 scripts/smoke-codex-guidance.py --binary "$teamcode_binary" --codex /abs
 ./gradlew :app:smokeForecastBrowser
 ```
 
+Files sent to a session, read by the real Claude client (docker for MySQL and an S3-compatible bucket; no provider call):
+
+```sh
+python3 scripts/smoke-session-files.py --binary "$teamcode_binary" --jar "$teamcode_jar" --claude /absolute/path/to/actual/claude
+```
+
+It starts the server jar, a Versity S3 Gateway behind a one-day self-signed certificate (artifact storage requires https; only the server's JVM trusts it) and a remote session hosted by the native CLI. It checks the `file_storage_not_configured` refusal before a bucket exists, saves and tests the bucket, sends a file with `/attach` from `teamcode attach`, and checks that the actual Claude reads it with its Read tool at the path the host wrote (a `teamcode-<uid>/<session>` directory outside the working directory, mode 0600) and that the sent message names the file without that path. Like the guidance fixtures above it is opt-in and not in pull-request CI, which has no Claude executable; the same flow is covered without one by `CloudFilePersistenceTest`, the host tests and the CLI and app tests.
+
 The Gradle tasks own the MySQL/server setup and pass private loopback fixture information to their child scripts. Do not invoke `smoke-agent-runs.py` or `smoke-forecast-browser.mjs` without that fixture input. The browser task writes its screenshot under `app/build/preview/forecasts-live.png`. See [agent guidance](agent-guidance.md) for Codex hook trust and delivery semantics.
 
 Separate four assertions: the server issued advice, the CLI received it, the native hook emitted it, and the model followed it. The first three do not prove the fourth. Likewise, synthetic forecast replay validates control rules, not forecast accuracy under outside-proxy spend or real load.
