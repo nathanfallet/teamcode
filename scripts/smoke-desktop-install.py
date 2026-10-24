@@ -85,7 +85,7 @@ def require(condition, message):
         raise SystemExit('Desktop acceptance failed: ' + message)
 
 
-def show_installer_log(temporary, msi, control):
+def show_installer_log(temporary, msi, control, root):
     """What the Windows installer left behind, before the temporary folder holding it is deleted with the run's work."""
     log = temporary / 'teamcode-desktop-msiexec.log'
     print(f'--- installer diagnostics: {log} exists={log.is_file()}; {temporary} holds {sorted(p.name for p in temporary.iterdir())} ---', flush=True)
@@ -94,6 +94,10 @@ def show_installer_log(temporary, msi, control):
         text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
         lines = text.splitlines()
         print(f'--- {log.name}: last 120 of {len(lines)} lines ---\n' + '\n'.join(lines[-120:]) + '\n--- end ---', flush=True)
+    shown = sorted(str(p.relative_to(root)) for p in root.rglob('*') if len(p.relative_to(root).parts) <= 3)[:80] if root.is_dir() else None
+    print(f'--- {root} exists={root.is_dir()}; first entries: {shown} ---', flush=True)
+    version = root / 'app' / 'resources' / 'teamcode-desktop-version'
+    print(f'--- version file {version} exists={version.is_file()} content={version.read_text().strip() if version.is_file() else None} ---', flush=True)
     if system() == 'windows':
         subprocess.run(['tasklist', '/V', '/FI', 'IMAGENAME eq msiexec.exe'], timeout=60)
         subprocess.run(['sc', 'query', 'msiserver'], timeout=60)
@@ -145,7 +149,7 @@ def main():
             output = result.stdout + result.stderr
             print(f'$ teamcode ui --bundle {source.name} --yes --no-launch -> {result.returncode}\n{output}', flush=True)
             if result.returncode != 0:
-                show_installer_log(temporary, bundle / package, 'Windows installer' in output)
+                show_installer_log(temporary, bundle / package, 'Windows installer' in output, root)
             return result.returncode, output
 
         # One modified byte in the middle of the package: refused before anything opens it, nothing installed.
