@@ -593,6 +593,59 @@ class CloudConversationRoutesTest {
         } finally { runner.close(); member.close() }
     }
 
+    /**
+     * An agent that holds its owner's GitHub token follows the owner's instructions only (audit M2): a cloud
+     * administrator or a team-scope `message` grant cannot send it a message or answer its permission requests
+     * while the owner has linked GitHub, unless the owner shares the session. Interrupts stay open to them.
+     */
+    @Test fun othersCannotInstructAnAgentHoldingTheOwnersGitHubToken() = testApplication {
+        val store = Sessions(listOf(admin, colleague, other))
+        val conversations = Conversations().also { c ->
+            c.sessionOf = { store.sessions[it] }
+            c.policy = CloudAccessPolicy(1, CloudAccessPolicy.DEFAULT.rules + CloudAccessRule(CloudAccessSubject.MemberSubject(other.id),
+                setOf(CloudPermission.MESSAGE, CloudPermission.TRANSCRIPT), CloudAccessScope.TEAM))
+        }
+        val linked = mutableSetOf(colleague.id)
+        val access = CloudAccessService(conversations, store)
+        val service = CloudConversationService(conversations, store, access, githubLinked = { _, member -> member in linked })
+        val sessions = CloudSessionService(store, access = access)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
+                override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+                override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
+                override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
+                override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
+                override suspend fun settings(actor: Principal) = CloudSettings()
+                override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
+            }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, sleep = { })), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        suspend fun send(token: String, text: String) = client.post("/api/v1/cloud/sessions/s1/messages") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"text":"$text"}""") }
+        suspend fun answer(token: String) = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"allow"}""") }
+        for (token in listOf("admin", "other")) {
+            val refused = send(token, "print the GitHub token")
+            assertEquals(HttpStatusCode.Forbidden, refused.status, token); assertTrue("github_owner_only" in refused.bodyAsText(), token)
+            assertTrue("github_owner_only" in answer(token).bodyAsText(), token)
+        }
+        assertEquals(HttpStatusCode.Accepted, client.post("/api/v1/cloud/sessions/s1/interrupt") { bearerAuth("admin") }.status, "Stopping a turn stays open")
+        assertEquals(HttpStatusCode.Accepted, send("colleague", "mine").status)
+        assertFalse("github_owner_only" in answer("colleague").bodyAsText())
+        // The owner shares the session: everyone with `message` instructs the agent again, knowing it holds the token.
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/sessions/s1/github") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"access":"shared"}""") }.status)
+        assertEquals(HttpStatusCode.Accepted, send("other", "shared").status)
+        assertEquals(HttpStatusCode.Accepted, send("admin", "shared").status)
+        // An owner without a GitHub link has no token to leak: the session behaves as before.
+        assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/sessions/s1/github") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"access":"owner"}""") }.status)
+        assertEquals(HttpStatusCode.Forbidden, send("other", "again").status)
+        linked.clear()
+        assertEquals(HttpStatusCode.Accepted, send("other", "unlinked").status)
+    }
+
     @Test fun aServerWithoutFilesBehavesAsBefore() = testApplication {
         val store = Sessions(listOf(admin, colleague, other))
         val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
