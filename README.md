@@ -28,7 +28,7 @@ TeamCode Desktop (macOS, Windows, Linux) follows your team's sessions and runs r
    | System | `teamcode ui` installs | Also attached |
    | --- | --- | --- |
    | macOS (Apple silicon `macos-arm64`, Intel `macos-x64`) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
-   | Windows (`windows-x64`) | `.msi`, installed for the current user in `%LOCALAPPDATA%\Programs\TeamCode` | |
+   | Windows (`windows-x64`) | `.msi`, installed for the current user in `%LOCALAPPDATA%\TeamCode App` | |
    | Linux (`linux-x64`, `linux-arm64`) | `.tar.gz` of the `TeamCode` folder (`bin/TeamCode` starts it) | `.deb`, `.rpm` (installed in `/opt/teamcode`) |
 
    Every file is listed in the release's `SHA256SUMS`. macOS packages are signed with a Developer ID and notarized. The Windows installer is not signed by a paid signing service: SmartScreen warns on first launch ("More info", then "Run anyway"); its hash is in the signed `desktop-manifest.json`.

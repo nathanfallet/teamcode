@@ -150,14 +150,16 @@ compose.desktop {
                     }
                 }
             }
-            // Installed for the current user, without administrator rights, in %LOCALAPPDATA%\Programs\TeamCode, where
-            // `teamcode ui` looks for it (the CLI owns %LOCALAPPDATA%\TeamCode). The upgrade code never changes, so a new
-            // version replaces the previous one.
+            // Installed for the current user, without administrator rights, in %LOCALAPPDATA%\TeamCode App, where `teamcode ui`
+            // looks for it (the CLI owns %LOCALAPPDATA%\TeamCode). The upgrade code never changes, so a new version replaces
+            // the previous one.
             windows {
                 perUserInstall = true
-                // A forward slash: with a single backslash jpackage installed the app in %LOCALAPPDATA%\ProgramsTeamCode (where
-                // `teamcode ui` does not look), and with two it refused the path.
-                installationPath = "Programs/TeamCode"
+                // One folder level, no separator, on purpose. The plugin passes the path quoted in an @argfile, where a
+                // backslash escapes the next character: "Programs\TeamCode" became "ProgramsTeamCode". And for a per-user
+                // install jpackage writes <RemoveFolder> components only for INSTALLDIR, so an intermediate folder such as
+                // "Programs" fails WiX's ICE64 and light.exe exits with 204, whether the separator is "\\" or "/".
+                installationPath = "TeamCode App"
                 upgradeUuid = "0a37b001-5b3a-4573-8733-7051f76cf26f"
                 menu = true
                 shortcut = true

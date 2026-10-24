@@ -45,7 +45,7 @@ def installed_root(env):
     if os_name == 'macos':
         return Path(env['HOME']) / 'Applications' / 'TeamCode.app'
     if os_name == 'windows':
-        return Path(env['LOCALAPPDATA']) / 'Programs' / 'TeamCode'
+        return Path(env['LOCALAPPDATA']) / 'TeamCode App'
     return Path(env['XDG_DATA_HOME']) / 'teamcode-desktop' / 'current'
 
 

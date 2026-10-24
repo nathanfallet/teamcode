@@ -175,7 +175,7 @@ class DesktopInstallTest {
     }
 
     @Test fun windowsRunsThePerUserPackageAndChecksTheInstalledVersion() = runBlocking {
-        val root = File(home, "AppData/Local/Programs/TeamCode")
+        val root = File(home, "AppData/Local/TeamCode App")
         val msiexec: suspend (String, List<String>) -> Int = { command, arguments ->
             commands += listOf(command) + arguments
             File(root, "TeamCode.exe").apply { parentFile.mkdirs(); writeText("exe") }

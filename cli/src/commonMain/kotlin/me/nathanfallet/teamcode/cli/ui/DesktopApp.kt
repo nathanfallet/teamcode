@@ -18,7 +18,7 @@ internal data class DesktopInstallation(val root: Path, val version: String?, va
 /**
  * Where TeamCode Desktop is installed on each system, in the order `teamcode ui` looks:
  * - macOS: `~/Applications/TeamCode.app` (where it installs it), then `/Applications/TeamCode.app` (the disk image);
- * - Windows: `%LOCALAPPDATA%\Programs\TeamCode` (the per-user installer);
+ * - Windows: `%LOCALAPPDATA%\TeamCode App` (the per-user installer);
  * - Linux: `$XDG_DATA_HOME/teamcode-desktop/current` (`~/.local/share/teamcode-desktop/current`), then the `.deb`'s
  *   `/opt/teamcode`. The folder is not inside the CLI's own `~/.local/share/teamcode`, which the CLI installer owns.
  * Each app carries its version in `teamcode-desktop-version`, in its resources folder (written by the build).
@@ -37,7 +37,7 @@ internal class DesktopLocations(private val os: String, private val env: (String
         ?.resolve("applications")?.resolve("teamcode-desktop.desktop")
 
     /** Windows: the per-user installer's folder. */
-    val windowsRoot: Path? get() = env("LOCALAPPDATA")?.toPath()?.takeIf { it.isAbsolute }?.resolve("Programs")?.resolve("TeamCode")
+    val windowsRoot: Path? get() = env("LOCALAPPDATA")?.toPath()?.takeIf { it.isAbsolute }?.resolve("TeamCode App")
 
     fun candidates(): List<Path> = when (os) {
         "macos" -> listOfNotNull(applications?.resolve(APP), "/Applications".toPath().resolve(APP))
