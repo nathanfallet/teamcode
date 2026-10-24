@@ -7,7 +7,7 @@ plugins {
 kotlin {
     jvmToolchain(21)
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
-    macosArm64(); macosX64(); linuxX64(); linuxArm64()
+    macosArm64(); linuxX64(); linuxArm64()
     mingwX64 { binaries.all { linkerOpts("-ladvapi32") } } // Token and security descriptor calls of the config lock.
     sourceSets {
         macosMain.get().kotlin.srcDir("src/posixMain/kotlin")

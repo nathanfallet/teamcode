@@ -69,6 +69,7 @@ The chart rolls with `maxUnavailable: 0`, a pod disruption budget keeping one re
 - Enforcement features introduced by a release (for example group caps, ownership restrictions or new run limits) are enforced only by upgraded replicas. Do not rely on them, and do not enable or configure them, until every replica runs the new version.
 - Do not perform administration that depends on a new feature (creating groups, caps or overrides) while old replicas are still serving traffic.
 - A first upgrade from a release without ownership promotes one existing enabled administrator to owner and revokes that account's sessions and service keys (see [team roles](team-roles.md)). Re-issue automation keys of that account afterwards.
+- Sign-in throttling moved from one team-wide budget to per-address budgets and per-device backoff ([team roles](team-roles.md#sign-in-throttling)); older replicas keep the former budget until they are replaced.
 - Wait until `/ready` is healthy on all replicas and no old pod remains before declaring the upgrade complete.
 
 ### Rolling back

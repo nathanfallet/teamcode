@@ -17,6 +17,8 @@ class DesktopEnvironment(
     private val configOverride: String? = null,
     val os: Os = Os.current(),
     val initialDirectory: String? = null,
+    /** Why the last update failed (`--update-error`, given by the CLI that reopened this version after a failed update). */
+    val updateError: String? = null,
 ) {
     enum class Os {
         MACOS, LINUX, WINDOWS;
@@ -63,7 +65,9 @@ class DesktopEnvironment(
             // Started from a terminal, the app already has the shell's variables: no shell to start.
             val shell = if (os == Os.WINDOWS || process.containsKey("XDG_CONFIG_HOME") || process["TERM_PROGRAM"] != null) emptyMap()
             else readLoginShell(process["SHELL"]?.takeIf { File(it).isAbsolute } ?: "/bin/sh")
-            return DesktopEnvironment(process, shell, override, os, directory)
+            val updateError = args.indexOf("--update-error").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }
+                ?.replace(Regex("\\s+"), " ")?.filterNot { it.isISOControl() }?.trim()?.take(1_000)?.takeIf { it.isNotBlank() }
+            return DesktopEnvironment(process, shell, override, os, directory, updateError)
         }
 
         /**

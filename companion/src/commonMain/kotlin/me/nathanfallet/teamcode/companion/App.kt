@@ -47,7 +47,7 @@ fun App(menuShortcuts: Boolean = false) {
     }
 }
 
-/** Cmd (or Ctrl) with N, 1, 2 or comma: the same shortcuts as the desktop's menu bar. */
+/** Cmd (or Ctrl) with N, 1, 2, comma or K: the same shortcuts as the desktop's menu bar. */
 internal fun shortcut(event: KeyEvent): AppCommand? {
     if (event.type != KeyEventType.KeyDown || !(event.isMetaPressed || event.isCtrlPressed)) return null
     return when (event.key) {
@@ -55,6 +55,7 @@ internal fun shortcut(event: KeyEvent): AppCommand? {
         Key.One -> AppCommand.SHOW_SESSIONS
         Key.Two -> AppCommand.SHOW_ARTIFACTS
         Key.Comma -> AppCommand.SHOW_ACCOUNT
+        Key.K -> AppCommand.COMMAND_PALETTE
         else -> null
     }
 }

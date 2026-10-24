@@ -5,13 +5,14 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.infrastructure.secrets.Passwords
+import me.nathanfallet.teamcode.infrastructure.secrets.TrustedBrowsers
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
-class SqlTeamService(private val database: Database, private val passwords: Passwords = Passwords()) : TeamService {
+/** [browsers] signs the dashboard's trusted-browser cookie; without it, browsers are never trusted devices. */
+class SqlTeamService(private val database: Database, private val passwords: Passwords = Passwords(), private val browsers: TrustedBrowsers? = null) : TeamService {
     private val hashing = Semaphore(4) // Local CPU protection; the authoritative rate budget is in MySQL.
-    private val loginBudget = SqlLoginBudget(database)
     private val access = CheckMemberAccessUseCase()
     private val dummyHash = passwords.hash(Passwords.secret())
 
@@ -29,26 +30,40 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         password
     }
     override suspend fun login(username: String, password: String, device: String, installationId: String?): LoginSession =
-        login(username, password, device, installationId, null, null)
-    override suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?): LoginSession {
+        login(username, password, device, installationId, null, null, LoginOrigin())
+    override suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?): LoginSession =
+        login(username, password, device, installationId, platform, osVersion, LoginOrigin())
+    override suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?, origin: LoginOrigin): LoginSession {
         DeviceService.validateInstallation(installationId)
         if (installationId != null) DeviceService.validateName(device)
         DeviceService.validatePlatform(platform, osVersion)
-        if (!loginBudget.admit()) throw TeamFailure("login_rate_limit", 429, "Too many login attempts. Try again in a minute.")
-        if (username.length !in 1..64 || password.length !in 1..1024) throw denied()
+        val normalized = username.lowercase()
+        val wellFormed = username.length in 1..64 && password.length in 1..1024
+        // A device the member signed in from before has its own backoff, and no source budget: nobody else can lock it.
+        val failureKey = database.query {
+            // The member the collation matches (case and accents folded), so spellings of one username share one counter.
+            val memberId = if (wellFormed) Members.select(Members.id).where { (Members.teamId eq "default") and (Members.username eq normalized) }.singleOrNull()?.get(Members.id) else null
+            val trusted = memberId?.let { trustedDevice(this, it, installationId, origin.browser) }
+            when {
+                trusted != null -> trusted
+                SqlLoginThrottle.admitSource(this, SqlLoginThrottle.sourceKey(origin.sourceAddress)) -> SqlLoginThrottle.accountKey(memberId, normalized)
+                else -> null
+            }
+        } ?: throw TeamFailure("login_rate_limit", 429, "Too many login attempts from this address. Try again in a minute.")
+        if (!wellFormed) throw denied()
         val outcome = hashing.withPermit { database.query {
-            val row = Members.selectAll().where { (Members.teamId eq "default") and (Members.username eq username.lowercase()) }.forUpdate().singleOrNull()
-            val now = nowMillis()
-            if (row != null && row[Members.lockedUntil] > now) return@query null
+            val row = Members.selectAll().where { (Members.teamId eq "default") and (Members.username eq normalized) }.forUpdate().singleOrNull()
+            val locked = SqlLoginThrottle.isLocked(this, failureKey)
+            // Always hash: a locked or unknown username answers after the same work as a wrong password.
             val valid = passwords.verify(password, row?.get(Members.passwordHash) ?: dummyHash)
-            if (row == null) return@query null
-            val member = member(row)
-            if (!valid || member.disabled) {
-                val failures = row[Members.failedLogins] + 1
-                Members.update({ Members.id eq member.id }) { it[failedLogins] = failures; it[lockedUntil] = if (failures >= 5) now + 60_000 else 0 }
+            if (locked) return@query null
+            val member = row?.let(::member)
+            if (member == null || !valid || member.disabled) {
+                SqlLoginThrottle.recordFailure(this, failureKey)
                 return@query null
             }
-            Members.update({ Members.id eq member.id }) { it[failedLogins] = 0; it[lockedUntil] = 0 }
+            SqlLoginThrottle.clear(failureKey)
+            val now = nowMillis()
             Tokens.deleteWhere { (memberId eq member.id) and (expiresAt less now) and serviceScopes.isNull() }
             if (Tokens.select(Tokens.id).where { (Tokens.memberId eq member.id) and Tokens.serviceScopes.isNull() }.count() >= 50) {
                 val oldest = Tokens.select(Tokens.id).where { (Tokens.memberId eq member.id) and Tokens.serviceScopes.isNull() }.orderBy(Tokens.expiresAt).limit(1).single()[Tokens.id]
@@ -60,9 +75,20 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
             val expires = now + if (device == "Web dashboard") 8 * 3_600_000L else 30 * 86_400_000L
             Tokens.insert { it[Tokens.id] = id; it[memberId] = member.id; it[tokenHash] = Passwords.digest(token); it[Tokens.device] = device.filter { char -> !char.isISOControl() }.take(120); it[deviceId] = registeredDevice; it[createdAt] = now; it[expiresAt] = expires }
             audit("default", member.id, "session.login", id)
-            LoginSession(token, Principal(member, id, "default"), expires)
+            LoginSession(token, Principal(member, id, "default"), expires, if (origin.browser != null) browsers?.mint(member.id, now) else null)
         } }
         return outcome ?: throw denied()
+    }
+    /** Deletes throttling rows nobody needs any more; bounded, for the maintenance pass. */
+    suspend fun purgeLoginThrottle(limit: Int = 500): Int = database.query { SqlLoginThrottle.purge(this, limit) }
+    /** The failure key of a CLI or app installation, or a dashboard browser, this member already signed in from. */
+    private fun trustedDevice(c: JdbcTransaction, memberId: String, installationId: String?, browser: String?): String? {
+        if (installationId == null && browser.isNullOrEmpty()) return null
+        if (installationId != null && !Devices.select(Devices.id).where { (Devices.memberId eq memberId) and (Devices.installationId eq installationId) }.limit(1).empty())
+            return SqlLoginThrottle.deviceKey(memberId, "installation:$installationId")
+        if (!browser.isNullOrEmpty() && browsers?.verify(browser, memberId, c.nowMillis()) == true)
+            return SqlLoginThrottle.deviceKey(memberId, "browser:" + Passwords.digest(browser))
+        return null
     }
     override suspend fun authenticate(token: String): Principal? {
         if (token.length !in 32..256) return null
@@ -85,6 +111,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
             val hash = Members.select(Members.passwordHash).where { Members.id eq actor.member.id }.forUpdate().single()[Members.passwordHash]
             if (!passwords.verify(current, hash)) throw denied()
             Members.update({ Members.id eq actor.member.id }) { it[passwordHash] = passwords.hash(replacement); it[mustChangePassword] = false; it[failedLogins] = 0; it[lockedUntil] = 0 }
+            SqlLoginThrottle.clear(SqlLoginThrottle.accountKey(actor.member.id, actor.member.username))
             Tokens.deleteWhere { memberId eq actor.member.id }
             audit(actor.teamId, actor.member.id, "member.password_changed", actor.member.id)
         } }
@@ -118,6 +145,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         }
         Members.update({ Members.id eq id }) { it[Members.role] = baseRole(role); it[isOwner] = role == Role.OWNER; it[Members.disabled] = disabled }
         Tokens.deleteWhere { memberId eq id }
+        if (target.role.isAdministrator && (disabled || !role.isAdministrator)) revokeKeysCreatedForOthers(this, principal, id)
         audit(principal.teamId, principal.member.id, "member.updated", id)
         if (target.role != Role.OWNER && role == Role.OWNER) audit(principal.teamId, principal.member.id, "member.owner_granted", id)
         if (target.role == Role.OWNER && role != Role.OWNER) audit(principal.teamId, principal.member.id, "member.owner_removed", id)
@@ -129,10 +157,26 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         access.resetPassword(actor, target, hasOtherReadyOwner(principal.teamId, id))
         val password = Passwords.secret()
         Members.update({ Members.id eq id }) { it[passwordHash] = passwords.hash(password); it[mustChangePassword] = true; it[failedLogins] = 0; it[lockedUntil] = 0 }
+        SqlLoginThrottle.clear(SqlLoginThrottle.accountKey(target.id, target.username))
+        // A reset is how a compromised administrator is recovered: the keys they created for others end with it.
+        if (target.role.isAdministrator) revokeKeysCreatedForOthers(this, principal, id)
         Tokens.deleteWhere { memberId eq id }
         audit(principal.teamId, principal.member.id, "member.password_reset", id)
         NewMember(target.copy(passwordChangeRequired = true), password)
     } }
+    /**
+     * Service keys an administrator created for other members live only as long as that administrator's rights (audit
+     * M4): disabling or demoting them revokes those keys too, each journaled for the key's owner.
+     */
+    private fun revokeKeysCreatedForOthers(c: JdbcTransaction, actor: Principal, creatorId: String) {
+        while (true) {
+            val keys = Tokens.select(Tokens.id, Tokens.memberId).where { (Tokens.createdBy eq creatorId) and (Tokens.memberId neq creatorId) and Tokens.serviceScopes.isNotNull() }
+                .limit(500).map { it[Tokens.id] to it[Tokens.memberId] }
+            if (keys.isEmpty()) return
+            Tokens.deleteWhere { Tokens.id inList keys.map { it.first } }
+            for ((key, owner) in keys) c.audit(actor.teamId, actor.member.id, "service_key.revoked_with_creator", key, related = owner)
+        }
+    }
     private fun getMember(team: String, id: String): Member = Members.selectAll().where { (Members.teamId eq team) and (Members.id eq id) }.singleOrNull()?.let(::member)
         ?: throw TeamFailure("not_found", 404, "Member not found.")
     /** Only the columns a principal needs, so authentication does not depend on columns added to `tokens` for other features. */

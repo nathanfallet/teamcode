@@ -25,6 +25,7 @@ catch (error: ReleaseDownloadException) { throw CliOperationException(error.code
 
 internal class Update : SuspendingCliktCommand(name = "update") {
     private val check by option("--check", help = "Check signed metadata without installing or restarting anything.").flag()
+    private val json by option("--json", help = "With --check: print the result as one JSON object (what TeamCode Desktop reads).").flag()
     private val rollback by option("--rollback", help = "Restore the previous verified local version without network access.").flag()
     private val version by option("--version", help = "Choose a published version, including prereleases or an explicit downgrade.")
     private val bundle by option("--bundle", help = "Use an offline signed release directory.")
@@ -57,10 +58,12 @@ internal class Update : SuspendingCliktCommand(name = "update") {
             if (!me.nathanfallet.teamcode.cli.platform.environment("TEAMCODE_DISABLE_AUTOUPDATE").isNullOrEmpty()) echo("Environment override: background checks are disabled.")
             return@releaseOperation
         }
+        if (json && !check) throw UsageError("--json only applies to --check.")
         if (check) {
             if (rollback || bundle != null || root != null) throw UsageError("--check cannot be combined with --rollback, --bundle or --root.")
             val result = ReleaseClient { configure -> HttpClient { configure(this) } }.use { CheckRelease(it, currentVersion = VERSION)(version) }
-            if (result == null) echo("No stable published release is available. Current version: $VERSION.")
+            if (json) echo(releaseCheckJson(VERSION, result))
+            else if (result == null) echo("No stable published release is available. Current version: $VERSION.")
             else {
                 echo("Current version: ${result.currentVersion}")
                 echo("Verified release: ${result.release.manifest.version} (${result.release.manifest.sourceCommit})")

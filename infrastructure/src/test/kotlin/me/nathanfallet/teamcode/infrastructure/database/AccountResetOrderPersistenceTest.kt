@@ -50,7 +50,8 @@ class AccountResetOrderPersistenceTest {
 
                 val expectedTies = listOf(tieA, tieB).sorted()
                 assertEquals(expectedTies + listOf(pastWeekly, tieC, soon, later) + listOf(never, modelOnly).sorted(), admission.poolAccounts(admin).mapNotNull { it.accountId })
-                assertEquals(admission.poolAccounts(admin).mapNotNull { it.accountId }, accounts.list("default").map { it.id }, "The management listing uses the same order")
+                // The management listing runs the other way (latest reset first, ties by id), and accounts without a known reset come last.
+                assertEquals(listOf(later, soon, tieC, pastWeekly) + expectedTies + listOf(never, modelOnly).sorted(), accounts.list("default").map { it.id }, "The management listing shows the latest reset first")
 
                 // A later observation moves the account; a five-hour reset coming sooner does not move one that has a weekly reset.
                 admission.observe(later, QuotaUpdate(listOf(AccountQuota(later, "five_hour", .2, now + 10, now + hour / 2)), now + 10))

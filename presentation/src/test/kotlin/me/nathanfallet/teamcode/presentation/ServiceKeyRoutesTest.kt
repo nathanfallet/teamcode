@@ -173,6 +173,9 @@ class ServiceKeyRoutesTest {
         assertTrue(forMember.bodyAsText().let { it.contains(""""neverExpires":true""") && it.contains(""""createdBy":""") && it.contains(""""createdByName":""") })
         val memberDashboard = client.get("/dashboard/members/member/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertTrue(memberDashboard.contains("<td>never</td>")); assertTrue(memberDashboard.contains("created by "))
+        // Administrator scopes are offered only on the administrator's own keys (audit M4).
+        assertFalse(memberDashboard.contains("""value="admin:cloud""""), "Not on a key for someone else")
+        assertTrue(dashboard.contains("""value="admin:cloud""""), "On the administrator's own keys")
         assertFalse(client.get("/dashboard/service-keys") { header(HttpHeaders.Cookie, "teamcode_session=member") }.bodyAsText().contains("""name="never""""))
         val sdk = TeamCodeClient("http://localhost", { "admin" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
         try {

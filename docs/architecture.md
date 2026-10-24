@@ -37,7 +37,7 @@ Stateless server replicas and a shared MySQL database. Use HikariCP and reviewed
 
 The local CLI embeds an HTTP loopback-only Ktor CIO server. Outbound HTTPS uses Ktor 3.6 engine defaults (Darwin on macOS, Curl on Linux, WinHttp on Windows); the dependency is shared across native targets. Server CIO and client CIO are different concerns: never assume Native client TLS works merely because the local HTTP server works. The central server uses Netty on JVM.
 
-Native targets: macosArm64, macosX64, linuxX64, linuxArm64, mingwX64. `api` and `client` also target Android, iosArm64 and iosSimulatorArm64 for the [companion app](companion.md). Publish target binaries and checksums; document dynamic library requirements. Compile and test on appropriate hosts, not only JVM. Do not promise static binaries or supported targets before their release artifacts pass verification.
+Native targets: macosArm64, linuxX64, linuxArm64, mingwX64. `api` and `client` also target Android, iosArm64 and iosSimulatorArm64 for the [companion app](companion.md). Publish target binaries and checksums; document dynamic library requirements. Compile and test on appropriate hosts, not only JVM. Do not promise static binaries or supported targets before their release artifacts pass verification.
 
 ## Request lifecycle
 

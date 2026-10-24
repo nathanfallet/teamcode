@@ -39,13 +39,3 @@ class SqlScheduledWork(private val database: Database) {
             }.orderBy(Coalesce(ScheduledWork.lastStartedAt, longLiteral(0)) to SortOrder.ASC, Accounts.id to SortOrder.ASC).limit(8).map { it[Accounts.id] }
     }
 }
-/** Shared by dashboard and CLI login, including unknown usernames. Denials commit their count. */
-internal class SqlLoginBudget(private val database: Database) {
-    suspend fun admit(): Boolean = database.query {
-        val row = LoginBudget.selectAll().where { LoginBudget.id eq 1 }.forUpdate().single()
-        val window = nowMillis() / 60_000
-        val attempts = if (row[LoginBudget.windowNumber] == window) row[LoginBudget.attempts] else 0
-        LoginBudget.update({ LoginBudget.id eq 1 }) { it[windowNumber] = window; it[LoginBudget.attempts] = minOf(attempts + 1, 121) }
-        attempts < 120
-    }
-}

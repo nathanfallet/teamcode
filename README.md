@@ -27,7 +27,7 @@ TeamCode Desktop (macOS, Windows, Linux) follows your team's sessions and runs r
 
    | System | `teamcode ui` installs | Also attached |
    | --- | --- | --- |
-   | macOS (Apple silicon `macos-arm64`, Intel `macos-x64`) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
+   | macOS (Apple silicon `macos-arm64`; Intel Macs are no longer supported, the last release with an Intel build is [1.0.1](https://github.com/nathanfallet/teamcode/releases/tag/1.0.1)) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
    | Windows (`windows-x64`) | `.msi`, installed for the current user in `%LOCALAPPDATA%\TeamCode App` | |
    | Linux (`linux-x64`, `linux-arm64`) | `.tar.gz` of the `TeamCode` folder (`bin/TeamCode` starts it) | `.deb`, `.rpm` (installed in `/opt/teamcode`) |
 
@@ -72,7 +72,7 @@ export TEAMCODE_PUBLIC_URL=https://teamcode.example.org
 java -jar app/build/libs/app-all.jar
 ```
 
-Put an HTTPS reverse proxy in front of port 8080, or use `http://localhost:8080` as the public URL for local development. `TEAMCODE_HOST` defaults to loopback. The public URL must match the browser origin for form protection.
+Put an HTTPS reverse proxy in front of port 8080, or use `http://localhost:8080` as the public URL for local development. `TEAMCODE_HOST` defaults to loopback. The public URL must match the browser origin for form protection. Behind a proxy, set `TEAMCODE_TRUSTED_PROXIES` (Helm: `trustedProxies`) to its addresses so that [sign-in throttling](docs/team-roles.md#sign-in-throttling) sees each client's address.
 
 On an empty database, TeamCode creates owner account `admin` and prints its random temporary password **once** to the bootstrap log. Sign in at `/dashboard` and change it. Restarting does not print or reset it. There is no public registration, email setup or OAuth requirement for team membership. Administrators create users and receive a one-time temporary password to share privately. Password changes and resets revoke every existing session; disabling or changing a member's role also revokes their sessions. The [last ready owner](docs/team-roles.md) cannot be disabled, demoted or have their password reset; administrators cannot grant ownership or change an owner account. Administrators can also create [groups with cumulative budgets and scoped managers](docs/groups.md); managers can pause/resume admission within their groups without changing global roles or quotas.
 
