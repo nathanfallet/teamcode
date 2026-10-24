@@ -26,7 +26,7 @@ fun normalizeOrigin(input: String): String {
     val withScheme = if ("://" in trimmed) trimmed else "https://$trimmed"
     val match = ORIGIN.matchEntire(withScheme) ?: throw CompanionException.InvalidOrigin()
     val scheme = match.groupValues[1].lowercase()
-    val host = match.groupValues[2].lowercase().let { if (it.endsWith('.') && !it.endsWith("..")) it.dropLast(1) else it }
+    val host = match.groupValues[2].lowercase().let { if (it.endsWith('.')) it.dropLast(1) else it }
     val port = match.groupValues[3]
     if (host.isEmpty() || host.startsWith('.') || host.endsWith('.') || ".." in host) throw CompanionException.InvalidOrigin()
     val portNumber = port.drop(1).takeIf { it.isNotEmpty() }?.toInt()

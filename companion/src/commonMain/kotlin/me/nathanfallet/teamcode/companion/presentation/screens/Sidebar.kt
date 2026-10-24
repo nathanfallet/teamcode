@@ -262,6 +262,7 @@ private fun stateColor(state: SessionState, finished: Boolean): Color {
     }
 }
 
+@Suppress("DEPRECATION") // LocalClipboardManager: plain text is all the link needs
 @Composable
 private fun ArtifactRow(artifact: Artifact, state: SidebarState, actions: SidebarActions) {
     val clipboard = LocalClipboardManager.current

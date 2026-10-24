@@ -40,12 +40,14 @@ import androidx.window.core.layout.WindowSizeClass
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 
 /**
- * The window is at least medium-wide (600 dp, Material's breakpoint): a sidebar and a content panel instead of tabs
- * and pushed screens. Read from Compose's window size class, the same on the desktop, iPad and Android tablets.
+ * The window is at least medium-wide (600 dp, Material's breakpoint) and medium-tall (480 dp): a sidebar and a content
+ * panel instead of tabs and pushed screens. A phone in landscape is wide but short, and keeps its tabs. Read from
+ * Compose's window size class, the same on the desktop, iPad and Android tablets.
  */
 @Composable
-fun isWideWindow(): Boolean =
-    currentWindowAdaptiveInfoV2().windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
+fun isWideWindow(): Boolean = currentWindowAdaptiveInfoV2().windowSizeClass.let {
+    it.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) && it.isHeightAtLeastBreakpoint(WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND)
+}
 
 /** Provided by the app: true when the window shows the sidebar layout ([isWideWindow]). Sheets become dialogs then. */
 val LocalWideLayout = compositionLocalOf { false }

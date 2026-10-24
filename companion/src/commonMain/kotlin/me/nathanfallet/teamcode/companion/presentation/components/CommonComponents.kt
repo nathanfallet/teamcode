@@ -148,8 +148,8 @@ fun TcButton(
             .heightIn(min = when { dense && small -> 30.dp; dense -> 36.dp; small -> 44.dp; else -> 48.dp })
             .clip(Radii.control)
             .background(background)
-            .border(1.dp, border, Radii.control)
             .then(if (enabled && !busy) Modifier.hoverHighlight(Radii.control, if (kind == ButtonKind.PRIMARY) colors.onAccent.copy(alpha = 0.10f) else null).handCursor() else Modifier)
+            .border(1.dp, border, Radii.control)
             .clickable(enabled = enabled && !busy, role = Role.Button, onClick = onClick)
             .padding(horizontal = if (small || dense) 12.dp else 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
@@ -184,8 +184,8 @@ fun TcIconButton(
                 .size(if (dense) 32.dp else 44.dp)
                 .clip(shape)
                 .background(when (kind) { IconButtonKind.FILLED -> colors.accent; IconButtonKind.OUTLINED -> colors.panel; IconButtonKind.PLAIN -> Color.Transparent }.dimmed())
-                .border(1.dp, (if (kind == IconButtonKind.OUTLINED) colors.line else Color.Transparent).dimmed(), shape)
                 .then(if (enabled) Modifier.hoverHighlight(shape, if (kind == IconButtonKind.FILLED) colors.onAccent.copy(alpha = 0.10f) else null).handCursor() else Modifier)
+                .border(1.dp, (if (kind == IconButtonKind.OUTLINED) colors.line else Color.Transparent).dimmed(), shape)
                 .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
@@ -268,8 +268,10 @@ fun TcCard(
             .fillMaxWidth()
             .clip(Radii.card)
             .background(colors.panel)
+            // The hover tint goes under the border, which stays visible.
+            .then(if (onClick != null) Modifier.hoverHighlight(Radii.card) else Modifier)
             .border(1.dp, borderColor, Radii.card)
-            .then(if (onClick != null) Modifier.hoverHighlight(Radii.card).handCursor().clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.handCursor().clickable(onClick = onClick) else Modifier)
             .padding(horizontal = padding, vertical = padding - 1.dp),
         verticalArrangement = Arrangement.spacedBy(spacing),
         content = content,
@@ -491,8 +493,12 @@ fun TcTextField(
     val colors = TeamCode.colors
     // The field edits a TextFieldValue to insert a line break where the cursor is; the caller keeps a String.
     var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
-    // Changed from outside (a draft cleared after sending, a form reset): the cursor goes to the end.
-    if (field.text != value) field = TextFieldValue(value, TextRange(value.length))
+    // Changed from outside (a draft cleared after sending, a value trimmed): the caret stays where it was, within the
+    // new text; a field filled from empty (a restored draft) puts it at the end.
+    if (field.text != value) {
+        val caret = if (field.text.isEmpty()) TextRange(value.length) else TextRange(field.selection.start.coerceAtMost(value.length), field.selection.end.coerceAtMost(value.length))
+        field = TextFieldValue(value, caret)
+    }
     val submit by rememberUpdatedState(onSubmit)
     val style = TextStyle(
         color = colors.text,

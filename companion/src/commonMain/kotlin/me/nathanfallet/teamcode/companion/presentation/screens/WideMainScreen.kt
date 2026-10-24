@@ -50,6 +50,7 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionDestination
+import me.nathanfallet.teamcode.companion.presentation.navigation.detailRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionsListRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
@@ -98,15 +99,23 @@ fun WideMainScreen(
     val settingsState by settings.uiState.collectAsStateWithLifecycle()
     val account = homeState.account
 
-    /** Shows [route] as the content panel's first screen: what the sidebar opens replaces what was open. */
-    fun show(route: Any) = detail.navigate(route) {
-        popUpTo(0) { inclusive = true }
-        launchSingleTop = true
+    /**
+     * Shows [route] as the content panel's only screen: what the sidebar opens replaces what was open. Already shown
+     * alone, it stays as it is (its search, filters and scroll kept).
+     */
+    fun show(route: Any) {
+        val stack = detail.currentBackStack.value.filter { it.destination !is androidx.navigation.NavGraph }
+        if (stack.size == 1 && stack.single().detailRouteOrRoot() == route) return
+        detail.navigate(route) {
+            popUpTo(detail.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
     }
 
     LaunchedEffect(pending) {
         if (pending.isEmpty()) return@LaunchedEffect
-        pending.forEach { detail.navigate(it) }
+        // In place of what the panel showed before the window narrowed: never stacked on it.
+        pending.forEachIndexed { index, route -> if (index == 0) show(route) else detail.navigate(route) }
         onPendingShown()
     }
     // Another account: what the panel showed belonged to the previous one.
@@ -138,15 +147,25 @@ fun WideMainScreen(
     val sidebarArtifacts: ArtifactsViewModel? = signedIn?.let { key(it.id) { koinViewModel(key = "sidebar-artifacts-${it.id}") { parametersOf(ArtifactsRoute(it.id)) } } }
     val artifactsState = sidebarArtifacts?.uiState?.collectAsStateWithLifecycle()?.value
     // Back to the window after a while elsewhere: the artifacts may have changed (sessions follow their live feed).
-    var started by remember { mutableStateOf(false) }
+    // A new view model (another account) loads on its own: no second request.
+    var started by remember(sidebarArtifacts) { mutableStateOf(false) }
     LifecycleStartEffect(sidebarArtifacts) {
         if (started) sidebarArtifacts?.reload()
         started = true
         onStopOrDispose { }
     }
+    // Sessions publish artifacts: a turn that finishes may have added one, so the list reloads then.
+    val finishedTurns = sessionsState.list?.finishedTurns.orEmpty()
+    var seenTurns by remember(sidebarArtifacts) { mutableStateOf(finishedTurns) }
+    LaunchedEffect(finishedTurns) {
+        if ((finishedTurns - seenTurns).isNotEmpty()) sidebarArtifacts?.reload()
+        seenTurns = finishedTurns
+    }
 
     val current by detail.currentBackStackEntryAsState()
     val selection = current.selection()
+    // However a session was opened (the panel's list, a link, a new session), the sidebar's row is read.
+    LaunchedEffect(selection) { (selection as? SidebarSelection.Session)?.let { sidebarSessions.opened(it.id) } }
     val now = rememberNow()
 
     val directive = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(currentWindowAdaptiveInfoV2()).copy(horizontalPartitionSpacerSize = 0.dp)
@@ -268,6 +287,13 @@ private fun NavHostController.backFrom(entry: NavBackStackEntry): (() -> Unit)? 
     val stack = currentBackStack.value.filter { it.destination !is androidx.navigation.NavGraph }
     val index = stack.indexOfFirst { it.id == entry.id }
     return if (index > 0) ({ popBackStack(); Unit }) else null
+}
+
+/** The route [this] shows, for the panel's screens and its first one. */
+private fun NavBackStackEntry.detailRouteOrRoot(): Any? = when {
+    destination.hasRoute<SessionsListRoute>() -> SessionsListRoute
+    destination.hasRoute<AccountRoute>() -> AccountRoute
+    else -> detailRoute()
 }
 
 /** The name of the screen under [entry], for its back button. */

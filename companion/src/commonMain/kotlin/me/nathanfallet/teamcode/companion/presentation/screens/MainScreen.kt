@@ -104,11 +104,13 @@ class MainSheets internal constructor(
 fun rememberMainSheets(): MainSheets {
     val koin = getKoin()
     val localHost = remember { koin.getOrNull<LocalHost>() }
-    val sheets = MainSheets(
-        rememberSaveable { mutableStateOf<String?>(null) }, rememberSaveable { mutableStateOf<String?>(null) },
-        rememberSaveable { mutableStateOf<String?>(null) }, rememberSaveable { mutableStateOf<String?>(null) },
-        rememberSaveable { mutableStateOf(false) }, localHost,
-    )
+    val newSessionFor = rememberSaveable { mutableStateOf<String?>(null) }
+    val chooserFor = rememberSaveable { mutableStateOf<String?>(null) }
+    val localSessionFor = rememberSaveable { mutableStateOf<String?>(null) }
+    val localDirectory = rememberSaveable { mutableStateOf<String?>(null) }
+    val switcher = rememberSaveable { mutableStateOf(false) }
+    // One holder for the composition's lifetime: callers key their remembered actions on it.
+    val sheets = remember(localHost) { MainSheets(newSessionFor, chooserFor, localSessionFor, localDirectory, switcher, localHost) }
     LaunchedEffect(localHost) {
         localHost?.takeInitialDirectory()?.let { directory ->
             sheets.localDirectory = directory
