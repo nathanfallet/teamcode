@@ -221,9 +221,15 @@ class ReconcileCloudSessionsUseCase(
                 val profile = store.profileVersion(current.teamId, current.profileId, current.profileVersion)
                     ?: return fail(current, owner, now, CloudProblem("profile_unavailable", "The pinned profile version no longer exists."))
                 val image = current.imageDigest?.let { digest -> current.imageReference.substringBefore('@') + "@" + digest } ?: current.imageReference
-                cluster.createPod(current.clusterId, PodRequest(current.namespace, execution.podName, image, current.workspace.claimName,
-                    labels(current) + (EPOCH_LABEL to execution.epoch.toString()), profile.resources, profile.imagePullSecrets,
-                    mapOf(TEAM_ENV to current.teamId, SESSION_ENV to current.id, EPOCH_ENV to execution.epoch.toString())))
+                try {
+                    cluster.createPod(current.clusterId, PodRequest(current.namespace, execution.podName, image, current.workspace.claimName,
+                        labels(current) + (EPOCH_LABEL to execution.epoch.toString()), profile.resources, profile.imagePullSecrets,
+                        mapOf(TEAM_ENV to current.teamId, SESSION_ENV to current.id, EPOCH_ENV to execution.epoch.toString())))
+                } catch (_: SessionNetworkPolicyRefusedException) {
+                    // Never a pod without its network policy: an administrator must grant the right, then retry.
+                    val problem = CloudProblem("network_policy_refused", "The cluster refused the session network policy: its service account may not manage NetworkPolicies in the session namespace.", true)
+                    return if (first) fail(current, owner, now, problem) else block(current, owner, now, execution, problem)
+                }
                 return now + STEP_MILLIS
             }
             return lost(current, owner, now, execution, "pod_missing")

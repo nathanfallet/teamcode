@@ -98,6 +98,30 @@ topologySpreadConstraints: []
 extraEnv: []
 javaToolOptions: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
 
+# Network access of cloud session pods. Sessions keep full internet access; only cluster-internal and metadata
+# endpoints are blocked. Before every session pod, the server applies the NetworkPolicy `teamcode-sessions` to the
+# session namespace (its service account needs `create` and `patch` on networkpolicies there): no ingress, other
+# session pods included; egress to DNS, to the TeamCode server, and to every public address on every port, but not to
+# RFC 1918, carrier-grade NAT, link-local and cloud metadata (169.254.169.254, fd00:ec2::254), unique-local ranges or
+# the Kubernetes API server. An operator setting on purpose: a dashboard administrator cannot change it.
+# See docs/cloud-sessions.md#session-network-policy.
+cloudSessions:
+  networkPolicy:
+    # false applies no policy (pods are then unrestricted unless the cluster's own policies apply); not recommended.
+    enabled: true
+    # Stricter lockdown, off by default: true removes the internet rule, leaving DNS, the TeamCode server and
+    # `extraEgress` only (git hosts, registries, a proxy must then be listed). Web search, fetch, npm, pip and git stop
+    # working unless allowed there.
+    lockdown: false
+    # More CIDRs to block, for a pod, service or node range outside the private ranges (some IPv6 clusters).
+    blockedCidrs: []
+    # NetworkPolicy egress rules appended verbatim (`to` and `ports` only; an ipBlock may not reach link-local), for
+    # example the ingress controller when session pods reach the server URL through the cluster's own load balancer:
+    # - to:
+    #     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+    #   ports: [{protocol: TCP, port: 443}]
+    extraEgress: []
+
 # Optional single MySQL instance for a self-contained installation, using the tested official 8.4 image.
 # For production HA, disable this and supply an externally managed MySQL 8.4 JDBC URL below.
 mysql:
@@ -105,6 +129,9 @@ mysql:
   image: mysql:8.4
   database: teamcode
   jdbcUrl: ""
+  # Ingress to the bundled MySQL only from the TeamCode server pods of this release, on 3306.
+  networkPolicy:
+    enabled: true
   persistence:
     size: 10Gi
     storageClass: ""

@@ -18,8 +18,9 @@ import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
 
 /**
  * "On this device" through the installed CLI: `teamcode remote start DIRECTORY --json --detach` creates the session
- * (kind `remote`, hosted by the CLI's device) and starts its host in the background, which outlives the app. Sessions
- * here use the CLI's sign-in, so only the CLI's account can start them.
+ * (kind `remote`, hosted by the CLI's device). The device's daemon hosts it, and starts it again when it dies or a
+ * message wakes it; without the daemon the CLI starts its host in the background. Either way the host outlives the app,
+ * which starts no host itself. Sessions here use the CLI's sign-in, so only the CLI's account can start them.
  */
 class DesktopLocalHost(
     private val locator: CliLocator,
@@ -27,7 +28,6 @@ class DesktopLocalHost(
     private val accounts: AccountRepository,
     private val environment: DesktopEnvironment,
     private val appVersion: String,
-    private val supervisor: RemoteHostSupervisor? = null,
     private val installer: CliInstaller? = null,
     private val picker: suspend () -> String? = { pickDirectory(environment.os) },
 ) : LocalHost {
@@ -59,7 +59,6 @@ class DesktopLocalHost(
         val id = sessionId(result.stdout)
         // Exit code 0, or still waiting for its host after the session was created: the session exists either way.
         if (id == null || (result.exitCode != 0 && result.exitCode != null)) throw LocalHostException(explanation(result))
-        supervisor?.started(id, createdEpoch(result.stdout))
         return id
     }
 
@@ -84,11 +83,6 @@ class DesktopLocalHost(
         fun sessionId(stdout: String): String? = stdout.lineSequence().map { it.trim() }.filter { it.startsWith("{") }.firstNotNullOfOrNull { line ->
             try { (json.parseToJsonElement(line) as? JsonObject)?.get("id")?.jsonPrimitive?.content } catch (_: Exception) { null }
         }?.takeIf { Regex("[a-zA-Z0-9-]{1,36}").matches(it) }
-
-        /** The epoch the session was created with (before its host took a newer one). */
-        fun createdEpoch(stdout: String): Int = stdout.lineSequence().map { it.trim() }.filter { it.startsWith("{") }.firstNotNullOfOrNull { line ->
-            try { (json.parseToJsonElement(line) as? JsonObject)?.get("currentEpoch")?.jsonPrimitive?.content?.toIntOrNull() } catch (_: Exception) { null }
-        } ?: 0
 
         /** The CLI's last error line (its own sentence: TeamCode's messages never carry a credential), bounded. */
         fun explanation(result: CliResult): String {

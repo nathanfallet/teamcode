@@ -7,7 +7,7 @@ plugins {
 }
 
 // The desktop app (macOS, Windows, Linux): the shared app of :companion, plus what only makes sense on a member's
-// computer — the CLI's account, finding the CLI, sessions on this device and their supervision, the menu bar icon.
+// computer — the CLI's account, finding the CLI, sessions on this device, the menu bar icon.
 kotlin { jvmToolchain(21) }
 
 // The SHA-256 of the release's install scripts, given by the release pipeline once they are generated

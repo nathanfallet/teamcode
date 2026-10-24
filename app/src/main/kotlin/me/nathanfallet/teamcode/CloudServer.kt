@@ -10,6 +10,7 @@ import me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase
 import me.nathanfallet.teamcode.infrastructure.cloud.ClusterApiException
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesClusterPort
 import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
+import me.nathanfallet.teamcode.infrastructure.cloud.SessionNetworkPolicy
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
@@ -38,7 +39,11 @@ import me.nathanfallet.teamcode.presentation.DeviceDaemonChannel
  * `404` and `cloud.*` capabilities are not advertised. The runner channel and the workers keep serving the sessions that
  * already exist, so turning cloud sessions off never kills a running agent; they stay idle until a runtime is stored.
  */
-class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: String, objects: ArtifactObjectStore? = null) : AutoCloseable {
+class CloudServer(
+    database: Database, cipher: CredentialCipher, publicOrigin: String, objects: ArtifactObjectStore? = null,
+    /** The operator's session network policy, from the deployment variables; never stored or set from the dashboard. */
+    sessionNetwork: SessionNetworkPolicy = SessionNetworkPolicy(),
+) : AutoCloseable {
     val runtime = CloudRuntimeService(SqlCloudRuntimeStore(database), publicOrigin)
     private val store = SqlCloudSessionStore(database)
     private val adminStore = SqlCloudAdminStore(database, cipher)
@@ -48,7 +53,8 @@ class CloudServer(database: Database, cipher: CredentialCipher, publicOrigin: St
         if (!current.enabled) throw CloudConfigurationException("cloud sessions are turned off; queued sessions start once they are on again")
         val image = current.runnerImage ?: throw CloudConfigurationException("no runner image is set; set it on Dashboard → Cloud sessions")
         if (!CloudRuntimeService.usableOrigin(runtime.serverUrl(current))) throw CloudConfigurationException("the callback origin for pods is not HTTPS or is loopback; set the server URL for pods on Dashboard → Cloud sessions")
-        KubernetesPodOptions(serverUrl = runtime.serverUrl(current), runnerImage = image, runnerBinary = current.runnerBinary, workspaceAccessMode = current.workspaceAccessMode)
+        KubernetesPodOptions(serverUrl = runtime.serverUrl(current), runnerImage = image, runnerBinary = current.runnerBinary, workspaceAccessMode = current.workspaceAccessMode,
+            network = sessionNetwork)
     }, workspaceAccessMode = { runtime.current.workspaceAccessMode })
     private val work = SqlScheduledWork(database)
     private val replica = UUID.randomUUID().toString()
