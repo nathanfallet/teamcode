@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -96,8 +98,10 @@ import me.nathanfallet.teamcode.companion.presentation.dictation.DictationNotice
 import me.nathanfallet.teamcode.companion.presentation.dictation.listening
 import me.nathanfallet.teamcode.companion.presentation.dictation.listeningHint
 import me.nathanfallet.teamcode.companion.presentation.dictation.rememberDictation
+import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItem
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptSeparator
+import me.nathanfallet.teamcode.companion.presentation.transcript.indexOfEvent
 import me.nathanfallet.teamcode.companion.presentation.transcript.transcriptItems
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
@@ -377,6 +381,17 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
         // Only when a scroll ends: the first value is no gesture, and a transcript measured before this ran must still be pinned.
         snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling -> if (!scrolling) follow = !listState.canScrollForward }
     }
+    // Older events arrive above the ones being read: the list keeps the member on the same event, whatever the items'
+    // keys became. Compose keeps the first visible item by its key, which is not enough here: the "top" row is the first
+    // visible item of a member who reached the top, and it stays at index 0 while the page lands under it.
+    var shownItems by remember { mutableStateOf<List<TranscriptItem>?>(null) }
+    SideEffect {
+        if (shownItems !== items) {
+            // Following the newest message is decided by the effect above; nothing is read yet when the first page lands.
+            if (!follow) listState.keepReading(items)
+            shownItems = items
+        }
+    }
     // Hidden until the first page is pinned to the bottom: the transcript never shows its top, then jumps.
     var settled by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
@@ -413,6 +428,22 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
             state.pending.forEach { PendingBubble(it, viewModel) }
         }
     }
+}
+
+/**
+ * Called as [items] replace the ones the list was laid out with (before the next measure): puts the list back on the
+ * event its first visible row shows, at the same distance from the top, when that row moved to another index.
+ */
+private fun LazyListState.keepReading(items: List<TranscriptItem>) {
+    val info = layoutInfo
+    // The first row that is an event: the "top" and "bottom" rows have no sequence.
+    val reading = info.visibleItemsInfo.firstOrNull { it.key is Long } ?: return
+    val index = items.indexOfEvent(reading.key as Long)
+    if (index < 0 || index + 1 == reading.index) return
+    // The row stays the first one laid out, at the top edge: a row that started below it (the "top" button above it was
+    // visible) moves up by that button's height at most. A negative offset would anchor the list on rows above it, whose
+    // heights are only known once measured, and it would drift as they settle.
+    requestScrollToItem(index + 1, 0)
 }
 
 /** The bottom dock: what the agent does (Interrupt) or that the session is paused (Resume), then the message field. */

@@ -1,14 +1,22 @@
 package me.nathanfallet.teamcode.companion
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import kotlinx.coroutines.flow.Flow
@@ -40,7 +48,7 @@ class SessionScreenTest {
         override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = emptyFlow()
     }
 
-    private fun viewModel(sessions: FakeSessionRepository): SessionViewModel {
+    private fun viewModel(sessions: FakeSessionRepository, transcripts: TranscriptRepository = this.transcripts): SessionViewModel {
         val features = FakeFeatures()
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
@@ -169,5 +177,41 @@ class SessionScreenTest {
         onNodeWithTag("summary").performClick()
         onNodeWithText("Cloud").assertExists()
         assertEquals(0, hidden)
+    }
+
+    /** A history of [count] agent messages (sequence 1..count) served 50 at a time, newest page first, like the server. */
+    private fun pagedHistory(count: Int, tools: Boolean = false) = object : TranscriptRepository {
+        private val all: List<TranscriptEvent> = (1..count).map { seq ->
+            if (tools && seq % 5 != 0) TranscriptEvent.ToolCall(seq.toLong(), 0, "t$seq", "Bash", "{}", "step $seq", null)
+            else TranscriptEvent.AgentMessage(seq.toLong(), 0, "Message $seq", null)
+        }
+        override suspend fun page(accountId: String, sessionId: String, before: Long?): TranscriptPage {
+            val older = all.filter { before == null || it.seq < before }
+            val events = older.takeLast(50)
+            return TranscriptPage(events, nextBefore = events.first().seq.takeIf { it > 1 }, lastSeq = count.toLong())
+        }
+        override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = emptyFlow()
+    }
+
+    @Test fun loadingEarlierEventsKeepsTheMessageBeingReadWhereItWas() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        val model = viewModel(sessions, pagedHistory(150))
+        setContent { TeamCodeTheme { Box(Modifier.size(900.dp, 700.dp)) { SessionScreen(model, memberId = "m1", onBack = {}) } } }
+        waitUntil { model.uiState.value.loaded }
+        waitForIdle()
+        // The member scrolls up by hand (that is what stops the list following the newest message), to the top of the
+        // loaded page: "Message 101" is its first message, right under the button.
+        onNodeWithTag("transcript").performTouchInput { swipeDown() }
+        waitForIdle()
+        onNodeWithTag("transcript").performScrollToIndex(0)
+        waitForIdle()
+        val listTop = onNodeWithTag("transcript").getBoundsInRoot().top
+        val before = onNodeWithText("Message 101", useUnmergedTree = true).getBoundsInRoot().top
+        onNodeWithText("Load earlier events").performClick()
+        waitUntil { model.uiState.value.transcript.events.size == 100 }
+        waitForIdle()
+        // Same message, nearly the same place: it moves up under the edge the button was at, not fifty messages away.
+        val after = onNodeWithText("Message 101", useUnmergedTree = true).getBoundsInRoot().top
+        assertTrue(after.value in listTop.value..before.value + 1f, "Message 101 moved from $before to $after (list top $listTop)")
     }
 }
