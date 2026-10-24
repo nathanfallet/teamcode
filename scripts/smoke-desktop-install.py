@@ -86,16 +86,17 @@ def require(condition, message):
 
 
 def show_installer_log(temporary):
-    """The Windows installer's verbose log, before the temporary folder holding it is deleted with the run's work."""
+    """What the Windows installer left behind, before the temporary folder holding it is deleted with the run's work."""
     log = temporary / 'teamcode-desktop-msiexec.log'
-    if not log.is_file():
-        return
-    data = log.read_bytes()
-    text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
-    lines = text.splitlines()
-    print(f'--- {log.name}: last 120 of {len(lines)} lines ---\n' + '\n'.join(lines[-120:]) + '\n--- end ---', flush=True)
+    print(f'--- installer diagnostics: {log} exists={log.is_file()}; {temporary} holds {sorted(p.name for p in temporary.iterdir())} ---', flush=True)
+    if log.is_file():
+        data = log.read_bytes()
+        text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
+        lines = text.splitlines()
+        print(f'--- {log.name}: last 120 of {len(lines)} lines ---\n' + '\n'.join(lines[-120:]) + '\n--- end ---', flush=True)
     if system() == 'windows':
-        subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msiexec.exe', '/V'], timeout=60)
+        subprocess.run(['tasklist', '/V', '/FI', 'IMAGENAME eq msiexec.exe'], timeout=60)
+        subprocess.run(['sc', 'query', 'msiserver'], timeout=60)
 
 
 def main():
