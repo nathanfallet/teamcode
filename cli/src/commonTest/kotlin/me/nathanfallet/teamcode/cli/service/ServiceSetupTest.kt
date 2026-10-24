@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktError
 import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.cli.platform.ServicePlatform
+import me.nathanfallet.teamcode.cli.platform.hostOs
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.writePrivateFile
 import okio.Buffer
@@ -80,10 +81,12 @@ class ServiceSetupTest {
             assertEquals(scratch.launcher, settings.executable, "The managed launcher, which follows updates")
             assertEquals(8789, settings.port)
             assertTrue(ownsRegistration(settings))
+            // The registration of another OS than the host's keeps that OS's separator after the home directory.
+            fun portable(path: Any) = path.toString().replace('\\', '/')
             when (os) {
-                "macos" -> assertEquals((scratch.home / "Library" / "LaunchAgents" / "${settings.label}.plist").toString(), settings.registration)
-                "linux" -> assertEquals((scratch.home / ".config" / "systemd" / "user" / "${settings.label}.service").toString(), settings.registration)
-                else -> assertEquals((scratch.home / ".config" / "teamcode" / "service-task.xml").toString(), settings.registration)
+                "macos" -> assertEquals(portable(scratch.home / "Library" / "LaunchAgents" / "${settings.label}.plist"), portable(settings.registration))
+                "linux" -> assertEquals(portable(scratch.home / ".config" / "systemd" / "user" / "${settings.label}.service"), portable(settings.registration))
+                else -> assertEquals(portable(scratch.home / ".config" / "teamcode" / "service-task.xml"), portable(settings.registration))
             }
             assertTrue("starts at login" in setup.line && "teamcode login" in setup.line, setup.line)
             assertFalse(setup.failed)
@@ -290,7 +293,9 @@ class ServiceSetupTest {
             <Arguments>&quot;service&quot; &quot;serve&quot; &quot;--config&quot; &quot;${scratch.config}&quot;</Arguments></Exec></Actions>
             </Task>
         """.trimIndent() + "\n"
-        for ((os, text) in listOf("linux" to linux, "macos" to macos, "windows" to windows)) {
+        // A Windows host's paths (drive, backslashes) are not what a Linux or macOS registration of that time held.
+        val cases = listOf("linux" to linux, "macos" to macos, "windows" to windows).filter { hostOs() != "windows" || it.first == "windows" }
+        for ((os, text) in cases) {
             val registration = when (os) {
                 "linux" -> scratch.home / ".config" / "systemd" / "user" / "$label.service"
                 "macos" -> scratch.home / "Library" / "LaunchAgents" / "$label.plist"
