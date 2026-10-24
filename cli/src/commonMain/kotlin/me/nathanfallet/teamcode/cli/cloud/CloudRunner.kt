@@ -198,7 +198,6 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
             }
             val log: (String) -> Unit = { echo(it, err = true) }
             val workspace = EnvironmentPreparation.WORKSPACE
-            val commands = ShellCommandRunner(EnvironmentPreparation.logFile(workspace, epoch))
             val agentChannel = object : AgentChannel {
                 override suspend fun agent() = client.runnerAgent(RunnerAgentRequest(team, session, epoch))
                 override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
@@ -223,8 +222,9 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 // Again after the proxy, whose engine installs its own handlers.
                 installServiceSignalHandlers()
                 val port = proxy.engine.resolvedConnectors().single().port
-                // HOME is on the workspace volume, so the conversation id survives pauses and new pods.
-                val home = environment("HOME")?.takeIf { it.isNotBlank() } ?: "/workspace/.home"
+                // The runner's state stays on the workspace volume, so the conversation id survives pauses and new pods.
+                // Its HOME does not: the pod gives it a volume of its own, which the agent's container never mounts.
+                val home = "$workspace/$RUNNER_STATE_DIR"
                 // In a session pod the agent runs in its own container under another UID: processes start through the
                 // supervisor there, and the helper in that container fetches git credentials from this process.
                 val processes = environment("TEAMCODE_AGENT_SOCKET")?.takeIf { it.isNotBlank() }?.let { RemoteProcesses(it, scope, log = { message -> echo(message, err = true) }) }
@@ -277,6 +277,14 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                     }, tools = tools, variables = agentVariables,
                     // The pod's `uploads` volume, mounted read-only in the agent's container; an older pod spec has none.
                     uploads = environment("TEAMCODE_UPLOADS_DIR")?.takeIf { it.isNotBlank() }?.let { SessionUploads.pod(it) })
+                // Preparation commands run where the agent runs, never beside the projected token; the runner masks their
+                // output and a writer in the agent's container keeps the log.
+                val logFile = EnvironmentPreparation.logFile(workspace, epoch)
+                val commands: CommandRunner = processes?.let { remote ->
+                    SupervisedCommandRunner(workspace, { command, arguments, overrides, directory -> remote.start(command, arguments, overrides, directory) }) {
+                        ProcessLogSink(remote.start(binary, listOf("cloud", "preparation-log", logFile), emptyMap(), workspace))
+                    }
+                } ?: ShellCommandRunner(logFile)
                 val prepare: suspend () -> Boolean = {
                     val prepared = EnvironmentPreparation(preparation, commands, workspace, log = log).run()
                     // The first write happens here, after registration and before the agent starts, so its first `gh` is authenticated.
@@ -326,3 +334,5 @@ internal suspend fun untilTerminated(log: (String) -> Unit, stopRequested: () ->
 }
 
 private const val SIGNAL_POLL_MILLIS = 100L
+/** The runner's state on the workspace (the agent's conversation id), below `/workspace`; formerly its `HOME`. */
+internal const val RUNNER_STATE_DIR = ".home"

@@ -222,6 +222,7 @@ class CloudTransferPersistenceTest {
         repeat(10) { if (pod !in cluster(ra).podNames()) pass(ra) }
         cluster(ra).start(pod); pass(ra)
         ra.runner.register(teamId, s.id, 2, pod)
+        assertTrue(rb.runner.environment(teamId, s.id, 2).untrustedWorkspace, "The recipient's runner treats the former owner's workspace as untrusted")
         rb.runner.heartbeat(teamId, s.id, 2, ready = true)
         assertEquals(READY, ra.store.find(teamId, s.id)!!.state)
         assertEquals(listOf(2 to to, 1 to from), ra.sessions.executions(t.recipient, s.id).map { it.epoch to it.ownerId })
@@ -469,6 +470,7 @@ class CloudTransferPersistenceTest {
         val pod = CloudSessionService.podName(created.id, 1)
         ra.cluster.start(pod); pass(ra)
         ra.runner.register(owner.teamId, created.id, 1, pod)
+        assertFalse(rb.runner.environment(owner.teamId, created.id, 1).untrustedWorkspace, "A new session's workspace is its owner's")
         rb.runner.heartbeat(owner.teamId, created.id, 1, ready = true)
         return ra.store.find(owner.teamId, created.id)!!.also { assertEquals(READY, it.state) }
     }

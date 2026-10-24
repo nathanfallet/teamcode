@@ -45,7 +45,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
         val prepared = channel.runner.environment(pod.teamId, pod.sessionId, pod.epoch)
         call.respond(RunnerEnvironmentView(prepared.spec.view(), RunnerGitIdentityView(prepared.git.name, prepared.git.email),
-            prepared.variables.values, prepared.variables.unavailable, prepared.github.view()))
+            prepared.variables.values, prepared.variables.unavailable, prepared.github.view(), prepared.untrustedWorkspace))
     }
     post(RUNNER_PATH + "preparation") {
         val body = call.jsonBody<RunnerPreparationRequest>()

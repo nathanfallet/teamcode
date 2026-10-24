@@ -13,8 +13,15 @@ class CloudPreparationTest {
         repositories = listOf(CloudRepositoryView("https://github.com/example/api.git", "api", "main", "task-1")),
         workingDirectory = "api", setup = CloudSetupView(create = listOf("npm ci"), start = listOf("npm run db:migrate")),
     )
-    private fun environment(github: RunnerGitHubView = RunnerGitHubView("linked", token, 1)) =
-        RunnerEnvironmentView(recipe, RunnerGitIdentityView("octo", "42+octo@users.noreply.github.com"), mapOf("NPM_TOKEN" to "npm_synthetic_value"), emptyList(), github)
+    private fun environment(github: RunnerGitHubView = RunnerGitHubView("linked", token, 1), untrusted: Boolean = false) =
+        RunnerEnvironmentView(recipe, RunnerGitIdentityView("octo", "42+octo@users.noreply.github.com"), mapOf("NPM_TOKEN" to "npm_synthetic_value"), emptyList(), github, untrusted)
+    /** A `git` command without the hardening options every preparation `git` carries. */
+    private fun List<String>.plain(): List<String> {
+        if (firstOrNull() != "git") return this
+        val rest = drop(1).toMutableList()
+        while (rest.firstOrNull() == "-c") { rest.removeAt(0); rest.removeAt(0) }
+        return listOf("git") + rest
+    }
 
     private class Calls(val prepared: () -> RunnerEnvironmentView) : PreparationCalls {
         val phases = mutableListOf<String>()
@@ -45,9 +52,16 @@ class CloudPreparationTest {
         assertTrue(EnvironmentPreparation(calls, shell, sleep = {}).run())
         val commands = shell.commands()
         assertEquals(listOf("git", "config", "--global", "user.name", "octo"), commands[1])
-        assertEquals(listOf("git", "clone", "--", "https://github.com/example/api.git", "/workspace/.teamcode/clone-0"), commands[4])
-        assertEquals(listOf("git", "checkout", "--quiet", "main", "--"), commands[5]); assertEquals("/workspace/.teamcode/clone-0", shell.calls.first { it.arguments == commands[5] }.directory)
-        assertEquals(listOf("git", "switch", "--quiet", "-c", "task-1"), commands[6])
+        assertEquals(listOf("git", "clone", "--", "https://github.com/example/api.git", "/workspace/.teamcode/clone-0"), commands[4].plain())
+        assertEquals(listOf("git", "checkout", "--quiet", "main", "--"), commands[5].plain()); assertEquals("/workspace/.teamcode/clone-0", shell.calls.first { it.arguments == commands[5] }.directory)
+        assertEquals(listOf("git", "switch", "--quiet", "-c", "task-1"), commands[6].plain())
+        // Whatever configuration the workspace or the agent's home holds: no hook, no fsmonitor, HTTPS only, no
+        // submodule, and only our credential helper, added back after every other one is reset.
+        val options = commands[4].drop(1).takeWhile { it != "clone" }.chunked(2).map { it.last() }
+        assertEquals(listOf("core.hooksPath=/dev/null", "core.fsmonitor=false", "protocol.allow=never", "protocol.https.allow=always",
+            "fetch.recurseSubmodules=false", "submodule.recurse=false", "credential.helper=", "credential.https://github.com.helper=${EnvironmentPreparation.CREDENTIAL_HELPER}"), options)
+        assertTrue(commands.none { it.getOrNull(2) == EnvironmentPreparation.RESET_HOME || it.getOrNull(2) == EnvironmentPreparation.RESET_REPOSITORY },
+            "A workspace only its owner worked on is never reset")
         assertEquals(listOf("/workspace/.teamcode/clone-0", "/workspace/api"), commands[7].takeLast(2))
         val setup = shell.calls.filter { it.arguments.take(2) == listOf("/bin/sh", "-c") && it.arguments.size == 3 }
         assertEquals(listOf("npm ci", "npm run db:migrate"), setup.map { it.arguments[2] })
@@ -73,16 +87,79 @@ class CloudPreparationTest {
         assertTrue(EnvironmentPreparation(calls, resumed, sleep = {}).run())
         val commands = resumed.commands()
         assertTrue(commands.none { it.first() == "rm" || it.getOrNull(1) == "clone" || it.getOrNull(1) == "checkout" }, "Work on the workspace is never re-cloned or reset")
-        assertTrue(listOf("git", "fetch", "--prune", "origin") in commands)
+        assertTrue(listOf("git", "fetch", "--prune", "origin") in commands.map { it.plain() })
+        assertTrue("core.hooksPath=/dev/null" in commands.single { it.plain() == listOf("git", "fetch", "--prune", "origin") }, "The fetch runs no hook of the repository")
         assertEquals(listOf("npm run db:migrate"), resumed.calls.filter { it.arguments.size == 3 && it.arguments[0] == "/bin/sh" }.map { it.arguments[2] }, "Create steps ran once")
         assertNull(resumed.calls.first().environment["GH_TOKEN"], "Without a linked account no GitHub credential is configured")
         assertNull(resumed.calls.first().environment["GIT_CONFIG_COUNT"])
         assertEquals(listOf("configuring_git", "fetching_repositories", "running_setup"), calls.phases)
     }
 
+    @Test fun aTransferredWorkspaceIsResetBeforeAnythingRunsWithTheNewOwnersCredentials() = runTest {
+        val calls = Calls { environment(untrusted = true) }
+        val shell = Shell(mutableSetOf("/workspace/api", "/workspace/api/.git"))
+        assertTrue(EnvironmentPreparation(calls, shell, sleep = {}).run())
+        val commands = shell.commands()
+        assertEquals(listOf("/bin/sh", "-c", EnvironmentPreparation.RESET_HOME, "sh", "/workspace/.agent-home", "/workspace/.teamcode/quarantine/agent-home"), commands.first(),
+            "The agent's home is reset first, before the Git identity is written there")
+        val reset = commands.indexOfFirst { it.getOrNull(2) == EnvironmentPreparation.RESET_REPOSITORY }
+        val fetch = commands.indexOfFirst { it.plain().take(2) == listOf("git", "fetch") }
+        assertTrue(reset in 1 until fetch, "Each repository's configuration is rebuilt before its first fetch")
+        assertEquals(listOf("/workspace/.teamcode/quarantine/repository-0", "https://github.com/example/api.git"), commands[reset].takeLast(2), "From the recipe's URL")
+        assertEquals("/workspace/api", shell.calls.first { it.arguments == commands[reset] }.directory)
+        assertEquals(listOf("securing_workspace", "configuring_git", "securing_workspace", "fetching_repositories", "running_setup"), calls.phases)
+
+        // A repository the reset refuses (its .git is a link or a gitfile) stops the preparation before any fetch.
+        val refused = Calls { environment(untrusted = true) }
+        val linked = Shell(mutableSetOf("/workspace/api", "/workspace/api/.git")) { if (it.getOrNull(2) == EnvironmentPreparation.RESET_REPOSITORY) 3 else 0 }
+        assertFalse(EnvironmentPreparation(refused, linked, sleep = {}).run())
+        assertEquals(listOf(RunnerPreparationFailureView("workspace", 0, 3)), refused.failures)
+        assertTrue(linked.commands().none { it.plain().take(2) == listOf("git", "fetch") } && linked.calls.none { it.arguments.size == 3 && it.arguments[0] == "/bin/sh" })
+        // A failed home reset stops it before the Git identity.
+        val home = Calls { environment(untrusted = true) }
+        val failing = Shell(mutableSetOf("/workspace/api")) { if (it.getOrNull(2) == EnvironmentPreparation.RESET_HOME) 1 else 0 }
+        assertFalse(EnvironmentPreparation(home, failing, sleep = {}).run())
+        assertEquals(listOf(RunnerPreparationFailureView("workspace", null, 1)), home.failures)
+        assertEquals(1, failing.commands().size)
+    }
+
+    @Test fun inAPodEveryCommandRunsThroughTheSupervisorAndOnlyMaskedOutputReachesTheLog() = runTest {
+        class Started(val command: String, val arguments: List<String>, val environment: Map<String, String?>, val directory: String)
+        val started = mutableListOf<Started>()
+        val logged = mutableListOf<String>()
+        var closed = 0
+        val output = listOf("cloning with $token", "done")
+        val runner = SupervisedCommandRunner("/workspace", { command, arguments, environment, directory ->
+            started += Started(command, arguments, environment, directory)
+            object : me.nathanfallet.teamcode.cli.platform.AgentProcess {
+                val lines = ArrayDeque(output)
+                override suspend fun writeLine(line: String) = false
+                override suspend fun readLine(maxLine: Int) = lines.removeFirstOrNull()
+                override fun closeInput() {}
+                override fun exitCode() = if (lines.isEmpty()) 7 else null
+                override suspend fun stop(graceMillis: Long) = 7
+            }
+        }) {
+            object : PreparationLogSink {
+                override suspend fun append(line: String) { logged += line }
+                override suspend fun close() { closed++ }
+            }
+        }
+        assertEquals(7, runner.run(listOf("git", "fetch", "origin"), "/workspace/api", mapOf("GH_TOKEN" to token), setOf(token)))
+        val call = started.single()
+        assertEquals("/bin/sh", call.command); assertEquals(listOf("git", "fetch", "origin"), call.arguments.takeLast(3))
+        assertEquals("/workspace/api", call.arguments[3], "The wrapper changes into the command's directory")
+        assertEquals(token, call.environment["GH_TOKEN"])
+        assertEquals(listOf("cloning with [REDACTED]", "done"), logged, "The token never reaches the log")
+        assertEquals(1, closed)
+        // The supervisor not answering is a failed start, reported like a missing command.
+        assertEquals(127, SupervisedCommandRunner("/workspace", { _, _, _, _ -> throw IllegalStateException("The agent container did not answer.") }) { null }
+            .run(listOf("true"), "/workspace", emptyMap(), emptySet()))
+    }
+
     @Test fun aFailedStepIsReportedAsFieldsAndNothingRunsAfterIt() = runTest {
         val calls = Calls { environment() }
-        val shell = Shell { if (it.getOrNull(1) == "clone") 128 else 0 }
+        val shell = Shell { if (it.plain().getOrNull(1) == "clone") 128 else 0 }
         assertFalse(EnvironmentPreparation(calls, shell, sleep = {}).run())
         assertEquals(listOf(RunnerPreparationFailureView("clone", 0, 128)), calls.failures)
         assertTrue(shell.commands().none { it.getOrNull(1) == "-c" && it.size == 3 }, "No setup command runs after a failed clone")

@@ -65,4 +65,23 @@ class CloudEnvironmentRulesTest {
         assertTrue(CloudEnvironmentRules.message(PreparationFailure(PreparationStep.SETUP_START, 0, 1), spec, 1).startsWith("Setup command 1 (start) failed"))
         assertNull(PreparationStep.parse("rm -rf /"))
     }
+
+    @Test fun aWorkspaceIsUntrustedUntilItsOwnerPreparedItSinceAnotherMemberWorkedOnIt() {
+        fun execution(epoch: Int, owner: String?, ready: Boolean = true) =
+            CloudExecution("s1", epoch, "tc-s1-e$epoch", ExecutionState.ENDED, createdAt = 0, runnerReady = ready, ownerId = owner)
+        fun untrusted(owner: String, epoch: Int, vararg executions: CloudExecution, truncated: Boolean = false) =
+            CloudEnvironmentRules.untrustedWorkspace(owner, "a", epoch, executions.toList(), truncated)
+        assertFalse(untrusted("a", 1), "A new session's first execution prepares a fresh workspace")
+        assertFalse(untrusted("a", 3, execution(2, "a"), execution(1, null)), "The owner's own workspace, from before transfers existed too")
+        assertTrue(untrusted("b", 2, execution(1, "a")), "The recipient's first execution after a transfer")
+        assertTrue(untrusted("b", 2, execution(1, null)), "An execution without an owner ran for the creator")
+        assertTrue(untrusted("b", 3, execution(2, "b", ready = false), execution(1, "a")), "A recipient execution that never got ready did not finish the reset")
+        assertFalse(untrusted("b", 4, execution(3, "b"), execution(2, "b", ready = false), execution(1, "a")), "Trusted again once the recipient prepared it")
+        assertTrue(untrusted("a", 4, execution(3, "b"), execution(2, "a"), execution(1, "a")), "Given back to the former owner after someone else's work")
+        assertFalse(untrusted("a", 2, execution(2, "b"), execution(1, "a")), "The current execution itself never counts")
+        assertTrue(untrusted("b", 101, *Array(100) { execution(100 - it, "b", ready = false) }, truncated = true), "A truncated history is not proof")
+        assertTrue(CloudEnvironmentRules.message(PreparationFailure(PreparationStep.WORKSPACE, 0), spec, 2).contains("Git configuration of api"))
+        assertEquals(PreparationStep.WORKSPACE, PreparationStep.parse("workspace"))
+        assertTrue("securing_workspace" in CloudEnvironmentRules.PHASES)
+    }
 }

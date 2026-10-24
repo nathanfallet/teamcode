@@ -4,12 +4,14 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.subcommands
+import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.SystemExit
 import okio.FileSystem
 import okio.Path.Companion.toPath
+import me.nathanfallet.teamcode.cli.cloud.PreparationLogFile
 import me.nathanfallet.teamcode.cli.cloud.untilTerminated
 import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.installServiceSignalHandlers
@@ -77,3 +79,17 @@ internal class CloudEnvironment : SuspendingCliktCommand(name = "environment") {
     }
 }
 
+/**
+ * `teamcode cloud preparation-log FILE`: appends the lines of standard input to the preparation log, keeping its last
+ * 4 MiB. The runner starts it in the agent's container, so the file on the workspace is opened by the agent's UID and
+ * never by the runner, and sends it the output of each preparation command with known secrets already masked.
+ */
+internal class CloudPreparationLog : SuspendingCliktCommand(name = "preparation-log") {
+    override val hiddenFromHelp = true
+    override fun help(context: Context) = "Append standard input to the preparation log (started by the runner, not by hand)."
+    private val file by argument("FILE")
+    override suspend fun run() {
+        val log = PreparationLogFile(file)
+        try { generateSequence(::readlnOrNull).forEach(log::append) } finally { log.close() }
+    }
+}

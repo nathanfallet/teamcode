@@ -370,8 +370,14 @@ class RunnerEnvironmentView(
     val variables: Map<String, String> = emptyMap(),
     val unavailableVariables: List<String> = emptyList(),
     val github: RunnerGitHubView,
+    /**
+     * Another member worked on this workspace since the owner's last prepared execution (a transfer). The runner then
+     * treats the workspace as untrusted input: it resets the agent's home and each repository's Git configuration and
+     * hooks before running anything with the owner's credentials.
+     */
+    val untrustedWorkspace: Boolean = false,
 ) {
-    override fun toString() = "RunnerEnvironmentView(repositories=${environment.repositories.size}, variables=${variables.keys.sorted()}, github=${github.status})"
+    override fun toString() = "RunnerEnvironmentView(repositories=${environment.repositories.size}, variables=${variables.keys.sorted()}, github=${github.status}, untrustedWorkspace=$untrustedWorkspace)"
 }
 /** A failed step as structured fields only; the server writes the message, and command output never leaves the pod. */
 @Serializable

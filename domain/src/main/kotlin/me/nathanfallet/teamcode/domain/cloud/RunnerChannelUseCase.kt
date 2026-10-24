@@ -89,7 +89,11 @@ class RunnerChannelUseCase(
         val access = github.userAccess(teamId, owner.id)
         if (spec.requireGitHub && access !is GitHubAccess.Linked)
             fail(teamId, sessionId, epoch, if (access is GitHubAccess.NotLinked) "The owner has not linked GitHub, which this profile requires." else "The owner's GitHub access is unavailable right now.", retryable = true)
-        return PreparedEnvironment(spec, CloudEnvironmentRules.gitIdentity(owner.username, access, spec), resolved, access)
+        // Content another member left on the workspace (a transfer) must not run with this owner's credentials unchecked.
+        val executions = store.executions(teamId, sessionId)
+        val untrusted = CloudEnvironmentRules.untrustedWorkspace(owner.id, session.createdBy.effectiveMemberId, epoch, executions,
+            truncated = executions.size >= EXECUTION_HISTORY_LIMIT)
+        return PreparedEnvironment(spec, CloudEnvironmentRules.gitIdentity(owner.username, access, spec), resolved, access, untrusted)
     }
 
     /**
@@ -104,7 +108,7 @@ class RunnerChannelUseCase(
             if (failure != null) {
                 val spec = current.environment
                 val count = when (failure.step) {
-                    PreparationStep.CLONE, PreparationStep.CHECKOUT, PreparationStep.FETCH -> spec.repositories.size
+                    PreparationStep.CLONE, PreparationStep.CHECKOUT, PreparationStep.FETCH, PreparationStep.WORKSPACE -> spec.repositories.size
                     PreparationStep.SETUP_CREATE -> spec.setup.create.size
                     PreparationStep.SETUP_START -> spec.setup.start.size
                     else -> 0
@@ -150,5 +154,7 @@ class RunnerChannelUseCase(
         const val DRAIN_MILLIS = 10 * 60_000L
         /** Steps that may succeed on another attempt (network, GitHub). Setup commands and paths fail the same way again. */
         private val RETRYABLE_STEPS = setOf(PreparationStep.CLONE, PreparationStep.FETCH, PreparationStep.RUNNER)
+        /** [CloudSessionStore.executions] returns at most this many executions, newest first. */
+        const val EXECUTION_HISTORY_LIMIT = 100
     }
 }

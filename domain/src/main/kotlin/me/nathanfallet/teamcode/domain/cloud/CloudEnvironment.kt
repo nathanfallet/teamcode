@@ -83,14 +83,19 @@ fun interface GitHubAccessSource {
 
 data class GitIdentity(val name: String, val email: String)
 
-/** What the runner receives to prepare one execution. Holds secrets: never log or persist it. */
-class PreparedEnvironment(val spec: CloudEnvironmentSpec, val git: GitIdentity, val variables: CloudVariables, val github: GitHubAccess) {
-    override fun toString() = "PreparedEnvironment(repositories=${spec.repositories.size}, variables=$variables, github=${github::class.simpleName})"
+/**
+ * What the runner receives to prepare one execution. Holds secrets: never log or persist it. [untrustedWorkspace] is
+ * true when another member worked on the workspace since the owner's last prepared execution (a transfer): the runner
+ * then resets the agent's home and the repositories' Git configuration before anything runs with the owner's credentials.
+ */
+class PreparedEnvironment(val spec: CloudEnvironmentSpec, val git: GitIdentity, val variables: CloudVariables, val github: GitHubAccess,
+                          val untrustedWorkspace: Boolean = false) {
+    override fun toString() = "PreparedEnvironment(repositories=${spec.repositories.size}, variables=$variables, github=${github::class.simpleName}, untrustedWorkspace=$untrustedWorkspace)"
 }
 
 enum class PreparationStep(val wire: String) {
     GIT_IDENTITY("git_identity"), CLONE("clone"), CHECKOUT("checkout"), FETCH("fetch"), WORKING_DIRECTORY("working_directory"),
-    SETUP_CREATE("setup_create"), SETUP_START("setup_start"), RUNNER("runner");
+    SETUP_CREATE("setup_create"), SETUP_START("setup_start"), WORKSPACE("workspace"), RUNNER("runner");
     companion object { fun parse(value: String) = entries.find { it.wire == value } }
 }
 /** A failed step, reported by the runner as structured fields only: no command output ever reaches the server. */
@@ -99,7 +104,7 @@ data class PreparationFailure(val step: PreparationStep, val index: Int? = null,
 object CloudEnvironmentRules {
     const val PREPARATION_FAILED = "preparation_failed"
     /** Progress phases a runner may report while preparing; `phase` stays an open string for clients. */
-    val PHASES = setOf("configuring_git", "cloning_repositories", "fetching_repositories", "running_setup")
+    val PHASES = setOf("securing_workspace", "configuring_git", "cloning_repositories", "fetching_repositories", "running_setup")
     const val MAX_REPOSITORIES = 16
     const val MAX_COMMANDS = 16
     const val MAX_COMMAND_LENGTH = 4096
@@ -199,7 +204,24 @@ object CloudEnvironmentRules {
             PreparationStep.WORKING_DIRECTORY -> "The working directory ${spec.workingDirectory ?: "."} does not exist after cloning."
             PreparationStep.SETUP_CREATE -> "Setup command ${(failure.index ?: 0) + 1} (create) failed$exit.$log"
             PreparationStep.SETUP_START -> "Setup command ${(failure.index ?: 0) + 1} (start) failed$exit.$log"
+            PreparationStep.WORKSPACE -> "Resetting the agent's home and the Git configuration of ${repository?.path ?: "the workspace"} after a transfer failed$exit. A repository whose .git is not a plain directory is refused.$log"
             PreparationStep.RUNNER -> "The runner could not prepare the environment."
         }
+    }
+
+    /**
+     * Whether the workspace of the execution [epoch] must be treated as untrusted input: another member's execution ran
+     * on it after the last execution of [ownerId] that reached `ready`. [executions] are the session's, newest first and
+     * possibly truncated; an execution recorded before transfers existed ([CloudExecution.ownerId] null) ran for the
+     * session's creator. When the history is cut before an answer is found, the workspace is untrusted.
+     */
+    fun untrustedWorkspace(ownerId: String, creatorId: String, epoch: Int, executions: List<CloudExecution>, truncated: Boolean): Boolean {
+        for (execution in executions.sortedByDescending { it.epoch }) {
+            if (execution.epoch >= epoch) continue
+            val ranFor = execution.ownerId ?: creatorId
+            if (ranFor != ownerId) return true
+            if (execution.runnerReady) return false
+        }
+        return truncated
     }
 }

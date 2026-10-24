@@ -112,7 +112,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
 
     override suspend fun executions(teamId: String, sessionId: String): List<CloudExecution> = database.query {
         (CloudExecutions innerJoin CloudSessions).selectAll().where { (CloudSessions.id eq sessionId) and (CloudSessions.teamId eq teamId) }
-            .orderBy(CloudExecutions.epoch to SortOrder.DESC).limit(100).map(::readExecution)
+            .orderBy(CloudExecutions.epoch to SortOrder.DESC).limit(RunnerChannelUseCase.EXECUTION_HISTORY_LIMIT).map(::readExecution)
     }
     override suspend fun execution(sessionId: String, epoch: Int): CloudExecution? = database.query {
         CloudExecutions.selectAll().where { (CloudExecutions.sessionId eq sessionId) and (CloudExecutions.epoch eq epoch) }.singleOrNull()?.let(::readExecution)

@@ -112,7 +112,7 @@ class KubernetesClusterPortTest {
 
         assertNotEquals(runner.uid(), agent.uid(), "Two UIDs: the agent cannot read the runner's files")
         assertTrue(agent["securityContext"]!!.jsonObject["runAsNonRoot"]!!.jsonPrimitive.boolean)
-        assertEquals(setOf("workspace", "runner", "runner-token", "sockets", "gh-config", "uploads"), runner.mounts().keys)
+        assertEquals(setOf("workspace", "runner", "runner-token", "sockets", "gh-config", "uploads", "runner-home"), runner.mounts().keys)
         assertEquals(setOf("workspace", "runner", "sockets", "gh-config", "uploads"), agent.mounts().keys, "The agent never mounts the projected token")
         val volumes = spec["volumes"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
         assertEquals("Memory", volumes.getValue("sockets")["emptyDir"]!!.jsonObject["medium"]!!.jsonPrimitive.content)
@@ -134,6 +134,9 @@ class KubernetesClusterPortTest {
         // Nothing of the runner channel reaches the agent's container.
         assertTrue(agent.env().keys.none { it.startsWith("TEAMCODE_CLOUD_") || it == "TEAMCODE_SERVER_URL" }, "No runner coordinates: ${agent.env().keys}")
         assertEquals("/workspace/.agent-home", agent.env()["HOME"]); assertNotEquals(runner.env()["HOME"], agent.env()["HOME"])
+        // The runner's HOME is a volume of its own, off the workspace the agent writes.
+        assertEquals("/var/teamcode/runner-home", runner.env()["HOME"]); assertEquals("/var/teamcode/runner-home", runner.mounts()["runner-home"])
+        assertNotNull(volumes.getValue("runner-home")["emptyDir"])
         assertEquals(listOf("/opt/teamcode/teamcode", "cloud", "agent-supervisor"), agent["command"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertEquals(runner["image"], agent["image"], "The same image: the agent's toolchain is the team's")
         assertFailsWith<IllegalArgumentException> { KubernetesPodOptions("https://teamcode.example.test", "runner:1", runAsUser = 1000, agentRunAsUser = 1000) }

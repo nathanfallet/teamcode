@@ -137,11 +137,15 @@ private class CloudTransfersShow : SuspendingCliktCommand(name = "show") {
 }
 
 private class CloudTransfersAccept : SuspendingCliktCommand(name = "accept") {
-    override fun help(context: Context) = "Accept a session offered to you. The session pauses, then becomes yours."
+    override fun help(context: Context) = "Accept a session offered to you. The session pauses, then becomes yours. Its workspace is the former owner's work: " +
+        "TeamCode resets the agent's settings and the repositories' Git configuration, but scripts and project files in the repositories run with your credentials, so review them."
     private val id by argument()
     private val resume by option(help = "Resume the session for you once it is yours, or not (default: what the offer asked for).").switch("--resume" to true, "--no-resume" to false)
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")
-    override suspend fun run() { echo(sdk(loadConfig()).use { it.acceptCloudTransfer(id, resume, onBehalfOf) }.line()) }
+    override suspend fun run() {
+        echo(sdk(loadConfig()).use { it.acceptCloudTransfer(id, resume, onBehalfOf) }.line())
+        echo(ACCEPTED_WORKSPACE_NOTICE, err = true)
+    }
 }
 
 private class CloudTransfersDecline : SuspendingCliktCommand(name = "decline") {
@@ -156,3 +160,7 @@ private class CloudTransfersCancel : SuspendingCliktCommand(name = "cancel") {
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")
     override suspend fun run() { echo(sdk(loadConfig()).use { it.cancelCloudTransfer(id, onBehalfOf) }.line()) }
 }
+
+/** Said on every acceptance: what the recipient takes over runs with the recipient's credentials. */
+internal const val ACCEPTED_WORKSPACE_NOTICE = "The workspace is the former owner's work. Before it runs as you, TeamCode resets the agent's settings and " +
+    "each repository's Git configuration and hooks; scripts and project files in the repositories are not reviewed: check them before you run them."

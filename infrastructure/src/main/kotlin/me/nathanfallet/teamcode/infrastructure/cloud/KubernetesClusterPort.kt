@@ -232,7 +232,8 @@ class KubernetesClusterPort(
                         env("TEAMCODE_AGENT_SOCKET", AGENT_SOCKET)
                         env("TEAMCODE_CREDENTIAL_SOCKET", CREDENTIAL_SOCKET)
                         env("TEAMCODE_GH_CONFIG_DIR", GH_CONFIG_DIR)
-                        env("HOME", "$WORKSPACE_DIR/.home")
+                        // Off the workspace: the agent writes there, and nothing it writes may steer the runner.
+                        env("HOME", RUNNER_HOME)
                         env("TEAMCODE_UPLOADS_DIR", UPLOADS_DIR)
                         request.env.toSortedMap().forEach { (name, value) -> env(name, value) }
                     }
@@ -249,6 +250,7 @@ class KubernetesClusterPort(
                         addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
                         addJsonObject { put("name", GH_CONFIG_VOLUME); put("mountPath", GH_CONFIG_DIR) }
                         addJsonObject { put("name", UPLOADS_VOLUME); put("mountPath", UPLOADS_DIR) }
+                        addJsonObject { put("name", RUNNER_HOME_VOLUME); put("mountPath", RUNNER_HOME) }
                     }
                 }
                 addJsonObject {
@@ -291,6 +293,8 @@ class KubernetesClusterPort(
                 // The files members attach to messages: on the node's disk (not memory, which counts against the
                 // containers' limits), gone with the pod. The runner keeps what it writes under the limit.
                 addJsonObject { put("name", UPLOADS_VOLUME); putJsonObject("emptyDir") { put("sizeLimit", UPLOADS_SIZE_LIMIT) } }
+                // The runner's HOME, mounted in its container only and gone with the pod.
+                addJsonObject { put("name", RUNNER_HOME_VOLUME); putJsonObject("emptyDir") { put("sizeLimit", "16Mi") } }
                 addJsonObject {
                     put("name", "runner-token")
                     putJsonObject("projected") { putJsonArray("sources") { addJsonObject { putJsonObject("serviceAccountToken") {
@@ -446,7 +450,13 @@ class KubernetesClusterPort(
         const val UPLOADS_VOLUME = "uploads"
         /** Above the runner's own bound of 768 MiB per execution: going over the limit would evict the pod. */
         const val UPLOADS_SIZE_LIMIT = "1Gi"
-        /** The agent's `HOME`, created by the agent's UID on the workspace volume (the runner's lives in `.home`). */
+        /**
+         * The runner's `HOME`: an `emptyDir` only its container mounts. It used to be `/workspace/.home`, which the
+         * agent can write; the runner's state (the conversation id) stays there, read and written by the runner only.
+         */
+        const val RUNNER_HOME = "/var/teamcode/runner-home"
+        const val RUNNER_HOME_VOLUME = "runner-home"
+        /** The agent's `HOME`, created by the agent's UID on the workspace volume (the runner's state lives in `.home`). */
         const val AGENT_HOME = "$WORKSPACE_DIR/.agent-home"
         private const val RUNNER_CPU = "250m"
         private const val RUNNER_MEMORY = "256Mi"

@@ -601,7 +601,9 @@ private fun ApiCatalog.cloudTransfers() {
     post("/api/v1/cloud/transfers/{transfer}/accept") {
         operationId = "acceptCloudTransfer"; tag(ApiTags.CLOUD_TRANSFERS)
         summary = "Accept an offered session"
-        description = "The recipient accepts; `resume` overrides what the offer asked for."
+        description = "The recipient accepts; `resume` overrides what the offer asked for. The workspace comes as the former owner " +
+            "left it: on the recipient's first execution the agent's home and each repository's Git configuration and hooks are " +
+            "reset, but files in the working tree (package scripts, project settings) run with the recipient's credentials."
         parameters {
             pathId("transfer", "The transfer's identifier.")
             onBehalfOf()
