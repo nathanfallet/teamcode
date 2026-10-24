@@ -23,7 +23,7 @@ class CloudRoutesTest {
         val sessions = linkedMapOf<String, CloudSession>()
         val keys = mutableMapOf<String, Pair<String, String>>()
         var clock = 1_000L
-        val profile = CloudProfile("profile-id", "default", "toolchain", 1, CloudProfileSpec("cluster-id", "teamcode", "registry.example/toolchain:1"), setOf(colleague.id), 1, 1)
+        var profile = CloudProfile("profile-id", "default", "toolchain", 1, CloudProfileSpec("cluster-id", "teamcode", "registry.example/toolchain:1"), setOf(colleague.id), 1, 1)
         /** A profile assigned to nobody: only administrators may use it. */
         val reserved = CloudProfile("reserved-id", "default", "reserved", 1, profile.spec, emptySet(), 1, 1)
         override suspend fun now() = clock++
@@ -822,6 +822,11 @@ class CloudRoutesTest {
         // A session the owner created stays as before: the owner's token, with nothing to turn on.
         val own = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Own", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
         assertEquals(CloudGitHubAccess.OWNER, own.githubAccess)
+        // A profile that requires GitHub cannot work without the owner's consent: it is refused up front, not failed later.
+        store.profile = store.profile.copy(spec = store.profile.spec.copy(environment = CloudEnvironmentSpec(requireGitHub = true)))
+        assertEquals("github_owner_consent", assertFailsWith<TeamFailure> {
+            sessions.create(Principal(admin, "admin-session", "default"), colleague.id, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null)
+        }.code)
     }
 
     @Test fun runnerReadsTheVariablesOfTheExecutionOwnerOnlyWhileTheSessionRuns() = testApplication {

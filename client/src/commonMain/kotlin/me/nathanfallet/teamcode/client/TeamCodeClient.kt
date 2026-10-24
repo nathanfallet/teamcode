@@ -313,6 +313,9 @@ class TeamCodeClient(
     suspend fun pauseCloudSession(id: String, force: Boolean = false, onBehalfOf: String? = null): CloudSessionView =
         cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
+    /** Chooses whose instructions the agent follows with the owner's GitHub token (`cloud.sessions.github-access.v1`); owner only. */
+    suspend fun setCloudGitHubAccess(id: String, access: String): CloudSessionView =
+        identifier(id).let { request("/api/v1/cloud/sessions/$id/github", HttpMethod.Put, CloudGitHubAccessRequest(access)) }
     /** Starts a remote session's next execution on this device (`cloud.sessions.remote.v1`); the host then uses the runner channel. */
     suspend fun hostCloudSession(id: String): CloudHostView = cloudAction("/api/v1/cloud/sessions/$id/host", id, null, null).body()
     suspend fun deleteCloudSession(id: String, onBehalfOf: String? = null) { cloudAction("/api/v1/cloud/sessions/$id", id, onBehalfOf, null, HttpMethod.Delete) }

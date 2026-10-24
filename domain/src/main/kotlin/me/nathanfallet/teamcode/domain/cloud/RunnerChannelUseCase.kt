@@ -86,7 +86,10 @@ class RunnerChannelUseCase(
         val unreadable = missing.filter { it in resolved.unavailable }
         if (unreadable.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables of the owner are unavailable right now: ${unreadable.joinToString(", ")}.", retryable = true)
         if (missing.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables are not assigned to the owner: ${missing.joinToString(", ")}.")
-        val access = github.userAccess(teamId, owner.id)
+        if (session.githubAccess == CloudGitHubAccess.NONE && spec.requireGitHub)
+            fail(teamId, sessionId, epoch, "GitHub access is off for this session, which was created on its owner's behalf; the owner turns it on with " +
+                "teamcode cloud github ${session.id} --access owner.", retryable = true)
+        val access = if (session.githubAccess == CloudGitHubAccess.NONE) GitHubAccess.NotLinked else github.userAccess(teamId, owner.id)
         if (spec.requireGitHub && access !is GitHubAccess.Linked)
             fail(teamId, sessionId, epoch, if (access is GitHubAccess.NotLinked) "The owner has not linked GitHub, which this profile requires." else "The owner's GitHub access is unavailable right now.", retryable = true)
         // Content another member left on the workspace (a transfer) must not run with this owner's credentials unchecked.

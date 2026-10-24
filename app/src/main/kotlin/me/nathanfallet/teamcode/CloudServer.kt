@@ -65,7 +65,9 @@ class CloudServer(
     private val conversationStore = SqlCloudConversationStore(database)
     // Groups do not exist in TeamCode yet; a group directory plugs in here when they land.
     private val access = CloudAccessService(conversationStore, store, CloudGroupDirectory.NONE)
-    private val conversationService = CloudConversationService(conversationStore, store, access)
+    // A linked owner's agent holds their GitHub token: only the owner instructs it unless they share the session (audit M2).
+    private val conversationService = CloudConversationService(conversationStore, store, access,
+        githubLinked = { teamId, memberId -> githubStore.link(teamId, memberId) != null })
     private val daemonStore = SqlDeviceDaemonStore(database)
     val sessions = CloudSessionService(store, access = access, initialMessages = conversationService, daemons = daemonStore)
     /** Members' device daemons: presence, published folders and the queue of sessions to host. */

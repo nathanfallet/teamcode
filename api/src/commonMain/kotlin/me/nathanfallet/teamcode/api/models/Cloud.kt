@@ -88,6 +88,11 @@ data class CloudSessionView(
     val kind: String = CloudSessionKinds.CLOUD,
     /** Where a remote session runs; null for cloud sessions. */
     val host: CloudSessionHostView? = null,
+    /**
+     * Whose instructions an agent holding the owner's GitHub token follows (`cloud.sessions.github-access.v1`): `owner`,
+     * `shared` or `none`. Null from a server without the feature.
+     */
+    val githubAccess: String? = null,
 )
 object CloudSessionKinds {
     const val CLOUD = "cloud"
@@ -169,6 +174,9 @@ data class CreateCloudSessionRequest(
 data class CloudHostView(val teamId: String, val epoch: Int, val session: CloudSessionView)
 @Serializable
 data class PauseCloudSessionRequest(val force: Boolean = false)
+/** `PUT /cloud/sessions/{id}/github` (`cloud.sessions.github-access.v1`): `owner`, `shared` or `none`. Owner only. */
+@Serializable
+data class CloudGitHubAccessRequest(val access: String)
 
 @Serializable
 data class CloudExecutionView(

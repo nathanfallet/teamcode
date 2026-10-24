@@ -31,6 +31,7 @@ internal fun CloudSession.view() = CloudSessionView(
     environment = environment.view(), kind = kind.wire,
     host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire, it.folderId) },
     waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
+    githubAccess = githubAccess.wire.takeIf { kind != CloudSessionKind.REMOTE },
 )
 /** The profile id and image reference of a remote session, which has neither. */
 internal const val REMOTE_PLACEHOLDER = "remote"
@@ -214,6 +215,11 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
         post("/sessions/{id}/pause") {
             val input = if (call.request.contentType().withoutParameters() == ContentType.Application.Json) call.jsonBody<PauseCloudSessionRequest>() else PauseCloudSessionRequest()
             call.respond(HttpStatusCode.Accepted, sessions.pause(call.principal, call.onBehalfOf(), call.id(), input.force).view())
+        }
+        put("/sessions/{id}/github") {
+            val input = call.jsonBody<CloudGitHubAccessRequest>()
+            val access = CloudGitHubAccess.parse(input.access) ?: throw TeamFailure("invalid_github_access", 400, "Use access owner, shared or none.")
+            call.respond(sessions.setGitHubAccess(call.principal, call.onBehalfOf(), call.id(), access).view())
         }
         // A remote session's host (teamcode remote) starts its next execution here, from the session's device.
         post("/sessions/{id}/host") {

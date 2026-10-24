@@ -64,11 +64,14 @@ class CompleteCloudTransferUseCase(
         val problems = recipients.problems(s, transfer.toMemberId)
         if (problems.isNotEmpty()) return fail(s, transfer, owner, now, problems.first().copy(message = "The recipient is no longer eligible: ${problems.joinToString { it.code }}."))
         val settings = store.settings(s.teamId)
-        val next = if (transfer.resume) s.copy(ownerId = transfer.toMemberId, state = RESUMING, phase = "waiting_capacity", desiredState = DesiredState.RUNNING,
+        // The former owner's choice to share their GitHub access does not carry over to the recipient's token.
+        val github = if (s.githubAccess == CloudGitHubAccess.SHARED) CloudGitHubAccess.OWNER else s.githubAccess
+        val next = (if (transfer.resume) s.copy(ownerId = transfer.toMemberId, state = RESUMING, phase = "waiting_capacity", desiredState = DesiredState.RUNNING,
             transferId = null, pausedAt = null, expiresAt = null, resumeBlocked = null, failure = null, updatedAt = now)
             // The recipient gets the full paused retention: a session about to expire is not handed over for deletion.
             else s.copy(ownerId = transfer.toMemberId, state = PAUSED, phase = null, desiredState = DesiredState.PAUSED, transferId = null,
-                expiresAt = settings.pausedRetentionDays?.let { now + it * ReconcileCloudSessionsUseCase.DAY_MILLIS }, failure = null, updatedAt = now)
+                expiresAt = settings.pausedRetentionDays?.let { now + it * ReconcileCloudSessionsUseCase.DAY_MILLIS }, failure = null, updatedAt = now))
+            .copy(githubAccess = github)
         return when (transfers.complete(s, next, transfer, owner, settings.maxRetainedSessionsPerMember)) {
             is TransferCompletion.Completed, TransferCompletion.Conflict -> now
             TransferCompletion.RecipientAtLimit -> fail(s, transfer, owner, now, CloudProblem("cloud_session_limit", "The recipient already retains the maximum number of cloud sessions."))

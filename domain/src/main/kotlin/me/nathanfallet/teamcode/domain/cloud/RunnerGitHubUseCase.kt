@@ -19,6 +19,8 @@ class RunnerGitHubUseCase(private val sessions: CloudSessionStore, private val g
         if (session.state !in STATES) throw TeamFailure("github_unavailable", 409, "The session cannot use GitHub in its current state.")
         val owner = sessions.member(teamId, execution.ownerId ?: session.ownerId)
         if (owner == null || owner.disabled) return GitHubAccess.NotLinked
+        // A session created on someone's behalf runs another member's instructions until its owner allows GitHub.
+        if (session.githubAccess == CloudGitHubAccess.NONE) return GitHubAccess.NotLinked
         return github.userAccess(teamId, owner.id)
     }
 

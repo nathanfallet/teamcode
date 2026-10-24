@@ -466,6 +466,16 @@ Clone, fetch and GitHub failures are `retryable`; setup, path and `workspace` (a
 
 Each member links their own GitHub account to the team's GitHub App. The link gives **only that member's cloud sessions** Git and `gh` access, with the member's own permissions intersected with the App installation's; it serves no other purpose (the skill catalog is published from CI, not synchronized from GitHub). The token is handed out on one path only: `POST /cloud/runner/environment`, to the registered runner of the current epoch of a session the member owns, resolved for the current owner on every call. No other API returns it, and it is never logged, journaled or written to the session.
 
+### Who instructs an agent that holds the token
+
+The agent does what its messages say, including running `gh auth token` or printing the credential it was handed. Anyone who can message a session can therefore use, or read, its owner's token. Each session has a **GitHub access** mode, shown as `githubAccess` in the session view and in `teamcode cloud show` (`cloud.sessions.github-access.v1`):
+
+- `owner` (the default for a session the member created): the owner's token; while the owner has linked GitHub, only the owner sends messages, uploads files and answers permission requests (`403 github_owner_only` for everyone else, cloud administrators and team-scope `message` grants included). Interrupts stay open to everyone with `message`: they only stop a turn. An owner without a GitHub link has no token to expose, and the session behaves as before.
+- `shared`: the owner's token, instructed by everyone the access policy lets message the session. The owner chooses it, knowing they lend their GitHub access.
+- `none`: no GitHub token (`not_linked` for the runner, no token at preparation). A session **created on someone's behalf** (`TeamCode-On-Behalf-Of`) starts here: its first instructions are the creator's, not the owner's. Creating one on a profile that requires GitHub is refused (`422 github_owner_consent`); the owner creates that session themselves.
+
+`PUT /cloud/sessions/{id}/github` with `{"access": "owner" | "shared" | "none"}`, or `teamcode cloud github SESSION --access MODE`, changes it. Only the owner, signed in or with their own key, never on their behalf (`403 github_owner_only`); another member gets `404`. Turning access off (`none`) waits for a pause (`409 session_not_paused`), because a running agent keeps a token it already received until it expires; turning it on or sharing applies from the next token renewal and the next message. A transfer resets `shared` to `owner`: the former owner's choice does not lend the recipient's token. Each change is journaled as `cloud.session.github_access_changed`. Sessions that existed before this version are `owner`, including those created on someone's behalf. Remote sessions run on the owner's device with its own credentials and have no mode.
+
 ### The team's App (administrator)
 
 Create a GitHub App owned by the organization:

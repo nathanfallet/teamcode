@@ -19,6 +19,19 @@ enum class CloudSessionKind(val wire: String) {
     companion object { fun parse(value: String) = entries.single { it.wire == value } }
 }
 /**
+ * Who may instruct an agent that holds the owner's GitHub token (audit M2). The runner serves the token of the member
+ * the execution runs for, so anyone who can send that agent a message can make it use, or print, the token.
+ */
+enum class CloudGitHubAccess(val wire: String) {
+    /** The owner's token; only the owner sends messages and answers permission requests while the owner has a GitHub link. */
+    OWNER("owner"),
+    /** The owner's token; everyone the access policy lets message the session may instruct the agent. Chosen by the owner. */
+    SHARED("shared"),
+    /** No GitHub token. A session created on someone's behalf starts here until its owner turns access on. */
+    NONE("none");
+    companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
+/**
  * The device a remote session runs on; [device] is null once the device was removed or when it was not read with the
  * session. [online]: the current execution is registered and not ended (the reconciler ends it 90 s after the host's
  * last heartbeat), with [lastHeartbeatAt] from that execution; both are only read with the session.
@@ -155,6 +168,8 @@ data class CloudSession(
     val kind: CloudSessionKind = CloudSessionKind.CLOUD,
     /** Set for remote sessions only. */
     val host: CloudSessionHost? = null,
+    /** Whose instructions an agent holding the owner's GitHub token follows ([CloudGitHubAccess]); not used by remote sessions. */
+    val githubAccess: CloudGitHubAccess = CloudGitHubAccess.OWNER,
 ) {
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
