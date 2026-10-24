@@ -206,7 +206,7 @@ destination.write_bytes(pathlib.Path(os.environ['TEAMCODE_TEST_BUNDLE'], name).r
         result = self.run_installer(TEAMCODE_INSTALL_BUNDLE=str(self.bundle), TEAMCODE_TEST_SYSTEM='Darwin', TEAMCODE_TEST_MACHINE='x86_64')
         self.assertNotEqual(0, result.returncode); self.assertFalse(self.execution.exists())
         self.assertIn(b'macOS on Intel is no longer supported', result.stderr)
-        self.assertIn(b'1.0.0', result.stderr)
+        self.assertIn(b'1.0.1', result.stderr)
         result = self.run_installer(TEAMCODE_TEST_UID='0')
         self.assertNotEqual(0, result.returncode); self.assertFalse(self.execution.exists())
         result = self.run_installer(TEAMCODE_TEST_MACHINE='riscv64')
