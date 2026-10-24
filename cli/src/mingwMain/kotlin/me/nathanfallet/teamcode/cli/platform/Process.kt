@@ -39,7 +39,8 @@ private fun resolve(command: String, arguments: List<String>): Pair<String, List
 
 actual suspend fun runInteractiveProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, quiet: Boolean): Int {
     val (application, actualArguments) = resolve(command, arguments)
-    val line = (listOf(application) + actualArguments).joinToString(" ", transform = ::quoteWindowsArgument)
+    val line = if (application.substringAfterLast('\\').equals("msiexec.exe", ignoreCase = true)) msiexecCommandLine(application, actualArguments)
+        else (listOf(application) + actualArguments).joinToString(" ", transform = ::quoteWindowsArgument)
     if (line.length >= 32_767) throw ProcessStartException(ProcessStartException.Reason.TooLong, command)
     val child = memScoped {
         val values = mutableMapOf<String, Pair<String, String>>()
