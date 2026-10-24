@@ -27,15 +27,16 @@ class ReleaseClientTest {
             assertNull(request.headers[HttpHeaders.Cookie])
             assertEquals("identity", request.headers[HttpHeaders.AcceptEncoding])
             assertEquals("TeamCode release client", request.headers[HttpHeaders.UserAgent])
-            when (request.url.host) {
-                "api.github.com" -> {
+            assertEquals("api.github.com", request.url.host)
+            when (request.url.encodedPath) {
+                "/repos/nathanfallet/teamcode/releases/latest" -> {
                     assertEquals("application/vnd.github+json", request.headers[HttpHeaders.Accept])
-                    respond("""{"draft":false,"prerelease":false,"tag_name":"1.2.3","assets":[{"browser_download_url":"https://attacker.example/secret"}]}""")
+                    // Only the asset ids are read from the JSON, never a download URL it names.
+                    respond("""{"draft":false,"prerelease":false,"tag_name":"1.2.3","assets":[{"id":7,"name":"manifest.json","browser_download_url":"https://attacker.example/secret"},{"id":8,"name":"manifest.sig"}]}""")
                 }
                 else -> {
-                    assertEquals("github.com", request.url.host)
-                    assertTrue(request.url.encodedPath.startsWith("/nathanfallet/teamcode/releases/download/1.2.3/"))
-                    respond(if (request.url.encodedPath.endsWith("manifest.json")) " RAW MANIFEST BYTES " else " RAW SIGNATURE BYTES ")
+                    assertEquals("application/octet-stream", request.headers[HttpHeaders.Accept])
+                    respond(if (request.url.encodedPath.endsWith("/assets/7")) " RAW MANIFEST BYTES " else " RAW SIGNATURE BYTES ")
                 }
             }
         }.use { transport ->
@@ -43,8 +44,24 @@ class ReleaseClientTest {
             val downloaded = transport.metadata("1.2.3")
             assertEquals(" RAW MANIFEST BYTES ", downloaded.manifest.decodeToString())
             assertEquals(" RAW SIGNATURE BYTES ", downloaded.signature.decodeToString())
-            assertEquals(3, calls.size)
+            // The latest release's JSON already listed its assets: no second lookup.
+            assertEquals(listOf("latest", "assets/7", "assets/8").map { "https://api.github.com/repos/nathanfallet/teamcode/releases/$it" }, calls)
         }
+    }
+
+    @Test fun anExplicitVersionIsLookedUpByItsExactTagOnce() = runBlocking {
+        val paths = mutableListOf<String>()
+        client(releaseServer("1.0.0-alpha.1", listOf("manifest.json", "manifest.sig")) { request -> paths += request.url.encodedPath; respond("bytes") }).use { transport ->
+            transport.metadata("1.0.0-alpha.1")
+            transport.metadata("1.0.0-alpha.1")
+            assertEquals(4, paths.size)
+        }
+        for (body in listOf("""{"draft":false,"tag_name":"1.0.1","assets":[]}""", """{"draft":true,"tag_name":"1.0.0","assets":[]}""",
+            """{"draft":false,"tag_name":"1.0.0"}""", """{"draft":false,"tag_name":"1.0.0","assets":[{"id":"1","name":"manifest.json"}]}""", "not JSON")) {
+            client { respond(body) }.use { transport -> failure("release_discovery_invalid") { transport.metadata("1.0.0") } }
+        }
+        client { respond("", HttpStatusCode.NotFound) }.use { transport -> failure("release_http_404") { transport.metadata("1.0.0") } }
+        client(releaseServer("1.0.0", listOf("manifest.json")) { respond("bytes") }).use { transport -> failure("release_http_404") { transport.metadata("1.0.0") } }
     }
 
     @Test fun invalidDiscoveryAndDraftPrereleaseOrRedirectResultsCannotChooseAVersion() = runBlocking {
@@ -64,37 +81,47 @@ class ReleaseClientTest {
 
     @Test fun githubCdnRedirectsAreBoundedAndNeverCarryAuthentication() = runBlocking {
         var requests = 0
-        client { request ->
+        client(releaseServer("1.0.0-alpha.1", listOf("manifest.json", "manifest.sig")) { request ->
             requests++
             assertNull(request.headers[HttpHeaders.Authorization])
             assertNull(request.headers[HttpHeaders.Cookie])
-            if (request.url.host == "github.com") respond("", HttpStatusCode.Found,
+            if (request.url.host == "api.github.com") respond("", HttpStatusCode.Found,
                 headersOf(HttpHeaders.Location, "https://release-assets.githubusercontent.com/assets/file?sig=PRIVATE_CDN_QUERY"))
-            else respond("raw bytes")
-        }.use { transport ->
+            else {
+                // GitHub's REST headers stay on api.github.com.
+                assertNull(request.headers["X-GitHub-Api-Version"])
+                respond("raw bytes")
+            }
+        }).use { transport ->
             assertEquals("raw bytes", transport.metadata("1.0.0-alpha.1").manifest.decodeToString())
             assertEquals(4, requests)
         }
         requests = 0
-        client { requests++; respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://objects.githubusercontent.com/loop")) }.use { transport ->
+        client(releaseServer("1.0.0", listOf("manifest.json", "manifest.sig")) { requests++; respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://objects.githubusercontent.com/loop")) }).use { transport ->
             failure("release_redirect_invalid") { transport.metadata("1.0.0") }
             assertEquals(6, requests)
         }
     }
 
     @Test fun redirectsCannotDowngradeOrLeaveTheReleaseOrigins() = runBlocking {
-        for (address in listOf("http://github.com/file", "https://attacker.example/", "https://release-assets.githubusercontent.com.attacker.example/",
-            "https://name:password@release-assets.githubusercontent.com/file", "https://github.com/elsewhere", "https://github.com:444/elsewhere",
+        for (address in listOf("http://release-assets.githubusercontent.com/file", "https://attacker.example/", "https://release-assets.githubusercontent.com.attacker.example/",
+            "https://name:password@release-assets.githubusercontent.com/file", "https://github.com/elsewhere", "https://api.github.com/elsewhere",
+            "https://release-assets.githubusercontent.com:444/file",
             "//objects.githubusercontent.com/file", "https://objects.githubusercontent.com/file#fragment", "https://objects.githubusercontent.com/file\r\nsecret")) {
             var requests = 0
-            client { requests++; respond("", HttpStatusCode.TemporaryRedirect, headersOf(HttpHeaders.Location, address)) }.use { transport ->
+            client(releaseServer("1.0.0", listOf("manifest.json", "manifest.sig")) { requests++; respond("", HttpStatusCode.TemporaryRedirect, headersOf(HttpHeaders.Location, address)) }).use { transport ->
                 failure("release_redirect_invalid") { transport.metadata("1.0.0") }
                 assertEquals(1, requests, address)
             }
         }
+        // A release lookup is never redirected.
+        client { respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://release-assets.githubusercontent.com/file")) }.use { transport ->
+            failure("release_redirect_invalid") { transport.metadata("1.0.0") }
+        }
     }
 
     @Test fun metadataBoundsApplyToHeadersAndStreamingBodiesWithoutTrustingContentLength() = runBlocking {
+        val names = listOf("manifest.json", "manifest.sig")
         for ((body, headers) in listOf(
             "x" to headersOf(HttpHeaders.ContentLength, "16385"),
             "x" to headersOf(HttpHeaders.ContentLength, "invalid"),
@@ -102,28 +129,28 @@ class ReleaseClientTest {
             "xx" to headersOf(HttpHeaders.ContentLength, "1"),
             "x".repeat(16385) to Headers.Empty,
             "x" to headersOf(HttpHeaders.ContentEncoding, "gzip"),
-        )) client { respond(body, headers = headers) }.use { transport ->
+        )) client(releaseServer("1.0.0", names) { respond(body, headers = headers) }).use { transport ->
             failure(if (headers[HttpHeaders.ContentEncoding] != null) "release_encoding_invalid" else "release_size_invalid") { transport.metadata("1.0.0") }
         }
         var calls = 0
-        client { calls++; respond(if (calls == 1) "{}" else "x".repeat(2049)) }.use { transport ->
+        client(releaseServer("1.0.0", names) { calls++; respond(if (calls == 1) "{}" else "x".repeat(2049)) }).use { transport ->
             failure("release_size_invalid") { transport.metadata("1.0.0") }
         }
-        client { respond("x".repeat(256 * 1024 + 1)) }.use { transport -> failure("release_size_invalid") { transport.latestVersion() } }
+        client { respond("x".repeat(1024 * 1024 + 1)) }.use { transport -> failure("release_size_invalid") { transport.latestVersion() } }
     }
 
     @Test fun exactBinarySizeIsStreamedWithoutDeliveringOverflowBytes() = runBlocking {
         val received = mutableListOf<Byte>()
-        client { request ->
-            assertEquals("/nathanfallet/teamcode/releases/download/1.0.0/teamcode-1.0.0-windows-x64.exe", request.url.encodedPath)
+        client(releaseServer("1.0.0", listOf("teamcode-1.0.0-linux-x64", "teamcode-1.0.0-windows-x64.exe")) { request ->
+            assertEquals("/repos/nathanfallet/teamcode/releases/assets/2", request.url.encodedPath)
             respond("binary")
-        }.use { transport ->
+        }).use { transport ->
             transport.binary("1.0.0", "windows-x64", 6) { data, size -> received.addAll(data.take(size)) }
             assertEquals("binary", received.toByteArray().decodeToString())
         }
         for (content in listOf("short", "too long")) {
             received.clear()
-            client { respond(content) }.use { transport ->
+            client(releaseServer("1.0.0", listOf("teamcode-1.0.0-linux-x64")) { respond(content) }).use { transport ->
                 failure("release_size_invalid") { transport.binary("1.0.0", "linux-x64", 6) { data, size -> received.addAll(data.take(size)) } }
                 assertTrue(received.size <= 6)
             }
@@ -140,14 +167,46 @@ class ReleaseClientTest {
             val error = assertFailsWith<ReleaseDownloadException> { transport.metadata("1.0.0") }
             assertEquals("release_http_403", error.code)
             assertFalse(error.toString().contains("PRIVATE"))
+            assertNull(error.detail)
         }
-        client { throw IllegalStateException("PRIVATE_CDN_QUERY") }.use { transport ->
+        client { throw IllegalStateException("Failed for https://release-assets.githubusercontent.com/a?sig=PRIVATE_CDN_QUERY") }.use { transport ->
             val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
-            assertEquals("release_network_failure", error.code)
+            assertEquals("release_response_invalid", error.code)
             assertFalse(error.toString().contains("PRIVATE"))
+            assertEquals("IllegalStateException: Failed for https://release-assets.githubusercontent.com/…", error.detail)
             assertNull(error.cause)
         }
     }
+
+    @Test fun transportFailuresKeepTheirFamilyAndAShortCause() = runBlocking {
+        for ((thrown, code) in listOf(
+            java.net.UnknownHostException("api.github.com: Name or service not known") to "release_dns_failure",
+            javax.net.ssl.SSLHandshakeException("PKIX path building failed") to "release_tls_failure",
+            java.net.ConnectException("Connection refused") to "release_connection_failure",
+            java.net.SocketTimeoutException("Read timed out") to "release_timeout",
+            CurlIllegalStateException("Connection failed for request. Reason: Received HTTP code 407 from proxy after CONNECT") to "release_proxy_failure",
+            io.ktor.utils.io.ClosedByteChannelException(null) to "release_connection_closed",
+            CurlIllegalStateException("Connection failed for request. Reason: Send failure") to "release_network_failure",
+            IllegalStateException("Header line length limit exceeded") to "release_response_invalid",
+            UnsupportedOperationException("unexpected") to "release_unexpected_failure",
+        )) client { throw thrown }.use { transport ->
+            val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
+            assertEquals(code, error.code, thrown.toString())
+            assertEquals(thrown.message?.let { "${thrown::class.simpleName}: $it" } ?: thrown::class.simpleName, error.detail)
+        }
+        client { respond("", HttpStatusCode.Forbidden, headersOf("x-ratelimit-remaining" to listOf("0"), "x-ratelimit-reset" to listOf("${System.currentTimeMillis() / 1000 + 600}"))) }.use { transport ->
+            val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
+            assertEquals("release_rate_limited", error.code)
+            assertEquals("GitHub API rate limit reached, it resets in about 10 minutes", error.detail)
+        }
+        client { respond("", HttpStatusCode.TooManyRequests, headersOf("x-ratelimit-remaining", "0")) }.use { transport -> failure("release_rate_limited") { transport.latestVersion() } }
+        assertTrue(releaseFailureDetail(IllegalStateException("x".repeat(500))).length <= 200)
+        assertEquals("DarwinHttpRequestException: Error Domain=NSURLErrorDomain Code=-1003 \"A server with the specified hostname could not be found.\"",
+            releaseFailureDetail(DarwinHttpRequestException("Error Domain=NSURLErrorDomain Code=-1003 \"A server with the specified hostname could not be found.\" UserInfo={NSErrorFailingURLKey=https://release-assets.githubusercontent.com/a?sig=SECRET}")))
+    }
+
+    private class DarwinHttpRequestException(message: String) : Exception(message)
+    private class CurlIllegalStateException(message: String) : IllegalStateException(message)
 
     @Test fun cancellingAnUpdateCheckCancelsWorkInsteadOfBecomingAConnectivityError() = runBlocking {
         val entered = CompletableDeferred<Unit>()
@@ -161,12 +220,14 @@ class ReleaseClientTest {
     }
 
     @Test fun desktopMetadataPackagesAndInstallScriptsUseTheirCanonicalPinnedPaths() = runBlocking {
+        val names = listOf("desktop-manifest.json", "desktop-manifest.sig", "teamcode-desktop-1.2.3-linux-x64.tar.gz", "install.sh", "install.ps1")
         val paths = mutableListOf<String>()
-        client { request ->
+        client(releaseServer("1.2.3", names) { request ->
             paths += request.url.encodedPath
             assertNull(request.headers[HttpHeaders.Authorization])
-            respond(if (request.url.encodedPath.endsWith(".tar.gz")) "package" else "bytes of ${request.url.encodedPath.substringAfterLast('/')}")
-        }.use { transport ->
+            val name = names[request.url.encodedPath.substringAfterLast('/').toInt() - 1]
+            respond(if (name.endsWith(".tar.gz")) "package" else "bytes of $name")
+        }).use { transport ->
             val metadata = transport.desktopMetadata("1.2.3")
             assertEquals("bytes of desktop-manifest.json", metadata.manifest.decodeToString())
             assertEquals("bytes of desktop-manifest.sig", metadata.signature.decodeToString())
@@ -176,13 +237,12 @@ class ReleaseClientTest {
             assertEquals("bytes of install.sh", transport.installScript("1.2.3", "install.sh").decodeToString())
             assertEquals("bytes of install.ps1", transport.installScript("1.2.3", "install.ps1").decodeToString())
         }
-        val base = "/nathanfallet/teamcode/releases/download/1.2.3/"
-        assertEquals(listOf("desktop-manifest.json", "desktop-manifest.sig", "teamcode-desktop-1.2.3-linux-x64.tar.gz", "install.sh", "install.ps1").map { base + it }, paths)
+        assertEquals((1..5).map { "/repos/nathanfallet/teamcode/releases/assets/$it" }, paths)
     }
 
     @Test fun desktopDownloadsRefuseOtherNamesOversizedPackagesAndInexactBodies() = runBlocking {
         var requests = 0
-        client { requests++; respond("x".repeat(256 * 1024 + 1)) }.use { transport ->
+        client(releaseServer("1.2.3", listOf("install.sh")) { requests++; respond("x".repeat(256 * 1024 + 1)) }).use { transport ->
             failure("release_asset_invalid") { transport.installScript("1.2.3", "../install.sh") }
             failure("release_asset_invalid") { transport.installScript("1.2.3", "manifest.json") }
             failure("release_version_invalid") { transport.installScript("latest", "install.sh") }
@@ -191,7 +251,7 @@ class ReleaseClientTest {
             assertEquals(0, requests)
             failure("release_size_invalid") { transport.installScript("1.2.3", "install.sh") }
         }
-        client { respond("one byte more") }.use { transport ->
+        client(releaseServer("1.2.3", listOf("teamcode-desktop-1.2.3-macos-arm64.dmg", "teamcode-desktop-1.2.3-macos-arm64.zip")) { respond("one byte more") }).use { transport ->
             failure("release_size_invalid") { transport.desktopPackage("1.2.3", "macos-arm64", 12) { _, _ -> } }
         }
     }

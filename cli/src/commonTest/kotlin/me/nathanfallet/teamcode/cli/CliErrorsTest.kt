@@ -130,9 +130,82 @@ class CliErrorsTest {
         assertContains(message(SerializationException("Unexpected JSON token")), "cannot read")
         assertContains(message(ProcessStartException(ProcessStartException.Reason.NotFound, "codex")), "Cannot find the codex executable")
         assertContains(message(CliUserException("No configuration found. Run teamcode login first.")), "Run teamcode login first")
-        assertContains(message(ReleaseDownloadException("release_network_failure")), "release server")
+        assertContains(message(ReleaseDownloadException("release_network_failure")), "Cannot reach GitHub's release servers")
         assertContains(message(CliOperationException("release_writer_busy")), "another TeamCode update")
         assertContains(message(IllegalStateException("boom")), "--debug")
+    }
+
+    /** A release failure as `teamcode update` reports it (converted by releaseOperation) and as `teamcode ui` does (raw). */
+    private fun release(code: String, detail: String? = null): String {
+        val update = message(CliOperationException(code, detail))
+        assertEquals(update, message(ReleaseDownloadException(code, detail)))
+        assertContains(update, "($code)")
+        detail?.let { assertContains(update, "Cause: $it.") }
+        return update
+    }
+
+    @Test fun `a release timeout says the download was too slow and offers the install script`() {
+        val text = release("release_timeout", "the download did not finish within its time budget")
+        assertContains(text, "did not finish in time"); assertContains(text, INSTALL_SCRIPT_COMMAND); assertContains(text, "keeps your login")
+        assertContains(release("release_operation_timeout"), "did not finish in time")
+    }
+
+    @Test fun `a release dns failure names the hosts and the curl test`() {
+        val text = release("release_dns_failure", "UnknownHostException: api.github.com")
+        assertContains(text, "does not resolve"); assertContains(text, "curl -sSI https://api.github.com"); assertContains(text, "DNS")
+    }
+
+    @Test fun `a release tls failure points at certificates clock and intercepting proxies`() {
+        val text = release("release_tls_failure", "CurlIllegalStateException: SSL certificate problem: unable to get local issuer certificate")
+        assertContains(text, "certificate"); assertContains(text, "ca-certificates"); assertContains(text, "system date")
+        assertContains(text, "curl -sSI https://release-assets.githubusercontent.com")
+    }
+
+    @Test fun `a release proxy failure points at the proxy settings`() {
+        val text = release("release_proxy_failure", "CurlIllegalStateException: Received HTTP code 407 from proxy after CONNECT")
+        assertContains(text, "proxy"); assertContains(text, "HTTPS_PROXY"); assertFalse(text.contains("Check connectivity"))
+    }
+
+    @Test fun `a release connection failure lists what to check and how to test`() {
+        val text = release("release_connection_failure", "ConnectException: Connection refused")
+        assertContains(text, "refused or reset"); assertContains(text, "firewall"); assertContains(text, "curl -sSI")
+        assertContains(release("release_connection_closed"), "closed before the release download finished")
+    }
+
+    @Test fun `an unclassified release network failure keeps its code and offers the install script`() {
+        val text = release("release_network_failure", "CurlIllegalStateException: Connection failed for request. Reason: Send failure")
+        assertContains(text, "Cannot reach GitHub's release servers"); assertContains(text, INSTALL_SCRIPT_COMMAND)
+    }
+
+    @Test fun `an unreadable release answer is not called a network failure`() {
+        val text = release("release_response_invalid", "IllegalStateException: Header line length limit exceeded")
+        assertContains(text, "cannot read"); assertFalse(text.contains("Cannot reach")); assertContains(text, INSTALL_SCRIPT_COMMAND)
+    }
+
+    @Test fun `a github rate limit says to wait and how long`() {
+        val text = release("release_rate_limited", "GitHub API rate limit reached, it resets in about 10 minutes")
+        assertContains(text, "60 per hour"); assertContains(text, "about 10 minutes"); assertContains(text, "Wait")
+    }
+
+    @Test fun `a local write failure is about disk space and permissions not the network`() {
+        val text = release("release_write_failure", "IOException: No space left on device")
+        assertContains(text, "Cannot save"); assertContains(text, "disk space"); assertContains(text, "df -h")
+        assertFalse(text.contains("network")); assertFalse(text.contains("Cannot reach"))
+    }
+
+    @Test fun `an unexpected release failure asks for the debug output`() {
+        val text = release("release_unexpected_failure", "UnsupportedOperationException: boom")
+        assertContains(text, "--debug"); assertContains(text, INSTALL_SCRIPT_COMMAND)
+    }
+
+    @Test fun `missing releases and github outages say so`() {
+        assertContains(release("release_http_404"), "not published")
+        assertContains(release("release_http_503"), "unavailable")
+    }
+
+    @Test fun `debug output carries the release cause`() {
+        assertEquals("Debug: type=CliOperationException code=release_dns_failure cause=\"UnknownHostException: api.github.com\" version=$VERSION",
+            describeFailure(CliOperationException("release_dns_failure", "UnknownHostException: api.github.com"), server).diagnostic)
     }
 
     @Test fun `debug output names only the type status and codes`() {

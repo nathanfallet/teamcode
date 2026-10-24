@@ -41,7 +41,8 @@ class CliInstaller(
     suspend fun install(output: (String) -> Unit) {
         val expected = expectedSha256?.takeIf { available } ?: throw LocalHostException("This build of TeamCode cannot install the CLI: use the command shown.")
         val script = try { download(appVersion, scriptName) } catch (error: ReleaseDownloadException) {
-            throw LocalHostException("The install script of TeamCode $appVersion could not be downloaded (${error.code}). Check your network, or use the command shown.")
+            throw LocalHostException("The install script of TeamCode $appVersion could not be downloaded (${error.code})." +
+                (error.detail?.let { " Cause: $it." } ?: "") + " Check your network, VPN or proxy, or run the command shown in a terminal.")
         }
         if (sha256(script) != expected) throw LocalHostException("The downloaded install script is not the one this app was built with. Nothing was run.")
         withContext(Dispatchers.IO) {

@@ -21,7 +21,7 @@ catch (error: TimeoutCancellationException) {
     currentCoroutineContext().ensureActive()
     throw CliOperationException("release_operation_timeout")
 } catch (error: CancellationException) { throw error }
-catch (error: ReleaseDownloadException) { throw CliOperationException(error.code) }
+catch (error: ReleaseDownloadException) { throw CliOperationException(error.code, error.detail) }
 
 internal class Update : SuspendingCliktCommand(name = "update") {
     private val check by option("--check", help = "Check signed metadata without installing or restarting anything.").flag()

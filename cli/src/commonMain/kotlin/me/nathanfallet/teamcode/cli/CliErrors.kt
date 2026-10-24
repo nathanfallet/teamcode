@@ -1,8 +1,5 @@
 package me.nathanfallet.teamcode.cli
 
-import io.ktor.client.network.sockets.ConnectTimeoutException
-import io.ktor.client.network.sockets.SocketTimeoutException
-import io.ktor.client.plugins.HttpRequestTimeoutException
 import kotlinx.serialization.SerializationException
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.ProcessStartException
@@ -16,7 +13,9 @@ import me.nathanfallet.teamcode.client.TeamCodeException
  *
  * Both are built only from values TeamCode validates: HTTP status, API error codes, `Retry-After`, request ids,
  * class names and the configured server origin. Exception messages, response bodies, tokens and exception chains
- * from TLS, JSON, files or remote servers are never printed: they may carry credentials.
+ * from TLS, JSON, files or remote servers are never printed: they may carry credentials. The one exception is the
+ * release client's [ReleaseDownloadException.detail]: its requests carry no credential, and the detail is reduced to
+ * a class name and a short message whose URLs keep only their origin.
  */
 internal class CliFailure(val message: String, val diagnostic: String)
 
@@ -30,10 +29,8 @@ internal fun describeFailure(error: Throwable, serverUrl: String?): CliFailure {
         error is ProcessStartException -> error.toUserError().message
         error is TeamCodeException -> httpMessage(error, server)
         error is OAuthEnrollmentException -> oauthMessage(error)
-        error is CliOperationException -> operationMessage(error.code)
-        error is ReleaseDownloadException ->
-            if (error.code == "release_network_failure") "Cannot reach the TeamCode release server (${error.code}). Check your network, then try again."
-            else releaseFailureMessage(error.code)
+        error is CliOperationException -> operationMessage(error.code, error.detail)
+        error is ReleaseDownloadException -> releaseFailureMessage(error.code, error.detail)
         network != null -> networkMessage(network, server)
         error.isA("SerializationException", "NoTransformationFoundException", "JsonConvertException") || error is SerializationException ->
             "The $server answered something this CLI ($VERSION) cannot read. It may run another TeamCode version, or a proxy or login page answered instead. " +
@@ -46,7 +43,7 @@ internal fun describeFailure(error: Throwable, serverUrl: String?): CliFailure {
 }
 
 /** Network failures by family; detected from ktor's common types and each engine's error names, never printed. */
-internal enum class NetworkFailure { DNS, REFUSED, TIMEOUT, TLS, CLOSED, OTHER }
+internal typealias NetworkFailure = me.nathanfallet.teamcode.client.NetworkFailure
 
 private fun httpMessage(error: TeamCodeException, server: String): String {
     val code = error.code
@@ -131,8 +128,8 @@ private fun oauthMessage(error: OAuthEnrollmentException): String {
     }
 }
 
-private fun operationMessage(code: String): String = when {
-    code.startsWith("release_") -> releaseFailureMessage(code)
+private fun operationMessage(code: String, detail: String?): String = when {
+    code.startsWith("release_") -> releaseFailureMessage(code, detail)
     code.startsWith("configuration_write_") || code.startsWith("windows_private_file_") ->
         "Cannot write a private TeamCode file ($code). Check that your user owns ${configLocation()} and that no other user can access it, then try again."
     code.startsWith("desktop_") -> desktopFailureMessage(code)
@@ -159,55 +156,19 @@ private fun networkMessage(failure: NetworkFailure, server: String): String = wh
     NetworkFailure.TLS -> "TLS error with the $server: its certificate is not trusted, expired or does not match the host name, or it does not speak HTTPS on this port. " +
         "Check the URL and the server's certificate; a proxy that intercepts HTTPS can also cause this."
     NetworkFailure.CLOSED -> "The connection to the $server closed before the answer was complete. Check your network, then try again."
+    NetworkFailure.PROXY -> "The proxy between this computer and the $server refused or failed the connection. Check your proxy settings (HTTPS_PROXY on Linux) and that it allows this server."
+    NetworkFailure.HEADERS -> "The $server, or a proxy in front of it, answered with headers this CLI cannot read (a header line over 8 KB). Check the server URL and any proxy in between."
     NetworkFailure.OTHER -> "Cannot reach the $server. Check the URL, your network and that the server is running."
 }
 
 internal fun networkFailure(error: Throwable): NetworkFailure? {
     val chain = generateSequence(error) { it.cause }.take(8).toList()
     if (chain.any { it is TeamCodeException || it is CliUserException || it is OAuthEnrollmentException || it is ReleaseDownloadException }) return null
-    // Only errors raised by the HTTP stack count: a local disk or permission failure (also an IOException on the JVM,
-    // where okio uses java.io) must not read as an unreachable server. Names and messages are inspected, never printed.
-    val names = chain.map { it::class.simpleName.orEmpty() }
-    fun named(vararg candidates: String) = names.any { name -> candidates.any(name::contains) }
-    val packages = chain.map { it::class.qualifiedName.orEmpty() }
-    val fromHttpStack = packages.any { name -> HTTP_PACKAGES.any(name::startsWith) } || named(*ENGINE_NAMES) ||
-        chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException }
-    if (!fromHttpStack) return null
-    when {
-        named("SSL", "Tls", "TLS", "Certificate") -> return NetworkFailure.TLS
-        named("UnknownHost", "UnresolvedAddress") -> return NetworkFailure.DNS
-        chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException } || named("Timeout") -> return NetworkFailure.TIMEOUT
-        named("ConnectException", "NoRouteToHost", "PortUnreachable") -> return NetworkFailure.REFUSED
-        named("EOFException", "ClosedReceiveChannel", "ClosedByteChannel") -> return NetworkFailure.CLOSED
-    }
-    val text = chain.joinToString("\n") { it.message.orEmpty() }
-    fun mentions(fragments: List<String>) = fragments.any { text.contains(it) }
-    // Numeric engine codes only count for their own engine, so a port number elsewhere cannot match.
-    val darwin = named("Darwin"); val winHttp = named("WinHttp")
-    fun code(darwinCodes: List<Int>, winHttpCodes: List<Int>) =
-        darwin && darwinCodes.any { text.contains("Code=$it ") || text.contains("Code=$it\"") || text.endsWith("Code=$it") } ||
-            winHttp && winHttpCodes.any { Regex("(^|\\D)$it(\\D|$)").containsMatchIn(text) }
-    return when {
-        mentions(TLS_TEXT) || code(listOf(-1200, -1201, -1202, -1203, -1204, -1205, -1206, -2000), listOf(12175, 12037, 12038, 12044, 12045, 12057, 12169)) -> NetworkFailure.TLS
-        mentions(DNS_TEXT) || code(listOf(-1003, -1006), listOf(12007)) -> NetworkFailure.DNS
-        mentions(TIMEOUT_TEXT) || code(listOf(-1001), listOf(12002)) -> NetworkFailure.TIMEOUT
-        mentions(REFUSED_TEXT) || code(listOf(-1004, -1009, -1005), listOf(12029, 12030)) -> NetworkFailure.REFUSED
-        else -> NetworkFailure.OTHER
-    }
+    return me.nathanfallet.teamcode.client.networkFailure(error)
 }
 
 private fun Throwable.isA(vararg names: String) =
     generateSequence(this) { it.cause }.take(8).any { it::class.simpleName in names }
-
-// Engines: OkHttp (JVM tests), Curl (Linux), Darwin/NSURLSession (macOS) and WinHTTP (Windows). Case-sensitive on purpose:
-// a lowercase host name such as `tls.example.com` in an engine message must not look like a TLS failure.
-private val HTTP_PACKAGES = listOf("io.ktor.", "java.net.", "javax.net.", "okhttp3.", "java.nio.channels.UnresolvedAddress")
-private val ENGINE_NAMES = arrayOf("Curl", "Darwin", "WinHttp")
-private val TLS_TEXT = listOf("SSL", "TLS", "certificate", "Certificate", "security error")
-private val DNS_TEXT = listOf("resolve host", "Could not resolve", "Couldn't resolve", "could not be resolved", "Unable to resolve", "nodename nor servname",
-    "Name or service not known")
-private val TIMEOUT_TEXT = listOf("timed out", "Timeout was reached")
-private val REFUSED_TEXT = listOf("Couldn't connect", "Could not connect", "Connection refused", "Failed to connect", "could not be established")
 
 private fun diagnostic(error: Throwable, network: NetworkFailure?): String = buildString {
     append("Debug: type=").append(error::class.simpleName ?: "unknown")
@@ -219,8 +180,8 @@ private fun diagnostic(error: Throwable, network: NetworkFailure?): String = bui
             error.requestId?.let { append(" request_id=").append(it) }
         }
         is OAuthEnrollmentException -> { append(" reason=").append(error.reason.name.lowercase()); error.status?.let { append(" status=").append(it) } }
-        is CliOperationException -> append(" code=").append(error.code)
-        is ReleaseDownloadException -> append(" code=").append(error.code)
+        is CliOperationException -> { append(" code=").append(error.code); error.detail?.let { append(" cause=\"").append(it).append('"') } }
+        is ReleaseDownloadException -> { append(" code=").append(error.code); error.detail?.let { append(" cause=\"").append(it).append('"') } }
         is ProcessStartException -> append(" reason=").append(error.reason.name)
         else -> {}
     }
@@ -237,3 +198,60 @@ private fun duration(seconds: Long) = when {
 }
 
 private fun configLocation() = try { configPath().substringBeforeLast('/') } catch (_: Exception) { "the TeamCode configuration directory" }
+
+/** The one-line command that reinstalls the latest release with the platform's own downloader (curl or .NET), not this client. */
+internal const val INSTALL_SCRIPT_COMMAND = "curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/install.sh | sh"
+private const val REINSTALL = "reinstall with the install script, which downloads with your system's curl: `$INSTALL_SCRIPT_COMMAND` " +
+    "(on Windows, the install.ps1 command in the README); it keeps your login and settings"
+private const val TEST_HOSTS = "test access with `curl -sSI https://api.github.com` and `curl -sSI https://release-assets.githubusercontent.com` " +
+    "(any HTTP status line means the host is reachable)"
+
+/**
+ * Actionable text for release failures: what happened, the short technical cause when there is one, and what to do. The code
+ * stays in the output for diagnostics, support and scripts (the smoke scripts match on it).
+ */
+internal fun releaseFailureMessage(code: String, detail: String? = null): String {
+    val cause = detail?.let { " Cause: $it." } ?: ""
+    return when (code) {
+        "release_installation_busy" ->
+            "TeamCode installation is busy ($code): an agent session started by TeamCode is still running, or the installation is being modified. Close all agent sessions, then run the command again (for example `teamcode update`)."
+        "release_writer_busy" ->
+            "TeamCode installation is busy ($code): another TeamCode update or installation change is in progress. Wait for it to finish, then run the command again."
+        "release_timeout", "release_operation_timeout" ->
+            "The TeamCode release download did not finish in time ($code): GitHub stopped answering, or the connection is too slow for the download.$cause " +
+                "Check your network or VPN, then run the command again. On a slow or unstable connection, $REINSTALL."
+        "release_dns_failure" ->
+            "Cannot find GitHub's release servers ($code): api.github.com or release-assets.githubusercontent.com does not resolve.$cause " +
+                "Check your DNS, network or VPN, $TEST_HOSTS, then run the command again."
+        "release_tls_failure" ->
+            "The secure connection to GitHub's release servers failed ($code): the certificate is not trusted or has expired, or a proxy or antivirus intercepts HTTPS.$cause " +
+                "Check the system date and the CA certificates (the ca-certificates package on Linux) and any HTTPS-inspecting proxy, $TEST_HOSTS, then run the command again."
+        "release_proxy_failure" ->
+            "The proxy between this computer and GitHub refused or failed the connection ($code).$cause " +
+                "Check your proxy settings (HTTPS_PROXY on Linux) and that the proxy allows api.github.com and release-assets.githubusercontent.com, then run the command again."
+        "release_connection_failure" ->
+            "Cannot connect to GitHub's release servers ($code): the connection was refused or reset, or there is no route.$cause " +
+                "Check your network, VPN, firewall or proxy, $TEST_HOSTS, then run the command again."
+        "release_connection_closed" ->
+            "The connection to GitHub closed before the release download finished ($code).$cause Run the command again; if it keeps failing, check your network or VPN, or $REINSTALL."
+        "release_network_failure" ->
+            "Cannot reach GitHub's release servers ($code).$cause Check your network, VPN or proxy and $TEST_HOSTS. If curl works, $REINSTALL."
+        "release_response_invalid" ->
+            "GitHub's release servers answered something this TeamCode version cannot read ($code).$cause A proxy, a captive portal or a change on GitHub can cause this; " +
+                "$REINSTALL."
+        "release_rate_limited" ->
+            "GitHub refused the request for now: too many unauthenticated API requests from your network, 60 per hour per IP address ($code).$cause " +
+                "Wait for the limit to reset, then run the command again, or $REINSTALL."
+        "release_write_failure" ->
+            "Cannot save the downloaded TeamCode release on this computer ($code): the disk may be full, or your user cannot write to the TeamCode installation folder.$cause " +
+                "Free some disk space (`df -h` shows it on macOS and Linux), check that your user owns the TeamCode installation folder, then run the command again."
+        "release_unexpected_failure" ->
+            "The TeamCode release download failed unexpectedly ($code).$cause Run the command again with `teamcode --debug` and report its output; meanwhile, $REINSTALL."
+        "release_http_404" ->
+            "This TeamCode release or one of its files is not published on GitHub ($code). Check the version with `teamcode update --check`."
+        else -> if (code.startsWith("release_http_5"))
+            "GitHub's release servers are unavailable ($code). Try again in a few minutes."
+        else
+            "TeamCode release operation failed ($code).$cause Check connectivity, release files, private permissions and platform crypto libraries."
+    }
+}

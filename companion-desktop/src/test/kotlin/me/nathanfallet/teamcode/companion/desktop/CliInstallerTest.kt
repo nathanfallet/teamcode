@@ -42,8 +42,12 @@ class CliInstallerTest {
         val error = assertFailsWith<LocalHostException> { installer(failing, CliInstaller.sha256(failing)).install { lines += it } }
         assertEquals("The installer stopped with exit code 3: see its output above.", error.message)
         assertEquals(listOf("TeamCode release operation failed (release_http_404)."), lines)
-        val offline = CliInstaller(environment, "1.2.3", CliInstaller.sha256(script), { _, _ -> throw ReleaseDownloadException("release_network_failure") })
-        assertTrue("release_network_failure" in assertFailsWith<LocalHostException> { offline.install { } }.message)
+        val offline = CliInstaller(environment, "1.2.3", CliInstaller.sha256(script), { _, _ -> throw ReleaseDownloadException("release_dns_failure", "UnknownHostException: api.github.com") })
+        val message = assertFailsWith<LocalHostException> { offline.install { } }.message
+        assertTrue("(release_dns_failure)" in message, message)
+        assertTrue("Cause: UnknownHostException: api.github.com." in message, message)
+        val refused = CliInstaller(environment, "1.2.3", CliInstaller.sha256(script), { _, _ -> throw ReleaseDownloadException("release_http_404") })
+        assertFalse("Cause:" in assertFailsWith<LocalHostException> { refused.install { } }.message)
     }
 
     @Test fun aBuildWithoutTheHashOnlyShowsTheCommand() = runTest {
