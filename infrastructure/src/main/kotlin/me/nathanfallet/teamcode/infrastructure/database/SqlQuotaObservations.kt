@@ -90,10 +90,17 @@ internal fun readQuotaModelLimits(team: String): Map<String, Map<String, String>
         .groupBy { it[QuotaModelLimits.accountId] }
         .mapValues { (_, rows) -> rows.associate { it[QuotaModelLimits.modelName] to it[QuotaModelLimits.limitSlug] } }
 
-/** Keeps `accounts.next_reset_at` equal to the earliest still-future reset of a shared window; call inside a transaction. */
+/**
+ * Keeps `accounts.next_reset_at` equal to the account's weekly (`seven_day`) reset while that one is still in the future.
+ * Without a future weekly reset it falls back to the earliest still-future reset of any other shared (non-`model:`) window.
+ * Call inside a transaction.
+ */
 internal fun refreshNextReset(accountId: String, now: Long) {
-    val earliest = QuotaWindows.select(QuotaWindows.resetsAt).where {
+    val windows = QuotaWindows.select(QuotaWindows.windowName, QuotaWindows.resetsAt).where {
         (QuotaWindows.accountId eq accountId) and (QuotaWindows.windowName notLike "model:%") and (QuotaWindows.resetsAt greater now)
-    }.mapNotNull { it[QuotaWindows.resetsAt] }.minOrNull() ?: NO_KNOWN_RESET
-    Accounts.update({ (Accounts.id eq accountId) and (Accounts.nextResetAt neq earliest) }) { it[nextResetAt] = earliest }
+    }.mapNotNull { row -> row[QuotaWindows.resetsAt]?.let { row[QuotaWindows.windowName] to it } }
+    val next = windows.firstOrNull { it.first == WEEKLY_WINDOW }?.second ?: windows.minOfOrNull { it.second } ?: NO_KNOWN_RESET
+    Accounts.update({ (Accounts.id eq accountId) and (Accounts.nextResetAt neq next) }) { it[nextResetAt] = next }
 }
+
+private const val WEEKLY_WINDOW = "seven_day"

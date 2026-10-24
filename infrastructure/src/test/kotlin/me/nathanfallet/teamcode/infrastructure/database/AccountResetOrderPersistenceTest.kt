@@ -28,23 +28,34 @@ class AccountResetOrderPersistenceTest {
                 val later = add(accounts, "Resets later")
                 val tieA = add(accounts, "Tie A")
                 val tieB = add(accounts, "Tie B")
+                val tieC = add(accounts, "Five-hour only")
                 val modelOnly = add(accounts, "Model window only")
+                val pastWeekly = add(accounts, "Weekly already reset")
                 val now = db.query { nowMillis() } - 100  // Observations may not be dated in the future.
                 val hour = 3_600_000L
-                // The closest of an account's shared windows decides, not the first one listed.
+                // The weekly reset decides when the account has one, even when a five-hour window resets sooner.
                 admission.observe(later, QuotaUpdate(listOf(AccountQuota(later, "five_hour", .1, now, now + 5 * hour), AccountQuota(later, "seven_day", .1, now, now + 48 * hour)), now))
                 admission.observe(soon, QuotaUpdate(listOf(AccountQuota(soon, "seven_day", .1, now, now + 24 * hour), AccountQuota(soon, "five_hour", .1, now, now + hour)), now))
                 admission.observe(tieA, QuotaUpdate(listOf(AccountQuota(tieA, "five_hour", .1, now, now + 2 * hour)), now))
                 admission.observe(tieB, QuotaUpdate(listOf(AccountQuota(tieB, "five_hour", .9, now, now + 2 * hour)), now))
+                // Without a weekly window the earliest shared reset is kept.
+                admission.observe(tieC, QuotaUpdate(listOf(AccountQuota(tieC, "five_hour", .1, now, now + 5 * hour), AccountQuota(tieC, "custom", .1, now, now + 7 * hour)), now))
                 // A model-scoped window never bars the account, so it does not give it a reset either.
                 admission.observe(modelOnly, QuotaUpdate(listOf(AccountQuota(modelOnly, "model:fable", .1, now, now + hour / 2)), now))
 
+                // A weekly reset in the past does not count: the earliest future reset of the other shared windows is used.
+                admission.observe(pastWeekly, QuotaUpdate(listOf(AccountQuota(pastWeekly, "seven_day", .1, now, now - hour), AccountQuota(pastWeekly, "five_hour", .1, now, now + 3 * hour)), now))
+                assertEquals(now + 3 * hour, stored(db, pastWeekly))
+                assertEquals(now + 5 * hour, stored(db, tieC))
+
                 val expectedTies = listOf(tieA, tieB).sorted()
-                assertEquals(listOf(soon) + expectedTies + listOf(later) + listOf(never, modelOnly).sorted(), admission.poolAccounts(admin).mapNotNull { it.accountId })
+                assertEquals(expectedTies + listOf(pastWeekly, tieC, soon, later) + listOf(never, modelOnly).sorted(), admission.poolAccounts(admin).mapNotNull { it.accountId })
                 assertEquals(admission.poolAccounts(admin).mapNotNull { it.accountId }, accounts.list("default").map { it.id }, "The management listing uses the same order")
 
-                // A later observation moves the account; a window with no reset leaves it where the others still say.
+                // A later observation moves the account; a five-hour reset coming sooner does not move one that has a weekly reset.
                 admission.observe(later, QuotaUpdate(listOf(AccountQuota(later, "five_hour", .2, now + 10, now + hour / 2)), now + 10))
+                assertEquals(now + 48 * hour, stored(db, later))
+                admission.observe(later, QuotaUpdate(listOf(AccountQuota(later, "seven_day", .2, now + 11, now + hour / 2)), now + 11))
                 assertEquals(later, admission.poolAccounts(admin).first().accountId)
                 admission.observe(soon, QuotaUpdate(listOf(AccountQuota(soon, "five_hour", .2, now + 20, null)), now + 20))
                 assertEquals(now + 24 * hour, stored(db, soon), "An unreported reset falls back to the next window that has one")
