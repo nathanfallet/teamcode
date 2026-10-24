@@ -1,4 +1,4 @@
-{{- if and .Values.mysql.enabled .Values.mysql.networkPolicy.enabled }}
+{{- if and .Values.mysql.enabled (dig "networkPolicy" "enabled" true .Values.mysql) }}
 # Only this release's TeamCode server pods reach the bundled MySQL. Enforced by CNIs that implement NetworkPolicy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

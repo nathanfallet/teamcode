@@ -28,17 +28,21 @@ class SessionNetworkPolicyTest {
         assertNull(egress[1].jsonObject["ports"], "Every port of a public address")
         for (blocked in listOf("169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8"))
             assertTrue(blocked in v4.except(), blocked)
-        for (blocked in listOf("fe80::/10", "fc00::/7", "64:ff9b::/96", "2002::/16"))
+        for (blocked in listOf("fe80::/10", "fc00::/7", "64:ff9b::a00:0/104", "64:ff9b::a9fe:0/112", "2002:a00::/24", "2002:c0a8::/32"))
             assertTrue(blocked in v6.except(), blocked)
     }
 
     @Test fun cloudMetadataAndClusterAddressesAreNeverInTheInternetRule() {
         val except = SessionNetworkPolicy().manifest().spec()["egress"]!!.jsonArray.drop(1).flatMap { rule -> rule.blocks().flatMap { it.except() } }.map(Cidr::parse)
         // AWS, GCP and Azure IMDS, Alibaba's, AWS's IPv6 IMDS, a typical pod and service address, a node on a Docker network.
-        for (address in listOf("169.254.169.254/32", "100.100.100.200/32", "fd00:ec2::254/128", "10.96.0.1/32", "10.244.1.7/32", "172.18.0.2/32", "fe80::1/128"))
+        // Azure's WireServer; private and metadata addresses reached through NAT64 or 6to4.
+        for (address in listOf("169.254.169.254/32", "100.100.100.200/32", "fd00:ec2::254/128", "10.96.0.1/32", "10.244.1.7/32", "172.18.0.2/32", "fe80::1/128",
+            "168.63.129.16/32", "64:ff9b::a9fe:a9fe/128", "64:ff9b::a00:1/128", "2002:a9fe:a9fe::/48", "2002:c0a8:101::1/128"))
             assertTrue(except.any { it.contains(Cidr.parse(address)) }, address)
         assertFalse(except.any { it.contains(Cidr.parse("140.82.112.3/32")) }, "github.com stays reachable")
         assertFalse(except.any { it.contains(Cidr.parse("2606:4700::6810:84e5/128")) }, "a public IPv6 address stays reachable")
+        assertFalse(except.any { it.contains(Cidr.parse("64:ff9b::8c52:7003/128")) }, "github.com through DNS64/NAT64 stays reachable")
+        assertFalse(except.any { it.contains(Cidr.parse("2002:8c52:7003::1/128")) }, "a public 6to4 address stays reachable")
     }
 
     @Test fun lockdownLeavesOnlyDnsTheServerAndTheOperatorsRules() {
@@ -96,9 +100,22 @@ class SessionNetworkPolicyTest {
             """[{"to":[]}]""",
             """[{"to":[{"podSelector":{}}],"from":[]}]""",
             """["not a rule"]""",
+            """[{"to":[{}]}]""",
+            """[{"to":[{"ipBlock":{"cidr":"10.0.0.0/8","except":["11.0.0.0/8"]}}]}]""",
+            """[{"to":[{"ipBlock":{"cidr":"10.0.0.0/8","except":["10.0.0.0/8"]}}]}]""",
+            """[{"to":[{"ipBlock":{"cidr":"10.0.0.0/8"},"podSelector":{}}]}]""",
+            """[{"to":[{"podSelector":{"matchLabels":{"app":"bad value"}}}]}]""",
+            """[{"to":[{"podSelector":{"matchExpressions":[{"key":"app","operator":"Maybe"}]}}]}]""",
+            """[{"to":[{"podSelector":{"matchExpressions":[{"key":"app","operator":"In","values":[]}]}}]}]""",
+            """[{"to":[{"podSelector":{}}],"ports":[{"port":"x y"}]}]""",
+            """[{"to":[{"podSelector":{}}],"ports":[{"port":70000}]}]""",
+            """[{"to":[{"podSelector":{}}],"ports":[{"protocol":"ICMP","port":1}]}]""",
+            """[{"to":[{"podSelector":{}}],"ports":[{"port":443,"endPort":80}]}]""",
+            """[{"to":[{"podSelector":{}}],"ports":[{"port":"https","endPort":444}]}]""",
         )) assertFailsWith<IllegalArgumentException>(bad) { SessionNetworkPolicy(extraEgress = rules(bad)) }
         SessionNetworkPolicy(extraEgress = rules("""[{"to":[{"ipBlock":{"cidr":"0.0.0.0/0","except":["169.254.0.0/16"]}}],"ports":[{"port":22}]}]"""))
         SessionNetworkPolicy(extraEgress = rules("""[{"to":[{"ipBlock":{"cidr":"10.0.0.5/32"}},{"podSelector":{"matchLabels":{"app":"proxy"}}}]}]"""))
+        SessionNetworkPolicy(extraEgress = rules("""[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}},"podSelector":{"matchExpressions":[{"key":"app.kubernetes.io/component","operator":"In","values":["controller"]},{"key":"tier","operator":"Exists"}]}}],"ports":[{"protocol":"TCP","port":443},{"port":8000,"endPort":8100},{"protocol":"TCP","port":"https"}]}]"""))
     }
 
     @Test fun deploymentVariablesAreParsedStrictly() {

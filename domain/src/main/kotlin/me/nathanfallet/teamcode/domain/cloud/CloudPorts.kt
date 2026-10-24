@@ -126,7 +126,7 @@ data class ManagedObjects(val pods: List<PodObservation>, val claims: List<Strin
 data class TokenIdentity(val namespace: String, val serviceAccount: String, val podName: String?, val podUid: String?)
 
 /**
- * The cluster refused the session namespace's network policy (HTTP 401 or 403): the service account may not manage
+ * The cluster refused the session namespace's network policy (HTTP 403): the service account may not manage
  * NetworkPolicies there. No pod is created without the policy, so the start fails with `network_policy_refused`.
  */
 class SessionNetworkPolicyRefusedException : Exception("The cluster's service account may not apply the session network policy.")

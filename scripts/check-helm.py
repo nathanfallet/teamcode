@@ -76,6 +76,12 @@ assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN'] == 'true'
 assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == '203.0.113.0/24,2001:db8::/32'
 assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']) == values['cloudSessions']['networkPolicy']['extraEgress']
 assert not any(doc['kind'] == 'NetworkPolicy' for doc in documents), 'mysql.networkPolicy.enabled=false renders no policy'
+# A null list (an empty `extraEgress:` key) still renders a JSON array, and `enabled: false` reaches the server as written.
+rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'cloudSessions.networkPolicy.extraEgress=null',
+                           '--set', 'cloudSessions.networkPolicy.blockedCidrs=null', '--set', 'cloudSessions.networkPolicy.enabled=false'], check=True, capture_output=True, text=True).stdout
+env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
+assert env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA'] == '[]' and env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == ''
+assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY'] == 'false'
 # Misconfigured installations must fail at render time.
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0

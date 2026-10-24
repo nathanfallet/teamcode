@@ -59,8 +59,10 @@ data class SessionNetworkPolicy(
                 }
                 if (!lockdown) {
                     val blocked = blockedCidrs.map(Cidr::parse) + clusterApi.map(Cidr::of)
-                    for ((all, private) in listOf(Cidr.parse("0.0.0.0/0") to PRIVATE_V4, Cidr.parse("::/0") to PRIVATE_V6)) {
-                        val ranges = private.map(Cidr::parse)
+                    val blockedV4 = PRIVATE_V4.map(Cidr::parse) + blocked.filter { !it.v6 }
+                    // NAT64 and 6to4 stay usable (DNS64 clusters reach IPv4-only sites through them), minus the IPv4 ranges they embed.
+                    val embedded = blockedV4.flatMap { listOf(it.nat64(), it.sixToFour()) }
+                    for ((all, ranges) in listOf(Cidr.parse("0.0.0.0/0") to PRIVATE_V4.map(Cidr::parse), Cidr.parse("::/0") to PRIVATE_V6.map(Cidr::parse) + embedded)) {
                         // Only what the private ranges do not already cover, so the list stays readable.
                         val except = (ranges + blocked.filter { it.v6 == all.v6 && ranges.none { range -> range.contains(it) } }).distinct()
                         addJsonObject { putJsonArray("to") { addJsonObject { putJsonObject("ipBlock") {
@@ -79,12 +81,15 @@ data class SessionNetworkPolicy(
         private val LINK_LOCAL = listOf("169.254.0.0/16", "fe80::/10").map(Cidr::parse)
         /** Not public: this host, RFC 1918, carrier-grade NAT (Alibaba's metadata), loopback, link-local, IETF, benchmark, multicast and reserved. */
         val PRIVATE_V4 = listOf("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
-            "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3")
+            "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3",
+            // Azure's WireServer (host goal state and extension settings), a public-range address answering every VM.
+            "168.63.129.16/32")
         /**
-         * IPv6 forms that are not public or embed an IPv4 destination: NAT64, Teredo, 6to4, unique-local (AWS metadata),
-         * link-local, multicast. IPv4-mapped addresses are never routed, and the API server refuses them in a policy.
+         * IPv6 ranges that are not public: loopback, local-use NAT64, Teredo (its client address is obfuscated), unique-local
+         * (AWS metadata), link-local, multicast. Well-known NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) are excepted only
+         * where they embed a blocked IPv4 range. IPv4-mapped addresses are never routed, and the API server refuses them.
          */
-        val PRIVATE_V6 = listOf("::/127", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fc00::/7", "fe80::/10", "ff00::/8")
+        val PRIVATE_V6 = listOf("::/127", "64:ff9b:1::/48", "2001::/32", "fc00::/7", "fe80::/10", "ff00::/8")
 
         /**
          * Reads the deployment variables; an invalid value fails the server start rather than run sessions with a
@@ -108,25 +113,100 @@ data class SessionNetworkPolicy(
             )
         }
 
-        /** An egress rule holds only `to` and `ports`; an `ipBlock` that overlaps link-local must except all of it. */
+        /**
+         * Checks an operator rule at startup with the API server's own rules for egress rules, so a rule it would refuse
+         * stops the start instead of failing every pod later: `to` (required, not empty) and `ports` only; a peer is an
+         * `ipBlock` alone or a `namespaceSelector` and/or `podSelector`; `except` entries are strict subsets of their
+         * block; ports name TCP, UDP or SCTP and a number (1-65535, with an optional `endPort`) or a service name. An
+         * `ipBlock` that overlaps link-local must except all of it.
+         */
         private fun requireValidRule(rule: JsonElement) {
             val fields = rule as? JsonObject ?: throw IllegalArgumentException("Each extra egress rule must be an object.")
             require(fields.keys.all { it == "to" || it == "ports" }) { "An extra egress rule holds only `to` and `ports`." }
             val peers = fields["to"]
             require(peers == null || peers is JsonArray) { "`to` must be an array." }
-            require(fields["ports"] == null || fields["ports"] is JsonArray) { "`ports` must be an array." }
             // A rule without `to` allows every destination on its ports, link-local included.
             require(peers != null && peers.jsonArray.isNotEmpty()) { "An extra egress rule must name its destinations in `to`." }
-            for (peer in peers.jsonArray) {
-                val block = (peer as? JsonObject ?: throw IllegalArgumentException("Each `to` entry must be an object."))["ipBlock"] ?: continue
-                val cidr = Cidr.parse(((block as? JsonObject)?.get("cidr") as? JsonPrimitive)?.contentOrNull
-                    ?: throw IllegalArgumentException("An ipBlock needs a cidr."))
-                val except = (block.jsonObject["except"] as? JsonArray)?.map { Cidr.parse(it.jsonPrimitive.content) }.orEmpty()
-                for (linkLocal in LINK_LOCAL.filter { it.v6 == cidr.v6 }) {
-                    require(!linkLocal.contains(cidr)) { "An extra egress rule may not reach link-local addresses: $cidr." }
-                    require(!cidr.contains(linkLocal) || except.any { it.contains(linkLocal) }) {
-                        "An extra egress ipBlock containing $linkLocal must list it in `except`."
+            for (peer in peers.jsonArray) requireValidPeer(peer)
+            val ports = fields["ports"] ?: return
+            require(ports is JsonArray) { "`ports` must be an array." }
+            ports.forEach(::requireValidPort)
+        }
+
+        private fun requireValidPeer(peer: JsonElement) {
+            val entry = peer as? JsonObject ?: throw IllegalArgumentException("Each `to` entry must be an object.")
+            require(entry.isNotEmpty() && entry.keys.all { it in setOf("ipBlock", "namespaceSelector", "podSelector") }) {
+                "A `to` entry holds ipBlock, namespaceSelector or podSelector."
+            }
+            for (key in listOf("namespaceSelector", "podSelector")) entry[key]?.let(::requireValidSelector)
+            val block = entry["ipBlock"] ?: return
+            require(entry.size == 1) { "An ipBlock cannot be combined with selectors." }
+            val fields = block as? JsonObject ?: throw IllegalArgumentException("An ipBlock must be an object.")
+            require(fields.keys.all { it == "cidr" || it == "except" }) { "An ipBlock holds cidr and except." }
+            val cidr = Cidr.parse((fields["cidr"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("An ipBlock needs a cidr."))
+            val except = when (val list = fields["except"]) {
+                null -> emptyList()
+                is JsonArray -> list.map { Cidr.parse((it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: throw IllegalArgumentException("`except` holds CIDRs.")) }
+                else -> throw IllegalArgumentException("`except` must be an array.")
+            }
+            except.forEach { require(cidr.contains(it) && it != cidr) { "$it is not a strict subset of $cidr." } }
+            for (linkLocal in LINK_LOCAL.filter { it.v6 == cidr.v6 }) {
+                require(!linkLocal.contains(cidr)) { "An extra egress rule may not reach link-local addresses: $cidr." }
+                require(!cidr.contains(linkLocal) || except.any { it.contains(linkLocal) }) {
+                    "An extra egress ipBlock containing $linkLocal must list it in `except`."
+                }
+            }
+        }
+
+        private val LABEL_VALUE = Regex("""([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?""")
+        private val LABEL_KEY = Regex("""([a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?""")
+
+        private fun requireValidSelector(selector: JsonElement) {
+            val fields = selector as? JsonObject ?: throw IllegalArgumentException("A selector must be an object.")
+            require(fields.keys.all { it == "matchLabels" || it == "matchExpressions" }) { "A selector holds matchLabels and matchExpressions." }
+            when (val labels = fields["matchLabels"]) {
+                null -> {}
+                is JsonObject -> labels.forEach { (key, value) ->
+                    val text = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    require(LABEL_KEY.matches(key) && text != null && LABEL_VALUE.matches(text)) { "Invalid label $key in a selector." }
+                }
+                else -> throw IllegalArgumentException("matchLabels must be an object.")
+            }
+            when (val expressions = fields["matchExpressions"]) {
+                null -> {}
+                is JsonArray -> expressions.forEach { expression ->
+                    val e = expression as? JsonObject ?: throw IllegalArgumentException("A match expression must be an object.")
+                    val key = (e["key"] as? JsonPrimitive)?.content
+                    val operator = (e["operator"] as? JsonPrimitive)?.content
+                    val values = e["values"] as? JsonArray
+                    require(key != null && LABEL_KEY.matches(key)) { "A match expression needs a valid key." }
+                    when (operator) {
+                        "In", "NotIn" -> require(!values.isNullOrEmpty() && values.all { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.let(LABEL_VALUE::matches) == true }) { "$operator needs values." }
+                        "Exists", "DoesNotExist" -> require(values.isNullOrEmpty()) { "$operator takes no values." }
+                        else -> throw IllegalArgumentException("Unknown selector operator $operator.")
                     }
+                }
+                else -> throw IllegalArgumentException("matchExpressions must be an array.")
+            }
+        }
+
+        private val PORT_NAME = Regex("""[a-z0-9]([-a-z0-9]{0,13}[a-z0-9])?""")
+
+        private fun requireValidPort(port: JsonElement) {
+            val fields = port as? JsonObject ?: throw IllegalArgumentException("Each port must be an object.")
+            require(fields.keys.all { it in setOf("protocol", "port", "endPort") }) { "A port holds protocol, port and endPort." }
+            fields["protocol"]?.let { require((it as? JsonPrimitive)?.content in setOf("TCP", "UDP", "SCTP")) { "A port's protocol is TCP, UDP or SCTP." } }
+            val number = fields["port"] as? JsonPrimitive
+            val value = number?.let { if (it.isString) null else it.intOrNull }
+            when {
+                number == null -> require(fields["endPort"] == null) { "endPort needs port." }
+                value != null -> {
+                    require(value in 1..65535) { "A port is between 1 and 65535." }
+                    fields["endPort"]?.let { end -> require((end as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull?.let { it in value..65535 } == true) { "endPort is a port at least port." } }
+                }
+                else -> {
+                    require(number.isString && PORT_NAME.matches(number.content) && number.content.any(Char::isLetter)) { "A named port is a service name." }
+                    require(fields["endPort"] == null) { "endPort needs a numeric port." }
                 }
             }
         }
@@ -136,6 +216,10 @@ data class SessionNetworkPolicy(
 /** An IPv4 or IPv6 CIDR given as a literal. Parsed here, never by `InetAddress`, so no text is ever resolved as a host name. */
 internal data class Cidr(val network: BigInteger, val prefix: Int, val v6: Boolean) {
     private val bits get() = if (v6) 128 else 32
+    /** This IPv4 range inside the well-known NAT64 prefix `64:ff9b::/96`. */
+    fun nat64() = Cidr(BigInteger.valueOf(0x64ff9b).shiftLeft(96).or(network), 96 + prefix, true).also { require(!v6) }
+    /** This IPv4 range inside 6to4 (`2002:V4ADDR::/48`). */
+    fun sixToFour() = Cidr(BigInteger.valueOf(0x2002).shiftLeft(112).or(network.shiftLeft(80)), 16 + prefix, true).also { require(!v6) }
     fun contains(other: Cidr) = other.v6 == v6 && other.prefix >= prefix && other.network.shiftRight(bits - prefix) == network.shiftRight(bits - prefix)
     override fun toString(): String {
         val address = if (!v6) (3 downTo 0).joinToString(".") { network.shiftRight(it * 8).toInt().and(0xff).toString() }

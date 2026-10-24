@@ -314,16 +314,24 @@ class KubernetesClusterPortTest {
     }
 
     @Test fun aRefusedPolicyCreatesNoPod(): Unit = runBlocking {
-        for (status in listOf(HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized)) {
-            requests.clear()
-            val port = port { request -> if (request.method == HttpMethod.Patch) json("""{"kind":"Status","message":"networkpolicies is forbidden"}""", status) else json("{}", HttpStatusCode.Created) }
-            assertFailsWith<SessionNetworkPolicyRefusedException>(status.toString()) { port.createPod("c1", anyPod) }
-            assertTrue(requests.none { it.method == HttpMethod.Post }, "No pod without its policy ($status)")
-        }
+        val port = port { request -> if (request.method == HttpMethod.Patch) json("""{"kind":"Status","message":"networkpolicies is forbidden"}""", HttpStatusCode.Forbidden) else json("{}", HttpStatusCode.Created) }
+        assertFailsWith<SessionNetworkPolicyRefusedException> { port.createPod("c1", anyPod) }
+        assertTrue(requests.none { it.method == HttpMethod.Post }, "No pod without its policy")
+        requests.clear()
+        val rotating = port { request -> if (request.method == HttpMethod.Patch) json("{}", HttpStatusCode.Unauthorized) else json("{}", HttpStatusCode.Created) }
+        assertEquals(401, assertFailsWith<ClusterApiException> { rotating.createPod("c1", anyPod) }.status, "A token being rotated is retried, not a missing right")
+        assertTrue(requests.none { it.method == HttpMethod.Post })
         requests.clear()
         val failing = port { request -> if (request.method == HttpMethod.Patch) json("{}", HttpStatusCode.ServiceUnavailable) else json("{}", HttpStatusCode.Created) }
         assertEquals(503, assertFailsWith<ClusterApiException> { failing.createPod("c1", anyPod) }.status, "Another failure is retried like any cluster error")
         assertTrue(requests.none { it.method == HttpMethod.Post })
+    }
+
+    @Test fun anUnresolvableServerUrlCreatesNeitherPolicyNorPod(): Unit = runBlocking {
+        // The cluster API resolves (10.0.0.1); the server URL does not: a policy without the server rule would cut running pods.
+        val port = port({ host -> if (host == "teamcode.example.test") throw java.net.UnknownHostException(host) else listOf(address(10, 0, 0, 1)) }) { json("{}", HttpStatusCode.Created) }
+        assertFailsWith<SessionServerUnresolvedException> { port.createPod("c1", anyPod) }
+        assertTrue(requests.isEmpty(), "Neither the policy nor the pod is sent")
     }
 
     @Test fun theOperatorCanLeaveNetworkPoliciesToTheCluster(): Unit = runBlocking {

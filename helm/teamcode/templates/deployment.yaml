@@ -80,14 +80,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: encryption-key
+            {{- /* Values missing from an older release (helm upgrade --reuse-values) keep the defaults. */}}
+            {{- $sessionNetwork := dig "networkPolicy" (dict) (.Values.cloudSessions | default (dict)) }}
             - name: TEAMCODE_CLOUD_SESSION_NETWORK_POLICY
-              value: {{ .Values.cloudSessions.networkPolicy.enabled | quote }}
+              value: {{ dig "enabled" true $sessionNetwork | toString | quote }}
             - name: TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN
-              value: {{ .Values.cloudSessions.networkPolicy.lockdown | quote }}
+              value: {{ dig "lockdown" false $sessionNetwork | toString | quote }}
             - name: TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS
-              value: {{ join "," .Values.cloudSessions.networkPolicy.blockedCidrs | quote }}
+              value: {{ join "," ($sessionNetwork.blockedCidrs | default (list)) | quote }}
             - name: TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA
-              value: {{ toJson .Values.cloudSessions.networkPolicy.extraEgress | quote }}
+              value: {{ toJson ($sessionNetwork.extraEgress | default (list)) | quote }}
             - name: JAVA_TOOL_OPTIONS
               value: {{ .Values.javaToolOptions | quote }}
             {{- with .Values.extraEnv }}

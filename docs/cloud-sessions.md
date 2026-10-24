@@ -564,7 +564,7 @@ Two rights are optional; they only fill the [profile form](#profiles)'s lists, a
 
 `scripts/smoke-cloud-kind.py` creates exactly these roles, the optional ones included.
 
-**Upgrading.** A service account without the `networkpolicies` right gets no new pod: each start fails with `network_policy_refused` (a resume is blocked with it, keeping the workspace) until the right is granted, and the session can then be created or resumed again. Running pods are not touched.
+**Upgrading.** A service account without the `networkpolicies` right gets no new pod: each start refused with `403` fails with `network_policy_refused` (a `401`, such as a token being rotated, is retried) (a resume is blocked with it, keeping the workspace) until the right is granted, and the session can then be created or resumed again. Running pods are not touched.
 
 Each server replica runs the reconciler continuously (leased per session) and, through scheduled work, garbage collection every 10 minutes and the idempotency-record purge every minute. A failed reconciliation step is logged with the session id and the error class or Kubernetes status only.
 
@@ -578,20 +578,20 @@ Before creating any session pod, the server applies a NetworkPolicy named `teamc
 | --- | --- |
 | Ingress | Nothing, from other session pods included. The runner only dials out, and `kubectl exec` goes through the kubelet, not the pod network |
 | Egress, DNS | Port 53, UDP and TCP, to any destination, so CoreDNS, NodeLocal DNSCache (a link-local address) and cloud resolvers all work |
-| Egress, the TeamCode server | The addresses the server URL for pods resolves to (as the server resolves it, at every pod start), on its port, even when they are private; never a link-local one |
-| Egress, internet | Every port of every public address: `0.0.0.0/0` and `::/0` except this host, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, where Alibaba's metadata answers), loopback, link-local (`169.254.0.0/16`, `fe80::/10`: `169.254.169.254` and `metadata.google.internal` for AWS, GCP and Azure), IETF, benchmark, multicast and reserved IPv4 ranges, NAT64, Teredo and 6to4 (they embed IPv4 destinations), unique-local `fc00::/7` (AWS's IPv6 metadata `fd00:ec2::254`), IPv6 multicast, the Kubernetes API server's addresses (resolved from the cluster's API URL, often public on managed clusters), and any `blockedCidrs`. Pod and service CIDRs are inside these private ranges on usual clusters |
+| Egress, the TeamCode server | The addresses the server URL for pods resolves to (as the server resolves it, at every pod start), on its port, even when they are private; never a link-local one. If the URL does not resolve, or the cluster's API URL does not, no policy and no pod are sent and the start is retried: a policy without them would cut running pods from the server or let them reach the API server |
+| Egress, internet | Every port of every public address: `0.0.0.0/0` and `::/0` except this host, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, where Alibaba's metadata answers), loopback, link-local (`169.254.0.0/16`, `fe80::/10`: `169.254.169.254` and `metadata.google.internal` for AWS, GCP and Azure), IETF, benchmark, multicast and reserved IPv4 ranges, Azure's WireServer `168.63.129.16`, every blocked IPv4 range as embedded in NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`), which otherwise stay open so DNS64 clusters keep IPv4-only sites, Teredo and local-use NAT64, unique-local `fc00::/7` (AWS's IPv6 metadata `fd00:ec2::254`), IPv6 multicast, the Kubernetes API server's addresses (resolved from the cluster's API URL, often public on managed clusters), and any `blockedCidrs`. Pod and service CIDRs are inside these private ranges on usual clusters |
 | Egress, extra | The operator's `extraEgress` rules, verbatim |
 
 The agent needs no route to model providers: inference goes through the runner's loopback proxy to the TeamCode server ([inference from the pod](#inference-from-the-pod)).
 
-The policy is an operator setting, read from the server's environment at startup (an invalid value stops the start), set in the [Helm chart](../helm/teamcode/README.md) under `cloudSessions.networkPolicy`:
+The policy is an operator setting, read from the server's environment at startup when the server has a database (an invalid value stops the start), set in the [Helm chart](../helm/teamcode/README.md) under `cloudSessions.networkPolicy`:
 
 | Value | Variable | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled` | `TEAMCODE_CLOUD_SESSION_NETWORK_POLICY` | `true` | `false` applies no policy: pods are then unrestricted unless the cluster's own policies apply. Not recommended |
 | `lockdown` | `TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN` | `false` | A stricter option for teams that want it: `true` removes the internet rule, leaving DNS, the server and `extraEgress`, so git hosts, registries or a proxy must be listed there. Web search, fetch, `npm` and `pip` then stop working unless allowed. Kubernetes NetworkPolicy cannot name hosts; with a CNI that can (Cilium `toFQDNs`, Calico DNS policies), write those policies for the same pods: policies add up |
 | `blockedCidrs` | `TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS` (comma-separated) | none | More ranges to block: a pod, service or node range outside the private ranges (some IPv6 clusters give pods public addresses), or a host to keep away from sessions |
-| `extraEgress` | `TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA` (a JSON array) | none | NetworkPolicy egress rules appended verbatim. Each holds `to` (required, not empty) and `ports` only, and an `ipBlock` may not reach link-local: a block that contains `169.254.0.0/16` or `fe80::/10` must list it in `except` |
+| `extraEgress` | `TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA` (a JSON array) | none | NetworkPolicy egress rules appended verbatim, checked at startup against the API server's rules (peers, selectors, `except` strict subsets, protocols, ports and `endPort`). Each holds `to` (required, not empty) and `ports` only, and an `ipBlock` may not reach link-local: a block that contains `169.254.0.0/16` or `fe80::/10` must list it in `except` |
 
 Cases that need a setting:
 
@@ -599,7 +599,7 @@ Cases that need a setting:
 - **Private git hosts, registries or proxies** on private addresses: an `extraEgress` rule for each.
 - **Enforcement.** A NetworkPolicy does nothing on a CNI that does not implement it (for example flannel alone). `scripts/smoke-cloud-kind.py` checks on a real `kind` cluster that the policy is applied with `create` and `patch` only, that DNS resolves, and that a session pod reaches neither the API server's service, a node nor `169.254.169.254` while an unlabelled pod reaches the service.
 
-Not covered: a CNI enforces the policy for a new pod a few seconds after the pod starts (kindnet: up to about 5 s); the runner's first calls fall in that window, the agent starts after preparation, well after it. The policy is per namespace, not per profile, so every profile of the server shares it, and two TeamCode servers sharing a namespace overwrite each other's (the last pod start wins). The server URL and the API server are resolved by the TeamCode server, which may see other addresses than the pods (split-horizon DNS); `extraEgress` and `blockedCidrs` cover that. Public egress stays open by design, so an agent can send what it reads to a public host. The TeamCode server's own egress is not restricted by the chart.
+Not covered: a CNI enforces the policy for a new pod a few seconds after the pod starts (kindnet: up to about 5 s); the runner's first calls fall in that window, the agent starts after preparation, well after it. The policy is per namespace, not per profile, so every profile of the server shares it, and two TeamCode servers sharing a namespace overwrite each other's (the last pod start wins). The server URL and the API server are resolved by the TeamCode server, which may see other addresses than the pods (split-horizon DNS), and the policy holds the latest answer: a server URL whose private addresses rotate should be allowed by `extraEgress` (a CIDR or the ingress selector) rather than rely on the resolved rule. `extraEgress` and `blockedCidrs` cover these cases. Public egress stays open by design, so an agent can send what it reads to a public host. The TeamCode server's own egress is not restricted by the chart.
 
 ### Profiles
 

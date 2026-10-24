@@ -25,6 +25,9 @@ import me.nathanfallet.teamcode.infrastructure.database.ClusterConnection
 /** A non-success Kubernetes API status. The response body is never kept: it may echo request content. */
 class ClusterApiException(val status: Int) : Exception("The Kubernetes API returned HTTP $status.")
 
+/** The server URL for pods does not resolve from the server, so the session network policy cannot name it; retried. */
+class SessionServerUnresolvedException : Exception("The server URL for pods does not resolve.")
+
 /** The cluster API host resolves to a link-local, unspecified or cloud metadata address, so the service-account token is not sent. */
 class ClusterHostNotAllowedException : Exception("The Kubernetes API host resolves to an address that is not allowed.")
 
@@ -163,14 +166,17 @@ class KubernetesClusterPort(
     /**
      * Server-side apply (`PATCH` with `application/apply-patch+yaml`, field manager `teamcode`, forced): creates the
      * policy or replaces the fields TeamCode owns in one idempotent call. Needs `create` and `patch` on `networkpolicies`. The server
-     * URL and the API server are resolved here, as the TeamCode server sees them, for every pod.
+     * URL and the API server are resolved here, as the TeamCode server sees them, for every pod. Either failing to
+     * resolve stops the start (retried like a cluster error): a policy without the API server would let the pod reach
+     * it, one without the server rule would cut every running pod of the namespace from the server.
      */
     private suspend fun applyNetworkPolicy(clusterId: String, namespace: String, policy: SessionNetworkPolicy, serverUrl: String) {
         val path = "/apis/networking.k8s.io/v1/namespaces/${segment(namespace)}/networkpolicies/${SessionNetworkPolicy.NAME}?fieldManager=teamcode&force=true"
-        val clusterApi = resolve(client(clusterId).connection.apiUrl)
-        val server = serverUrl.let { url -> resolve(url).takeIf { it.isNotEmpty() }?.let { SessionNetworkPolicy.Server(it, Url(url).port) } }
+        val clusterApi = resolve(client(clusterId).connection.apiUrl).ifEmpty { throw ClusterHostNotAllowedException() }
+        val server = SessionNetworkPolicy.Server(resolve(serverUrl).ifEmpty { throw SessionServerUnresolvedException() }, Url(serverUrl).port)
         val response = call(clusterId, HttpMethod.Patch, path, policy.manifest(server, clusterApi), contentType = APPLY_PATCH)
-        if (response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.Forbidden) throw SessionNetworkPolicyRefusedException()
+        // Forbidden is the missing right; 401 (a token being rotated) is retried like any cluster error.
+        if (response.status == HttpStatusCode.Forbidden) throw SessionNetworkPolicyRefusedException()
         if (!response.status.isSuccess()) throw ClusterApiException(response.status.value)
     }
 

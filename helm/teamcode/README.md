@@ -72,7 +72,7 @@ kubectl --namespace teamcode port-forward service/teamcode 8080:8080
 
 ## External database and availability
 
-The bundled MySQL StatefulSet is a convenience, **not a highly available database**. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it, for example for a backup job that connects directly). For production database failover and managed backups, use an external MySQL 8.4 service:
+The bundled MySQL StatefulSet is a convenience, **not a highly available database**. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it). **Upgrading:** on a CNI that enforces NetworkPolicy, a backup job, exporter or any other pod that connects to the bundled MySQL directly stops reaching it; disable the policy or route it through the server pods' labels. For production database failover and managed backups, use an external MySQL 8.4 service:
 
 ```yaml
 mysql:
