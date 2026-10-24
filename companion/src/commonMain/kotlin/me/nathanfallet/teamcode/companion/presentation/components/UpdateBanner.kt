@@ -36,8 +36,8 @@ import org.koin.mp.KoinPlatform
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
- * "Update available" at the top of the content panel: one click updates the CLI and the app together, then reopens the app on the
- * new version.
+ * "Update available" at the top of the main screen's content (the content panel when wide, above the tab when narrow):
+ * one click updates the CLI and the app together, then reopens the app on the new version.
  *
  * Desktop only (macOS, Windows, Linux), decided by the platform and never by the window's size: it shows only where
  * the desktop's module binds an [AppUpdater]. The iOS and Android apps, iPad included in its wide or split layout,

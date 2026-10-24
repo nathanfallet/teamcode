@@ -130,6 +130,8 @@ class DesktopAppUpdaterTest {
     @Test fun theUpdateErrorArgumentIsRead() {
         val environment = DesktopEnvironment.detect(arrayOf("--config-path", "/tmp/c.json", "--update-error", "It failed\u0007."), mapOf("XDG_CONFIG_HOME" to "/tmp"))
         assertEquals("It failed.", environment.updateError)
+        // The CLI's message spans lines: they stay apart as words.
+        assertEquals("It failed. Run teamcode --debug ui.", DesktopEnvironment.detect(arrayOf("--update-error", "It failed.\nRun teamcode --debug ui."), mapOf("XDG_CONFIG_HOME" to "/tmp")).updateError)
         assertNull(DesktopEnvironment.detect(arrayOf(), mapOf("XDG_CONFIG_HOME" to "/tmp")).updateError)
     }
 

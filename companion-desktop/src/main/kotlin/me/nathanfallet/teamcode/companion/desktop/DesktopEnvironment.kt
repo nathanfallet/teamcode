@@ -66,7 +66,7 @@ class DesktopEnvironment(
             val shell = if (os == Os.WINDOWS || process.containsKey("XDG_CONFIG_HOME") || process["TERM_PROGRAM"] != null) emptyMap()
             else readLoginShell(process["SHELL"]?.takeIf { File(it).isAbsolute } ?: "/bin/sh")
             val updateError = args.indexOf("--update-error").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) }
-                ?.filterNot { it.isISOControl() }?.take(1_000)?.takeIf { it.isNotBlank() }
+                ?.replace(Regex("\\s+"), " ")?.filterNot { it.isISOControl() }?.trim()?.take(1_000)?.takeIf { it.isNotBlank() }
             return DesktopEnvironment(process, shell, override, os, directory, updateError)
         }
 

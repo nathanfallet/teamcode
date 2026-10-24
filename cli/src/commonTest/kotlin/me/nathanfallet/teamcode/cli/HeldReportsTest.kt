@@ -60,8 +60,23 @@ class HeldReportsTest {
     @Test fun aLongRunKeepsABoundedNumberOfLines() = runTest {
         val printed = mutableListOf<String>()
         val terminal = HeldTerminal(printed::add, limit = 3)
-        terminal.holding { repeat(100) { terminal.report("TeamCode answered HTTP 429 (rate_limited_$it): slow down.") } }
-        assertEquals(3, printed.size)
+        terminal.holding {
+            repeat(100) { terminal.report("TeamCode answered HTTP 429 (rate_limited_$it): slow down.") }
+            // Published late in the run: the newest line is still said, after the count of what was left out.
+            terminal.report("TeamCode 1.0.2 is available. Run teamcode update to install it.")
+        }
+        assertEquals(listOf(
+            "TeamCode answered HTTP 429 (rate_limited_0): slow down.",
+            "TeamCode answered HTTP 429 (rate_limited_1): slow down.",
+            "TeamCode answered HTTP 429 (rate_limited_2): slow down.",
+            "(97 more lines were left out while the agent ran.)",
+            "TeamCode 1.0.2 is available. Run teamcode update to install it.",
+        ), printed)
+    }
+
+    @Test fun aClosedTerminalNeverReplacesTheAgentsResult() = runTest {
+        val terminal = HeldTerminal({ throw IllegalStateException("stderr closed") })
+        assertEquals(3, terminal.holding { terminal.report("TeamCode launch heartbeat is temporarily unavailable."); 3 })
     }
 
     @Test fun linesReportedFromOtherThreadsAreAllKept() = runTest {
