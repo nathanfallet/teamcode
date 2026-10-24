@@ -98,8 +98,9 @@ private class HookShow : SuspendingCliktCommand(name = "show") {
             }
             if (withheld) {
                 // Content that was not shown was not read: approving it takes the digest above, passed explicitly.
-                echo("\nSome files are not UTF-8 text and were not shown, so this version is not recorded as read. Inspect them yourself, " +
-                    "then pass the digest above to teamcode hooks approve --digest.", err = true)
+                val shown = HookText.visible(hook.name, keepLines = false)
+                echo("\nSome files are not UTF-8 text and were not shown, so this version is not recorded as read. Inspect them yourself " +
+                    "(teamcode hooks show prints only text), then approve it with teamcode hooks approve $shown --digest ${HookText.visible(hook.digest, keepLines = false)}.", err = true)
                 return@use
             }
             // approve records this version, and only this one, unless --digest names another.

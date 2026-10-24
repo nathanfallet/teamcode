@@ -106,8 +106,16 @@ class WebhooksTest {
         val store = MemoryWebhookStore()
         val before = WebhookService(store, sealer, allowPrivateTargets = true).create(principal(admin), "https://10.0.0.5/hook", types, "internal").webhook
         val after = WebhookService(store, sealer)
-        assertFalse(after.update(principal(admin), before.id, before.version, before.url, types, "paused", enabled = false).enabled)
-        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { after.update(principal(admin), before.id, before.version + 1, "https://10.0.0.6/hook", types, "", null) }.code)
+        val relabeled = after.update(principal(admin), before.id, before.version, before.url, types, "saved enabled, as the dashboard form does", enabled = true)
+        assertTrue(relabeled.enabled)
+        val paused = after.update(principal(admin), before.id, relabeled.version, before.url, types, "paused", enabled = false)
+        assertFalse(paused.enabled)
+        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { after.update(principal(admin), before.id, paused.version, before.url, types, "", enabled = true) }.code, "A paused one cannot be enabled again on a refused URL")
+        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { after.update(principal(admin), before.id, paused.version, "https://10.0.0.6/hook", types, "", null) }.code)
+        // A public URL is not looked up in the store at all.
+        val counted = object : WebhookStore by store { var finds = 0; override suspend fun find(teamId: String, id: String) = store.find(teamId, id).also { finds++ } }
+        WebhookService(counted, sealer).update(principal(admin), before.id, paused.version, "https://hooks.example.test/moved", types, "", enabled = true)
+        assertEquals(0, counted.finds)
     }
 
     @Test fun theSecretIsShownOnceAndStoredSealed() = runBlocking {

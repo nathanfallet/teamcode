@@ -15,7 +15,7 @@ Webhooks send the events of the [event feed](cloud-conversations.md#event-feed) 
 
 **Target.** An `https` URL without credentials or fragment, on the **public internet**: `localhost`, loopback, private (RFC 1918, unique-local IPv6), link-local, carrier-grade NAT, multicast, unspecified, reserved and cloud metadata addresses are refused (`400 webhook_host_not_allowed`), in numeric spellings too. A DNS name is resolved again at every delivery and refused if any answer is such an address, and the delivery connects to the address that was checked, so a name that changes its answer between the check and the connection (DNS rebinding) is refused too (`host_not_allowed` in the delivery log). Redirects are not followed.
 
-Webhooks are managed by administrators and their `admin:cloud` keys, which are often stored in CI: a private target would let such a key send signed POSTs to the server's own network and read the status codes back, a port scanner (audit L1). For an internal receiver, the operator sets `TEAMCODE_WEBHOOK_PRIVATE_TARGETS=true` (Helm: `webhooks.allowPrivateTargets: true`), which allows loopback and private addresses again; link-local, unspecified and metadata addresses stay refused. A subscription created while the option was on stops delivering (`host_not_allowed`) when it is turned off.
+Webhooks are managed by administrators and their `admin:cloud` keys, which are often stored in CI: a private target would let such a key send signed POSTs to the server's own network and read the status codes back, a port scanner (audit L1). For an internal receiver, the operator sets `TEAMCODE_WEBHOOK_PRIVATE_TARGETS=true` (Helm: `webhooks.allowPrivateTargets: true`), which allows loopback and private addresses again; link-local, unspecified and metadata addresses stay refused. A subscription created while the option was on stops delivering (`host_not_allowed`) when it is turned off; it can still be paused, relabeled or deleted on its URL, and moved to an allowed one, but not enabled again once paused.
 
 ## What is sent
 
@@ -49,7 +49,7 @@ A `2xx` within 10 seconds is a delivery. A network error, a timeout, a `5xx`, `4
 
 ## Delivery log
 
-Each delivery shows its state (`pending`, `delivered`, `failed`), attempts, the next attempt, the last HTTP status and a short error code: `timeout`, `connect`, `tls`, `dns`, `host_not_allowed`, `invalid_url`, `secret_unreadable`, `expired`. The receiver's answer is never read or stored. The log is kept 14 days.
+Each delivery shows its state (`pending`, `delivered`, `failed`), attempts, the next attempt, the last HTTP status and a short error code: `timeout`, `connect`, `tls`, `dns`, `host_not_allowed`, `secret_unreadable`, `expired` (a URL the client cannot parse fails as `connect`; deliveries logged by older servers may still show `invalid_url`). The receiver's answer is never read or stored. The log is kept 14 days.
 
 ## Storage
 

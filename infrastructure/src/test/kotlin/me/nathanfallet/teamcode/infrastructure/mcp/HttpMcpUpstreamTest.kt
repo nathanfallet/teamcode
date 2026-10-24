@@ -92,9 +92,10 @@ class HttpMcpUpstreamTest {
         val private = HttpMcpUpstream(HttpClient(MockEngine { error("must not connect") }))
         assertFailsWith<McpUpstreamFailure> { private.listTools(server().copy(endpoint = "https://127.0.0.1/mcp"), limits) }
         for (address in listOf("127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "2002:a00:1::1", "2001::1", "64:ff9b::a9fe:a9fe",
-            "::ffff:0:10.0.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "192.88.99.1", "2001:db8::1", "100::1"))
+            "::ffff:0:10.0.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "192.88.99.1", "2001:db8::1", "100::1",
+            "2001:2::1", "2001:2:0:ffff::1", "2001:10::1", "2001:1f::1", "2001:20::1", "2001:2f:ffff::1", "3fff::1", "3fff:fff::1"))
             assertFalse(McpAddressPolicy.isPublic(InetAddress.getByName(address)), address)
-        for (address in listOf("1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "::ffff:0:1.1.1.1")) assertTrue(McpAddressPolicy.isPublic(InetAddress.getByName(address)), address)
+        for (address in listOf("1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "::ffff:0:1.1.1.1", "2001:2:1::1", "2001:30::1", "3ffe::1", "3fff:1000::1")) assertTrue(McpAddressPolicy.isPublic(InetAddress.getByName(address)), address)
     }
 
     @Test fun rejectsUnsupportedProtocolVersionsAndInsecureEndpoints() = runBlocking {

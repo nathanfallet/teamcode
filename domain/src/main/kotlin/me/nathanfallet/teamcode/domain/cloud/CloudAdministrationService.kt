@@ -187,7 +187,7 @@ class CloudAdministrationService(
         /**
          * Whether a resolved address is on the public internet: not unspecified, loopback, link-local (cloud metadata
          * included), private (RFC 1918, `fec0::/10`), unique-local (`fc00::/7`), carrier-grade NAT, multicast,
-         * benchmarking, documentation, discard or reserved, and no IPv6 form that embeds an IPv4 destination (mapped,
+         * benchmarking, documentation, ORCHID, discard or reserved, and no IPv6 form that embeds an IPv4 destination (mapped,
          * translated, compatible, 6to4, Teredo, NAT64) unless that destination is public. No DNS lookup happens here.
          */
         fun publicAddress(address: ByteArray): Boolean {
@@ -202,6 +202,9 @@ class CloudAdministrationService(
                 if (bytes[0] == 0 && bytes[1] == 0x64 && bytes[2] == 0xff && bytes[3] == 0x9b) return false
                 if (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x0d && bytes[3] == 0xb8) return false // 2001:db8::/32 documentation
                 if (bytes[0] == 0x01 && (1 until 8).all { bytes[it] == 0 }) return false // 100::/64 discard
+                if (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0 && bytes[3] == 0x02 && bytes[4] == 0 && bytes[5] == 0) return false // 2001:2::/48 benchmarking
+                if (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0 && (bytes[3] and 0xf0) in setOf(0x10, 0x20)) return false // 2001:10::/28 ORCHID, 2001:20::/28 ORCHIDv2
+                if (bytes[0] == 0x3f && bytes[1] == 0xff && (bytes[2] and 0xf0) == 0) return false // 3fff::/20 documentation
                 // IPv4-mapped (::ffff:a.b.c.d), IPv4-translated (::ffff:0:a.b.c.d) and IPv4-compatible addresses are judged as their IPv4 address.
                 val zeros = (0 until 8).all { bytes[it] == 0 }
                 val mapped = zeros && bytes[8] == 0 && bytes[9] == 0 && ((bytes[10] == 0xff && bytes[11] == 0xff) || (bytes[10] == 0 && bytes[11] == 0))

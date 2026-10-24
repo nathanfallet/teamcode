@@ -125,8 +125,8 @@ fun main() {
     // dials the address its policy checked (audit L2).
     val webhookPrivateTargets = webhookPrivateTargets(System.getenv("TEAMCODE_WEBHOOK_PRIVATE_TARGETS"))
     val webhooks = if (webhookStore != null && webhookSealer != null) me.nathanfallet.teamcode.domain.webhooks.WebhookService(webhookStore, webhookSealer, allowPrivateTargets = webhookPrivateTargets) else null
-    val webhookSender = me.nathanfallet.teamcode.infrastructure.webhooks.HttpWebhookSender(allowPrivateTargets = webhookPrivateTargets)
-    if (webhookStore != null && webhookSealer != null) {
+    val webhookSender = if (webhookStore != null && webhookSealer != null) me.nathanfallet.teamcode.infrastructure.webhooks.HttpWebhookSender(allowPrivateTargets = webhookPrivateTargets) else null
+    if (webhookStore != null && webhookSealer != null && webhookSender != null) {
         val work = SqlScheduledWork(database!!)
         val delivery = me.nathanfallet.teamcode.domain.webhooks.DeliverWebhooksUseCase(webhookStore, webhookSealer, webhookSender)
         workers.launch {
@@ -228,7 +228,7 @@ fun main() {
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
             apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons, trustedProxies = trustedProxies) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookSender.close(); artifactHttp.close(); database?.close() }
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookSender?.close(); artifactHttp.close(); database?.close() }
 }
 
 /**

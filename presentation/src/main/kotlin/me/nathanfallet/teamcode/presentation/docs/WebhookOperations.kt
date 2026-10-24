@@ -57,7 +57,7 @@ internal fun ApiCatalog.webhookOperations() {
     get("/api/v1/webhooks/{id}/deliveries") {
         operationId = "listWebhookDeliveries"; tag(ApiTags.WEBHOOKS)
         summary = "The delivery log"
-        description = "The newest first, kept 14 days. `lastError` is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `invalid_url`, `secret_unreadable`, `expired`), never the receiver's answer."
+        description = "The newest first, kept 14 days. `lastError` is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `secret_unreadable`, `expired`; `invalid_url` only in deliveries logged by older servers), never the receiver's answer."
         parameters { pathId("id", "The webhook's identifier."); queryNumber("limit", "1 to 200 (50 by default).") }
         responses { ok<List<WebhookDeliveryView>>("The deliveries."); notFound("No such webhook (`not_found`).") }
     }

@@ -139,6 +139,13 @@ class TeamHooksTest {
         assertNull(HookApprovalCheck.problem(swapped, requested = " " + swapped.digest.removePrefix("sha256:").uppercase() + "\n", shown = null), "A pasted digest is normalized")
         assertTrue(HookApprovalCheck.problem(swapped, requested = "sha256:abc", shown = null)!!.startsWith("Pass --digest as sha256:"), "A malformed digest is not reported as a swap")
         assertEquals(swapped.digest, HookShownDigests(root / "shown.json").also { it.record(read.name, swapped.digest) }.load()[read.name])
+        // The server's name and digest are printed escaped, like show prints them.
+        val hostile = swapped.copy(name = "stop-guard\u001B[2K\rok", digest = "sha256:\u202E" + "1".repeat(64))
+        for (message in listOf(HookApprovalCheck.problem(hostile, requested = null, shown = null)!!, HookApprovalCheck.problem(hostile, requested = read.digest, shown = null)!!,
+            HookApprovalCheck.problem(hostile, requested = null, shown = "sha256:\u001B]0;x\u0007")!!)) {
+            assertFalse(message.any { it == '\u001B' || it == '\r' || it == '\u202E' || it == '\u0007' }, message)
+            assertTrue("stop-guard<U+001B>[2K<U+000D>ok" in message, message)
+        }
     }
 
     /** `show` and `list` print no character that hides, rewrites or reorders what the member reads (audit M5). */
@@ -149,6 +156,8 @@ class TeamHooksTest {
         assertEquals("<U+200B><U+200D><U+FEFF><U+00AD><U+2060><U+061C><U+180E>", HookText.visible("\u200B\u200D\uFEFF\u00AD\u2060\u061C\u180E"), "Zero-width and format characters")
         assertEquals("<U+001B>[2J<U+0085><U+2028>", HookText.visible("\u001B[2J\u0085\u2028"), "Escapes, C1 controls and line separators")
         assertEquals("tag<U+E0041>", HookText.visible("tag\uDB40\uDC41"), "Invisible tag characters outside the basic plane")
+        assertEquals("<U+110BD><U+110CD><U+13430><U+1343F><U+1BCA0><U+1D173>", HookText.visible("\uD804\uDCBD\uD804\uDCCD\uD80D\uDC30\uD80D\uDC3F\uD82F\uDCA0\uD834\uDD73"),
+            "Every format character outside the basic plane")
         assertEquals("caf\u00e9 \uD83D\uDE00", HookText.visible("caf\u00e9 \uD83D\uDE00"), "Ordinary text is untouched")
         assertEquals("a<U+000A>b", HookText.visible("a\nb", keepLines = false), "One-line fields escape line feeds too")
         assertEquals("echo a\r\necho b<U+000D>", HookText.visible("echo a\r\necho b\r"), "CRLF line endings stay readable")

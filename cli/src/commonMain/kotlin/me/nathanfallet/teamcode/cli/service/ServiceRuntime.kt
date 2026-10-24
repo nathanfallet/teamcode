@@ -35,8 +35,9 @@ internal fun stopRequested(settings: ServiceSettings): Boolean {
  * origin ([serviceProof], audit L9).
  *
  * A service older than the challenge answers it with `401`. That counts as not running, except while waiting for a
- * given version other than this binary's ([expectedVersion]: a rollback or a recovery to an older release), where the
- * probe asks again with the token as before, since an older service has no other way to answer.
+ * release older than this binary ([expectedVersion]: a rollback or a recovery to an older release), where the probe
+ * asks again with the token as before, since an older service has no other way to answer. A newer or unparsable
+ * version never gets the token: a release from now on answers the challenge.
  */
 internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, backgroundWorkload: Boolean = false, expectedVersion: String? = null, runRouting: Boolean = false, mcpRelay: Boolean = false, localTokenHeader: Boolean = false, artifactRelay: Boolean = false, activityRelay: Boolean = false): Boolean = try {
     HttpClient { followRedirects = false; install(HttpTimeout) { requestTimeoutMillis = 2_000; connectTimeoutMillis = 1_000 } }.use { http ->
@@ -63,12 +64,21 @@ internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, 
             answer != null -> answer.takeIf { it["proof"]?.jsonPrimitive?.content == me.nathanfallet.teamcode.cli.proxy.serviceProof(settings.localToken, challenge, settings.id, origin) }
                 // The proof stands for the installation ID and the origin.
                 ?.let { JsonObject(it + mapOf("id" to JsonPrimitive(settings.id), "serverUrl" to JsonPrimitive(origin))) }
-            status == 401 && expectedVersion != null && expectedVersion != me.nathanfallet.teamcode.cli.VERSION -> identity(null).second
+            status == 401 && expectedVersion != null && olderRelease(expectedVersion, me.nathanfallet.teamcode.cli.VERSION) -> identity(null).second
             else -> null
         } ?: return@use false
         serviceMatches(body, settings.id, origin, backgroundWorkload, runRouting, mcpRelay, localTokenHeader, artifactRelay, activityRelay) && (expectedVersion == null || body["version"]?.jsonPrimitive?.content == expectedVersion)
     }
 } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+
+/** Whether [candidate] is a strictly older `major.minor.patch` release than [current]; `false` when either does not parse. */
+internal fun olderRelease(candidate: String, current: String): Boolean {
+    fun parse(version: String): List<Int>? = version.removePrefix("v").substringBefore('+').substringBefore('-').split('.')
+        .takeIf { it.size == 3 }?.map { part -> part.takeIf { it.isNotEmpty() && it.length <= 9 && it.all(Char::isDigit) }?.toInt() ?: return null }
+    val (older, newer) = (parse(candidate) ?: return false) to (parse(current) ?: return false)
+    val difference = older.zip(newer).firstOrNull { (a, b) -> a != b } ?: return false
+    return difference.first < difference.second
+}
 
 internal fun serviceMatches(body: JsonObject, id: String, origin: String, backgroundWorkload: Boolean, runRouting: Boolean = false, mcpRelay: Boolean = false, localTokenHeader: Boolean = false, artifactRelay: Boolean = false, activityRelay: Boolean = false): Boolean {
     val capabilities = body["capabilities"] as? JsonArray

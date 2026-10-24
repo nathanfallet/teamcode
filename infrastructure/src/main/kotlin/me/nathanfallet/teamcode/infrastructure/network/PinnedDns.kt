@@ -25,6 +25,12 @@ class PinnedDnsTimeout(val host: String) : UnknownHostException("The destination
 object PinnedDns {
     private const val LOOKUP_DEADLINE_MILLIS = 5_000L
 
+    /**
+     * Abandoned lookups keep their thread until the system resolver gives up: a dedicated bound keeps a name server
+     * that never answers from taking the whole I/O pool (database, files) with it. Shared by every client.
+     */
+    private val lookups = Dispatchers.IO.limitedParallelism(16)
+
     fun resolver(
         allowed: (ByteArray) -> Boolean,
         lookup: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() },
@@ -32,7 +38,7 @@ object PinnedDns {
         val host = name.removePrefix("[").removeSuffix("]")
         // A lookup cannot be interrupted, so it runs outside the caller's scope and is abandoned after the deadline.
         // A timeout is reported as an I/O failure: a CancellationException here would look like the caller's own cancellation.
-        val addresses = withTimeoutOrNull(LOOKUP_DEADLINE_MILLIS) { CoroutineScope(Dispatchers.IO).async { lookup(host) }.await() }
+        val addresses = withTimeoutOrNull(LOOKUP_DEADLINE_MILLIS) { CoroutineScope(lookups).async { lookup(host) }.await() }
             ?: throw PinnedDnsTimeout(host)
         if (addresses.isEmpty() || addresses.any { !allowed(it.address) }) throw PinnedDnsRefusal(host)
         addresses.map { it.hostAddress }

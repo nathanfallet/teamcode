@@ -151,7 +151,17 @@ class ServiceTest {
             assertEquals(listOf<String?>(null), bearers, "No token when no older version is awaited")
             assertTrue(serviceResponds(settings, "https://team.example", expectedVersion = "0.9.0"))
             assertEquals(listOf(null, null, "Bearer $token"), bearers)
+            // A version newer than this binary answers the challenge: waiting for it never sends the token.
+            assertFalse(serviceResponds(settings, "https://team.example", expectedVersion = "999.0.0"))
+            assertFalse(serviceResponds(settings, "https://team.example", expectedVersion = "not-a-version"))
+            assertEquals(listOf(null, null, "Bearer $token", null, null), bearers)
         } finally { older.stop(0) }
+    }
+
+    @Test fun olderReleaseComparesMajorMinorPatch() {
+        assertTrue(olderRelease("0.9.0", "1.0.0")); assertTrue(olderRelease("1.2.3", "1.2.10")); assertTrue(olderRelease("v1.2.3", "1.3.0-beta"))
+        assertFalse(olderRelease("1.2.3", "1.2.3")); assertFalse(olderRelease("1.10.0", "1.9.9")); assertFalse(olderRelease("2.0.0", "1.0.0"))
+        assertFalse(olderRelease("1.2", "1.3.0")); assertFalse(olderRelease("1.2.x", "1.3.0")); assertFalse(olderRelease("0.1.0", "unknown"))
     }
 
     @Test fun windowsTaskUsesTheCurrentUserWithoutEmbeddingCredentialsOrRequiringElevation() {

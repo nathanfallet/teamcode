@@ -79,6 +79,15 @@ class HttpWebhookSenderTest {
         } finally { server.stop(0) }
     }
 
+    /** A literal private address in the URL is refused on the URL itself, before any lookup or connection. */
+    @Test fun aLiteralPrivateUrlIsRefusedBeforeAnyLookup() = runBlocking {
+        var lookups = 0
+        val counted = sender(lookup = { lookups++; listOf(InetAddress.getByAddress(byteArrayOf(93.toByte(), 184.toByte(), 215.toByte(), 14))) })
+        for (url in listOf("https://10.0.0.5:8443/x", "https://127.0.0.1/x", "https://[::1]/x", "https://[fd12::1]/x", "https://0x7f000001/x", "https://localhost/x"))
+            assertEquals("host_not_allowed", counted.send(url, emptyMap(), "{}").error, url)
+        assertEquals(0, lookups)
+    }
+
     /**
      * Audit L2: the connection dials the address its own lookup checked, and that lookup is the only one. A name that
      * answers a loopback address is refused without reaching the local receiver; with the operator's opt-in, the

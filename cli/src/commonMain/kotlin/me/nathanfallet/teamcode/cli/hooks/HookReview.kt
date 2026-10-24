@@ -29,7 +29,11 @@ internal object HookText {
     }
 
     private fun hidden(code: Int, c: Char, pair: Boolean): Boolean = when {
-        pair -> code in 0xE0000..0xE0FFF || code in 0x1BCA0..0x1BCA3 || code in 0x1D173..0x1D17A
+        // Common Kotlin has no category for code points above U+FFFF, so every supplementary format character
+        // (Unicode 17) is listed: tags and variation selectors, Kaithi number signs, Egyptian hieroglyph format
+        // controls, shorthand format controls, musical symbol formatting.
+        pair -> code in 0xE0000..0xE0FFF || code == 0x110BD || code == 0x110CD || code in 0x13430..0x1343F ||
+            code in 0x1BCA0..0x1BCA3 || code in 0x1D173..0x1D17A
         c.isSurrogate() -> true
         c.isISOControl() -> true
         code in 0x200B..0x200F || code in 0x2028..0x202E || code in 0x2060..0x206F -> true
@@ -64,9 +68,13 @@ internal object HookApprovalCheck {
         val normalized = requested?.trim()?.lowercase()?.also {
             if (!digest.matches(it)) return "Pass --digest as sha256: followed by 64 hexadecimal digits, as teamcode hooks show prints it."
         }?.let { if (it.startsWith("sha256:")) it else "sha256:$it" }
-        val expected = normalized ?: shown ?: return "Read it first with teamcode hooks show ${hook.name}, or pass --digest."
+        // The name and digests come from the server (and the shown-digests file): printed escaped, like show prints them.
+        val name = HookText.visible(hook.name, keepLines = false)
+        val delivered = HookText.visible(hook.digest, keepLines = false)
+        val expected = normalized ?: shown ?: return "Read it first with teamcode hooks show $name, or pass --digest."
         if (expected == hook.digest) return null
-        return if (normalized != null) "The server delivers ${hook.digest}, not the --digest you passed ($expected). Read it with teamcode hooks show ${hook.name}."
-        else "The delivered version changed since you read it (you read $expected, the server now delivers ${hook.digest}). Read it again with teamcode hooks show ${hook.name}."
+        val read = HookText.visible(expected, keepLines = false)
+        return if (normalized != null) "The server delivers $delivered, not the --digest you passed ($read). Read it with teamcode hooks show $name."
+        else "The delivered version changed since you read it (you read $read, the server now delivers $delivered). Read it again with teamcode hooks show $name."
     }
 }

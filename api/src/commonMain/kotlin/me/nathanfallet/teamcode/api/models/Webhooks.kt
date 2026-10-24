@@ -20,7 +20,7 @@ data class CreateWebhookRequest(val url: String, val types: List<String>, val de
 @Serializable
 data class UpdateWebhookRequest(val version: Int, val url: String, val types: List<String>, val description: String = "", val enabled: Boolean? = null)
 
-/** One attempt series for one event; [state] is `pending`, `delivered` or `failed`. [lastError] is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `invalid_url`, `secret_unreadable`, `expired`), never a response body. */
+/** One attempt series for one event; [state] is `pending`, `delivered` or `failed`. [lastError] is a short code (`timeout`, `dns`, `tls`, `connect`, `host_not_allowed`, `secret_unreadable`, `expired`; `invalid_url` only in deliveries logged by older servers), never a response body. */
 @Serializable
 data class WebhookDeliveryView(
     val id: String, val eventSeq: Long?, val eventType: String, val state: String, val attempts: Int, val nextAttemptAt: Long?,
