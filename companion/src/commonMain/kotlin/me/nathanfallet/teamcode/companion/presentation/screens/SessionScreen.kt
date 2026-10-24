@@ -84,6 +84,13 @@ import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboar
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import me.nathanfallet.teamcode.companion.presentation.dictation.DictationButton
+import me.nathanfallet.teamcode.companion.presentation.dictation.DictationNotice
+import me.nathanfallet.teamcode.companion.presentation.dictation.listening
+import me.nathanfallet.teamcode.companion.presentation.dictation.listeningHint
+import me.nathanfallet.teamcode.companion.presentation.dictation.rememberDictation
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptSeparator
 import me.nathanfallet.teamcode.companion.presentation.transcript.transcriptItems
@@ -391,6 +398,11 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                     })
                 }
                 PendingFileChips(state.files.files, onRetry = viewModel::retryFile, onRemove = viewModel::removeFile)
+                // The microphone where the platform transcribes natively: the words fill the draft, never sent by themselves.
+                val dictation = rememberDictation()
+                val field = remember { FocusRequester() }
+                dictation?.let { DictationNotice(it) }
+                val send = { dictation?.cancel(); viewModel.send() }
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Only once the server announced `cloud.files.v1`: an older server shows the composer as before.
                     if (state.files.supported) {
@@ -398,11 +410,13 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                         AttachButton(state.files, picker, onUnavailable = viewModel::explainFiles)
                     }
                     TcTextField(
-                        state.draft, viewModel::onDraftChange, placeholder = stringResource(Res.string.composer_hint), singleLine = false, maxLines = 6,
-                        modifier = Modifier.weight(1f), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
-                        onSubmit = { if (state.canSend) viewModel.send() },
+                        state.draft, viewModel::onDraftChange, singleLine = false, maxLines = 6,
+                        placeholder = if (dictation?.listening() == true) listeningHint() else stringResource(Res.string.composer_hint),
+                        modifier = Modifier.weight(1f).focusRequester(field), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
+                        onSubmit = { if (state.canSend) send() },
+                        trailing = dictation?.let { { DictationButton(it, { viewModel.uiState.value.draft }, viewModel::onDraftChange, field) } },
                     )
-                    TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = viewModel::send, kind = IconButtonKind.FILLED,
+                    TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = send, kind = IconButtonKind.FILLED,
                         enabled = state.canSend, modifier = Modifier.testTag("send"))
                 }
             }

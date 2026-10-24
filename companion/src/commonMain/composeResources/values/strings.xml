@@ -170,6 +170,12 @@
     <string name="composer_send">Send</string>
     <string name="composer_ended">This session ended: it takes no more messages.</string>
     <string name="composer_unsupported">This server does not take messages from the app.</string>
+    <string name="composer_dictate">Dictate</string>
+    <string name="composer_dictate_stop">Stop dictating</string>
+    <string name="composer_listening">Listening…</string>
+    <string name="dictation_permission_denied">The microphone or speech recognition is not allowed for TeamCode. Allow both in the system settings to dictate.</string>
+    <string name="dictation_unavailable">Dictation is not available right now: no recognizer for this language, or no network.</string>
+    <string name="dictation_failed">Dictation stopped unexpectedly. Tap the microphone to try again.</string>
     <string name="pending_sending">Sending…</string>
     <string name="pending_sent">Sent, waiting for the agent</string>
     <string name="notice_nothing_running">Nothing is running.</string>

@@ -62,6 +62,8 @@ kotlin {
             implementation(libs.coroutines.swing)
             implementation(libs.ktor.client.java)
             implementation(libs.java.keyring)
+            // macOS Dictation, started through the Objective-C runtime.
+            implementation(libs.jna)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

@@ -489,6 +489,8 @@ fun TcTextField(
      * Alt+Enter break it. An on-screen keyboard keeps its own Enter. Null: Enter behaves as by default.
      */
     onSubmit: (() -> Unit)? = null,
+    /** Inside the field, at its end (the composer's microphone). */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = TeamCode.colors
     // The field edits a TextFieldValue to insert a line break where the cursor is; the caller keeps a String.
@@ -559,6 +561,7 @@ fun TcTextField(
                             if (value.isEmpty() && placeholder != null) Text(placeholder, style = style.copy(color = colors.muted), maxLines = if (singleLine) 1 else 3, overflow = TextOverflow.Ellipsis)
                             inner()
                         }
+                        trailing?.invoke()
                     }
                 }
             },
