@@ -47,4 +47,12 @@ class SettingsRepositoriesTest {
         assertEquals(ThemePreference.DARK, SettingsPreferencesRepository(settings).theme.value)
         assertEquals(ThemePreference.SYSTEM, SettingsPreferencesRepository(MapSettings("preferences.theme" to "PINK")).theme.value)
     }
+
+    @Test fun theSidebarWidthIsKept() {
+        val settings = MapSettings()
+        assertNull(SettingsPreferencesRepository(settings).sidebarWidth)
+        SettingsPreferencesRepository(settings).setSidebarWidth(2)
+        assertEquals(2, SettingsPreferencesRepository(settings).sidebarWidth)
+        assertNull(SettingsPreferencesRepository(MapSettings("preferences.sidebarWidth" to -1)).sidebarWidth)
+    }
 }

@@ -53,20 +53,25 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         val code = coroutineScope {
             val service = loadService(configPath())
             val report: (String) -> Unit = { echo(it, err = true) }
+            // Before the agent starts: a pending service restart and the wait for it are said at once.
             val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(service?.executable, report)
-            val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(report) }
-            try { runAgent() } finally {
-                try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally {
-                    try { lease?.close() } finally {
-                        // The last session to end restarts the service on the version selected while it ran.
-                        lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
-                    }
+            // While the agent runs it owns the terminal: what is reported meanwhile waits until it has exited.
+            val terminal = HeldTerminal(report)
+            try {
+                coroutineScope {
+                    val watcher = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(terminal::report) }
+                    try { runAgent(terminal) } finally { withContext(NonCancellable) { watcher.cancelAndJoin() } }
+                }
+            } finally {
+                try { lease?.close() } finally {
+                    // After the agent exited: the last session to end restarts the service on the version selected while it ran.
+                    lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
                 }
             }
         }
         if (code != 0) SystemExit.exit(code)
     }
-    private suspend fun runAgent(): Int {
+    private suspend fun runAgent(terminal: HeldTerminal): Int {
         val parsedLabels = parseLabels(labels)
         val config = loadConfig()
         return sdk(config).use { client ->
@@ -83,20 +88,20 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             // Whether the agent works or waits for a person: a state only, reported by the hooks that carry guidance.
             val activity = !noActivity && RUN_ACTIVITY_CAPABILITY in capabilities.features
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
-            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = { echo(it, err = true) }, labels = parsedLabels) { runId ->
+            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = terminal::report, labels = parsedLabels) { runId ->
                 val service = loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables)
+                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables, terminal)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
-                    val server = proxyServer(client, token, 0) { echo(it, err = true) }
+                    val server = proxyServer(client, token, 0, report = terminal::report)
                     try {
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables)
+                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables, terminal)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -185,7 +190,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
     /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
     private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
-    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?): Int {
+    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?, terminal: HeldTerminal): Int {
         val options = arguments.takeWhile { it != "--" }
         val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
@@ -226,11 +231,11 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                 codexInstructions = codexInstructions)
             // The variables go first: TeamCode's own settings always win (the server already refuses their names).
             val environment = variables.orEmpty() + plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment
-            val variablesFile = if (agent == "claude" && variables != null) LocalEnvironmentFile.create(client, variables) { echo(it, err = true) } else null
+            val variablesFile = if (agent == "claude" && variables != null) LocalEnvironmentFile.create(client, variables, terminal::report) else null
             return try {
                 coroutineScope {
                     val refresh = variablesFile?.let { file -> launch { file.refresh.run() } }
-                    try { runInteractiveProcess(agent, plan.arguments, environment + (variablesFile?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it.path) }.orEmpty())) }
+                    try { terminal.holding { runInteractiveProcess(agent, plan.arguments, environment + (variablesFile?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it.path) }.orEmpty())) } }
                     finally { refresh?.cancel() }
                 }
             } catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }

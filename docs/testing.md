@@ -17,7 +17,6 @@ Examples below use a macOS ARM64 host. Choose the matching target and executable
 | Host | Gradle target suffix | Output directory | Executable |
 | --- | --- | --- | --- |
 | macOS Apple Silicon | `MacosArm64` | `macosArm64` | `teamcode.kexe` |
-| macOS Intel | `MacosX64` | `macosX64` | `teamcode.kexe` |
 | Linux x64 | `LinuxX64` | `linuxX64` | `teamcode.kexe` |
 | Linux ARM64 runtime | `LinuxArm64` | `linuxArm64` | `teamcode.kexe` |
 | Windows x64 | `MingwX64` | `mingwX64` | `teamcode.exe` |

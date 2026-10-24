@@ -6,9 +6,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.VerticalDragHandle
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -27,6 +29,24 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
+import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
+import me.nathanfallet.teamcode.companion.domain.models.KindFilter
+import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionScope
+import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
+import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.artifactViewerUrl
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsUiState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsUiState
+import me.nathanfallet.teamcode.companion.resources.artifacts_mine
+import me.nathanfallet.teamcode.companion.resources.sessions_ended
+import me.nathanfallet.teamcode.companion.resources.sessions_kind_cloud
+import me.nathanfallet.teamcode.companion.resources.sessions_kind_remote
+import me.nathanfallet.teamcode.companion.resources.sessions_paused
+import me.nathanfallet.teamcode.companion.resources.sessions_team
+import org.koin.compose.koinInject
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -43,7 +63,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import androidx.window.core.layout.WindowSizeClass
 import me.nathanfallet.teamcode.companion.domain.models.Account
+import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
+import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.navigation.AccountRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
@@ -95,6 +117,9 @@ fun WideMainScreen(
     settings: SettingsViewModel = koinViewModel(),
 ) {
     val sheets = rememberMainSheets()
+    var palette by remember { mutableStateOf(false) }
+    val preferences: PreferencesRepository = koinInject()
+    val platform: PlatformInfo = koinInject()
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val settingsState by settings.uiState.collectAsStateWithLifecycle()
     val account = homeState.account
@@ -132,19 +157,23 @@ fun WideMainScreen(
                 AppCommand.SHOW_SESSIONS -> show(SessionsListRoute)
                 AppCommand.SHOW_ARTIFACTS -> active?.let { show(ArtifactsRoute(it.id)) }
                 AppCommand.SHOW_ACCOUNT -> show(AccountRoute)
+                AppCommand.COMMAND_PALETTE -> palette = !palette
             }
         }
     }
 
-    // The sidebar's lists: their own view models, kept current while the window shows them.
-    val sidebarSessions: SessionsViewModel = koinViewModel(key = "sidebar-sessions")
+    // One list of sessions and one of artifacts for the sidebar and the content panel's full lists: one load and one
+    // live feed each, the read marks and the filters shared. The same view models as the phone layout's tabs (the same
+    // keys in the same store), so a window crossing the breakpoint keeps them too. The sidebar keeps them current while
+    // the window shows it; the panel's list screens do not start or stop them.
+    val sidebarSessions: SessionsViewModel = koinViewModel()
     val sessionsState by sidebarSessions.uiState.collectAsStateWithLifecycle()
     LifecycleStartEffect(sidebarSessions) {
         sidebarSessions.start()
         onStopOrDispose { sidebarSessions.stop() }
     }
     val signedIn = account?.takeIf { it.signedIn }
-    val sidebarArtifacts: ArtifactsViewModel? = signedIn?.let { key(it.id) { koinViewModel(key = "sidebar-artifacts-${it.id}") { parametersOf(ArtifactsRoute(it.id)) } } }
+    val sidebarArtifacts: ArtifactsViewModel? = signedIn?.let { key(it.id) { koinViewModel(key = artifactsKey(it.id)) { parametersOf(ArtifactsRoute(it.id)) } } }
     val artifactsState = sidebarArtifacts?.uiState?.collectAsStateWithLifecycle()?.value
     // Back to the window after a while elsewhere: the artifacts may have changed (sessions follow their live feed).
     // A new view model (another account) loads on its own: no second request.
@@ -172,12 +201,19 @@ fun WideMainScreen(
     val navigator = rememberListDetailPaneScaffoldNavigator<Any>(scaffoldDirective = directive)
     val windowSize = currentWindowAdaptiveInfoV2().windowSizeClass
     val narrow = !windowSize.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
-    // The divider snaps to three sidebar widths; a medium window starts on the narrowest.
+    // The divider snaps to three sidebar widths: the one the member left it on, else the narrowest on a medium window.
+    val anchors = remember { SidebarWidths.map { PaneExpansionAnchor.Offset.fromStart(it) } }
     val expansion = rememberPaneExpansionState(
         keyProvider = navigator.scaffoldValue,
-        anchors = SidebarWidths.map { PaneExpansionAnchor.Offset.fromStart(it) },
-        initialAnchoredIndex = if (narrow) 0 else 1,
+        anchors = anchors,
+        initialAnchoredIndex = sidebarWidthIndex(preferences.sidebarWidth, narrow),
     )
+    LaunchedEffect(expansion) {
+        // Its first value is the width it opened on, not a choice: saving it would pin the default as the member's.
+        snapshotFlow { expansion.currentAnchor }.drop(1).collect { anchor ->
+            anchors.indexOf(anchor).takeIf { it >= 0 && it != preferences.sidebarWidth }?.let(preferences::setSidebarWidth)
+        }
+    }
     LaunchedEffect(Unit) { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail) }
 
     val actions = remember(detail, sheets) {
@@ -192,6 +228,10 @@ fun WideMainScreen(
             onSignInAgain = onSignInAgain,
             onAddAccount = onAddAccount,
             onSettings = { show(AccountRoute) },
+            onMarkSessionRead = { sidebarSessions.opened(it.id) },
+            artifactLink = { artifact -> home.uiState.value.account?.let { artifactViewerUrl(it.origin, artifact.id) } },
+            onSearch = { palette = true },
+            searchShortcut = paletteShortcutLabel(platform),
         )
     }
 
@@ -210,6 +250,7 @@ fun WideMainScreen(
                             artifacts = artifactsState?.artifacts.orEmpty().take(SIDEBAR_ROWS), artifactsLoading = artifactsState?.loading ?: false,
                             artifactsError = artifactsState?.error,
                             selection = selection, now = now,
+                            sessionsFilter = sessionsFilterLabel(sessionsState), artifactsFilter = artifactsFilterLabel(artifactsState),
                         ),
                         actions,
                         Modifier.weight(1f),
@@ -219,9 +260,11 @@ fun WideMainScreen(
             }
         },
         detailPane = {
-            AnimatedPane {
+            // Under macOS's title bar the panel starts below it (the bar stays the window's to drag and zoom); the update banner heads it.
+            AnimatedPane { Column(Modifier.fillMaxSize().windowTitleBarPadding()) {
+                UpdateBanner()
                 NavHost(
-                    detail, startDestination = SessionsListRoute, modifier = Modifier.fillMaxSize().testTag("content-panel"),
+                    detail, startDestination = SessionsListRoute, modifier = Modifier.weight(1f).fillMaxWidth().testTag("content-panel"),
                     enterTransition = { fadeIn(tween(120)) }, exitTransition = { fadeOut(tween(90)) },
                     popEnterTransition = { fadeIn(tween(120)) }, popExitTransition = { fadeOut(tween(90)) },
                 ) {
@@ -232,7 +275,10 @@ fun WideMainScreen(
                             onNewSession = { sheets.newSession(it.id) },
                             onSwitchAccount = { sheets.switcher = true },
                             titleActions = { TransfersButton(it.id) { detail.navigate(TransfersRoute(it.id)) } },
+                            onOpenSessionArtifacts = { a, session -> detail.navigate(ArtifactsRoute(a.id, session.id)) },
                             viewModel = home,
+                            sessionsViewModel = sidebarSessions,
+                            follow = false,
                         )
                     }
                     composable<SessionRoute> { entry ->
@@ -240,7 +286,9 @@ fun WideMainScreen(
                     }
                     composable<ArtifactsRoute> { entry ->
                         val route = entry.toRoute<ArtifactsRoute>()
-                        val viewModel: ArtifactsViewModel = koinViewModel { parametersOf(route) }
+                        // The account's full gallery is the sidebar's list; a session's artifacts are a list of their own.
+                        val shared = sidebarArtifacts?.takeIf { route.sessionId == null && route.accountId == signedIn.id }
+                        val viewModel: ArtifactsViewModel = shared ?: koinViewModel { parametersOf(route) }
                         ArtifactsScreen(viewModel, forSession = route.sessionId != null, onBack = detail.backFrom(entry),
                             onOpen = { detail.navigate(ArtifactRoute(route.accountId, it.id)) }, onOpenLink = onOpenLink, backLabel = detail.backLabel(entry))
                     }
@@ -262,7 +310,7 @@ fun WideMainScreen(
                             onOpenSubscriptions = { detail.navigate(SubscriptionAccountsRoute(it.id)) }, viewModel = settings)
                     }
                 }
-            }
+            } }
         },
         paneExpansionState = expansion,
         paneExpansionDragHandle = { state ->
@@ -277,7 +325,37 @@ fun WideMainScreen(
 
     MainSheetsHost(sheets, settings, onOpenSession = { accountId, sessionId -> show(SessionRoute(accountId, sessionId)) }, onSignInAgain, onAddAccount,
         onManageAccounts = { show(AccountRoute) })
+
+    if (palette) CommandPalette(
+        paletteItems(account, settingsState.accounts, sessionsState.list?.sessions.orEmpty(), artifactsState?.artifacts.orEmpty(), PaletteActions(
+            onNewSession = actions.onNewSession, onAllSessions = actions.onAllSessions, onAllArtifacts = actions.onAllArtifacts,
+            onTransfers = { show(TransfersRoute(it.id)) }, onSettings = actions.onSettings, onAddAccount = onAddAccount, onSwitchAccount = actions.onSwitchAccount,
+            onSignInAgain = onSignInAgain, onOpenSession = actions.onOpenSession, onOpenArtifact = actions.onOpenArtifact,
+        )),
+        onDismiss = { palette = false },
+    )
 }
+
+/** The key of an account's artifact list in the signed-in app's store: the phone's tab and the wide layout share it. */
+internal fun artifactsKey(accountId: String) = "artifacts-$accountId"
+
+/** The sidebar width to start on: the saved one when it is still one of [SidebarWidths], else the default for the window. */
+internal fun sidebarWidthIndex(saved: Int?, narrow: Boolean): Int = saved?.takeIf { it in SidebarWidths.indices } ?: if (narrow) 0 else 1
+
+/** Cmd+K on Apple platforms, Ctrl+K elsewhere, as the platform writes it. */
+internal fun paletteShortcutLabel(platform: PlatformInfo): String = if (platform.platform == "macOS" || platform.platform == "iOS") "⌘K" else "Ctrl+K"
+
+/** The shared session list's filter, when it is not the default (my active sessions of every kind). */
+@Composable
+private fun sessionsFilterLabel(state: SessionsUiState): String? = listOfNotNull(
+    when (state.group) { SessionGroup.ACTIVE -> null; SessionGroup.PAUSED -> stringResource(Res.string.sessions_paused); SessionGroup.ENDED -> stringResource(Res.string.sessions_ended) },
+    if (state.scope == SessionScope.TEAM) stringResource(Res.string.sessions_team) else null,
+    when (state.kind) { KindFilter.ALL -> null; KindFilter.CLOUD -> stringResource(Res.string.sessions_kind_cloud); KindFilter.REMOTE -> stringResource(Res.string.sessions_kind_remote) },
+).joinToString(" · ").ifEmpty { null }
+
+/** The shared artifact list's filter, when it is not the default (the team's). */
+@Composable
+private fun artifactsFilterLabel(state: ArtifactsUiState?): String? = if (state?.scope == ArtifactScope.MINE) stringResource(Res.string.artifacts_mine) else null
 
 /** The sidebar widths the divider snaps to. */
 val SidebarWidths = listOf(232.dp, 280.dp, 360.dp)

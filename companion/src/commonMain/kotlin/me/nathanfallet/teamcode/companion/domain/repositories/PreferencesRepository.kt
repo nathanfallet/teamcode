@@ -11,4 +11,8 @@ interface PreferencesRepository {
     /** The permission mode chosen at the last launch of a session on a device; [PermissionMode.ASK] until one was chosen. */
     val permissionMode: PermissionMode
     fun setPermissionMode(mode: PermissionMode)
+
+    /** Which of the wide layout's sidebar widths the member left the divider on; null until they moved it. */
+    val sidebarWidth: Int?
+    fun setSidebarWidth(index: Int)
 }

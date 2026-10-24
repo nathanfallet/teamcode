@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.cli.update
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import me.nathanfallet.teamcode.api.models.ReleaseVersion
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.client.ReleaseClient
@@ -24,3 +26,21 @@ internal class CheckRelease(
         return ReleaseCheck(currentVersion, verified, metadata)
     }
 }
+
+/**
+ * `teamcode update --check --json`: one line that TeamCode Desktop reads to show its update banner. Only the
+ * authenticated manifest's values are reported; [latestVersion] is null when no stable release is published.
+ */
+@Serializable
+internal data class ReleaseCheckReport(
+    val currentVersion: String,
+    val latestVersion: String?,
+    val updateAvailable: Boolean,
+    val sourceCommit: String? = null,
+    val keyId: String? = null,
+)
+
+internal fun releaseCheckJson(currentVersion: String, check: ReleaseCheck?): String = Json.encodeToString(
+    ReleaseCheckReport.serializer(),
+    ReleaseCheckReport(currentVersion, check?.release?.manifest?.version, check?.updateAvailable == true, check?.release?.manifest?.sourceCommit, check?.release?.keyId),
+)

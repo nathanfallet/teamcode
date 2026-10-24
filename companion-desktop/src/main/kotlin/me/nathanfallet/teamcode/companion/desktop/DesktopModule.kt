@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.companion.desktop
 
 import me.nathanfallet.teamcode.companion.di.platformModule
+import me.nathanfallet.teamcode.companion.di.updateModule
+import me.nathanfallet.teamcode.companion.domain.services.AppUpdater
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.services.CliAccountLink
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
@@ -18,7 +20,7 @@ import org.koin.dsl.module
  * tokens through [CliCredentialStore], the CLI's installation id, the CLI's account and sessions on this device.
  */
 fun desktopModule(environment: DesktopEnvironment): Module = module {
-    includes(platformModule(), desktopOverrides(environment))
+    includes(platformModule(), desktopOverrides(environment), updateModule)
 }
 
 internal fun desktopOverrides(environment: DesktopEnvironment): Module = module {
@@ -34,5 +36,6 @@ internal fun desktopOverrides(environment: DesktopEnvironment): Module = module 
     single { CliProcesses(get()) }
     single { CliLocator(get(), get()) }
     single { CliInstaller(get()) }
+    single<AppUpdater> { DesktopAppUpdater(get(), get(), environment, get<PlatformInfo>().appVersion) }
     single<LocalHost> { DesktopLocalHost(get(), get(), get(), get(), get<PlatformInfo>().appVersion, installer = get()) }
 }

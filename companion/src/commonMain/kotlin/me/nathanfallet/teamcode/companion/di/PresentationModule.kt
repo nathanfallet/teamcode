@@ -33,6 +33,6 @@ val presentationModule = module {
     viewModel { (route: NewSessionRoute) -> NewSessionViewModel(route, get(), get(), get(), get(), get(), get(), get()) }
     // Desktop only: its platform module provides the LocalHost these need.
     viewModel { (route: NewSessionRoute) -> LocalSessionViewModel(route, get(), get(), get()) }
-    viewModel { (route: ArtifactsRoute) -> ArtifactsViewModel(route, get()) }
+    viewModel { (route: ArtifactsRoute) -> ArtifactsViewModel(route, get(), get()) }
     viewModel { (route: ArtifactRoute) -> ArtifactViewModel(route, get(), get(), embedsArtifacts) }
 }

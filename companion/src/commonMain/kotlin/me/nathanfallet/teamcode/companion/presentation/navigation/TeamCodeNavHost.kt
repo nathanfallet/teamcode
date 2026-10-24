@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.companion.presentation.navigation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +30,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavBackStackEntry
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
+import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.screens.WideMainScreen
 import me.nathanfallet.teamcode.companion.resources.sessions_title
 import androidx.navigation.toRoute
@@ -42,6 +44,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.MainTab
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SubscriptionAccountsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
@@ -84,6 +87,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     // Captured once: the first sign-in navigates explicitly instead of rebuilding the graph.
     val startDestination = remember { if (rootViewModel.hasAccounts.value) MainRoute else AddServerRoute }
     val resolveLink: ResolveLinkUseCase = koinInject()
+    val accountRepository: AccountRepository = koinInject()
     // A link to a server no account is on: shown before any sign-in page, with its origin in full.
     var newServer by remember { mutableStateOf<String?>(null) }
     /** Opens an artifact link; false when it is not one. */
@@ -108,6 +112,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     // Narrow to wide, the screens pushed over the tabs move to the content panel; wide to narrow, the panel's screens
     // are pushed over the tabs.
     var pendingDetail by remember { mutableStateOf<List<Any>>(emptyList()) }
+    // The phone layout's tab: the panel opens on the same list, and the tab on the panel's first screen.
+    var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
     var wasWide by remember { mutableStateOf(wide) }
     LaunchedEffect(wide) {
         if (wide == wasWide) return@LaunchedEffect
@@ -118,25 +124,32 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val above = if (main < 0) emptyList() else stack.drop(main + 1)
             val routes = above.mapNotNull { it.detailRoute() }
             // Only screens the panel shows: a sign-in in progress stays where it is.
-            if (routes.isNotEmpty() && routes.size == above.size) {
-                navController.popBackStack<MainRoute>(inclusive = false)
-                pendingDetail = routes
+            if (routes.size == above.size && main >= 0) {
+                if (routes.isNotEmpty()) navController.popBackStack<MainRoute>(inclusive = false)
+                // The tab's list first (a session opened from the artifacts goes back to them), unless a pushed screen is already its own.
+                val first = tabRoute(tab, accountRepository.activeAccountId.value)
+                pendingDetail = listOfNotNull(first.takeIf { it != routes.firstOrNull() }) + routes
             }
         } else if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true) {
-            detail.currentBackStack.value.mapNotNull { it.detailRoute() }.forEach { navController.navigate(it) }
+            val panel = detail.currentBackStack.value.filter { it.destination !is androidx.navigation.NavGraph }
+            val root = panel.firstOrNull()?.let { panelTab(it) }
+            // The panel's first screen is a tab's (the sessions, the artifacts, Settings): that tab opens, the screens above are pushed.
+            tab = root ?: MainTab.SESSIONS
+            panel.drop(if (root != null) 1 else 0).mapNotNull { it.detailRoute() }.forEach { navController.navigate(it) }
         }
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
+        // The sign-in screens fill the window: below macOS's title bar when the app draws under it.
         composable<AddServerRoute> {
-            AddServerScreen(
+            Box(Modifier.windowTitleBarPadding()) { AddServerScreen(
                 canGoBack = navController.previousBackStackEntry != null,
                 onBack = { navController.popBackStack() },
                 onContinue = { origin -> navController.navigate(LoginRoute(origin)) },
-            )
+            ) }
         }
         composable<LoginRoute> { entry ->
-            LoginScreen(
+            Box(Modifier.windowTitleBarPadding()) { LoginScreen(
                 route = entry.toRoute(),
                 onBack = { navController.popBackStack() },
                 onSignedIn = {
@@ -144,7 +157,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                     if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() != true)
                         navController.navigate(MainRoute) { popUpTo(0) { inclusive = true } }
                 },
-            )
+            ) }
         }
         composable<MainRoute> {
             if (wide) WideMainScreen(
@@ -155,6 +168,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenLink = ::openLink,
                 onAddAccount = { navController.navigate(AddServerRoute) },
             ) else MainScreen(
+                initialTab = tab,
+                onTabChange = { tab = it },
                 onSignInAgain = { account -> navController.navigate(LoginRoute(account.origin, account.username)) },
                 onOpenSession = { accountId, sessionId -> navController.navigate(SessionRoute(accountId, sessionId)) },
                 onOpenArtifact = { accountId, artifactId -> navController.navigate(ArtifactRoute(accountId, artifactId)) },
@@ -245,6 +260,21 @@ internal fun SessionDestination(route: SessionRoute, onBack: (() -> Unit)?, onOp
             TransferSheet(sheet, onDismiss = { transferring = null })
         }
     }
+}
+
+/** The tab of the phone layout that [entry], the content panel's first screen, is; null for a screen pushed over the tabs. */
+internal fun panelTab(entry: NavBackStackEntry): MainTab? = when {
+    entry.destination.hasRoute<SessionsListRoute>() -> MainTab.SESSIONS
+    entry.destination.hasRoute<AccountRoute>() -> MainTab.ACCOUNT
+    entry.destination.hasRoute<ArtifactsRoute>() && entry.toRoute<ArtifactsRoute>().sessionId == null -> MainTab.ARTIFACTS
+    else -> null
+}
+
+/** The content panel's screen for the phone layout's [tab]; the artifacts need the active account. */
+internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
+    MainTab.SESSIONS -> SessionsListRoute
+    MainTab.ACCOUNT -> AccountRoute
+    MainTab.ARTIFACTS -> accountId?.let { ArtifactsRoute(it) }
 }
 
 /** The route of a screen both layouts show (pushed over the tabs, or in the content panel); null for the others. */

@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
@@ -52,6 +53,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
 import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
+import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
@@ -63,6 +65,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionVi
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import org.koin.compose.getKoin
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
@@ -182,11 +185,21 @@ fun MainScreen(
     onAddAccount: () -> Unit,
     onOpenTransfers: (accountId: String) -> Unit = {},
     onOpenSubscriptions: (accountId: String) -> Unit = {},
+    /** The tab to open on (the screen a wider window showed); then the member's. */
+    initialTab: MainTab = MainTab.SESSIONS,
+    onTabChange: (MainTab) -> Unit = {},
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
 ) {
-    var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
+    var tab by rememberSaveable { mutableStateOf(initialTab) }
+    // The tab last told to the caller: its echo back as initialTab is not a new tab, and must not undo a later choice.
+    var reported by remember { mutableStateOf(initialTab) }
+    // A wider window narrowed on one of its lists or on Settings: that tab.
+    LaunchedEffect(initialTab) { if (initialTab != reported) { reported = initialTab; tab = initialTab } }
+    // Only the member's own choices: the first composition and the tab given by a wider window are already known.
+    LaunchedEffect(tab) { if (tab != reported) { reported = tab; onTabChange(tab) } }
     val sheets = rememberMainSheets()
+    var palette by remember { mutableStateOf(false) }
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val account = homeState.account
     LaunchedEffect(Unit) {
@@ -196,11 +209,14 @@ fun MainScreen(
                 AppCommand.SHOW_SESSIONS -> tab = MainTab.SESSIONS
                 AppCommand.SHOW_ARTIFACTS -> tab = MainTab.ARTIFACTS
                 AppCommand.SHOW_ACCOUNT -> tab = MainTab.ACCOUNT
+                AppCommand.COMMAND_PALETTE -> palette = !palette
             }
         }
     }
 
     Column(Modifier.fillMaxSize().background(TeamCode.colors.background)) {
+        // The desktop's narrow window gets the banner too: shown by platform, never by size (nothing binds it on mobile).
+        UpdateBanner()
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 MainTab.SESSIONS -> SessionsScreen(
@@ -212,7 +228,7 @@ fun MainScreen(
                     viewModel = home,
                 )
                 MainTab.ARTIFACTS -> if (account != null && account.signedIn) key(account.id) {
-                    val viewModel: ArtifactsViewModel = koinViewModel(key = "artifacts-${account.id}") { parametersOf(ArtifactsRoute(account.id)) }
+                    val viewModel: ArtifactsViewModel = koinViewModel(key = artifactsKey(account.id)) { parametersOf(ArtifactsRoute(account.id)) }
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
                 } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
@@ -223,6 +239,30 @@ fun MainScreen(
     }
 
     MainSheetsHost(sheets, settings, onOpenSession, onSignInAgain, onAddAccount, onManageAccounts = { tab = MainTab.ACCOUNT })
+
+    // A tablet or a phone with a keyboard: the same palette as the desktop, over the tabs.
+    if (palette) {
+        val sessions: SessionsViewModel = koinViewModel()
+        // The Sessions tab keeps the shared list live; on another tab, the palette does while it is open.
+        if (tab != MainTab.SESSIONS) LifecycleStartEffect(sessions) {
+            sessions.start()
+            onStopOrDispose { sessions.stop() }
+        }
+        val sessionsState by sessions.uiState.collectAsStateWithLifecycle()
+        val settingsState by settings.uiState.collectAsStateWithLifecycle()
+        val artifacts = account?.takeIf { it.signedIn }?.let { key(it.id) { koinViewModel<ArtifactsViewModel>(key = artifactsKey(it.id)) { parametersOf(ArtifactsRoute(it.id)) } } }
+        val artifactsState = artifacts?.uiState?.collectAsStateWithLifecycle()?.value
+        CommandPalette(
+            paletteItems(account, settingsState.accounts, sessionsState.list?.sessions.orEmpty(), artifactsState?.artifacts.orEmpty(), PaletteActions(
+                onNewSession = { sheets.newSession(it.id) }, onAllSessions = { tab = MainTab.SESSIONS }, onAllArtifacts = { tab = MainTab.ARTIFACTS },
+                onTransfers = { onOpenTransfers(it.id) }, onSettings = { tab = MainTab.ACCOUNT }, onAddAccount = onAddAccount, onSwitchAccount = { settings.switchTo(it) },
+                onSignInAgain = onSignInAgain,
+                onOpenSession = { session -> account?.let { sessions.opened(session.id); onOpenSession(it.id, session.id) } },
+                onOpenArtifact = { artifact -> account?.let { onOpenArtifact(it.id, artifact.id) } },
+            )),
+            onDismiss = { palette = false },
+        )
+    }
 }
 
 /** A tab that needs a signed-in account while the active one is signed out. */

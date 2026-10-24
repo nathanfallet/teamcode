@@ -58,7 +58,7 @@ val generateReleaseTrust by tasks.registering {
 kotlin {
     jvmToolchain(21)
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
-    listOf(macosArm64(), macosX64(), linuxX64(), linuxArm64(), mingwX64()).forEach { target ->
+    listOf(macosArm64(), linuxX64(), linuxArm64(), mingwX64()).forEach { target ->
         if (!target.name.startsWith("mingw")) {
             target.compilations.getByName("main").cinterops.create("process") {
                 definitionFile.set(project.file("src/nativeInterop/cinterop/process.def"))
@@ -68,6 +68,16 @@ kotlin {
             target.compilations.getByName("main").cinterops.create("windows") {
                 definitionFile.set(project.file("src/nativeInterop/cinterop/windows.def"))
                 includeDirs(project.file("src/nativeInterop/cinterop"))
+            }
+        }
+        if (target.name.startsWith("linux")) {
+            // Keeps OpenSSL (linked by Ktor's Curl engine) usable until exit; see tls_exit.def.
+            target.compilations.getByName("main").cinterops.create("tlsExit") {
+                definitionFile.set(project.file("src/nativeInterop/cinterop/tls_exit.def"))
+            }
+            // Test-only destructor that checks the TLS library is still usable once atexit() handlers have run.
+            target.compilations.getByName("test").cinterops.create("tlsExitProbe") {
+                definitionFile.set(project.file("src/nativeInterop/cinterop/tls_exit_probe.def"))
             }
         }
         target.binaries.executable {

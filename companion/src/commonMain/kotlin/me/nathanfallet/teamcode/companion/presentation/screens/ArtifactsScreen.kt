@@ -18,7 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -38,6 +44,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.ArrowSquareOut
+import com.adamglin.phosphoricons.regular.Copy
 import com.adamglin.phosphoricons.regular.FileText
 import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.Link
@@ -49,6 +57,10 @@ import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.Chip
 import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
+import me.nathanfallet.teamcode.companion.presentation.components.ContextMenuBox
+import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
+import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
+import me.nathanfallet.teamcode.companion.presentation.components.arrowKeyNavigation
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.IconTile
@@ -71,7 +83,10 @@ import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_back
 import me.nathanfallet.teamcode.companion.resources.action_cancel
 import me.nathanfallet.teamcode.companion.resources.action_retry
+import me.nathanfallet.teamcode.companion.resources.artifact_copy_link
+import me.nathanfallet.teamcode.companion.resources.artifact_open_browser
 import me.nathanfallet.teamcode.companion.resources.artifacts_card_details
+import me.nathanfallet.teamcode.companion.resources.sidebar_open
 import me.nathanfallet.teamcode.companion.resources.artifacts_empty
 import me.nathanfallet.teamcode.companion.resources.artifacts_empty_body
 import me.nathanfallet.teamcode.companion.resources.artifacts_link_hint
@@ -105,6 +120,9 @@ fun ArtifactsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val now = rememberNow()
+    @Suppress("DEPRECATION") // LocalClipboardManager: plain text is all the link needs
+    val clipboard = LocalClipboardManager.current
+    val uriHandler = LocalUriHandler.current
     val colors = TeamCode.colors
     var linkSheet by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -133,12 +151,24 @@ fun ArtifactsScreen(
         LaunchedEffect(nearEnd, state.nextBefore) { if (nearEnd && state.query.isBlank()) viewModel.loadMore() }
         val shown = state.shown
         LazyColumn(
-            Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).testTag("artifacts"),
+            Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("artifacts"),
             state = listState,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(shown, key = { it.id }) { artifact -> ArtifactCard(artifact, now) { onOpen(artifact) } }
+            items(shown, key = { it.id }) { artifact ->
+                ContextMenuBox(menu = { close ->
+                    DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_open)) }, onClick = { close(); onOpen(artifact) }, modifier = Modifier.testTag("menu-open"))
+                    viewModel.viewerUrl(artifact)?.let { url ->
+                        DropdownMenuItem(text = { Text(stringResource(Res.string.artifact_copy_link)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Copy, null, Modifier.size(16.dp)) },
+                            onClick = { close(); clipboard.setText(AnnotatedString(url)) }, modifier = Modifier.testTag("menu-copy-link"))
+                        DropdownMenuItem(text = { Text(stringResource(Res.string.artifact_open_browser)) }, leadingIcon = { Icon(PhosphorIcons.Regular.ArrowSquareOut, null, Modifier.size(16.dp)) },
+                            onClick = { close(); uriHandler.openUri(url) }, modifier = Modifier.testTag("menu-browser"))
+                    }
+                }) {
+                    ArtifactCard(artifact, now) { onOpen(artifact) }
+                }
+            }
             item(key = "end") {
                 BusyRow(state.loading || state.loadingMore)
                 if (!state.loading && state.error == null && shown.isEmpty()) {
@@ -185,9 +215,27 @@ private fun LinkSheet(onOpenLink: (String) -> Boolean, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * An artifact: title, description, access, version, owner and age. On a wide pointer-first window it is a one-line
+ * row, as the sessions' cards are there.
+ */
 @Composable
 private fun ArtifactCard(artifact: Artifact, now: Long, onClick: () -> Unit) {
     val colors = TeamCode.colors
+    if (LocalDense.current && LocalWideLayout.current) {
+        TcCard(Modifier.testTag("artifact-${artifact.id}"), onClick = onClick, padding = 10.dp) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconTile(PhosphorIcons.Regular.FileText, size = 28.dp)
+                Text(artifact.title, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).testTag("artifact-title-${artifact.id}"))
+                Text(artifact.description, color = colors.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Chip(artifact.access)
+                Text(stringResource(Res.string.artifacts_card_details, artifact.currentVersion, artifact.ownerName, relativeTime(artifact.updatedAt, now)),
+                    style = MetaStyle, color = colors.muted, maxLines = 1)
+            }
+        }
+        return
+    }
     TcCard(Modifier.testTag("artifact-${artifact.id}"), onClick = onClick) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             IconTile(PhosphorIcons.Regular.FileText)

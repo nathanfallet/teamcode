@@ -5,6 +5,7 @@ import me.nathanfallet.teamcode.companion.domain.services.CliAccountLink
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import me.nathanfallet.teamcode.companion.domain.services.InstallationIdentity
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
+import me.nathanfallet.teamcode.companion.domain.services.AppUpdater
 import org.koin.dsl.koinApplication
 import kotlin.test.*
 
@@ -18,6 +19,8 @@ class DesktopModuleTest {
             assertIs<SharedInstallationIdentity>(koin.get<InstallationIdentity>())
             assertIs<CliAccountSync>(koin.get<CliAccountLink>())
             assertIs<DesktopLocalHost>(koin.get<LocalHost>())
+            // Only the desktop provides the updater the update banner needs.
+            assertIs<DesktopAppUpdater>(koin.get<AppUpdater>())
             // The app and the CLI of this computer share one installation id, beside config.json.
             val id = koin.get<InstallationIdentity>().id()
             assertEquals(id, java.io.File(directory, "teamcode/installation-id").readText())

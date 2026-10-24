@@ -37,18 +37,18 @@ class ReleaseBundleTest(unittest.TestCase):
                             fileName=name, sha256=release.digest(binary), size=binary.stat().st_size)
             (inputs / f'{target}.json').write_text(json.dumps(metadata))
 
-    def test_assembled_manifest_identifies_all_five_targets_and_every_hash(self):
+    def test_assembled_manifest_identifies_all_four_targets_and_every_hash(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); inputs = root / 'inputs'; self.fixture(inputs)
             manifest = release.assemble(inputs, self.revision, self.source_commit, root / 'output')
             self.assertEqual(set(release.TARGETS), set(manifest['assets']))
             self.assertEqual(self.revision, manifest['tag'])
             sums = (root / 'output/SHA256SUMS').read_text().splitlines()
-            self.assertEqual(6, len(sums))
+            self.assertEqual(5, len(sums))
             for line in sums:
                 checksum, name = line.split('  ')
                 self.assertEqual(checksum, release.digest(root / 'output' / name))
-            self.assertEqual(7, len(list((root / 'output').iterdir())))
+            self.assertEqual(6, len(list((root / 'output').iterdir())))
             with self.assertRaises(ValueError):
                 release.assemble(inputs, self.revision, self.source_commit, root / 'output')
 

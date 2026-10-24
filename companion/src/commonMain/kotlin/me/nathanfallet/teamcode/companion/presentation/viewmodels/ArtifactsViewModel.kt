@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
+import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.LoadArtifactsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.artifactViewerUrl
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
 
 data class ArtifactsUiState(
@@ -30,7 +32,11 @@ data class ArtifactsUiState(
 }
 
 /** The gallery: the member's own artifacts or the team's they can read, newest first, a page at a time. */
-class ArtifactsViewModel(private val route: ArtifactsRoute, private val loadArtifacts: LoadArtifactsUseCase) : ViewModel() {
+class ArtifactsViewModel(
+    private val route: ArtifactsRoute,
+    private val loadArtifacts: LoadArtifactsUseCase,
+    private val accounts: AccountRepository,
+) : ViewModel() {
     private val state = MutableStateFlow(ArtifactsUiState())
     val uiState: StateFlow<ArtifactsUiState> = state.asStateFlow()
     private var load: Job? = null
@@ -42,6 +48,13 @@ class ArtifactsViewModel(private val route: ArtifactsRoute, private val loadArti
         state.update { ArtifactsUiState(scope = scope, query = it.query) }
         reload()
     }
+
+    /**
+     * The viewer page of [artifact], built from the account's own origin (never the link the server answered), as the
+     * artifact screen shares it; null when the account is gone.
+     */
+    fun viewerUrl(artifact: Artifact): String? =
+        accounts.accounts.value.firstOrNull { it.id == route.accountId }?.let { artifactViewerUrl(it.origin, artifact.id) }
 
     fun onQuery(query: String) = state.update { it.copy(query = query) }
 

@@ -78,7 +78,7 @@ class ReleaseVerificationTest {
         val future = first.verify(bytes(ReleaseFixtures.futureTargetPayload), bytes(ReleaseFixtures.futureTargetEnvelope))
         assertTrue("linux-riscv64" in future.manifest.assets)
         future.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText), "linux-x64")
-        failure("release_target_missing") { future.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText), "macos-x64") }
+        failure("release_target_missing") { future.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText), "macos-arm64") }
         failure("release_target_unsupported") { future.verifyBinary(Buffer().writeUtf8(ReleaseFixtures.binaryText), "linux-riscv64") }
     }
     @Test fun artifactVersionsAndNamesDoNotPermitPathOrNumericAmbiguity() {
