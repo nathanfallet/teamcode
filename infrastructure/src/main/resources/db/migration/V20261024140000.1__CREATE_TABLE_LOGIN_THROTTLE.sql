@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS login_throttle (throttle_key CHAR(64) PRIMARY KEY, window_number BIGINT DEFAULT 0 NOT NULL, attempts INT DEFAULT 0 NOT NULL, failures INT DEFAULT 0 NOT NULL, locked_until BIGINT DEFAULT 0 NOT NULL, updated_at BIGINT NOT NULL);
+CREATE INDEX login_throttle_updated ON login_throttle (updated_at, locked_until);
