@@ -157,7 +157,7 @@ private fun networkMessage(failure: NetworkFailure, server: String): String = wh
         "Check the URL and the server's certificate; a proxy that intercepts HTTPS can also cause this."
     NetworkFailure.CLOSED -> "The connection to the $server closed before the answer was complete. Check your network, then try again."
     NetworkFailure.PROXY -> "The proxy between this computer and the $server refused or failed the connection. Check your proxy settings (HTTPS_PROXY on Linux) and that it allows this server."
-    NetworkFailure.HEADERS -> "The $server, or a proxy in front of it, answered with headers this CLI cannot read (a header line over 8 KB). Check the server URL and any proxy in between."
+    NetworkFailure.HEADERS -> "The $server, or a proxy in front of it, answered with headers this CLI cannot read (for example a header line over 8 KB). Check the server URL and any proxy in between."
     NetworkFailure.OTHER -> "Cannot reach the $server. Check the URL, your network and that the server is running."
 }
 
@@ -211,7 +211,7 @@ private const val TEST_HOSTS = "test access with `curl -sSI https://api.github.c
  * stays in the output for diagnostics, support and scripts (the smoke scripts match on it).
  */
 internal fun releaseFailureMessage(code: String, detail: String? = null): String {
-    val cause = detail?.let { " Cause: $it" + if (it.last() in ".…!?") "" else "." } ?: ""
+    val cause = releaseCause(detail)
     return when (code) {
         "release_installation_busy" ->
             "TeamCode installation is busy ($code): an agent session started by TeamCode is still running, or the installation is being modified. Close all agent sessions, then run the command again (for example `teamcode update`)."
@@ -254,4 +254,10 @@ internal fun releaseFailureMessage(code: String, detail: String? = null): String
         else
             "TeamCode release operation failed ($code).$cause Check connectivity, release files, private permissions and platform crypto libraries."
     }
+}
+
+/** " Cause: <detail>." for a non-blank detail, with no doubled final punctuation; empty otherwise. */
+internal fun releaseCause(detail: String?): String {
+    val text = detail?.trim()?.takeIf { it.isNotEmpty() } ?: return ""
+    return " Cause: $text" + if (text.last() in ".…!?") "" else "."
 }

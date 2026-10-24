@@ -171,7 +171,7 @@ class ReleaseClientTest {
         }
         client { throw IllegalStateException("Failed for https://release-assets.githubusercontent.com/a?sig=PRIVATE_CDN_QUERY") }.use { transport ->
             val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
-            assertEquals("release_response_invalid", error.code)
+            assertEquals("release_unexpected_failure", error.code)
             assertFalse(error.toString().contains("PRIVATE"))
             assertEquals("IllegalStateException: Failed for https://release-assets.githubusercontent.com/…", error.detail)
             assertNull(error.cause)
@@ -189,6 +189,10 @@ class ReleaseClientTest {
             CurlIllegalStateException("Connection failed for request. Reason: Send failure") to "release_network_failure",
             IllegalStateException("Header line length limit exceeded") to "release_response_invalid",
             UnsupportedOperationException("unexpected") to "release_unexpected_failure",
+            IllegalStateException("HttpClient is closed") to "release_unexpected_failure",
+            kotlinx.io.IOException("Connection reset by peer") to "release_network_failure",
+            CurlIllegalStateException("Connection failed for request. Reason: Could not resolve proxy: proxy.corp") to "release_proxy_failure",
+            DarwinHttpRequestException("Error Domain=NSURLErrorDomain Code=-1202 \"The certificate for this server is invalid, via web proxy\"") to "release_tls_failure",
             // As the Linux curl engine really throws them (seen on Ubuntu without CA certificates): plain IllegalStateExceptions.
             IllegalStateException("TLS verification failed for request: CurlRequestData(url='https://api.github.com/x', method='GET', content: 0 bytes). Reason: SSL peer certificate or SSH remote key was not OK") to "release_tls_failure",
             IllegalStateException("Connection failed for request: CurlRequestData(url='https://api.github.com/x', method='GET', content: 0 bytes). Reason: Could not resolve hostname") to "release_dns_failure",
@@ -199,6 +203,9 @@ class ReleaseClientTest {
             assertFalse(error.detail.orEmpty().contains("/x"), error.detail)
         }
         assertEquals("ConnectException: Connection refused", releaseFailureDetail(java.net.ConnectException("Connection refused")))
+        val proxy = releaseFailureDetail(IllegalStateException("Received HTTP code 407 from proxy http://alice:s3cret@proxy.corp:8080/x?y and alice:s3cret@proxy.corp"))
+        assertFalse("s3cret" in proxy || "alice" in proxy, proxy)
+        assertContains(proxy, "http://proxy.corp:8080/…")
         client { respond("", HttpStatusCode.Forbidden, headersOf("x-ratelimit-remaining" to listOf("0"), "x-ratelimit-reset" to listOf("${System.currentTimeMillis() / 1000 + 600}"))) }.use { transport ->
             val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
             assertEquals("release_rate_limited", error.code)
@@ -286,9 +293,11 @@ class ReleaseClientTest {
             transport.binary("1.0.0", "linux-x64", 6) { _, _ -> }
             transport.desktopPackage("1.0.0", "linux-x64", 6) { _, _ -> }
         }
-        fun covers(budget: Long, value: Long?) = value == null || value == io.ktor.client.plugins.HttpTimeoutConfig.INFINITE_TIMEOUT_MS || value >= budget
-        val binary = timeouts["3"] ?: timeouts["teamcode-1.0.0-linux-x64"]
-        val desktop = timeouts["4"] ?: timeouts["teamcode-desktop-1.0.0-linux-x64.tar.gz"]
+        // Asset ids follow releaseServer's order: 3 is the binary, 4 the desktop package. Each must ask for an explicit timeout.
+        fun covers(budget: Long, value: Long?) = value != null && value >= budget
+        assertTrue("3" in timeouts && "4" in timeouts, timeouts.toString())
+        val binary = timeouts["3"]
+        val desktop = timeouts["4"]
         assertTrue(covers(300_000, binary), "binary request timeout $binary, budget 300 s ($timeouts)")
         assertTrue(covers(900_000, desktop), "desktop package request timeout $desktop, budget 900 s ($timeouts)")
     }
@@ -309,6 +318,30 @@ class ReleaseClientTest {
                 transport.binary("1.0.0", "linux-x64", 6) { _, _ -> throw kotlinx.io.IOException("No space left on device") }
             }
             assertEquals("release_write_failure", error.code)
+        }
+    }
+
+    @Test fun aSinkRefusalThatIsNotAnIoErrorReachesTheCallerUnchanged() = runBlocking {
+        class Busy : Exception("installation busy")
+        client(releaseServer("1.0.0", listOf("teamcode-1.0.0-linux-x64")) { respond("binary") }).use { transport ->
+            assertFailsWith<Busy> { transport.binary("1.0.0", "linux-x64", 6) { _, _ -> throw Busy() } }
+        }
+    }
+
+    @Test fun reUploadedAssetsAreLookedUpAgainInsteadOfReportedAsUnpublished() = runBlocking {
+        var lookups = 0
+        client { request ->
+            val path = request.url.encodedPath
+            when {
+                path.endsWith("/releases/latest") -> respond("""{"draft":false,"prerelease":false,"tag_name":"1.0.0","assets":[{"id":1,"name":"manifest.json"},{"id":2,"name":"manifest.sig"}]}""")
+                path.endsWith("/releases/tags/1.0.0") -> { lookups++; respond("""{"draft":false,"tag_name":"1.0.0","assets":[{"id":11,"name":"manifest.json"},{"id":12,"name":"manifest.sig"}]}""") }
+                path.endsWith("/assets/11") || path.endsWith("/assets/12") -> respond("bytes")
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        }.use { transport ->
+            assertEquals("1.0.0", transport.latestVersion())
+            assertEquals("bytes", transport.metadata("1.0.0").manifest.decodeToString())
+            assertEquals(1, lookups)
         }
     }
 

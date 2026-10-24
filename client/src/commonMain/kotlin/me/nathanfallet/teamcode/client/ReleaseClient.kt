@@ -11,6 +11,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.DesktopReleaseFormat
@@ -46,8 +48,13 @@ class ReleaseClient(
         install(HttpTimeout) { connectTimeoutMillis = 10_000; socketTimeoutMillis = 30_000 }
     }
 
-    /** Asset name to GitHub asset id, per release version, from the release JSON already read (one lookup per version). */
+    /**
+     * Asset name to GitHub asset id, per release version, from the release JSON already read (one lookup per version).
+     * Guarded by [assetLock]; an asset that answers 404 through a cached id drops the entry and is looked up again once,
+     * so a release whose assets were re-uploaded is not reported as unpublished by a long-lived client.
+     */
     private val assetIds = mutableMapOf<String, Map<String, Long>>()
+    private val assetLock = Mutex()
 
     /** Returns only a stable published version hint; a signature must still authenticate its metadata. */
     suspend fun latestVersion(): String? = safe {
@@ -61,7 +68,7 @@ class ReleaseClient(
             val version = tag
             if (version == null || !ReleaseFormat.validVersion(version) || '-' in version)
                 throw ReleaseDownloadException("release_discovery_invalid")
-            assets(root)?.let { assetIds[version] = it }
+            assets(root)?.let { ids -> assetLock.withLock { assetIds[version] = ids } }
             version
         }
     }
@@ -71,8 +78,8 @@ class ReleaseClient(
         requireVersion(version)
         withTimeout(METADATA_BUDGET) {
             DownloadedReleaseMetadata(
-                requireNotNull(fetch(assetUrl(version, "manifest.json"), ReleaseFormat.MAX_MANIFEST_BYTES, Kind.ASSET, METADATA_BUDGET)),
-                requireNotNull(fetch(assetUrl(version, "manifest.sig"), ReleaseFormat.MAX_SIGNATURE_BYTES, Kind.ASSET, METADATA_BUDGET)),
+                fetchAsset(version, "manifest.json", ReleaseFormat.MAX_MANIFEST_BYTES, METADATA_BUDGET),
+                fetchAsset(version, "manifest.sig", ReleaseFormat.MAX_SIGNATURE_BYTES, METADATA_BUDGET),
             )
         }
     }
@@ -87,7 +94,7 @@ class ReleaseClient(
         if (target !in ReleaseFormat.targets || size !in 1..ReleaseFormat.MAX_BINARY_BYTES)
             throw ReleaseDownloadException("release_asset_invalid")
         withTimeout(BINARY_BUDGET) {
-            request(assetUrl(version, ReleaseFormat.fileName(version, target)), Kind.ASSET, BINARY_BUDGET, absentAllowed = false) { response ->
+            requestAsset(version, ReleaseFormat.fileName(version, target), BINARY_BUDGET) { response ->
                 read(response, size, exact = true, receive)
             }
         }
@@ -99,8 +106,8 @@ class ReleaseClient(
         requireVersion(version)
         withTimeout(METADATA_BUDGET) {
             DownloadedReleaseMetadata(
-                requireNotNull(fetch(assetUrl(version, DesktopReleaseFormat.MANIFEST), ReleaseFormat.MAX_MANIFEST_BYTES, Kind.ASSET, METADATA_BUDGET)),
-                requireNotNull(fetch(assetUrl(version, DesktopReleaseFormat.SIGNATURE), ReleaseFormat.MAX_SIGNATURE_BYTES, Kind.ASSET, METADATA_BUDGET)),
+                fetchAsset(version, DesktopReleaseFormat.MANIFEST, ReleaseFormat.MAX_MANIFEST_BYTES, METADATA_BUDGET),
+                fetchAsset(version, DesktopReleaseFormat.SIGNATURE, ReleaseFormat.MAX_SIGNATURE_BYTES, METADATA_BUDGET),
             )
         }
     }
@@ -114,7 +121,7 @@ class ReleaseClient(
         if (target !in ReleaseFormat.targets || size !in 1..DesktopReleaseFormat.MAX_PACKAGE_BYTES)
             throw ReleaseDownloadException("release_asset_invalid")
         withTimeout(DESKTOP_PACKAGE_BUDGET) {
-            request(assetUrl(version, DesktopReleaseFormat.fileName(version, target)), Kind.ASSET, DESKTOP_PACKAGE_BUDGET, absentAllowed = false) { response ->
+            requestAsset(version, DesktopReleaseFormat.fileName(version, target), DESKTOP_PACKAGE_BUDGET) { response ->
                 read(response, size, exact = true, receive)
             }
         }
@@ -128,7 +135,7 @@ class ReleaseClient(
     suspend fun installScript(version: String, name: String): ByteArray = safe {
         requireVersion(version)
         if (name !in setOf("install.sh", "install.ps1")) throw ReleaseDownloadException("release_asset_invalid")
-        withTimeout(METADATA_BUDGET) { requireNotNull(fetch(assetUrl(version, name), DesktopReleaseFormat.MAX_INSTALL_SCRIPT_BYTES, Kind.ASSET, METADATA_BUDGET)) }
+        withTimeout(METADATA_BUDGET) { fetchAsset(version, name, DesktopReleaseFormat.MAX_INSTALL_SCRIPT_BYTES, METADATA_BUDGET) }
     }
 
     /**
@@ -138,8 +145,25 @@ class ReleaseClient(
      * answers with short headers and redirects to the same CDN. The id comes from the release JSON of that exact tag (an
      * id, never a URL from the JSON); the bytes are still authenticated by the signed manifest and its SHA-256.
      */
-    private suspend fun assetUrl(version: String, file: String): String {
-        val ids = assetIds[version] ?: releaseAssets(version).also { assetIds[version] = it }
+    private suspend fun requestAsset(version: String, file: String, budget: Long, receive: suspend (HttpResponse) -> Unit) {
+        val cached = assetLock.withLock { assetIds[version] }
+        val ids = cached ?: releaseAssets(version).also { ids -> assetLock.withLock { assetIds[version] = ids } }
+        try { request(assetAddress(ids, file), Kind.ASSET, budget, absentAllowed = false, receive) }
+        catch (error: ReleaseDownloadException) {
+            // A 404 answers before any byte reaches [receive], so one retry with fresh ids delivers nothing twice.
+            if (cached == null || error.code != "release_http_404") throw error
+            val fresh = releaseAssets(version).also { assetLock.withLock { assetIds[version] = it } }
+            request(assetAddress(fresh, file), Kind.ASSET, budget, absentAllowed = false, receive)
+        }
+    }
+
+    private suspend fun fetchAsset(version: String, file: String, limit: Int, budget: Long): ByteArray {
+        var output: ByteArray? = null
+        requestAsset(version, file, budget) { response -> output = readBounded(response, limit) }
+        return requireNotNull(output)
+    }
+
+    private fun assetAddress(ids: Map<String, Long>, file: String): String {
         val id = ids[file] ?: throw ReleaseDownloadException("release_http_404")
         return "https://api.github.com/repos/$repository/releases/assets/$id"
     }
@@ -177,13 +201,15 @@ class ReleaseClient(
 
     private suspend fun fetch(address: String, limit: Int, kind: Kind, budget: Long, absentAllowed: Boolean = false): ByteArray? {
         var output: ByteArray? = null
-        request(address, kind, budget, absentAllowed) { response ->
-            val bytes = ByteArray(limit)
-            var count = 0
-            read(response, limit.toLong(), exact = false) { buffer, size -> buffer.copyInto(bytes, count, 0, size); count += size }
-            output = bytes.copyOf(count)
-        }
+        request(address, kind, budget, absentAllowed) { response -> output = readBounded(response, limit) }
         return output
+    }
+
+    private suspend fun readBounded(response: HttpResponse, limit: Int): ByteArray {
+        val bytes = ByteArray(limit)
+        var count = 0
+        read(response, limit.toLong(), exact = false) { buffer, size -> buffer.copyInto(bytes, count, 0, size); count += size }
+        return bytes.copyOf(count)
     }
 
     private suspend fun request(address: String, kind: Kind, budget: Long, absentAllowed: Boolean, receive: suspend (HttpResponse) -> Unit) {
@@ -205,7 +231,7 @@ class ReleaseClient(
                     val location = response.headers.getAll(HttpHeaders.Location)?.singleOrNull()
                         ?: throw ReleaseDownloadException("release_redirect_invalid")
                     if (attempt == 5 || kind == Kind.API) throw ReleaseDownloadException("release_redirect_invalid")
-                    next = checkedRedirect(location, address)
+                    next = checkedRedirect(location)
                 } else if (absentAllowed && response.status == HttpStatusCode.NotFound) {
                     complete = true
                 } else {
@@ -223,7 +249,11 @@ class ReleaseClient(
         }
     }
 
-    private fun checkedRedirect(value: String, original: String): String {
+    /**
+     * Asset downloads may only be redirected to GitHub's release CDN, on any path: the CDN serves signed, short-lived
+     * paths, and the bytes are authenticated afterwards (signed manifest, then SHA-256), never trusted for being there.
+     */
+    private fun checkedRedirect(value: String): String {
         if (value.length !in 1..8192 || value.any { it <= ' ' || it == '\u007f' }) throw ReleaseDownloadException("release_redirect_invalid")
         val url = try { Url(value) } catch (_: IllegalArgumentException) { throw ReleaseDownloadException("release_redirect_invalid") }
         if (!value.startsWith("https://") || url.protocol != URLProtocol.HTTPS || url.port != 443 ||
@@ -253,11 +283,19 @@ class ReleaseClient(
             throw ReleaseDownloadException("release_size_invalid")
     }
 
-    /** The caller's sink (staging file) failing is a local write error, never a network one. */
+    /**
+     * The caller's sink (staging file) failing with an I/O error is a local write error, never a network one. Any other
+     * error of the sink is the caller's own (a refusal, a busy installation): [safe] rethrows it unchanged.
+     */
     private suspend fun deliver(receive: suspend (ByteArray, Int) -> Unit, buffer: ByteArray, size: Int) = try { receive(buffer, size) }
     catch (error: CancellationException) { throw error }
     catch (error: ReleaseDownloadException) { throw error }
-    catch (error: Exception) { throw ReleaseDownloadException("release_write_failure", releaseFailureDetail(error)) }
+    catch (error: Exception) {
+        if (error is okio.IOException || error is kotlinx.io.IOException) throw ReleaseDownloadException("release_write_failure", releaseFailureDetail(error))
+        throw SinkFailure(error)
+    }
+
+    private class SinkFailure(val original: Exception) : Exception()
 
     private suspend fun <T> safe(operation: suspend () -> T): T = try { operation() }
     catch (error: TimeoutCancellationException) {
@@ -267,6 +305,7 @@ class ReleaseClient(
     }
     catch (error: CancellationException) { throw error }
     catch (error: ReleaseDownloadException) { throw error }
+    catch (error: SinkFailure) { throw error.original }
     catch (error: Exception) { throw ReleaseDownloadException(releaseFailureCode(error), releaseFailureDetail(error)) }
 
     override fun close() = http.close()
@@ -274,7 +313,8 @@ class ReleaseClient(
     @OptIn(kotlin.time.ExperimentalTime::class)
     private fun rateLimitDetail(reset: String?): String {
         val seconds = reset?.toLongOrNull()?.minus(kotlin.time.Clock.System.now().epochSeconds) ?: return "GitHub API rate limit reached"
-        return "GitHub API rate limit reached, it resets in about ${(seconds.coerceIn(0, 3_600) + 59) / 60} minutes"
+        val minutes = (seconds.coerceIn(0, 3_600) + 59) / 60
+        return "GitHub API rate limit reached, it resets in " + if (minutes <= 1) "about a minute" else "about $minutes minutes"
     }
 
     private companion object {
@@ -297,7 +337,8 @@ internal fun releaseFailureCode(error: Throwable): String = when (networkFailure
     NetworkFailure.CLOSED -> "release_connection_closed"
     NetworkFailure.HEADERS -> "release_response_invalid"
     NetworkFailure.OTHER -> "release_network_failure"
-    null -> if (generateSequence(error) { it.cause }.take(8).any { it is IllegalArgumentException || it is IllegalStateException })
-        "release_response_invalid" else "release_unexpected_failure"
+    // Inside the transport (the sink is handled apart), an I/O error is a network one even when no engine marker names it.
+    null -> if (generateSequence(error) { it.cause }.take(8).any { it is kotlinx.io.IOException || it is okio.IOException })
+        "release_network_failure" else "release_unexpected_failure"
 }
 

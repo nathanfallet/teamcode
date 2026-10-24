@@ -185,6 +185,7 @@ class CliErrorsTest {
     @Test fun `a github rate limit says to wait and how long`() {
         val text = release("release_rate_limited", "GitHub API rate limit reached, it resets in about 10 minutes")
         assertContains(text, "60 per hour"); assertContains(text, "about 10 minutes"); assertContains(text, "Wait")
+        assertEquals("", releaseCause("")); assertEquals(" Cause: cut short…", releaseCause("cut short…"))
     }
 
     @Test fun `a local write failure is about disk space and permissions not the network`() {
