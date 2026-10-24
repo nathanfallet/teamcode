@@ -155,7 +155,9 @@ compose.desktop {
             // version replaces the previous one.
             windows {
                 perUserInstall = true
-                installationPath = "Programs\\TeamCode"
+                // jpackage reads its arguments from a file where a backslash escapes the next character: a single one
+                // installed the app in %LOCALAPPDATA%\ProgramsTeamCode, where `teamcode ui` does not look.
+                installationPath = "Programs\\\\TeamCode"
                 upgradeUuid = "0a37b001-5b3a-4573-8733-7051f76cf26f"
                 menu = true
                 shortcut = true
