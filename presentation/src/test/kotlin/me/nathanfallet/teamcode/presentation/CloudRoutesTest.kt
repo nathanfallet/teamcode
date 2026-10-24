@@ -818,6 +818,8 @@ class CloudRoutesTest {
             assertTrue("session_not_paused" in running.bodyAsText())
             store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED, desiredState = DesiredState.PAUSED)
             assertEquals(HttpStatusCode.OK, access("colleague", "none").status)
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(githubAccess = CloudGitHubAccess.OWNER, environment = CloudEnvironmentSpec(requireGitHub = true))
+            assertEquals(HttpStatusCode.UnprocessableEntity, access("colleague", "none").status, "A profile that requires GitHub cannot run without it")
         } finally { runner.close() }
         // A session the owner created stays as before: the owner's token, with nothing to turn on.
         val own = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Own", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session

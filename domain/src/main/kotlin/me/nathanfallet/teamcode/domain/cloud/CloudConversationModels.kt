@@ -38,7 +38,10 @@ enum class CloudInputKind(val wire: String) {
 }
 
 /** A member's answer to the `permission.request` [requestId]: [answers] (a question's answers) need [allow]. */
-data class PermissionAnswer(val requestId: String, val allow: Boolean, val message: String?, val answers: List<QuestionAnswer>)
+data class PermissionAnswer(val requestId: String, val allow: Boolean, val message: String?, val answers: List<QuestionAnswer>) {
+    /** A denial without a message or answers: it only stops a tool use and carries no instruction for the agent. */
+    val isBareDenial: Boolean get() = !allow && message == null && answers.isEmpty()
+}
 /** The answer to the question at index [question]: the chosen [options] by index, or free [text]. */
 data class QuestionAnswer(val question: Int, val options: List<Int> = emptyList(), val text: String? = null)
 

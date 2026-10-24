@@ -295,6 +295,8 @@ class CloudSessionService(
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
                 current.state == CloudSessionState.TRANSFERRING || current.transferId != null -> throw TeamFailure("session_transferring", 409, "The session is being transferred.")
                 current.githubAccess == access -> null
+                access == CloudGitHubAccess.NONE && current.environment.requireGitHub -> throw TeamFailure("github_required", 422,
+                    "This session's profile requires GitHub: it cannot run without GitHub access.")
                 access == CloudGitHubAccess.NONE && current.state != CloudSessionState.PAUSED -> throw TeamFailure("session_not_paused", 409,
                     "A running agent keeps the GitHub token it already received. Pause the session, then turn GitHub access off.")
                 else -> CloudTransition(current.copy(githubAccess = access, updatedAt = now),

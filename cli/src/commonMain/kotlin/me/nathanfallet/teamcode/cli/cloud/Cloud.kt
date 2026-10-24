@@ -240,6 +240,8 @@ private class CloudGitHub : SuspendingCliktCommand(name = "github") {
             if ("cloud.sessions.github-access.v1" !in client.capabilities().features) throw CliktError("This TeamCode server does not support choosing a session's GitHub access.")
             val session = client.setCloudGitHubAccess(id, access)
             echo("GitHub: " + GITHUB_ACCESS_HELP.getValue(session.githubAccess ?: access))
+            if (access != "none" && session.createdBy.initiatorId != session.ownerId) echo("This session was created by ${session.createdBy.initiatorId}: " +
+                "its conversation and workspace hold what they asked for, and the agent now acts on them with your GitHub access. Read the transcript (teamcode cloud logs $id) first.", err = true)
         }
     }
 }

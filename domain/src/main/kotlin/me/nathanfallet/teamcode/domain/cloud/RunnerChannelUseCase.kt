@@ -87,7 +87,7 @@ class RunnerChannelUseCase(
         if (unreadable.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables of the owner are unavailable right now: ${unreadable.joinToString(", ")}.", retryable = true)
         if (missing.isNotEmpty()) fail(teamId, sessionId, epoch, "Required environment variables are not assigned to the owner: ${missing.joinToString(", ")}.")
         if (session.githubAccess == CloudGitHubAccess.NONE && spec.requireGitHub)
-            fail(teamId, sessionId, epoch, "GitHub access is off for this session, which was created on its owner's behalf; the owner turns it on with " +
+            fail(teamId, sessionId, epoch, "GitHub access is off for this session; its owner turns it on with " +
                 "teamcode cloud github ${session.id} --access owner.", retryable = true)
         val access = if (session.githubAccess == CloudGitHubAccess.NONE) GitHubAccess.NotLinked else github.userAccess(teamId, owner.id)
         if (spec.requireGitHub && access !is GitHubAccess.Linked)

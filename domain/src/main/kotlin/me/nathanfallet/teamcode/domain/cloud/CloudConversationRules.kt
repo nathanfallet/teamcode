@@ -4,6 +4,21 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 /** Bounds and masking for transcripts and inputs. */
 object CloudConversationRules {
+    /**
+     * Whether [authorId]'s instructions are kept from the agent of [session] because it holds the owner's GitHub token
+     * (audit M2), before the owner's link is checked: a non-owner, in `owner` mode, on a cloud session.
+     */
+    fun ownerOnly(session: CloudSession, authorId: String) =
+        authorId != session.ownerId && session.kind != CloudSessionKind.REMOTE && session.githubAccess == CloudGitHubAccess.OWNER
+
+    /**
+     * An input that only stops something (an interrupt, a bare permission denial as the transport encodes it) and so may
+     * reach an owner-only agent from anyone with `message`.
+     */
+    fun onlyStops(input: CloudInput) = input.kind == CloudInputKind.INTERRUPT ||
+        (input.kind == CloudInputKind.PERMISSION && input.text != null && BARE_DENIAL.matches(input.text))
+    private val BARE_DENIAL = Regex("""\{"requestId":"(?:[^"\\]|\\.)*","behavior":"deny"\}""")
+
     /** Longest message a member may send, in characters. */
     const val MAX_MESSAGE_CHARS = 32_000
     /** Longest string kept in an event; longer strings are cut and marked. */

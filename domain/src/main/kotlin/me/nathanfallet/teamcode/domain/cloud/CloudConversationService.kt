@@ -115,7 +115,8 @@ class CloudConversationService(
     suspend fun answer(principal: Principal, id: String, answer: PermissionAnswer, request: InputRequest): InputOutcome {
         CloudConversationRules.validatePermissionAnswer(answer)
         val session = open(principal, id, CloudPermission.MESSAGE)
-        requireGitHubInstructor(principal, session)
+        // A bare denial only stops a tool use, like an interrupt: it stays open to everyone with `message`.
+        if (!answer.isBareDenial) requireGitHubInstructor(principal, session)
         val approver = session.ownerId == principal.member.id || principal.isCloudAdministrator
         val input = newInput(principal, session, CloudInputKind.PERMISSION, request.text, request.copy(wake = false))
         // Checked by the store under the session lock, after an idempotent retry was replayed (a retry of an answer
@@ -134,11 +135,12 @@ class CloudConversationService(
     /**
      * Audit M2: an agent that holds its owner's GitHub token does what its messages say, including printing the token.
      * In [CloudGitHubAccess.OWNER] mode, while the owner has linked GitHub, only the owner sends it messages and answers
-     * its permission requests; an interrupt only stops a turn and stays open to everyone with `message`.
+     * its permission requests; an interrupt or a bare denial only stops a turn and stays open to everyone with `message`.
+     * Delivery checks again ([RunnerConversationUseCase]): an input accepted earlier (owner not linked yet, session
+     * shared then) never reaches an agent that now holds the token.
      */
     private suspend fun requireGitHubInstructor(principal: Principal, session: CloudSession) {
-        if (session.ownerId == principal.member.id || session.kind == CloudSessionKind.REMOTE) return
-        if (session.githubAccess != CloudGitHubAccess.OWNER || !githubLinked(session.teamId, session.ownerId)) return
+        if (!CloudConversationRules.ownerOnly(session, principal.member.id) || !githubLinked(session.teamId, session.ownerId)) return
         throw TeamFailure("github_owner_only", 403, "This session's agent holds its owner's GitHub token, so only the owner instructs it. " +
             "The owner can share it with teamcode cloud github ${session.id} --access shared.")
     }

@@ -18,7 +18,8 @@ internal object HookText {
             val c = text[i]
             val pair = c.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()
             val code = if (pair) 0x10000 + ((c.code - 0xD800) shl 10) + (text[i + 1].code - 0xDC00) else c.code
-            val kept = keepLines && (c == '\n' || c == '\t')
+            // A CRLF line ending stays a line ending; a lone carriage return could overwrite the line.
+            val kept = keepLines && (c == '\n' || c == '\t' || (c == '\r' && i + 1 < text.length && text[i + 1] == '\n'))
             if (!kept && hidden(code, c, pair)) append("<U+").append(code.toString(16).uppercase().padStart(4, '0')).append('>')
             else { append(c); if (pair) append(text[i + 1]) }
             i += if (pair) 2 else 1
@@ -31,6 +32,8 @@ internal object HookText {
         c.isISOControl() -> true
         code in 0x200B..0x200F || code in 0x2028..0x202E || code in 0x2060..0x206F -> true
         code == 0xFEFF || code == 0x00AD || code == 0x061C || code == 0x180E || code == 0x034F || code in 0xFFF9..0xFFFB -> true
+        // Letters and symbols that render blank: Hangul fillers, the Braille blank.
+        code == 0x115F || code == 0x1160 || code == 0x3164 || code == 0xFFA0 || code == 0x2800 -> true
         else -> c.category == CharCategory.FORMAT || c.category == CharCategory.LINE_SEPARATOR || c.category == CharCategory.PARAGRAPH_SEPARATOR
     }
 }
@@ -44,10 +47,18 @@ internal class HookShownDigests(private val file: Path, private val fileSystem: 
     fun record(name: String, digest: String) = writePrivateFile(file.toString(), json.encodeToString(load() + (name to digest)))
 }
 
-/** Whether `approve` may record the delivered [hook]: it must be the version the member read, never one swapped in since. */
+/**
+ * Whether `approve` may record the delivered [hook]: it must be the version the member read, never one the server
+ * swapped in since. It records the member's review step; a process running with the member's rights can approve hooks
+ * anyway (it can write the approvals file), so this is no defense against local code.
+ */
 internal object HookApprovalCheck {
+    private val digest = Regex("(sha256:)?[0-9a-f]{64}")
     fun problem(hook: EffectiveHookView, requested: String?, shown: String?): String? {
-        val expected = requested ?: shown ?: return "Read it first with teamcode hooks show ${hook.name}, or pass --digest."
+        val normalized = requested?.trim()?.lowercase()?.also {
+            if (!digest.matches(it)) return "Pass --digest as sha256: followed by 64 hexadecimal digits, as teamcode hooks show prints it."
+        }?.let { if (it.startsWith("sha256:")) it else "sha256:$it" }
+        val expected = normalized ?: shown ?: return "Read it first with teamcode hooks show ${hook.name}, or pass --digest."
         if (expected != hook.digest) return "The delivered version changed since you read it (you read $expected, the server now delivers ${hook.digest}). " +
             "Read it again with teamcode hooks show ${hook.name}."
         return null

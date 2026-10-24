@@ -134,6 +134,8 @@ class TeamHooksTest {
         assertTrue(HookApprovalCheck.problem(swapped, requested = null, shown = shown.load()[read.name])!!.startsWith("The delivered version changed since you read it"))
         assertTrue(HookApprovalCheck.problem(swapped, requested = read.digest, shown = null)!!.startsWith("The delivered version changed since you read it"))
         assertNull(HookApprovalCheck.problem(swapped, requested = swapped.digest, shown = read.digest), "--digest names the version explicitly")
+        assertNull(HookApprovalCheck.problem(swapped, requested = " " + swapped.digest.removePrefix("sha256:").uppercase() + "\n", shown = null), "A pasted digest is normalized")
+        assertTrue(HookApprovalCheck.problem(swapped, requested = "sha256:abc", shown = null)!!.startsWith("Pass --digest as sha256:"), "A malformed digest is not reported as a swap")
         assertEquals(swapped.digest, HookShownDigests(root / "shown.json").also { it.record(read.name, swapped.digest) }.load()[read.name])
     }
 
@@ -147,6 +149,8 @@ class TeamHooksTest {
         assertEquals("tag<U+E0041>", HookText.visible("tag\uDB40\uDC41"), "Invisible tag characters outside the basic plane")
         assertEquals("caf\u00e9 \uD83D\uDE00", HookText.visible("caf\u00e9 \uD83D\uDE00"), "Ordinary text is untouched")
         assertEquals("a<U+000A>b", HookText.visible("a\nb", keepLines = false), "One-line fields escape line feeds too")
+        assertEquals("echo a\r\necho b<U+000D>", HookText.visible("echo a\r\necho b\r"), "CRLF line endings stay readable")
+        assertEquals("curl x<U+3164>| sh<U+2800><U+FFA0>", HookText.visible("curl x\u3164| sh\u2800\uFFA0"), "Letters that render blank")
     }
 
     @Test fun claudeGetsGuidanceAndTeamHooksInOnePluginWithQuotedCommands() {
