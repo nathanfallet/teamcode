@@ -27,7 +27,7 @@ TeamCode Desktop (macOS, Windows, Linux) follows your team's sessions and runs r
 
    | System | `teamcode ui` installs | Also attached |
    | --- | --- | --- |
-   | macOS (Apple silicon `macos-arm64`, Intel `macos-x64`) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
+   | macOS (Apple silicon `macos-arm64`; Intel Macs are no longer supported, the last release with an Intel build is [1.0.0](https://github.com/nathanfallet/teamcode/releases/tag/1.0.0)) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
    | Windows (`windows-x64`) | `.msi`, installed for the current user in `%LOCALAPPDATA%\TeamCode App` | |
    | Linux (`linux-x64`, `linux-arm64`) | `.tar.gz` of the `TeamCode` folder (`bin/TeamCode` starts it) | `.deb`, `.rpm` (installed in `/opt/teamcode`) |
 

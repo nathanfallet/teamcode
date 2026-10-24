@@ -151,7 +151,7 @@ destination.write_bytes(pathlib.Path(os.environ['TEAMCODE_TEST_BUNDLE'], name).r
 
     def test_all_posix_targets_use_exact_pinned_https_assets_and_literal_native_arguments(self):
         for system, machine, target in [('Linux', 'x86_64', 'linux-x64'), ('Linux', 'aarch64', 'linux-arm64'),
-                                        ('Darwin', 'x86_64', 'macos-x64'), ('Darwin', 'arm64', 'macos-arm64')]:
+                                        ('Darwin', 'arm64', 'macos-arm64')]:
             with self.subTest(target=target):
                 for call in self.calls.iterdir(): call.unlink()
                 result = self.run_installer(TEAMCODE_TEST_SYSTEM=system, TEAMCODE_TEST_MACHINE=machine)
@@ -203,6 +203,10 @@ destination.write_bytes(pathlib.Path(os.environ['TEAMCODE_TEST_BUNDLE'], name).r
         self.assertIn(b'macos-arm64', result.stdout)
         self.assertEqual([], list(self.calls.iterdir()))
         self.execution.unlink()
+        result = self.run_installer(TEAMCODE_INSTALL_BUNDLE=str(self.bundle), TEAMCODE_TEST_SYSTEM='Darwin', TEAMCODE_TEST_MACHINE='x86_64')
+        self.assertNotEqual(0, result.returncode); self.assertFalse(self.execution.exists())
+        self.assertIn(b'macOS on Intel is no longer supported', result.stderr)
+        self.assertIn(b'1.0.0', result.stderr)
         result = self.run_installer(TEAMCODE_TEST_UID='0')
         self.assertNotEqual(0, result.returncode); self.assertFalse(self.execution.exists())
         result = self.run_installer(TEAMCODE_TEST_MACHINE='riscv64')

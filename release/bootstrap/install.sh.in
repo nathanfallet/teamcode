@@ -31,6 +31,10 @@ case "$machine" in
     x86_64|amd64) machine=x64 ;;
     *) fail 'Supported architectures: ARM64 and x64.' ;;
 esac
+# Intel Macs have no build any more; 1.0.0 is the last release that carries one (Apple Silicon under Rosetta is arm64 above).
+if [ "$system" = macos ] && [ "$machine" = x64 ]; then
+    fail 'macOS on Intel is no longer supported; the last release with an Intel build is 1.0.0 (https://github.com/@@REPOSITORY@@/releases/tag/1.0.0).'
+fi
 target="$system-$machine"
 case "$target" in
 @@POSIX_ASSETS@@

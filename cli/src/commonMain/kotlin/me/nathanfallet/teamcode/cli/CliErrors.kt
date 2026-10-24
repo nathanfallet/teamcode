@@ -247,6 +247,9 @@ internal fun releaseFailureMessage(code: String, detail: String? = null): String
                 "Free some disk space (`df -h` shows it on macOS and Linux), check that your user owns the TeamCode installation folder, then run the command again."
         "release_unexpected_failure" ->
             "The TeamCode release download failed unexpectedly ($code).$cause Run the command again with `teamcode --debug` and report its output; meanwhile, $REINSTALL."
+        "release_target_missing" ->
+            "This TeamCode release has no build for this computer ($code). macOS on Intel is no longer supported: the last release with an Intel build is 1.0.0 " +
+                "(https://github.com/nathanfallet/teamcode/releases/tag/1.0.0). On any other system, check the version with `teamcode update --check`."
         "release_http_404" ->
             "This TeamCode release or one of its files is not published on GitHub ($code). Check the version with `teamcode update --check`."
         else -> if (code.startsWith("release_http_5"))

@@ -10,7 +10,7 @@ import shutil
 import struct
 import subprocess
 
-TARGETS = ('macos-arm64', 'macos-x64', 'linux-x64', 'linux-arm64', 'windows-x64')
+TARGETS = ('macos-arm64', 'linux-x64', 'linux-arm64', 'windows-x64')
 NUMBER = r'(?:0|[1-9][0-9]*)'
 PRERELEASE_PART = rf'(?:{NUMBER}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
 VERSION = re.compile(rf'{NUMBER}\.{NUMBER}\.{NUMBER}(?:-{PRERELEASE_PART}(?:\.{PRERELEASE_PART})*)?')
@@ -53,8 +53,8 @@ def binary_target(path):
             return 'linux-x64' if machine == 62 else 'linux-arm64'
     if len(data) >= 8 and data[:4] == b'\xcf\xfa\xed\xfe':
         cpu = struct.unpack_from('<I', data, 4)[0]
-        if cpu in (0x1000007, 0x100000C):
-            return 'macos-x64' if cpu == 0x1000007 else 'macos-arm64'
+        if cpu == 0x100000C:
+            return 'macos-arm64'
     if data[:2] == b'MZ' and len(data) >= 64:
         offset = struct.unpack_from('<I', data, 60)[0]
         if offset + 6 <= len(data) and data[offset:offset + 4] == b'PE\0\0' and struct.unpack_from('<H', data, offset + 4)[0] == 0x8664:

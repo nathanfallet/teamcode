@@ -40,7 +40,7 @@ mavenPublishing {
 kotlin {
     jvmToolchain(21)
     jvm { testRuns["test"].executionTask.configure { useJUnitPlatform() } }
-    macosArm64(); macosX64(); linuxX64(); linuxArm64(); mingwX64()
+    macosArm64(); linuxX64(); linuxArm64(); mingwX64()
     // Mobile targets for the companion app; published with the others.
     iosArm64(); iosSimulatorArm64()
     androidLibrary {

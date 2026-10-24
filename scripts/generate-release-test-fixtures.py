@@ -20,6 +20,7 @@ def main():
             'internal object ReleaseFixtures {', '    const val binaryText = "TeamCode native binary fixture"']
     binary = b'TeamCode native binary fixture'
     version = '1.2.3-alpha.1'
+    # The vectors keep a fifth, retired target (macos-x64): older releases carried it and current clients must still verify them.
     assets = {target: {'fileName': f'teamcode-{version}-{target}' + ('.exe' if target.startswith('windows-') else ''),
                        'sha256': hashlib.sha256(binary).hexdigest(), 'size': len(binary)}
               for target in ('macos-arm64', 'macos-x64', 'linux-arm64', 'linux-x64', 'windows-x64')}
