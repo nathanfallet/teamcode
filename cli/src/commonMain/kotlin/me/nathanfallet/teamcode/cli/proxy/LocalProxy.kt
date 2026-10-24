@@ -24,11 +24,13 @@ internal const val SERVICE_CHALLENGE_HEADER = "TeamCode-Service-Challenge"
 private val serviceChallenge = Regex("[0-9a-f]{64}")
 
 /**
- * What only a holder of [localToken] can answer to [challenge]: HMAC-SHA256, keyed with the token, of the challenge and
- * the installation [serviceId]. The answer reveals nothing about the token, and a fresh challenge cannot be replayed.
+ * What only a holder of [localToken] can answer to [challenge]: HMAC-SHA256, keyed with the token, of the challenge, the
+ * installation [serviceId] and the upstream [serverUrl]. The probe knows the last two and checks them through the proof,
+ * so the answer to an unauthenticated challenge does not carry them. It reveals nothing about the token either, and a
+ * proof is useless to another listener: answering a probe's fresh challenge takes the token, at that moment.
  */
-internal fun serviceProof(localToken: String, challenge: String, serviceId: String): String =
-    "teamcode-service-v1\n$challenge\n$serviceId".encodeUtf8().hmacSha256(localToken.encodeUtf8()).hex()
+internal fun serviceProof(localToken: String, challenge: String, serviceId: String, serverUrl: String?): String =
+    "teamcode-service-v1\n$challenge\n$serviceId\n${serverUrl.orEmpty()}".encodeUtf8().hmacSha256(localToken.encodeUtf8()).hex()
 
 /** Fixed inference and local guidance routes. No CONNECT or arbitrary destination. */
 fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int = 2 * 1024 * 1024, serviceId: String? = null, serverUrl: String? = null,
@@ -51,8 +53,11 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
             } else {
                 call.response.header(HttpHeaders.CacheControl, "no-store")
                 call.respondText(buildJsonObject {
-                    challenge?.let { put("proof", serviceProof(localToken, it, serviceId)) }
-                    put("id", serviceId); put("serverUrl", serverUrl); put("version", me.nathanfallet.teamcode.cli.VERSION)
+                    // Unauthenticated: the proof stands for the installation ID and the upstream origin, which only a
+                    // caller holding the token sees in clear.
+                    if (challenge != null) put("proof", serviceProof(localToken, challenge, serviceId, serverUrl))
+                    else { put("id", serviceId); put("serverUrl", serverUrl) }
+                    put("version", me.nathanfallet.teamcode.cli.VERSION)
                     putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }

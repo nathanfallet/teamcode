@@ -114,7 +114,11 @@ class WebhookService(
     }
 
     suspend fun update(actor: Principal, id: String, version: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription {
-        write(actor); validate(url, types, description)
+        write(actor)
+        // A subscription kept on its URL can still be paused, relabeled or deleted after the operator withdrew private
+        // targets; only a new URL must pass the address rule (its deliveries are refused meanwhile).
+        val unchanged = store.find(actor.teamId, id)?.url == url
+        validate(url, types, description, checkTarget = !unchanged)
         return store.update(actor, id, version, url, types, description, enabled)
     }
 
@@ -135,12 +139,12 @@ class WebhookService(
         return store.enqueueTest(actor, id, payload)
     }
 
-    private fun validate(url: String, types: Set<TeamEventType>, description: String) {
+    private fun validate(url: String, types: Set<TeamEventType>, description: String, checkTarget: Boolean = true) {
         val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?').substringBefore('#')
         if (url.length > MAX_URL || !url.startsWith("https://") || '#' in url || '@' in authority || url.any { it.isISOControl() || it.isWhitespace() } ||
             !CloudAdministrationService.allowedApiHost(url) || authority.isEmpty())
             throw TeamFailure("invalid_webhook", 400, "Use an https URL without credentials or a fragment, and not a link-local or cloud metadata address.")
-        if (!allowPrivateTargets && !CloudAdministrationService.publicApiHost(url))
+        if (checkTarget && !allowPrivateTargets && !CloudAdministrationService.publicApiHost(url))
             throw TeamFailure("webhook_host_not_allowed", 400, "Webhooks reach public addresses only: not localhost, a loopback, private or reserved address. The server operator can allow private targets with TEAMCODE_WEBHOOK_PRIVATE_TARGETS=true.")
         if (types.isEmpty()) throw TeamFailure("invalid_webhook", 400, "Choose at least one event type.")
         if (description.length > MAX_DESCRIPTION || description.any { it.isISOControl() }) throw TeamFailure("invalid_webhook", 400, "The description is at most $MAX_DESCRIPTION characters.")

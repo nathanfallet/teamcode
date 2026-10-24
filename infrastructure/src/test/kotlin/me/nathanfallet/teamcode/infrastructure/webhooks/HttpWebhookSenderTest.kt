@@ -1,22 +1,18 @@
 package me.nathanfallet.teamcode.infrastructure.webhooks
 
 import com.sun.net.httpserver.HttpServer
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 class HttpWebhookSenderTest {
-    private val http = HttpClient(CIO) {
-        followRedirects = false; expectSuccess = false
-        install(HttpTimeout) { connectTimeoutMillis = 2_000; requestTimeoutMillis = 2_000 }
-    }
-    @AfterTest fun close() = http.close()
+    private val senders = mutableListOf<HttpWebhookSender>()
+    @AfterTest fun close() = senders.forEach { it.close() }
+    private fun sender(allowPrivateTargets: Boolean = false, lookup: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() }) =
+        HttpWebhookSender(allowPrivateTargets, lookup, requestTimeoutMillis = 2_000).also { senders += it }
     /** The local receivers below listen on loopback, which only an operator's opt-in allows. */
-    private fun internal(client: HttpClient = http) = HttpWebhookSender(client, allowPrivateTargets = true)
+    private fun internal() = sender(allowPrivateTargets = true)
 
     private fun serve(status: Int, onRequest: (headers: Map<String, String>, body: String) -> Unit = { _, _ -> }, location: String? = null): Pair<HttpServer, String> {
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -53,7 +49,7 @@ class HttpWebhookSenderTest {
     }
 
     @Test fun refusesMetadataHostsBeforeAndAfterNameResolution() = runBlocking {
-        val sender = HttpWebhookSender(http, resolver = { if (it == "rebind.example.test") listOf(InetAddress.getByAddress(byteArrayOf(169.toByte(), 254.toByte(), 169.toByte(), 254.toByte()))) else throw java.net.UnknownHostException(it) })
+        val sender = sender(allowPrivateTargets = true, lookup = { if (it == "rebind.example.test") listOf(InetAddress.getByAddress(byteArrayOf(169.toByte(), 254.toByte(), 169.toByte(), 254.toByte()))) else throw java.net.UnknownHostException(it) })
         assertEquals("host_not_allowed", sender.send("https://169.254.169.254/latest", emptyMap(), "{}").error, "A literal metadata address")
         assertEquals("host_not_allowed", sender.send("https://metadata.google.internal/", emptyMap(), "{}").error)
         assertEquals("host_not_allowed", sender.send("https://rebind.example.test/hook", emptyMap(), "{}").error, "A name that resolves to a metadata address")
@@ -65,7 +61,7 @@ class HttpWebhookSenderTest {
         var hits = 0
         val (server, url) = serve(204, { _, _ -> hits++ })
         try {
-            val sender = HttpWebhookSender(http, resolver = { host ->
+            val sender = sender(lookup = { host ->
                 when (host) {
                     "internal.example.test" -> listOf(InetAddress.getByAddress(byteArrayOf(10, 0, 0, 5)))
                     "mixed.example.test" -> listOf(InetAddress.getByAddress(byteArrayOf(93.toByte(), 184.toByte(), 215.toByte(), 14)), InetAddress.getLoopbackAddress())
@@ -79,35 +75,28 @@ class HttpWebhookSenderTest {
             assertEquals("host_not_allowed", sender.send("https://mixed.example.test/x", emptyMap(), "{}").error, "Every answer must be public")
             assertEquals(0, hits)
             assertEquals(204, internal().send(url, emptyMap(), "{}").status, "The operator's opt-in allows it")
+            assertEquals("dns", sender(lookup = { throw java.net.UnknownHostException(it) }).send("https://nowhere.example.test/x", emptyMap(), "{}").error)
         } finally { server.stop(0) }
     }
 
     /**
-     * Audit L2: the client dials the address its resolver checked. The check before the connection sees a public
-     * answer; the connection's own lookup gets a loopback one (a rebinding name) and is refused without reaching it,
-     * while a client whose resolver accepts the answer reaches exactly that address under the original host name.
+     * Audit L2: the connection dials the address its own lookup checked, and that lookup is the only one. A name that
+     * answers a loopback address is refused without reaching the local receiver; with the operator's opt-in, the
+     * request reaches exactly the checked address, with the original name kept in `Host`.
      */
     @Test fun theConnectionDialsTheAddressItChecked() = runBlocking {
         val hosts = mutableListOf<String>()
         val (server, url) = serve(204, { headers, _ -> hosts += headers["host"].orEmpty() })
         val port = url.substringAfter("127.0.0.1:").substringBefore('/')
-        val loopback = { _: String -> listOf(InetAddress.getLoopbackAddress()) }
-        fun client(allowed: (ByteArray) -> Boolean) = HttpClient(CIO) {
-            followRedirects = false; expectSuccess = false
-            engine { dnsResolver = me.nathanfallet.teamcode.infrastructure.network.PinnedDns.resolver(allowed, loopback) }
-            install(HttpTimeout) { connectTimeoutMillis = 2_000; requestTimeoutMillis = 2_000 }
-        }
+        var lookups = 0
+        val loopback = { _: String -> lookups++; listOf(InetAddress.getLoopbackAddress()) }
         try {
-            val publicFirst = { _: String -> listOf(InetAddress.getByAddress(byteArrayOf(93.toByte(), 184.toByte(), 215.toByte(), 14))) }
-            client(webhookAddressPolicy(false)).use { pinned ->
-                val result = HttpWebhookSender(pinned, resolver = publicFirst).send("http://rebind.example.test:$port/hook", emptyMap(), "{}")
-                assertEquals("host_not_allowed", result.error, "Refused at the connection"); assertNull(result.status)
-            }
-            assertTrue(hosts.isEmpty(), "The rebinding answer is never dialled")
-            client(webhookAddressPolicy(true)).use { pinned ->
-                assertEquals(204, HttpWebhookSender(pinned, resolver = loopback, allowPrivateTargets = true).send("http://receiver.example.test:$port/hook", emptyMap(), "{}").status)
-            }
+            val result = sender(lookup = loopback).send("http://rebind.example.test:$port/hook", emptyMap(), "{}")
+            assertEquals("host_not_allowed", result.error, "Refused at the connection"); assertNull(result.status)
+            assertTrue(hosts.isEmpty(), "The refused answer is never dialled")
+            assertEquals(204, sender(allowPrivateTargets = true, lookup = loopback).send("http://receiver.example.test:$port/hook", emptyMap(), "{}").status)
             assertEquals(listOf("receiver.example.test:$port"), hosts, "Dialled the checked address, with the name kept in Host")
+            assertEquals(2, lookups, "One lookup per connection, the one that was checked")
         } finally { server.stop(0) }
     }
 

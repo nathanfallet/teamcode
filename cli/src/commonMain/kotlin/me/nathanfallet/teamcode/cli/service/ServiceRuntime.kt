@@ -29,30 +29,44 @@ internal fun stopRequested(settings: ServiceSettings): Boolean {
 }
 
 /**
- * A capability alone is insufficient: verify the installation ID and fixed upstream origin. The probe never sends the
+ * A capability alone is insufficient: verify the installation ID and fixed upstream origin. The probe does not send the
  * local token: whoever listens on the fixed port (another local user while the service is down, say) gets a fresh
- * challenge, and only the service, which holds the token, can answer it ([serviceProof], audit L9). A service older
- * than the challenge answers `401` and is reported as not running.
+ * challenge, and only the service, which holds the token, can answer it with a proof of its installation ID and
+ * origin ([serviceProof], audit L9).
+ *
+ * A service older than the challenge answers it with `401`. That counts as not running, except while waiting for a
+ * given version other than this binary's ([expectedVersion]: a rollback or a recovery to an older release), where the
+ * probe asks again with the token as before, since an older service has no other way to answer.
  */
 internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, backgroundWorkload: Boolean = false, expectedVersion: String? = null, runRouting: Boolean = false, mcpRelay: Boolean = false, localTokenHeader: Boolean = false, artifactRelay: Boolean = false, activityRelay: Boolean = false): Boolean = try {
-    val challenge = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     HttpClient { followRedirects = false; install(HttpTimeout) { requestTimeoutMillis = 2_000; connectTimeoutMillis = 1_000 } }.use { http ->
-        http.prepareGet("http://127.0.0.1:${settings.port}/_teamcode/service") { header(me.nathanfallet.teamcode.cli.proxy.SERVICE_CHALLENGE_HEADER, challenge) }.execute { response ->
-            if (response.status.value != 200 || (response.contentLength() ?: 0) > 4096) return@execute false
-            // Bounded body even when the occupied port belongs to another local application.
-            val channel = response.bodyAsChannel()
-            val bytes = ByteArray(4097)
-            var size = 0
-            while (size < bytes.size) {
-                val read = channel.readAvailable(bytes, size, bytes.size - size)
-                if (read < 0) break
-                size += read
+        suspend fun identity(challenge: String?): Pair<Int, JsonObject?> =
+            http.prepareGet("http://127.0.0.1:${settings.port}/_teamcode/service") {
+                if (challenge != null) header(me.nathanfallet.teamcode.cli.proxy.SERVICE_CHALLENGE_HEADER, challenge) else bearerAuth(settings.localToken)
+            }.execute { response ->
+                if (response.status.value != 200 || (response.contentLength() ?: 0) > 4096) return@execute response.status.value to null
+                // Bounded body even when the occupied port belongs to another local application.
+                val channel = response.bodyAsChannel()
+                val bytes = ByteArray(4097)
+                var size = 0
+                while (size < bytes.size) {
+                    val read = channel.readAvailable(bytes, size, bytes.size - size)
+                    if (read < 0) break
+                    size += read
+                }
+                if (size > 4096) return@execute 200 to null
+                200 to Json.parseToJsonElement(bytes.decodeToString(0, size)).jsonObject
             }
-            if (size > 4096) return@execute false
-            val body = Json.parseToJsonElement(bytes.decodeToString(0, size)).jsonObject
-            body["proof"]?.jsonPrimitive?.content == me.nathanfallet.teamcode.cli.proxy.serviceProof(settings.localToken, challenge, settings.id) &&
-            serviceMatches(body, settings.id, origin, backgroundWorkload, runRouting, mcpRelay, localTokenHeader, artifactRelay, activityRelay) && (expectedVersion == null || body["version"]?.jsonPrimitive?.content == expectedVersion)
-        }
+        val challenge = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        val (status, answer) = identity(challenge)
+        val body = when {
+            answer != null -> answer.takeIf { it["proof"]?.jsonPrimitive?.content == me.nathanfallet.teamcode.cli.proxy.serviceProof(settings.localToken, challenge, settings.id, origin) }
+                // The proof stands for the installation ID and the origin.
+                ?.let { JsonObject(it + mapOf("id" to JsonPrimitive(settings.id), "serverUrl" to JsonPrimitive(origin))) }
+            status == 401 && expectedVersion != null && expectedVersion != me.nathanfallet.teamcode.cli.VERSION -> identity(null).second
+            else -> null
+        } ?: return@use false
+        serviceMatches(body, settings.id, origin, backgroundWorkload, runRouting, mcpRelay, localTokenHeader, artifactRelay, activityRelay) && (expectedVersion == null || body["version"]?.jsonPrimitive?.content == expectedVersion)
     }
 } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 

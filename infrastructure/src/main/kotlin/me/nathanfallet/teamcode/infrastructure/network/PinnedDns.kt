@@ -5,10 +5,13 @@ import java.net.UnknownHostException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Thrown by [PinnedDns] when a host resolves to nothing or to an address the policy refuses. */
 class PinnedDnsRefusal(val host: String) : UnknownHostException("The destination address is not allowed.")
+
+/** Thrown by [PinnedDns] when the lookup takes longer than its deadline: an I/O failure, never a cancellation. */
+class PinnedDnsTimeout(val host: String) : UnknownHostException("The destination did not resolve in time.")
 
 /**
  * The address check and the connection on one lookup (audit L2). Used as the CIO engine's `dnsResolver`: the engine
@@ -28,7 +31,9 @@ object PinnedDns {
     ): suspend (String) -> List<String> = { name ->
         val host = name.removePrefix("[").removeSuffix("]")
         // A lookup cannot be interrupted, so it runs outside the caller's scope and is abandoned after the deadline.
-        val addresses = withTimeout(LOOKUP_DEADLINE_MILLIS) { CoroutineScope(Dispatchers.IO).async { lookup(host) }.await() }
+        // A timeout is reported as an I/O failure: a CancellationException here would look like the caller's own cancellation.
+        val addresses = withTimeoutOrNull(LOOKUP_DEADLINE_MILLIS) { CoroutineScope(Dispatchers.IO).async { lookup(host) }.await() }
+            ?: throw PinnedDnsTimeout(host)
         if (addresses.isEmpty() || addresses.any { !allowed(it.address) }) throw PinnedDnsRefusal(host)
         addresses.map { it.hostAddress }
     }

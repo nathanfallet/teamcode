@@ -86,10 +86,14 @@ class ServiceTest {
             val response = client.get("/_teamcode/service") { header(SERVICE_CHALLENGE_HEADER, challenge) }
             assertEquals(HttpStatusCode.OK, response.status)
             val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-            assertEquals(serviceProof(token, challenge, "installation"), body["proof"]!!.jsonPrimitive.content)
-            assertNotEquals(serviceProof("x".repeat(64), challenge, "installation"), body["proof"]!!.jsonPrimitive.content, "The proof depends on the token")
-            assertNotEquals(serviceProof(token, "d".repeat(64), "installation"), body["proof"]!!.jsonPrimitive.content, "and on the challenge")
-            assertFalse(response.bodyAsText().contains(token))
+            val proof = body["proof"]!!.jsonPrimitive.content
+            assertEquals(serviceProof(token, challenge, "installation", "https://team.example"), proof)
+            assertNotEquals(serviceProof("x".repeat(64), challenge, "installation", "https://team.example"), proof, "The proof depends on the token")
+            assertNotEquals(serviceProof(token, "d".repeat(64), "installation", "https://team.example"), proof, "on the challenge")
+            assertNotEquals(serviceProof(token, challenge, "other", "https://team.example"), proof, "on the installation")
+            assertNotEquals(serviceProof(token, challenge, "installation", "https://other.example"), proof, "and on the origin")
+            // Without the token, the answer names neither the installation nor the server.
+            assertFalse(response.bodyAsText().contains(token)); assertFalse(response.bodyAsText().contains("installation")); assertFalse(response.bodyAsText().contains("team.example"))
             // A malformed challenge is no credential, and browsers stay refused.
             assertEquals(HttpStatusCode.Unauthorized, client.get("/_teamcode/service") { header(SERVICE_CHALLENGE_HEADER, "short") }.status)
             assertEquals(HttpStatusCode.Forbidden, client.get("/_teamcode/service") { header(SERVICE_CHALLENGE_HEADER, challenge); header(HttpHeaders.Origin, "https://browser.example") }.status)
@@ -127,6 +131,27 @@ class ServiceTest {
             assertFalse(seen.single().contains(token), "The token never leaves the probe")
             assertFalse(seen.single().contains("Authorization", ignoreCase = true))
         } finally { squatter.stop(0) }
+    }
+
+    /** A rollback waits for an older service, which answers the challenge with 401: only then does the probe send the token. */
+    @Test fun anOlderServiceIsRecognizedOnlyWhileWaitingForItsVersion() = kotlinx.coroutines.runBlocking {
+        val bearers = mutableListOf<String?>()
+        val older = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0)
+        older.createContext("/_teamcode/service") { exchange ->
+            val bearer = exchange.requestHeaders.getFirst("Authorization")
+            bearers += bearer
+            if (bearer != "Bearer $token") { exchange.sendResponseHeaders(401, -1); exchange.close(); return@createContext }
+            val answer = """{"id":"${"a".repeat(32)}","serverUrl":"https://team.example","version":"0.9.0","capabilities":[]}""".toByteArray()
+            exchange.sendResponseHeaders(200, answer.size.toLong()); exchange.responseBody.use { it.write(answer) }
+        }
+        older.start()
+        try {
+            val settings = ServiceSettings("a".repeat(32), older.address.port, token, "/usr/local/bin/teamcode", "/home/user/config.json", "/home/user/service", "linux", "501")
+            assertFalse(serviceResponds(settings, "https://team.example"))
+            assertEquals(listOf<String?>(null), bearers, "No token when no older version is awaited")
+            assertTrue(serviceResponds(settings, "https://team.example", expectedVersion = "0.9.0"))
+            assertEquals(listOf(null, null, "Bearer $token"), bearers)
+        } finally { older.stop(0) }
     }
 
     @Test fun windowsTaskUsesTheCurrentUserWithoutEmbeddingCredentialsOrRequiringElevation() {

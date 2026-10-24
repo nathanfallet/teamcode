@@ -101,6 +101,13 @@ class WebhooksTest {
         val internal = WebhookService(MemoryWebhookStore(), sealer, allowPrivateTargets = true)
         for (url in private) internal.create(principal(admin), url, types, "allowed by the operator")
         assertEquals("invalid_webhook", assertFailsWith<TeamFailure> { internal.create(principal(admin), "https://169.254.169.254/latest", types, "") }.code, "Metadata stays refused")
+
+        // After the operator withdraws the opt-in, a subscription kept on its private URL can still be paused or relabeled.
+        val store = MemoryWebhookStore()
+        val before = WebhookService(store, sealer, allowPrivateTargets = true).create(principal(admin), "https://10.0.0.5/hook", types, "internal").webhook
+        val after = WebhookService(store, sealer)
+        assertFalse(after.update(principal(admin), before.id, before.version, before.url, types, "paused", enabled = false).enabled)
+        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { after.update(principal(admin), before.id, before.version + 1, "https://10.0.0.6/hook", types, "", null) }.code)
     }
 
     @Test fun theSecretIsShownOnceAndStoredSealed() = runBlocking {
