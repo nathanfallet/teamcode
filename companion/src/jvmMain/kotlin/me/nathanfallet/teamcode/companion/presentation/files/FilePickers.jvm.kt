@@ -1,5 +1,8 @@
 package me.nathanfallet.teamcode.companion.presentation.files
 
+import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.files_attach
+import org.jetbrains.compose.resources.stringResource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Box
@@ -27,11 +30,12 @@ import me.nathanfallet.teamcode.companion.domain.models.PickedFile
 @Composable
 actual fun rememberFilePicker(onPicked: (List<PickedFile>) -> Unit, onFailed: () -> Unit): FilePicker {
     val picked by rememberUpdatedState(onPicked)
-    return remember {
+    val title = stringResource(Res.string.files_attach)
+    return remember(title) {
         object : FilePicker {
             override val sources = listOf(FileSource.DOCUMENTS)
             override fun launch(source: FileSource) {
-                val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD).apply { isMultipleMode = true }
+                val dialog = FileDialog(null as Frame?, title, FileDialog.LOAD).apply { isMultipleMode = true }
                 dialog.isVisible = true
                 val chosen = dialog.files.orEmpty().toList()
                 dialog.dispose()

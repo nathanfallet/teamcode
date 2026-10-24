@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.transfers
 
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
@@ -104,8 +106,8 @@ class TransferSessionUseCase(
     suspend operator fun invoke(accountId: String, sessionId: String, ownerId: String, request: TransferRequest, idempotencyKey: String): SessionTransfer = guard(accountId) {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: throw CompanionException.Unauthorized()
         val sent = sent(account, request)
-        require(TransferRules.validId(sent.toMemberId)) { "Enter the recipient's member ID." }
-        require(sent.toMemberId != ownerId) { "This member already owns the session." }
+        requireInput(TransferRules.validId(sent.toMemberId), InvalidInput.Problem.MEMBER_ID, message = "Enter the recipient's member ID.")
+        requireInput(sent.toMemberId != ownerId, InvalidInput.Problem.MEMBER_OWNS, message = "This member already owns the session.")
         if (Features.TRANSFERS !in features.features(accountId)) throw CompanionException.Unsupported(Features.TRANSFERS)
         transfers.transfer(accountId, sessionId, sent, idempotencyKey)
     }

@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.sessions
 
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.DeviceFolder
@@ -48,15 +50,15 @@ class CreateDeviceSessionUseCase(
 ) {
     suspend operator fun invoke(accountId: String, form: NewDeviceSession, idempotencyKey: String): CloudSession = guard(accountId) {
         val sent = form.normalized()
-        require(sent.deviceId.isNotBlank()) { "Choose one of your online devices." }
-        require(sent.folderId.isNotBlank()) { "Choose one of the folders the device offers." }
-        require(sent.agent in StartLocalSessionUseCase.AGENTS) { "Choose Claude Code or Codex." }
-        require(sent.name.isNotEmpty() && sent.name.length <= MAX_NAME && sent.name.none(Char::isISOControl)) { "Name the session (up to $MAX_NAME characters)." }
+        requireInput(sent.deviceId.isNotBlank(), InvalidInput.Problem.CHOOSE_DEVICE, message = "Choose one of your online devices.")
+        requireInput(sent.folderId.isNotBlank(), InvalidInput.Problem.CHOOSE_FOLDER, message = "Choose one of the folders the device offers.")
+        requireInput(sent.agent in StartLocalSessionUseCase.AGENTS, InvalidInput.Problem.CHOOSE_AGENT, message = "Choose Claude Code or Codex.")
+        requireInput(sent.name.isNotEmpty() && sent.name.length <= MAX_NAME && sent.name.none(Char::isISOControl), InvalidInput.Problem.SESSION_NAME, MAX_NAME, "Name the session (up to $MAX_NAME characters).")
         val announced = features.features(accountId)
         if (Features.DEVICE_SESSIONS !in announced) throw CompanionException.Unsupported(Features.DEVICE_SESSIONS)
         val message = sent.initialMessage
         if (message != null) {
-            require(MessageRules.valid(message)) { "Write a first message of up to ${MessageRules.MAX_CHARS} characters." }
+            requireInput(MessageRules.valid(message), InvalidInput.Problem.FIRST_MESSAGE_LENGTH, MessageRules.MAX_CHARS, "Write a first message of up to ${MessageRules.MAX_CHARS} characters.")
             if (Features.INITIAL_MESSAGE !in announced) throw CompanionException.Unsupported(Features.INITIAL_MESSAGE)
         }
         val session = deviceRefusals { sessions.createOnDevice(accountId, sent, idempotencyKey) }

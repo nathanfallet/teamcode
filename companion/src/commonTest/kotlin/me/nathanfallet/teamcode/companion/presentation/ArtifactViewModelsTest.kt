@@ -133,6 +133,7 @@ class ArtifactViewModelsTest {
         model.contentCrashed()
         assertEquals(reload + 1, model.uiState.value.reload)
         model.contentCrashed()
+        settle()
         assertNull(model.uiState.value.opened)
         assertNotNull(model.uiState.value.error)
     }

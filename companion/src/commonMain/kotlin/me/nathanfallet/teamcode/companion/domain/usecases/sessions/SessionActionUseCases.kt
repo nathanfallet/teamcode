@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.sessions
 
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
@@ -41,9 +43,9 @@ class SendMessageUseCase(
 ) {
     /** [files]: uploaded files the message carries; with files, [text] may be empty. */
     fun draft(text: String, files: List<UploadedFile> = emptyList()): PendingMessage {
-        require(files.size <= FilePolicy.MAX_FILES) { "A message carries ${FilePolicy.MAX_FILES} files at most." }
+        requireInput(files.size <= FilePolicy.MAX_FILES, InvalidInput.Problem.FILES_MAX, FilePolicy.MAX_FILES, "A message carries ${FilePolicy.MAX_FILES} files at most.")
         val sent = if (files.isNotEmpty() && text.isBlank()) "" else text
-        require(MessageRules.valid(sent, withFiles = files.isNotEmpty())) { "Write a message of up to ${MessageRules.MAX_CHARS} characters." }
+        requireInput(MessageRules.valid(sent, withFiles = files.isNotEmpty()), InvalidInput.Problem.MESSAGE_LENGTH, MessageRules.MAX_CHARS, "Write a message of up to ${MessageRules.MAX_CHARS} characters.")
         return PendingMessage(ids.newId(), sent, PendingMessage.State.SENDING, files = files)
     }
 
@@ -159,11 +161,11 @@ class CreateSessionUseCase(private val sessions: SessionRepository, private val 
     suspend operator fun invoke(accountId: String, form: NewSession, idempotencyKey: String): CloudSession = guard(accountId) {
         val sent = form.normalized()
         val name = sent.name
-        require(name.isNotEmpty() && name.length <= MAX_NAME && name.none(Char::isISOControl)) { "Name the session (up to $MAX_NAME characters)." }
-        require(form.profileId.isNotBlank()) { "Choose a profile." }
+        requireInput(name.isNotEmpty() && name.length <= MAX_NAME && name.none(Char::isISOControl), InvalidInput.Problem.SESSION_NAME, MAX_NAME, "Name the session (up to $MAX_NAME characters).")
+        requireInput(form.profileId.isNotBlank(), InvalidInput.Problem.CHOOSE_PROFILE, message = "Choose a profile.")
         val message = sent.initialMessage
         if (message != null) {
-            require(MessageRules.valid(message)) { "Write a first message of up to ${MessageRules.MAX_CHARS} characters." }
+            requireInput(MessageRules.valid(message), InvalidInput.Problem.FIRST_MESSAGE_LENGTH, MessageRules.MAX_CHARS, "Write a first message of up to ${MessageRules.MAX_CHARS} characters.")
             if (Features.INITIAL_MESSAGE !in features.features(accountId)) throw CompanionException.Unsupported(Features.INITIAL_MESSAGE)
         }
         sessions.create(accountId, sent, idempotencyKey)

@@ -140,7 +140,8 @@ class SubscriptionAccountsViewModel(
             } catch (error: Exception) {
                 // Only a paste that is not the code can be corrected; anything else used this attempt up.
                 val spent = !(error is CompanionException.ProviderSignIn && !error.restart)
-                updateSignIn { it.copy(sending = false, error = error.userMessage(), spent = spent, paste = if (spent) "" else it.paste) }
+                val message = error.userMessage()
+                updateSignIn { it.copy(sending = false, error = message, spent = spent, paste = if (spent) "" else it.paste) }
             }
         }
     }

@@ -108,6 +108,14 @@ Both take an optional `onOpen`, called once the server accepted the stream and b
 
 The Android app is `me.nathanfallet.teamcode` (minSdk 26, targetSdk 36, compiled against 37 as OkHttp 5.5 requires); the iOS app has the same identifier and requires iOS 16.
 
+### Language
+
+The app is available in English (the default) and French. Every text lives in `companion/src/commonMain/composeResources/values/strings.xml` (English) and `values-fr/strings.xml` (French), read with `stringResource`, `pluralStringResource` or `getString`; no screen carries a literal sentence. The app follows the system language (the JVM's default locale on the desktop, the device language on Android and iOS) and falls back to English for any other. French addresses the member as `tu`; `session`, `workspace`, `token`, `device flow` and product, command and flag names stay as the CLI words them, and the CLI's own explanations (a folder refused by `teamcode remote start`, the install script's output) are shown as the CLI wrote them.
+
+Failures are worded where they are shown: the domain throws typed errors (`CompanionException`, `InvalidInput`) whose English `message` stays for logs and tests, and `userMessage()` words them from the resources. Event names sent to analytics, if any, are never translated.
+
+To add a language `xx`: translate `values/strings.xml` into `values-xx/strings.xml` (every key, the same `%1$s` placeholders, a bare apostrophe, never `\'`; a plural needs its `other` form), then declare it to the systems: a `<locale android:name="xx"/>` in `companion-android/src/main/res/xml/locales_config.xml` (the manifest already references it; this enables Android 13+'s per-app language picker), the language in `CFBundleLocalizations` of `companion-ios/TeamCode/Info.plist` and in `knownRegions` of `companion-ios/TeamCode.xcodeproj/project.pbxproj` (otherwise iOS treats the app as English-only and shows no language setting). `LocalizationTest` (`:companion:jvmTest`) fails when a key or a placeholder is missing from a language, or when a declaration is missing or extra. The iOS permission prompts (`NSCameraUsageDescription` and the other `Info.plist` usage descriptions) are not localized yet.
+
 ## Distribution
 
 Store builds are made and uploaded from a maintainer's Mac with fastlane (`Gemfile`, `fastlane/Fastfile`); there is no publication job yet. Nothing in the repository holds a key, a certificate or a password: each lane reads them from files next to the Fastfile and from the environment, all ignored by git.

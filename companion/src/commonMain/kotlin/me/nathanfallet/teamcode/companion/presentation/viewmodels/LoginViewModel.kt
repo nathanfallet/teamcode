@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import org.jetbrains.compose.resources.getString
+import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -119,9 +121,10 @@ class LoginViewModel(
                 throw error
             } catch (error: CompanionException.InvalidCredentials) {
                 // During a password change, the temporary session expired or was revoked: back to signing in.
+                val message = if (state.value.passwordChange == null) error.userMessage() else getString(Res.string.error_temporary_session_ended)
                 state.update {
-                    if (it.passwordChange == null) it.copy(working = false, error = error.userMessage())
-                    else it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = "The temporary session ended. Sign in again: with your new password if the change went through, otherwise with the temporary one.")
+                    if (it.passwordChange == null) it.copy(working = false, error = message)
+                    else it.copy(working = false, passwordChange = null, password = "", newPassword = "", confirmation = "", error = message)
                 }
             } catch (error: CompanionException.PasswordChanged) {
                 // Back to the sign-in form: the temporary password and its session no longer exist.

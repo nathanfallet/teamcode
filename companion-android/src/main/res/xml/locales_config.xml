@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The languages the app is translated into (the values-<language> folders of :companion), so Android 13+ offers
+     them in the per-app language picker of the system settings. Without a per-app choice, the app follows the system
+     language. LocalizationTest keeps this list, the iOS declarations and the translations in step. -->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en"/>
+    <locale android:name="fr"/>
+</locale-config>

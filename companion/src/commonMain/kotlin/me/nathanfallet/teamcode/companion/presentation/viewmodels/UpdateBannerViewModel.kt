@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import org.jetbrains.compose.resources.getString
+import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -102,7 +104,7 @@ class UpdateBannerViewModel(
                 throw error
             } catch (error: Exception) {
                 val output = (state.value as? UpdateBannerState.Updating)?.output.orEmpty()
-                val message = (error as? AppUpdateException)?.message ?: "The update failed unexpectedly. Run teamcode update in a terminal to see why."
+                val message = (error as? AppUpdateException)?.message ?: getString(Res.string.update_failed_unexpected)
                 state.value = UpdateBannerState.Failed(version, message, output)
             }
         }

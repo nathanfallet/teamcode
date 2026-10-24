@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import org.jetbrains.compose.resources.getString
+import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -274,7 +276,7 @@ class SessionViewModel(
         val message = try {
             sendMessage.draft(state.value.draft.trim(), attached)
         } catch (error: IllegalArgumentException) {
-            state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
+            viewModelScope.launch { state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) } }
             return
         }
         // A new message replaces what the last action said (a refused draft, nothing to interrupt).
@@ -470,6 +472,7 @@ class SessionViewModel(
         state.update { it.copy(drafts = it.drafts + (requestId to sending), notice = null) }
         viewModelScope.launch {
             val outcome = answerPermission(route.accountId, route.sessionId, answer, key)
+            val generic = getString(Res.string.error_generic)
             state.update { current ->
                 val draft = current.drafts[requestId] ?: sending
                 when (outcome) {
@@ -479,7 +482,7 @@ class SessionViewModel(
                     is AnswerOutcome.Invalid -> current.copy(drafts = current.drafts + (requestId to draft.edited()), notice = SessionNotice.PermissionInvalid(outcome.code))
                     is AnswerOutcome.Refused -> current.copy(
                         drafts = current.drafts + (requestId to draft.edited()),
-                        notice = if (outcome.code == "permission_answer_denied") SessionNotice.PermissionDenied else SessionNotice.Text(outcome.reason ?: outcome.code ?: "Something went wrong."),
+                        notice = if (outcome.code == "permission_answer_denied") SessionNotice.PermissionDenied else SessionNotice.Text(outcome.reason ?: outcome.code ?: generic),
                     )
                 }.withReconciledDrafts()
             }

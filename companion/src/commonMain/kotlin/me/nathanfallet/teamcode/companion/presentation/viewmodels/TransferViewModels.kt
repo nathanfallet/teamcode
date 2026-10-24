@@ -29,7 +29,7 @@ sealed interface TransferError {
     data class Text(val text: String) : TransferError
 }
 
-internal fun Throwable.transferError(): TransferError =
+internal suspend fun Throwable.transferError(): TransferError =
     if (this is CompanionException.TransferRefused) TransferError.Refused(code, problems) else TransferError.Text(userMessage())
 
 data class TransferUiState(

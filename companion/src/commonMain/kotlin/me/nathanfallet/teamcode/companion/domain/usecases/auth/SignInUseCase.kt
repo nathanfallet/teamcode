@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
@@ -76,6 +78,6 @@ class SignInUseCase(
 /** A device name the server accepts: 1 to 120 characters without control characters. */
 fun validDeviceName(name: String): String {
     val trimmed = name.trim()
-    require(trimmed.length in 1..120 && trimmed.none { it.isISOControl() }) { "Use 1 to 120 characters without control characters." }
+    requireInput(trimmed.length in 1..120 && trimmed.none { it.isISOControl() }, InvalidInput.Problem.DEVICE_NAME, message = "Use 1 to 120 characters without control characters.")
     return trimmed
 }

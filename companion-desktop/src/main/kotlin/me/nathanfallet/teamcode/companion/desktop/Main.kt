@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.desktop
 
+import me.nathanfallet.teamcode.companion.presentation.DesktopLabel
+import me.nathanfallet.teamcode.companion.presentation.desktopLabel
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -83,9 +85,9 @@ fun main(args: Array<String>) {
                 Desktop.getDesktop().addAppEventListener(java.awt.desktop.AppReopenedListener { visible = true })
         }
         if (tray) Tray(icon = icon, tooltip = "TeamCode", onAction = { visible = true }, menu = {
-            Item("Open TeamCode", onClick = { visible = true })
+            Item(desktopLabel(DesktopLabel.TRAY_OPEN), onClick = { visible = true })
             Separator()
-            Item("Quit TeamCode (sessions on this device keep running)", onClick = ::exitApplication)
+            Item(desktopLabel(DesktopLabel.TRAY_QUIT), onClick = ::exitApplication)
         })
         val windowState = rememberWindowState(
             placement = if (saved?.maximized == true) WindowPlacement.Maximized else WindowPlacement.Floating,
@@ -125,17 +127,17 @@ fun main(args: Array<String>) {
             // Wide enough for the sidebar and a readable panel: the window never falls back to the phone layout.
             LaunchedEffect(Unit) { window.minimumSize = Dimension(WindowPlacementStore.MIN_WIDTH, WindowPlacementStore.MIN_HEIGHT) }
             MenuBar {
-                Menu("File") {
-                    Item("New Session…", shortcut = shortcut(Key.N), onClick = { AppCommands.send(AppCommand.NEW_SESSION) })
+                Menu(desktopLabel(DesktopLabel.MENU_FILE)) {
+                    Item(desktopLabel(DesktopLabel.MENU_NEW_SESSION), shortcut = shortcut(Key.N), onClick = { AppCommands.send(AppCommand.NEW_SESSION) })
                     Separator()
-                    Item("Close Window", shortcut = shortcut(Key.W), onClick = { if (tray) visible = false else exitApplication() })
+                    Item(desktopLabel(DesktopLabel.MENU_CLOSE_WINDOW), shortcut = shortcut(Key.W), onClick = { if (tray) visible = false else exitApplication() })
                 }
-                Menu("View") {
-                    Item("Sessions", shortcut = shortcut(Key.One), onClick = { AppCommands.send(AppCommand.SHOW_SESSIONS) })
-                    Item("Artifacts", shortcut = shortcut(Key.Two), onClick = { AppCommands.send(AppCommand.SHOW_ARTIFACTS) })
-                    Item("Command Palette…", shortcut = shortcut(Key.K), onClick = { AppCommands.send(AppCommand.COMMAND_PALETTE) })
+                Menu(desktopLabel(DesktopLabel.MENU_VIEW)) {
+                    Item(desktopLabel(DesktopLabel.MENU_SESSIONS), shortcut = shortcut(Key.One), onClick = { AppCommands.send(AppCommand.SHOW_SESSIONS) })
+                    Item(desktopLabel(DesktopLabel.MENU_ARTIFACTS), shortcut = shortcut(Key.Two), onClick = { AppCommands.send(AppCommand.SHOW_ARTIFACTS) })
+                    Item(desktopLabel(DesktopLabel.MENU_COMMAND_PALETTE), shortcut = shortcut(Key.K), onClick = { AppCommands.send(AppCommand.COMMAND_PALETTE) })
                     Separator()
-                    Item("Settings…", shortcut = shortcut(Key.Comma), onClick = { AppCommands.send(AppCommand.SHOW_ACCOUNT) })
+                    Item(desktopLabel(DesktopLabel.MENU_SETTINGS), shortcut = shortcut(Key.Comma), onClick = { AppCommands.send(AppCommand.SHOW_ACCOUNT) })
                 }
             }
             // macOS hides the bar in fullscreen (the green button too: Compose reads the window's fullscreen from AppKit):

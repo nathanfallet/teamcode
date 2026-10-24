@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import org.jetbrains.compose.resources.getString
+import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -144,7 +146,7 @@ class ArtifactViewModel(
     fun contentCrashed() {
         if (state.value.opened == null) return
         if (recentlyRenewed()) {
-            state.update { it.copy(opened = null, error = "The page stopped working.") }
+            viewModelScope.launch { getString(Res.string.error_page_crashed).let { message -> state.update { it.copy(opened = null, error = message) } } }
             return
         }
         state.update { it.copy(reload = it.reload + 1) }

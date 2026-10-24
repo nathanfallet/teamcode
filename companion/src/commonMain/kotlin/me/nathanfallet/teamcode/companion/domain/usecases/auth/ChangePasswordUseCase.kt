@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.auth
 
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import kotlinx.coroutines.CancellationException
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SignInResult
@@ -19,9 +21,9 @@ class ChangePasswordUseCase(
         replacement: String,
         confirmation: String,
     ): SignInResult.SignedIn {
-        if (replacement != confirmation) throw IllegalArgumentException("The passwords do not match.")
-        if (replacement.length < MIN_PASSWORD_LENGTH) throw IllegalArgumentException("Use at least $MIN_PASSWORD_LENGTH characters.")
-        if (replacement == currentPassword) throw IllegalArgumentException("Choose a password different from the temporary one.")
+        requireInput(replacement == confirmation, InvalidInput.Problem.PASSWORDS_MISMATCH, message = "The passwords do not match.")
+        requireInput(replacement.length >= MIN_PASSWORD_LENGTH, InvalidInput.Problem.PASSWORD_SHORT, MIN_PASSWORD_LENGTH, "Use at least $MIN_PASSWORD_LENGTH characters.")
+        requireInput(replacement != currentPassword, InvalidInput.Problem.PASSWORD_SAME, message = "Choose a password different from the temporary one.")
         auth.changePassword(pending.server.origin, pending.temporaryToken, currentPassword, replacement)
         // The change revoked the temporary session: a failed sign-in now cannot be retried with it.
         val result = try {

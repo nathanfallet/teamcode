@@ -72,6 +72,7 @@ import me.nathanfallet.teamcode.companion.resources.transcript_turn_completed
 import me.nathanfallet.teamcode.companion.resources.transcript_turn_ended
 import me.nathanfallet.teamcode.companion.resources.transcript_turn_failed
 import me.nathanfallet.teamcode.companion.resources.transcript_turn_interrupted
+import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
 private val UserBubbleShape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
@@ -157,7 +158,7 @@ private fun ToolGroup(item: TranscriptItem.Tools) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(PhosphorIcons.Regular.ListBullets, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
-            Text(stringResource(Res.string.transcript_actions, item.tools.size), fontSize = 13.sp, color = colors.muted, modifier = Modifier.weight(1f))
+            Text(pluralStringResource(Res.plurals.transcript_actions, item.tools.size, item.tools.size), fontSize = 13.sp, color = colors.muted, modifier = Modifier.weight(1f))
             Text(summary, style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Icon(if (expanded) PhosphorIcons.Regular.CaretDown else PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
         }
@@ -205,7 +206,7 @@ private fun TurnSeparator(event: TranscriptEvent.Turn) {
     val details = listOfNotNull(
         label,
         event.durationMs?.let { stringResource(Res.string.transcript_seconds, (it / 1000).toInt()) },
-        event.steps?.let { stringResource(Res.string.transcript_steps, it) },
+        event.steps?.let { pluralStringResource(Res.plurals.transcript_steps, it, it) },
     ).joinToString(" · ")
     val colors = TeamCode.colors
     TranscriptSeparator(details, if (event.phase == TurnPhase.FAILED) colors.danger else if (event.phase == TurnPhase.INTERRUPTED) colors.warn else colors.muted, inset = 0.dp)

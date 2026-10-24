@@ -100,3 +100,6 @@ sealed class CompanionException(message: String) : Exception(message) {
 
 /** Error codes are short snake_case identifiers; anything else from the server is not shown. */
 private val CODE = Regex("[a-z][a-z0-9_]{0,63}")
+
+/** [code] when it is safe to show, null otherwise. */
+internal fun visibleCode(code: String?): String? = code?.takeIf { it.matches(CODE) }

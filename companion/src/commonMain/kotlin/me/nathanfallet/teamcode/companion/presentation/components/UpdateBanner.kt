@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.components
 
+import me.nathanfallet.teamcode.companion.resources.*
+import org.jetbrains.compose.resources.stringResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -73,11 +75,11 @@ fun UpdateBannerContent(state: UpdateBannerState, onUpdate: () -> Unit, onDismis
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 val (title, detail) = when (state) {
-                    is UpdateBannerState.Available -> "Update available: TeamCode ${state.version}" to
-                        "Updates the CLI and this app, then reopens TeamCode. Agent sessions keep running."
-                    is UpdateBannerState.Updating -> "Updating TeamCode to ${state.version}…" to state.output.lastOrNull()
-                    is UpdateBannerState.Restarting -> "The CLI is on TeamCode ${state.version}" to "TeamCode closes, installs the new app and reopens by itself in a minute or two."
-                    is UpdateBannerState.Failed -> (state.version?.let { "The update to TeamCode $it failed" } ?: "The update failed") to state.message
+                    is UpdateBannerState.Available -> stringResource(Res.string.update_available_title, state.version) to
+                        stringResource(Res.string.update_available_detail)
+                    is UpdateBannerState.Updating -> stringResource(Res.string.update_updating_title, state.version) to state.output.lastOrNull()
+                    is UpdateBannerState.Restarting -> stringResource(Res.string.update_restarting_title, state.version) to stringResource(Res.string.update_restarting_detail)
+                    is UpdateBannerState.Failed -> (state.version?.let { stringResource(Res.string.update_failed_title_version, it) } ?: stringResource(Res.string.update_failed_title)) to state.message
                     UpdateBannerState.Hidden -> return@Row
                 }
                 Text(title, color = if (failed) colors.danger else colors.text, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -90,12 +92,12 @@ fun UpdateBannerContent(state: UpdateBannerState, onUpdate: () -> Unit, onDismis
             }
             when (state) {
                 is UpdateBannerState.Available -> {
-                    TcButton("Update", onUpdate, small = true, fill = false, modifier = Modifier.testTag("update-banner-update"))
-                    TcIconButton(PhosphorIcons.Regular.X, "Not now (hide for this version)", onDismiss, modifier = Modifier.testTag("update-banner-dismiss"))
+                    TcButton(stringResource(Res.string.update_action), onUpdate, small = true, fill = false, modifier = Modifier.testTag("update-banner-update"))
+                    TcIconButton(PhosphorIcons.Regular.X, stringResource(Res.string.update_not_now), onDismiss, modifier = Modifier.testTag("update-banner-dismiss"))
                 }
                 is UpdateBannerState.Failed -> {
-                    if (state.version != null) TcButton("Try again", onUpdate, small = true, fill = false, kind = ButtonKind.SECONDARY, modifier = Modifier.testTag("update-banner-retry"))
-                    TcIconButton(PhosphorIcons.Regular.X, "Close", onDismiss, modifier = Modifier.testTag("update-banner-dismiss"))
+                    if (state.version != null) TcButton(stringResource(Res.string.update_try_again), onUpdate, small = true, fill = false, kind = ButtonKind.SECONDARY, modifier = Modifier.testTag("update-banner-retry"))
+                    TcIconButton(PhosphorIcons.Regular.X, stringResource(Res.string.action_close), onDismiss, modifier = Modifier.testTag("update-banner-dismiss"))
                 }
                 else -> Unit
             }

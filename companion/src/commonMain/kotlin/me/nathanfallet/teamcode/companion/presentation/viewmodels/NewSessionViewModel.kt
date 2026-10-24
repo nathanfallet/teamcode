@@ -109,7 +109,8 @@ class NewSessionViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                change { it.copy(loadingProfiles = false, error = error.userMessage()) }
+                val message = error.userMessage()
+                change { it.copy(loadingProfiles = false, error = message) }
             }
         }
     }
@@ -141,7 +142,8 @@ class NewSessionViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                change { it.copy(loadingDevices = false, error = error.userMessage()) }
+                val message = error.userMessage()
+                change { it.copy(loadingDevices = false, error = message) }
             }
         }
     }
@@ -170,9 +172,10 @@ class NewSessionViewModel(
                 if (state.value.deviceId != deviceId) return@launch
                 // The device went offline or is gone: the list no longer offers it. Dropped here without reading the list
                 // again, which could still name it (its presence lags) and lead back here.
+                val message = error.userMessage()
                 if (error.isDeviceGone()) change {
-                    it.copy(devices = it.devices?.filter { device -> device.id != deviceId }, deviceId = null, folders = null, loadingFolders = false, error = error.userMessage()).withFolder(null)
-                } else change { it.copy(loadingFolders = false, folders = it.folders ?: emptyList(), error = error.userMessage()) }
+                    it.copy(devices = it.devices?.filter { device -> device.id != deviceId }, deviceId = null, folders = null, loadingFolders = false, error = message).withFolder(null)
+                } else change { it.copy(loadingFolders = false, folders = it.folders ?: emptyList(), error = message) }
             }
         }
     }
@@ -218,7 +221,8 @@ class NewSessionViewModel(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                change { it.copy(creating = false, error = error.userMessage()) }
+                val message = error.userMessage()
+                change { it.copy(creating = false, error = message) }
                 when {
                     error.isDeviceGone() -> reloadDevices(keepError = true)
                     error is CompanionException.DeviceRefused && error.code == FOLDER_NOT_PUBLISHED -> current.deviceId?.let { loadFoldersOf(it, keepError = true) }
