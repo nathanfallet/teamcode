@@ -107,6 +107,7 @@ class PosixBootstrapFlowTest(unittest.TestCase):
         executable = b'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['TEAMCODE_TEST_EXECUTION'], 'w') as out: json.dump(sys.argv[1:], out)
+with open(os.environ['TEAMCODE_TEST_EXECUTION'] + '.env', 'w') as out: json.dump({'TEAMCODE_NO_SERVICE': os.environ.get('TEAMCODE_NO_SERVICE')}, out)
 sys.exit(int(os.environ.get('TEAMCODE_TEST_EXIT', '0')))
 '''
         executable += b'\n#' + b'fixture-padding' * 160 + b'\n'
@@ -179,6 +180,21 @@ destination.write_bytes(pathlib.Path(os.environ['TEAMCODE_TEST_BUNDLE'], name).r
                 self.assertNotEqual(0, result.returncode)
                 self.assertFalse(self.execution.exists())
                 for file, data in originals.items(): (self.bundle / file).write_bytes(data)
+
+    def test_the_native_installation_ends_with_the_service_step_unless_opted_out(self):
+        # Decision 4: `teamcode install` installs and starts the login service after the binary; the script opts out
+        # only through TEAMCODE_NO_SERVICE, which reaches the native installer unchanged.
+        self.env.pop('TEAMCODE_NO_SERVICE', None)
+        result = self.run_installer()
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        arguments = json.loads(self.execution.read_text())
+        self.assertEqual('install', arguments[0])
+        self.assertNotIn('--no-service', arguments)
+        self.assertNotIn('--at-boot', arguments, 'Never boot startup, which needs elevation')
+        self.assertIsNone(json.loads(Path(str(self.execution) + '.env').read_text())['TEAMCODE_NO_SERVICE'])
+        result = self.run_installer(TEAMCODE_NO_SERVICE='1')
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertEqual('1', json.loads(Path(str(self.execution) + '.env').read_text())['TEAMCODE_NO_SERVICE'])
 
     def test_offline_installation_rosetta_root_and_native_failure(self):
         result = self.run_installer(TEAMCODE_INSTALL_BUNDLE=str(self.bundle), TEAMCODE_TEST_SYSTEM='Darwin',

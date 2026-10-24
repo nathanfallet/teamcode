@@ -10,7 +10,20 @@ teamcode run claude -- --dangerously-skip-permissions
 teamcode run codex -- exec "Explain this repository"
 ```
 
-`service install` registers a macOS LaunchAgent, Linux systemd user unit or Windows scheduled logon task, starts it now, and enables startup at user login. Linux requires a running systemd user manager. These are user services; the Windows task uses the current user's interactive token at least privilege and stores no Windows password. Use the explicit `--at-boot` (`--system`) mode below for startup before login. Native binary updates are handled separately by the managed installer/updater below.
+`service install` registers a macOS LaunchAgent, Linux systemd user unit or Windows scheduled logon task, starts it now, and enables startup at user login. Linux requires a running systemd user manager. These are user services; the Windows task uses the current user's interactive token at least privilege and stores no Windows password. Use the explicit `--at-boot` (`--system`) mode below for startup before login. `teamcode install` and `teamcode update` also do this on their own ([automatic setup](#automatic-setup)).
+
+## Automatic setup
+
+`teamcode install` (and so `install.sh` and `install.ps1`), `teamcode update` and each attempt of the [automatic update job](automatic-updates.md) end with the service step:
+
+- **Missing:** the service is installed at login with the managed launcher as its executable (it follows every update), on port 8789, and started. Without a saved login it waits for `teamcode login` and binds no port.
+- **Present at login:** the registration is checked: it exists byte for byte, is enabled (`launchctl print-disabled`, `systemctl --user is-enabled`, the task's `Enabled`), loaded (`launchctl print`, the task) and running. Anything missing is repaired in place, with the same service id: the file written again, `launchctl enable` or `systemctl --user enable`, then a start. A registration that is already right is left alone. The update itself already restarted a running service on the new version (decision 12).
+- **Never elevated.** Every step runs in the user's own domain (`gui/UID`, `systemctl --user`, a logon task with the interactive token). A registration made with `--at-boot` is respected as it is, and the setup never creates one.
+- **Kept as is:** a service of another executable (a manual or source installation), and a modified registration, which is reported.
+- **Opt-out:** `--no-service` on `install` or `update` skips the step once, as does `TEAMCODE_NO_SERVICE=1`. `teamcode service automatic off` keeps it off; `service uninstall` turns it off too, so an update never undoes an uninstall, and `service install` or `service automatic on` turns it back on.
+- **Cloud runners:** nothing is done in a cloud session's pod (decision 9).
+
+The step prints one line starting with `Local TeamCode service:`. A failure (no systemd user manager, for example) never undoes the installation or the update: the line, on the error stream, gives the reason and the command to run, `teamcode service install`. Registrations made before the daemon existed are recognized as they are and repaired in place. `service stop` stops the service until the next update repairs it; use `service automatic off` to keep it stopped.
 
 ## Startup before login
 

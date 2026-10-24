@@ -9,7 +9,7 @@ import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.client.ReleaseClient
 
 /** Explicit native user-job control; normal command launches never install a scheduler job. */
-internal suspend fun automaticUpdateCommand(store: InstallationStore, operation: String?, execute: Boolean, echo: (String) -> Unit) {
+internal suspend fun automaticUpdateCommand(store: InstallationStore, operation: String?, execute: Boolean, noService: Boolean = false, echo: (String) -> Unit) {
     val current = store.state() ?: throw CliOperationException("release_not_managed")
     store.validate(current.current)
     if (store.launcherVersion() == null) throw CliOperationException("release_not_managed")
@@ -31,6 +31,9 @@ internal suspend fun automaticUpdateCommand(store: InstallationStore, operation:
                 ?.also { activation -> activationReport(activation, store).drop(1).forEach(echo) }?.version },
         )
         echo("Automatic update: ${result?.outcome ?: "DISABLED"}${result?.version?.let { " ($it)" }.orEmpty()}.")
+        // Each attempt also checks the service (decisions 10 and 11), even without a new version and after a failed one.
+        if (result != null && result.diagnostic != "automatic_worker_busy")
+            echo(setUpInstallationService(store, policy.settings()?.configuration ?: configPath(), noService).line)
         if (result?.outcome == "FAILED") throw CliOperationException(result.diagnostic ?: "automatic_update_failed")
         return
     }

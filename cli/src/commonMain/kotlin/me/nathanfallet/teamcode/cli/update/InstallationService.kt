@@ -5,6 +5,9 @@ import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.config.configPath
+import me.nathanfallet.teamcode.cli.daemon.insideCloudRunner
+import me.nathanfallet.teamcode.cli.platform.environment
+import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.service.*
 import okio.Path.Companion.toPath
 
@@ -16,7 +19,8 @@ internal suspend fun installationService(store: InstallationStore, firstInstall:
         if (firstInstall) return null // Preserve a manually installed/source-checkout service.
         throw CliOperationException("release_service_unmanaged")
     }
-    if (!ownsRegistration(selected)) throw CliOperationException("release_service_unmanaged")
+    // Without its registration no OS manager runs it: nothing to restart, and the service step registers it again.
+    if (!ownsRegistration(selected)) return null
     return InstallationService(selected, managedServiceRunning(selected))
 }
 
@@ -39,3 +43,17 @@ internal suspend fun recoverInstallationService(store: InstallationStore, pendin
     startManagedService(selected)
     awaitInstallationService(InstallationService(selected, true), pending.before?.current?.version ?: throw CliOperationException("release_service_recovery_failed"))
 }
+
+/**
+ * The service step at the end of `teamcode install`, `teamcode update` and the automatic update job (decisions 10 and 11):
+ * install the login service run by this installation's launcher, or check and repair its login startup. The update has
+ * already restarted a running service on the new payload (decision 12); this step never undoes it, whatever happens.
+ */
+internal suspend fun setUpInstallationService(store: InstallationStore, configuration: String, optOut: Boolean): ServiceSetup =
+    setUpService(configuration, store.paths.launcher.toString(),
+        if (optOut) "--no-service" else if (!environment("TEAMCODE_NO_SERVICE").isNullOrEmpty()) "TEAMCODE_NO_SERVICE" else null,
+        cloudRunner = { insideCloudRunner() }, platform = { servicePlatform() },
+        home = { environment("HOME") ?: environment("USERPROFILE") },
+        sameExecutable = { executable ->
+            try { sameInstallationPath(executable.toPath(), store.paths.launcher, store.paths.target) } catch (_: Exception) { false }
+        })

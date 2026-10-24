@@ -59,7 +59,7 @@ def main():
                 env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root),
                            TMPDIR=str(temporary), TEMP=str(temporary), TMP=str(temporary),
                            TEAMCODE_INSTALL_ROOT=str(install_root), TEAMCODE_INSTALL_BUNDLE=str(bundle),
-                           TEAMCODE_DISABLE_AUTOUPDATE='1')
+                           TEAMCODE_DISABLE_AUTOUPDATE='1', TEAMCODE_NO_SERVICE='1')
                 launcher = install_root / 'bin' / ('teamcode.exe' if os.name == 'nt' else 'teamcode')
                 invoke = [shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)] if os.name == 'nt' else [shell, str(script)]
 

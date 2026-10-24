@@ -2,7 +2,10 @@ package me.nathanfallet.teamcode.cli.service
 
 import com.github.ajalt.clikt.command.*
 import com.github.ajalt.clikt.core.*
+import com.github.ajalt.clikt.parameters.arguments.argument
+import com.github.ajalt.clikt.parameters.arguments.optional
 import com.github.ajalt.clikt.parameters.options.*
+import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.api.Serialization
@@ -16,13 +19,18 @@ import okio.Path.Companion.toPath
 class Service : SuspendingNoOpCliktCommand(name = "service") {
     override fun help(context: Context) = "Manage the local service (the authenticated proxy and this device's daemon, which hosts the remote sessions " +
         "you start on it from your other devices): automatic startup at login or, explicitly, at boot."
-    init { subcommands(Install(), Print(), Manage("start"), Manage("stop"), Manage("restart"), Manage("uninstall"), Status(), Logs(), Serve()) }
+    init { subcommands(Install(), Print(), Manage("start"), Manage("stop"), Manage("restart"), Manage("uninstall"), Status(), Logs(), Automatic(), Serve()) }
 }
 
 private fun settings(config: String, port: Int, executable: String?, atBoot: Boolean = false): ServiceSettings {
     val platform = servicePlatform()
     if (platform.userId == "0") throw CliktError("Run service installation as your user; TeamCode requests OS authorization only where needed.")
     val home = environment("HOME") ?: environment("USERPROFILE") ?: throw CliktError("Cannot locate the user home directory.")
+    return newServiceSettings(config, port, executable ?: me.nathanfallet.teamcode.cli.update.managedInstallation()?.paths?.launcher?.toString() ?: platform.executable, atBoot, platform, home)
+}
+
+/** A new registration's settings: a random id and local capability, and the registration path of [platform]'s startup mode. */
+internal fun newServiceSettings(config: String, port: Int, executable: String, atBoot: Boolean, platform: ServicePlatform, home: String): ServiceSettings {
     val id = randomHex(16)
     val label = "me.nathanfallet.teamcode.$id"
     val registration = when (platform.os) {
@@ -30,7 +38,7 @@ private fun settings(config: String, port: Int, executable: String?, atBoot: Boo
         "windows" -> config.toPath().parent!!.resolve("service-task.xml").toString()
         else -> "${config.toPath().parent!!.parent}/systemd/user/$label.service"
     }
-    return ServiceSettings(id, port, randomHex(32), executable ?: me.nathanfallet.teamcode.cli.update.managedInstallation()?.paths?.launcher?.toString() ?: platform.executable, config, registration, platform.os, platform.userId, atBoot, platform.userName, platform.userHome)
+    return ServiceSettings(id, port, randomHex(32), executable, config, registration, platform.os, platform.userId, atBoot, platform.userName, platform.userHome)
 }
 
 private class Print : SuspendingCliktCommand(name = "print") {
@@ -60,6 +68,8 @@ private class Install : SuspendingCliktCommand(name = "install") {
         if (binary != null && binary != selected.executable) throw CliktError("Uninstall before changing the service executable.")
         if (FileSystem.SYSTEM.metadataOrNull(selected.executable.toPath())?.isRegularFile != true) throw CliktError("The executable must exist at a stable absolute path.")
         if (existing == null) writePrivateFile(servicePath(config), Serialization.json.encodeToString(ServiceSettings.serializer(), selected))
+        // An explicit installation is the opposite of the opt-out an earlier uninstall recorded.
+        setAutomaticServiceSetup(config, true)
         if (selected.atBoot) echo(when (selected.os) {
             "macos" -> "Installing a LaunchDaemon running as your user. macOS may request administrator authorization."
             "windows" -> "Boot startup needs an elevated terminal and your Windows account password in a masked OS prompt. TeamCode does not store it."
@@ -77,15 +87,20 @@ private class Install : SuspendingCliktCommand(name = "install") {
     }
 }
 
-private suspend fun manager(settings: ServiceSettings, action: String, checkResult: Boolean = true, quiet: Boolean = false): Int {
+/** The OS service manager command for [action]; queries (`status`, `enabled`, `running`, `active`) never change anything. */
+internal class ServiceManagerCall(val invocation: ServiceManagerInvocation, val environment: Map<String, String>)
+
+private val SERVICE_QUERIES = setOf("status", "enabled", "running", "active")
+
+internal fun serviceManagerCall(settings: ServiceSettings, action: String, quiet: Boolean = false, systemRoot: String? = environment("SystemRoot")): ServiceManagerCall {
     val command: String
     val args: List<String>
     if (settings.os == "windows") {
-        val system = requireNotNull(environment("SystemRoot")) + "\\System32"
+        val system = requireNotNull(systemRoot) + "\\System32"
         if (settings.atBoot && action == "load") {
             command = "$system\\WindowsPowerShell\\v1.0\\powershell.exe"
             args = listOf("-NoLogo", "-NoProfile", "-Command", windowsBootRegistrationScript())
-        } else if (action in setOf("status", "active")) {
+        } else if (action in SERVICE_QUERIES) {
             command = "$system\\WindowsPowerShell\\v1.0\\powershell.exe"
             val script = """
                 ${'$'}ErrorActionPreference = 'Stop'
@@ -95,7 +110,8 @@ private suspend fun manager(settings: ServiceSettings, action: String, checkResu
                     ${'$'}task = ${'$'}scheduler.GetFolder('\').GetTasks(1) | Where-Object { ${'$'}_.Name -eq ${'$'}env:TEAMCODE_SERVICE_TASK }
                     if (-not ${'$'}task) { exit 3 }
                     ${if (settings.atBoot) windowsBootTaskCheck() else ""}
-                    if (${'$'}env:TEAMCODE_SERVICE_OPERATION -eq 'active' -and ${'$'}task.GetInstances(0).Count -eq 0) { exit 3 }
+                    if (${'$'}env:TEAMCODE_SERVICE_OPERATION -in @('active', 'running') -and ${'$'}task.GetInstances(0).Count -eq 0) { exit 3 }
+                    if (${'$'}env:TEAMCODE_SERVICE_OPERATION -eq 'enabled' -and -not ${'$'}task.Enabled) { exit 3 }
                     exit 0
                 } catch { exit 2 }
             """.trimIndent()
@@ -112,33 +128,52 @@ private suspend fun manager(settings: ServiceSettings, action: String, checkResu
             }
         }
     } else if (settings.os == "macos") {
-        command = "/bin/launchctl"
         val domain = if (settings.atBoot) "system" else "gui/${settings.userId}"
         val target = "$domain/${settings.label}"
-        args = when (action) {
-            "status" -> listOf("print", target)
-            "start" -> listOf("kickstart", target)
-            "load" -> listOf("bootstrap", domain, settings.registration)
-            "stop" -> listOf("bootout", target)
-            else -> error("Unsupported launchd operation.")
+        if (action == "enabled" || action == "running") {
+            // launchctl has no exit status for these; read its report without a shell evaluating any value.
+            command = "/bin/sh"
+            args = listOf("-c", if (action == "enabled")
+                "! /bin/launchctl print-disabled \"${'$'}1\" | /usr/bin/grep -F -q -e \"\\\"${'$'}2\\\" => disabled\" -e \"\\\"${'$'}2\\\" => true\""
+                else "/bin/launchctl print \"${'$'}1/${'$'}2\" | /usr/bin/grep -q 'state = running'", "sh", domain, settings.label)
+        } else {
+            command = "/bin/launchctl"
+            args = when (action) {
+                "status" -> listOf("print", target)
+                "start" -> listOf("kickstart", target)
+                "load" -> listOf("bootstrap", domain, settings.registration)
+                "stop" -> listOf("bootout", target)
+                "enable" -> listOf("enable", target)
+                else -> error("Unsupported launchd operation.")
+            }
         }
     } else {
         command = "/usr/bin/systemctl"
-        args = listOf("--user") + if (action == "daemon-reload") listOf(action)
-            else listOf(action, if (action == "enable") settings.registration else "${settings.label}.service")
+        args = listOf("--user") + when (action) {
+            "daemon-reload" -> listOf(action)
+            "enable" -> listOf(action, settings.registration)
+            "enabled" -> listOf("is-enabled", "--quiet", "${settings.label}.service")
+            "running" -> listOf("is-active", "--quiet", "${settings.label}.service")
+            else -> listOf(action, "${settings.label}.service")
+        }
     }
-    val invocation = if (settings.atBoot && settings.os == "macos" && action != "status")
+    val invocation = if (settings.atBoot && settings.os == "macos" && action !in SERVICE_QUERIES)
         ServiceManagerInvocation("/usr/bin/sudo", (if (quiet) listOf("-n") else emptyList()) + command + args)
         else ServiceManagerInvocation(command, args)
+    return ServiceManagerCall(invocation, if (settings.os == "windows") mapOf(
+        "TEAMCODE_SERVICE_TASK" to settings.label, "TEAMCODE_SERVICE_OPERATION" to action,
+        "TEAMCODE_SERVICE_REGISTRATION" to settings.registration, "TEAMCODE_SERVICE_USER" to settings.userId,
+        "TEAMCODE_SERVICE_EXECUTABLE" to settings.executable,
+        "TEAMCODE_SERVICE_ARGUMENTS" to listOf("service", "serve", "--config", settings.config).joinToString(" ", transform = ::quoteWindowsArgument),
+        // A caller running PowerShell 7 may export modules incompatible with Windows PowerShell 5.1.
+        "PSModulePath" to "${requireNotNull(systemRoot)}\\System32\\WindowsPowerShell\\v1.0\\Modules",
+    ) else emptyMap())
+}
+
+private suspend fun manager(settings: ServiceSettings, action: String, checkResult: Boolean = true, quiet: Boolean = false): Int {
+    val call = serviceManagerCall(settings, action, quiet)
     val result = withTimeout(if (action in setOf("stop", "restart")) 670_000L else if (settings.atBoot && !quiet) 180_000L else 15_000L) {
-        runInteractiveProcess(invocation.command, invocation.arguments, if (settings.os == "windows") mapOf(
-            "TEAMCODE_SERVICE_TASK" to settings.label, "TEAMCODE_SERVICE_OPERATION" to action,
-            "TEAMCODE_SERVICE_REGISTRATION" to settings.registration, "TEAMCODE_SERVICE_USER" to settings.userId,
-            "TEAMCODE_SERVICE_EXECUTABLE" to settings.executable,
-            "TEAMCODE_SERVICE_ARGUMENTS" to listOf("service", "serve", "--config", settings.config).joinToString(" ", transform = ::quoteWindowsArgument),
-            // A caller running PowerShell 7 may export modules incompatible with Windows PowerShell 5.1.
-            "PSModulePath" to "${requireNotNull(environment("SystemRoot"))}\\System32\\WindowsPowerShell\\v1.0\\Modules",
-        ) else emptyMap(), quiet = quiet || action in setOf("status", "active"))
+        runInteractiveProcess(call.invocation.command, call.invocation.arguments, call.environment, quiet = quiet || action in SERVICE_QUERIES)
     }
     if (checkResult && result != 0) throw CliktError("The OS service manager rejected the operation.")
     return result
@@ -197,7 +232,11 @@ private class Manage(private val operation: String) : SuspendingCliktCommand(nam
         }
         when (operation) {
             "start" -> start(selected)
-            "stop" -> stop(selected)
+            "stop" -> {
+                stop(selected)
+                if (!selected.atBoot && automaticServiceSetup(selected.config))
+                    echo("Stopped. teamcode update and the automatic update job start it again; teamcode service automatic off keeps it stopped.")
+            }
             "restart" -> { echo("Draining the local proxy before restarting."); stop(selected); start(selected) }
             "uninstall" -> {
                 if (!ownsRegistration(selected)) throw CliktError("The registration is missing. Repair it with service install before uninstalling.")
@@ -214,7 +253,10 @@ private class Manage(private val operation: String) : SuspendingCliktCommand(nam
                 removeServiceRegistration(selected)
                 if (selected.os == "linux") manager(selected, "daemon-reload")
                 FileSystem.SYSTEM.delete(servicePath(selected.config).toPath())
+                // Otherwise the next update or automatic update job would install it again (decision 10).
+                setAutomaticServiceSetup(selected.config, false)
                 echo("Removed the TeamCode service. Saved login and logs are preserved.")
+                echo("teamcode install and teamcode update no longer set it up; teamcode service install or teamcode service automatic on does again.")
             }
         }
     }
@@ -247,6 +289,17 @@ private class Logs : SuspendingCliktCommand(name = "logs") {
     }
 }
 
+private class Automatic : SuspendingCliktCommand(name = "automatic") {
+    private val state by argument("on|off|status").choice("on", "off", "status").optional()
+    override fun help(context: Context) = "Whether teamcode install, teamcode update and the automatic update job install this service " +
+        "when it is missing and repair its login startup (on by default; --no-service skips it once)."
+    override suspend fun run() {
+        val config = configPath()
+        when (state) { "on" -> setAutomaticServiceSetup(config, true); "off" -> setAutomaticServiceSetup(config, false) }
+        echo("Automatic service setup: ${if (automaticServiceSetup(config)) "on" else "off"}.")
+    }
+}
+
 private class Serve : SuspendingCliktCommand(name = "serve") {
     private val config by option("--config", help = "Absolute saved configuration path, supplied by the service manager.").required()
     override suspend fun run() {
@@ -262,5 +315,26 @@ internal suspend fun startManagedService(settings: ServiceSettings) {
     if (!me.nathanfallet.teamcode.cli.daemon.insideCloudRunner()) start(settings, quiet = true)
 }
 internal suspend fun stopManagedService(settings: ServiceSettings) = stop(settings, quiet = true)
+/** The exit status of a query (`status`, `enabled`, `running`): 0 when true. Never elevated. */
+internal suspend fun queryService(settings: ServiceSettings, query: String): Int {
+    require(query in SERVICE_QUERIES)
+    return manager(settings, query, checkResult = false, quiet = true)
+}
+/** Login startup: a systemd user unit enabled after a reload, a launchd job no longer disabled, a logon task created and enabled. */
+internal suspend fun enableManagedService(settings: ServiceSettings) {
+    require(!settings.atBoot)
+    when (settings.os) {
+        "linux" -> { manager(settings, "daemon-reload", quiet = true); manager(settings, "enable", quiet = true) }
+        "macos" -> manager(settings, "enable", quiet = true)
+        else -> {
+            when (manager(settings, "status", false, quiet = true)) {
+                3 -> manager(settings, "load", quiet = true)
+                0 -> Unit
+                else -> error("Cannot query Windows Task Scheduler.")
+            }
+            manager(settings, "enable", quiet = true)
+        }
+    }
+}
 internal suspend fun managedServiceRunning(settings: ServiceSettings): Boolean =
     manager(settings, if (settings.os == "windows") "active" else "status", false) == 0

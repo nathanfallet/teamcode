@@ -12,6 +12,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.VERSION
+import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.client.ReleaseClient
 import me.nathanfallet.teamcode.client.ReleaseDownloadException
 
@@ -31,7 +32,9 @@ internal class Update : SuspendingCliktCommand(name = "update") {
     private val notifications by option("--notifications", help = "Configure background signed release notifications for this managed installation.").choice("on", "off", "status")
     private val automatic by option("--automatic", help = "Opt into an hourly user update job, disable it, inspect it or remove its registration.").choice("on", "off", "status", "uninstall")
     private val automaticRun by option("--automatic-run", help = "Run one enabled automatic update attempt; supplied by the OS scheduler.").flag()
-    override fun help(context: Context) = "Check or update a managed native installation; preserve login. Running agent sessions keep their version; the owned service restarts when they end."
+    private val noService by option("--no-service", help = "Do not install the local service or check its login startup this time (teamcode service automatic off keeps this setting).").flag()
+    override fun help(context: Context) = "Check or update a managed native installation; preserve login. Running agent sessions keep their version; the owned service restarts when they end. " +
+        "Then installs the local service if it is missing, or checks that it starts at login and repairs it."
 
     override suspend fun run() = releaseOperation {
         if (listOf(notifications != null, automatic != null, automaticRun).count { it } > 1)
@@ -40,7 +43,7 @@ internal class Update : SuspendingCliktCommand(name = "update") {
             if (check || rollback || version != null || bundle != null) throw UsageError("Automatic updates cannot be combined with a check, version, bundle or rollback.")
             val store = root?.let { InstallationStore(defaultInstallationPaths(it)) } ?: managedInstallation()
                 ?: throw CliOperationException("release_not_managed")
-            automaticUpdateCommand(store, automatic, automaticRun) { echo(it) }
+            automaticUpdateCommand(store, automatic, automaticRun, noService) { echo(it) }
             return@releaseOperation
         }
         if (notifications != null) {
@@ -78,6 +81,8 @@ internal class Update : SuspendingCliktCommand(name = "update") {
                 echo("The managed installation is already up to date.")
                 pendingRestartReport(store)?.let { echo(it) }
             } else activationReport(activation, store).forEach { echo(it) }
+            // Decision 10: the binary update is done and kept; a service failure is reported, never thrown.
+            setUpInstallationService(store, configPath(), noService).let { echo(it.line, err = it.failed) }
         }
     }
 }

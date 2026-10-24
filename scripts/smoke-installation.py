@@ -47,7 +47,8 @@ def main():
         config_root = root / 'configuration'
         home = root / 'home'
         # Installation links the command under HOME: never let this smoke touch the real one.
-        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root), TEAMCODE_DISABLE_AUTOUPDATE='1')
+        # This smoke registers its own service on a free port; the automatic setup is smoke-service-setup.py's subject.
+        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root), TEAMCODE_DISABLE_AUTOUPDATE='1', TEAMCODE_NO_SERVICE='1')
         env['PATH'] = os.pathsep.join(entry for entry in env['PATH'].split(os.pathsep) if Path(entry) != home / '.local' / 'bin')
         root.mkdir()
         home.mkdir()

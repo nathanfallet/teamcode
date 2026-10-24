@@ -32,10 +32,9 @@ The installer makes `teamcode` available by name, without administrator rights (
 teamcode login --server https://teamcode.example.org
 teamcode run claude -- --dangerously-skip-permissions
 teamcode run codex -- exec "Explain this repository"
-teamcode service install
 ```
 
-Agent installation and optional user-service registration remain explicit steps. Installing TeamCode does not start a proxy, enroll provider accounts or create a team login. Re-running the installer reuses its managed installation. A saved login causes the native installer to check compatibility with that self-hosted server before activation.
+The installation ends with the [local service](services.md#automatic-setup), the device's daemon: it is installed and started at user login (a LaunchAgent, a systemd user unit or a logon task, never elevated), and connects once you run `teamcode login`. One line says what was done; a service failure never fails the installation and names the command to run. Set `TEAMCODE_NO_SERVICE=1` before running the script to skip it. Agent installation stays an explicit step: installing TeamCode does not enroll provider accounts or create a team login. Re-running the installer reuses its managed installation. A saved login causes the native installer to check compatibility with that self-hosted server before activation.
 
 The desktop app installs the CLI the same way, from the script of its own version, after checking the script's SHA-256 against the one it was built with. In the other direction, `teamcode ui` installs TeamCode Desktop of the CLI's version from its signed desktop manifest, then opens it ([companion](companion.md#desktop-sessions-on-this-device)).
 
@@ -49,7 +48,7 @@ No platform needs Java, Gradle, Python or Node to install TeamCode. POSIX bootst
 | Linux | `~/.local/share/teamcode`, or `$XDG_DATA_HOME/teamcode` |
 | Windows | `%LOCALAPPDATA%\TeamCode` |
 
-Set `TEAMCODE_INSTALL_ROOT` to an absolute private directory before invoking the script to override the root. The native installer refuses an unrelated nonempty layout. Configuration remains under the existing XDG/home `.config/teamcode` location. POSIX bootstrap refuses root; system-service provisioning is a separate operation.
+Set `TEAMCODE_INSTALL_ROOT` to an absolute private directory before invoking the script to override the root. The native installer refuses an unrelated nonempty layout. Configuration remains under the existing XDG/home `.config/teamcode` location. POSIX bootstrap refuses root; startup before login (`teamcode service install --at-boot`) is a separate, explicit operation.
 
 ## Command on PATH
 

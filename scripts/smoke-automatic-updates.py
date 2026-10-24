@@ -64,7 +64,8 @@ def main():
     config_root = workspace / 'configuration'
     config_path = config_root / 'teamcode/config.json'
     launcher = root / 'bin' / ('teamcode.exe' if os.name == 'nt' else 'teamcode')
-    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root))
+    # It registers its own service on a free port; the automatic setup is smoke-service-setup.py's subject.
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(config_root), TEAMCODE_NO_SERVICE='1')
     env.pop('TEAMCODE_DISABLE_AUTOUPDATE', None)
     token = secrets.token_hex(32)
     service_installed = False

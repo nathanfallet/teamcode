@@ -6,13 +6,16 @@ import com.github.ajalt.clikt.parameters.options.*
 import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.CliOperationException
+import me.nathanfallet.teamcode.cli.config.configPath
+import me.nathanfallet.teamcode.cli.service.ServiceSetupOutcome
 
 internal class Install : SuspendingCliktCommand(name = "install") {
     private val version by option("--version", help = "Published version; defaults to the latest stable release.")
     private val bundle by option("--bundle", help = "Offline signed release directory containing manifest.json, manifest.sig and the target asset.")
     private val root by option("--root", help = "Absolute private installation directory; defaults to the user's application data.")
+    private val noService by option("--no-service", help = "Do not install the local service (this device's daemon) or check its login startup.").flag()
     private val noPath by option("--no-path", help = "Do not make the teamcode command available by name (a ~/.local/bin link on macOS/Linux, the user PATH on Windows).").flag()
-    override fun help(context: Context) = "Install a verified native release with an immutable launcher and versioned payloads. Saved login is preserved."
+    override fun help(context: Context) = "Install a verified native release with an immutable launcher and versioned payloads, then the local service, started at login. Saved login is preserved."
     override suspend fun run() = releaseOperation {
         if (servicePlatform().userId == "0") throw CliOperationException("release_user_installation_required")
         val store = InstallationStore(defaultInstallationPaths(root))
@@ -32,6 +35,11 @@ internal class Install : SuspendingCliktCommand(name = "install") {
                 throw CliOperationException("release_command_link_conflict")
             }
         }
-        echo("Then use $COMMAND_NAME login and $COMMAND_NAME service install.")
+        // Decision 4: the installation ends with the service, started at login. Its failure never undoes the installation.
+        val service = setUpInstallationService(store, configPath(), noService)
+        echo(service.line, err = service.failed)
+        if (service.outcome in setOf(ServiceSetupOutcome.INSTALLED, ServiceSetupOutcome.REPAIRED, ServiceSetupOutcome.UNCHANGED, ServiceSetupOutcome.AT_BOOT))
+            echo("Then use $COMMAND_NAME login.")
+        else echo("Then use $COMMAND_NAME login and $COMMAND_NAME service install.")
     }
 }
