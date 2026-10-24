@@ -61,6 +61,19 @@ def require(condition, message):
         raise SystemExit('Desktop acceptance failed: ' + message)
 
 
+def show_installer_log(temporary):
+    """The Windows installer's verbose log, before the temporary folder holding it is deleted with the run's work."""
+    log = temporary / 'teamcode-desktop-msiexec.log'
+    if not log.is_file():
+        return
+    data = log.read_bytes()
+    text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
+    lines = text.splitlines()
+    print(f'--- {log.name}: last 120 of {len(lines)} lines ---\n' + '\n'.join(lines[-120:]) + '\n--- end ---', flush=True)
+    if system() == 'windows':
+        subprocess.run(['tasklist', '/FI', 'IMAGENAME eq msiexec.exe', '/V'], timeout=60)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True, type=Path)
@@ -90,6 +103,8 @@ def main():
                                     capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=900)
             output = result.stdout + result.stderr
             print(f'$ teamcode ui --bundle {source.name} --yes --no-launch -> {result.returncode}\n{output}', flush=True)
+            if result.returncode != 0:
+                show_installer_log(temporary)
             return result.returncode, output
 
         # One modified byte in the middle of the package: refused before anything opens it, nothing installed.
