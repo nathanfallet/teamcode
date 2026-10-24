@@ -3,7 +3,8 @@ name: teamcode
 description: Self-hosted team subscription gateway with shared MySQL state
 type: application
 version: 0.1.0
-appVersion: "1.0.0-SNAPSHOT"
+# Release packaging replaces it with the exact version (helm package --app-version), which the image tag defaults to.
+appVersion: "latest"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/nathanfallet/teamcode
 sources:

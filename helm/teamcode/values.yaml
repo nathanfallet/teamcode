@@ -2,8 +2,11 @@
 replicaCount: 3
 image:
   repository: nathanfallet/teamcode
-  tag: latest
-  pullPolicy: Always
+  # Empty: the chart's appVersion. A released chart (teamcode-VERSION.tgz) carries its exact server version, so it
+  # deploys that image and nothing else; this directory's chart carries "latest" (tested main images).
+  tag: ""
+  # Empty: Always for "latest", IfNotPresent for an exact version.
+  pullPolicy: ""
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""

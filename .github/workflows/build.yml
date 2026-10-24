@@ -34,19 +34,19 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - run: python3 scripts/release-request.py
       - run: python3 scripts/check-module-graph.py
       - run: python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'
       - run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
       - run: ./gradlew :api:jvmTest :client:jvmTest :client:testAndroidHostTest :api:compileAndroidMain :domain:test :infrastructure:test :presentation:test :config:jvmTest :cli:jvmTest :app:test :app:buildFatJar
       - run: python3 scripts/smoke-replicas.py --jar app/build/libs/app-all.jar
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: server-jar
           path: app/build/libs/app-all.jar
@@ -55,12 +55,12 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Install the Android platform the app compiles against
         # `yes` ends on SIGPIPE once sdkmanager exits; that status must not fail the step under pipefail.
         run: '{ yes || true; } | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" > /dev/null'
@@ -69,8 +69,8 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4.3.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.19.0
       - run: python3 -m pip install PyYAML==6.0.3
@@ -82,7 +82,7 @@ jobs:
           curl --fail --location --retry 2 https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
           helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org | ./kubeconform -strict -summary
           helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org --set mysql.enabled=false --set mysql.jdbcUrl=jdbc:mysql://db:3306/teamcode --set autoscaling.enabled=true | ./kubeconform -strict -summary
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-helm-chart
           path: chart-dist/*.tgz
@@ -100,12 +100,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Select image tags
         run: |
           if [ "${{ github.ref_type }}" = tag ] || [ "${{ github.event_name }}" = workflow_dispatch -a "${{ inputs.publish_release }}" = true ]; then
@@ -132,12 +132,12 @@ jobs:
         os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Install Linux transport dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
@@ -182,12 +182,12 @@ jobs:
         run: python3 scripts/smoke-team.py --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --jar app/build/libs/app-all.jar
       - name: Stage the tested native release asset
         run: python3 scripts/release-bundle.py stage --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --target "$NATIVE_ASSET" --version "$TEAMCODE_VERSION" --commit "$GITHUB_SHA" --output dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ env.NATIVE_ASSET }}
           path: dist/*
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-${{ env.NATIVE_DIRECTORY }}
           path: cli/build/bin/${{ env.NATIVE_DIRECTORY }}/releaseExecutable/teamcode.kexe
@@ -196,7 +196,7 @@ jobs:
         run: ./gradlew "-PteamcodeVersion=$TEAMCODE_INSTALLATION_VERSION" ":cli:linkReleaseExecutable${NATIVE_TARGET}"
       - name: Stage the actual installation-baseline executable
         run: python3 scripts/release-bundle.py stage --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --target "$NATIVE_ASSET" --version "$TEAMCODE_INSTALLATION_VERSION" --commit "$GITHUB_SHA" --output installation-dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installation-release-${{ env.NATIVE_ASSET }}
           path: installation-dist/*
@@ -206,15 +206,15 @@ jobs:
     timeout-minutes: 30
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - run: .\gradlew.bat :cli:linkReleaseExecutableMingwX64 :cli:linkDebugTestMingwX64 :config:linkDebugTestMingwX64
       - run: .\cli\build\bin\mingwX64\debugTest\test.exe
       - run: .\config\build\bin\mingwX64\debugTest\test.exe
@@ -230,12 +230,12 @@ jobs:
         run: |
           $releaseVersion = $env:ORG_GRADLE_PROJECT_teamcodeVersion
           python scripts/release-bundle.py stage --binary cli/build/bin/mingwX64/releaseExecutable/teamcode.exe --target windows-x64 --version $releaseVersion --commit $env:GITHUB_SHA --output dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows-x64
           path: dist/*
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-windows-x64
           path: cli/build/bin/mingwX64/releaseExecutable/teamcode.exe
@@ -246,7 +246,7 @@ jobs:
       - name: Stage the actual installation-baseline executable
         shell: pwsh
         run: python scripts/release-bundle.py stage --binary cli/build/bin/mingwX64/releaseExecutable/teamcode.exe --target windows-x64 --version $env:TEAMCODE_INSTALLATION_VERSION --commit $env:GITHUB_SHA --output installation-dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installation-release-windows-x64
           path: installation-dist/*
@@ -267,28 +267,28 @@ jobs:
     env:
       NATIVE_TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - run: ./gradlew ":cli:linkReleaseExecutable${NATIVE_TARGET}" ":cli:linkDebugTest${NATIVE_TARGET}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-tests-${{ matrix.asset }}
           path: cli/build/bin/${{ matrix.directory }}/debugTest/test.kexe
           retention-days: 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-${{ matrix.asset }}
           path: cli/build/bin/${{ matrix.directory }}/releaseExecutable/teamcode.kexe
           retention-days: 1
       - name: Compile the distinct installation-baseline version
         run: ./gradlew "-PteamcodeVersion=$TEAMCODE_INSTALLATION_VERSION" ":cli:linkReleaseExecutable${NATIVE_TARGET}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installation-candidate-${{ matrix.asset }}
           path: cli/build/bin/${{ matrix.directory }}/releaseExecutable/teamcode.kexe
@@ -310,26 +310,26 @@ jobs:
       NATIVE_ASSET: ${{ matrix.asset }}
       EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-${{ matrix.asset }}
           path: cli/build/bin/${{ matrix.directory }}/releaseExecutable
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-tests-${{ matrix.asset }}
           path: cli/build/bin/${{ matrix.directory }}/debugTest
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: installation-candidate-${{ matrix.asset }}
           path: installation-candidate
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: server-jar
           path: app/build/libs
@@ -361,7 +361,7 @@ jobs:
         run: python3 scripts/smoke-team.py --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --jar app/build/libs/app-all.jar
       - name: Stage the tested native release asset
         run: python3 scripts/release-bundle.py stage --binary "cli/build/bin/${NATIVE_DIRECTORY}/releaseExecutable/teamcode.kexe" --target "$NATIVE_ASSET" --version "$TEAMCODE_VERSION" --commit "$GITHUB_SHA" --output dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ matrix.asset }}
           path: dist/*
@@ -370,7 +370,7 @@ jobs:
         run: |
           chmod 755 installation-candidate/teamcode.kexe
           python3 scripts/release-bundle.py stage --binary installation-candidate/teamcode.kexe --target "$NATIVE_ASSET" --version "$TEAMCODE_INSTALLATION_VERSION" --commit "$GITHUB_SHA" --output installation-dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installation-release-${{ matrix.asset }}
           path: installation-dist/*
@@ -380,27 +380,27 @@ jobs:
     needs: [native, windows, cross_native]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           merge-multiple: true
           path: staged
       - name: Verify and assemble all four tested targets
         run: python3 scripts/release-bundle.py assemble --inputs staged --version "${ORG_GRADLE_PROJECT_teamcodeVersion}" --commit "$GITHUB_SHA" --output dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-release-bundle
           path: dist/*
           retention-days: 7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: installation-release-*
           merge-multiple: true
           path: installation-staged
       - name: Verify and assemble all four distinct-version baselines
         run: python3 scripts/release-bundle.py assemble --inputs installation-staged --version "$TEAMCODE_INSTALLATION_VERSION" --commit "$GITHUB_SHA" --output installation-dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-installation-bundle
           path: installation-dist/*
@@ -415,8 +415,8 @@ jobs:
       install_sh_sha256: ${{ steps.installers.outputs.install_sh_sha256 }}
       install_ps1_sha256: ${{ steps.installers.outputs.install_ps1_sha256 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-release-bundle
           path: dist
@@ -433,7 +433,7 @@ jobs:
         run: |
           echo "install_sh_sha256=$(sha256sum dist/install.sh | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           echo "install_ps1_sha256=$(sha256sum dist/install.ps1 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-installation-bundle
           path: installation-dist
@@ -441,12 +441,12 @@ jobs:
         env:
           TEAMCODE_RELEASE_SIGNING_KEY: ${{ secrets.TEAMCODE_RELEASE_SIGNING_KEY }}
         run: python3 scripts/release-signature.py sign --manifest installation-dist/manifest.json --signature installation-dist/manifest.sig --public-key release/trust/teamcode-release-2026.pem
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-signed-release-bundle
           path: dist/*
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-signed-installation-bundle
           path: installation-dist/*
@@ -477,12 +477,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Install the Linux packaging tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot rpm
@@ -679,12 +679,12 @@ jobs:
           for extra in "${extras[@]}"; do
             python3 scripts/release-desktop.py extra --package "$extra" --target "$DESKTOP_TARGET" --version "$version" --output desktop-extras
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-package-${{ matrix.target }}
           path: desktop-staged/*
           retention-days: 7
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: runner.os != 'Windows'
         with:
           name: desktop-extra-${{ matrix.target }}
@@ -704,8 +704,8 @@ jobs:
     outputs:
       macos_signed: ${{ steps.signed.outputs.macos_signed }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: desktop-package-*
           merge-multiple: true
@@ -721,7 +721,7 @@ jobs:
       - name: Tell the acceptance whether the macOS app carries the Developer ID
         id: signed
         run: echo "macos_signed=${{ secrets.TEAMCODE_MACOS_CERTIFICATE_P12 != '' && vars.TEAMCODE_MACOS_TEAM_ID != '' }}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: teamcode-signed-desktop-bundle
           path: desktop-dist/*
@@ -748,19 +748,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     # These jobs receive public signed files, never signing or team/provider credentials.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         if: runner.os == 'Windows'
         with:
           node-version: '22'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-signed-release-bundle
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-signed-installation-bundle
           path: installation-dist
@@ -811,7 +811,7 @@ jobs:
           if [[ "$INSTALLATION_TARGET" == windows-* ]]; then suffix=".exe"; fi
           binary="installation-fixtures/second/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}-${INSTALLATION_TARGET}${suffix}"
           python scripts/smoke-service-setup.py --binary "$binary" --bundle installation-fixtures/first
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-signed-desktop-bundle
           path: desktop-dist
@@ -838,20 +838,20 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-signed-release-bundle
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-helm-chart
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: teamcode-signed-desktop-bundle
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: desktop-extra-*
           merge-multiple: true
