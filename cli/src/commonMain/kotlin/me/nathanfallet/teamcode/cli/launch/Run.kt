@@ -5,7 +5,6 @@ import com.github.ajalt.clikt.core.*
 import com.github.ajalt.clikt.parameters.arguments.*
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
@@ -53,14 +52,15 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         val code = coroutineScope {
             val service = loadService(configPath())
             val report: (String) -> Unit = { echo(it, err = true) }
+            // Before the agent starts: a pending service restart and the wait for it are said at once.
             val lease = me.nathanfallet.teamcode.cli.update.agentInstallationLease(service?.executable, report)
-            val updates = launch { me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(report) }
-            try { runAgent() } finally {
-                try { withContext(NonCancellable) { updates.cancelAndJoin() } } finally {
-                    try { lease?.close() } finally {
-                        // The last session to end restarts the service on the version selected while it ran.
-                        lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
-                    }
+            try {
+                // While the agent runs it owns the terminal: a release notice waits until it has exited.
+                withHeldReports(report, { held -> me.nathanfallet.teamcode.cli.update.watchReleaseUpdates(held) }) { runAgent() }
+            } finally {
+                try { lease?.close() } finally {
+                    // After the agent exited: the last session to end restarts the service on the version selected while it ran.
+                    lease?.let { withContext(NonCancellable) { me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart(it.store, report = report) } }
                 }
             }
         }

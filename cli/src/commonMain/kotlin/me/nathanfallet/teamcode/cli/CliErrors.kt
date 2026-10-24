@@ -145,6 +145,7 @@ internal fun desktopFailureMessage(code: String): String = when {
     code == "desktop_version_mismatch" || code == "desktop_package_layout" || code == "desktop_package_invalid" ->
         "The TeamCode Desktop package is not the expected one ($code). Nothing was installed."
     code == "desktop_launch_failed" -> "TeamCode Desktop is installed but could not be opened ($code). Open it from your applications."
+    code == "desktop_restart_timeout" -> "TeamCode Desktop did not quit in time for its update ($code). Quit it, then run teamcode ui --yes."
     code.startsWith("desktop_msiexec_") -> "The Windows installer of TeamCode Desktop failed ($code). Run teamcode ui again, or install the .msi from the release page."
     else -> "TeamCode Desktop could not be installed ($code). The previous installation, if any, is unchanged. $DEBUG_HINT"
 }
@@ -247,6 +248,9 @@ internal fun releaseFailureMessage(code: String, detail: String? = null): String
                 "Free some disk space (`df -h` shows it on macOS and Linux), check that your user owns the TeamCode installation folder, then run the command again."
         "release_unexpected_failure" ->
             "The TeamCode release download failed unexpectedly ($code).$cause Run the command again with `teamcode --debug` and report its output; meanwhile, $REINSTALL."
+        "release_not_managed" ->
+            "This TeamCode CLI is not a managed installation ($code): it was copied by hand or built from source, so it cannot update itself. " +
+                "Install it once with the install script (see the README), which keeps your login and settings; later updates then work."
         "release_http_404" ->
             "This TeamCode release or one of its files is not published on GitHub ($code). Check the version with `teamcode update --check`."
         else -> if (code.startsWith("release_http_5"))

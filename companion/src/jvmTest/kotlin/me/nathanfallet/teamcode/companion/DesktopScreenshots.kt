@@ -108,8 +108,8 @@ class DesktopScreenshots {
         }
     }
 
-    private fun scene(width: Int, height: Int, theme: ThemePreference, block: DesktopComposeUiTest.() -> Unit) {
-        val koin = startKoin { modules(appModules(demoModule()) + demoOverrides()) }.koin
+    internal fun scene(width: Int, height: Int, theme: ThemePreference, extra: List<org.koin.core.module.Module> = emptyList(), block: DesktopComposeUiTest.() -> Unit) {
+        val koin = startKoin { modules(appModules(demoModule()) + demoOverrides() + extra) }.koin
         koin.get<PreferencesRepository>().setTheme(theme)
         try {
             // Rendered at 2x: the window is twice the size in pixels and the content sees a density of 2.
@@ -130,7 +130,7 @@ class DesktopScreenshots {
     private fun DesktopComposeUiTest.clickText(text: String): SemanticsNodeInteraction =
         onAllNodesWithText(text).onFirst().performSemanticsAction(SemanticsActions.OnClick)
 
-    private fun DesktopComposeUiTest.shot(output: File, name: String) {
+    internal fun DesktopComposeUiTest.shot(output: File, name: String) {
         waitForIdle()
         // Every root, the window's and those of dialogs and menus over it, drawn where it sits.
         val roots = onAllNodes(isRoot())

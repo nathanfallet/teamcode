@@ -6,6 +6,8 @@ import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.optional
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.types.long
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.mordant.terminal.Terminal
 import io.ktor.client.HttpClient
 import me.nathanfallet.teamcode.cli.CliOperationException
@@ -15,6 +17,10 @@ import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.hostOs
 import me.nathanfallet.teamcode.cli.platform.runInteractiveProcess
+import me.nathanfallet.teamcode.cli.platform.servicePlatform
+import me.nathanfallet.teamcode.cli.platform.waitForProcessExit
+import me.nathanfallet.teamcode.cli.describeFailure
+import kotlin.time.Duration.Companion.minutes
 import me.nathanfallet.teamcode.cli.platform.startDetachedProcess
 import me.nathanfallet.teamcode.cli.platform.writePrivateFile
 import me.nathanfallet.teamcode.cli.remote.remoteDirectory
@@ -41,26 +47,46 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
     private val noLaunch by option("--no-launch", help = "Install or update the desktop app if needed, without opening it.").flag()
     private val bundle by option("--bundle", help = "Install from an offline directory with desktop-manifest.json, desktop-manifest.sig and the package.")
     private val noService by option("--no-service", help = "After installing the desktop app, do not install the local service or check its login startup.").flag()
+    private val restartApp by option("--restart-app", metavar = "PID", help = "Install or update the desktop app, then reopen it once the running app with this process id has quit " +
+        "(what TeamCode Desktop's Update button runs). On Windows, where the running app keeps its files open, the installation itself waits for it to quit.").long()
+    private val waitFor by option("--wait-for", hidden = true, help = "Wait for this process to exit before installing and opening the app (the hand-off --restart-app starts).").long()
     override fun help(context: Context) = "Open TeamCode Desktop, installing the version of this CLI first when it is missing or older " +
         "(signed manifest, SHA-256 and, on macOS, the Developer ID signature are checked; no administrator rights)."
 
     override suspend fun run() = releaseOperation {
         val os = hostOs()
+        val restart = restartApp
+        val waited = waitFor
+        if (restart != null && (restart <= 0 || noLaunch || bundle != null || directory != null || waited != null))
+            throw UsageError("--restart-app takes the app's process id and cannot be combined with --no-launch, --bundle, a directory or --wait-for.")
+        if (restart != null && !yes) throw UsageError("--restart-app needs --yes: the app asks no question.")
         val folder = directory?.let { remoteDirectory(it).toString() }
         val config = configPath()
         val locations = DesktopLocations(os, ::environment)
+        // The hand-off of --restart-app: the app has to quit first (on Windows, before its files can be replaced).
+        if (waited != null && !waitForProcessExit(waited, RESTART_WAIT)) {
+            echo("TeamCode Desktop (process $waited) was still running after ${RESTART_WAIT.inWholeMinutes} minutes: nothing was installed or opened.", err = true)
+            throw CliOperationException("desktop_restart_timeout")
+        }
+        // Windows: the running app holds its files, so the installation runs once it has quit, in a process of its own.
+        if (restart != null && os == "windows") {
+            handOff(listOf("ui", "--yes", "--wait-for", restart.toString()) + if (noService) listOf("--no-service") else emptyList(), config)
+            echo("TeamCode Desktop installs version $VERSION once the running app has quit, then reopens.")
+            return@releaseOperation
+        }
         val temporary = (environment("TMPDIR") ?: environment("TEMP") ?: environment("TMP") ?: "/tmp").toPath()
         val client = if (bundle == null) ReleaseClient { configure -> HttpClient { configure(this) } } else null
         try {
             val source = bundle?.let { BundleDesktopSource(it.toPath()) } ?: OnlineDesktopSource(requireNotNull(client))
             val terminal = Terminal()
+            // After the member clicked Update (--wait-for), the Windows installer may show its progress window.
             val installer = DesktopInstaller(os, installationTarget(), locations, source, temporary, { command, arguments ->
                 runInteractiveProcess(command, arguments, emptyMap(), quiet = command == "codesign")
-            }, report = { echo(it) }, quietWindows = yes || !terminal.terminalInfo.interactive)
+            }, report = { echo(it) }, quietWindows = waited == null && (yes || !terminal.terminalInfo.interactive))
             val service = suspend {
                 setUpInstallationService(try { managedInstallation() } catch (_: Exception) { null }, config, noService)
             }
-            val app = DesktopUi(VERSION, locations, installer, report = { echo(it) }, service = service,
+            val ui = DesktopUi(VERSION, locations, installer, report = { echo(it) }, service = service,
                 reportError = { echo(it, err = true) }) { question ->
                 if (yes) true
                 else if (!terminal.terminalInfo.interactive) throw CliUserException("$question Run teamcode ui --yes to install it without asking.")
@@ -68,8 +94,23 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
                     echo("$question [y/N] ", trailingNewline = false)
                     terminal.readLineOrNull(hideInput = false)?.trim()?.lowercase() in setOf("y", "yes")
                 }
-            }.prepare() ?: return@releaseOperation
+            }
+            val app = try { ui.prepare() } catch (error: Exception) {
+                // The app already quit for this update: it is reopened on the version still installed, which says why.
+                if (waited == null || error is kotlinx.coroutines.CancellationException) throw error
+                locations.installed().firstOrNull()?.let { previous ->
+                    try { launch(os, previous, listOf("--config-path", config, "--update-error", describeFailure(error, null).message.take(1_000)), config) }
+                    catch (_: Exception) { }
+                }
+                throw error
+            } ?: return@releaseOperation
             if (noLaunch) { echo("TeamCode Desktop ${app.version} is installed: ${app.root}"); return@releaseOperation }
+            if (restart != null) {
+                // The new app opens once this one has quit: a second instance would start beside it otherwise.
+                handOff(listOf("ui", "--wait-for", restart.toString(), "--no-service"), config)
+                echo("TeamCode Desktop ${app.version} is installed: it reopens once the running app has quit.")
+                return@releaseOperation
+            }
             val arguments = listOf("--config-path", config) + (folder?.let { listOf("--directory", it) } ?: emptyList())
             launch(os, app, arguments, config)
             echo("Opened TeamCode Desktop ${app.version}.")
@@ -84,12 +125,27 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
             if (runInteractiveProcess(command.first(), command.drop(1), emptyMap(), quiet = true) != 0) throw CliOperationException("desktop_launch_failed")
             return
         }
-        // Its output goes to a private log beside config.json, emptied once it passes 1 MiB.
+        startDetachedProcess(command.first(), command.drop(1), desktopLog(config))
+    }
+
+    /**
+     * Starts this CLI again, detached, with [arguments]: the step that outlives the app. The managed launcher when there
+     * is one, so it runs the selected version; its output goes to `desktop.log`.
+     */
+    private fun handOff(arguments: List<String>, config: String) {
+        val executable = (try { managedInstallation()?.paths?.launcher?.toString() } catch (_: Exception) { null }) ?: servicePlatform().executable
+        startDetachedProcess(executable, arguments, desktopLog(config))
+    }
+
+    /** A private log beside config.json, emptied once it passes 1 MiB. */
+    private fun desktopLog(config: String): String {
         val log = configSibling(config, "desktop.log")
         val size = FileSystem.SYSTEM.metadataOrNull(log.toPath())?.size
         if (size == null || size > 1_048_576) writePrivateFile(log, "")
-        startDetachedProcess(command.first(), command.drop(1), log)
+        return log
     }
+
+    private companion object { val RESTART_WAIT = 2.minutes }
 }
 
 /**

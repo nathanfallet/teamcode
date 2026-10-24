@@ -56,4 +56,18 @@ class CheckReleaseTest {
             assertEquals(3, calls)
         }
     }
+
+    @Test fun theJsonReportCarriesOnlyTheAuthenticatedValues() = runBlocking {
+        transport().use { client ->
+            val result = CheckRelease(client, VerifyReleaseManifest(listOf(ReleaseFixtures.firstKey)), "1.0.0")("1.2.3-alpha.1")
+            val json = kotlinx.serialization.json.Json.parseToJsonElement(releaseCheckJson("1.0.0", result)).let { it as kotlinx.serialization.json.JsonObject }
+            assertEquals("\"1.0.0\"", json["currentVersion"].toString())
+            assertEquals("\"1.2.3-alpha.1\"", json["latestVersion"].toString())
+            assertEquals("true", json["updateAvailable"].toString())
+            assertEquals("\"${result!!.release.manifest.sourceCommit}\"", json["sourceCommit"].toString())
+            assertEquals("\"${result.release.keyId}\"", json["keyId"].toString())
+        }
+        // No stable release: the version is null and nothing is available, on one line TeamCode Desktop reads.
+        assertEquals("""{"currentVersion":"1.0.0","latestVersion":null,"updateAvailable":false}""", releaseCheckJson("1.0.0", null))
+    }
 }
