@@ -70,6 +70,12 @@ kotlin {
                 includeDirs(project.file("src/nativeInterop/cinterop"))
             }
         }
+        if (target.name.startsWith("linux")) {
+            // Test-only destructor that checks the TLS library is still usable once atexit() handlers have run.
+            target.compilations.getByName("test").cinterops.create("tlsExitProbe") {
+                definitionFile.set(project.file("src/nativeInterop/cinterop/tls_exit_probe.def"))
+            }
+        }
         target.binaries.executable {
             entryPoint = "me.nathanfallet.teamcode.cli.main"
             baseName = "teamcode"

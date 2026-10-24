@@ -1,0 +1,22 @@
+package = me.nathanfallet.teamcode.cli.interop.tlsexitprobe
+---
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* The OpenSSL that Ktor's Curl engine links statically into every Linux executable, test binaries included. */
+int OPENSSL_init_crypto(uint64_t opts, const void *settings);
+
+#define TEAMCODE_TLS_EXIT_PROBE_STOPPED 97
+
+/*
+ * Test-only probe. Executable destructors run from _dl_fini, after every atexit() handler, so this sees the TLS
+ * library as a Curl worker thread still running at exit would. OPENSSL_INIT_BASE_ONLY (0x40000) only checks that
+ * OPENSSL_cleanup() has not run: it returns 0 once the library is stopped, and never re-initializes anything.
+ */
+__attribute__((destructor, used)) static void teamcode_tls_exit_probe(void) {
+    if (getenv("TEAMCODE_TLS_EXIT_PROBE") == NULL) return;
+    _exit(OPENSSL_init_crypto(0x00040000L, NULL) == 1 ? 0 : TEAMCODE_TLS_EXIT_PROBE_STOPPED);
+}
+
+static inline int teamcode_tls_exit_probe_stopped_code(void) { return TEAMCODE_TLS_EXIT_PROBE_STOPPED; }
