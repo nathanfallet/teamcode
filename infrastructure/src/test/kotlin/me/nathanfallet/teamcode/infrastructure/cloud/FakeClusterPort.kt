@@ -20,6 +20,8 @@ class FakeClusterPort : ClusterPort {
     val pods = mutableMapOf<String, Pod>()
     val volumes = mutableMapOf<String, Volume>()
     var unreachable = false
+    /** The service account may not manage NetworkPolicies: no pod is created, as in [KubernetesClusterPort]. */
+    var networkPolicyRefused = false
     val calls = mutableListOf<String>()
 
     @Synchronized private fun <T> op(name: String, block: () -> T): T {
@@ -61,6 +63,7 @@ class FakeClusterPort : ClusterPort {
         volumes.values.map { it.observation }.filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
     }
     override suspend fun createPod(clusterId: String, request: PodRequest) = op("createPod") {
+        if (networkPolicyRefused) throw SessionNetworkPolicyRefusedException()
         pods.getOrPut(key(request.namespace, request.name)) { Pod(request.namespace, request, PodPhase.PENDING, false, null, null) }
         Unit
     }

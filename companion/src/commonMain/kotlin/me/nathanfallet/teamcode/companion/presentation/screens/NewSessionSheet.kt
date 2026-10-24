@@ -118,10 +118,10 @@ fun NewSessionSheet(viewModel: NewSessionViewModel, onDismiss: () -> Unit, onCre
                 SessionTarget.CLOUD -> CloudFields(state, viewModel)
                 SessionTarget.DEVICE -> DeviceFields(state, viewModel, device?.let { deviceName(it) })
             }
-            TcTextField(state.name, viewModel::onName, label = stringResource(Res.string.new_session_name), tag = "name")
+            TcTextField(state.name, viewModel::onName, label = stringResource(Res.string.new_session_name), tag = "name", onSubmit = { if (state.canCreate) viewModel.create() })
             if (state.acceptsMessage) {
                 TcTextField(state.message, viewModel::onMessage, label = stringResource(Res.string.new_session_message), placeholder = stringResource(Res.string.new_session_message_hint),
-                    singleLine = false, minLines = 3, maxLines = 8, tag = "message")
+                    singleLine = false, minLines = 3, maxLines = 8, tag = "message", onSubmit = { if (state.canCreate) viewModel.create() })
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionTitle(stringResource(Res.string.new_session_overrides))

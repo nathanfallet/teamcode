@@ -17,9 +17,11 @@ class KubernetesClusterPortTest {
     private val bodies = mutableListOf<JsonObject?>()
 
     private fun address(vararg octets: Int) = java.net.InetAddress.getByAddress(ByteArray(octets.size) { octets[it].toByte() })
-    private fun port(resolver: (String) -> List<java.net.InetAddress> = { listOf(address(10, 0, 0, 1)) }, handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData) = KubernetesClusterPort(
+    private fun port(resolver: (String) -> List<java.net.InetAddress> = { listOf(address(10, 0, 0, 1)) },
+                     options: KubernetesPodOptions = KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0"),
+                     handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData) = KubernetesClusterPort(
         { ClusterConnection("https://k8s.example.test:6443", "unused-with-mock", token) },
-        { KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0") },
+        { options },
         MockEngine { request ->
             requests += request
             bodies += (request.body as? TextContent)?.text?.let { Json.parseToJsonElement(it).jsonObject }
@@ -43,6 +45,8 @@ class KubernetesClusterPortTest {
         val ok = port({ listOf(address(10, 0, 0, 1), address(127, 0, 0, 1)) }) { json("""{"spec":{"volumeName":"pv-1"},"status":{"phase":"Bound"}}""") }
         assertNotNull(ok.claim("c1", "teamcode", "tc-ws-1"))
     }
+    /** The pod sent by `createPod`, after its namespace's network policy. */
+    private fun podBody() = bodies.filterNotNull().single { it["kind"]?.jsonPrimitive?.content == "Pod" }
     private fun MockRequestHandleScope.json(value: String, status: HttpStatusCode = HttpStatusCode.OK) =
         respond(value, status, headersOf(HttpHeaders.ContentType, "application/json"))
 
@@ -78,7 +82,7 @@ class KubernetesClusterPortTest {
         port.createPod("c1", PodRequest("teamcode", "tc-1-e2", "registry.example/toolchain@sha256:" + "a".repeat(64), "tc-ws-1",
             mapOf("teamcode.nathanfallet.me/epoch" to "2"), CloudResources(2000, 4096), listOf("registry"),
             mapOf("TEAMCODE_CLOUD_SESSION" to "1", "TEAMCODE_CLOUD_EPOCH" to "2", "TEAMCODE_CLOUD_TEAM" to "t")))
-        val pod = bodies.single()!!
+        val pod = podBody()
         val spec = pod["spec"]!!.jsonObject
         assertEquals("Never", spec["restartPolicy"]!!.jsonPrimitive.content)
         assertFalse(spec["automountServiceAccountToken"]!!.jsonPrimitive.boolean, "The default API token is never mounted")
@@ -102,7 +106,7 @@ class KubernetesClusterPortTest {
         port.createPod("c1", PodRequest("teamcode", "tc-1-e2", "registry.example/toolchain@sha256:" + "a".repeat(64), "tc-ws-1",
             mapOf("teamcode.nathanfallet.me/epoch" to "2"), CloudResources(2000, 4096), emptyList(),
             mapOf("TEAMCODE_CLOUD_SESSION" to "1", "TEAMCODE_CLOUD_EPOCH" to "2", "TEAMCODE_CLOUD_TEAM" to "t")))
-        val spec = bodies.single()!!["spec"]!!.jsonObject
+        val spec = podBody()["spec"]!!.jsonObject
         assertFalse(spec["shareProcessNamespace"]!!.jsonPrimitive.boolean, "The agent must not see the runner's processes")
         val containers = spec["containers"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
         val runner = containers.getValue("session"); val agent = containers.getValue("agent")
@@ -148,7 +152,7 @@ class KubernetesClusterPortTest {
         port.createPod("c1", PodRequest("teamcode", "tc-1-e2", "registry.example/toolchain@sha256:" + "a".repeat(64), "tc-ws-1",
             mapOf("teamcode.nathanfallet.me/epoch" to "2"), CloudResources(2000, 4096), emptyList(),
             mapOf("TEAMCODE_CLOUD_SESSION" to "1", "TEAMCODE_CLOUD_EPOCH" to "2", "TEAMCODE_CLOUD_TEAM" to "t")))
-        val spec = bodies.single()!!["spec"]!!.jsonObject
+        val spec = podBody()["spec"]!!.jsonObject
         val volume = spec["volumes"]!!.jsonArray.map { it.jsonObject }.single { it["name"]!!.jsonPrimitive.content == "uploads" }
         val emptyDir = volume["emptyDir"]!!.jsonObject
         assertEquals("1Gi", emptyDir["sizeLimit"]!!.jsonPrimitive.content, "Bounded, above the runner's own 768 MiB per execution")
@@ -288,5 +292,61 @@ class KubernetesClusterPortTest {
         }
         assertEquals(500, assertFailsWith<ClusterApiException> { port { json("{}", HttpStatusCode.InternalServerError) }.storageClasses("c1") }.status)
         assertFailsWith<IllegalArgumentException> { port { json("{}") }.imagePullSecrets("c1", "../kube-system") }
+    }
+
+    private val anyPod = PodRequest("tenant", "tc-1-e1", "registry.example/toolchain:1", "tc-ws-1", emptyMap(), CloudResources(1000, 1024), emptyList(), emptyMap())
+
+    @Test fun theNamespaceNetworkPolicyIsAppliedBeforeEveryPod(): Unit = runBlocking {
+        val port = port { json("{}", HttpStatusCode.Created) }
+        port.createPod("c1", anyPod)
+        port.createPod("c1", anyPod.copy(name = "tc-1-e2"))
+        val paths = requests.map { it.method to it.url.encodedPath }
+        val policyPath = "/apis/networking.k8s.io/v1/namespaces/tenant/networkpolicies/teamcode-sessions"
+        assertEquals(listOf(HttpMethod.Patch to policyPath, HttpMethod.Post to "/api/v1/namespaces/tenant/pods",
+            HttpMethod.Patch to policyPath, HttpMethod.Post to "/api/v1/namespaces/tenant/pods"), paths,
+            "Applied first, and again for every pod so a policy removed by hand comes back")
+        val apply = requests.first()
+        assertEquals("application/apply-patch+yaml", apply.body.contentType?.withoutParameters()?.toString())
+        assertEquals("teamcode", apply.url.parameters["fieldManager"]); assertEquals("true", apply.url.parameters["force"])
+        assertEquals("Bearer $token", apply.headers[HttpHeaders.Authorization])
+        // The mock resolves every host to 10.0.0.1: the server rule names it on 443, the API server is already private.
+        assertEquals(SessionNetworkPolicy().manifest(SessionNetworkPolicy.Server(listOf(byteArrayOf(10, 0, 0, 1)), 443), listOf(byteArrayOf(10, 0, 0, 1))), bodies.first())
+    }
+
+    @Test fun aRefusedPolicyCreatesNoPod(): Unit = runBlocking {
+        val port = port { request -> if (request.method == HttpMethod.Patch) json("""{"kind":"Status","message":"networkpolicies is forbidden"}""", HttpStatusCode.Forbidden) else json("{}", HttpStatusCode.Created) }
+        assertFailsWith<SessionNetworkPolicyRefusedException> { port.createPod("c1", anyPod) }
+        assertTrue(requests.none { it.method == HttpMethod.Post }, "No pod without its policy")
+        requests.clear()
+        val rotating = port { request -> if (request.method == HttpMethod.Patch) json("{}", HttpStatusCode.Unauthorized) else json("{}", HttpStatusCode.Created) }
+        assertEquals(401, assertFailsWith<ClusterApiException> { rotating.createPod("c1", anyPod) }.status, "A token being rotated is retried, not a missing right")
+        assertTrue(requests.none { it.method == HttpMethod.Post })
+        requests.clear()
+        val failing = port { request -> if (request.method == HttpMethod.Patch) json("{}", HttpStatusCode.ServiceUnavailable) else json("{}", HttpStatusCode.Created) }
+        assertEquals(503, assertFailsWith<ClusterApiException> { failing.createPod("c1", anyPod) }.status, "Another failure is retried like any cluster error")
+        assertTrue(requests.none { it.method == HttpMethod.Post })
+    }
+
+    @Test fun anUnresolvableServerUrlCreatesNeitherPolicyNorPod(): Unit = runBlocking {
+        // The cluster API resolves (10.0.0.1); the server URL does not: a policy without the server rule would cut running pods.
+        val port = port({ host -> if (host == "teamcode.example.test") throw java.net.UnknownHostException(host) else listOf(address(10, 0, 0, 1)) }) { json("{}", HttpStatusCode.Created) }
+        assertFailsWith<SessionServerUnresolvedException> { port.createPod("c1", anyPod) }
+        assertTrue(requests.isEmpty(), "Neither the policy nor the pod is sent")
+    }
+
+    @Test fun theOperatorCanLeaveNetworkPoliciesToTheCluster(): Unit = runBlocking {
+        val off = KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0", network = SessionNetworkPolicy(enabled = false))
+        val port = port(options = off) { json("{}", HttpStatusCode.Created) }
+        port.createPod("c1", anyPod)
+        assertEquals(listOf(HttpMethod.Post), requests.map { it.method }, "Disabled: the pod only, as before")
+    }
+
+    @Test fun theOperatorsSettingsReachThePolicy(): Unit = runBlocking {
+        val closed = SessionNetworkPolicy(lockdown = true, extraEgress = Json.parseToJsonElement("""[{"to":[{"ipBlock":{"cidr":"10.20.0.0/16"}}],"ports":[{"protocol":"TCP","port":443}]}]""").jsonArray)
+        val port = port(options = KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0", network = closed)) { json("{}", HttpStatusCode.Created) }
+        port.createPod("c1", anyPod)
+        val egress = bodies.first()!!["spec"]!!.jsonObject["egress"]!!.jsonArray
+        assertEquals(3, egress.size, "DNS, the server and the operator's rule, no internet")
+        assertEquals("10.20.0.0/16", egress[2].jsonObject["to"]!!.jsonArray.single().jsonObject["ipBlock"]!!.jsonObject["cidr"]!!.jsonPrimitive.content)
     }
 }

@@ -361,6 +361,15 @@ class CloudSessionPersistenceTest {
         drain(ra) { ra.store.find(team, pulling.id)!!.state == TERMINATED }
         assertEquals(DeletionState.PROVEN, ra.store.find(team, pulling.id)!!.workspace.deletion)
 
+        // A namespace where the service account may not apply the session network policy never gets a pod.
+        val unprotected = create("No network policy")
+        cluster(ra).networkPolicyRefused = true
+        try { pass(ra); pass(ra); pass(ra) } finally { cluster(ra).networkPolicyRefused = false }
+        assertEquals(FAILED, ra.store.find(team, unprotected.id)!!.state)
+        assertEquals("network_policy_refused", ra.store.find(team, unprotected.id)!!.failure?.code)
+        assertTrue(cluster(ra).pods.keys.none { it.endsWith(CloudSessionService.podName(unprotected.id, 1)) }, "No pod without its network policy")
+        drain(ra) { ra.store.find(team, unprotected.id)!!.workspace.deletion == DeletionState.PROVEN }
+
         // The runner may checkpoint as soon as its heartbeat reports the pause, before the reconciler moves to pausing.
         val early = create("Early checkpoint")
         ready(early.id)

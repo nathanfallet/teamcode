@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.ServerInfo
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.InspectServerUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.trimTyped
 
 data class AddServerUiState(
     val origin: String = "",
@@ -37,11 +38,13 @@ class AddServerViewModel(
     }
 
     fun check() {
-        if (state.value.checking || state.value.origin.isBlank()) return
-        state.update { it.copy(checking = true, error = null, server = null) }
+        // What a keyboard added around the address goes before it is checked, and from the field too.
+        val origin = state.value.origin.trimTyped()
+        if (state.value.checking || origin.isEmpty()) return
+        state.update { it.copy(origin = origin, checking = true, error = null, server = null) }
         check = viewModelScope.launch {
             try {
-                val server = inspect(state.value.origin)
+                val server = inspect(origin)
                 state.update { it.copy(checking = false, server = server, newServer = accounts.accounts.value.none { account -> account.origin == server.origin }) }
             } catch (error: CancellationException) {
                 throw error

@@ -83,7 +83,7 @@ import org.koin.compose.koinInject
  * (withdraw an offer). [onOpenSession] opens a session the member can see: theirs before it went, or once it is theirs.
  */
 @Composable
-fun TransfersScreen(viewModel: TransfersViewModel, onBack: () -> Unit, onOpenSession: (String) -> Unit, backLabel: String = stringResource(Res.string.sessions_title), clock: Clock = koinInject()) {
+fun TransfersScreen(viewModel: TransfersViewModel, onBack: (() -> Unit)?, onOpenSession: (String) -> Unit, backLabel: String = stringResource(Res.string.sessions_title), clock: Clock = koinInject()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
     val now = rememberNow(clock)

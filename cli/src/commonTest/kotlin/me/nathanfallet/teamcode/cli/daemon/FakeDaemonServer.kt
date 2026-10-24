@@ -140,11 +140,13 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
 
     /**
      * Hosts that behave like `teamcode remote host`: online once started, they checkpoint and exit 0 when their session
-     * should pause, and exit 1 when [crash] names them. [started] lists what the daemon started.
+     * should pause, exit 1 when [crash] names them, and hang when [hang] does. [started] lists what the daemon started.
      */
     inner class Hosts : HostLauncher {
         val started = mutableListOf<Triple<String, Int, String>>()
         val crash = mutableSetOf<String>()
+        /** Hosts that stop answering without exiting: alive until a newer epoch fences them. */
+        val hang = mutableSetOf<String>()
         override fun start(sessionId: String, epoch: Int, teamId: String, log: String): DetachedProcess {
             started += Triple(sessionId, epoch, teamId)
             val session = sessions.getValue(sessionId)
@@ -154,6 +156,7 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
                 override fun exitCode(): Int? {
                     exit?.let { return it }
                     if (session.epoch != epoch) return 0.also { exit = it }
+                    if (sessionId in hang) return null
                     if (sessionId in crash) { crash -= sessionId; session.online = false; return 1.also { exit = it } }
                     if (session.desiredState != "running") { checkpoint(sessionId); return 0.also { exit = it } }
                     return null

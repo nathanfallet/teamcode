@@ -77,6 +77,8 @@ fun LoginScreen(
     val changing = state.passwordChange != null
     val unreachable = state.server == null && !state.working
     val colors = TeamCode.colors
+    // Enter in any field submits once the form is complete (viewModel.submit checks it too).
+    val submit = { viewModel.submit() }
     FormPage(footer = {
         if (unreachable) return@FormPage
         if (!changing) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -102,12 +104,12 @@ fun LoginScreen(
             TcTextField(
                 value = state.username, onValueChange = viewModel::onUsernameChange, label = stringResource(Res.string.login_username),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, capitalization = KeyboardCapitalization.None, imeAction = ImeAction.Next, autoCorrectEnabled = false),
-                tag = "username", contentType = ContentType.Username,
+                tag = "username", contentType = ContentType.Username, onSubmit = submit,
             )
-            PasswordField(state.password, viewModel::onPasswordChange, stringResource(Res.string.login_password), "password", ContentType.Password)
+            PasswordField(state.password, viewModel::onPasswordChange, stringResource(Res.string.login_password), "password", ContentType.Password, onSubmit = submit)
             TcTextField(
                 value = state.deviceName, onValueChange = viewModel::onDeviceNameChange, label = stringResource(Res.string.login_device_name),
-                hint = stringResource(Res.string.login_device_hint), tag = "device",
+                hint = stringResource(Res.string.login_device_hint), tag = "device", onSubmit = submit,
             )
             if (state.cliLinkOffered) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f)) {
@@ -118,18 +120,18 @@ fun LoginScreen(
             }
         } else {
             PasswordField(state.newPassword, viewModel::onNewPasswordChange, stringResource(Res.string.password_change_new), "new-password", ContentType.NewPassword,
-                hint = stringResource(Res.string.password_change_hint))
-            PasswordField(state.confirmation, viewModel::onConfirmationChange, stringResource(Res.string.password_change_confirm), "confirm-password", ContentType.NewPassword)
+                hint = stringResource(Res.string.password_change_hint), onSubmit = submit)
+            PasswordField(state.confirmation, viewModel::onConfirmationChange, stringResource(Res.string.password_change_confirm), "confirm-password", ContentType.NewPassword, onSubmit = submit)
         }
         state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("error")) }
     }
 }
 
 @Composable
-private fun PasswordField(value: String, onChange: (String) -> Unit, label: String, tag: String, type: ContentType, hint: String? = null) {
+private fun PasswordField(value: String, onChange: (String) -> Unit, label: String, tag: String, type: ContentType, hint: String? = null, onSubmit: (() -> Unit)? = null) {
     TcTextField(
         value = value, onValueChange = onChange, label = label, hint = hint, password = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-        tag = tag, contentType = type,
+        tag = tag, contentType = type, onSubmit = onSubmit,
     )
 }

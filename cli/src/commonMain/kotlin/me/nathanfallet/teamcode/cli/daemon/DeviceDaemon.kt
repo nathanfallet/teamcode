@@ -33,7 +33,10 @@ internal fun interface HostLauncher {
  *   agent and conversation come from the server and `remote/`, exactly as for `teamcode remote host`.
  * - **Supervision.** A host that exits while its session should still run on that epoch is started again on a new
  *   epoch, at most [maxStarts] times in [startWindowMillis]; the session is then refused (`host_failed`) if it is still
- *   queued. A host whose session paused, ended or moved to another host is forgotten.
+ *   queued. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
+ *   is checked on the server every [lostCheckMillis]: once the server paused its session for the lost host
+ *   (`host_offline`, on that epoch), the daemon resumes it, within the same limit, and the queue gives it a new host
+ *   that fences the silent one. A host whose session paused, ended or moved to another host is forgotten.
  * - **Stop.** It stops polling, asks the server to pause every session it hosts (each agent finishes its turn and its
  *   host checkpoints and exits), waits for them up to [stopWaitMillis], then says it is offline
  *   (`DELETE /devices/current/daemon`). The next daemon resumes the sessions it paused ([DaemonSessions]), and a
@@ -57,6 +60,7 @@ internal class DeviceDaemon(
     private val startWindowMillis: Long = 600_000,
     private val retryMillis: Long = 30_000,
     private val maxBackoffMillis: Long = 60_000,
+    private val lostCheckMillis: Long = 30_000,
 ) {
     private class Hosted(val sessionId: String, val epoch: Int, val process: DetachedProcess?)
 
@@ -66,6 +70,7 @@ internal class DeviceDaemon(
     private val hosted = mutableMapOf<String, Hosted>()
     private val starts = mutableMapOf<String, MutableList<Long>>()
     private val retryAt = mutableMapOf<String, Long>()
+    private val checkedAt = mutableMapOf<String, Long>()
     private var pending: List<DaemonSession> = sessions.read()
     private var published: List<DeviceFolderView>? = null
     @kotlin.concurrent.Volatile private var refused = false
@@ -214,11 +219,22 @@ internal class DeviceDaemon(
 
     private suspend fun watchHosts() {
         for (entry in hosted.values.toList()) {
-            val code = entry.process?.exitCode() ?: continue
+            val code = entry.process?.exitCode()
+            // A host still running (or a previous daemon's) is asked about every lostCheckMillis only: it may have gone silent.
+            if (code == null) {
+                val now = now()
+                if (now - checkedAt.getOrPut(entry.sessionId) { now } < lostCheckMillis) continue
+                checkedAt[entry.sessionId] = now
+            }
             val view = try { client.cloudSession(entry.sessionId) }
                 catch (error: CancellationException) { throw error }
                 catch (error: TeamCodeException) { if (error.statusCode == 404) { forget(entry.sessionId) }; continue }
                 catch (_: Exception) { continue }
+            if (view.state == "paused" && view.desiredState == "paused" && view.failure?.code == HOST_OFFLINE && view.currentEpoch == entry.epoch) {
+                resumeLost(entry)
+                continue
+            }
+            if (code == null) continue
             val stillOurs = view.desiredState == "running" && view.state != "terminated" && view.currentEpoch == entry.epoch
             if (!stillOurs) { forget(entry.sessionId); continue }
             val record = records.load(entry.sessionId)
@@ -233,8 +249,30 @@ internal class DeviceDaemon(
         }
     }
 
+    /**
+     * The server paused [entry]'s session because its host stopped answering: resumed, so the queue gives it a new host.
+     * The start is counted when the order is accepted; an unreachable server leaves the entry for the next check.
+     */
+    private suspend fun resumeLost(entry: Hosted) {
+        val id = entry.sessionId
+        val recent = starts[id].orEmpty().count { now() - it <= startWindowMillis }
+        if (records.load(id) == null || recent >= maxStarts) {
+            report("The host of session $id stopped answering; not starting it again.")
+            forget(id)
+            return
+        }
+        try {
+            client.resumeCloudSession(id)
+            hosted.remove(id); checkedAt.remove(id)
+            report("The host of session $id stopped answering; resuming it.")
+        } catch (error: CancellationException) { throw error }
+        catch (error: TeamCodeException) { report("Session $id could not be resumed (${error.describe()})."); forget(id) }
+        catch (_: Exception) { /* Unreachable: checked again later. */ }
+    }
+
     private fun forget(id: String) {
         hosted.remove(id)
+        checkedAt.remove(id)
         sessions.remove(id)
     }
 

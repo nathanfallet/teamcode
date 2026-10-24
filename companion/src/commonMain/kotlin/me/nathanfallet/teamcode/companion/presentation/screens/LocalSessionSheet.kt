@@ -188,9 +188,9 @@ private fun Form(viewModel: LocalSessionViewModel) {
         Segmented(listOf("claude" to stringResource(Res.string.local_session_agent_claude), "codex" to stringResource(Res.string.local_session_agent_codex)),
             selected = state.agent, onSelect = viewModel::onAgent, modifier = Modifier.fillMaxWidth(), tag = { "local-agent-$it" })
     }
-    TcTextField(state.name, viewModel::onName, label = stringResource(Res.string.new_session_name), tag = "local-name")
+    TcTextField(state.name, viewModel::onName, label = stringResource(Res.string.new_session_name), tag = "local-name", onSubmit = { if (state.canStart) viewModel.create() })
     TcTextField(state.message, viewModel::onMessage, label = stringResource(Res.string.new_session_message), placeholder = stringResource(Res.string.new_session_message_hint),
-        singleLine = false, minLines = 3, maxLines = 8, tag = "local-message")
+        singleLine = false, minLines = 3, maxLines = 8, tag = "local-message", onSubmit = { if (state.canStart) viewModel.create() })
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(stringResource(Res.string.new_session_overrides))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

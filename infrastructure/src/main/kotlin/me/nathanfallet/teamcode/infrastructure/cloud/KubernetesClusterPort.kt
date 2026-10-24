@@ -25,6 +25,9 @@ import me.nathanfallet.teamcode.infrastructure.database.ClusterConnection
 /** A non-success Kubernetes API status. The response body is never kept: it may echo request content. */
 class ClusterApiException(val status: Int) : Exception("The Kubernetes API returned HTTP $status.")
 
+/** The server URL for pods does not resolve from the server, so the session network policy cannot name it; retried. */
+class SessionServerUnresolvedException : Exception("The server URL for pods does not resolve.")
+
 /** The cluster API host resolves to a link-local, unspecified or cloud metadata address, so the service-account token is not sent. */
 class ClusterHostNotAllowedException : Exception("The Kubernetes API host resolves to an address that is not allowed.")
 
@@ -46,6 +49,8 @@ data class KubernetesPodOptions(
     val runAsUser: Long = 1000,
     /** The agent's UID: it must not be the runner's, whose files and projected token it must never read. */
     val agentRunAsUser: Long = 1001,
+    /** Applied to the session namespace before every pod; set by the operator, see [SessionNetworkPolicy]. */
+    val network: SessionNetworkPolicy = SessionNetworkPolicy(),
 ) {
     init {
         // The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server.
@@ -148,8 +153,31 @@ class KubernetesClusterPort(
         // PersistentVolumes are cluster-wide and carry no TeamCode label: read them all, with a larger page budget.
         list(clusterId, "/api/v1/persistentvolumes", null, maxPages = 200).map(::volume).filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
 
+    /**
+     * Applies the namespace's [SessionNetworkPolicy] first, on every pod, so a policy deleted or changed by hand is
+     * restored before the next pod starts; a refusal creates no pod ([SessionNetworkPolicyRefusedException]).
+     */
     override suspend fun createPod(clusterId: String, request: PodRequest) {
-        create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request))
+        val pods = options()
+        if (pods.network.enabled) applyNetworkPolicy(clusterId, request.namespace, pods.network, pods.serverUrl)
+        create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request, pods))
+    }
+
+    /**
+     * Server-side apply (`PATCH` with `application/apply-patch+yaml`, field manager `teamcode`, forced): creates the
+     * policy or replaces the fields TeamCode owns in one idempotent call. Needs `create` and `patch` on `networkpolicies`. The server
+     * URL and the API server are resolved here, as the TeamCode server sees them, for every pod. Either failing to
+     * resolve stops the start (retried like a cluster error): a policy without the API server would let the pod reach
+     * it, one without the server rule would cut every running pod of the namespace from the server.
+     */
+    private suspend fun applyNetworkPolicy(clusterId: String, namespace: String, policy: SessionNetworkPolicy, serverUrl: String) {
+        val path = "/apis/networking.k8s.io/v1/namespaces/${segment(namespace)}/networkpolicies/${SessionNetworkPolicy.NAME}?fieldManager=teamcode&force=true"
+        val clusterApi = resolve(client(clusterId).connection.apiUrl).ifEmpty { throw ClusterHostNotAllowedException() }
+        val server = SessionNetworkPolicy.Server(resolve(serverUrl).ifEmpty { throw SessionServerUnresolvedException() }, Url(serverUrl).port)
+        val response = call(clusterId, HttpMethod.Patch, path, policy.manifest(server, clusterApi), contentType = APPLY_PATCH)
+        // Forbidden is the missing right; 401 (a token being rotated) is retried like any cluster error.
+        if (response.status == HttpStatusCode.Forbidden) throw SessionNetworkPolicyRefusedException()
+        if (!response.status.isSuccess()) throw ClusterApiException(response.status.value)
     }
 
     override suspend fun pod(clusterId: String, namespace: String, name: String): PodObservation? =
@@ -365,13 +393,14 @@ class KubernetesClusterPort(
         throw ClusterApiException(507) // More objects than one pass may read; refuse rather than act on a partial list.
     }
 
-    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?, accept: String = JSON): HttpResponse {
+    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?, accept: String = JSON,
+                             contentType: ContentType = ContentType.Application.Json): HttpResponse {
         val client = client(clusterId)
         return client.http.request(client.connection.apiUrl.trimEnd('/') + path) {
             this.method = method
             bearerAuth(client.connection.token)
             header(HttpHeaders.Accept, accept)
-            if (body != null) { contentType(ContentType.Application.Json); setBody(body.toString()) }
+            if (body != null) { contentType(contentType); setBody(body.toString()) }
         }
     }
     private suspend fun parse(response: HttpResponse): JsonObject {
@@ -417,6 +446,12 @@ class KubernetesClusterPort(
             catch (_: Exception) { throw ClusterHostNotAllowedException() }
         if (addresses.isEmpty() || addresses.any { !CloudAdministrationService.allowedResolvedAddress(it.address) }) throw ClusterHostNotAllowedException()
     }
+
+    /** The addresses of a URL's host, off the event loop; none when it does not resolve. */
+    private suspend fun resolve(url: String): List<ByteArray> = try {
+        val host = Url(url).host.removePrefix("[").removeSuffix("]")
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { resolver(host) }.map { it.address }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { emptyList() }
 
     override fun close() {
         clients.values.forEach { if (it.http !== shared) it.http.close() }; clients.clear()
@@ -468,6 +503,8 @@ class KubernetesClusterPort(
         private const val MAX_RESPONSE_CHARS = 16 * 1024 * 1024
         private val safeReason = Regex("[A-Za-z]{1,64}")
         private const val JSON = "application/json"
+        /** JSON is YAML, so the manifest is sent as built. */
+        private val APPLY_PATCH = ContentType("application", "apply-patch+yaml")
         /** Metadata only, with no fallback to a full list: the API server answers `406` rather than send secret data. */
         internal const val METADATA_ONLY = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
         private val DEFAULT_CLASS_ANNOTATIONS = listOf("storageclass.kubernetes.io/is-default-class", "storageclass.beta.kubernetes.io/is-default-class")

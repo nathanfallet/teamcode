@@ -180,7 +180,8 @@ fun AccountScreen(
                         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             var name by remember(account.id, account.deviceName) { mutableStateOf(account.deviceName) }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                TcTextField(name, { name = it }, modifier = Modifier.weight(1f), tag = "device-name", minHeight = 44.dp)
+                                TcTextField(name, { name = it }, modifier = Modifier.weight(1f), tag = "device-name", minHeight = 44.dp,
+                                    onSubmit = { if (!state.working && name.isNotBlank() && name != account.deviceName) viewModel.renameDevice(name) })
                                 TcButton(stringResource(Res.string.settings_device_rename), onClick = { viewModel.renameDevice(name) }, small = true,
                                     enabled = !state.working && name.isNotBlank() && name != account.deviceName, modifier = Modifier.testTag("rename"))
                             }

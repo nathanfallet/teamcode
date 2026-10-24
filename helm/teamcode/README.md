@@ -62,7 +62,7 @@ Behind a proxy or CDN such as Cloudflare, every TeamCode response (dashboard HTM
 
 The creating pod logs the initial `admin` temporary password exactly once. Find it with the command printed by Helm, sign in at `/dashboard`, and replace it. Administrators create team members; there is no public registration.
 
-The chart carries no cloud, GitHub or Kubernetes setting, and none belongs in `extraEnv`. Cloud sessions (on or off, runner image, Kubernetes clusters) and the team's GitHub App are configured by an administrator in the dashboard's **Settings** section and stored in the database; see [cloud sessions deployment](../../docs/cloud-sessions.md#deployment). The former `TEAMCODE_CLOUD_*` variables, if still set, only seed a database that stores no cloud runtime yet.
+The chart carries no cloud, GitHub or Kubernetes setting, and none belongs in `extraEnv`, with one exception: `cloudSessions.networkPolicy`, the NetworkPolicy the server applies to every cloud session namespace. Sessions keep full internet access; only cluster-internal and metadata endpoints are blocked (no ingress; no pod, service, node, private or link-local address, cloud metadata or Kubernetes API server; DNS and the TeamCode server stay reachable). It is an operator setting on purpose, so no dashboard administrator can change it; a stricter `lockdown` exists, off by default, and [session network policy](../../docs/cloud-sessions.md#session-network-policy) lists the cases that need a value (a server reached through the cluster's own load balancer, private git hosts or registries). The session clusters' service accounts need `create` and `patch` on `networkpolicies` in each session namespace. Cloud sessions (on or off, runner image, Kubernetes clusters) and the team's GitHub App are configured by an administrator in the dashboard's **Settings** section and stored in the database; see [cloud sessions deployment](../../docs/cloud-sessions.md#deployment). The former `TEAMCODE_CLOUD_*` variables, if still set, only seed a database that stores no cloud runtime yet.
 
 For local access without ingress, use `publicUrl: http://localhost:8080` and:
 
@@ -72,7 +72,7 @@ kubectl --namespace teamcode port-forward service/teamcode 8080:8080
 
 ## External database and availability
 
-The bundled MySQL StatefulSet is a convenience, **not a highly available database**. For production database failover and managed backups, use an external MySQL 8.4 service:
+The bundled MySQL StatefulSet is a convenience, **not a highly available database**. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it). **Upgrading:** on a CNI that enforces NetworkPolicy, a backup job, exporter or any other pod that connects to the bundled MySQL directly stops reaching it; disable the policy or route it through the server pods' labels. For production database failover and managed backups, use an external MySQL 8.4 service:
 
 ```yaml
 mysql:

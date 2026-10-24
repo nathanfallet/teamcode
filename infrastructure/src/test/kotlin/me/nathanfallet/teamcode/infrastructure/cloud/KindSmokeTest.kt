@@ -45,7 +45,8 @@ class KindSmokeTest {
                 database.migrate()
                 val cipher = CredentialCipher(ByteArray(32) { 7 })
                 val adminStore = SqlCloudAdminStore(database, cipher)
-                val options = KubernetesPodOptions("https://teamcode.invalid", read("image"), workspaceAccessMode = "ReadWriteOnce")
+                // A literal address: the session network policy names the server, so its URL must resolve (TEST-NET-1, never answered).
+                val options = KubernetesPodOptions("https://192.0.2.10", read("image"), workspaceAccessMode = "ReadWriteOnce")
                 KubernetesClusterPort({ adminStore.connection(it) }, { options }).use { port ->
                     val store = SqlCloudSessionStore(database)
                     val admin = CloudAdministrationService(adminStore, port)

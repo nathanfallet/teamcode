@@ -168,7 +168,7 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 fun SessionScreen(
-    viewModel: SessionViewModel, memberId: String?, onBack: () -> Unit, onOpenArtifacts: () -> Unit = {}, backLabel: String = stringResource(Res.string.sessions_title),
+    viewModel: SessionViewModel, memberId: String?, onBack: (() -> Unit)?, onOpenArtifacts: () -> Unit = {}, backLabel: String = stringResource(Res.string.sessions_title),
     /** More items of the "…" menu for the loaded session (the transfer action); call `close` before acting. */
     menuItems: @Composable (session: CloudSession, close: () -> Unit) -> Unit = { _, _ -> },
 ) {
@@ -400,6 +400,7 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                     TcTextField(
                         state.draft, viewModel::onDraftChange, placeholder = stringResource(Res.string.composer_hint), singleLine = false, maxLines = 6,
                         modifier = Modifier.weight(1f), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
+                        onSubmit = { if (state.canSend) viewModel.send() },
                     )
                     TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = viewModel::send, kind = IconButtonKind.FILLED,
                         enabled = state.canSend, modifier = Modifier.testTag("send"))
