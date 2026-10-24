@@ -302,12 +302,13 @@ class ServiceSetupTest {
                 else -> scratch.home / ".config" / "teamcode" / "service-task.xml"
             }
             val bytes = if (os == "windows") Buffer().apply { writeShortLe(0xfeff); text.forEach { writeShortLe(it.code) } }.readByteArray() else text.encodeToByteArray()
-            fs.createDirectories(registration.parent!!)
-            fs.write(registration) { write(bytes) }
-            // The settings of that time: no atBoot, userName or userHome fields.
+            // The settings of that time: no atBoot, userName or userHome fields. Written first, as `service install` does:
+            // the private writer creates the config directory itself, and on Windows refuses one another owner created.
             val userId = if (os == "windows") "S-1-5-21-123-456-789-1001" else "501"
             writePrivateFile(servicePath(scratch.config), """{"id":"$id","port":8789,"localToken":"${"d".repeat(64)}","executable":${jsonString(scratch.launcher)},""" +
                 """"config":${jsonString(scratch.config)},"registration":${jsonString(registration.toString())},"os":"$os","userId":"$userId"}""")
+            fs.createDirectories(registration.parent!!)
+            fs.write(registration) { write(bytes) }
             val system = FakeSystem()
             val setup = setUp(scratch, system, os)
             assertEquals(ServiceSetupOutcome.UNCHANGED, setup.outcome, "$os: ${setup.line}")
