@@ -13,12 +13,16 @@ import platform.AVFAudio.AVAudioEngine
 import platform.AVFAudio.AVAudioSession
 import platform.AVFAudio.AVAudioSessionCategoryOptionDuckOthers
 import platform.AVFAudio.AVAudioSessionCategoryRecord
+import platform.AVFAudio.AVAudioSessionCategorySoloAmbient
+import platform.AVFAudio.AVAudioSessionModeDefault
 import platform.AVFAudio.AVAudioSessionModeMeasurement
 import platform.AVFAudio.AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
 import platform.AVFAudio.setActive
 import platform.Foundation.NSError
 import platform.Foundation.NSLocale
 import platform.Foundation.currentLocale
+import platform.Foundation.countryCode
+import platform.Foundation.languageCode
 import platform.Foundation.localeIdentifier
 import platform.Speech.SFSpeechAudioBufferRecognitionRequest
 import platform.Speech.SFSpeechRecognitionTask
@@ -41,11 +45,11 @@ actual fun rememberSpeechRecognizer(): SpeechRecognizer? = remember {
  * the recognizer's initializer returns nil for a language it does not know, which Kotlin's constructor cannot express.
  */
 private fun supportedLocale(): NSLocale? {
-    fun NSLocale.key() = localeIdentifier.replace('_', '-')
     val current = NSLocale.currentLocale
     val supported = SFSpeechRecognizer.supportedLocales().filterIsInstance<NSLocale>()
-    return supported.firstOrNull { it.key() == current.key() }
-        ?: supported.firstOrNull { it.key().substringBefore('-') == current.key().substringBefore('-') }
+    // Language and region compared as codes: an identifier may carry keywords (fr_FR@calendar=gregorian) or a script.
+    return supported.firstOrNull { it.languageCode == current.languageCode && it.countryCode == current.countryCode }
+        ?: supported.filter { it.languageCode == current.languageCode }.minByOrNull { it.localeIdentifier }
 }
 
 private class IosSpeechRecognizer(private val recognizer: SFSpeechRecognizer) : SpeechRecognizer {
@@ -61,6 +65,12 @@ private class IosSpeechRecognizer(private val recognizer: SFSpeechRecognizer) : 
         if (!recognizer.isAvailable()) { fail(SpeechError.UNAVAILABLE); awaitClose {}; return@callbackFlow }
 
         val session = AVAudioSession.sharedInstance()
+        // Put back as it was once done: the app's other audio must not stay silenced by a recording category.
+        val previous = Triple(session.category, session.mode, session.categoryOptions)
+        fun restore() {
+            session.setActive(false, AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation, null)
+            session.setCategory(previous.first ?: AVAudioSessionCategorySoloAmbient, previous.second ?: AVAudioSessionModeDefault, previous.third, null)
+        }
         session.setCategory(AVAudioSessionCategoryRecord, AVAudioSessionModeMeasurement, AVAudioSessionCategoryOptionDuckOthers, null)
         session.setActive(true, null)
         val request = SFSpeechAudioBufferRecognitionRequest().apply {
@@ -73,7 +83,7 @@ private class IosSpeechRecognizer(private val recognizer: SFSpeechRecognizer) : 
         val format = input.outputFormatForBus(0u)
         // No microphone (a simulator without input): the engine would refuse a tap of zero channels.
         if (format.channelCount == 0u || format.sampleRate == 0.0) {
-            session.setActive(false, AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation, null)
+            restore()
             fail(SpeechError.UNAVAILABLE); awaitClose {}; return@callbackFlow
         }
         input.installTapOnBus(0u, 1024u, format) { buffer, _ -> buffer?.let(request::appendAudioPCMBuffer) }
@@ -85,7 +95,7 @@ private class IosSpeechRecognizer(private val recognizer: SFSpeechRecognizer) : 
         engine.prepare()
         if (!engine.startAndReturnError(null)) {
             release()
-            session.setActive(false, AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation, null)
+            restore()
             fail(SpeechError.FAILED); awaitClose {}; return@callbackFlow
         }
         val task: SFSpeechRecognitionTask = recognizer.recognitionTaskWithRequest(request) { result, error ->
@@ -103,7 +113,7 @@ private class IosSpeechRecognizer(private val recognizer: SFSpeechRecognizer) : 
             finish = null
             task.cancel()
             release()
-            session.setActive(false, AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation, null)
+            restore()
         }
     }
 

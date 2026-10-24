@@ -25,7 +25,14 @@ private object MacDictation : SpeechRecognizer {
         try { Native.load("objc", ObjC::class.java) } catch (_: Throwable) { null }
     }
 
-    val available: Boolean get() = objc != null
+    /** Checked once: an Objective-C exception for an unknown selector on AppKit's thread would end the whole app. */
+    val available: Boolean by lazy {
+        val objc = objc ?: return@lazy false
+        val application = application(objc) ?: return@lazy false
+        objc.objc_msgSend(application, objc.sel_registerName("respondsToSelector:"), objc.sel_registerName("startDictation:")) != 0.toByte()
+    }
+
+    private fun application(objc: ObjC): Pointer? = objc.objc_msgSend(objc.objc_getClass("NSApplication"), objc.sel_registerName("sharedApplication"))
 
     /**
      * `startDictation:` is the action of Edit > Start Dictation…, handled by NSApplication; sent again while dictating,
@@ -33,8 +40,8 @@ private object MacDictation : SpeechRecognizer {
      * it there.
      */
     override fun toggleSystemDictation() {
-        val objc = objc ?: return
-        val application = objc.objc_msgSend(objc.objc_getClass("NSApplication"), objc.sel_registerName("sharedApplication")) ?: return
+        val objc = objc?.takeIf { available } ?: return
+        val application = application(objc) ?: return
         objc.objc_msgSend(
             application, objc.sel_registerName("performSelectorOnMainThread:withObject:waitUntilDone:"),
             objc.sel_registerName("startDictation:"), null, false,
@@ -50,6 +57,8 @@ private object MacDictation : SpeechRecognizer {
         fun objc_getClass(name: String): Pointer?
         fun sel_registerName(name: String): Pointer?
         fun objc_msgSend(receiver: Pointer?, selector: Pointer?): Pointer?
+        /** A `BOOL` result: one byte, the register's upper bits are not defined. */
+        fun objc_msgSend(receiver: Pointer?, selector: Pointer?, argument: Pointer?): Byte
         fun objc_msgSend(receiver: Pointer?, selector: Pointer?, action: Pointer?, argument: Pointer?, wait: Boolean): Pointer?
     }
 }

@@ -90,6 +90,17 @@ class DictationTest {
         assertEquals(DictationState.Idle, dictation.uiState.value)
     }
 
+    @Test fun anEmptyFinalResultKeepsTheWordsAlreadyShown() = runTest {
+        val recognizer = FakeRecognizer()
+        val dictation = dictation(recognizer)
+        val draft = Draft("Note:")
+        dictation.toggle(draft.read, draft.write); runCurrent()
+        recognizer.say(SpeechEvent.Partial("check the logs")); runCurrent()
+        recognizer.say(SpeechEvent.Final("")); runCurrent()
+        assertEquals("Note: check the logs", draft.text)
+        assertEquals(DictationState.Idle, dictation.uiState.value)
+    }
+
     @Test fun nothingIsEverSent() = runTest {
         // The dictation only writes the draft: there is no send callback to call, and the draft stays for review.
         val recognizer = FakeRecognizer()

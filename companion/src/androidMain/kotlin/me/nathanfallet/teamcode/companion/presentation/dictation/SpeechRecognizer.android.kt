@@ -94,7 +94,8 @@ private class AndroidSpeechRecognizer(private val context: Context, private val 
         AndroidRecognizer.ERROR_NO_MATCH, AndroidRecognizer.ERROR_SPEECH_TIMEOUT -> SpeechError.NO_SPEECH
         AndroidRecognizer.ERROR_NETWORK, AndroidRecognizer.ERROR_NETWORK_TIMEOUT, AndroidRecognizer.ERROR_SERVER,
         AndroidRecognizer.ERROR_SERVER_DISCONNECTED, AndroidRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
-        AndroidRecognizer.ERROR_LANGUAGE_UNAVAILABLE, AndroidRecognizer.ERROR_RECOGNIZER_BUSY -> SpeechError.UNAVAILABLE
+        AndroidRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> SpeechError.UNAVAILABLE
+        // Busy (the previous listening still closing) and the rest: a retry may work, so not "unavailable".
         else -> SpeechError.FAILED
     }
 }

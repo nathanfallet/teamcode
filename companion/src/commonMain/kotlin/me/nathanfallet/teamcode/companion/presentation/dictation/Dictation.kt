@@ -75,7 +75,8 @@ class Dictation(private val recognizer: SpeechRecognizer, private val scope: Cor
                 recognizer.listen().collect { event ->
                     when (event) {
                         is SpeechEvent.Partial -> if (!write(event.text)) { state.value = DictationState.Idle; this@launch.cancel() }
-                        is SpeechEvent.Final -> { write(event.text); state.value = DictationState.Idle }
+                        // An empty final result (Android's recognizer when it heard little) keeps the words already shown.
+                        is SpeechEvent.Final -> { if (event.text.isNotEmpty()) write(event.text); state.value = DictationState.Idle }
                         is SpeechEvent.Failed -> state.value =
                             if (event.error == SpeechError.NO_SPEECH) DictationState.Idle else DictationState.Failed(event.error)
                     }
@@ -86,7 +87,8 @@ class Dictation(private val recognizer: SpeechRecognizer, private val scope: Cor
                 // A recognizer that threw instead of reporting: the words so far stay in the draft.
                 state.value = DictationState.Failed(SpeechError.FAILED)
             } finally {
-                if (state.value == DictationState.Listening) state.value = DictationState.Idle
+                // Only the current listening: a finished one ending after a new tap must not reset its state.
+                if (job === coroutineContext[Job] && state.value == DictationState.Listening) state.value = DictationState.Idle
             }
         }
     }

@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -13,18 +12,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.phosphoricons.Fill
@@ -75,27 +72,32 @@ fun listeningHint(): String = stringResource(Res.string.composer_listening)
 fun DictationButton(dictation: Dictation, draft: () -> String, onDraft: (String) -> Unit, field: FocusRequester) {
     val colors = TeamCode.colors
     val listening = dictation.listening()
-    val pulse by rememberInfiniteTransition().animateFloat(1f, 0.55f, infiniteRepeatable(tween(700), RepeatMode.Reverse))
     val label = stringResource(if (listening) Res.string.composer_dictate_stop else Res.string.composer_dictate)
     Box(
         Modifier
             .size(28.dp)
             .clip(CircleShape)
-            .background(if (listening) colors.accent.copy(alpha = pulse) else androidx.compose.ui.graphics.Color.Transparent)
+            .then(if (listening) Modifier.pulse(colors.accent) else Modifier)
             .handCursor()
-            .clickable(role = Role.Button, onClickLabel = label) {
+            .clickable(role = Role.Button) {
                 if (dictation.systemDictation) field.requestFocus()
                 dictation.toggle(draft, onDraft)
             }
-            .semantics { stateDescription = if (listening) "listening" else "idle" }
             .testTag(if (listening) "dictation-listening" else "dictate"),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             if (listening) PhosphorIcons.Fill.Microphone else PhosphorIcons.Regular.Microphone, contentDescription = label,
-            tint = if (listening) colors.onAccent else colors.muted, modifier = Modifier.size(18.dp).alpha(if (listening) 1f else 0.9f),
+            tint = if (listening) colors.onAccent else colors.muted, modifier = Modifier.size(18.dp),
         )
     }
+}
+
+/** The listening background: only composed while listening, and animated at draw time, not by recomposing. */
+@Composable
+private fun Modifier.pulse(color: Color): Modifier {
+    val pulse = rememberInfiniteTransition().animateFloat(1f, 0.55f, infiniteRepeatable(tween(700), RepeatMode.Reverse))
+    return drawBehind { drawRect(color.copy(alpha = pulse.value)) }
 }
 
 /** Why the microphone stopped, above the composer, until dismissed or the next tap. */
