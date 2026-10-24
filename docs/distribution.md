@@ -71,6 +71,13 @@ A private owner backup was created at `~/.config/teamcode-release-signing/rsa-30
 The native verifier uses the same RSA-PSS/SHA-256 parameters through platform crypto: [Apple Security](https://developer.apple.com/documentation/security/seckeyalgorithm/rsasignaturedigestpsssha256), [Windows BCrypt](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptverifysignature) and [OpenSSL EVP](https://docs.openssl.org/3.4/man7/RSA-PSS/). The exact bytes must be verified against a shipped public key before parsing manifest contents or executing an asset. Apple imports a build-generated PKCS#1 public key; Linux and Windows import SubjectPublicKeyInfo. The JVM test implementation uses JCE with the same fixed parameters. No private key or user-provided trust-root override is compiled into the CLI. Cross-platform runtime acceptance is recorded separately in the status ledger.
 
 
+
+**Where the key lives (audit L5).** The two jobs that sign (`signed_bundle`, `desktop_manifest`) run in the `release-signing` GitHub environment. As long as the key is a repository secret, any ref that can dispatch the workflow (`workflow_dispatch` with `full_validation` on an unreviewed branch, by anyone holding `actions:write`) gets a validly signed manifest as an artifact. Moving it into the environment lets its deployment rules decide:
+
+1. **Settings → Environments → `release-signing`** (created by the first run if absent): add the secret `TEAMCODE_RELEASE_SIGNING_KEY` there, then delete the repository secret of the same name.
+2. **Deployment branches and tags:** *Selected branches and tags*, with `main` and the tag pattern `[0-9]*`. Full validation of another branch then stops at `signed_bundle`; add a branch pattern for validation branches only if they are protected, or approve such runs one by one with **Required reviewers** (which also gates every `main` push, so it suits a release-only key).
+3. For independence from GitHub itself, sign offline or with a separate signer: the environment only narrows who can obtain a signature through Actions.
+
 ## Native verification command
 
 Verification works offline without a TeamCode login or configured server:

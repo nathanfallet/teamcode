@@ -407,8 +407,10 @@ jobs:
           retention-days: 7
   signed_bundle:
     timeout-minutes: 5
-    # Pull-request code never receives the publisher key, including same-repository PRs.
+    # Pull-request code never receives the publisher key, including same-repository PRs. The key belongs in the
+    # release-signing environment, whose deployment branch rules decide which refs may sign (docs/distribution.md).
     if: github.event_name != 'pull_request'
+    environment: release-signing
     needs: [bundle]
     runs-on: ubuntu-latest
     outputs:
@@ -699,6 +701,7 @@ jobs:
     timeout-minutes: 10
     # Signed with the publisher key, like the CLI's manifest: never for pull-request code.
     if: github.event_name != 'pull_request'
+    environment: release-signing
     needs: [desktop]
     runs-on: ubuntu-latest
     outputs:
