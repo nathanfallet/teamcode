@@ -19,6 +19,10 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo to send it to a session's agent.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate a message to a session's agent instead of typing it.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turn what you dictate into the text of your message. On devices that support it, this happens on the device.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

@@ -149,6 +149,20 @@ class SessionViewModelTest {
         model.stop()
     }
 
+    @Test fun endingTheSessionAsksTheServerThenReadsTheHeaderAndARefusalIsANotice() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        sessions.byId["s1"] = sessions.byId["s1"]!!.copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.TERMINATED)
+        model.end(); settle()
+        assertEquals(1, sessions.calls.count { it == "end s1" })
+        assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionState.TERMINATED, model.uiState.value.session?.state)
+        assertFalse(model.uiState.value.acting)
+        sessions.endFailure = CompanionException.Server(403, "forbidden")
+        model.end(); settle()
+        assertTrue(model.uiState.value.notice is me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice.Text)
+        model.stop()
+    }
+
     // ---- Permission requests -------------------------------------------------------------------------------------
 
     private fun options(vararg labels: String) = labels.map { AgentQuestionOption(it, "About $it") }

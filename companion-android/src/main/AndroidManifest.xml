@@ -2,6 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The composer's microphone: the system's speech recognizer listens, asked on the first tap. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
+    <!-- Android 11+ hides the speech recognition service from the app unless it says it looks for one. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+    </queries>
 
     <!-- Tokens never leave the device: no cloud backup, no device-to-device transfer, no cleartext HTTP. -->
     <application

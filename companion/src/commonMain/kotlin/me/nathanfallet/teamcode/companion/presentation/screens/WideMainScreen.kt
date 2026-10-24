@@ -32,8 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.drop
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
-import me.nathanfallet.teamcode.companion.domain.models.KindFilter
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
@@ -41,10 +40,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.artifactView
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsUiState
 import me.nathanfallet.teamcode.companion.resources.artifacts_mine
-import me.nathanfallet.teamcode.companion.resources.sessions_ended
-import me.nathanfallet.teamcode.companion.resources.sessions_kind_cloud
-import me.nathanfallet.teamcode.companion.resources.sessions_kind_remote
-import me.nathanfallet.teamcode.companion.resources.sessions_paused
+import me.nathanfallet.teamcode.companion.resources.sessions_filter_all
+import me.nathanfallet.teamcode.companion.resources.sessions_filter_ended
 import me.nathanfallet.teamcode.companion.resources.sessions_team
 import org.koin.compose.koinInject
 import androidx.compose.ui.Modifier
@@ -75,6 +72,7 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.SessionDestina
 import me.nathanfallet.teamcode.companion.presentation.navigation.detailRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SessionsListRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.GitHubLinkRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
@@ -83,6 +81,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewM
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.GitHubLinkViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.TransfersViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
@@ -305,9 +304,14 @@ fun WideMainScreen(
                         val viewModel: SubscriptionAccountsViewModel = koinViewModel { parametersOf(entry.toRoute<SubscriptionAccountsRoute>()) }
                         SubscriptionAccountsScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry))
                     }
+                    composable<GitHubLinkRoute> { entry ->
+                        val viewModel: GitHubLinkViewModel = koinViewModel { parametersOf(entry.toRoute<GitHubLinkRoute>()) }
+                        GitHubLinkScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry))
+                    }
                     composable<AccountRoute> {
                         AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
-                            onOpenSubscriptions = { detail.navigate(SubscriptionAccountsRoute(it.id)) }, viewModel = settings)
+                            onOpenSubscriptions = { detail.navigate(SubscriptionAccountsRoute(it.id)) },
+                            onOpenGitHub = { detail.navigate(GitHubLinkRoute(it.id)) }, viewModel = settings)
                     }
                 }
             } }
@@ -345,12 +349,11 @@ internal fun sidebarWidthIndex(saved: Int?, narrow: Boolean): Int = saved?.takeI
 /** Cmd+K on Apple platforms, Ctrl+K elsewhere, as the platform writes it. */
 internal fun paletteShortcutLabel(platform: PlatformInfo): String = if (platform.platform == "macOS" || platform.platform == "iOS") "⌘K" else "Ctrl+K"
 
-/** The shared session list's filter, when it is not the default (my active sessions of every kind). */
+/** The shared session list's filter, when it is not the default (my active and paused sessions). */
 @Composable
 private fun sessionsFilterLabel(state: SessionsUiState): String? = listOfNotNull(
-    when (state.group) { SessionGroup.ACTIVE -> null; SessionGroup.PAUSED -> stringResource(Res.string.sessions_paused); SessionGroup.ENDED -> stringResource(Res.string.sessions_ended) },
+    when (state.filter) { SessionFilter.OPEN -> null; SessionFilter.ALL -> stringResource(Res.string.sessions_filter_all); SessionFilter.ENDED -> stringResource(Res.string.sessions_filter_ended) },
     if (state.scope == SessionScope.TEAM) stringResource(Res.string.sessions_team) else null,
-    when (state.kind) { KindFilter.ALL -> null; KindFilter.CLOUD -> stringResource(Res.string.sessions_kind_cloud); KindFilter.REMOTE -> stringResource(Res.string.sessions_kind_remote) },
 ).joinToString(" · ").ifEmpty { null }
 
 /** The shared artifact list's filter, when it is not the default (the team's). */
@@ -398,7 +401,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<SessionRoute>() -> SidebarSelection.Session(toRoute<SessionRoute>().sessionId)
         destination.hasRoute<ArtifactRoute>() -> SidebarSelection.Artifact(toRoute<ArtifactRoute>().artifactId)
         destination.hasRoute<ArtifactsRoute>() -> if (toRoute<ArtifactsRoute>().sessionId == null) SidebarSelection.AllArtifacts else SidebarSelection.None
-        destination.hasRoute<AccountRoute>() || destination.hasRoute<SubscriptionAccountsRoute>() -> SidebarSelection.Settings
+        destination.hasRoute<AccountRoute>() || destination.hasRoute<SubscriptionAccountsRoute>() || destination.hasRoute<GitHubLinkRoute>() -> SidebarSelection.Settings
         else -> SidebarSelection.None
     }
 }

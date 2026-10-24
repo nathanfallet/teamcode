@@ -13,12 +13,11 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
-import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.laptop
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
@@ -39,8 +38,8 @@ class SessionUseCasesTest {
         SessionChange(seq, type, session, member, at, state, if (type == "cloud.turn") phase else null)
 
     @Test fun aListKeepsItsGroupAndScopeNewestFirst() {
-        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(
-            SessionPage(listOf(cloudSession("a", createdAt = 1), cloudSession("b", createdAt = 3), cloudSession("p", SessionState.PAUSED, createdAt = 4), cloudSession("o", ownerId = "m2", createdAt = 5)), "cursor"),
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(
+            SessionPage(listOf(cloudSession("a", createdAt = 1), cloudSession("b", createdAt = 3), cloudSession("t", SessionState.TERMINATED, createdAt = 4), cloudSession("o", ownerId = "m2", createdAt = 5)), "cursor"),
         )
         assertEquals(listOf("b", "a"), list.sessions.map { it.id })
         assertEquals("cursor", list.nextBefore)
@@ -50,7 +49,7 @@ class SessionUseCasesTest {
     }
 
     @Test fun aTurnUpdatesTheRowAndMarksItUntilOpened() {
-        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("a")), null))
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a")), null))
         val (started, fetch) = list.applied(change(1, "a", phase = "started"))
         assertNull(fetch)
         assertEquals(SessionState.ACTIVE, started.sessions.single().state)
@@ -63,9 +62,11 @@ class SessionUseCasesTest {
     }
 
     @Test fun aStateThatLeavesTheGroupRemovesTheRowAndAnUnknownSessionIsFetchedOnlyIfItMayBelong() {
-        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("a")), null))
-        val (paused, none) = list.applied(change(1, "a", "cloud.session.paused", state = SessionState.PAUSED))
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a")), null))
+        val (paused, none) = list.applied(change(1, "a", "cloud.session.ended", state = SessionState.TERMINATED))
         assertTrue(paused.sessions.isEmpty()); assertNull(none)
+        // A pause keeps the row: active and paused sessions share the list.
+        assertEquals(listOf("a"), list.applied(change(1, "a", "cloud.session.paused", state = SessionState.PAUSED)).first.sessions.map { it.id })
         // A session resumed elsewhere: read it, then put it in place.
         val (_, fetch) = paused.applied(change(2, "n", "cloud.session.resumed", state = SessionState.READY))
         assertEquals("n", fetch)
@@ -74,18 +75,18 @@ class SessionUseCasesTest {
         assertNull(paused.applied(change(3, "x", "cloud.session.ended", state = SessionState.TERMINATED)).second)
         // Someone else's session on "Mine": ignored.
         assertNull(paused.applied(change(4, "y", "cloud.session.created", member = "m2", state = SessionState.CREATING)).second)
-        val team = SessionList(SessionScope.TEAM, SessionGroup.ACTIVE, "m1")
+        val team = SessionList(SessionScope.TEAM, SessionFilter.OPEN, "m1")
         assertEquals("y", team.applied(change(4, "y", "cloud.session.created", member = "m2", state = SessionState.CREATING)).second)
     }
 
     @Test fun aFetchedSessionOlderThanTheLoadedPagesWaitsForThem() {
-        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("new", createdAt = 10)), "more"))
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("new", createdAt = 10)), "more"))
         assertEquals(listOf("new"), list.upserted(cloudSession("old", createdAt = 1)).sessions.map { it.id })
         assertEquals(listOf("newer", "new"), list.upserted(cloudSession("newer", createdAt = 20)).sessions.map { it.id })
     }
 
     @Test fun aRefreshKeepsThePagesLoadedAfterTheFirstAndUnsettledRowsAreReadAgain() {
-        val list = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1")
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1")
             .loaded(SessionPage(listOf(cloudSession("c", createdAt = 30), cloudSession("b", createdAt = 20)), "b"))
             .appended(SessionPage(listOf(cloudSession("a", createdAt = 10)), null))
         // "d" appeared and pushed "b" past the first page: page 1 is replaced, the older rows stay, and so does "everything is loaded".
@@ -100,7 +101,7 @@ class SessionUseCasesTest {
     }
 
     @Test fun turnsOfSessionsFoundOutsideTheListAreNotReadAgainAndUnknownStatesAreNotPolled() {
-        val active = SessionList(SessionScope.TEAM, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("a", createdAt = 10)), "more"))
+        val active = SessionList(SessionScope.TEAM, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a", createdAt = 10)), "more"))
         // A turn of a session the list does not hold: read once; found past the loaded pages, its next turns are not read.
         assertEquals("old", active.applied(change(1, "old")).second)
         val remembered = active.upserted(cloudSession("old", createdAt = 1))
@@ -111,11 +112,11 @@ class SessionUseCasesTest {
         val hidden = active.forgotten("a")
         assertTrue(hidden.sessions.isEmpty()); assertNull(hidden.applied(change(5, "a")).second)
         assertTrue("old" !in remembered.appended(SessionPage(listOf(cloudSession("old", createdAt = 1)), null)).outside)
-        // A turn never runs in a paused or ended session: those lists never read one.
-        val paused = SessionList(SessionScope.TEAM, SessionGroup.PAUSED, "m1")
-        assertNull(paused.applied(change(4, "z")).second)
+        // A turn never runs in an ended session: that list never reads one.
+        val ended = SessionList(SessionScope.TEAM, SessionFilter.ENDED, "m1")
+        assertNull(ended.applied(change(4, "z")).second)
         // A state this version does not know is not read again every tick.
-        val unknown = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("u", SessionState.UNKNOWN)), null))
+        val unknown = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("u", SessionState.UNKNOWN)), null))
         assertTrue(unknown.unsettled.isEmpty())
         assertNull(unknown.applied(change(5, "u")).second, "nor on each of its turns")
     }
@@ -149,7 +150,7 @@ class SessionUseCasesTest {
 
     @Test fun theLastLoadedRowStaysWhenItChanges() {
         val list = me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionList(
-            me.nathanfallet.teamcode.companion.domain.models.SessionScope.MINE, me.nathanfallet.teamcode.companion.domain.models.SessionGroup.ACTIVE, "m1")
+            me.nathanfallet.teamcode.companion.domain.models.SessionScope.MINE, me.nathanfallet.teamcode.companion.domain.models.SessionFilter.OPEN, "m1")
             .refreshed(me.nathanfallet.teamcode.companion.domain.models.SessionPage(listOf(cloudSession("a", createdAt = 3), cloudSession("b", createdAt = 2), cloudSession("c", createdAt = 1)), "c"))
         val updated = list.upserted(cloudSession("c", state = me.nathanfallet.teamcode.companion.domain.models.SessionState.ACTIVE, createdAt = 1))
         assertEquals(listOf("a", "b", "c"), updated.sessions.map { it.id })
@@ -168,13 +169,13 @@ class SessionUseCasesTest {
 
     @Test fun aServerWithoutSessionsSaysSoAndA401ChecksTheAccountOnce() = runTest {
         val sessions = FakeSessionRepository()
-        assertFailsWith<CompanionException.Unsupported> { LoadSessionsUseCase(sessions, FakeFeatures(emptySet()), guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE) }
+        assertFailsWith<CompanionException.Unsupported> { LoadSessionsUseCase(sessions, FakeFeatures(emptySet()), guard())("a1", SessionScope.MINE, SessionFilter.OPEN) }
         val auth = FakeAuthRepository().apply { meResult = ::unauthorized }
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val store = credentials().apply { write("a1", "token") }
         val guard = AccountGuard(RefreshAccountUseCase(auth, accounts, store, FixedClock()))
         sessions.pages = { _, _ -> throw CompanionException.Unauthorized() }
-        assertFailsWith<CompanionException.Unauthorized> { LoadSessionsUseCase(sessions, FakeFeatures(), guard)("a1", SessionScope.MINE, SessionGroup.ACTIVE) }
+        assertFailsWith<CompanionException.Unauthorized> { LoadSessionsUseCase(sessions, FakeFeatures(), guard)("a1", SessionScope.MINE, SessionFilter.OPEN) }
         assertEquals(listOf("me a1"), auth.calls)
         assertFalse(accounts.accounts.value.single().signedIn)
         assertNull(store.read("a1"))
@@ -194,31 +195,32 @@ class SessionUseCasesTest {
         assertEquals(12, Transcript().withLatest(TranscriptPage(emptyList(), null, lastSeq = 12)).newestSeq)
     }
 
-    @Test fun aListKeepsOnlyTheKindsItFiltersOnAndIgnoresTheFeedsOtherKinds() {
+    @Test fun aListKeepsEveryKindAndTheStatesItsFilterCovers() {
         val remote = cloudSession("r", createdAt = 2_000, host = laptop())
-        val both = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1").loaded(SessionPage(listOf(cloudSession("c"), remote), null))
-        assertEquals(listOf("r", "c"), both.sessions.map { it.id })
-        val cloudOnly = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1", KindFilter.CLOUD).loaded(SessionPage(listOf(cloudSession("c"), remote), null))
-        assertEquals(listOf("c"), cloudOnly.sessions.map { it.id })
-        // A remote session's event is not read into a cloud list; an event without a kind (an older server) still is.
-        assertNull(cloudOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING).copy(kind = SessionKind.REMOTE)).second)
-        assertEquals("n", cloudOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING)).second)
-        // Read anyway, a remote session never lands in it.
-        assertTrue(cloudOnly.upserted(cloudSession("n", host = laptop())).sessions.none { it.id == "n" })
-        val remoteOnly = SessionList(SessionScope.MINE, SessionGroup.ACTIVE, "m1", KindFilter.REMOTE).loaded(SessionPage(listOf(remote), null))
-        assertEquals("n", remoteOnly.applied(change(1, "n", "cloud.session.created", state = SessionState.CREATING).copy(kind = SessionKind.REMOTE)).second)
+        val open = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("c"), remote, cloudSession("p", SessionState.PAUSED, createdAt = 500), cloudSession("t", SessionState.TERMINATED, createdAt = 400)), null))
+        assertEquals(listOf("r", "c", "p"), open.sessions.map { it.id })
+        // Ended sessions join the "All" list, and only theirs the "Ended" one.
+        val all = SessionList(SessionScope.MINE, SessionFilter.ALL, "m1").loaded(SessionPage(open.sessions + cloudSession("t", SessionState.TERMINATED, createdAt = 400), null))
+        assertEquals(listOf("r", "c", "p", "t"), all.sessions.map { it.id })
+        val ended = SessionList(SessionScope.MINE, SessionFilter.ENDED, "m1").loaded(SessionPage(all.sessions, null))
+        assertEquals(listOf("t"), ended.sessions.map { it.id })
+        // A session that ends leaves the open list and a paused one stays in it.
+        assertTrue(open.upserted(cloudSession("c", SessionState.TERMINATED)).sessions.none { it.id == "c" })
+        assertTrue(open.upserted(cloudSession("c", SessionState.PAUSED)).sessions.any { it.id == "c" })
+        // An event saying a session ended or paused reads it into the list that covers that state.
+        assertEquals("n", open.applied(change(1, "n", "cloud.session.paused", state = SessionState.PAUSED)).second)
+        assertNull(open.applied(change(1, "n", "cloud.session.ended", state = SessionState.TERMINATED)).second)
+        assertEquals("n", all.applied(change(1, "n", "cloud.session.ended", state = SessionState.TERMINATED)).second)
+        assertEquals("n", ended.applied(change(1, "n", "cloud.session.ended", state = SessionState.TERMINATED)).second)
     }
 
-    @Test fun kindsAreAskedForOnlyFromAServerWithRemoteSessions() = runTest {
+    @Test fun everyKindIsAskedForOnlyFromAServerWithRemoteSessions() = runTest {
         val sessions = FakeSessionRepository()
         val remote = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1"))
-        LoadSessionsUseCase(sessions, remote, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE)
-        LoadSessionsUseCase(sessions, remote, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE, kind = KindFilter.REMOTE)
+        LoadSessionsUseCase(sessions, remote, guard())("a1", SessionScope.MINE, SessionFilter.OPEN)
         val older = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1"))
-        LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE)
-        // An older server has no remote session: nothing to ask it for.
-        assertTrue(LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionGroup.ACTIVE, kind = KindFilter.REMOTE).sessions.isEmpty())
-        assertEquals(listOf("list MINE ACTIVE null cloud,remote", "list MINE ACTIVE null remote", "list MINE ACTIVE null"), sessions.calls)
+        LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionFilter.OPEN)
+        assertEquals(listOf("list MINE OPEN null cloud,remote", "list MINE OPEN null"), sessions.calls)
 
         sessions.calls.clear()
         sessions.changes = flowOf(LiveUpdate.Opened(false))

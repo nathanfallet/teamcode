@@ -52,6 +52,22 @@ sealed class CompanionException(message: String) : Exception(message) {
         }
     }
     /**
+     * The server refused to start a GitHub link ([code]: `github_app_not_configured`, `github_device_flow_disabled`).
+     * The screens word each code; the message is the fallback.
+     */
+    class GitHubRefused(val code: String) : CompanionException(
+        when (code) {
+            APP_NOT_CONFIGURED -> "An administrator has not configured the team's GitHub App yet."
+            DEVICE_FLOW_DISABLED -> "The team's GitHub App does not allow device flow. Link from the server's dashboard (GitHub page) instead, or ask an administrator to enable device flow on the App."
+            else -> "The server refused to start the GitHub link" + (code.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + "."
+        },
+    ) {
+        companion object {
+            const val APP_NOT_CONFIGURED = "github_app_not_configured"
+            const val DEVICE_FLOW_DISABLED = "github_device_flow_disabled"
+        }
+    }
+    /**
      * The server refused a file sent to a session ([code]: `file_too_large`, `upload_quota`, ...; [statusCode] 0 for a
      * check made here, such as `file_integrity_failed`), or the file could not be read (`file_unreadable`).
      */

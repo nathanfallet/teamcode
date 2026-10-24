@@ -35,7 +35,6 @@ import me.nathanfallet.teamcode.companion.di.appModules
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactPage
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.ThemePreference

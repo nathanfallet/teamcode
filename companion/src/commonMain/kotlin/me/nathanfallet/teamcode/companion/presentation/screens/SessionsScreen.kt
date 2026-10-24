@@ -57,8 +57,7 @@ import com.adamglin.phosphoricons.regular.Warning
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
-import me.nathanfallet.teamcode.companion.domain.models.KindFilter
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
 import me.nathanfallet.teamcode.companion.presentation.components.phaseLabel
@@ -76,7 +75,6 @@ import me.nathanfallet.teamcode.companion.presentation.components.KindChips
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
 import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
-import me.nathanfallet.teamcode.companion.presentation.components.Segmented
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
@@ -97,21 +95,19 @@ import me.nathanfallet.teamcode.companion.resources.sidebar_open
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
 import me.nathanfallet.teamcode.companion.resources.home_signed_out
 import me.nathanfallet.teamcode.companion.resources.new_session_title
-import me.nathanfallet.teamcode.companion.resources.sessions_active
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_active
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_active_body
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_ended
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_ended_body
-import me.nathanfallet.teamcode.companion.resources.sessions_empty_paused
-import me.nathanfallet.teamcode.companion.resources.sessions_empty_paused_body
-import me.nathanfallet.teamcode.companion.resources.sessions_ended
-import me.nathanfallet.teamcode.companion.resources.sessions_kind_all
-import me.nathanfallet.teamcode.companion.resources.sessions_kind_cloud
-import me.nathanfallet.teamcode.companion.resources.sessions_kind_remote
+import me.nathanfallet.teamcode.companion.resources.sessions_empty_all
+import me.nathanfallet.teamcode.companion.resources.sessions_empty_all_body
+import me.nathanfallet.teamcode.companion.resources.sessions_filter
+import me.nathanfallet.teamcode.companion.resources.sessions_filter_all
+import me.nathanfallet.teamcode.companion.resources.sessions_filter_ended
+import me.nathanfallet.teamcode.companion.resources.sessions_filter_open
 import me.nathanfallet.teamcode.companion.resources.sessions_load_more
 import me.nathanfallet.teamcode.companion.resources.sessions_loading
 import me.nathanfallet.teamcode.companion.resources.sessions_mine
-import me.nathanfallet.teamcode.companion.resources.sessions_paused
 import me.nathanfallet.teamcode.companion.resources.sessions_reconnecting
 import me.nathanfallet.teamcode.companion.resources.sessions_scope
 import me.nathanfallet.teamcode.companion.resources.sessions_signed_out_title
@@ -167,24 +163,24 @@ fun SessionsScreen(
         ) {
             LargeTitle(stringResource(Res.string.sessions_title)) {
                 if (account != null && account.signedIn) titleActions(account)
+                if (account != null && account.signedIn) {
+                    FilterPill(
+                        listOf(SessionFilter.ALL to stringResource(Res.string.sessions_filter_all), SessionFilter.OPEN to stringResource(Res.string.sessions_filter_open),
+                            SessionFilter.ENDED to stringResource(Res.string.sessions_filter_ended)),
+                        state.filter, sessionsViewModel::setFilter, stringResource(Res.string.sessions_filter), tag = "filter", optionTag = { "filter-${it.name.lowercase()}" },
+                    )
+                }
                 if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { onNewSession(account) },
                     kind = IconButtonKind.FILLED, modifier = Modifier.testTag("new-session"))
             }
             // The sidebar lists the accounts on a wide window.
             if (!LocalWideLayout.current) account?.let { AccountPill(it, onSwitchAccount) }
-            if (account != null && account.signedIn) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Segmented(
-                    listOf(SessionGroup.ACTIVE to stringResource(Res.string.sessions_active), SessionGroup.PAUSED to stringResource(Res.string.sessions_paused), SessionGroup.ENDED to stringResource(Res.string.sessions_ended)),
-                    selected = state.group, onSelect = sessionsViewModel::setGroup, modifier = Modifier.weight(1f), tag = { "group-${it.name.lowercase()}" },
+            if (account != null && account.signedIn && account.isAdministrator) Row(verticalAlignment = Alignment.CenterVertically) {
+                FilterPill(
+                    listOf(SessionScope.MINE to stringResource(Res.string.sessions_mine), SessionScope.TEAM to stringResource(Res.string.sessions_team)),
+                    state.scope, sessionsViewModel::setScope, stringResource(Res.string.sessions_scope), tag = "scope", optionTag = { "scope-${it.name.lowercase()}" },
                 )
-                if (account.isAdministrator) ScopePill(state.scope, sessionsViewModel::setScope)
             }
-            // Only from a server with remote sessions: an older one has cloud sessions only.
-            if (account != null && account.signedIn && state.remoteSessions) Segmented(
-                listOf(KindFilter.ALL to stringResource(Res.string.sessions_kind_all), KindFilter.CLOUD to stringResource(Res.string.sessions_kind_cloud),
-                    KindFilter.REMOTE to stringResource(Res.string.sessions_kind_remote)),
-                selected = state.kind, onSelect = sessionsViewModel::setKind, modifier = Modifier.fillMaxWidth(), tag = { "kind-${it.name.lowercase()}" },
-            )
         }
 
         val list = state.list
@@ -236,13 +232,13 @@ fun SessionsScreen(
             item(key = "end") {
                 BusyRow(state.loadingMore)
                 if (!state.loading && list != null && sessions.isEmpty() && state.error == null && account != null && account.signedIn) {
-                    val (title, body) = when (list.group) {
-                        SessionGroup.ACTIVE -> Res.string.sessions_empty_active to Res.string.sessions_empty_active_body
-                        SessionGroup.PAUSED -> Res.string.sessions_empty_paused to Res.string.sessions_empty_paused_body
-                        SessionGroup.ENDED -> Res.string.sessions_empty_ended to Res.string.sessions_empty_ended_body
+                    val (title, body) = when (list.filter) {
+                        SessionFilter.OPEN -> Res.string.sessions_empty_active to Res.string.sessions_empty_active_body
+                        SessionFilter.ALL -> Res.string.sessions_empty_all to Res.string.sessions_empty_all_body
+                        SessionFilter.ENDED -> Res.string.sessions_empty_ended to Res.string.sessions_empty_ended_body
                     }
                     EmptyState(PhosphorIcons.Regular.TerminalWindow, stringResource(title), stringResource(body), Modifier.testTag("sessions-empty")) {
-                        if (list.group == SessionGroup.ACTIVE) TcButton(stringResource(Res.string.new_session_title), onClick = { onNewSession(account) }, icon = PhosphorIcons.Regular.Plus)
+                        if (list.filter != SessionFilter.ENDED) TcButton(stringResource(Res.string.new_session_title), onClick = { onNewSession(account) }, icon = PhosphorIcons.Regular.Plus)
                     }
                 }
                 if (list?.nextBefore != null && !state.loadingMore) {
@@ -278,13 +274,11 @@ fun AccountPill(account: Account, onClick: () -> Unit, modifier: Modifier = Modi
     }
 }
 
-/** Administrators choose between their own sessions and the whole team's. */
+/** A pill showing the chosen option; it opens a menu of [options], the chosen one in bold. */
 @Composable
-private fun ScopePill(scope: SessionScope, onScope: (SessionScope) -> Unit) {
+private fun <T> FilterPill(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, description: String, tag: String, optionTag: (T) -> String) {
     val colors = TeamCode.colors
     var open by remember { mutableStateOf(false) }
-    val options = listOf(SessionScope.MINE to stringResource(Res.string.sessions_mine), SessionScope.TEAM to stringResource(Res.string.sessions_team))
-    val description = stringResource(Res.string.sessions_scope)
     Box {
         Row(
             Modifier
@@ -295,17 +289,17 @@ private fun ScopePill(scope: SessionScope, onScope: (SessionScope) -> Unit) {
                 .clickable(role = Role.Button) { open = true }
                 .semantics { contentDescription = description }
                 .padding(horizontal = 12.dp)
-                .testTag("scope"),
+                .testTag(tag),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(options.first { it.first == scope }.second, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(options.first { it.first == selected }.second, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Icon(PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = colors.panel) {
             for ((value, label) in options) {
-                DropdownMenuItem(text = { Text(label, fontWeight = if (value == scope) FontWeight.SemiBold else FontWeight.Normal) }, onClick = { open = false; onScope(value) },
-                    modifier = Modifier.testTag("scope-${value.name.lowercase()}"))
+                DropdownMenuItem(text = { Text(label, fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal) }, onClick = { open = false; onSelect(value) },
+                    modifier = Modifier.testTag(optionTag(value)))
             }
         }
     }

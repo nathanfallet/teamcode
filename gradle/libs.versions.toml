@@ -19,6 +19,8 @@ multiplatform-settings = "1.3.0"
 phosphor-icon = "1.0.0"
 java-keyring = "1.0.4"
 jkeychain = "1.1.0"
+# The version java-keyring already brings: the desktop calls the Objective-C runtime through it (macOS Dictation).
+jna = "5.13.0"
 markdown-renderer = "0.45.0"
 ktor = "3.6.0"
 serialization = "1.9.0"
@@ -101,6 +103,7 @@ multiplatform-settings-test = { module = "com.russhwolf:multiplatform-settings-t
 phosphor-icons = { module = "com.adamglin:phosphor-icon", version.ref = "phosphor-icon" }
 java-keyring = { module = "com.github.javakeyring:java-keyring", version.ref = "java-keyring" }
 jkeychain = { module = "pt.davidafsilva.apple:jkeychain", version.ref = "jkeychain" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 markdown-renderer-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdown-renderer" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }

@@ -22,10 +22,9 @@ import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
-import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
@@ -66,7 +65,7 @@ class SessionsViewModelTest {
         settle()
         // The answer was read before the turn started: the change applies on top of it.
         assertEquals(SessionState.ACTIVE, model.uiState.value.list!!.sessions.single().state)
-        assertEquals(listOf("feed", "list MINE ACTIVE null"), sessions.calls)
+        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
         model.stop()
     }
 
@@ -79,9 +78,9 @@ class SessionsViewModelTest {
         settle()
         assertEquals(listOf("n"), model.uiState.value.list!!.sessions.map { it.id })
         assertEquals(1, sessions.calls.count { it == "get n" })
-        model.setGroup(SessionGroup.PAUSED)
+        model.setFilter(SessionFilter.ENDED)
         settle()
-        assertEquals("list MINE PAUSED null", sessions.calls.last())
+        assertEquals("list MINE ENDED null", sessions.calls.last())
         assertTrue(model.uiState.value.list!!.sessions.isEmpty())
         model.stop()
         // Stopped: the feed is closed and nothing more is read.
@@ -119,43 +118,42 @@ class SessionsViewModelTest {
         assertNotNull(model.uiState.value.error)
         // "Load more" has no loop to read it: it is ignored rather than queued.
         model.loadMore()
-        model.setGroup(SessionGroup.PAUSED)
+        model.setFilter(SessionFilter.ENDED)
         settle()
         assertTrue(model.uiState.value.following)
         feed.send(LiveUpdate.Opened(false))
         settle()
-        assertEquals("list MINE PAUSED null", sessions.calls.last())
+        assertEquals("list MINE ENDED null", sessions.calls.last())
         assertFalse(model.uiState.value.loading)
         model.stop()
     }
 
-    @Test fun theKindFilterAppearsWithRemoteSessionsAndReloadsWithoutReopeningTheFeed() = runTest(dispatcher) {
+    @Test fun aServerWithRemoteSessionsIsAskedForEveryKindAndTheStatusFilterReloadsWithoutReopeningTheFeed() = runTest(dispatcher) {
         val model = viewModel(FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1")))
-        // Before the server's capabilities are read, there is no filter to choose.
-        model.setKind(KindFilter.REMOTE)
-        assertEquals(KindFilter.ALL, model.uiState.value.kind)
+        assertEquals(SessionFilter.OPEN, model.uiState.value.filter)
         model.start()
         feed.send(LiveUpdate.Opened(false))
         settle()
         assertTrue(model.uiState.value.remoteSessions)
-        assertEquals(listOf("feed cloud,remote", "list MINE ACTIVE null cloud,remote"), sessions.calls)
-        model.setKind(KindFilter.REMOTE)
+        assertEquals(listOf("feed cloud,remote", "list MINE OPEN null cloud,remote"), sessions.calls)
+        model.setFilter(SessionFilter.ALL)
         settle()
-        assertEquals(listOf("feed cloud,remote", "list MINE ACTIVE null cloud,remote", "list MINE ACTIVE null remote"), sessions.calls)
-        assertEquals(KindFilter.REMOTE, model.uiState.value.kind)
+        assertEquals(listOf("feed cloud,remote", "list MINE OPEN null cloud,remote", "list MINE ALL null cloud,remote"), sessions.calls)
+        assertEquals(SessionFilter.ALL, model.uiState.value.filter)
+        // The same filter again reads nothing.
+        model.setFilter(SessionFilter.ALL)
+        settle()
+        assertEquals(3, sessions.calls.size)
         model.stop()
     }
 
-    @Test fun anOlderServerOffersNoKindFilterAndIsAskedAsBefore() = runTest(dispatcher) {
+    @Test fun anOlderServerIsAskedAsBefore() = runTest(dispatcher) {
         val model = viewModel()
         model.start()
         feed.send(LiveUpdate.Opened(false))
         settle()
         assertFalse(model.uiState.value.remoteSessions)
-        model.setKind(KindFilter.CLOUD)
-        settle()
-        assertEquals(listOf("feed", "list MINE ACTIVE null"), sessions.calls)
-        assertEquals(KindFilter.ALL, model.uiState.value.kind)
+        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
         model.stop()
     }
 
@@ -170,7 +168,7 @@ class SessionsViewModelTest {
         model.loadMore(); model.loadMore(); settle(); model.loadMore()
         gate.complete(Unit)
         settle()
-        assertEquals(listOf("list MINE ACTIVE c1"), sessions.calls.filter { it.endsWith(" c1") || it.endsWith(" c2") })
+        assertEquals(listOf("list MINE OPEN c1"), sessions.calls.filter { it.endsWith(" c1") || it.endsWith(" c2") })
         assertEquals(listOf("a", "b"), model.uiState.value.list!!.sessions.map { it.id })
         model.stop()
     }

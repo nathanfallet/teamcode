@@ -185,6 +185,7 @@ fun MainScreen(
     onAddAccount: () -> Unit,
     onOpenTransfers: (accountId: String) -> Unit = {},
     onOpenSubscriptions: (accountId: String) -> Unit = {},
+    onOpenGitHub: (accountId: String) -> Unit = {},
     /** The tab to open on (the screen a wider window showed); then the member's. */
     initialTab: MainTab = MainTab.SESSIONS,
     onTabChange: (MainTab) -> Unit = {},
@@ -232,7 +233,7 @@ fun MainScreen(
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
                 } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
-                    onOpenSubscriptions = { onOpenSubscriptions(it.id) }, viewModel = settings)
+                    onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, viewModel = settings)
             }
         }
         TabBar(tab) { tab = it }

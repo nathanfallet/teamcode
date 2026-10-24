@@ -334,6 +334,9 @@ class SessionViewModel(
     fun pause() = act { val session = control.pause(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
     fun resume() = act { val session = control.resume(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
 
+    /** Ends the session (its workspace is deleted): the header then reads the server's answer, "Ended" once it is done. */
+    fun end() = act { control.end(route.accountId, route.sessionId); actions++; refreshSession() }
+
     private fun act(action: suspend () -> Unit) {
         if (state.value.acting) return
         state.update { it.copy(acting = true, notice = null) }

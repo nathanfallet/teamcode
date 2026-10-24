@@ -80,6 +80,8 @@ import me.nathanfallet.teamcode.companion.resources.settings_theme
 import me.nathanfallet.teamcode.companion.resources.settings_theme_dark
 import me.nathanfallet.teamcode.companion.resources.settings_theme_light
 import me.nathanfallet.teamcode.companion.resources.settings_theme_system
+import me.nathanfallet.teamcode.companion.resources.github_row_hint
+import me.nathanfallet.teamcode.companion.resources.github_title
 import me.nathanfallet.teamcode.companion.resources.subscriptions_row_hint
 import me.nathanfallet.teamcode.companion.resources.subscriptions_section
 import me.nathanfallet.teamcode.companion.resources.subscriptions_title
@@ -93,6 +95,7 @@ fun AccountScreen(
     onSignInAgain: (Account) -> Unit,
     onSwitchAccount: () -> Unit,
     onOpenSubscriptions: (Account) -> Unit = {},
+    onOpenGitHub: (Account) -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -146,6 +149,20 @@ fun AccountScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(stringResource(Res.string.subscriptions_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                                 Text(stringResource(Res.string.subscriptions_row_hint), color = colors.muted, fontSize = 12.5.sp)
+                            }
+                            Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+
+            active?.takeIf { it.signedIn }?.let { account ->
+                Section(stringResource(Res.string.github_title)) {
+                    Group {
+                        GroupRow(Modifier.testTag("github"), onClick = { onOpenGitHub(account) }) {
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(Res.string.github_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(stringResource(Res.string.github_row_hint), color = colors.muted, fontSize = 12.5.sp)
                             }
                             Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
                         }

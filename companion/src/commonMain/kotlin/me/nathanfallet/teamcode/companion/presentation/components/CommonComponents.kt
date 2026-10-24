@@ -489,14 +489,18 @@ fun TcTextField(
      * Alt+Enter break it. An on-screen keyboard keeps its own Enter. Null: Enter behaves as by default.
      */
     onSubmit: (() -> Unit)? = null,
+    /** Inside the field, at its end (the composer's microphone). */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = TeamCode.colors
     // The field edits a TextFieldValue to insert a line break where the cursor is; the caller keeps a String.
     var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     // Changed from outside (a draft cleared after sending, a value trimmed): the caret stays where it was, within the
-    // new text; a field filled from empty (a restored draft) puts it at the end.
+    // new text; a field filled from empty (a restored draft), or whose caret was at the end (dictated words streaming
+    // in), puts it at the end.
     if (field.text != value) {
-        val caret = if (field.text.isEmpty()) TextRange(value.length) else TextRange(field.selection.start.coerceAtMost(value.length), field.selection.end.coerceAtMost(value.length))
+        val atEnd = field.selection.collapsed && field.selection.end == field.text.length
+        val caret = if (field.text.isEmpty() || atEnd) TextRange(value.length) else TextRange(field.selection.start.coerceAtMost(value.length), field.selection.end.coerceAtMost(value.length))
         field = TextFieldValue(value, caret)
     }
     val submit by rememberUpdatedState(onSubmit)
@@ -559,6 +563,7 @@ fun TcTextField(
                             if (value.isEmpty() && placeholder != null) Text(placeholder, style = style.copy(color = colors.muted), maxLines = if (singleLine) 1 else 3, overflow = TextOverflow.Ellipsis)
                             inner()
                         }
+                        trailing?.invoke()
                     }
                 }
             },

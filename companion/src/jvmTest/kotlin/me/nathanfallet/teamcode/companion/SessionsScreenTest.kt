@@ -9,7 +9,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
@@ -34,7 +34,7 @@ class SessionsScreenTest {
         val sessions = FakeSessionRepository()
         val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED)
         sessions.changes = feed.receiveAsFlow()
-        sessions.pages = { group, _ -> SessionPage(if (group == SessionGroup.ACTIVE) listOf(cloudSession("s1", SessionState.ACTIVE)) else emptyList(), null) }
+        sessions.pages = { filter, _ -> SessionPage(if (filter != SessionFilter.ENDED) listOf(cloudSession("s1", SessionState.ACTIVE)) else emptyList(), null) }
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
@@ -59,9 +59,15 @@ class SessionsScreenTest {
         waitForIdle()
         onNodeWithTag("finished-s1", useUnmergedTree = true).assertDoesNotExist()
 
-        onNodeWithTag("group-paused").performClick()
-        waitUntil { sessions.calls.lastOrNull() == "list MINE PAUSED null" && !list.uiState.value.loading }
-        onNodeWithText("No paused session").assertExists()
+        // The bar of states and the cloud / remote bar are gone: one pill next to the "+" button picks the filter.
+        onNodeWithTag("group-paused").assertDoesNotExist()
+        onNodeWithTag("kind-remote").assertDoesNotExist()
+        onNodeWithTag("filter").performClick()
+        onNodeWithTag("filter-all").assertExists()
+        onNodeWithTag("filter-open").assertExists()
+        onNodeWithTag("filter-ended").performClick()
+        waitUntil { sessions.calls.lastOrNull() == "list MINE ENDED null" && !list.uiState.value.loading }
+        onNodeWithText("No ended session").assertExists()
         // A member sees no team filter.
         onNodeWithTag("scope-team").assertDoesNotExist()
     }
@@ -94,20 +100,20 @@ class SessionsScreenTest {
 
         onNodeWithTag("scope").assertExists().performClick()
         onNodeWithTag("scope-team").performClick()
-        waitUntil { sessions.calls.lastOrNull() == "list TEAM ACTIVE null" && !list.uiState.value.loading }
+        waitUntil { sessions.calls.lastOrNull() == "list TEAM OPEN null" && !list.uiState.value.loading }
         onNodeWithText("Team").assertExists()
     }
 
-    @Test fun withRemoteSessionsRowsSayWhereTheyRunAndTheKindFilterReloads() = runComposeUiTest {
+    @Test fun withRemoteSessionsRowsSayWhereTheyRun() = runComposeUiTest {
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val store = credentials().also { kotlinx.coroutines.runBlocking { it.write("a1", "token") } }
         val auth = FakeAuthRepository()
         val sessions = FakeSessionRepository()
         val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED)
         sessions.changes = feed.receiveAsFlow()
-        sessions.pages = { group, _ ->
-            SessionPage(if (group == SessionGroup.PAUSED) listOf(cloudSession("r1", SessionState.PAUSED, createdAt = 2_000, host = laptop(online = false), problemCode = "host_offline"),
-                cloudSession("c1", SessionState.PAUSED)) else emptyList(), null)
+        sessions.pages = { _, _ ->
+            SessionPage(listOf(cloudSession("r1", SessionState.PAUSED, createdAt = 2_000, host = laptop(online = false), problemCode = "host_offline"),
+                cloudSession("c1", SessionState.PAUSED)), null)
         }
         val features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1"))
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
@@ -120,17 +126,13 @@ class SessionsScreenTest {
         }
         feed.trySend(LiveUpdate.Opened(false))
         waitUntil { list.uiState.value.remoteSessions && !list.uiState.value.loading }
-        onNodeWithTag("group-paused").performClick()
         waitUntil { list.uiState.value.list?.sessions?.isNotEmpty() == true }
         onNodeWithText("Remote · Ada's MacBook").assertExists()
         onNodeWithTag("offline-r1", useUnmergedTree = true).assertExists()
         onNodeWithTag("where-c1", useUnmergedTree = true).assertExists()
-        onNodeWithTag("kind-remote").performClick()
-        waitUntil { sessions.calls.lastOrNull() == "list MINE PAUSED null remote" && !list.uiState.value.loading }
-        onNodeWithText("Session c1").assertDoesNotExist()
     }
 
-    @Test fun anOlderServerShowsNeitherTheKindFilterNorTheKind() = runComposeUiTest {
+    @Test fun anOlderServerShowsNoKind() = runComposeUiTest {
         val accounts = InMemoryAccountRepository(listOf(account("a1")))
         val store = credentials().also { kotlinx.coroutines.runBlocking { it.write("a1", "token") } }
         val sessions = FakeSessionRepository()
@@ -149,8 +151,7 @@ class SessionsScreenTest {
         feed.trySend(LiveUpdate.Opened(false))
         waitUntil { list.uiState.value.list?.sessions?.isNotEmpty() == true }
         onNodeWithText("Session c1").assertExists()
-        onNodeWithTag("kind-all").assertDoesNotExist()
         onNodeWithTag("where-c1", useUnmergedTree = true).assertDoesNotExist()
-        assertEquals(listOf("feed", "list MINE ACTIVE null"), sessions.calls)
+        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
     }
 }

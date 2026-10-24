@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
@@ -81,12 +82,20 @@ import me.nathanfallet.teamcode.companion.presentation.components.LinkButton
 import me.nathanfallet.teamcode.companion.presentation.components.NavBar
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
+import me.nathanfallet.teamcode.companion.presentation.theme.Radii
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
 import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import me.nathanfallet.teamcode.companion.presentation.dictation.DictationButton
+import me.nathanfallet.teamcode.companion.presentation.dictation.DictationNotice
+import me.nathanfallet.teamcode.companion.presentation.dictation.listening
+import me.nathanfallet.teamcode.companion.presentation.dictation.listeningHint
+import me.nathanfallet.teamcode.companion.presentation.dictation.rememberDictation
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptSeparator
 import me.nathanfallet.teamcode.companion.presentation.transcript.transcriptItems
@@ -142,6 +151,10 @@ import me.nathanfallet.teamcode.companion.resources.session_ended
 import me.nathanfallet.teamcode.companion.resources.session_live
 import me.nathanfallet.teamcode.companion.resources.session_load_older
 import me.nathanfallet.teamcode.companion.resources.session_menu_pause
+import me.nathanfallet.teamcode.companion.resources.action_cancel
+import me.nathanfallet.teamcode.companion.resources.session_menu_end
+import me.nathanfallet.teamcode.companion.resources.session_end_title
+import me.nathanfallet.teamcode.companion.resources.session_end_body
 import me.nathanfallet.teamcode.companion.resources.session_menu_resume
 import me.nathanfallet.teamcode.companion.resources.session_nothing_older
 import me.nathanfallet.teamcode.companion.resources.session_paused_dock
@@ -235,10 +248,11 @@ fun SessionScreen(
     }
 }
 
-/** "…": pause or resume (owner and administrators), and the artifacts this session published. */
+/** "…": pause, resume or end (owner and administrators), and the artifacts this session published. */
 @Composable
 private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    var confirmEnd by remember { mutableStateOf(false) }
     val session = state.session
     Box {
         TcIconButton(PhosphorIcons.Regular.DotsThree, stringResource(Res.string.session_actions), onClick = { open = true }, modifier = Modifier.testTag("session-menu"))
@@ -254,6 +268,31 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
             DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(18.dp)) },
                 onClick = { open = false; onOpenArtifacts() }, modifier = Modifier.testTag("session-artifacts"))
             if (session != null) menuItems(session) { open = false }
+            if (session != null && state.canControl && ControlSessionUseCase.canEnd(session)) {
+                DropdownMenuItem(text = { Text(stringResource(Res.string.session_menu_end), color = TeamCode.colors.danger) },
+                    leadingIcon = { Icon(PhosphorIcons.Regular.Stop, null, Modifier.size(18.dp), tint = TeamCode.colors.danger) },
+                    enabled = !state.acting, onClick = { open = false; confirmEnd = true }, modifier = Modifier.testTag("end"))
+            }
+        }
+    }
+    if (confirmEnd) EndSessionDialog(onConfirm = { confirmEnd = false; viewModel.end() }, onDismiss = { confirmEnd = false })
+}
+
+/** Ending a session deletes its workspace and cannot be undone: asked first. */
+@Composable
+private fun EndSessionDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val colors = TeamCode.colors
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("end-confirm"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(Res.string.session_end_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.session_end_body), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
+                TcButton(stringResource(Res.string.session_menu_end), onClick = onConfirm, kind = ButtonKind.DANGER, modifier = Modifier.weight(1f).testTag("end-confirm-yes"))
+            }
         }
     }
 }
@@ -417,6 +456,11 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                     })
                 }
                 PendingFileChips(state.files.files, onRetry = viewModel::retryFile, onRemove = viewModel::removeFile)
+                // The microphone where the platform transcribes natively: the words fill the draft, never sent by themselves.
+                val dictation = rememberDictation()
+                val field = remember { FocusRequester() }
+                dictation?.let { DictationNotice(it) }
+                val send = { dictation?.cancel(); viewModel.send() }
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Only once the server announced `cloud.files.v1`: an older server shows the composer as before.
                     if (state.files.supported) {
@@ -424,11 +468,13 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                         AttachButton(state.files, picker, onUnavailable = viewModel::explainFiles)
                     }
                     TcTextField(
-                        state.draft, viewModel::onDraftChange, placeholder = stringResource(Res.string.composer_hint), singleLine = false, maxLines = 6,
-                        modifier = Modifier.weight(1f), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
-                        onSubmit = { if (state.canSend) viewModel.send() },
+                        state.draft, viewModel::onDraftChange, singleLine = false, maxLines = 6,
+                        placeholder = if (dictation?.listening() == true) listeningHint() else stringResource(Res.string.composer_hint),
+                        modifier = Modifier.weight(1f).focusRequester(field), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
+                        onSubmit = { if (state.canSend) send() },
+                        trailing = dictation?.let { { DictationButton(it, { viewModel.uiState.value.draft }, viewModel::onDraftChange, field) } },
                     )
-                    TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = viewModel::send, kind = IconButtonKind.FILLED,
+                    TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = send, kind = IconButtonKind.FILLED,
                         enabled = state.canSend, modifier = Modifier.testTag("send"))
                 }
             }

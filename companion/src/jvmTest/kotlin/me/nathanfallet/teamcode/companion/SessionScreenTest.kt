@@ -97,6 +97,35 @@ class SessionScreenTest {
         onNodeWithTag("waiting-host").assertDoesNotExist()
     }
 
+    @Test fun endingASessionIsAskedFirstAndOnlyOfferedForASessionThatHasNotEnded() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null && model.uiState.value.canControl }
+        onNodeWithTag("session-menu").performClick()
+        onNodeWithTag("end").performClick()
+        // Nothing is sent before the confirmation; cancelling keeps the session.
+        onNodeWithTag("end-confirm").assertExists()
+        assertTrue(sessions.calls.none { it.startsWith("end") })
+        onNodeWithText("Cancel").performClick()
+        onNodeWithTag("end-confirm").assertDoesNotExist()
+        onNodeWithTag("session-menu").performClick()
+        onNodeWithTag("end").performClick()
+        onNodeWithTag("end-confirm-yes").performClick()
+        waitUntil { sessions.calls.contains("end s1") }
+        onNodeWithTag("end-confirm").assertDoesNotExist()
+    }
+
+    @Test fun anEndedSessionHasNoEndEntry() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.TERMINATED) }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("session-menu").performClick()
+        onNodeWithTag("session-artifacts").assertExists()
+        onNodeWithTag("end").assertDoesNotExist()
+    }
+
     @Test fun aPausedCloudSessionStillResumesFromHere() = runComposeUiTest {
         val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
         val model = viewModel(sessions)

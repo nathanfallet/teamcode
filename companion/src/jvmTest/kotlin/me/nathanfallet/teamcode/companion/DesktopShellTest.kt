@@ -80,10 +80,11 @@ class DesktopShellTest {
             assertEquals(1, sessions.calls.count { it.startsWith("list") }, sessions.calls.toString())
             assertEquals(1, feeds)
             // A filter of the panel's list is the sidebar's too, and its section title says so.
-            onNodeWithTag("group-paused").performSemanticsAction(SemanticsActions.OnClick)
+            onNodeWithTag("filter").performSemanticsAction(SemanticsActions.OnClick)
+            onNodeWithTag("filter-ended").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("sidebar-session-p1").assertExists()
-            onAllNodesWithText("SESSIONS · PAUSED").onFirst().assertExists()
+            onNodeWithTag("sidebar-session-s0").assertDoesNotExist()
+            onAllNodesWithText("SESSIONS · ENDED").onFirst().assertExists()
             assertEquals(1, feeds)
         }
     }
