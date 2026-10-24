@@ -33,9 +33,11 @@ for external in (False, True):
     assert any(doc['kind'] == 'StatefulSet' for doc in documents) != external
     assert any(doc['kind'] == 'HorizontalPodAutoscaler' for doc in documents) == external
     assert ('replicas' not in deployment['spec']) == external
-    # Session pods' network policy: on by default, internet to public addresses only (the server applies it).
+    # Session pods' network policy, applied by the server: on by default, and sessions keep full internet access
+    # (no lockdown, nothing blocked beyond the built-in cluster-internal and metadata ranges, no extra rule).
+    # SessionNetworkPolicyTest.theChartDefaultsKeepFullInternetAccess builds the policy from exactly these values.
     assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY']['value'] == 'true'
-    assert env['TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET']['value'] == 'true'
+    assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN']['value'] == 'false'
     assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS']['value'] == ''
     assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']['value']) == []
     policies = [doc for doc in documents if doc['kind'] == 'NetworkPolicy']
@@ -63,14 +65,14 @@ for external in (False, True):
         assert 'content-security-policy' not in yaml.safe_dump(ingress).lower()
 # The operator's session egress settings reach the server as written.
 values = {'publicUrl': 'https://teamcode.example.org', 'mysql': {'networkPolicy': {'enabled': False}}, 'cloudSessions': {'networkPolicy': {
-    'enabled': True, 'internet': False, 'blockedCidrs': ['203.0.113.0/24', '2001:db8::/32'],
+    'enabled': True, 'lockdown': True, 'blockedCidrs': ['203.0.113.0/24', '2001:db8::/32'],
     'extraEgress': [{'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ingress-nginx'}}}], 'ports': [{'protocol': 'TCP', 'port': 443}]}]}}}
 with tempfile.NamedTemporaryFile('w', suffix='.yaml') as handle:
     yaml.safe_dump(values, handle)
     handle.flush()
     documents = [doc for doc in yaml.safe_load_all(subprocess.run(['helm', 'template', 'test', chart, '-f', handle.name], check=True, capture_output=True, text=True).stdout) if doc]
 env = {item['name']: item['value'] for item in next(doc for doc in documents if doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env'] if 'value' in item}
-assert env['TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET'] == 'false'
+assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN'] == 'true'
 assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == '203.0.113.0/24,2001:db8::/32'
 assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']) == values['cloudSessions']['networkPolicy']['extraEgress']
 assert not any(doc['kind'] == 'NetworkPolicy' for doc in documents), 'mysql.networkPolicy.enabled=false renders no policy'

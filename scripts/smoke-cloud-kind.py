@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 
 CLUSTER = "teamcode-smoke"
 NAMESPACE = "teamcode-smoke"
@@ -41,10 +42,10 @@ rules:
 - apiGroups: [""]
   resources: [pods, persistentvolumeclaims]
   verbs: [get, list, create, delete]
-# The session network policy, applied by server-side apply before every pod.
+# The session network policy, applied by server-side apply before every pod (creating it needs `create`).
 - apiGroups: [networking.k8s.io]
   resources: [networkpolicies]
-  verbs: [patch]
+  verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -165,11 +166,21 @@ def check_network_policy(kubectl):
 
     if not reaches("probe-control", service, 443):
         sys.exit("Kind smoke failed: the control pod cannot reach the API server, so enforcement cannot be told apart.")
+    def blocked(address, port):
+        # The CNI programs a new pod's address into the policy a few seconds after the pod is ready (kindnet: up to
+        # about 5 s): wait for it to take effect, then the address must stay unreachable.
+        deadline = time.monotonic() + 60
+        while reaches("probe-session", address, port):
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(2)
+        return not reaches("probe-session", address, port)
+
     failures = [name for name, ok in [
+        ("a session pod cannot reach the API server's service", blocked(service, 443)),
+        ("a session pod cannot reach the node", blocked(node, 6443)),
+        ("a session pod cannot reach the metadata address", blocked("169.254.169.254", 80)),
         ("DNS resolves from a session pod", resolves("probe-session")),
-        ("a session pod cannot reach the API server's service", not reaches("probe-session", service, 443)),
-        ("a session pod cannot reach the node", not reaches("probe-session", node, 6443)),
-        ("a session pod cannot reach the metadata address", not reaches("probe-session", "169.254.169.254", 80)),
     ] if not ok]
     if failures:
         sys.exit("Kind smoke failed: " + "; ".join(failures))
@@ -232,7 +243,7 @@ def main():
             run(os.path.join(root, "gradlew"), "--no-daemon", "-p", root, ":infrastructure:test", "--tests", "*KindSmokeTest*", "--rerun", env=env)
             check_network_policy(kubectl)
             print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause, resume into a new pod with two replicas, proven deletion, "
-                  "and the session network policy (applied with patch only, DNS allowed, API server, node and metadata address unreachable) on a real cluster.")
+                  "and the session network policy (applied with create and patch only, DNS allowed, API server, node and metadata address unreachable) on a real cluster.")
         finally:
             if not args.keep:
                 run("kind", "delete", "cluster", "--name", CLUSTER, "--kubeconfig", kubeconfig)

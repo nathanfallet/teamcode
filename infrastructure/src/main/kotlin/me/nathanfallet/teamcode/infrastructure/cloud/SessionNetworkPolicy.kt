@@ -7,23 +7,24 @@ import me.nathanfallet.teamcode.domain.cloud.ReconcileCloudSessionsUseCase.Compa
 /**
  * The NetworkPolicy applied to every session namespace before a session pod is created, set by the operator through
  * the deployment (`TEAMCODE_CLOUD_SESSION_*`, the chart's `cloudSessions.networkPolicy`), never from the dashboard: an
- * administrator or an `admin:cloud` key cannot widen what a pod reaches.
+ * administrator or an `admin:cloud` key cannot change what a pod reaches.
  *
- * It selects every TeamCode pod of the namespace (`app.kubernetes.io/managed-by=teamcode`), denies all ingress, and
- * allows egress only to:
+ * Sessions keep full internet access; only cluster-internal and metadata endpoints are blocked. The policy selects
+ * every TeamCode pod of the namespace (`app.kubernetes.io/managed-by=teamcode`), denies all ingress (other session pods
+ * included), and allows egress to:
  * - DNS, port 53 over UDP and TCP, to any destination (CoreDNS pods, NodeLocal DNSCache, a cloud resolver);
- * - with [internet], every public address: `0.0.0.0/0` and `::/0` minus [PRIVATE_V4], [PRIVATE_V6] and [blockedCidrs],
- *   so link-local and cloud metadata addresses, RFC 1918, carrier-grade NAT and unique-local ranges (where pods,
- *   services, nodes and most metadata endpoints live) are unreachable;
- * - the [extraEgress] rules, verbatim (for example the ingress controller pods when the server URL hairpins inside the
- *   cluster), except that an `ipBlock` may never reach a link-local range.
+ * - the TeamCode server: the addresses its URL for pods resolves to, on its port, even when they are private;
+ * - unless [lockdown], every public address on every port: `0.0.0.0/0` and `::/0` minus [PRIVATE_V4], [PRIVATE_V6]
+ *   (RFC 1918, carrier-grade NAT, link-local and cloud metadata, unique-local: where pods, services and nodes live),
+ *   the Kubernetes API server's addresses and [blockedCidrs];
+ * - the [extraEgress] rules, verbatim, except that an `ipBlock` may never reach a link-local range.
  *
- * The agent needs no direct route to model providers: inference goes through the runner's loopback proxy to the
- * TeamCode server, which the pod reaches at its public URL.
+ * Inference needs no route to model providers: it goes through the runner's loopback proxy to the TeamCode server.
  */
 data class SessionNetworkPolicy(
     val enabled: Boolean = true,
-    val internet: Boolean = true,
+    /** Off by default. On: no internet rule, only DNS, the server and [extraEgress]. */
+    val lockdown: Boolean = false,
     val blockedCidrs: List<String> = emptyList(),
     val extraEgress: JsonArray = JsonArray(emptyList()),
 ) {
@@ -32,8 +33,14 @@ data class SessionNetworkPolicy(
         extraEgress.forEach { rule -> requireValidRule(rule) }
     }
 
-    /** The NetworkPolicy object, as sent with server-side apply. */
-    fun manifest(): JsonObject = buildJsonObject {
+    /** Where the session pods reach the TeamCode server: its addresses as the server resolves them, and its port. */
+    data class Server(val addresses: List<ByteArray>, val port: Int)
+
+    /**
+     * The NetworkPolicy object, as sent with server-side apply. [clusterApi] are the API server's addresses, removed
+     * from the internet rule (a managed cluster's endpoint is often public).
+     */
+    fun manifest(server: Server? = null, clusterApi: List<ByteArray> = emptyList()): JsonObject = buildJsonObject {
         put("apiVersion", "networking.k8s.io/v1"); put("kind", "NetworkPolicy")
         putJsonObject("metadata") { put("name", NAME); putJsonObject("labels") { put(MANAGED_LABEL, "teamcode") } }
         putJsonObject("spec") {
@@ -43,10 +50,19 @@ data class SessionNetworkPolicy(
             putJsonArray("ingress") {}
             putJsonArray("egress") {
                 addJsonObject { putJsonArray("ports") { for (protocol in listOf("UDP", "TCP")) addJsonObject { put("protocol", protocol); put("port", 53) } } }
-                if (internet) {
-                    val blocked = blockedCidrs.map(Cidr::parse)
+                // The server, explicitly: its address may be private (an internal load balancer). Never a link-local one.
+                server?.addresses?.map(Cidr::of)?.distinct()?.filter { address -> LINK_LOCAL.none { it.contains(address) } }?.takeIf { it.isNotEmpty() }?.let { addresses ->
+                    addJsonObject {
+                        putJsonArray("to") { addresses.forEach { address -> addJsonObject { putJsonObject("ipBlock") { put("cidr", address.toString()) } } } }
+                        putJsonArray("ports") { addJsonObject { put("protocol", "TCP"); put("port", server.port) } }
+                    }
+                }
+                if (!lockdown) {
+                    val blocked = blockedCidrs.map(Cidr::parse) + clusterApi.map(Cidr::of)
                     for ((all, private) in listOf(Cidr.parse("0.0.0.0/0") to PRIVATE_V4, Cidr.parse("::/0") to PRIVATE_V6)) {
-                        val except = (private.map(Cidr::parse) + blocked.filter { it.v6 == all.v6 }).distinct()
+                        val ranges = private.map(Cidr::parse)
+                        // Only what the private ranges do not already cover, so the list stays readable.
+                        val except = (ranges + blocked.filter { it.v6 == all.v6 && ranges.none { range -> range.contains(it) } }).distinct()
                         addJsonObject { putJsonArray("to") { addJsonObject { putJsonObject("ipBlock") {
                             put("cidr", all.toString()); putJsonArray("except") { except.forEach { add(it.toString()) } }
                         } } } }
@@ -64,8 +80,11 @@ data class SessionNetworkPolicy(
         /** Not public: this host, RFC 1918, carrier-grade NAT (Alibaba's metadata), loopback, link-local, IETF, benchmark, multicast and reserved. */
         val PRIVATE_V4 = listOf("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
             "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3")
-        /** IPv6 forms that are not public or embed an IPv4 destination: mapped, NAT64, Teredo, 6to4, unique-local (AWS metadata), link-local, multicast. */
-        val PRIVATE_V6 = listOf("::/127", "::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fc00::/7", "fe80::/10", "ff00::/8")
+        /**
+         * IPv6 forms that are not public or embed an IPv4 destination: NAT64, Teredo, 6to4, unique-local (AWS metadata),
+         * link-local, multicast. IPv4-mapped addresses are never routed, and the API server refuses them in a policy.
+         */
+        val PRIVATE_V6 = listOf("::/127", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "fc00::/7", "fe80::/10", "ff00::/8")
 
         /**
          * Reads the deployment variables; an invalid value fails the server start rather than run sessions with a
@@ -83,7 +102,7 @@ data class SessionNetworkPolicy(
             } ?: JsonArray(emptyList())
             return SessionNetworkPolicy(
                 enabled = flag("TEAMCODE_CLOUD_SESSION_NETWORK_POLICY", true),
-                internet = flag("TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET", true),
+                lockdown = flag("TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN", false),
                 blockedCidrs = value("TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS")?.split(',')?.map(String::trim)?.filter(String::isNotEmpty).orEmpty(),
                 extraEgress = extra,
             )
@@ -125,6 +144,12 @@ internal data class Cidr(val network: BigInteger, val prefix: Int, val v6: Boole
     }
 
     companion object {
+        private val MAPPED = Cidr(BigInteger.valueOf(0xffff).shiftLeft(32), 96, true)
+        /** One address, as a /32 or /128. */
+        fun of(address: ByteArray): Cidr {
+            require(address.size == 4 || address.size == 16) { "Not an IP address." }
+            return Cidr(BigInteger(1, address), address.size * 8, address.size == 16)
+        }
         fun parse(text: String): Cidr {
             fun invalid(): Nothing = throw IllegalArgumentException("Not a CIDR: $text.")
             val parts = text.trim().split('/')
@@ -134,7 +159,10 @@ internal data class Cidr(val network: BigInteger, val prefix: Int, val v6: Boole
             val bits = if (v6) 128 else 32
             val prefix = parts[1].takeIf { it.length in 1..3 && it.all(Char::isDigit) }?.toInt()?.takeIf { it in 0..bits } ?: invalid()
             // Host bits are cleared, as the API server reads the block.
-            return Cidr(value.shiftRight(bits - prefix).shiftLeft(bits - prefix), prefix, v6)
+            return Cidr(value.shiftRight(bits - prefix).shiftLeft(bits - prefix), prefix, v6).also {
+                // The API server refuses IPv4-mapped IPv6 blocks in a NetworkPolicy.
+                require(!MAPPED.contains(it)) { "Write an IPv4-mapped address as IPv4: $text." }
+            }
         }
 
         private fun v4(text: String): BigInteger? {

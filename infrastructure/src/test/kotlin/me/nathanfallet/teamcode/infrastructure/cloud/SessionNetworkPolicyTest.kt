@@ -28,7 +28,7 @@ class SessionNetworkPolicyTest {
         assertNull(egress[1].jsonObject["ports"], "Every port of a public address")
         for (blocked in listOf("169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8"))
             assertTrue(blocked in v4.except(), blocked)
-        for (blocked in listOf("fe80::/10", "fc00::/7", "::ffff:0:0/96", "64:ff9b::/96", "2002::/16"))
+        for (blocked in listOf("fe80::/10", "fc00::/7", "64:ff9b::/96", "2002::/16"))
             assertTrue(blocked in v6.except(), blocked)
     }
 
@@ -41,11 +41,41 @@ class SessionNetworkPolicyTest {
         assertFalse(except.any { it.contains(Cidr.parse("2606:4700::6810:84e5/128")) }, "a public IPv6 address stays reachable")
     }
 
-    @Test fun withoutInternetOnlyDnsAndTheOperatorsRulesRemain() {
+    @Test fun lockdownLeavesOnlyDnsTheServerAndTheOperatorsRules() {
         val rules = Json.parseToJsonElement("""[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}}}],"ports":[{"protocol":"TCP","port":443}]}]""").jsonArray
-        val egress = SessionNetworkPolicy(internet = false, extraEgress = rules).manifest().spec()["egress"]!!.jsonArray
-        assertEquals(2, egress.size)
-        assertEquals(rules.single(), egress[1], "Appended verbatim")
+        val egress = SessionNetworkPolicy(lockdown = true, extraEgress = rules).manifest(SessionNetworkPolicy.Server(listOf(byteArrayOf(10, 1, 2, 3)), 8443)).spec()["egress"]!!.jsonArray
+        assertEquals(3, egress.size)
+        assertEquals("10.1.2.3/32", egress[1].blocks().single().cidr())
+        assertEquals(rules.single(), egress[2], "Appended verbatim")
+        assertTrue(egress.none { rule -> rule.blocks().any { it.cidr() == "0.0.0.0/0" } }, "No internet rule")
+    }
+
+    /** The values `helm/teamcode` renders by default (asserted by scripts/check-helm.py): full internet access. */
+    @Test fun theChartDefaultsKeepFullInternetAccess() {
+        val chart = mapOf("TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "true", "TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN" to "false",
+            "TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS" to "", "TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA" to "[]")
+        val policy = SessionNetworkPolicy.fromEnvironment(chart::get)
+        assertEquals(SessionNetworkPolicy(), policy)
+        val egress = policy.manifest().spec()["egress"]!!.jsonArray
+        val internet = egress.filter { rule -> rule.blocks().any { it.cidr() == "0.0.0.0/0" || it.cidr() == "::/0" } }
+        assertEquals(2, internet.size, "Both address families")
+        assertTrue(internet.all { it.jsonObject["ports"] == null }, "Every port")
+        val except = internet.flatMap { rule -> rule.blocks().flatMap { it.except() } }.map(Cidr::parse)
+        // Search engines, npm, PyPI, GitHub, a third-party API: public addresses stay reachable.
+        for (public in listOf("142.250.74.110/32", "104.16.0.35/32", "151.101.0.223/32", "140.82.112.3/32", "8.8.8.8/32", "2606:4700::6810:84e5/128", "2a00:1450:4007::64/128"))
+            assertFalse(except.any { it.contains(Cidr.parse(public)) }, public)
+    }
+
+    @Test fun theServerIsAllowedExplicitlyAndTheApiServerIsBlocked() {
+        val server = SessionNetworkPolicy.Server(listOf(byteArrayOf(10, 0, 0, 9), byteArrayOf(-87, -2, 1, 1), ByteArray(16) { if (it == 15) 7 else if (it == 0) 0xfd.toByte() else 0 }), 443)
+        val apiServer = listOf(byteArrayOf(34, 118, 1, 2), byteArrayOf(10, 0, 0, 1))
+        val egress = SessionNetworkPolicy().manifest(server, apiServer).spec()["egress"]!!.jsonArray
+        val toServer = egress[1].jsonObject
+        assertEquals(listOf("10.0.0.9/32", "fd00::7/128"), egress[1].blocks().map { it.cidr() }, "Never a link-local server address")
+        assertEquals(443, toServer["ports"]!!.jsonArray.single().jsonObject["port"]!!.jsonPrimitive.int)
+        val v4 = egress.map { it.blocks() }.flatten().single { it.cidr() == "0.0.0.0/0" }
+        assertTrue("34.118.1.2/32" in v4.except(), "A public API endpoint is blocked")
+        assertFalse("10.0.0.1/32" in v4.except(), "Already inside 10.0.0.0/8")
     }
 
     @Test fun blockedCidrsNarrowTheInternetRuleOfTheirFamily() {
@@ -74,17 +104,17 @@ class SessionNetworkPolicyTest {
     @Test fun deploymentVariablesAreParsedStrictly() {
         assertEquals(SessionNetworkPolicy(), SessionNetworkPolicy.fromEnvironment { null })
         val env = mapOf(
-            "TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "true", "TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET" to "FALSE",
+            "TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "true", "TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN" to "TRUE",
             "TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS" to " 203.0.113.0/24, ,2001:db8::/32 ",
             "TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA" to """[{"to":[{"ipBlock":{"cidr":"10.0.0.5/32"}}]}]""",
         )
         val parsed = SessionNetworkPolicy.fromEnvironment(env::get)
-        assertTrue(parsed.enabled); assertFalse(parsed.internet)
+        assertTrue(parsed.enabled); assertTrue(parsed.lockdown)
         assertEquals(listOf("203.0.113.0/24", "2001:db8::/32"), parsed.blockedCidrs)
         assertEquals(1, parsed.extraEgress.size)
         assertFalse(SessionNetworkPolicy.fromEnvironment(mapOf("TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "false")::get).enabled)
         for ((name, value) in listOf(
-            "TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "off", "TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET" to "yes",
+            "TEAMCODE_CLOUD_SESSION_NETWORK_POLICY" to "off", "TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN" to "yes",
             "TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS" to "metadata.google.internal/32", "TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS" to "0.0.0.0/0",
             "TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS" to "300.1.1.1/32", "TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA" to "{}",
             "TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA" to "not json",
@@ -93,15 +123,14 @@ class SessionNetworkPolicyTest {
 
     @Test fun cidrsAreLiteralsInCanonicalForm() {
         assertEquals("10.0.0.0/8", Cidr.parse("10.1.2.3/8").toString())
-        assertEquals("::ffff:0:0/96", Cidr.parse("0:0:0:0:0:ffff:0:0/96").toString())
-        assertEquals("::ffff:0:0/96", Cidr.parse("::ffff:0.0.0.0/96").toString())
+        assertEquals("64:ff9b::/96", Cidr.parse("64:ff9b:0:0:0:0:0.0.0.0/96").toString())
         assertEquals("2001:db8:0:1::/64", Cidr.parse("2001:DB8:0:1:0:0:0:0/64").toString())
         assertEquals("::/0", Cidr.parse("::/0").toString())
         assertEquals("fd00:ec2::254/128", Cidr.parse("fd00:ec2::254/128").toString())
         assertTrue(Cidr.parse("169.254.0.0/16").contains(Cidr.parse("169.254.169.254/32")))
         assertFalse(Cidr.parse("169.254.169.254/32").contains(Cidr.parse("169.254.0.0/16")))
         assertFalse(Cidr.parse("0.0.0.0/0").contains(Cidr.parse("::/0")))
-        for (bad in listOf("10.0.0.0", "10.0.0.0/33", "localhost/32", "1:2:3:4:5:6:7:8:9/64", "1::2::3/64", "::/129", "10.0.0/8", "10.0.0.0/-1"))
+        for (bad in listOf("10.0.0.0", "10.0.0.0/33", "localhost/32", "1:2:3:4:5:6:7:8:9/64", "1::2::3/64", "::/129", "::ffff:0:0/96", "::ffff:10.0.0.1/128", "10.0.0/8", "10.0.0.0/-1"))
             assertFailsWith<IllegalArgumentException>(bad) { Cidr.parse(bad) }
     }
 }

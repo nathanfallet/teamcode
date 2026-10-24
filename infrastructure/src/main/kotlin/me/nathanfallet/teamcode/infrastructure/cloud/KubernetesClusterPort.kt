@@ -156,17 +156,20 @@ class KubernetesClusterPort(
      */
     override suspend fun createPod(clusterId: String, request: PodRequest) {
         val pods = options()
-        if (pods.network.enabled) applyNetworkPolicy(clusterId, request.namespace, pods.network)
+        if (pods.network.enabled) applyNetworkPolicy(clusterId, request.namespace, pods.network, pods.serverUrl)
         create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request, pods))
     }
 
     /**
      * Server-side apply (`PATCH` with `application/apply-patch+yaml`, field manager `teamcode`, forced): creates the
-     * policy or replaces the fields TeamCode owns in one idempotent call. Needs `patch` on `networkpolicies`.
+     * policy or replaces the fields TeamCode owns in one idempotent call. Needs `create` and `patch` on `networkpolicies`. The server
+     * URL and the API server are resolved here, as the TeamCode server sees them, for every pod.
      */
-    private suspend fun applyNetworkPolicy(clusterId: String, namespace: String, policy: SessionNetworkPolicy) {
+    private suspend fun applyNetworkPolicy(clusterId: String, namespace: String, policy: SessionNetworkPolicy, serverUrl: String) {
         val path = "/apis/networking.k8s.io/v1/namespaces/${segment(namespace)}/networkpolicies/${SessionNetworkPolicy.NAME}?fieldManager=teamcode&force=true"
-        val response = call(clusterId, HttpMethod.Patch, path, policy.manifest(), contentType = APPLY_PATCH)
+        val clusterApi = resolve(client(clusterId).connection.apiUrl)
+        val server = serverUrl.let { url -> resolve(url).takeIf { it.isNotEmpty() }?.let { SessionNetworkPolicy.Server(it, Url(url).port) } }
+        val response = call(clusterId, HttpMethod.Patch, path, policy.manifest(server, clusterApi), contentType = APPLY_PATCH)
         if (response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.Forbidden) throw SessionNetworkPolicyRefusedException()
         if (!response.status.isSuccess()) throw ClusterApiException(response.status.value)
     }
@@ -437,6 +440,12 @@ class KubernetesClusterPort(
             catch (_: Exception) { throw ClusterHostNotAllowedException() }
         if (addresses.isEmpty() || addresses.any { !CloudAdministrationService.allowedResolvedAddress(it.address) }) throw ClusterHostNotAllowedException()
     }
+
+    /** The addresses of a URL's host, off the event loop; none when it does not resolve. */
+    private suspend fun resolve(url: String): List<ByteArray> = try {
+        val host = Url(url).host.removePrefix("[").removeSuffix("]")
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { resolver(host) }.map { it.address }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { emptyList() }
 
     override fun close() {
         clients.values.forEach { if (it.http !== shared) it.http.close() }; clients.clear()

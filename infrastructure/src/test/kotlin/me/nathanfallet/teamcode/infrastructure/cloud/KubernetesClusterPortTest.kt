@@ -309,7 +309,8 @@ class KubernetesClusterPortTest {
         assertEquals("application/apply-patch+yaml", apply.body.contentType?.withoutParameters()?.toString())
         assertEquals("teamcode", apply.url.parameters["fieldManager"]); assertEquals("true", apply.url.parameters["force"])
         assertEquals("Bearer $token", apply.headers[HttpHeaders.Authorization])
-        assertEquals(SessionNetworkPolicy().manifest(), bodies.first())
+        // The mock resolves every host to 10.0.0.1: the server rule names it on 443, the API server is already private.
+        assertEquals(SessionNetworkPolicy().manifest(SessionNetworkPolicy.Server(listOf(byteArrayOf(10, 0, 0, 1)), 443), listOf(byteArrayOf(10, 0, 0, 1))), bodies.first())
     }
 
     @Test fun aRefusedPolicyCreatesNoPod(): Unit = runBlocking {
@@ -333,11 +334,11 @@ class KubernetesClusterPortTest {
     }
 
     @Test fun theOperatorsSettingsReachThePolicy(): Unit = runBlocking {
-        val closed = SessionNetworkPolicy(internet = false, extraEgress = Json.parseToJsonElement("""[{"to":[{"ipBlock":{"cidr":"10.20.0.0/16"}}],"ports":[{"protocol":"TCP","port":443}]}]""").jsonArray)
+        val closed = SessionNetworkPolicy(lockdown = true, extraEgress = Json.parseToJsonElement("""[{"to":[{"ipBlock":{"cidr":"10.20.0.0/16"}}],"ports":[{"protocol":"TCP","port":443}]}]""").jsonArray)
         val port = port(options = KubernetesPodOptions("https://teamcode.example.test", "registry.example/teamcode-runner:1.0", network = closed)) { json("{}", HttpStatusCode.Created) }
         port.createPod("c1", anyPod)
         val egress = bodies.first()!!["spec"]!!.jsonObject["egress"]!!.jsonArray
-        assertEquals(2, egress.size, "DNS and the operator's rule, no internet")
-        assertEquals("10.20.0.0/16", egress[1].jsonObject["to"]!!.jsonArray.single().jsonObject["ipBlock"]!!.jsonObject["cidr"]!!.jsonPrimitive.content)
+        assertEquals(3, egress.size, "DNS, the server and the operator's rule, no internet")
+        assertEquals("10.20.0.0/16", egress[2].jsonObject["to"]!!.jsonArray.single().jsonObject["ipBlock"]!!.jsonObject["cidr"]!!.jsonPrimitive.content)
     }
 }
