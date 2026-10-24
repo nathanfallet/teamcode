@@ -6,7 +6,7 @@ This chart follows the structure of the [pkg chart](https://github.com/guimauved
 
 Ordinary main-branch image publication runs after Linux JVM/database and Helm checks succeed. Version tags additionally require the full five-target native and signed installation acceptance; paid native jobs are skipped on ordinary pushes. Pushes to `main` publish to Docker Hub using the repository secret `DOCKER_HUB_PASSWORD` for the `nathanfallet` login; pull requests build without publishing. No registry token belongs in chart values.
 
-The chart defaults to `nathanfallet/teamcode:latest` with `imagePullPolicy: Always`. The CI workflow builds and publishes this image for AMD64 and ARM64 after all verification jobs pass. New pods resolve the latest published image; publishing alone does not restart existing pods. Roll out the Deployment to pick up a new build. An immutable `sha-<commit>` tag can also be selected through `image.tag`. Configure an image pull secret if your Docker Hub repository is private.
+A **released chart** (`teamcode-VERSION.tgz`, attached to each GitHub release) deploys exactly its own server version, `nathanfallet/teamcode:VERSION` with `imagePullPolicy: IfNotPresent`: the image tag defaults to the chart's `appVersion`, which release packaging sets. The chart in this repository carries `appVersion: latest`, so installing from a checkout deploys `nathanfallet/teamcode:latest` with `imagePullPolicy: Always`. The CI workflow builds and publishes this image for AMD64 and ARM64 after all verification jobs pass. New pods resolve the latest published image; publishing alone does not restart existing pods. Roll out the Deployment to pick up a new build. An immutable `sha-<commit>` tag can also be selected through `image.tag`. Configure an image pull secret if your Docker Hub repository is private.
 
 Provision a Kubernetes Secret named `teamcode-secrets` in the target namespace using your secret manager. Required string values:
 
@@ -54,7 +54,7 @@ helm upgrade --install teamcode \
   --namespace teamcode --create-namespace -f values.yaml --wait --timeout 10m
 ```
 
-Users supply their own namespace, Secret, ingress and database settings; no operator cluster deployment is performed by the publisher. The chart continues to default to `latest`; set `image.tag: "0.1.0"` to pin the matching released server image.
+Users supply their own namespace, Secret, ingress and database settings; no operator cluster deployment is performed by the publisher. A released chart pins its own server version; set `image.tag` to choose another one (`latest` follows main).
 
 The chart does not issue TLS certificates. Supply the TLS secret using your existing certificate management. For ingress controllers other than NGINX, configure equivalent streaming settings: no response buffering, 2 MiB request bodies, and at least 660-second read/send timeouts. Keep the public origin identical on every replica, without a trailing slash.
 

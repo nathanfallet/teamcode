@@ -44,7 +44,11 @@ data class SendResult(val status: Int?, val error: String?) {
     val retryable get() = status == null || status >= 500 || status == 408 || status == 429
 }
 
-/** The network edge. An implementation refuses hosts [CloudAdministrationService.allowedApiHost] refuses, also after DNS. */
+/**
+ * The network edge. An implementation refuses the hosts [WebhookService] refuses, also after DNS, and connects to the
+ * address it checked: [CloudAdministrationService.publicAddress] by default, [CloudAdministrationService.allowedResolvedAddress]
+ * when the operator allows private targets.
+ */
 fun interface WebhookSender {
     suspend fun send(url: String, headers: Map<String, String>, body: String): SendResult
 }
@@ -78,8 +82,16 @@ class CreatedWebhook(val webhook: WebhookSubscription, val secret: String) {
     override fun toString() = "CreatedWebhook(webhook=$webhook, secret=[REDACTED])"
 }
 
-/** Management of subscriptions: administrators and administrators' `admin:cloud` keys only. */
-class WebhookService(private val store: WebhookStore, private val sealer: SecretSealer, private val random: () -> ByteArray = { ByteArray(32).also(SecureRandom()::nextBytes) }) {
+/**
+ * Management of subscriptions: administrators and administrators' `admin:cloud` keys only. A target must be on the
+ * public internet unless the operator sets [allowPrivateTargets] (`TEAMCODE_WEBHOOK_PRIVATE_TARGETS`): an
+ * administrator's key must not turn webhooks into a probe of the server's own network (audit L1).
+ */
+class WebhookService(
+    private val store: WebhookStore, private val sealer: SecretSealer,
+    private val random: () -> ByteArray = { ByteArray(32).also(SecureRandom()::nextBytes) },
+    private val allowPrivateTargets: Boolean = false,
+) {
     private fun read(actor: Principal) { actor.requireCloudRead(); actor.requireCloudAdministrator() }
     private fun write(actor: Principal) { actor.requireCloudWrite(); actor.requireCloudAdministrator() }
     private fun missing() = TeamFailure("not_found", 404, "Webhook not found.")
@@ -102,7 +114,11 @@ class WebhookService(private val store: WebhookStore, private val sealer: Secret
     }
 
     suspend fun update(actor: Principal, id: String, version: Int, url: String, types: Set<TeamEventType>, description: String, enabled: Boolean?): WebhookSubscription {
-        write(actor); validate(url, types, description)
+        write(actor)
+        // A subscription kept on its URL can still be paused, relabeled or deleted after the operator withdrew private
+        // targets; only a new URL must pass the address rule (its deliveries are refused meanwhile).
+        val unchanged = store.find(actor.teamId, id)?.url == url
+        validate(url, types, description, checkTarget = !unchanged)
         return store.update(actor, id, version, url, types, description, enabled)
     }
 
@@ -123,11 +139,13 @@ class WebhookService(private val store: WebhookStore, private val sealer: Secret
         return store.enqueueTest(actor, id, payload)
     }
 
-    private fun validate(url: String, types: Set<TeamEventType>, description: String) {
+    private fun validate(url: String, types: Set<TeamEventType>, description: String, checkTarget: Boolean = true) {
         val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?').substringBefore('#')
         if (url.length > MAX_URL || !url.startsWith("https://") || '#' in url || '@' in authority || url.any { it.isISOControl() || it.isWhitespace() } ||
             !CloudAdministrationService.allowedApiHost(url) || authority.isEmpty())
             throw TeamFailure("invalid_webhook", 400, "Use an https URL without credentials or a fragment, and not a link-local or cloud metadata address.")
+        if (checkTarget && !allowPrivateTargets && !CloudAdministrationService.publicApiHost(url))
+            throw TeamFailure("webhook_host_not_allowed", 400, "Webhooks reach public addresses only: not localhost, a loopback, private or reserved address. The server operator can allow private targets with TEAMCODE_WEBHOOK_PRIVATE_TARGETS=true.")
         if (types.isEmpty()) throw TeamFailure("invalid_webhook", 400, "Choose at least one event type.")
         if (description.length > MAX_DESCRIPTION || description.any { it.isISOControl() }) throw TeamFailure("invalid_webhook", 400, "The description is at most $MAX_DESCRIPTION characters.")
     }

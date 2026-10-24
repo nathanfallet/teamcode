@@ -427,7 +427,11 @@ class KubernetesClusterPort(
             expectSuccess = false
             followRedirects = false
             install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 30_000 }
-            engine { https { trustManager = trustManager(connection.caCertificate) } }
+            engine {
+                https { trustManager = trustManager(connection.caCertificate) }
+                // The connection dials the address this check accepted, never a second answer of the name (audit L2).
+                dnsResolver = me.nathanfallet.teamcode.infrastructure.network.PinnedDns.resolver(CloudAdministrationService::allowedResolvedAddress, resolver)
+            }
         }
         val created = Client(fingerprint, connection, http, System.currentTimeMillis())
         clients.put(clusterId, created)?.let { previous -> if (previous.http !== shared) retired += previous.http }
@@ -437,7 +441,7 @@ class KubernetesClusterPort(
     /**
      * A DNS name is re-resolved whenever the connection is loaded (at least every 30 s) and refused if any answer is
      * link-local, unspecified or a cloud metadata address, as for a literal address in the administration check.
-     * Resolution happens off the event loop. The check cannot pin the address the HTTP client later dials.
+     * Resolution happens off the event loop. The HTTP client applies the same check to the address it dials.
      */
     private suspend fun requireAllowedHost(apiUrl: String) {
         val host = try { Url(apiUrl).host.removePrefix("[").removeSuffix("]") } catch (_: Exception) { throw ClusterHostNotAllowedException() }

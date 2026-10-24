@@ -246,7 +246,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && audit != null) listOf("team.audit.v1") else emptyList()) +
                     (if (team != null && serviceKeys != null) listOf("team.read-key.v1") else emptyList()) +
                     (if (team != null && forecasts != null) listOf("capacity.forecasts.v1", "capacity.forecasts.live.v1") else emptyList()) +
-                    (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1", "team.skills.all-members.v1") else emptyList()) +
+                    (if (team != null && skills != null) listOf("team.skills.v1", "team.skills.publish-pin.v1", "team.skills.pin-scope.v1", "team.skills.all-members.v1") else emptyList()) +
                     (if (team != null && hooks != null) listOf("team.hooks.v1", "team.hooks.all-members.v1") else emptyList()) +
                     (if (team != null && variants != null) listOf("team.variants.v1") else emptyList()) +
                     (if (team != null && environment != null) listOf("team.environment.v1") else emptyList()) +

@@ -25,7 +25,7 @@ ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 
 # The TeamCode release whose binary goes into the image. Use your server's version.
-ARG TEAMCODE_VERSION=0.3.2
+ARG TEAMCODE_VERSION=1.0.1
 # Node.js runtime for the agent CLIs (an LTS line). Empty with both agent versions empty skips Node.js.
 ARG NODE_VERSION=24.21.0
 # Agent CLIs. Empty skips one; pin exact versions so a rebuild gives the same agent.
@@ -51,16 +51,39 @@ RUN apt-get update \
        "$(apt-cache show libssl3t64 >/dev/null 2>&1 && echo libssl3t64 || echo libssl3)" \
     && rm -rf /var/lib/apt/lists/*
 
-# The teamcode binary, checked against the release's SHA256SUMS.
+# The TeamCode publisher's public key (release/trust/teamcode-release-2026.pem in the TeamCode repository). The
+# release's manifest.sig is checked against it, so replacing the binary and SHA256SUMS of a release is not enough to
+# put another binary in this image. A fork that signs its own releases puts its own key here.
+COPY <<'EOF' /usr/local/share/teamcode/release-2026.pem
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvt26hBXU8nyHnq0pVU3C
+iMjMPUDKTVahWc4zCNGnxfbALmp2viekOOAMQXbhMLqR0//OQ/EpRoiwsLLqHNq5
+Lt03Btv6ie30W2JXYCNwS6dG6bbusVVsJvf1WDTnmap2Pq19jSvTqnlmi+Cuk/Lg
+GTHYVakpf98fCTzlI1cNulYgZfxckSTG3p9FQIOzHENdcfsCysfYylvLhOMjCccB
+TC7A3Fof4NPS2HJkA47FdCKGwU8hvhe9YcR7mKIqki6QcCHwwpe8jtXX2X5e+Wte
+7Rhj1pTqDKBJtNqOoh/cD97w9w7u0c2U+d1jTxHBItnKRwuiXzM0c0lZdhog/JSZ
+G5poqSSil4R0kMuosQe1A887TIMoBvf5vB0SMyduxFdZuvAji11Emfgnz0E2qZFC
+UfWQVUQEtVuJDzGLSqT2Z1rMc0vu6AQ8FHYM7lgvLyTbEU8LM/+PgAKI6K/K0EOf
+shLnIvBbcl+AvatfS3UpbBbkU4CJsi4FV7/Z78FDmoUpAgMBAAE=
+-----END PUBLIC KEY-----
+EOF
+
+# The teamcode binary: manifest.json must carry a valid RSA-PSS signature of the publisher key above, name this
+# version, and list the binary's SHA-256.
 RUN case "${TARGETARCH:-amd64}" in amd64) arch=x64 ;; arm64) arch=arm64 ;; *) echo "Unsupported architecture ${TARGETARCH:-amd64}" >&2; exit 1 ;; esac \
     && asset="teamcode-${TEAMCODE_VERSION}-linux-${arch}" \
     && base="https://github.com/nathanfallet/teamcode/releases/download/${TEAMCODE_VERSION}" \
     && cd /tmp \
     && curl -fsSLO --retry 3 "${base}/${asset}" \
-    && curl -fsSLO --retry 3 "${base}/SHA256SUMS" \
-    && grep " ${asset}\$" SHA256SUMS | sha256sum -c - \
+    && curl -fsSLO --retry 3 "${base}/manifest.json" \
+    && curl -fsSLO --retry 3 "${base}/manifest.sig" \
+    && sed -n 's/.*"signature": "\([A-Za-z0-9+\/=]*\)".*/\1/p' manifest.sig | base64 -d > manifest.sig.bin \
+    && openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 -sigopt rsa_mgf1_md:sha256 \
+       -verify /usr/local/share/teamcode/release-2026.pem -signature manifest.sig.bin manifest.json \
+    && grep -q "^  \"tag\": \"${TEAMCODE_VERSION}\",\$" manifest.json \
+    && grep -q "\"sha256\": \"$(sha256sum "${asset}" | cut -d ' ' -f 1)\"" manifest.json \
     && install -m 0755 "${asset}" /usr/local/bin/teamcode \
-    && rm -f "${asset}" SHA256SUMS
+    && rm -f "${asset}" manifest.json manifest.sig manifest.sig.bin
 
 # Node.js and the agent CLIs, system-wide under /usr/local.
 RUN if [ -z "${CLAUDE_CODE_VERSION}${CODEX_VERSION}" ]; then exit 0; fi \

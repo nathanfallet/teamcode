@@ -75,7 +75,8 @@ class SkillRoutesTest {
             override suspend fun authenticate(token: String): Principal? {
                 val scopes = when (token) {
                     "service-publish" -> setOf(ServiceScope.SKILLS_PUBLISH)
-                    "service-assign" -> setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN)
+                    "service-pin" -> setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN)
+                    "service-assign" -> setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.SKILLS_PIN)
                     "service-read" -> setOf(ServiceScope.SKILLS_READ)
                     "service-inference" -> setOf(ServiceScope.INFERENCE)
                     else -> return interactive.authenticate(token)
@@ -181,11 +182,11 @@ class SkillRoutesTest {
         val one = listOf(upload("SKILL.md", "One"))
 
         // `pin` publishes and approves in one call; a retry is a 200 that keeps the pin.
-        val created = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", pinned("1", one))
+        val created = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-pin", pinned("1", one))
         assertEquals(HttpStatusCode.Created, created.status)
         val first = Serialization.json.decodeFromString<PublishSkillVersionResponse>(created.bodyAsText())
         assertTrue(first.version.pinned); assertEquals("1", first.skill.pinnedVersion)
-        val retried = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", pinned("1", one))
+        val retried = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-pin", pinned("1", one))
         assertEquals(HttpStatusCode.OK, retried.status)
         assertTrue(Serialization.json.decodeFromString<PublishSkillVersionResponse>(retried.bodyAsText()).version.pinned)
 
@@ -193,14 +194,14 @@ class SkillRoutesTest {
         val waiting = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", publishBody("2", listOf(upload("SKILL.md", "Two"))))
         assertFalse(Serialization.json.decodeFromString<PublishSkillVersionResponse>(waiting.bodyAsText()).version.pinned)
         assertEquals("1", store.skills.getValue("review").pinnedVersion)
-        val pin = call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-publish", """{"version":"2"}""")
+        val pin = call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-pin", """{"version":"2"}""")
         assertEquals(HttpStatusCode.OK, pin.status)
         assertEquals("2", Serialization.json.decodeFromString<SkillView>(pin.bodyAsText()).pinnedVersion)
-        assertEquals(HttpStatusCode.OK, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-publish", """{"version":"1"}""").status)
+        assertEquals(HttpStatusCode.OK, call(HttpMethod.Put, "/api/v1/skills/review/pin", "service-pin", """{"version":"1"}""").status)
         assertEquals("1", store.skills.getValue("review").pinnedVersion)
 
-        // Other keys and members cannot pin by either route.
-        for (token in listOf("service-read", "service-inference", "member")) {
+        // Other keys and members cannot pin by either route, a publishing key without skills:pin included (audit L3).
+        for (token in listOf("service-publish", "service-read", "service-inference", "member")) {
             assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Put, "/api/v1/skills/review/pin", token, """{"version":"2"}""").status, token)
             assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/skills/review/versions", token, pinned("3", one)).status, token)
         }
@@ -254,8 +255,8 @@ class SkillRoutesTest {
         }
         fun forEveryone(version: String) = Serialization.json.encodeToString(PublishSkillVersionRequest(version, listOf(upload("SKILL.md", version)), pin = true, allMembers = true))
 
-        // skills:publish alone is refused, whole: nothing is stored.
-        val refused = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-publish", forEveryone("1"))
+        // skills:publish with skills:pin but without skills:assign is refused, whole: nothing is stored.
+        val refused = call(HttpMethod.Post, "/api/v1/skills/review/versions", "service-pin", forEveryone("1"))
         assertEquals(HttpStatusCode.Forbidden, refused.status)
         assertTrue(refused.bodyAsText().contains("credential_scope"))
         assertTrue(store.skills.isEmpty())

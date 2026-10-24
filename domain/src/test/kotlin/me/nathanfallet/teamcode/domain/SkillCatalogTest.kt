@@ -113,8 +113,8 @@ class SkillCatalogTest {
         val catalog = SkillCatalog(store)
         val files = listOf(file("SKILL.md"))
         val publisher = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH))
-        val assigner = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN))
-        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(publisher, "review", "1", files, pin = true, allMembers = true) }.code)
+        val assigner = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.SKILLS_PIN))
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(publisher.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN)), "review", "1", files, pin = true, allMembers = true) }.code)
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_ASSIGN)), "review", "1", files, allMembers = true) }.code)
         assertEquals("forbidden", assertFailsWith<TeamFailure> { catalog.publish(member.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN)), "review", "1", files, allMembers = true) }.code)
         assertEquals("forbidden", assertFailsWith<TeamFailure> { catalog.publish(member, "review", "1", files, allMembers = true) }.code)
@@ -187,11 +187,18 @@ class SkillCatalogTest {
         assertFailsWith<TeamFailure> { catalog.publish(admin, "Review", "3", files) }
     }
 
-    @Test fun pinningSharesThePublicationRightAndNothingElse() = runTest {
+    @Test fun pinningFromAKeyNeedsThePinScopeAndNothingElse() = runTest {
         val store = FakeStore()
         val catalog = SkillCatalog(store)
         val files = listOf(file("SKILL.md"))
-        val publisher = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH))
+        val publisher = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN))
+        // Audit L3: skills:publish alone stores versions, never changes what members receive.
+        val storing = admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH))
+        assertNull(catalog.publish(storing, "review", "1", files).skill.pinnedVersion)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.publish(storing, "review", "1", files, pin = true) }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.manage.pin(storing, "review", "1") }.code)
+        assertEquals("credential_scope", assertFailsWith<TeamFailure> { catalog.manage.authorizePin(admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_PIN))) }.code, "skills:pin grants nothing alone")
+        assertTrue(store.pins.isEmpty())
         // Publication pins only when asked.
         assertNull(catalog.publish(publisher, "review", "1", files).skill.pinnedVersion)
         assertEquals("1", catalog.publish(publisher, "review", "1", files, pin = true).skill.pinnedVersion)
@@ -201,7 +208,7 @@ class SkillCatalogTest {
         // The same refusals as publication, before the store is reached.
         for ((actor, code) in listOf(
             member to "forbidden",
-            member.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH)) to "forbidden",
+            member.copy(serviceScopes = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN)) to "forbidden",
             admin.copy(serviceScopes = setOf(ServiceScope.SKILLS_READ)) to "credential_scope",
             admin.copy(serviceScopes = setOf(ServiceScope.INFERENCE)) to "credential_scope",
         )) {

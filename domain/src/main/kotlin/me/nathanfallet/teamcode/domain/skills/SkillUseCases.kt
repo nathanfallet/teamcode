@@ -22,6 +22,23 @@ fun Principal.requireSkillAudienceWriter() {
     if (serviceScopes != null) requireScope(ServiceScope.SKILLS_ASSIGN)
 }
 
+/**
+ * Pinning (at publication or afterwards): an interactive administrator, or a publishing key that also holds `skills:pin`
+ * (administrator-owned only, rechecked by the store). `skills:publish` alone stores versions and never changes what is
+ * delivered (audit L3).
+ */
+fun Principal.requireSkillPinner() {
+    requireSkillPublisher()
+    if (serviceScopes != null) requireScope(ServiceScope.SKILLS_PIN)
+}
+
+/** The right a publication needs: [requireSkillPinner] with `pin`, [requireSkillAudienceWriter] with `allMembers`. */
+fun Principal.requireSkillPublication(pin: Boolean, allMembers: Boolean) {
+    requireSkillPublisher()
+    if (pin) requireSkillPinner()
+    if (allMembers) requireSkillAudienceWriter()
+}
+
 /** Reading one's own delivery: an interactive member, or a service key with `skills:read`. Others require an administrator. */
 fun Principal.requireSkillReader(memberId: String) {
     if (member.id != memberId) return requireAdmin()
@@ -30,7 +47,7 @@ fun Principal.requireSkillReader(memberId: String) {
 
 /**
  * Validates a CI or administrator upload and stores it as an immutable version. With `pin`, the uploaded version also
- * becomes the delivered one, under the same publication right. With `allMembers`, the skill is delivered to all members
+ * becomes the delivered one, which needs [requireSkillPinner]. With `allMembers`, the skill is delivered to all members
  * without an explicit decision, which needs [requireSkillAudienceWriter].
  */
 class PublishSkillVersionUseCase(private val store: SkillStore) {
@@ -40,7 +57,7 @@ class PublishSkillVersionUseCase(private val store: SkillStore) {
     suspend operator fun invoke(
         actor: Principal, name: String, version: String, files: List<SkillFile>, pin: Boolean = false, allMembers: Boolean = false,
     ): SkillPublication {
-        if (allMembers) actor.requireSkillAudienceWriter() else actor.requireSkillPublisher()
+        actor.requireSkillPublication(pin, allMembers)
         SkillArtifacts.validateName(name)
         SkillArtifacts.validateVersion(version)
         return store.publish(actor, name, version, SkillArtifacts.validate(files), pin, allMembers)
@@ -101,18 +118,18 @@ class ReportSkillInstallationsUseCase(private val store: SkillStore) {
 }
 
 /**
- * Catalog operations. All are administrator-only, except pinning, which skill publishers may also do. Authorization and
+ * Catalog operations. All are administrator-only, except pinning, which a publishing key with `skills:pin` may also do. Authorization and
  * input validation happen here, before persistence. Rules that depend on current shared state (retired skill, pinned
  * version, limits) are enforced by the store inside its locked transaction, so two replicas cannot both pass them.
  */
 class ManageSkillCatalogUseCase(private val store: SkillStore) {
     suspend fun catalog(actor: Principal): List<Skill> { actor.requireAdmin(); return store.catalog(actor) }
     suspend fun versions(actor: Principal, name: String): Pair<Skill, List<SkillVersion>> = admin(actor, name) { store.versions(actor, name) }
-    /** Pinning shares the publication right, so CI can approve what it publishes. Everything else is administrator-only. */
+    /** Open to a publishing key that holds `skills:pin`, so CI can approve what it publishes. Everything else is administrator-only. */
     suspend fun pin(actor: Principal, name: String, version: String): Skill =
-        admin(actor, name, version, authorize = { requireSkillPublisher() }) { store.pin(actor, name, version) }
+        admin(actor, name, version, authorize = { requireSkillPinner() }) { store.pin(actor, name, version) }
     /** Lets transports refuse a caller that may not pin before reading its body. */
-    fun authorizePin(actor: Principal) = actor.requireSkillPublisher()
+    fun authorizePin(actor: Principal) = actor.requireSkillPinner()
     suspend fun unpin(actor: Principal, name: String): Skill = admin(actor, name) { store.unpin(actor, name) }
     suspend fun retire(actor: Principal, name: String): Skill = admin(actor, name) { store.retire(actor, name) }
     suspend fun restore(actor: Principal, name: String): Skill = admin(actor, name) { store.restore(actor, name) }

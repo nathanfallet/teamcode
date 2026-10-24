@@ -83,7 +83,31 @@ class WebhooksTest {
         refused("https://hooks.example.test/x", emptySet())
         refused("https://hooks.example.test/x", types, "x".repeat(201))
         refused("https://hooks.example.test/" + "a".repeat(2_100))
-        service.create(principal(admin), "https://10.1.2.3:8443/hook", types, "private addresses are allowed, as for clusters")
+    }
+
+    /** Audit L1: an administrator's key cannot aim webhooks at the server's own network unless the operator allows it. */
+    @Test fun privateTargetsNeedTheOperatorsOptIn() = runBlocking {
+        val service = WebhookService(MemoryWebhookStore(), sealer)
+        val private = listOf("https://10.1.2.3:8443/hook", "https://127.0.0.1/hook", "https://localhost/hook", "https://api.localhost/hook",
+            "https://[::1]/hook", "https://[fd12::1]/hook", "https://192.168.1.1/hook", "https://172.16.0.1/hook", "https://100.64.0.1/hook",
+            "https://0x7f000001/hook", "https://2130706433/hook", "https://127.1/hook", "https://[::ffff:10.0.0.1]/hook", "https://[64:ff9b::a00:1]/hook")
+        for (url in private)
+            assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { service.create(principal(admin, setOf(ServiceScope.ADMIN_CLOUD)), url, types, "") }.code, url)
+        service.create(principal(admin), "https://93.184.215.14/hook", types, "a public literal")
+        service.create(principal(admin), "https://hooks.example.test/hook", types, "a name, checked when resolved")
+        val created = service.create(principal(admin), "https://hooks.example.test/hook", types, "")
+        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { service.update(principal(admin), created.webhook.id, 1, "https://10.0.0.5/x", types, "", null) }.code)
+
+        val internal = WebhookService(MemoryWebhookStore(), sealer, allowPrivateTargets = true)
+        for (url in private) internal.create(principal(admin), url, types, "allowed by the operator")
+        assertEquals("invalid_webhook", assertFailsWith<TeamFailure> { internal.create(principal(admin), "https://169.254.169.254/latest", types, "") }.code, "Metadata stays refused")
+
+        // After the operator withdraws the opt-in, a subscription kept on its private URL can still be paused or relabeled.
+        val store = MemoryWebhookStore()
+        val before = WebhookService(store, sealer, allowPrivateTargets = true).create(principal(admin), "https://10.0.0.5/hook", types, "internal").webhook
+        val after = WebhookService(store, sealer)
+        assertFalse(after.update(principal(admin), before.id, before.version, before.url, types, "paused", enabled = false).enabled)
+        assertEquals("webhook_host_not_allowed", assertFailsWith<TeamFailure> { after.update(principal(admin), before.id, before.version + 1, "https://10.0.0.6/hook", types, "", null) }.code)
     }
 
     @Test fun theSecretIsShownOnceAndStoredSealed() = runBlocking {

@@ -38,7 +38,8 @@ class SkillFileUpload(val path: String, val mode: String = "file", val contentBa
 
 /**
  * With `pin`, the published version also becomes the delivered one in the same transaction. Republishing the same
- * content with `pin` is idempotent. Servers advertise `team.skills.publish-pin.v1`; an older server ignores the field,
+ * content with `pin` is idempotent (a key needs `skills:pin` besides `skills:publish` on servers advertising
+ * `team.skills.pin-scope.v1`). Servers advertise `team.skills.publish-pin.v1`; an older server ignores the field,
  * which a client detects from `version.pinned` in the response.
  *
  * With `allMembers`, the skill is also delivered to every member without an explicit decision, in the same transaction

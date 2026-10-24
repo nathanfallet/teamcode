@@ -200,4 +200,4 @@ private const val SESSION_DESCRIPTION = "An interactive login token, returned as
 
 private const val SERVICE_KEY_DESCRIPTION = "A service key (Dashboard → Service keys, `teamcode keys create` or " +
     "`POST /api/v1/service-keys`). It acts as its owner, limited to its scopes: `inference`, `usage:read`, `guidance`, " +
-    "`mcp`, `skills:read`, `skills:publish`, `skills:assign`, `hooks:read`, `hooks:publish`, `cloud:read`, `cloud:write`, `admin:cloud`, `team:read`, `artifacts:read` and `artifacts:write`."
+    "`mcp`, `skills:read`, `skills:publish`, `skills:pin`, `skills:assign`, `hooks:read`, `hooks:publish`, `cloud:read`, `cloud:write`, `admin:cloud`, `team:read`, `artifacts:read` and `artifacts:write`."

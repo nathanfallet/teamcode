@@ -42,8 +42,9 @@ spec:
         - name: teamcode
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- $tag := .Values.image.tag | default .Chart.AppVersion }}
+          image: "{{ .Values.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default (ternary "Always" "IfNotPresent" (eq $tag "latest")) }}
           ports:
             - name: http
               containerPort: 8080
@@ -92,6 +93,8 @@ spec:
               value: {{ toJson ($sessionNetwork.extraEgress | default (list)) | quote }}
             - name: TEAMCODE_TRUSTED_PROXIES
               value: {{ join "," (.Values.trustedProxies | default (list)) | quote }}
+            - name: TEAMCODE_WEBHOOK_PRIVATE_TARGETS
+              value: {{ dig "allowPrivateTargets" false (.Values.webhooks | default dict) | toString | quote }}
             - name: JAVA_TOOL_OPTIONS
               value: {{ .Values.javaToolOptions | quote }}
             {{- with .Values.extraEnv }}

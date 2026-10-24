@@ -50,14 +50,14 @@ RUN apt-get update \
 
 ```sh
 docker build \
-  --build-arg TEAMCODE_VERSION=0.3.2 \
+  --build-arg TEAMCODE_VERSION=1.0.1 \
   -t registry.example.org/teamcode-session:2026-10-21 \
   docs/cloud-session-image
 ```
 
 | Build argument | Default | Purpose |
 | --- | --- | --- |
-| `TEAMCODE_VERSION` | the release the template was last updated for | The release whose `teamcode` binary goes into the image, checked against that release's `SHA256SUMS`. Use your server's version. |
+| `TEAMCODE_VERSION` | the release the template was last updated for | The release whose `teamcode` binary goes into the image. The build checks the release's `manifest.sig` against the publisher's public key written in the Dockerfile (the one the CLI pins for self-update), then that the signed `manifest.json` names this version and lists the binary's SHA-256: replacing a release's files, checksums included, is not enough to change the binary (audit L6). Releases signed before `manifest.sig` existed cannot be used. Use your server's version. |
 | `NODE_VERSION` | an LTS release | Node.js for the agent CLIs. |
 | `CLAUDE_CODE_VERSION` | a recent release | `@anthropic-ai/claude-code`. Empty leaves Claude Code out. |
 | `CODEX_VERSION` | a recent release | `@openai/codex`. Empty leaves Codex out. With both empty, Node.js is not installed. |
