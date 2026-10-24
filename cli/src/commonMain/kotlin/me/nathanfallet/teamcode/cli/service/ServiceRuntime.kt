@@ -28,10 +28,16 @@ internal fun stopRequested(settings: ServiceSettings): Boolean {
     return FileSystem.SYSTEM.read(path) { readUtf8() } == settings.id
 }
 
-/** A capability alone is insufficient: verify the installation ID and fixed upstream origin. */
+/**
+ * A capability alone is insufficient: verify the installation ID and fixed upstream origin. The probe never sends the
+ * local token: whoever listens on the fixed port (another local user while the service is down, say) gets a fresh
+ * challenge, and only the service, which holds the token, can answer it ([serviceProof], audit L9). A service older
+ * than the challenge answers `401` and is reported as not running.
+ */
 internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, backgroundWorkload: Boolean = false, expectedVersion: String? = null, runRouting: Boolean = false, mcpRelay: Boolean = false, localTokenHeader: Boolean = false, artifactRelay: Boolean = false, activityRelay: Boolean = false): Boolean = try {
+    val challenge = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
     HttpClient { followRedirects = false; install(HttpTimeout) { requestTimeoutMillis = 2_000; connectTimeoutMillis = 1_000 } }.use { http ->
-        http.prepareGet("http://127.0.0.1:${settings.port}/_teamcode/service") { bearerAuth(settings.localToken) }.execute { response ->
+        http.prepareGet("http://127.0.0.1:${settings.port}/_teamcode/service") { header(me.nathanfallet.teamcode.cli.proxy.SERVICE_CHALLENGE_HEADER, challenge) }.execute { response ->
             if (response.status.value != 200 || (response.contentLength() ?: 0) > 4096) return@execute false
             // Bounded body even when the occupied port belongs to another local application.
             val channel = response.bodyAsChannel()
@@ -44,6 +50,7 @@ internal suspend fun serviceResponds(settings: ServiceSettings, origin: String, 
             }
             if (size > 4096) return@execute false
             val body = Json.parseToJsonElement(bytes.decodeToString(0, size)).jsonObject
+            body["proof"]?.jsonPrimitive?.content == me.nathanfallet.teamcode.cli.proxy.serviceProof(settings.localToken, challenge, settings.id) &&
             serviceMatches(body, settings.id, origin, backgroundWorkload, runRouting, mcpRelay, localTokenHeader, artifactRelay, activityRelay) && (expectedVersion == null || body["version"]?.jsonPrimitive?.content == expectedVersion)
         }
     }
