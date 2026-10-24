@@ -18,6 +18,24 @@ curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/ins
 
 The script is pinned to the release it comes from, so every file it downloads matches that exact version. To install a specific version, replace `releases/latest/download/` with `releases/download/<version>/`. No JVM is required. The installer makes `teamcode` available by name (a `~/.local/bin` link on macOS/Linux, your user PATH on Windows) and preserves login and personal agent configuration. See the guide for prerequisites, custom roots, offline installation and current platform evidence.
 
+## Install the desktop app
+
+TeamCode Desktop (macOS, Windows, Linux) follows your team's sessions and runs remote sessions on your computer. It ships with every release, under the same version as the CLI. Three ways, none needing administrator rights:
+
+1. **From the CLI (recommended).** `teamcode ui` installs the desktop app of the CLI's version, or updates an older one, then opens it with the CLI's account. It checks the signed `desktop-manifest.json`, the package's SHA-256 and, on macOS, the Developer ID signature before anything runs. `teamcode ui --yes --no-launch` installs without asking or opening it.
+2. **Direct download.** The [latest release](https://github.com/nathanfallet/teamcode/releases/latest) attaches `teamcode-desktop-VERSION-TARGET.EXT` for each system:
+
+   | System | `teamcode ui` installs | Also attached |
+   | --- | --- | --- |
+   | macOS (Apple silicon `macos-arm64`, Intel `macos-x64`) | `.zip` of `TeamCode.app`: unzip into `~/Applications` | `.dmg` |
+   | Windows (`windows-x64`) | `.msi`, installed for the current user in `%LOCALAPPDATA%\Programs\TeamCode` | |
+   | Linux (`linux-x64`, `linux-arm64`) | `.tar.gz` of the `TeamCode` folder (`bin/TeamCode` starts it) | `.deb`, `.rpm` (installed in `/opt/teamcode`) |
+
+   Every file is listed in the release's `SHA256SUMS`. macOS packages are signed with a Developer ID and notarized. The Windows installer is not signed by a paid signing service: SmartScreen warns on first launch ("More info", then "Run anyway"); its hash is in the signed `desktop-manifest.json`.
+3. **From the app to the CLI.** Without the CLI, the desktop app offers "Install the TeamCode CLI": it runs the release's `install.sh` (or `install.ps1`) of its own version, only when the script's SHA-256 matches the one built into the app.
+
+There is no separate desktop install script.
+
 ## Troubleshooting CLI errors
 
 When a command fails, the CLI prints what happened and what to do, then exits with status 1. Messages are built only from the HTTP status, the API error code, `Retry-After`, a request id and the configured server origin: never a response body, token, pasted code or exception text, which may carry credentials.

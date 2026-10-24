@@ -55,7 +55,42 @@ val generateAppResources by tasks.registering {
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(generateAppResources) }
 
+// The macOS keyring's native library (osxkeychain.so) sits inside the jkeychain jar, where jpackage does not sign it and
+// notarization rejects the app. On a Mac that signs, the app takes a copy of that jar whose native library is signed with
+// the Developer ID (hardened runtime, secure timestamp) instead of the original one.
+val macosSigningIdentity = providers.environmentVariable("TEAMCODE_MACOS_SIGNING_IDENTITY").orNull
+val macosSigningKeychain = providers.environmentVariable("TEAMCODE_MACOS_SIGNING_KEYCHAIN").orNull
+val jkeychainOriginal by configurations.creating { isTransitive = false }
+dependencies { jkeychainOriginal(libs.jkeychain) }
+val jkeychainSignedDirectory = layout.buildDirectory.dir("signed-jkeychain/content")
+val signJkeychainNatives by tasks.registering(Sync::class) {
+    onlyIf { macosSigningIdentity != null }
+    from(jkeychainOriginal.elements.map { files -> files.map { zipTree(it.asFile) } })
+    into(jkeychainSignedDirectory)
+    doLast {
+        val identity = checkNotNull(macosSigningIdentity)
+        destinationDir.walkTopDown().filter { it.isFile && it.extension in setOf("so", "dylib", "jnilib") }.forEach { library ->
+            val command = mutableListOf("codesign", "--force", "--timestamp", "--options", "runtime", "--sign", "Developer ID Application: $identity")
+            macosSigningKeychain?.let { command += listOf("--keychain", it) }
+            command += library.absolutePath
+            val process = ProcessBuilder(command).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            check(process.waitFor() == 0) { "codesign failed on ${library.name}: $output" }
+        }
+    }
+}
+val signedJkeychainJar by tasks.registering(Jar::class) {
+    onlyIf { macosSigningIdentity != null }
+    archiveFileName.set("jkeychain-signed.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("signed-jkeychain"))
+    from(signJkeychainNatives.map { jkeychainSignedDirectory })
+}
+if (macosSigningIdentity != null) {
+    configurations.runtimeClasspath { exclude(group = "pt.davidafsilva.apple", module = "jkeychain") }
+}
+
 dependencies {
+    if (macosSigningIdentity != null) runtimeOnly(files(signedJkeychainJar))
     implementation(projects.companion)
     implementation(projects.config)
     implementation(projects.client)
@@ -77,21 +112,34 @@ dependencies {
 
 tasks.test { useJUnitPlatform() }
 
+val desktopPackageVersion = project.version.toString().substringBefore('-')
+// Every packaging task (app image, installers, uber jar) refuses a 0.x version rather than publish another number.
+tasks.matching { it.name.startsWith("package") || it.name.startsWith("create") && it.name.endsWith("Distributable") }.configureEach {
+    val packaged = desktopPackageVersion
+    doFirst {
+        check(!packaged.startsWith("0.")) {
+            "TeamCode Desktop is packaged with TeamCode's own version, and installers refuse a major version of 0: build it with -PteamcodeVersion=1.0.0 or later (got $packaged)."
+        }
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "me.nathanfallet.teamcode.companion.desktop.MainKt"
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "TeamCode"
             appResourcesRootDir.set(generatedAppResources)
-            // Signed with a Developer ID and notarized only on a Mac that provides them (docs/companion.md, Distribution);
-            // Windows installers stay unsigned in v1.
+            // Signed with a Developer ID only on a Mac that provides one (docs/companion.md, Distribution): the release
+            // pipeline imports it into a temporary keychain and notarizes with notarytool. Windows installers are not
+            // signed (no paid signing service): SmartScreen warns on first launch.
             macOS {
                 bundleID = "me.nathanfallet.teamcode.desktop"
                 providers.environmentVariable("TEAMCODE_MACOS_SIGNING_IDENTITY").orNull?.let { name ->
                     signing {
                         sign.set(true)
                         identity.set(name)
+                        providers.environmentVariable("TEAMCODE_MACOS_SIGNING_KEYCHAIN").orNull?.let { keychain.set(it) }
                     }
                 }
                 providers.environmentVariable("TEAMCODE_NOTARIZATION_APPLE_ID").orNull?.let { account ->
@@ -112,9 +160,9 @@ compose.desktop {
                 menu = true
                 shortcut = true
             }
-            // Installers take MAJOR.MINOR.PATCH only, and macOS refuses a major version of 0: the TeamCode version
-            // without its pre-release suffix, with 0.x packaged as 1.0.0.
-            packageVersion = project.version.toString().substringBefore('-').let { if (it.startsWith("0.")) "1.0.0" else it }
+            // Installers take MAJOR.MINOR.PATCH only: the TeamCode version without its pre-release suffix. macOS refuses
+            // a major version of 0, and the packages carry TeamCode's real version, so packaging a 0.x fails (below).
+            packageVersion = desktopPackageVersion
             // The JDK modules the bundled runtime needs (from `suggestRuntimeModules`): preferences, the Java HTTP
             // engine and the keyring's native access.
             // jdk.crypto.ec is a service module the scan cannot see: without it, TLS to ECDSA servers fails.

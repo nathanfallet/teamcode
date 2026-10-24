@@ -28,6 +28,8 @@ internal interface RunnerAgent {
     suspend fun stop()
     /** Registers [changed], called when the agent learns that the session's desired state changed (a pause, a resume). */
     fun onInstructionChange(changed: () -> Unit) {}
+    /** The server terminated the session: it never runs again, so what it keeps on this host can go at [stop]. */
+    fun sessionEnded() {}
 }
 
 /** The agent half of the runner channel, bound to one session epoch. */
@@ -37,10 +39,13 @@ interface AgentChannel {
     suspend fun inputs(waitMillis: Long): List<RunnerInputView>
     /**
      * [inputs], also returning the session's desired state; the server ends the wait early when it differs from
-     * [desiredState], the one the runner last knew. A server without the field answers it as null.
+     * [desiredState], the one the runner last knew. A server without the field answers it as null. [acceptsFiles]
+     * announces that this host downloads the files of a message (`cloud.files.v1`).
      */
-    suspend fun poll(waitMillis: Long, desiredState: String): RunnerInputsView = RunnerInputsView(inputs(waitMillis))
+    suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean = false): RunnerInputsView = RunnerInputsView(inputs(waitMillis))
     suspend fun acknowledge(acks: List<RunnerInputAckView>)
+    /** Streams the bytes of the message file [fileId] to [receive], at most [maxBytes]. */
+    suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit): Unit = throw UnsupportedOperationException("This channel downloads no file.")
 }
 
 /** The agent's conversation id, kept on the workspace volume so the next pod resumes it. */
@@ -78,6 +83,11 @@ internal class AgentHost(
     private val tools: AgentTools? = null,
     /** The owner's environment variables, read again at each agent start (see [AgentVariables]). */
     private val variables: AgentVariables? = null,
+    /**
+     * Where the files of a message are written for the agent; null (or one [SessionUploads.prepare] refuses) announces
+     * no file support, so the server rejects such messages (`files_unsupported`) instead of delivering their text alone.
+     */
+    private val uploads: SessionUploads? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
@@ -106,12 +116,20 @@ internal class AgentHost(
     /** The desired state the last input poll returned, sent with the next one. */
     private var desiredState = "running"
     private var instructionChanged: () -> Unit = {}
+    /** The uploads directory once prepared, given to the agent at start; null announces no file support. */
+    private var uploadsDirectory: String? = null
 
     override fun onInstructionChange(changed: () -> Unit) { instructionChanged = changed }
+
+    /** Set when the server terminated the session; only then does [stop] remove its files. */
+    private var ended = false
+    override fun sessionEnded() { ended = true }
 
     /** Runs input delivery and uploads until cancelled or fenced. */
     override suspend fun run() = coroutineScope {
         scope = this
+        // The sweep at start: what a previous execution left, and anything older than a week.
+        uploadsDirectory = uploads?.takeIf { it.prepare(log) }?.directory?.toString()
         val uploads = launch { uploadLoop() }
         try { inputLoop() } finally {
             uploads.cancel()
@@ -152,15 +170,22 @@ internal class AgentHost(
     /** Stops the agent at once; used when fenced or when the session is deleted. Nothing more is uploaded. */
     override suspend fun stop() {
         stopping = true
-        process?.stop(1_000)
-        reader?.cancel()
-        lock.withLock { cancelDeadlines(null) }
+        try {
+            process?.stop(1_000)
+            reader?.cancel()
+            lock.withLock { cancelDeadlines(null) }
+        } finally {
+            // Files stay until the session ends (a week at most): a pause, a host restart or a resume keeps them, so
+            // the resumed conversation can read them again. A fenced execution never removes them, since the execution
+            // that fenced it may run on this device and use the same directory.
+            if (ended && !fenced) uploads?.clear()
+        }
     }
 
     private suspend fun inputLoop() {
         var wait = 1_000L
         while (!fenced) {
-            val view = try { channel.poll(INPUT_WAIT_MILLIS, desiredState).also { wait = 1_000L } }
+            val view = try { channel.poll(INPUT_WAIT_MILLIS, desiredState, uploadsDirectory != null).also { wait = 1_000L } }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { if (handle(error)) return; sleep(wait); wait = (wait * 2).coerceAtMost(15_000); continue }
             // A pause (or its cancellation) reaches the runner loop now, through the poll already open, not at its next heartbeat.
@@ -217,7 +242,19 @@ internal class AgentHost(
             }
             return if (written) consumed else unavailable
         }
-        val text = input.text ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+        if (input.text == null && input.files.isEmpty()) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+        var text = input.text.orEmpty()
+        if (input.files.isNotEmpty()) {
+            // Stopping for a pause: nothing is downloaded, the message waits for the next execution.
+            if (lock.withLock { stopping }) return null
+            // Downloaded before the agent starts: a file that cannot be written rejects the message and starts no turn.
+            val attached = when (val outcome = attach(input)) {
+                is Attachment.Refused -> return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, outcome.reason)
+                Attachment.Fenced -> return null
+                is Attachment.Written -> outcome.lines
+            }
+            text = (listOf(text).filter { it.isNotBlank() } + attached).joinToString("\n\n")
+        }
         val (child, lines) = lock.withLock {
             // Stopping for a pause: the message stays queued on the server for the next execution, never lost.
             if (stopping) return null
@@ -232,6 +269,45 @@ internal class AgentHost(
         }
         if (child == null) return unavailable
         return if (write(child, lines)) consumed else unavailable
+    }
+
+    private sealed interface Attachment {
+        class Written(val lines: List<String>) : Attachment
+        class Refused(val reason: String) : Attachment
+        data object Fenced : Attachment
+    }
+
+    /**
+     * Downloads the files of [input] through the runner channel into [uploads], each once (by file id, so a
+     * redelivered message writes nothing again), and returns the line the agent reads for each: its absolute path,
+     * type and size. A file the server no longer offers, a failed download, a size or SHA-256 mismatch or a write
+     * that is not safe refuses the whole message with a reason.
+     */
+    private suspend fun attach(input: RunnerInputView): Attachment {
+        val target = uploads?.takeIf { uploadsDirectory != null } ?: return Attachment.Refused(SessionUploads.UNAVAILABLE)
+        val lines = mutableListOf<String>()
+        for (file in input.files) {
+            var attempt = 0
+            while (true) {
+                try {
+                    val path = target.write(file) { receive -> channel.file(file.id, file.size, receive) }
+                    lines += SessionUploads.line(path, file)
+                    break
+                } catch (error: CancellationException) { throw error }
+                catch (error: SessionUploads.Refused) { log("A message file was refused (${error.reason})."); return Attachment.Refused(error.reason) }
+                catch (error: Exception) {
+                    if (error is TeamCodeException) {
+                        if (error.code == "execution_fenced" || error.statusCode == 401 || error.statusCode == 403) { handle(error); return Attachment.Fenced }
+                        // Not offered to this execution any more (acknowledged, expired): retrying cannot help.
+                        if (error.statusCode == 404) return Attachment.Refused(SessionUploads.NOT_FOUND)
+                        if (error.statusCode in 400..499) return Attachment.Refused(SessionUploads.DOWNLOAD_FAILED)
+                    }
+                    if (++attempt >= FILE_ATTEMPTS) { log("A message file could not be downloaded."); return Attachment.Refused(SessionUploads.DOWNLOAD_FAILED) }
+                    sleep(1_000L * attempt)
+                }
+            }
+        }
+        return Attachment.Written(lines)
     }
 
     private suspend fun write(child: AgentProcess, lines: List<String>): Boolean = writeLock.withLock {
@@ -252,7 +328,7 @@ internal class AgentHost(
             state.clear()
             enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
         }
-        val next = agentAdapter(config, clientVersion, now)
+        val next = agentAdapter(config, clientVersion, now, readableDirectories = listOfNotNull(uploadsDirectory))
         val (command, environment) = launch(config.kind, next.command(resume))
         val child = start(command, environment, workingDirectory)
         process = child; adapter = next; resumed = resume
@@ -480,6 +556,8 @@ internal class AgentHost(
         /** What the agent reads when the session pauses while its request waits. */
         const val PAUSE_DENIAL = "The session is pausing: the request was denied."
         const val MAX_HANDLED = 1_000
+        /** Downloads of one file before its message is rejected; a refusal by the server is not retried. */
+        const val FILE_ATTEMPTS = 3
         const val DEFAULT_DRAIN_MILLIS = 10 * 60_000L
         const val SAFETY_MARGIN_MILLIS = 60_000L
         const val INTERRUPT_GRACE_MILLIS = 15_000L

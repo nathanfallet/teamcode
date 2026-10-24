@@ -115,7 +115,7 @@ internal class RunnerLoop(
                 Outcome.Conflict -> null
             }
             when (instruction?.desiredState) {
-                "terminated" -> { log("The session is being deleted."); return EXIT_FENCED_OR_DONE }
+                "terminated" -> { log("The session is being deleted."); agent?.sessionEnded(); return EXIT_FENCED_OR_DONE }
                 // Nothing to checkpoint before the environment is ready: the server stops a resume it cancels.
                 "paused" -> if (ready) {
                     val drain = draining ?: (if (agent == null) CompletableDeferred(true)
@@ -203,8 +203,10 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 override suspend fun agent() = client.runnerAgent(RunnerAgentRequest(team, session, epoch))
                 override suspend fun events(events: List<RunnerEventView>) = client.runnerEvents(RunnerEventsRequest(team, session, epoch, events))
                 override suspend fun inputs(waitMillis: Long) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis)).inputs
-                override suspend fun poll(waitMillis: Long, desiredState: String) = client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState))
+                override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean) =
+                    client.runnerInputs(RunnerInputsRequest(team, session, epoch, waitMillis, desiredState, acceptsFiles))
                 override suspend fun acknowledge(acks: List<RunnerInputAckView>) = client.runnerAcknowledge(RunnerInputAckRequest(team, session, epoch, acks))
+                override suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit) = client.runnerFile(team, session, epoch, fileId, maxBytes, receive)
             }
             // The agent's inference goes through a loopback proxy in this process, authenticated to the server with
             // the execution's `tcex_` credential; the agent only gets the proxy's random local token.
@@ -272,7 +274,9 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                         // Fetched before the agent starts, so a server without the route is known and the agent keeps its own configuration.
                         inference.available()
                         if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
-                    }, tools = tools, variables = agentVariables)
+                    }, tools = tools, variables = agentVariables,
+                    // The pod's `uploads` volume, mounted read-only in the agent's container; an older pod spec has none.
+                    uploads = environment("TEAMCODE_UPLOADS_DIR")?.takeIf { it.isNotBlank() }?.let { SessionUploads.pod(it) })
                 val prepare: suspend () -> Boolean = {
                     val prepared = EnvironmentPreparation(preparation, commands, workspace, log = log).run()
                     // The first write happens here, after registration and before the agent starts, so its first `gh` is authenticated.

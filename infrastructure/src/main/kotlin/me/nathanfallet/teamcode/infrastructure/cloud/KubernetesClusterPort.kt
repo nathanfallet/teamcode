@@ -233,6 +233,7 @@ class KubernetesClusterPort(
                         env("TEAMCODE_CREDENTIAL_SOCKET", CREDENTIAL_SOCKET)
                         env("TEAMCODE_GH_CONFIG_DIR", GH_CONFIG_DIR)
                         env("HOME", "$WORKSPACE_DIR/.home")
+                        env("TEAMCODE_UPLOADS_DIR", UPLOADS_DIR)
                         request.env.toSortedMap().forEach { (name, value) -> env(name, value) }
                     }
                     put("securityContext", containerSecurity(pods.runAsUser))
@@ -247,6 +248,7 @@ class KubernetesClusterPort(
                         addJsonObject { put("name", "runner-token"); put("mountPath", TOKEN_DIR); put("readOnly", true) }
                         addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
                         addJsonObject { put("name", GH_CONFIG_VOLUME); put("mountPath", GH_CONFIG_DIR) }
+                        addJsonObject { put("name", UPLOADS_VOLUME); put("mountPath", UPLOADS_DIR) }
                     }
                 }
                 addJsonObject {
@@ -276,6 +278,7 @@ class KubernetesClusterPort(
                         addJsonObject { put("name", "runner"); put("mountPath", RUNNER_DIR); put("readOnly", true) }
                         addJsonObject { put("name", "sockets"); put("mountPath", SOCKET_DIR) }
                         addJsonObject { put("name", GH_CONFIG_VOLUME); put("mountPath", GH_CONFIG_DIR); put("readOnly", true) }
+                        addJsonObject { put("name", UPLOADS_VOLUME); put("mountPath", UPLOADS_DIR); put("readOnly", true) }
                     }
                 }
             }
@@ -285,6 +288,9 @@ class KubernetesClusterPort(
                 addJsonObject { put("name", "sockets"); putJsonObject("emptyDir") { put("medium", "Memory"); put("sizeLimit", "1Mi") } }
                 // The agent's `gh` configuration: in memory, written by the runner only, gone with the pod.
                 addJsonObject { put("name", GH_CONFIG_VOLUME); putJsonObject("emptyDir") { put("medium", "Memory"); put("sizeLimit", "1Mi") } }
+                // The files members attach to messages: on the node's disk (not memory, which counts against the
+                // containers' limits), gone with the pod. The runner keeps what it writes under the limit.
+                addJsonObject { put("name", UPLOADS_VOLUME); putJsonObject("emptyDir") { put("sizeLimit", UPLOADS_SIZE_LIMIT) } }
                 addJsonObject {
                     put("name", "runner-token")
                     putJsonObject("projected") { putJsonArray("sources") { addJsonObject { putJsonObject("serviceAccountToken") {
@@ -431,6 +437,15 @@ class KubernetesClusterPort(
          */
         const val GH_CONFIG_DIR = "/run/teamcode-gh"
         const val GH_CONFIG_VOLUME = "gh-config"
+        /**
+         * The files of members' messages, written by the runner (UID [KubernetesPodOptions.runAsUser], mode 0640) and
+         * read by the agent through the pod's group (`runAsGroup` and `fsGroup`), on a volume its container mounts
+         * read-only. Outside the workspace, so they are never committed and never outlive the pod.
+         */
+        const val UPLOADS_DIR = "/var/teamcode/uploads"
+        const val UPLOADS_VOLUME = "uploads"
+        /** Above the runner's own bound of 768 MiB per execution: going over the limit would evict the pod. */
+        const val UPLOADS_SIZE_LIMIT = "1Gi"
         /** The agent's `HOME`, created by the agent's UID on the workspace volume (the runner's lives in `.home`). */
         const val AGENT_HOME = "$WORKSPACE_DIR/.agent-home"
         private const val RUNNER_CPU = "250m"

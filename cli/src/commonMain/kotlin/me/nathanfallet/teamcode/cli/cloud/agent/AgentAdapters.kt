@@ -113,8 +113,11 @@ private fun resultText(content: JsonElement?): String = when (content) {
  * With [AgentSettings.liveText], Claude Code also gets `--include-partial-messages`: the `text_delta` lines of a text
  * block become `message.agent.delta` events, coalesced by [LiveText] on the clock [now]. Each `message.agent` carries
  * its API message id (and its block index, when streamed), so a client replaces the deltas it showed with it.
+ *
+ * [readableDirectories] (the session's uploads directory, where the files of a message are written) are given with
+ * `--add-dir`, so Claude Code reads them without a permission request in `ask` mode.
  */
-class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Long = { 0L }) : AgentAdapter {
+class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Long = { 0L }, private val readableDirectories: List<String> = emptyList()) : AgentAdapter {
     private val live = LiveText(now)
     override var conversationId: String? = null; private set
     /**
@@ -130,6 +133,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
         if (settings.bypass) add("--dangerously-skip-permissions")
         if (settings.permissionRelay) addAll(listOf("--permission-prompt-tool", "stdio"))
         if (settings.liveText) add("--include-partial-messages")
+        readableDirectories.forEach { addAll(listOf("--add-dir", it)) }
         settings.model?.let { addAll(listOf("--model", it)) }
         settings.effort?.let { addAll(listOf("--effort", it)) }
         resume?.let { addAll(listOf("--resume", it)) }
@@ -417,6 +421,9 @@ internal class LiveText(private val now: () -> Long) {
  * `--dangerously-bypass-approvals-and-sandbox`. A message during a turn steers it (`turn/steer`), otherwise it
  * starts one (`turn/start`); an interrupt is `turn/interrupt`. Resume is `thread/resume` with the stored thread id;
  * when it fails a fresh thread starts and the conversation is reported `transcript_only`.
+ *
+ * The files of a message, written outside the session's directory, need no extra root: `workspace-write` limits
+ * writes only, and reads stay unrestricted unless a permission profile narrows them, which this host never sets.
  */
 class CodexAppServerAdapter(private val settings: AgentSettings, private val clientVersion: String) : AgentAdapter {
     override var conversationId: String? = null; private set
@@ -596,8 +603,8 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
     }
 }
 
-fun agentAdapter(settings: AgentSettings, clientVersion: String, now: () -> Long = { 0L }): AgentAdapter = when (settings.kind) {
-    "claude" -> ClaudeStreamJsonAdapter(settings, now)
+fun agentAdapter(settings: AgentSettings, clientVersion: String, now: () -> Long = { 0L }, readableDirectories: List<String> = emptyList()): AgentAdapter = when (settings.kind) {
+    "claude" -> ClaudeStreamJsonAdapter(settings, now, readableDirectories)
     "codex" -> CodexAppServerAdapter(settings, clientVersion)
     else -> throw IllegalArgumentException("Unsupported agent kind ${settings.kind}.")
 }

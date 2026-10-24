@@ -16,6 +16,12 @@ import me.nathanfallet.teamcode.cli.cloud.tailStart
 import me.nathanfallet.teamcode.cli.cloud.render
 import me.nathanfallet.teamcode.cli.cloud.agent.*
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
+import me.nathanfallet.teamcode.cli.platform.hostOs
+import me.nathanfallet.teamcode.cli.platform.pathStatus
+import okio.ByteString.Companion.toByteString
+import okio.FileSystem
+import kotlin.time.Clock
+import kotlin.uuid.Uuid
 import me.nathanfallet.teamcode.client.TeamCodeException
 import kotlin.test.*
 
@@ -627,7 +633,7 @@ class CloudAgentTest {
         val sent = mutableListOf<String>()
         val answers = Channel<String>(Channel.UNLIMITED)
         val polling = object : AgentChannel by channel {
-            override suspend fun poll(waitMillis: Long, desiredState: String): RunnerInputsView { sent += desiredState; return RunnerInputsView(emptyList(), answers.receive()) }
+            override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean): RunnerInputsView { sent += desiredState; return RunnerInputsView(emptyList(), answers.receive()) }
         }
         var changes = 0
         val host = AgentHost(polling, { _, _, _ -> FakeProcess() }, MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime })
@@ -828,5 +834,300 @@ class CloudAgentTest {
         refuse = TeamCodeException(404, "missing", "not_found")
         assertNull(inference.token())
         assertTrue(inference.unsupported)
+    }
+
+    /** A runner channel that serves message files, counting the downloads, and records what the host announced. */
+    private class FileChannel(val channel: FakeChannel, val kind: String = "claude", val mode: String? = null) : AgentChannel by channel {
+        val bytes = mutableMapOf<String, ByteArray>()
+        var downloads = 0
+        var failure: Exception? = null
+        val announced = mutableListOf<Boolean>()
+        override suspend fun agent() = RunnerAgentView(kind, "1", null, null, "none", permissionMode = mode)
+        override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean): RunnerInputsView {
+            announced += acceptsFiles
+            return RunnerInputsView(channel.inputs.receive())
+        }
+        override suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit) {
+            downloads++
+            failure?.let { throw it }
+            val content = bytes.getValue(fileId)
+            // Two chunks, as the client streams them.
+            val half = content.size / 2
+            receive(content.copyOfRange(0, half), half)
+            receive(content.copyOfRange(half, content.size), content.size - half)
+        }
+        fun serve(id: String, name: String, content: ByteArray, type: String = "image/png", sha256: String = content.toByteString().sha256().hex()): RunnerFileView {
+            bytes[id] = content
+            return RunnerFileView(id, name, content.size.toLong(), type, sha256)
+        }
+    }
+
+    /** A fresh directory standing for the user's temporary directory, and another for the session's working directory. */
+    private class Scratch {
+        val root = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "teamcode-files-test-${Uuid.random()}"
+        val temporary = (root / "tmp").also { FileSystem.SYSTEM.createDirectories(it) }
+        val workspace = (root / "workspace").also { FileSystem.SYSTEM.createDirectories(it) }
+        fun close() = FileSystem.SYSTEM.deleteRecursively(root, mustExist = false)
+    }
+
+    private val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+    private val windows get() = hostOs() == "windows"
+
+    private fun TestScope.fileHost(channel: FileChannel, scratch: Scratch, started: MutableList<Pair<AgentCommand, FakeProcess>>, uploads: SessionUploads) =
+        AgentHost(channel, { command, _, _ -> FakeProcess().also { started += command to it } }, MemoryState(), scratch.workspace.toString(), "1.0",
+            now = { testScheduler.currentTime }, uploads = uploads)
+
+    @Test fun messageFilesLandInTheUserTemporaryDirectoryPrivatelyAndTheAgentReadsTheirPath() = runTest {
+        val scratch = Scratch()
+        try {
+            val channel = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val uploads = SessionUploads.remote("s-1", "501", scratch.temporary)
+            val job = launch { fileHost(channel, scratch, started, uploads).run() }
+            val file = channel.serve("f1", "shot.png", png)
+            channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Look at this", 1, listOf(file))))
+            until { channel.channel.acks.isNotEmpty() }
+            assertEquals(CloudInputStatuses.CONSUMED, channel.channel.acks.single().status)
+            assertEquals(true, channel.announced.first(), "The host announces files once its directory is ready")
+
+            val directory = assertNotNull(uploads.directory)
+            assertEquals(FileSystem.SYSTEM.canonicalize(scratch.temporary / "teamcode-501" / "s-1"), directory)
+            val written = directory / "f1-shot.png"
+            assertContentEquals(png, FileSystem.SYSTEM.read(written) { readByteArray() })
+            assertTrue(FileSystem.SYSTEM.listRecursively(scratch.workspace).toList().isEmpty(), "Nothing under the working directory")
+            if (!windows) {
+                assertEquals(0x1C0, pathStatus((scratch.temporary / "teamcode-501").toString())!!.mode, "The user's directory is 0700")
+                assertEquals(0x1C0, pathStatus(directory.toString())!!.mode, "The session's directory is 0700")
+                assertEquals(0x180, pathStatus(written.toString())!!.mode, "The file is 0600")
+            }
+
+            // The stream-json line the agent reads: the text, then one line per file with its absolute path.
+            val (command, process) = started.single()
+            val text = obj(process.written.single())["message"]!!.jsonObject["content"]!!.jsonArray.single().jsonObject.str("text")
+            assertEquals("Look at this\n\n[Attached file: $written (image/png, 8 bytes)]", text)
+            assertTrue(written.isAbsolute)
+            // Claude Code reads the directory without a permission request.
+            val addDir = command.arguments.indexOf("--add-dir")
+            assertTrue(addDir >= 0, command.arguments.toString())
+            assertEquals(directory.toString(), command.arguments[addDir + 1])
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun aRedeliveredMessageWritesItsFilesOnce() = runTest {
+        val scratch = Scratch()
+        try {
+            val channel = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val job = launch { fileHost(channel, scratch, started, SessionUploads.remote("s-1", "501", scratch.temporary)).run() }
+            val input = RunnerInputView("in-1", "message", "", 1, listOf(channel.serve("f1", "a.txt", "hello".encodeToByteArray(), "text/plain")))
+            channel.channel.inputs.send(listOf(input))
+            until { channel.channel.acks.size == 1 }
+            channel.channel.inputs.send(listOf(input.copy(attempt = 2)))
+            until { channel.channel.acks.size == 2 }
+            assertEquals(channel.channel.acks[0], channel.channel.acks[1], "Acknowledged again")
+            assertEquals(1, channel.downloads, "Downloaded and written once")
+            assertEquals(1, started.single().second.written.size, "Handed to the agent once")
+            assertEquals("[Attached file: ", obj(started.single().second.written.single())["message"]!!.jsonObject["content"]!!.jsonArray.single().jsonObject.str("text").take(16),
+                "A message of files alone carries their lines only")
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun aFileThatDoesNotMatchOrCannotBeDownloadedRejectsTheMessageAndStartsNoTurn() = runTest {
+        val scratch = Scratch()
+        try {
+            val channel = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val uploads = SessionUploads.remote("s-1", "501", scratch.temporary)
+            val job = launch { fileHost(channel, scratch, started, uploads).run() }
+            val forged = channel.serve("f1", "shot.png", png, sha256 = "0".repeat(64))
+            channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Look", 1, listOf(forged))))
+            until { channel.channel.acks.size == 1 }
+            assertEquals(RunnerInputAckView("in-1", CloudInputStatuses.REJECTED, "file_integrity_failed"), channel.channel.acks.single())
+            assertTrue(FileSystem.SYSTEM.list(uploads.directory!!).isEmpty(), "The mismatching file is removed")
+
+            channel.failure = IllegalStateException("network")
+            channel.channel.inputs.send(listOf(RunnerInputView("in-2", "message", "Again", 1, listOf(channel.serve("f2", "b.png", png)))))
+            until { channel.channel.acks.size == 2 }
+            assertEquals(RunnerInputAckView("in-2", CloudInputStatuses.REJECTED, "file_download_failed"), channel.channel.acks[1])
+            assertEquals(1 + AgentHost.FILE_ATTEMPTS, channel.downloads, "A failing download is retried, then the message is rejected")
+
+            channel.failure = TeamCodeException(404, "gone", "not_found")
+            channel.channel.inputs.send(listOf(RunnerInputView("in-3", "message", "Once more", 1, listOf(channel.serve("f3", "c.png", png)))))
+            until { channel.channel.acks.size == 3 }
+            assertEquals(RunnerInputAckView("in-3", CloudInputStatuses.REJECTED, "file_unavailable"), channel.channel.acks[2])
+            assertTrue(started.isEmpty(), "No agent process, so no turn")
+            assertTrue(channel.channel.uploaded.none { it.type == CloudEventTypes.TURN }, "No turn event")
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun aFileNameOrIdCannotLeaveTheUploadsDirectory() = runTest {
+        val scratch = Scratch()
+        try {
+            val channel = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val uploads = SessionUploads.remote("s-1", "501", scratch.temporary)
+            val job = launch { fileHost(channel, scratch, started, uploads).run() }
+            val names = listOf("../../workspace/evil.png", "..\\..\\evil.png", "/etc/passwd", "..", "-rf", ".hidden\u0000.png")
+            names.forEachIndexed { index, name ->
+                channel.channel.inputs.send(listOf(RunnerInputView("in-$index", "message", "x", 1, listOf(channel.serve("f$index", name, png)))))
+            }
+            until { channel.channel.acks.size == names.size }
+            assertTrue(channel.channel.acks.all { it.status == CloudInputStatuses.CONSUMED }, channel.channel.acks.toString())
+            val directory = uploads.directory!!
+            val files = FileSystem.SYSTEM.listRecursively(scratch.root).filter { FileSystem.SYSTEM.metadata(it).isRegularFile }.toList()
+            assertEquals(names.size, files.size)
+            assertTrue(files.all { FileSystem.SYSTEM.canonicalize(it).parent == directory }, "Every file stays in the session's directory: $files")
+            assertEquals(listOf("f0-evil.png", "f1-evil.png", "f2-passwd", "f3-file", "f4-rf", "f5-hidden.png"), files.map { it.name }.sorted())
+            assertTrue(FileSystem.SYSTEM.listRecursively(scratch.workspace).toList().isEmpty())
+
+            // An id that is a path is refused, and a link planted at the target is never followed.
+            channel.channel.inputs.send(listOf(RunnerInputView("in-id", "message", "x", 1, listOf(channel.serve("../f", "a.png", png)))))
+            until { channel.channel.acks.size == names.size + 1 }
+            assertEquals("invalid_file", channel.channel.acks.last().reason)
+            if (!windows) {
+                val outside = scratch.workspace / "target.png"
+                FileSystem.SYSTEM.createSymlink(directory / "fl-link.png", outside)
+                channel.channel.inputs.send(listOf(RunnerInputView("in-link", "message", "x", 1, listOf(channel.serve("fl", "link.png", png)))))
+                until { channel.channel.acks.size == names.size + 2 }
+                assertEquals("file_write_failed", channel.channel.acks.last().reason)
+                assertFalse(FileSystem.SYSTEM.exists(outside), "Nothing written through the link")
+            }
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun aMessageFileSurvivesAPauseAndAResumeOnTheRemoteHost() = runTest {
+        val scratch = Scratch()
+        try {
+            val root = scratch.temporary / "teamcode-501"
+            val first = FileChannel(FakeChannel())
+            val host = fileHost(first, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
+            val job = launch { host.run() }
+            first.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(first.serve("f1", "a.png", png)))))
+            until { first.channel.acks.isNotEmpty() }
+            // The pause: the agent drains, the host checkpoints and stops (as RunnerLoop does on its way out).
+            host.drain(null)
+            host.stop()
+            job.cancel()
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"), "A pause keeps the file")
+
+            // The resume: a new execution of the same session finds it, and still writes the next file next to it.
+            val second = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val resumed = fileHost(second, scratch, started, SessionUploads.remote("s-1", "501", scratch.temporary))
+            val resumedJob = launch { resumed.run() }
+            second.channel.inputs.send(listOf(RunnerInputView("in-2", "message", "y", 1, listOf(second.serve("f2", "b.png", png)))))
+            until { second.channel.acks.isNotEmpty() }
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"), "The resumed conversation can read the first file again")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"))
+            // A message an earlier execution received but never acknowledged, offered again: the same bytes are reused, never rewritten.
+            second.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 2, listOf(second.serve("f1", "a.png", png)))))
+            until { second.channel.acks.size == 2 }
+            assertEquals(CloudInputStatuses.CONSUMED, second.channel.acks[1].status)
+            resumed.stop()
+            resumedJob.cancel()
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"), "Stopping without the session ending keeps the files")
+        } finally { scratch.close() }
+    }
+
+    @Test fun messageFilesAreRemovedWhenTheSessionEnds() = runTest {
+        val scratch = Scratch()
+        try {
+            val root = scratch.temporary / "teamcode-501"
+            val channel = FileChannel(FakeChannel())
+            val host = fileHost(channel, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
+            val heartbeats = Channel<String>(Channel.UNLIMITED)
+            val loop = RunnerLoop(object : RunnerCalls {
+                override suspend fun register() = RunnerInstructionView("running", null, 1)
+                override suspend fun heartbeat(ready: Boolean) = RunnerInstructionView(heartbeats.receive(), null, 1)
+                override suspend fun checkpoint(completed: Boolean) = RunnerInstructionView("paused", null, 1)
+            }, agent = host)
+            val job = async { loop.run() }
+            heartbeats.send("running")
+            channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(channel.serve("f1", "a.png", png)))))
+            until { channel.channel.acks.isNotEmpty() }
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f1-a.png"))
+            // The server terminated the session: the runner loop exits and the session's directory goes with it.
+            heartbeats.send("terminated")
+            assertEquals(RunnerLoop.EXIT_FENCED_OR_DONE, job.await())
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-1"), "Removed at the end of the session")
+
+            // A fenced host never removes anything, even for a session that ends: the execution that fenced it may use the directory.
+            val fencedChannel = FileChannel(FakeChannel())
+            val fencedHost = fileHost(fencedChannel, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary))
+            val fencedJob = launch { fencedHost.run() }
+            fencedChannel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(fencedChannel.serve("f2", "b.png", png)))))
+            until { fencedChannel.channel.acks.isNotEmpty() }
+            fencedChannel.failure = TeamCodeException(409, "fenced", "execution_fenced")
+            fencedChannel.channel.inputs.send(listOf(RunnerInputView("in-2", "message", "x", 1, listOf(fencedChannel.serve("f3", "c.png", png)))))
+            until { fencedHost.fenced }
+            fencedJob.join()
+            fencedHost.sessionEnded(); fencedHost.stop()
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "f2-b.png"), "A fenced host leaves the files")
+            assertEquals(1, fencedChannel.channel.acks.size, "and acknowledges nothing more")
+        } finally { scratch.close() }
+    }
+
+    @Test fun uploadsOlderThanAWeekAreSweptAtStart() = runTest {
+        val scratch = Scratch()
+        try {
+            val root = scratch.temporary / "teamcode-501"
+            // Left by earlier executions: this session's own files, and another session's (which may have ended while no host ran).
+            FileSystem.SYSTEM.createDirectories(root / "s-1"); FileSystem.SYSTEM.write(root / "s-1" / "old-a.txt") { writeUtf8("a") }
+            FileSystem.SYSTEM.createDirectories(root / "s-2"); FileSystem.SYSTEM.write(root / "s-2" / "old-b.txt") { writeUtf8("b") }
+            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary).prepare {})
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1" / "old-a.txt"), "This session's recent files stay")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-2" / "old-b.txt"), "Another session's recent files stay: its host may be running")
+            val later = Clock.System.now().toEpochMilliseconds() + SessionUploads.MAX_AGE_MILLIS + 60_000
+            assertTrue(SessionUploads.remote("s-1", "501", scratch.temporary, now = { later }).prepare {})
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-2"), "Anything older than a week is removed")
+            assertFalse(FileSystem.SYSTEM.exists(root / "s-1" / "old-a.txt"), "This session's too: a week at most")
+            assertTrue(FileSystem.SYSTEM.exists(root / "s-1"), "and its directory is ready again")
+        } finally { scratch.close() }
+    }
+
+    @Test fun aHostWithoutAUsableUploadsDirectoryAnnouncesNoFiles() = runTest {
+        val scratch = Scratch()
+        try {
+            // Another user's (or a planted) path where this user's directory should be: files are off, never written there.
+            FileSystem.SYSTEM.write(scratch.temporary / "teamcode-501") { writeUtf8("not a directory") }
+            val channel = FileChannel(FakeChannel())
+            val job = launch { fileHost(channel, scratch, mutableListOf(), SessionUploads.remote("s-1", "501", scratch.temporary)).run() }
+            channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1)))
+            until { channel.channel.acks.isNotEmpty() }
+            assertEquals(false, channel.announced.first())
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun aPodWritesItsFilesInTheUploadsVolumeReadableByTheAgentsGroup() = runTest {
+        val scratch = Scratch()
+        try {
+            val volume = (scratch.root / "uploads").also { FileSystem.SYSTEM.createDirectories(it) }
+            val channel = FileChannel(FakeChannel())
+            val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+            val uploads = SessionUploads.pod(volume.toString())
+            val job = launch { fileHost(channel, scratch, started, uploads).run() }
+            channel.channel.inputs.send(listOf(RunnerInputView("in-1", "message", "x", 1, listOf(channel.serve("f1", "a.png", png)))))
+            until { channel.channel.acks.isNotEmpty() }
+            val written = FileSystem.SYSTEM.canonicalize(volume) / "f1-a.png"
+            assertTrue(FileSystem.SYSTEM.exists(written))
+            if (!windows) assertEquals(0x1A0, pathStatus(written.toString())!!.mode, "0640: the agent's UID reads it through the pod's group")
+            job.cancel()
+        } finally { scratch.close() }
+    }
+
+    @Test fun codexInAskModeKeepsItsWorkspaceSandboxForMessageFiles() {
+        // workspace-write restricts writes only: the uploads directory is readable without an extra root, and never writable.
+        val adapter = agentAdapter(AgentSettings("codex", "0.163", null, null, permissionMode = RemotePermissionModes.ASK), "1.0", readableDirectories = listOf("/tmp/teamcode-501/s-1"))
+        val command = adapter.command(null).arguments
+        assertTrue("sandbox_mode=\"workspace-write\"" in command, command.toString())
+        assertFalse(command.any { "/tmp/teamcode-501" in it }, "No writable root for the uploads")
+        val claude = agentAdapter(AgentSettings("claude", "2.1", null, null, permissionMode = RemotePermissionModes.ASK), "1.0", readableDirectories = listOf("/tmp/teamcode-501/s-1"))
+        val arguments = claude.command(null).arguments
+        assertEquals(listOf("--add-dir", "/tmp/teamcode-501/s-1"), arguments.subList(arguments.indexOf("--add-dir"), arguments.indexOf("--add-dir") + 2))
     }
 }

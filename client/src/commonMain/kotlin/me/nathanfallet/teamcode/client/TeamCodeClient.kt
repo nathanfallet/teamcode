@@ -13,6 +13,7 @@ import io.ktor.client.plugins.resources.get
 import io.ktor.client.request.*
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
 import io.ktor.http.*
@@ -654,6 +655,30 @@ class TeamCodeClient(
     suspend fun runnerInputs(input: RunnerInputsRequest): RunnerInputsView =
         coded(HttpMethod.Post, "/api/v1/cloud/runner/inputs", input) { timeout { requestTimeoutMillis = input.waitMillis + 30_000 } }
     suspend fun runnerAcknowledge(input: RunnerInputAckRequest) { coded<Unit, RunnerInputAckRequest>(HttpMethod.Post, "/api/v1/cloud/runner/inputs/ack", input) }
+    /**
+     * Streams the bytes of a message file delivered to this execution (`cloud.files.v1`) to [receive], chunk by chunk,
+     * never more than [maxBytes]; the caller checks the size and SHA-256 the input announced. Nothing is buffered whole.
+     */
+    suspend fun runnerFile(teamId: String, sessionId: String, epoch: Int, fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit) {
+        identifier(fileId)
+        http.prepareGet("$origin/api/v1/cloud/runner/files/$fileId") {
+            authenticate()
+            parameter("teamId", teamId); parameter("sessionId", sessionId); parameter("epoch", epoch)
+            timeout { requestTimeoutMillis = RUNNER_FILE_TIMEOUT_MILLIS }
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw failure(response)
+            val body = response.bodyAsChannel()
+            val chunk = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val count = body.readAvailable(chunk, 0, chunk.size)
+                if (count < 0) break
+                total += count
+                if (total > maxBytes) throw TeamCodeException(502, "The file is larger than announced.", "file_too_large")
+                if (count > 0) receive(chunk, count)
+            }
+        }
+    }
     /** A `tcex_` inference credential for this execution; keep it in memory only. */
     suspend fun runnerInference(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/inference", input)
     /** The execution owner's current GitHub token (`status` `linked`), or why there is none; keep it in memory only. */
@@ -862,6 +887,8 @@ class TeamCodeClient(
         const val RECIPIENT_INELIGIBLE = "recipient_ineligible"
         private const val MAX_PROBLEMS = 16
         private const val MAX_ERROR_BODY = 16 * 1024
+        /** A 100 MiB file over a slow link; the server streams it as it reads it. */
+        private const val RUNNER_FILE_TIMEOUT_MILLIS = 10 * 60_000L
         /** A conflict carries the live manifest: up to 511 files. */
         private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
         private const val ARTIFACT_RELAY_LIMIT = 16 * 1024 * 1024 + 64 * 1024

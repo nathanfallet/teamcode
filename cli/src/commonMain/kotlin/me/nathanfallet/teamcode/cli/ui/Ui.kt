@@ -48,10 +48,10 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
         val client = if (bundle == null) ReleaseClient { configure -> HttpClient { configure(this) } } else null
         try {
             val source = bundle?.let { BundleDesktopSource(it.toPath()) } ?: OnlineDesktopSource(requireNotNull(client))
+            val terminal = Terminal()
             val installer = DesktopInstaller(os, installationTarget(), locations, source, temporary, { command, arguments ->
                 runInteractiveProcess(command, arguments, emptyMap(), quiet = command == "codesign")
-            }, report = { echo(it) })
-            val terminal = Terminal()
+            }, report = { echo(it) }, quietWindows = yes || !terminal.terminalInfo.interactive)
             val app = DesktopUi(VERSION, locations, installer, report = { echo(it) }) { question ->
                 if (yes) true
                 else if (!terminal.terminalInfo.interactive) throw CliUserException("$question Run teamcode ui --yes to install it without asking.")

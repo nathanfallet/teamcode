@@ -112,8 +112,8 @@ class KubernetesClusterPortTest {
 
         assertNotEquals(runner.uid(), agent.uid(), "Two UIDs: the agent cannot read the runner's files")
         assertTrue(agent["securityContext"]!!.jsonObject["runAsNonRoot"]!!.jsonPrimitive.boolean)
-        assertEquals(setOf("workspace", "runner", "runner-token", "sockets", "gh-config"), runner.mounts().keys)
-        assertEquals(setOf("workspace", "runner", "sockets", "gh-config"), agent.mounts().keys, "The agent never mounts the projected token")
+        assertEquals(setOf("workspace", "runner", "runner-token", "sockets", "gh-config", "uploads"), runner.mounts().keys)
+        assertEquals(setOf("workspace", "runner", "sockets", "gh-config", "uploads"), agent.mounts().keys, "The agent never mounts the projected token")
         val volumes = spec["volumes"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
         assertEquals("Memory", volumes.getValue("sockets")["emptyDir"]!!.jsonObject["medium"]!!.jsonPrimitive.content)
         // gh: the runner writes the owner's token to a memory volume the agent only reads, found through GH_CONFIG_DIR.
@@ -138,6 +138,35 @@ class KubernetesClusterPortTest {
         assertEquals(runner["image"], agent["image"], "The same image: the agent's toolchain is the team's")
         assertFailsWith<IllegalArgumentException> { KubernetesPodOptions("https://teamcode.example.test", "runner:1", runAsUser = 1000, agentRunAsUser = 1000) }
         assertFailsWith<IllegalArgumentException> { KubernetesPodOptions("https://teamcode.example.test", "runner:1", agentRunAsUser = 0) }
+    }
+
+    @Test fun messageFilesHaveADiskVolumeTheRunnerWritesAndTheAgentOnlyReads(): Unit = runBlocking {
+        val port = port { json("{}", HttpStatusCode.Created) }
+        port.createPod("c1", PodRequest("teamcode", "tc-1-e2", "registry.example/toolchain@sha256:" + "a".repeat(64), "tc-ws-1",
+            mapOf("teamcode.nathanfallet.me/epoch" to "2"), CloudResources(2000, 4096), emptyList(),
+            mapOf("TEAMCODE_CLOUD_SESSION" to "1", "TEAMCODE_CLOUD_EPOCH" to "2", "TEAMCODE_CLOUD_TEAM" to "t")))
+        val spec = bodies.single()!!["spec"]!!.jsonObject
+        val volume = spec["volumes"]!!.jsonArray.map { it.jsonObject }.single { it["name"]!!.jsonPrimitive.content == "uploads" }
+        val emptyDir = volume["emptyDir"]!!.jsonObject
+        assertEquals("1Gi", emptyDir["sizeLimit"]!!.jsonPrimitive.content, "Bounded, above the runner's own 768 MiB per execution")
+        assertNull(emptyDir["medium"], "On disk: up to 100 MiB per file must not count against the containers' memory")
+        val containers = spec["containers"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
+        fun JsonObject.mount() = this["volumeMounts"]!!.jsonArray.map { it.jsonObject }.single { it["name"]!!.jsonPrimitive.content == "uploads" }
+        val runner = containers.getValue("session").mount(); val agent = containers.getValue("agent").mount()
+        assertEquals("/var/teamcode/uploads", runner["mountPath"]!!.jsonPrimitive.content)
+        assertEquals("/var/teamcode/uploads", agent["mountPath"]!!.jsonPrimitive.content, "The same path: the one the agent reads in its message")
+        assertNull(runner["readOnly"], "The runner writes the files")
+        assertTrue(agent["readOnly"]!!.jsonPrimitive.boolean, "The agent can read them, never replace them")
+        assertFalse(spec["containers"]!!.jsonArray.any { container -> container.jsonObject["volumeMounts"]!!.jsonArray.any {
+            it.jsonObject["name"]!!.jsonPrimitive.content == "uploads" && it.jsonObject["mountPath"]!!.jsonPrimitive.content.startsWith("/workspace") } }, "Never under the workspace")
+        fun JsonObject.env() = this["env"]!!.jsonArray.associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["value"]!!.jsonPrimitive.content }
+        assertEquals("/var/teamcode/uploads", containers.getValue("session").env()["TEAMCODE_UPLOADS_DIR"], "The runner announces files only with this volume")
+        // The agent (UID 1001) reads the runner's 0640 files through the pod's group: runAsGroup and fsGroup, which the agent container does not override.
+        val pod = spec["securityContext"]!!.jsonObject
+        assertEquals(pod["runAsGroup"]!!.jsonPrimitive.long, pod["fsGroup"]!!.jsonPrimitive.long)
+        assertEquals(1000, pod["runAsGroup"]!!.jsonPrimitive.long)
+        for (container in containers.values) assertNull(container["securityContext"]!!.jsonObject["runAsGroup"], "Both containers stay in the pod's group")
+        assertNotEquals(containers.getValue("session")["securityContext"]!!.jsonObject["runAsUser"], containers.getValue("agent")["securityContext"]!!.jsonObject["runAsUser"])
     }
 
     @Test fun podObservationTokenReviewAndPagedLists(): Unit = runBlocking {
