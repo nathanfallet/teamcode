@@ -59,6 +59,7 @@ import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
+import me.nathanfallet.teamcode.companion.presentation.components.phaseLabel
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BrandGlyph
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
@@ -299,7 +300,7 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
             Text(session.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             StateChip(session.state)
         }
-        val details = listOfNotNull(session.agentKind, session.model, session.effort, session.phase).joinToString(" · ")
+        val details = listOfNotNull(session.agentKind, session.model, session.effort, phaseLabel(session)).joinToString(" · ")
         if (details.isNotEmpty()) Text(details, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (showKind || session.remote) KindChips(session)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

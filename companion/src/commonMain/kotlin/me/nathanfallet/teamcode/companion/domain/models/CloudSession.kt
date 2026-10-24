@@ -87,14 +87,30 @@ data class CloudSession(
     val kind: SessionKind = SessionKind.CLOUD,
     /** Where a remote session runs; null for a cloud session. */
     val host: SessionHost? = null,
+    /**
+     * Why the device's daemon refused to start the session ([problemCode] `host_refused`): its stable reason code
+     * (`folder_missing`, `agent_unsupported`, ...), null when it did not give a readable one.
+     */
+    val refusalReason: String? = null,
 ) {
     val remote: Boolean get() = kind == SessionKind.REMOTE
 
     /** A remote session paused because its device stopped answering (the server's `host_offline`). */
     val hostOffline: Boolean get() = remote && problemCode == HOST_OFFLINE
 
+    /**
+     * A remote session that waits for its device to start it (`phase = waiting_host`): a new one the device's daemon has
+     * not picked up yet, or one woken by a message. It starts by itself once the device answers.
+     */
+    val waitingForHost: Boolean get() = remote && phase == WAITING_HOST && state.group == SessionGroup.ACTIVE
+
+    /** The device's daemon refused to start the session (`host_refused`): it ended without running. */
+    val hostRefused: Boolean get() = remote && problemCode == HOST_REFUSED
+
     companion object {
         const val HOST_OFFLINE = "host_offline"
+        const val WAITING_HOST = "waiting_host"
+        const val HOST_REFUSED = "host_refused"
     }
 }
 

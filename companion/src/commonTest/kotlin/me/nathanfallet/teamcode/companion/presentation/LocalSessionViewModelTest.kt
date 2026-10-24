@@ -29,6 +29,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUs
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.StartLocalSessionUseCase
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionViewModel
+import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
+import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsPreferencesRepository
 import kotlin.test.*
 
 private class FakeLocalHost(var availability: LocalAvailability = LocalAvailability.Ready) : LocalHost {
@@ -85,6 +87,20 @@ class LocalSessionViewModelTest {
         assertEquals("s-1", model.uiState.value.started?.sessionId)
         assertEquals(PendingMessage.State.SENT, model.uiState.value.started?.firstMessage?.state)
         assertFalse(model.uiState.value.messageFailed)
+    }
+
+    @Test fun thePermissionModeOfTheLastLaunchComesBackOnThisDeviceToo() = runTest(dispatcher) {
+        val settings = com.russhwolf.settings.MapSettings()
+        val host = FakeLocalHost()
+        val first = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(settings))
+        settle()
+        assertFalse(first.uiState.value.bypassPermissions)
+        first.chooseDirectory(); first.onBypass(true); settle()
+        first.create(); settle()
+        assertTrue(host.started.single().bypassPermissions)
+        val next = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(settings))
+        assertTrue(next.uiState.value.bypassPermissions)
+        assertEquals(PermissionMode.BYPASS, SettingsPreferencesRepository(settings).permissionMode)
     }
 
     @Test fun aFirstMessageThatFailsIsSaidAndTheSessionStillOpens() = runTest(dispatcher) {

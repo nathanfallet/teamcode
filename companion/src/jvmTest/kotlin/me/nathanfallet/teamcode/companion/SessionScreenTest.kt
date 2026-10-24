@@ -68,6 +68,35 @@ class SessionScreenTest {
         onNodeWithTag("resume").assertDoesNotExist()
     }
 
+    @Test fun aSessionWaitingForItsDeviceSaysSoInWords() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.CREATING, host = laptop(online = false)).copy(phase = "waiting_host") }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("waiting-host").assertExists()
+        onNodeWithText("Waiting for Ada's MacBook to start the session", substring = true).assertExists()
+        onNodeWithTag("waiting-host-s1", useUnmergedTree = true).assertExists()
+        onNodeWithTag("problem").assertDoesNotExist()
+        onNodeWithTag("summary").performClick()
+        // The server's phase code is worded, never shown raw.
+        onNodeWithText("waiting for the device").assertExists()
+        onNodeWithText("waiting_host").assertDoesNotExist()
+    }
+
+    @Test fun aSessionTheDeviceRefusedSaysWhyInsteadOfACode() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply {
+            byId["s1"] = cloudSession("s1", SessionState.TERMINATED, host = laptop(online = false), problemCode = "host_refused").copy(refusalReason = "folder_missing")
+        }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("host-refused").assertExists()
+        onNodeWithText("Ada's MacBook refused to start this session: the folder no longer exists on the device.").assertExists()
+        onNodeWithTag("host-refused-s1", useUnmergedTree = true).assertExists()
+        onNodeWithTag("problem").assertDoesNotExist()
+        onNodeWithTag("waiting-host").assertDoesNotExist()
+    }
+
     @Test fun aPausedCloudSessionStillResumesFromHere() = runComposeUiTest {
         val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
         val model = viewModel(sessions)

@@ -47,7 +47,16 @@ internal fun CloudSessionView.domain() = CloudSession(
     host = host?.takeIf { kind == CloudSessionKinds.REMOTE }?.let {
         SessionHost(it.deviceName, it.platform, it.osVersion, it.directoryName, it.online, removed = it.deviceId == null, permissionMode = it.permissionMode)
     },
+    refusalReason = failure?.takeIf { it.code == CloudSession.HOST_REFUSED }?.message?.let(::refusalReason),
 )
+
+/**
+ * The daemon's reason code in a `host_refused` failure, which the server words "The device refused to start this session
+ * (folder_missing).": only a short snake_case code is kept, never the rest of a server text.
+ */
+internal fun refusalReason(message: String): String? = REFUSAL_REASON.findAll(message).lastOrNull()?.groupValues?.get(1)
+
+private val REFUSAL_REASON = Regex("""\(([a-z][a-z0-9_]{0,63})\)""")
 
 internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)
 

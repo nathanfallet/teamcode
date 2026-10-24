@@ -57,6 +57,27 @@ sealed class CompanionException(message: String) : Exception(message) {
      */
     class FileRefused(val code: String?, val statusCode: Int, val retryAfterSeconds: Long? = null) :
         CompanionException("The file was refused" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
+    /**
+     * The server refused to start a session on one of the member's devices, or to show its folders ([code]:
+     * `device_offline`, `folder_not_published`, `device_not_found`, ...). Each known code is worded here.
+     */
+    class DeviceRefused(val code: String) : CompanionException(
+        when (code) {
+            DEVICE_OFFLINE -> "This device is offline: its TeamCode service is not connected. Start it on the device (teamcode service install), or choose another device."
+            "folder_not_published" -> "This device no longer offers this folder. Add it on the device with teamcode folders add, or choose another folder."
+            "device_not_found" -> "This device is not one of yours any more, or it was removed."
+            "remote_requires_login" -> "Only the device's owner, signed in with a password, starts a session on it."
+            "device_target_unsupported" -> "This server does not start sessions on your devices. Update it to use them."
+            "invalid_folder" -> "Choose one of the folders the device offers."
+            else -> "The server refused to start the session on this device" + (code.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + "."
+        },
+    ) {
+        companion object {
+            const val DEVICE_OFFLINE = "device_offline"
+            /** The codes the server answers about a device or its folders; any other failure keeps its own type. */
+            val CODES = setOf(DEVICE_OFFLINE, "folder_not_published", "device_not_found", "remote_requires_login", "device_target_unsupported", "invalid_folder")
+        }
+    }
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
 }

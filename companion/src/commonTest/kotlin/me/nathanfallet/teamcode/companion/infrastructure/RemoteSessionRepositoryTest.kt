@@ -27,7 +27,13 @@ import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientProvider
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionRepository
+import me.nathanfallet.teamcode.companion.domain.models.DeviceFolder
+import me.nathanfallet.teamcode.companion.domain.models.HostDevice
+import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
+import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
+import io.ktor.http.content.OutgoingContent
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTranscriptRepository
 import me.nathanfallet.teamcode.companion.infrastructure.stream.ReconnectPolicy
 import kotlin.random.Random
@@ -292,5 +298,51 @@ class RemoteSessionRepositoryTest {
         val tool = assertIs<TranscriptEvent.PermissionRequest>(events[1])
         assertTrue(tool.inputLeftOut); assertNull(tool.input); assertEquals("{\"command\":", tool.inputPreview)
         assertEquals(TranscriptEvent.InputChanged(3, 3, "i1", "consumed", null, requestId = "r1"), events[2])
+    }
+
+    private val devices = RemoteDeviceRepository(calls)
+
+    @Test fun aSessionOnADeviceSendsTheDeviceAndFolderNeverADirectory() = runTest {
+        val remote = sessionJson.replace(""""future":{"x":1}}""", """"kind":"remote","phase":"waiting_host","host":{"deviceId":"d1","deviceName":"Ada's Mac","directoryName":"app","online":false,
+            "permissionMode":"bypass","folderId":"f1"}}""").replace(""""state":"active","phase":"agent",""", """"state":"creating",""")
+        json(remote, HttpStatusCode.Created)
+        val form = NewDeviceSession("Fix", "d1", "f1", "codex", "gpt-5", null, PermissionMode.BYPASS, "Go")
+        val session = sessions.createOnDevice("a1", form, "key-1")
+        assertTrue(session.waitingForHost); assertFalse(session.hostRefused)
+        val request = requests.single()
+        assertEquals("/api/v1/cloud/sessions", request.url.encodedPath); assertEquals("key-1", request.headers["Idempotency-Key"])
+        val body = (request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
+        for (part in listOf("\"kind\":\"remote\"", "\"deviceId\":\"d1\"", "\"folderId\":\"f1\"", "\"permissionMode\":\"bypass\"", "\"kind\":\"codex\"", "\"initialMessage\":\"Go\""))
+            assertTrue(body.contains(part), body)
+        // The folder's name is the server's to fill: the app never sends a directory, let alone a path.
+        assertFalse(body.contains("\"directoryName\":\""), body); assertFalse(body.contains("\"profileId\":\""), body)
+    }
+
+    @Test fun aRefusedSessionKeepsOnlyTheDaemonsReasonCode() = runTest {
+        fun refused(message: String) = sessionJson.replace(""""future":{"x":1}}""", """"kind":"remote","host":{"deviceId":"d1","deviceName":"Mac","directoryName":"app","online":false},
+            "failure":{"code":"host_refused","message":"$message","retryable":false}}""").replace(""""state":"active",""", """"state":"terminated",""")
+        json("""{"sessions":[${refused("The device refused to start this session (folder_missing).")},${refused("Refused <b>(Not A Code)</b>.")}]}""")
+        val (worded, unreadable) = sessions.sessions("a1", SessionScope.MINE, SessionGroup.ENDED, before = null).sessions
+        assertTrue(worded.hostRefused); assertEquals("folder_missing", worded.refusalReason)
+        // Anything but a short code is the server's text, never shown.
+        assertTrue(unreadable.hostRefused); assertNull(unreadable.refusalReason)
+        assertFalse(worded.waitingForHost)
+    }
+
+    @Test fun onlyTheOwnersOnlineDevicesAreOfferedWithTheFoldersTheyPublished() = runTest {
+        json("""[{"id":"d1","memberId":"m1","name":"Ada's Mac","createdAt":1,"lastLoginAt":2,"activeSessions":0,"current":false,"platform":"macos","osVersion":"15.1",
+            "daemon":{"online":true,"lastSeenAt":3,"version":"1.0.0"}},
+            {"id":"d2","memberId":"m1","name":"Old PC","createdAt":1,"lastLoginAt":2,"activeSessions":0,"current":false,"daemon":{"online":false,"lastSeenAt":1}},
+            {"id":"d3","memberId":"m1","name":"Phone","createdAt":1,"lastLoginAt":2,"activeSessions":0,"current":true,"platform":"ios"}]""")
+        assertEquals(listOf(HostDevice("d1", "Ada's Mac", "macos", "15.1", current = false)), devices.onlineDevices("a1"))
+        assertEquals("/api/v1/devices", requests.last().url.encodedPath)
+        json("""{"deviceId":"d1","daemon":{"online":true,"lastSeenAt":3},"folders":[{"id":"f1","name":"app","label":"~/git/app"},{"id":"f2","name":"docs"}]}""")
+        val folders = devices.folders("a1", "d1")
+        assertTrue(folders.online)
+        assertEquals(listOf(DeviceFolder("f1", "app", "~/git/app"), DeviceFolder("f2", "docs", null)), folders.folders)
+        assertEquals("/api/v1/devices/d1/folders", requests.last().url.encodedPath)
+        json("""{"error":{"type":"device_not_found","message":"No."}}""", HttpStatusCode.NotFound)
+        val refused = assertFailsWith<CompanionException.Server> { devices.folders("a1", "d9") }
+        assertEquals("device_not_found", refused.code)
     }
 }

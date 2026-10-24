@@ -8,6 +8,8 @@ import me.nathanfallet.teamcode.api.models.CloudInputView
 import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
 import me.nathanfallet.teamcode.api.models.SendCloudMessageRequest
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
+import me.nathanfallet.teamcode.api.models.CloudSessionKinds
+import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import kotlinx.coroutines.flow.emitAll
@@ -39,6 +41,15 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
     override suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession = calls.withAccount(accountId) { client ->
         val agent = if (session.model != null || session.effort != null) CloudAgentRequest(session.model, session.effort) else null
         client.createCloudSession(CreateCloudSessionRequest(name = session.name, profileId = session.profileId, agent = agent, initialMessage = session.initialMessage), idempotencyKey).domain()
+    }
+
+    override suspend fun createOnDevice(accountId: String, session: NewDeviceSession, idempotencyKey: String): CloudSession = calls.withAccount(accountId) { client ->
+        // No directoryName: the session's directory is the folder's name, which the server takes from the device.
+        val request = CreateCloudSessionRequest(
+            name = session.name, agent = CloudAgentRequest(session.model, session.effort, kind = session.agent), initialMessage = session.initialMessage,
+            kind = CloudSessionKinds.REMOTE, permissionMode = session.permissionMode.wire, deviceId = session.deviceId, folderId = session.folderId,
+        )
+        client.createCloudSession(request, idempotencyKey).domain()
     }
 
     override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String>): InputReceipt =

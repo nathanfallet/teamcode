@@ -157,6 +157,14 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "create ${session.name} $idempotencyKey"
         return createResult(session)
     }
+    var createOnDeviceResult: (me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession) -> me.nathanfallet.teamcode.companion.domain.models.CloudSession =
+        { cloudSession("new").copy(kind = me.nathanfallet.teamcode.companion.domain.models.SessionKind.REMOTE) }
+    val deviceCreations = mutableListOf<Pair<me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession, String>>()
+    override suspend fun createOnDevice(accountId: String, session: me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "createOnDevice ${session.name} $idempotencyKey"
+        deviceCreations += session to idempotencyKey
+        return createOnDeviceResult(session)
+    }
     override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String>): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
         calls += "send $sessionId $text $clientMessageId" + if (fileIds.isEmpty()) "" else " files=" + fileIds.joinToString(",")
         return sendResult(clientMessageId)
@@ -201,3 +209,16 @@ class FakeArtifactRepository : me.nathanfallet.teamcode.companion.domain.reposit
     }
     override suspend fun ticket(accountId: String, artifactId: String, version: Int?) = tickets(artifactId, version).also { calls += "ticket $artifactId $version" }
 }
+
+/** Online devices and their folders from maps; throw from [devicesResult] or [foldersResult] to fail. */
+class FakeDeviceRepository : me.nathanfallet.teamcode.companion.domain.repositories.DeviceRepository {
+    val calls = mutableListOf<String>()
+    var devicesResult: () -> List<me.nathanfallet.teamcode.companion.domain.models.HostDevice> = { emptyList() }
+    var foldersResult: (String) -> me.nathanfallet.teamcode.companion.domain.models.DeviceFolders =
+        { me.nathanfallet.teamcode.companion.domain.models.DeviceFolders(true, emptyList()) }
+    override suspend fun onlineDevices(accountId: String) = devicesResult().also { calls += "devices" }
+    override suspend fun folders(accountId: String, deviceId: String) = foldersResult(deviceId).also { calls += "folders $deviceId" }
+}
+
+fun hostDevice(id: String, name: String = "Device $id", current: Boolean = false) =
+    me.nathanfallet.teamcode.companion.domain.models.HostDevice(id, name, "macos", "15.1", current)

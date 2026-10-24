@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.Profile
@@ -26,6 +27,11 @@ interface SessionRepository {
 
     /** [idempotencyKey]: a retry with the same key and body returns the session the first attempt created. */
     suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession
+    /**
+     * Starts a remote session on one of the member's online devices, in a folder it published
+     * (`cloud.sessions.remote.daemon.v1`); the device's daemon hosts it. [idempotencyKey] as for [create].
+     */
+    suspend fun createOnDevice(accountId: String, session: NewDeviceSession, idempotencyKey: String): CloudSession
     /**
      * [clientMessageId]: a retry returns the first acknowledgement instead of queueing the message twice. [fileIds]: files
      * uploaded to this session and not sent yet (`cloud.files.v1`); with files, [text] may be empty.

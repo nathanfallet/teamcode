@@ -91,6 +91,9 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
+import me.nathanfallet.teamcode.companion.resources.session_waiting_host
+import me.nathanfallet.teamcode.companion.presentation.components.refusalText
+import me.nathanfallet.teamcode.companion.presentation.components.phaseLabel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_interrupt
 import me.nathanfallet.teamcode.companion.resources.action_resume
@@ -187,6 +190,9 @@ fun SessionScreen(
                         when {
                             // Not a failure of the session: its device went quiet, and it goes on once the device is back.
                             session.hostOffline -> Banner(stringResource(Res.string.session_host_offline, hostName(session.host)), Tone.WARN, Modifier.testTag("host-offline"))
+                            // The order is the session: it waits until the device's daemon picks it up, and says so.
+                            session.waitingForHost -> Banner(stringResource(Res.string.session_waiting_host, hostName(session.host)), Tone.ACCENT, Modifier.testTag("waiting-host"))
+                            session.hostRefused -> Banner(refusalText(session), Tone.DANGER, Modifier.testTag("host-refused"))
                             session.problemCode != null -> Banner(stringResource(Res.string.session_problem, session.problemCode), Tone.DANGER, Modifier.testTag("problem"))
                         }
                     }
@@ -283,7 +289,7 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
             Detail(stringResource(Res.string.session_detail_agent), session.agentKind)
             session.model?.let { Detail(stringResource(Res.string.session_detail_model), it) }
             session.effort?.let { Detail(stringResource(Res.string.session_detail_effort), it) }
-            session.phase?.let { Detail(stringResource(Res.string.session_detail_phase), it) }
+            phaseLabel(session)?.let { Detail(stringResource(Res.string.session_detail_phase), it) }
             if (session.repositories.isNotEmpty()) Detail(stringResource(Res.string.session_detail_repositories), session.repositories.joinToString("\n"))
         }
     }

@@ -22,6 +22,8 @@ object Features {
     const val ARTIFACT_TICKETS = "artifacts.tickets.v1"
     /** Sessions on a member's device: the list and the feed take `kind`, sessions carry their host. */
     const val REMOTE_SESSIONS = "cloud.sessions.remote.v1"
+    /** Sessions started on one of the member's online devices by its daemon, in a folder it published (`GET /devices/{id}/folders`). */
+    const val DEVICE_SESSIONS = "cloud.sessions.remote.daemon.v1"
     /** Files sent with messages: `POST …/files`, then their ids in the message's `fileIds`. */
     const val FILES = "cloud.files.v1"
 }

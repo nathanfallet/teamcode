@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
+import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
@@ -46,8 +48,13 @@ class LocalSessionViewModel(
     private val route: NewSessionRoute,
     private val start: StartLocalSessionUseCase,
     private val host: LocalHost,
+    /** Keeps the permission mode of the last launch, here and on another device alike. */
+    private val preferences: PreferencesRepository? = null,
 ) : ViewModel() {
-    private val state = MutableStateFlow(route.directory?.let { LocalSessionUiState(directory = it, name = StartLocalSessionUseCase.defaultName(it)) } ?: LocalSessionUiState())
+    private val state = MutableStateFlow(
+        (route.directory?.let { LocalSessionUiState(directory = it, name = StartLocalSessionUseCase.defaultName(it)) } ?: LocalSessionUiState())
+            .copy(bypassPermissions = preferences?.permissionMode == PermissionMode.BYPASS),
+    )
     val uiState: StateFlow<LocalSessionUiState> = state.asStateFlow()
 
     init { check() }
@@ -113,6 +120,7 @@ class LocalSessionViewModel(
         viewModelScope.launch {
             try {
                 val request = LocalSessionRequest(current.directory, current.agent, current.name, current.model, current.effort, current.bypassPermissions)
+                preferences?.setPermissionMode(if (current.bypassPermissions) PermissionMode.BYPASS else PermissionMode.ASK)
                 val started = start(route.accountId, request, current.message)
                 state.update { it.copy(starting = false, started = started) }
             } catch (error: CancellationException) {
