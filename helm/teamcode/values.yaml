@@ -99,6 +99,10 @@ topologySpreadConstraints: []
 # address. Empty trusts none: every client behind the ingress then shares the ingress pods' address budget. Set it to the
 # ingress controller pods' range, for example the cluster's pod CIDR ["10.244.0.0/16"]. See docs/team-roles.md.
 trustedProxies: []
+# Team webhooks reach public addresses only. true also allows loopback and private addresses (an internal receiver),
+# which lets any administrator or admin:cloud key send signed POSTs into the server's network. See docs/webhooks.md.
+webhooks:
+  allowPrivateTargets: false
 extraEnv: []
 javaToolOptions: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
 

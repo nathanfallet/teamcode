@@ -5,7 +5,6 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URI
 import java.net.UnknownHostException
@@ -16,6 +15,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService
 import me.nathanfallet.teamcode.domain.mcp.*
 import me.nathanfallet.teamcode.domain.variants.EffectiveMcpServer
 
@@ -27,8 +27,9 @@ fun interface McpAddressPolicy {
     companion object {
         /**
          * Resolves the host and refuses loopback, private, link-local (including cloud metadata), carrier-grade NAT,
-         * unique-local, multicast and unspecified addresses. The HTTP engine resolves again when it connects, so DNS
-         * rebinding between the two lookups is not prevented here; restrict egress at the network layer as well.
+         * unique-local, multicast and unspecified addresses, for a clear error before the session opens. The connection
+         * itself goes through the same check in the HTTP client's [me.nathanfallet.teamcode.infrastructure.network.PinnedDns]
+         * resolver, which dials the address it checked, so DNS rebinding between the two lookups gains nothing.
          */
         val PUBLIC_ONLY = McpAddressPolicy { host ->
             val addresses = try { withContext(Dispatchers.IO) { InetAddress.getAllByName(host) } }
@@ -37,25 +38,8 @@ fun interface McpAddressPolicy {
                 throw McpUpstreamFailure(McpOutcome.UPSTREAM_ERROR, "The MCP server resolves to a private or reserved address, which the gateway refuses.")
         }
 
-        fun isPublic(address: InetAddress): Boolean {
-            if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress) return false
-            val bytes = address.address
-            if (address is Inet6Address) {
-                val first = bytes[0].toInt() and 0xff
-                if (first and 0xfe == 0xfc) return false // fc00::/7 unique local
-                val prefix = bytes.take(4).map { it.toInt() and 0xff }
-                // 6to4 (2002::/16), Teredo (2001:0::/32) and NAT64 (64:ff9b::/96, 64:ff9b:1::/48) can reach embedded IPv4 destinations.
-                if (prefix[0] == 0x20 && prefix[1] == 0x02) return false
-                if (prefix == listOf(0x20, 0x01, 0, 0)) return false
-                if (prefix[0] == 0 && prefix[1] == 0x64 && prefix[2] == 0xff && prefix[3] == 0x9b) return false
-                // IPv4-mapped and IPv4-compatible addresses are checked as their IPv4 address.
-                if (bytes.take(10).all { it == 0.toByte() } && ((bytes[10].toInt() and 0xff == 0xff && bytes[11].toInt() and 0xff == 0xff) || (bytes[10] == 0.toByte() && bytes[11] == 0.toByte())))
-                    return isPublic(InetAddress.getByAddress(bytes.copyOfRange(12, 16)))
-                return true
-            }
-            val a = bytes[0].toInt() and 0xff; val b = bytes[1].toInt() and 0xff
-            return !(a == 0 || (a == 100 && b in 64..127) || (a == 192 && b == 0 && bytes[2].toInt() == 0) || (a == 198 && b in 18..19) || a >= 240)
-        }
+        /** [CloudAdministrationService.publicAddress], shared with webhooks. */
+        fun isPublic(address: InetAddress): Boolean = CloudAdministrationService.publicAddress(address.address)
     }
 }
 

@@ -39,6 +39,8 @@ for external in (False, True):
     assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY']['value'] == 'true'
     # Sign-in throttling trusts no proxy unless the operator lists one.
     assert env['TEAMCODE_TRUSTED_PROXIES']['value'] == ''
+    # Webhooks reach public addresses only unless the operator opts in (audit L1).
+    assert env['TEAMCODE_WEBHOOK_PRIVATE_TARGETS']['value'] == 'false'
     assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN']['value'] == 'false'
     assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS']['value'] == ''
     assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']['value']) == []
@@ -87,6 +89,9 @@ assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY'] == 'false'
 rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'trustedProxies={10.244.0.0/16,fd00::/8}'], check=True, capture_output=True, text=True).stdout
 env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
 assert env['TEAMCODE_TRUSTED_PROXIES'] == '10.244.0.0/16,fd00::/8'
+rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'webhooks.allowPrivateTargets=true'], check=True, capture_output=True, text=True).stdout
+env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
+assert env['TEAMCODE_WEBHOOK_PRIVATE_TARGETS'] == 'true'
 # Misconfigured installations must fail at render time.
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0

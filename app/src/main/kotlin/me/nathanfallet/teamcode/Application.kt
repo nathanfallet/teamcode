@@ -32,6 +32,7 @@ import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlTeamService
 import me.nathanfallet.teamcode.infrastructure.database.SqlDeviceService
 import me.nathanfallet.teamcode.infrastructure.fixtures.FixtureGatewayService
+import me.nathanfallet.teamcode.infrastructure.network.PinnedDns
 import me.nathanfallet.teamcode.presentation.configureGateway
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
@@ -120,14 +121,18 @@ fun main() {
     }
     val webhookStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlWebhookStore(it) }
     val webhookSealer = cipher?.let { me.nathanfallet.teamcode.infrastructure.secrets.CipherSecretSealer(it) }
-    val webhooks = if (webhookStore != null && webhookSealer != null) me.nathanfallet.teamcode.domain.webhooks.WebhookService(webhookStore, webhookSealer) else null
+    // Webhooks reach public addresses only, unless the operator allows private targets (audit L1); every client below
+    // dials the address its policy checked (audit L2).
+    val webhookPrivateTargets = webhookPrivateTargets(System.getenv("TEAMCODE_WEBHOOK_PRIVATE_TARGETS"))
+    val webhooks = if (webhookStore != null && webhookSealer != null) me.nathanfallet.teamcode.domain.webhooks.WebhookService(webhookStore, webhookSealer, allowPrivateTargets = webhookPrivateTargets) else null
     val webhookHttp = HttpClient(CIO) {
         followRedirects = false; expectSuccess = false
+        engine { dnsResolver = PinnedDns.resolver(me.nathanfallet.teamcode.infrastructure.webhooks.webhookAddressPolicy(webhookPrivateTargets)) }
         install(HttpTimeout) { connectTimeoutMillis = 5_000; requestTimeoutMillis = 10_000; socketTimeoutMillis = 10_000 }
     }
     if (webhookStore != null && webhookSealer != null) {
         val work = SqlScheduledWork(database!!)
-        val delivery = me.nathanfallet.teamcode.domain.webhooks.DeliverWebhooksUseCase(webhookStore, webhookSealer, me.nathanfallet.teamcode.infrastructure.webhooks.HttpWebhookSender(webhookHttp))
+        val delivery = me.nathanfallet.teamcode.domain.webhooks.DeliverWebhooksUseCase(webhookStore, webhookSealer, me.nathanfallet.teamcode.infrastructure.webhooks.HttpWebhookSender(webhookHttp, allowPrivateTargets = webhookPrivateTargets))
         workers.launch {
             while (isActive) {
                 try {
@@ -144,6 +149,7 @@ fun main() {
     // Artifacts: the bucket and its settings live in the database, configured on the dashboard; no deployment variable.
     val artifactHttp = HttpClient(CIO) {
         followRedirects = false; expectSuccess = false
+        engine { dnsResolver = PinnedDns.resolver(me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService::allowedResolvedAddress) }
         install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 60_000; socketTimeoutMillis = 30_000 }
     }
     val artifactObjects = me.nathanfallet.teamcode.infrastructure.artifacts.S3ObjectStore(artifactHttp)
@@ -175,6 +181,7 @@ fun main() {
     val mcpLimits = mcpLimits()
     val mcpHttp = HttpClient(CIO) {
         followRedirects = false
+        engine { dnsResolver = PinnedDns.resolver(me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService::publicAddress) }
         install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = maxOf(mcpLimits.callTimeoutMillis, mcpLimits.listTimeoutMillis) + 5_000 }
     }
     val mcp = mcpAccess?.let {
@@ -239,6 +246,13 @@ private fun initialCloudRuntime(): me.nathanfallet.teamcode.domain.cloud.CloudRu
         runnerBinary = value("TEAMCODE_CLOUD_RUNNER_BINARY") ?: me.nathanfallet.teamcode.domain.cloud.CloudRuntime.DEFAULT_RUNNER_BINARY,
         serverUrl = value("TEAMCODE_CLOUD_SERVER_URL"),
         workspaceAccessMode = value("TEAMCODE_CLOUD_WORKSPACE_ACCESS_MODE") ?: me.nathanfallet.teamcode.domain.cloud.CloudRuntime.DEFAULT_ACCESS_MODE)
+}
+
+/** `TEAMCODE_WEBHOOK_PRIVATE_TARGETS`: `true` lets webhooks reach loopback and private addresses; unset or `false` does not. Anything else stops the start. */
+internal fun webhookPrivateTargets(value: String?): Boolean = when (value?.trim()?.lowercase()) {
+    null, "", "false" -> false
+    "true" -> true
+    else -> throw IllegalArgumentException("TEAMCODE_WEBHOOK_PRIVATE_TARGETS must be true or false.")
 }
 
 /** Gateway bounds from `TEAMCODE_MCP_*` variables; unset values keep the defaults documented in docs/mcp-gateway.md. */

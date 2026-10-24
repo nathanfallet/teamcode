@@ -92,6 +92,8 @@ spec:
               value: {{ toJson ($sessionNetwork.extraEgress | default (list)) | quote }}
             - name: TEAMCODE_TRUSTED_PROXIES
               value: {{ join "," (.Values.trustedProxies | default (list)) | quote }}
+            - name: TEAMCODE_WEBHOOK_PRIVATE_TARGETS
+              value: {{ dig "allowPrivateTargets" false (.Values.webhooks | default dict) | toString | quote }}
             - name: JAVA_TOOL_OPTIONS
               value: {{ .Values.javaToolOptions | quote }}
             {{- with .Values.extraEnv }}

@@ -14,7 +14,7 @@ This page describes the authenticated MCP gateway for the V2 roadmap item [MCP g
 | Shared and delegated (per-member) upstream credentials, encrypted at rest, never returned | Done |
 | Timeouts, response/request size bounds, concurrency and per-minute rate per member and server | Done |
 | Metadata-only journal, per-member usage (API and dashboard) | Done |
-| Private-network (SSRF) refusal at connection time | Done, with the DNS rebinding limit below |
+| Private-network (SSRF) refusal at connection time | Done, on the address the connection dials (no DNS rebinding) |
 | Member-driven delegated OAuth with the upstream server | Planned (credentials are supplied by an administrator today) |
 | `teamcode run claude` / `teamcode run codex` connecting one agent-side MCP server per assigned server, for the launch only | Done; not yet exercised with a real agent |
 | Cloud sessions: the runner connects the owner's servers to the agent through its loopback relay with the execution credential, see [cloud sessions](cloud-sessions.md#team-mcp-servers-and-skills) | Done; not yet exercised with a real agent |
@@ -62,7 +62,7 @@ Credentials never reach the workstation: they are not part of any response, erro
 
 `HttpMcpUpstream` is a stateless Streamable HTTP client: each operation sends `initialize`, `notifications/initialized`, the request, then a best-effort `DELETE` of the upstream session when the upstream issued one (also after a timeout or a client disconnect, bounded to 2 seconds). It accepts JSON and server-sent event responses (other events and server-to-client requests on the stream are ignored), sends `MCP-Protocol-Version` after initialization, refuses redirects, and accepts upstream revisions 2025-11-25, 2025-06-18 and 2025-03-26. `tools/list` follows at most 16 pages.
 
-Before connecting, the host is resolved and the gateway refuses loopback, private (RFC 1918), link-local (including `169.254.169.254`), carrier-grade NAT, unique-local IPv6, multicast, unspecified and reserved addresses, IPv4-mapped and IPv4-compatible forms, and the 6to4, Teredo and NAT64 prefixes that embed IPv4 destinations. **Limit:** the HTTP engine resolves the name again when it connects, so DNS rebinding between the two lookups is not prevented by the gateway. Deployments should also restrict the server's egress at the network layer (for example a Kubernetes NetworkPolicy).
+Before connecting, the host is resolved and the gateway refuses loopback, private (RFC 1918), link-local (including `169.254.169.254`), carrier-grade NAT, unique-local IPv6, multicast, unspecified and reserved addresses, IPv4-mapped and IPv4-compatible forms, and the 6to4, Teredo and NAT64 prefixes that embed IPv4 destinations. The HTTP client applies the same check in its own resolver and dials the address it checked, keeping the name for TLS (SNI and certificate) and the `Host` header, so a name that answers a public address to the check and a private one to the connection (DNS rebinding) is refused. Cluster API, webhook and artifact storage connections are pinned the same way, each with its own address rule. Restricting the server's egress at the network layer (for example a Kubernetes NetworkPolicy) remains good practice.
 
 Opening an upstream session per operation costs extra round trips but keeps replicas stateless; caching upstream sessions in MySQL is a possible optimisation.
 
