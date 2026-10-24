@@ -585,6 +585,15 @@ jobs:
         run: |
           app="$BINARIES/app/TeamCode.app"
           dmg="$(ls "$BINARIES"/dmg/*.dmg)"
+          # Stapling fetches the ticket from Apple's CloudKit, which drops connections now and then.
+          staple() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if xcrun stapler staple "$1"; then return 0; fi
+              sleep 20
+            done
+            return 1
+          }
           notarize() {
             local result
             result="$(xcrun notarytool submit "$1" --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait --timeout 30m --output-format json)" || true
@@ -599,13 +608,13 @@ jobs:
           codesign -dv "$app" 2>&1 | grep -qx "TeamIdentifier=$TEAM_ID"
           ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize-app.zip"
           notarize "$RUNNER_TEMP/notarize-app.zip"
-          xcrun stapler staple "$app"
+          staple "$app"
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
           # The disk image carries its own signature, then its notarization ticket.
           codesign --force --timestamp --keychain "$TEAMCODE_MACOS_SIGNING_KEYCHAIN" --sign "Developer ID Application: $TEAMCODE_MACOS_SIGNING_IDENTITY" "$dmg"
           notarize "$dmg"
-          xcrun stapler staple "$dmg"
+          staple "$dmg"
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
       - name: Stage the package teamcode ui installs and the hand-installed ones
