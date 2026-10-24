@@ -63,6 +63,6 @@ kotlin {
             implementation(libs.okio)
         }
         commonTest.dependencies { implementation(kotlin("test")); implementation(libs.coroutines.test); implementation(libs.ktor.client.mock) }
-        jvmTest.dependencies { runtimeOnly(libs.junit) }
+        jvmTest.dependencies { runtimeOnly(libs.junit); implementation(libs.ktor.client.cio) }
     }
 }

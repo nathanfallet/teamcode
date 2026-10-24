@@ -6,7 +6,11 @@ import io.ktor.client.engine.mock.*
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.*
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.writeByte
+import io.ktor.utils.io.writer
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 
 class ReleaseClientTest {
@@ -189,6 +193,86 @@ class ReleaseClientTest {
         }
         client { respond("one byte more") }.use { transport ->
             failure("release_size_invalid") { transport.desktopPackage("1.2.3", "macos-arm64", 12) { _, _ -> } }
+        }
+    }
+
+    /** A release lookup (`/releases/tags/<version>`) listing [names] as assets 1, 2, 3…, then [asset] for every other request. */
+    private fun releaseServer(version: String, names: List<String>, asset: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData):
+        suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData = { request ->
+        if (request.url.encodedPath.endsWith("/releases/tags/$version"))
+            respond("""{"draft":false,"prerelease":false,"tag_name":"$version","assets":[${names.mapIndexed { i, n -> """{"id":${i + 1},"name":"$n"}""" }.joinToString(",")}]}""")
+        else asset(request)
+    }
+
+    /**
+     * The native engines (curl's CURLOPT_TIMEOUT_MS, NSURLSession, WinHttp) bound the whole transfer, body included, by
+     * the request timeout, so the request timeout each download asks for must cover its own budget: a 15 to 24 MB binary
+     * under ~200 KB/s, or a desktop package, must not be cut at two minutes. MockEngine does not apply that timeout to the
+     * body, so this checks what each request asks the engine for.
+     */
+    @Test fun eachDownloadAsksTheEngineForARequestTimeoutThatCoversItsBudget() = runBlocking {
+        val timeouts = mutableMapOf<String, Long?>()
+        client(releaseServer("1.0.0", listOf("manifest.json", "manifest.sig", "teamcode-1.0.0-linux-x64", "teamcode-desktop-1.0.0-linux-x64.tar.gz")) { request ->
+            timeouts[request.url.encodedPath.substringAfterLast('/')] =
+                request.getCapabilityOrNull(io.ktor.client.plugins.HttpTimeoutCapability)?.requestTimeoutMillis
+            respond(if (request.url.encodedPath.endsWith("1") || request.url.encodedPath.endsWith("2")) "meta" else "binary")
+        }).use { transport ->
+            transport.metadata("1.0.0")
+            transport.binary("1.0.0", "linux-x64", 6) { _, _ -> }
+            transport.desktopPackage("1.0.0", "linux-x64", 6) { _, _ -> }
+        }
+        fun covers(budget: Long, value: Long?) = value == null || value == io.ktor.client.plugins.HttpTimeoutConfig.INFINITE_TIMEOUT_MS || value >= budget
+        val binary = timeouts["3"] ?: timeouts["teamcode-1.0.0-linux-x64"]
+        val desktop = timeouts["4"] ?: timeouts["teamcode-desktop-1.0.0-linux-x64.tar.gz"]
+        assertTrue(covers(300_000, binary), "binary request timeout $binary, budget 300 s ($timeouts)")
+        assertTrue(covers(900_000, desktop), "desktop package request timeout $desktop, budget 900 s ($timeouts)")
+    }
+
+    @Test fun aDownloadPastItsBudgetIsATimeoutNotANetworkFailure() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val handler = releaseServer("1.0.0", listOf("teamcode-1.0.0-linux-x64")) {
+            respond(writer(dispatcher) { repeat(40) { delay(10_000); channel.writeByte(1); channel.flush() } }.channel)
+        }
+        ReleaseClient { configure -> HttpClient(MockEngine(MockEngineConfig().apply { this.dispatcher = dispatcher; addHandler(handler) })) { configure(this) } }.use { transport ->
+            failure("release_timeout") { transport.binary("1.0.0", "linux-x64", 40) { _, _ -> } }
+        }
+    }
+
+    @Test fun aLocalWriteFailureIsNotReportedAsANetworkFailure() = runBlocking {
+        client(releaseServer("1.0.0", listOf("teamcode-1.0.0-linux-x64")) { respond("binary") }).use { transport ->
+            val error = assertFailsWith<ReleaseDownloadException> {
+                transport.binary("1.0.0", "linux-x64", 6) { _, _ -> throw kotlinx.io.IOException("No space left on device") }
+            }
+            assertEquals("release_write_failure", error.code)
+        }
+    }
+
+    /**
+     * GitHub's `github.com/<repo>/releases/download/…` redirect carries a Content-Security-Policy line of about 9.2 KB.
+     * The curl (Linux) and WinHttp (Windows) engines parse response headers with ktor-http-cio, which refuses a line
+     * over 8 192 bytes; this handler parses each response through that same parser, as those engines do.
+     */
+    @Test fun releaseDownloadsNeverDependOnGithubComHeadersThatTheNativeEnginesCannotParse() = runBlocking {
+        val policy = "content-security-policy: default-src 'none'; " + "x".repeat(9_300)
+        suspend fun parsed(raw: String) = io.ktor.http.cio.parseResponse(ByteReadChannel(raw.replace("\n", "\r\n")))
+            ?: error("Failed to parse response header")
+        val hosts = mutableListOf<String>()
+        client(releaseServer("1.0.0", listOf("manifest.json", "manifest.sig", "teamcode-1.0.0-linux-x64")) { request ->
+            hosts += request.url.host
+            when (request.url.host) {
+                "github.com" -> {
+                    parsed("HTTP/1.1 302 Found\nlocation: https://release-assets.githubusercontent.com/a?sig=1\n$policy\ncontent-length: 0\n\n").close()
+                    respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://release-assets.githubusercontent.com/a?sig=1"))
+                }
+                "api.github.com" -> respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://release-assets.githubusercontent.com/a?sig=1"))
+                else -> respond("binary")
+            }
+        }).use { transport ->
+            assertEquals("binary", transport.metadata("1.0.0").manifest.decodeToString())
+            var received = 0
+            transport.binary("1.0.0", "linux-x64", 6) { _, size -> received += size }
+            assertEquals(6, received)
+            assertFalse("github.com" in hosts, hosts.toString())
         }
     }
 }
