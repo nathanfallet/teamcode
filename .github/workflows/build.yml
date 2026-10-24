@@ -589,6 +589,7 @@ jobs:
           # with 15, 30, 60, 120 and 240 s between them, and only when the failure is a network or service one (a lost
           # connection, a timeout, CloudKit, stapler's error 68, an HTTP 5xx). Anything else fails at once. Its output
           # is left in $apple_out (stdout) and $apple_err (stderr).
+          apple_failure='network connection was lost|NSURLErrorDomain|could not connect|timed out|timeout|CloudKit|Error 68|offline|temporarily unavailable|Service Unavailable|(HTTP|status( code)?)[^0-9]*5[0-9][0-9]|internal error|connection (reset|refused)'
           apple_out="$RUNNER_TEMP/apple.out"
           apple_err="$RUNNER_TEMP/apple.err"
           apple() {
@@ -599,7 +600,7 @@ jobs:
               cat "$apple_out"
               cat "$apple_err" >&2
               if [ "$status" -eq 0 ]; then return 0; fi
-              if ! cat "$apple_out" "$apple_err" | grep -qiE 'network connection was lost|NSURLErrorDomain|could not connect|timed out|timeout|CloudKit|Error 68|offline|temporarily unavailable|Service Unavailable|(HTTP|status( code)?)[^0-9]*5[0-9][0-9]|internal error|connection (reset|refused)'; then
+              if ! cat "$apple_out" "$apple_err" | grep -qiE "$apple_failure"; then
                 return "$status"
               fi
               if [ "$attempt" -eq 6 ]; then break; fi
@@ -624,21 +625,50 @@ jobs:
             fi
           }
           # The ticket is stapled, then validated: each retried on its own, so a lost connection while validating does
-          # not staple again. `spctl --assess` afterwards checks the stapled ticket offline.
+          # not staple again. A failed `stapler staple` always fails the release. `stapler validate` looks the ticket up
+          # in CloudKit, which the macos-15-intel runners often cannot reach (actions/runner-images#14924; Apple DTS
+          # advises retrying: https://developer.apple.com/forums/thread/824494). When it still fails after its retries
+          # with a network-only error, the offline gate below replaces it; any other failure still fails.
+          offline_gate() {
+            local artifact="$1" kind="$2" details
+            details="$(codesign -dvv "$artifact" 2>&1)" || { echo "::error::Offline gate: cannot read the signature of $artifact."; return 1; }
+            codesign --verify --deep --strict --verbose=2 "$artifact" || return 1
+            grep -q '^Authority=Developer ID Application: ' <<< "$details" || { echo "::error::Offline gate: $artifact is not signed by a Developer ID Application."; return 1; }
+            grep -qx "TeamIdentifier=$TEAM_ID" <<< "$details" || { echo "::error::Offline gate: $artifact is not signed by team $TEAM_ID."; return 1; }
+            if [ "$kind" = app ]; then
+              grep -q 'flags=.*runtime' <<< "$details" || { echo "::error::Offline gate: $artifact lacks the hardened runtime."; return 1; }
+              # `stapler staple` writes the ticket at Contents/CodeResources of the bundle.
+              [ -s "$artifact/Contents/CodeResources" ] || { echo "::error::Offline gate: no stapled ticket in $artifact."; return 1; }
+              spctl --assess --type execute --verbose=2 "$artifact" || return 1
+            else
+              # The ticket is appended after the signed image: the file must have grown, its signed part untouched.
+              local before_size
+              before_size="$(cat "$RUNNER_TEMP/dmg-before-staple.size")"
+              [ "$(stat -f %z "$artifact")" -gt "$before_size" ] || { echo "::error::Offline gate: no stapled ticket in $artifact."; return 1; }
+              cmp -n "$before_size" "$artifact" "$RUNNER_TEMP/dmg-before-staple.dmg" || { echo "::error::Offline gate: the signed image changed while stapling."; return 1; }
+              spctl --assess --type open --context context:primary-signature --verbose=2 "$artifact" || return 1
+            fi
+          }
           staple() {
-            apple xcrun stapler staple "$1"
-            apple xcrun stapler validate "$1"
+            apple xcrun stapler staple "$1" || return $?
+            local status=0
+            apple xcrun stapler validate "$1" && return 0 || status=$?
+            if ! cat "$apple_out" "$apple_err" | grep -qiE "$apple_failure"; then return "$status"; fi
+            echo "::warning::stapler validate could not reach Apple's CloudKit after 6 tries; checked $1 with the offline gate instead (signature, Developer ID, stapled ticket, spctl)."
+            offline_gate "$1" "$2"
           }
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign -dv "$app" 2>&1 | grep -qx "TeamIdentifier=$TEAM_ID"
           ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize-app.zip"
           notarize "$RUNNER_TEMP/notarize-app.zip"
-          staple "$app"
+          staple "$app" app
           spctl --assess --type execute --verbose=2 "$app"
           # The disk image carries its own signature, then its notarization ticket.
           codesign --force --timestamp --keychain "$TEAMCODE_MACOS_SIGNING_KEYCHAIN" --sign "Developer ID Application: $TEAMCODE_MACOS_SIGNING_IDENTITY" "$dmg"
           notarize "$dmg"
-          staple "$dmg"
+          cp "$dmg" "$RUNNER_TEMP/dmg-before-staple.dmg"
+          stat -f %z "$dmg" > "$RUNNER_TEMP/dmg-before-staple.size"
+          staple "$dmg" dmg
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
       - name: Stage the package teamcode ui installs and the hand-installed ones
         run: |
