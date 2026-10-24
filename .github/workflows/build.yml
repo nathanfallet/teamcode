@@ -585,24 +585,49 @@ jobs:
         run: |
           app="$BINARIES/app/TeamCode.app"
           dmg="$(ls "$BINARIES"/dmg/*.dmg)"
-          # Stapling and validating fetch the ticket from Apple's CloudKit, which drops connections now and then.
-          staple() {
-            local attempt
-            for attempt in 1 2 3 4 5; do
-              if xcrun stapler staple "$1" && xcrun stapler validate "$1"; then return 0; fi
-              sleep 20
+          # Every call to Apple's services (notarytool, stapler's CloudKit lookups) goes through apple(): up to 6 tries
+          # with 15, 30, 60, 120 and 240 s between them, and only when the failure is a network or service one (a lost
+          # connection, a timeout, CloudKit, stapler's error 68, an HTTP 5xx). Anything else fails at once. Its output
+          # is left in $apple_out (stdout) and $apple_err (stderr).
+          apple_out="$RUNNER_TEMP/apple.out"
+          apple_err="$RUNNER_TEMP/apple.err"
+          apple() {
+            local attempt status delay
+            for attempt in 1 2 3 4 5 6; do
+              status=0
+              "$@" > "$apple_out" 2> "$apple_err" || status=$?
+              cat "$apple_out"
+              cat "$apple_err" >&2
+              if [ "$status" -eq 0 ]; then return 0; fi
+              if ! cat "$apple_out" "$apple_err" | grep -qiE 'network connection was lost|NSURLErrorDomain|could not connect|timed out|timeout|CloudKit|Error 68|offline|temporarily unavailable|Service Unavailable|(HTTP|status( code)?)[^0-9]*5[0-9][0-9]|internal error|connection (reset|refused)'; then
+                return "$status"
+              fi
+              if [ "$attempt" -eq 6 ]; then break; fi
+              delay=$((15 * 2 ** (attempt - 1)))
+              if [ "$delay" -gt 240 ]; then delay=240; fi
+              echo "::warning::Apple service failure (try $attempt of 6): $* ; trying again in ${delay}s"
+              sleep "$delay"
             done
-            return 1
+            return "$status"
           }
+          notary=(--key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
           notarize() {
-            local result
-            result="$(xcrun notarytool submit "$1" --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" --wait --timeout 30m --output-format json)" || true
-            echo "$result" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("Notarization", r.get("id"), r.get("status"))'
-            if [ "$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status"))')" != Accepted ]; then
-              id="$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))')"
-              [ -n "$id" ] && xcrun notarytool log "$id" --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+            local id status
+            # A real rejection (Invalid) is a finished submission, not a failure of the call: it is not retried.
+            apple xcrun notarytool submit "$1" "${notary[@]}" --wait --timeout 30m --output-format json || true
+            id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))' < "$apple_out" 2>/dev/null || true)"
+            status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' < "$apple_out" 2>/dev/null || true)"
+            echo "Notarization ${id:-unknown} ${status:-no status}"
+            if [ "$status" != Accepted ]; then
+              if [ -n "$id" ]; then apple xcrun notarytool log "$id" "${notary[@]}" || true; fi
               return 1
             fi
+          }
+          # The ticket is stapled, then validated: each retried on its own, so a lost connection while validating does
+          # not staple again. `spctl --assess` afterwards checks the stapled ticket offline.
+          staple() {
+            apple xcrun stapler staple "$1"
+            apple xcrun stapler validate "$1"
           }
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign -dv "$app" 2>&1 | grep -qx "TeamIdentifier=$TEAM_ID"
