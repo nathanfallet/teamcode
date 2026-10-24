@@ -113,7 +113,7 @@ class ArtifactRulesTest {
         if (method.name == "toString") "stub" else error("Unexpected call to ${method.name}.")
     } as T
 
-    @Test @org.junit.jupiter.api.Timeout(120) fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
+    @Test fun theSecretScanIgnoresProseAndStaysLinearOnCraftedFiles() {
         for (prose in listOf("Basic cross-browser support for every page", "Token\n----------------\nexplained below", "Basic\n================", "basic setup-instructions-here",
                 "Basic input/output", "Token usage/limits", "token refresh_interval", "basic /api/v1/artifacts", "token getAccessToken", "Bearer /api/v1/artifacts/uploads",
                 "token refresh_interval_v2_settings"))
@@ -142,11 +142,36 @@ class ArtifactRulesTest {
         val jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4"
         assertFalse(jwt in CloudConversationRules.mask("jwt=$jwt"))
         assertFalse("hunter2" in CloudConversationRules.mask("--url-https://u:hunter2@host"))
-        val started = System.nanoTime()
-        for (crafted in listOf("a-".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "tc_".repeat(700_000)))
-            assertNull(CloudConversationRules.detect(crafted))
-        for (crafted in listOf("a.".repeat(1_000_000), "sk-".repeat(700_000), "eyJ".repeat(700_000), "-eyJ".repeat(500_000), "a".repeat(2_000_000), "x://a:".repeat(300_000)))
-            CloudConversationRules.mask(crafted)
-        assertTrue(System.nanoTime() - started < 30_000_000_000, "Each 2 MiB crafted file is scanned and masked in linear time (quadratic would take hours)")
+        // Linearity is measured in characters read by the regex engine, not in wall-clock time, so a loaded runner cannot fail it.
+        val sizes = listOf(100_000, 200_000)
+        val perChar = mutableMapOf<String, MutableList<Double>>()
+        fun crafted(unit: String, size: Int) = unit.repeat(size / unit.length + 1).take(size)
+        for (unit in listOf("a-", "sk-", "eyJ", "tc_", "a.", "-eyJ", "a", "x://a:")) for (size in sizes) {
+            val text = crafted(unit, size)
+            val budget = 1_000L * size
+            val detectReads = LongArray(1)
+            val found = CloudConversationRules.detect(CountingText(text, detectReads, budget))
+            if (unit in listOf("a-", "sk-", "eyJ", "tc_")) assertNull(found, unit)
+            val maskReads = LongArray(1)
+            CloudConversationRules.mask(text) { CountingText(it, maskReads, budget) }
+            perChar.getOrPut("detect $unit") { mutableListOf() }.add(detectReads[0].toDouble() / size)
+            perChar.getOrPut("mask $unit") { mutableListOf() }.add(maskReads[0].toDouble() / size)
+        }
+        for ((name, reads) in perChar) {
+            assertTrue(reads.all { it < 1_000 }, "$name reads a bounded number of characters per input character: $reads")
+            assertTrue(reads[1] < reads[0] * 1.5 + 1, "$name does not read more per character on a longer input (quadratic growth): $reads")
+        }
+    }
+
+    /** A text that counts every character the regex engine reads from it. */
+    private class CountingText(private val inner: CharSequence, private val reads: LongArray, private val budget: Long) : CharSequence {
+        override val length get() = inner.length
+        override fun get(index: Int): Char {
+            // Stops a scan that goes quadratic at once instead of letting it run for hours.
+            check(++reads[0] <= budget) { "The scan read more than $budget characters (quadratic or catastrophic backtracking)" }
+            return inner[index]
+        }
+        override fun subSequence(startIndex: Int, endIndex: Int): CharSequence = inner.subSequence(startIndex, endIndex)
+        override fun toString() = inner.toString()
     }
 }

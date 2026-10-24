@@ -63,7 +63,7 @@ object CloudConversationRules {
      * and URLs with credentials. Name-based assignments (`API_KEY = "…"`) are not reported: they are ordinary code in a
      * page and say nothing about the value. Used to refuse publishing a file rather than to rewrite it.
      */
-    fun detect(text: String): String? {
+    fun detect(text: CharSequence): String? {
         secrets.forEachIndexed { index, pattern -> if (pattern.containsMatchIn(text)) return secretKinds[index] }
         if (authorizationValue.findAll(text).any { looksLikeSecretValue(it.groupValues[1], it.groupValues[2]) }) return "authorization_header"
         if (urlCredentials.containsMatchIn(text)) return "url_credentials"
@@ -124,12 +124,15 @@ object CloudConversationRules {
         return ':' in text && text.none { it.isISOControl() }
     }
 
-    fun mask(text: String): String {
-        var masked = text
-        for (pattern in secrets) masked = pattern.replace(masked, MASK)
-        masked = authorization.replace(masked) { if (looksLikeCredential(it.groupValues[2])) "${it.groupValues[1]} $MASK" else it.value }
-        masked = assignment.replace(masked) { "${it.groupValues[1]}${it.groupValues[2]}$MASK" }
-        masked = urlCredentials.replace(masked) { "${it.groupValues[1]}$MASK@" }
+    fun mask(text: CharSequence): String = mask(text) { it }
+
+    /** [mask] with every pass reading the text through [view], which lets a test count the characters each pass reads. */
+    internal fun mask(text: CharSequence, view: (CharSequence) -> CharSequence): String {
+        var masked = text.toString()
+        for (pattern in secrets) masked = pattern.replace(view(masked), MASK)
+        masked = authorization.replace(view(masked)) { if (looksLikeCredential(it.groupValues[2])) "${it.groupValues[1]} $MASK" else it.value }
+        masked = assignment.replace(view(masked)) { "${it.groupValues[1]}${it.groupValues[2]}$MASK" }
+        masked = urlCredentials.replace(view(masked)) { "${it.groupValues[1]}$MASK@" }
         return masked
     }
 
