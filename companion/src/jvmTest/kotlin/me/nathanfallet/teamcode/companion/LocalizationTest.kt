@@ -5,6 +5,7 @@ import java.util.Locale
 import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
+import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.userMessage
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
@@ -140,12 +141,33 @@ class LocalizationTest {
         assertEquals("1 step", inLocale(Locale.ENGLISH) { getPluralString(Res.plurals.transcript_steps, 1, 1) })
     }
 
+    /** The sentence of a failure in [locale]. */
+    private fun worded(locale: Locale, failure: Throwable): String = inLocale(locale) {
+        val message = failure.userMessage()
+        message.resource?.let { getString(it, *message.args.toTypedArray()) } ?: message.text
+    }
+
     @Test
     fun failuresAreWordedInTheLanguage() {
-        assertEquals("Nom d'utilisateur ou mot de passe incorrect.", inLocale(Locale.FRENCH) { CompanionException.InvalidCredentials().userMessage() })
-        assertEquals("Wrong username or password.", inLocale(Locale.ENGLISH) { CompanionException.InvalidCredentials().userMessage() })
-        assertEquals("Utilise au moins 14 caractères.", inLocale(Locale.FRENCH) { InvalidInput(InvalidInput.Problem.PASSWORD_SHORT, 14, "x").userMessage() })
-        assertEquals("Trop de tentatives. Réessaie dans 30 s.", inLocale(Locale.FRENCH) { CompanionException.RateLimited(30).userMessage() })
-        assertEquals("Le serveur a répondu HTTP 502 (bad_gateway).", inLocale(Locale.FRENCH) { CompanionException.Server(502, "bad_gateway").userMessage() })
+        assertEquals("Nom d'utilisateur ou mot de passe incorrect.", worded(Locale.FRENCH, CompanionException.InvalidCredentials()))
+        assertEquals("Wrong username or password.", worded(Locale.ENGLISH, CompanionException.InvalidCredentials()))
+        assertEquals("Utilise au moins 14 caractères.", worded(Locale.FRENCH, InvalidInput(InvalidInput.Problem.PASSWORD_SHORT, 14, "x")))
+        assertEquals("Trop de tentatives. Réessaie dans 30 s.", worded(Locale.FRENCH, CompanionException.RateLimited(30)))
+        assertEquals("Le serveur a répondu HTTP 502 (bad_gateway).", worded(Locale.FRENCH, CompanionException.Server(502, "bad_gateway")))
+        // The CLI's explanation is shown as the CLI wrote it.
+        assertEquals("folder refused", worded(Locale.FRENCH, LocalHostException("folder refused")))
+    }
+
+    @Test
+    fun everyFailureHasItsEnglishTextInThePlaceOfItsSentence() {
+        for (failure in listOf<Throwable>(
+            CompanionException.InvalidOrigin(), CompanionException.Unreachable(), CompanionException.NotFound(), CompanionException.Server(500, null),
+            CompanionException.DeviceRefused("device_offline"), CompanionException.GitHubRefused("github_app_not_configured"),
+            CompanionException.EnrollmentRefused("account_in_use"), InvalidInput(InvalidInput.Problem.CHOOSE_PROFILE, 0, "Choose a profile."),
+        )) {
+            val message = failure.userMessage()
+            val sentence = worded(Locale.ENGLISH, failure)
+            assertEquals(message.text, sentence, "${failure::class.simpleName}: the English text and the English resource differ")
+        }
     }
 }

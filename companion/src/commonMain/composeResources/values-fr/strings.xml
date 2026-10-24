@@ -563,4 +563,8 @@
     <string name="input_choose_folder">Choisis l'un des dossiers proposés par l'appareil.</string>
     <string name="input_choose_agent">Choisis Claude Code ou Codex.</string>
     <string name="input_choose_local_folder">Choisis le dossier dans lequel l'agent travaille.</string>
+    <string name="settings_signed_out_of">Déconnecté de %1$s sur %2$s.</string>
+    <string name="settings_signed_out_unreachable">Déconnecté sur cet appareil. Le serveur est injoignable ; sa session expirera d'elle-même.</string>
+    <string name="settings_signed_out_storage">Déconnecté sur cet appareil, mais son stockage sécurisé a refusé l'accès : la session peut rester valide jusqu'à son expiration. Révoque-la depuis la page Appareils du serveur.</string>
+    <string name="settings_device_renamed">Cet appareil s'appelle maintenant « %1$s » sur %2$s.</string>
 </resources>

@@ -563,4 +563,8 @@
     <string name="input_choose_folder">Choose one of the folders the device offers.</string>
     <string name="input_choose_agent">Choose Claude Code or Codex.</string>
     <string name="input_choose_local_folder">Choose the folder the agent works in.</string>
+    <string name="settings_signed_out_of">Signed out of %1$s on %2$s.</string>
+    <string name="settings_signed_out_unreachable">Signed out on this device. The server could not be reached; its session expires on its own.</string>
+    <string name="settings_signed_out_storage">Signed out on this device, but its secure storage refused access: the session may stay valid until it expires. Revoke it from the server's Devices page.</string>
+    <string name="settings_device_renamed">This device is now “%1$s” on %2$s.</string>
 </resources>

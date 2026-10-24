@@ -33,7 +33,7 @@ sealed interface AddAccountStep {
         val paste: String = "",
         val opened: Boolean = false,
         val sending: Boolean = false,
-        val error: String? = null,
+        val error: Failure? = null,
         val spent: Boolean = false,
     ) : AddAccountStep {
         val canSubmit: Boolean get() = !sending && !spent && paste.isNotBlank()
@@ -50,7 +50,7 @@ data class SubscriptionAccountsUiState(
     val step: AddAccountStep? = null,
     /** A sign-in being started (the enrollment check asked again). */
     val starting: Boolean = false,
-    val error: String? = null,
+    val error: Failure? = null,
     /** The last account added or reconnected, for the confirmation. */
     val added: AddedSubscriptionAccount? = null,
 ) {

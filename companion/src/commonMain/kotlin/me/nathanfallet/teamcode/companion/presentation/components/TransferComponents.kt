@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.components
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -69,7 +70,7 @@ import org.koin.compose.koinInject
 /** The sentence for a refusal of the server, by its code; an unknown code is named as is. */
 @Composable
 fun transferErrorText(error: TransferError): String = when (error) {
-    is TransferError.Text -> error.text
+    is TransferError.Text -> error.text.words()
     is TransferError.Refused -> when (error.code) {
         "recipient_ineligible" -> stringResource(Res.string.transfer_refused_recipient, error.problems.map { transferProblem(it) }.joinToString("; ").ifEmpty { error.code })
         else -> refusal(error.code)?.let { stringResource(it) } ?: stringResource(Res.string.transfer_refused_other, error.code)

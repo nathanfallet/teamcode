@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.components
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.Failure
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -445,8 +447,8 @@ fun Skeleton(fraction: Float, height: Dp = 12.dp) {
 }
 
 @Composable
-fun ErrorText(message: String?, modifier: Modifier = Modifier) {
-    if (message != null) Text(message, color = TeamCode.colors.danger, fontSize = 13.sp, modifier = modifier.testTag("error"))
+fun ErrorText(message: Failure?, modifier: Modifier = Modifier) {
+    if (message != null) Text(message.words(), color = TeamCode.colors.danger, fontSize = 13.sp, modifier = modifier.testTag("error"))
 }
 
 @Composable

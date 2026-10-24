@@ -79,7 +79,7 @@ fun UpdateBannerContent(state: UpdateBannerState, onUpdate: () -> Unit, onDismis
                         stringResource(Res.string.update_available_detail)
                     is UpdateBannerState.Updating -> stringResource(Res.string.update_updating_title, state.version) to state.output.lastOrNull()
                     is UpdateBannerState.Restarting -> stringResource(Res.string.update_restarting_title, state.version) to stringResource(Res.string.update_restarting_detail)
-                    is UpdateBannerState.Failed -> (state.version?.let { stringResource(Res.string.update_failed_title_version, it) } ?: stringResource(Res.string.update_failed_title)) to state.message
+                    is UpdateBannerState.Failed -> (state.version?.let { stringResource(Res.string.update_failed_title_version, it) } ?: stringResource(Res.string.update_failed_title)) to (state.message ?: stringResource(Res.string.update_failed_unexpected))
                     UpdateBannerState.Hidden -> return@Row
                 }
                 Text(title, color = if (failed) colors.danger else colors.text, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

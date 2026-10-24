@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -93,7 +94,7 @@ fun GitHubLinkScreen(viewModel: GitHubLinkViewModel, onBack: (() -> Unit)?, back
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("github-error")) }
+            state.error?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("github-error")) }
             state.justLinked?.let { Banner(stringResource(Res.string.github_just_linked, it), Tone.NEUTRAL, Modifier.testTag("github-linked"), icon = null) }
             state.ended?.let {
                 Banner(stringResource(if (it == GitHubLinkEnd.EXPIRED) Res.string.github_ended_expired else Res.string.github_ended_denied), Tone.WARN, Modifier.testTag("github-ended"))

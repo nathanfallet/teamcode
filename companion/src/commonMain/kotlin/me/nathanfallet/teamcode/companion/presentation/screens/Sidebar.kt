@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.Failure
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -117,7 +119,7 @@ data class SidebarState(
     val artifacts: List<Artifact>,
     val artifactsLoading: Boolean,
     /** Why the artifacts did not load (a server without them, offline), shown in place of the list. */
-    val artifactsError: String? = null,
+    val artifactsError: Failure? = null,
     val selection: SidebarSelection,
     val now: Long,
     /** The filter the shared lists are on when it is not their default (Paused, Team...): shown by the section titles. */
@@ -194,7 +196,7 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
             when {
                 account != null && !account.signedIn -> Unit
                 state.artifactsLoading && state.artifacts.isEmpty() -> repeat(3) { SkeletonRow(it) }
-                state.artifacts.isEmpty() && state.artifactsError != null -> SidebarNote(state.artifactsError)
+                state.artifacts.isEmpty() && state.artifactsError != null -> SidebarNote(state.artifactsError.words())
                 state.artifacts.isEmpty() -> SidebarNote(stringResource(Res.string.sidebar_artifacts_empty))
                 else -> state.artifacts.take(SIDEBAR_ROWS).forEach { artifact -> ArtifactRow(artifact, state, actions) }
             }

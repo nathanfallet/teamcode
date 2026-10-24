@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -102,7 +103,7 @@ fun SubscriptionAccountsScreen(viewModel: SubscriptionAccountsViewModel, onBack:
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("subscriptions-error")) }
+            state.error?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("subscriptions-error")) }
             state.added?.let { AddedBanner(it) }
             when (state.access) {
                 EnrollmentAccess.ADMINISTRATORS_ONLY -> Banner(stringResource(Res.string.subscriptions_administrators_only), Tone.WARN, Modifier.testTag("enrollment-refused"))

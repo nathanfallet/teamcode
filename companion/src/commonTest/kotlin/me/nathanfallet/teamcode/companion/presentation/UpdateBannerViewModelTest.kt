@@ -24,6 +24,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 
 private class FakeUpdater(var latest: String? = "1.3.0", var cli: String? = "1.2.0") : AppUpdater {
     override val appVersion = "1.2.0"
@@ -179,7 +180,7 @@ class UpdateBannerViewModelTest {
         val model = viewModel(updater)
         runCurrent()
         model.update(); runCurrent()
-        assertEquals("The update failed unexpectedly. Run teamcode update in a terminal to see why.", assertIs<UpdateBannerState.Failed>(model.uiState.value).message)
+        assertNull(assertIs<UpdateBannerState.Failed>(model.uiState.value).message)
         model.dismiss()
         assertEquals(UpdateBannerState.Hidden, model.uiState.value)
         assertEquals("1.3.0", preferences.dismissedVersion)

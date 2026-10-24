@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -142,7 +143,7 @@ fun ArtifactsScreen(
                 selected = state.scope, onSelect = viewModel::setScope, modifier = Modifier.fillMaxWidth(), tag = { "artifacts-${it.wire}" },
             )
             state.error?.let { error ->
-                Banner(error, Tone.DANGER, Modifier.testTag("error"), action = { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::reload, kind = ButtonKind.SECONDARY, small = true) })
+                Banner(error.words(), Tone.DANGER, Modifier.testTag("error"), action = { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::reload, kind = ButtonKind.SECONDARY, small = true) })
             }
         }
         val listState = rememberLazyListState()

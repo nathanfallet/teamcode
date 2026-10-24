@@ -15,7 +15,7 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 
-data class HomeUiState(val account: Account? = null, val refreshing: Boolean = false, val error: String? = null)
+data class HomeUiState(val account: Account? = null, val refreshing: Boolean = false, val error: Failure? = null)
 
 /** The active account, re-read from the server when it changes (a revoked device shows as signed out). */
 class HomeViewModel(

@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -89,7 +90,7 @@ fun AddServerScreen(
             onSubmit = viewModel::check,
             tag = "origin",
         )
-        state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("error")) }
+        state.error?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("error")) }
         if (server != null) {
             ServerCard(PhosphorIcons.Regular.Check, stringResource(Res.string.add_server_found), server.origin, Modifier.testTag("server"))
             if (state.newServer) Banner(stringResource(Res.string.add_server_new_warning), Tone.WARN)

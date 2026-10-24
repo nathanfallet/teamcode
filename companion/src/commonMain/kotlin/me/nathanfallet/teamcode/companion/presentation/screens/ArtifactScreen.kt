@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -149,7 +150,7 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabe
                 TcButton(stringResource(Res.string.artifact_restart), onClick = viewModel::restart, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("artifact-restart"))
             })
             state.error?.let { error ->
-                Banner(error, Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
+                Banner(error.words(), Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
                     { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::load, kind = ButtonKind.SECONDARY, small = true) }
                 } else null)
             }

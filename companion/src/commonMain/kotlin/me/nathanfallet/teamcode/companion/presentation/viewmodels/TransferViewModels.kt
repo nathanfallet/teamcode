@@ -26,10 +26,10 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
 /** A failure of a transfer screen: the server's refusal, worded by the screen from its code, or the domain's sentence. */
 sealed interface TransferError {
     data class Refused(val code: String, val problems: List<String>) : TransferError
-    data class Text(val text: String) : TransferError
+    data class Text(val text: Failure) : TransferError
 }
 
-internal suspend fun Throwable.transferError(): TransferError =
+internal fun Throwable.transferError(): TransferError =
     if (this is CompanionException.TransferRefused) TransferError.Refused(code, problems) else TransferError.Text(userMessage())
 
 data class TransferUiState(

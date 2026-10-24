@@ -1,6 +1,5 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
-import org.jetbrains.compose.resources.getString
 import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -41,7 +40,7 @@ data class ArtifactUiState(
     val missingPage: Boolean = false,
     /** The page to load in place of the entry page: the one that answered `404`, asked again under a renewed ticket. */
     val page: String? = null,
-    val error: String? = null,
+    val error: Failure? = null,
 ) {
     /** The viewer page of the version shown: copied and opened in the browser, pinned when it is not the current one. */
     val versionUrl: String? get() = viewerUrl?.let { url -> version?.takeIf { it != artifact?.currentVersion }?.let { "$url?v=$it" } ?: url }
@@ -146,7 +145,7 @@ class ArtifactViewModel(
     fun contentCrashed() {
         if (state.value.opened == null) return
         if (recentlyRenewed()) {
-            viewModelScope.launch { getString(Res.string.error_page_crashed).let { message -> state.update { it.copy(opened = null, error = message) } } }
+            state.update { it.copy(opened = null, error = Failure("The page stopped working.", Res.string.error_page_crashed)) }
             return
         }
         state.update { it.copy(reload = it.reload + 1) }

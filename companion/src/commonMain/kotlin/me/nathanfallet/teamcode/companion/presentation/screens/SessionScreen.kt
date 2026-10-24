@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -217,13 +218,13 @@ fun SessionScreen(
                         }
                     }
                     state.error?.let { error ->
-                        Banner(error, Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
+                        Banner(error.words(), Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
                             { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::retry, kind = ButtonKind.SECONDARY, small = true) }
                         } else null)
                     }
                     state.notice?.let { notice ->
                         val text = when (notice) {
-                            is SessionNotice.Text -> notice.text
+                            is SessionNotice.Text -> notice.text.words()
                             SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
                             is SessionNotice.PermissionClosed -> stringResource(when (notice.code) {
                                 "permission_request_answered" -> Res.string.notice_permission_answered

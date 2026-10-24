@@ -38,7 +38,7 @@ data class GitHubLinkUiState(
     val starting: Boolean = false,
     val step: GitHubDeviceStep? = null,
     val unlinking: Boolean = false,
-    val error: String? = null,
+    val error: Failure? = null,
     /** How the last device flow ended without a link. */
     val ended: GitHubLinkEnd? = null,
     /** The login just linked, for the confirmation. */

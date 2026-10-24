@@ -31,7 +31,7 @@ data class LocalSessionUiState(
     val message: String = "",
     val bypassPermissions: Boolean = false,
     val starting: Boolean = false,
-    val error: String? = null,
+    val error: Failure? = null,
     val started: LocalSessionStart? = null,
     /** "Install" of a missing CLI is running; [installOutput] holds its last lines. */
     val installing: Boolean = false,

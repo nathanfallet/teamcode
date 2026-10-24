@@ -108,7 +108,7 @@ class SubscriptionAccountsViewModelTest {
         model = model(); settle()
         model.startAdding(); model.choose(subscriptionTypes.first()); settle()
         model.onPaste("nope"); model.submit(); settle()
-        assertEquals("Paste the complete code#state shown by Claude.", signIn.error)
+        assertEquals("Paste the complete code#state shown by Claude.", signIn.error?.text)
         assertFalse(signIn.spent)
         assertEquals("nope", signIn.paste)
         model.onPaste("better")
@@ -136,13 +136,13 @@ class SubscriptionAccountsViewModelTest {
         model.startAdding(); model.choose(subscriptionTypes.first()); settle()
         model.onPaste("code#state"); model.submit(); settle()
         assertTrue(signIn.spent)
-        assertContains(signIn.error!!, "already in the pool")
+        assertContains(signIn.error!!.text, "already in the pool")
         // The setting changed since the screen loaded: starting again is refused before any sign-in, and read again.
         repository.access = EnrollmentAccess.ADMINISTRATORS_ONLY
         model.choose(signIn.signIn.type); settle()
         val state = model.uiState.value
         assertNull(state.step)
-        assertContains(state.error!!, "Only administrators")
+        assertContains(state.error!!.text, "Only administrators")
         assertEquals(EnrollmentAccess.ADMINISTRATORS_ONLY, state.access)
         assertEquals(1, repository.attempts)
     }

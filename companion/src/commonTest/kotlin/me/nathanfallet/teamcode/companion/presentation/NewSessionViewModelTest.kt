@@ -161,7 +161,7 @@ class NewSessionViewModelTest {
         assertEquals(listOf("devices", "folders d1"), devices.calls)
         val state = model.uiState.value
         assertEquals(emptyList(), state.devices); assertNull(state.deviceId); assertFalse(state.loadingDevices); assertFalse(state.loadingFolders)
-        assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error)
+        assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error?.text)
         // Refresh reads it again, once.
         model.reloadDevices(); settle()
         assertEquals(listOf("devices", "folders d1", "devices", "folders d1"), devices.calls)
@@ -206,7 +206,7 @@ class NewSessionViewModelTest {
         sessions.createOnDeviceResult = { throw CompanionException.Server(409, "device_offline") }
         model.create(); settle()
         val state = model.uiState.value
-        assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error)
+        assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error?.text)
         assertEquals(emptyList(), state.devices); assertNull(state.deviceId); assertFalse(state.canCreate)
         assertNull(state.created)
     }

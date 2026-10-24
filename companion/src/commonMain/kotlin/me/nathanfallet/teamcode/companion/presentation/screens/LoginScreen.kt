@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -96,7 +97,7 @@ fun LoginScreen(
             ServerCard(PhosphorIcons.Regular.HardDrives, stringResource(Res.string.login_signing_in_to), state.origin, Modifier.testTag("login-server"), mutedTitle = true)
         }
         if (unreachable) {
-            state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("error")) }
+            state.error?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("error")) }
             TcButton(stringResource(Res.string.action_retry), onClick = viewModel::loadServer, kind = ButtonKind.SECONDARY)
             return@FormPage
         }
@@ -123,7 +124,7 @@ fun LoginScreen(
                 hint = stringResource(Res.string.password_change_hint), onSubmit = submit)
             PasswordField(state.confirmation, viewModel::onConfirmationChange, stringResource(Res.string.password_change_confirm), "confirm-password", ContentType.NewPassword, onSubmit = submit)
         }
-        state.error?.let { Banner(it, Tone.DANGER, Modifier.testTag("error")) }
+        state.error?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("error")) }
     }
 }
 

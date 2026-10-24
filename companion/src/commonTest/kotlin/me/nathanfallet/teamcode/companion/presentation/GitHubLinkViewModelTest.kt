@@ -130,7 +130,7 @@ class GitHubLinkViewModelTest {
         model.startLinking(); settle()
         val state = model.uiState.value
         assertNull(state.step)
-        assertContains(state.error!!, "device flow")
+        assertContains(state.error!!.text, "device flow")
         assertEquals(listOf("offered", "link", "start", "offered", "link"), repository.calls)
     }
 
@@ -145,7 +145,7 @@ class GitHubLinkViewModelTest {
         advanceTimeBy(5_000); settle()
         assertEquals(3, failures)
         assertNull(model.uiState.value.step)
-        assertEquals("The server could not be reached.", model.uiState.value.error)
+        assertEquals("The server could not be reached.", model.uiState.value.error?.text)
     }
 
     @Test fun anotherFailureEndsTheFlowAtOnce() = runTest(dispatcher) {
@@ -153,7 +153,7 @@ class GitHubLinkViewModelTest {
         model = model(); settle()
         model.startLinking(); advanceTimeBy(5_000); settle()
         assertNull(model.uiState.value.step)
-        assertContains(model.uiState.value.error!!, "github_unreachable")
+        assertContains(model.uiState.value.error!!.text, "github_unreachable")
         assertEquals(1, repository.calls.count { it.startsWith("poll") })
     }
 

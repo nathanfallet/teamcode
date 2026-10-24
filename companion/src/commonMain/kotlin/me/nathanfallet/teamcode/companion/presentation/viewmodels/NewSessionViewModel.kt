@@ -55,7 +55,7 @@ data class NewSessionUiState(
     val effort: String = "",
     val message: String = "",
     val creating: Boolean = false,
-    val error: String? = null,
+    val error: Failure? = null,
     val created: CloudSession? = null,
 ) {
     // Not while something loads: its answer can change what is sent, and so the key a retry must reuse.

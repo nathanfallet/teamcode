@@ -23,7 +23,7 @@ data class ArtifactsUiState(
     val loading: Boolean = true,
     val loadingMore: Boolean = false,
     val query: String = "",
-    val error: String? = null,
+    val error: Failure? = null,
 ) {
     /** The loaded artifacts whose title or description holds the search, ignoring case. */
     val shown: List<Artifact> get() = query.trim().let { q ->

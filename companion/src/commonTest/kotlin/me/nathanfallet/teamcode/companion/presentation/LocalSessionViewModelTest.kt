@@ -140,7 +140,7 @@ class LocalSessionViewModelTest {
         settle()
         model.chooseDirectory(); settle()
         model.create(); settle()
-        assertEquals("Choose a project directory: /Users/ada itself.", model.uiState.value.error)
+        assertEquals("Choose a project directory: /Users/ada itself.", model.uiState.value.error?.text)
         assertNull(model.uiState.value.started)
         assertTrue(model.uiState.value.canStart)
     }
@@ -166,7 +166,7 @@ class LocalSessionViewModelTest {
         val refused = LocalSessionViewModel(NewSessionRoute("cli"), useCase(failing), failing, SettingsPreferencesRepository(MapSettings()))
         settle()
         refused.installCli(); settle()
-        assertEquals("The downloaded install script is not the one this app was built with. Nothing was run.", refused.uiState.value.error)
+        assertEquals("The downloaded install script is not the one this app was built with. Nothing was run.", refused.uiState.value.error?.text)
         assertIs<LocalAvailability.CliMissing>(refused.uiState.value.availability)
         assertFalse(refused.uiState.value.installing)
     }

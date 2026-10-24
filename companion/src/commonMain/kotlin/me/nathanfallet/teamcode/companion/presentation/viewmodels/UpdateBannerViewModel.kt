@@ -1,6 +1,5 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
-import org.jetbrains.compose.resources.getString
 import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -27,7 +26,8 @@ sealed interface UpdateBannerState {
     /** The update is installed: the app quits and the new version opens. */
     data class Restarting(val version: String) : UpdateBannerState
     /** The update failed; [version] is offered again by "Try again" (null after a failure reported at startup). */
-    data class Failed(val version: String?, val message: String, val output: List<String> = emptyList()) : UpdateBannerState
+    /** [message] is the updater's own explanation; null when the failure was not one it explained (the banner words it). */
+    data class Failed(val version: String?, val message: String?, val output: List<String> = emptyList()) : UpdateBannerState
 }
 
 /**
@@ -104,7 +104,7 @@ class UpdateBannerViewModel(
                 throw error
             } catch (error: Exception) {
                 val output = (state.value as? UpdateBannerState.Updating)?.output.orEmpty()
-                val message = (error as? AppUpdateException)?.message ?: getString(Res.string.update_failed_unexpected)
+                val message = (error as? AppUpdateException)?.message
                 state.value = UpdateBannerState.Failed(version, message, output)
             }
         }

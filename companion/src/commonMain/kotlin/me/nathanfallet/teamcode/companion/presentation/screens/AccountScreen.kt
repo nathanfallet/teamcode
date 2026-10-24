@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -107,7 +108,7 @@ fun AccountScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             LargeTitle(stringResource(Res.string.account_title))
-            state.message?.let { Banner(it, Tone.NEUTRAL, Modifier.testTag("message"), icon = null) }
+            state.message?.let { Banner(it.words(), Tone.NEUTRAL, Modifier.testTag("message"), icon = null) }
             if (!state.persistentCredentials) Banner(stringResource(Res.string.settings_no_keyring), Tone.WARN)
             BusyRow(state.working)
 

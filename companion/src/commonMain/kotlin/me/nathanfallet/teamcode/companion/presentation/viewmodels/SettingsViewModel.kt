@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
+import me.nathanfallet.teamcode.companion.resources.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -27,7 +28,7 @@ data class SettingsUiState(
     /** False on a desktop without a keyring: tokens are not kept after the app quits. */
     val persistentCredentials: Boolean = true,
     val working: Boolean = false,
-    val message: String? = null,
+    val message: Failure? = null,
     /** On the desktop, where the CLI's `config.json` is (shown with the CLI's account). */
     val cliConfigPath: String? = null,
 ) {
@@ -55,20 +56,20 @@ class SettingsViewModel(
 
     fun signOut(account: Account) = work {
         when (signOut(account.id)) {
-            SignOutUseCase.Result.REVOKED -> "Signed out of ${account.username} on ${account.origin}."
-            SignOutUseCase.Result.SERVER_UNREACHABLE -> "Signed out on this device. The server could not be reached; its session expires on its own."
+            SignOutUseCase.Result.REVOKED -> Failure("Signed out of ${account.username} on ${account.origin}.", Res.string.settings_signed_out_of, listOf(account.username, account.origin))
+            SignOutUseCase.Result.SERVER_UNREACHABLE -> Failure("Signed out on this device. The server could not be reached; its session expires on its own.", Res.string.settings_signed_out_unreachable)
             SignOutUseCase.Result.STORAGE_REFUSED ->
-                "Signed out on this device, but its secure storage refused access: the session may stay valid until it expires. Revoke it from the server's Devices page."
+                Failure("Signed out on this device, but its secure storage refused access: the session may stay valid until it expires. Revoke it from the server's Devices page.", Res.string.settings_signed_out_storage)
         }
     }
 
     fun renameDevice(name: String) = work {
         val account = accounts.activeAccountId.value?.let { id -> accounts.accounts.value.firstOrNull { it.id == id } } ?: return@work null
         val renamed = renameDevice(account.id, name)
-        "This device is now \"${renamed.deviceName}\" on ${renamed.origin}."
+        Failure("This device is now \"${renamed.deviceName}\" on ${renamed.origin}.", Res.string.settings_device_renamed, listOf(renamed.deviceName, renamed.origin))
     }
 
-    private fun work(action: suspend () -> String?) {
+    private fun work(action: suspend () -> Failure?) {
         if (status.value.working) return
         status.update { it.copy(working = true, message = null) }
         viewModelScope.launch {

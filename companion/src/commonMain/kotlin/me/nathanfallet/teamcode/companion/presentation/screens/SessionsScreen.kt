@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion.presentation.screens
 
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -206,7 +207,7 @@ fun SessionsScreen(
                 return@LazyColumn
             }
             if (error != null) item(key = "error") {
-                Banner(error, Tone.DANGER, Modifier.testTag("sessions-error"), action = if (state.error != null) {
+                Banner(error.words(), Tone.DANGER, Modifier.testTag("sessions-error"), action = if (state.error != null) {
                     { TcButton(stringResource(Res.string.action_retry), onClick = sessionsViewModel::retry, kind = ButtonKind.SECONDARY, small = true) }
                 } else null)
             }

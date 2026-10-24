@@ -21,7 +21,7 @@ data class AddServerUiState(
     val server: ServerInfo? = null,
     /** True when no account (signed in or not) uses this origin yet: the screen says it is a new server. */
     val newServer: Boolean = true,
-    val error: String? = null,
+    val error: Failure? = null,
 )
 
 class AddServerViewModel(

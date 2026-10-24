@@ -35,7 +35,7 @@ data class SessionsUiState(
     /** True while the feed (or polling) is running; false in the background, after a refusal, or signed out. */
     val following: Boolean = false,
     val reconnecting: Boolean = false,
-    val error: String? = null,
+    val error: Failure? = null,
     /** The server announces remote sessions: a row says where its session runs. */
     val remoteSessions: Boolean = false,
 ) {
