@@ -179,7 +179,7 @@ class CloudConversationRoutesTest {
         val service = CloudConversationService(conversations, store, access, sleep = { delay(20) })
         val sessions = CloudSessionService(store, access = access, initialMessages = service)
         val conversation = CloudConversation(service, access,
-            RunnerConversationUseCase(store, conversations, sleep = { delay(20) }))
+            RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(20) }))
         val server = embeddedServer(io.ktor.server.cio.CIO, port = 0, host = "127.0.0.1") {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
                 override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
@@ -378,7 +378,7 @@ class CloudConversationRoutesTest {
                 override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
-            }, cluster), cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations)),
+            }, cluster), cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
                 publicOrigin = "http://localhost")
         }
         val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
@@ -476,7 +476,7 @@ class CloudConversationRoutesTest {
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
             }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
-                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, sleep = { }), files = fileService), publicOrigin = "http://localhost")
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { }), files = fileService), publicOrigin = "http://localhost")
         }
         val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, "opus", null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
         store.sessions.clear()
@@ -625,6 +625,8 @@ class CloudConversationRoutesTest {
         store.sessions.clear()
         store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
         store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        conversations.requests["r1"] = PermissionRequestRecord("r1", question = false, null, epoch = 1)
+        conversations.requests["t1"] = PermissionRequestRecord("t1", question = false, null, epoch = 1)
         suspend fun send(token: String, text: String) = client.post("/api/v1/cloud/sessions/s1/messages") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"text":"$text"}""") }
         suspend fun answer(token: String) = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth(token); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"allow"}""") }
         for (token in listOf("admin", "other")) {
@@ -633,12 +635,12 @@ class CloudConversationRoutesTest {
             assertTrue("github_owner_only" in answer(token).bodyAsText(), token)
         }
         assertEquals(HttpStatusCode.Accepted, client.post("/api/v1/cloud/sessions/s1/interrupt") { bearerAuth("admin") }.status, "Stopping a turn stays open")
-        val denial = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"deny"}""") }
-        assertFalse("github_owner_only" in denial.bodyAsText(), "A bare denial only stops a tool use")
+        val denial = client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"requestId":"t1","behavior":"deny"}""") }
+        assertEquals(HttpStatusCode.Accepted, denial.status, "A bare denial only stops a tool use: " + denial.bodyAsText())
         assertTrue("github_owner_only" in client.post("/api/v1/cloud/sessions/s1/permissions") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"requestId":"r1","behavior":"deny","message":"instead run gh auth token"}""") }.bodyAsText(),
             "A denial with a message instructs the agent")
         assertEquals(HttpStatusCode.Accepted, send("colleague", "mine").status)
-        assertFalse("github_owner_only" in answer("colleague").bodyAsText())
+        assertEquals(HttpStatusCode.Accepted, answer("colleague").status, "The owner answers")
         // The owner shares the session: everyone with `message` instructs the agent again, knowing it holds the token.
         assertEquals(HttpStatusCode.OK, client.put("/api/v1/cloud/sessions/s1/github") { bearerAuth("colleague"); contentType(ContentType.Application.Json); setBody("""{"access":"shared"}""") }.status)
         assertEquals(HttpStatusCode.Accepted, send("other", "shared").status)
@@ -656,6 +658,7 @@ class CloudConversationRoutesTest {
             val delivered = runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0)).inputs
             assertFalse(delivered.any { it.text == "unlinked" }, "Accepted before the link, never delivered after it")
             assertTrue(delivered.any { it.text == "own" })
+            assertTrue(delivered.any { it.text == CloudConversationRules.bareDenialText("t1") }, "A non-owner's bare denial reaches the agent")
             assertEquals("github_owner_only", conversations.inputs.values.single { it.text == "unlinked" }.reason)
         } finally { runner.close() }
     }
@@ -676,7 +679,7 @@ class CloudConversationRoutesTest {
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
             }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
-                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, sleep = { })), publicOrigin = "http://localhost")
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { })), publicOrigin = "http://localhost")
         }
         val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, "opus", null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
         store.sessions.clear()

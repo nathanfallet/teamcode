@@ -24,7 +24,7 @@ class CloudIdlePersistenceTest {
         val sessions = CloudSessionService(store, access = access, initialMessages = conversation)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster, activity = conversations)
         val runner = RunnerChannelUseCase(store)
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
     }
 
     @Test fun initialMessageAndIdlePause() = runBlocking {

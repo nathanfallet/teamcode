@@ -9,7 +9,9 @@ import okio.Path
 /**
  * What a member reads before approving a hook is what runs: every character that can hide, overwrite or reorder text
  * in a terminal (controls other than line feed and tab, carriage return, bidi overrides and isolates, zero-width and
- * other format characters, line separators, tag characters) is printed as `<U+XXXX>`.
+ * other format characters, line separators, tag characters, spaces other than U+0020, characters that render blank) is
+ * printed as `<U+XXXX>`. Letters and marks of every script stay readable, so this is a list of what hides, kept with
+ * the tests that name each entry.
  */
 internal object HookText {
     fun visible(text: String, keepLines: Boolean = true): String = buildString {
@@ -32,8 +34,10 @@ internal object HookText {
         c.isISOControl() -> true
         code in 0x200B..0x200F || code in 0x2028..0x202E || code in 0x2060..0x206F -> true
         code == 0xFEFF || code == 0x00AD || code == 0x061C || code == 0x180E || code == 0x034F || code in 0xFFF9..0xFFFB -> true
-        // Letters and symbols that render blank: Hangul fillers, the Braille blank.
-        code == 0x115F || code == 0x1160 || code == 0x3164 || code == 0xFFA0 || code == 0x2800 -> true
+        // Letters, marks and symbols that render blank: Hangul fillers, Khmer inherent vowels, the Braille blank, variation selectors.
+        code == 0x115F || code == 0x1160 || code == 0x3164 || code == 0xFFA0 || code == 0x2800 || code == 0x17B4 || code == 0x17B5 || code in 0xFE00..0xFE0F -> true
+        // Every space but the ordinary one (no-break, ideographic, en, em... spaces look like it and are not it).
+        c.category == CharCategory.SPACE_SEPARATOR -> c != ' '
         else -> c.category == CharCategory.FORMAT || c.category == CharCategory.LINE_SEPARATOR || c.category == CharCategory.PARAGRAPH_SEPARATOR
     }
 }
@@ -59,8 +63,8 @@ internal object HookApprovalCheck {
             if (!digest.matches(it)) return "Pass --digest as sha256: followed by 64 hexadecimal digits, as teamcode hooks show prints it."
         }?.let { if (it.startsWith("sha256:")) it else "sha256:$it" }
         val expected = normalized ?: shown ?: return "Read it first with teamcode hooks show ${hook.name}, or pass --digest."
-        if (expected != hook.digest) return "The delivered version changed since you read it (you read $expected, the server now delivers ${hook.digest}). " +
-            "Read it again with teamcode hooks show ${hook.name}."
-        return null
+        if (expected == hook.digest) return null
+        return if (normalized != null) "The server delivers ${hook.digest}, not the --digest you passed ($expected). Read it with teamcode hooks show ${hook.name}."
+        else "The delivered version changed since you read it (you read $expected, the server now delivers ${hook.digest}). Read it again with teamcode hooks show ${hook.name}."
     }
 }

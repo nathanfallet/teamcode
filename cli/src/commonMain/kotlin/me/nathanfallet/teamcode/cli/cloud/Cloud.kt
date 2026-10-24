@@ -241,7 +241,8 @@ private class CloudGitHub : SuspendingCliktCommand(name = "github") {
             val session = client.setCloudGitHubAccess(id, access)
             echo("GitHub: " + GITHUB_ACCESS_HELP.getValue(session.githubAccess ?: access))
             if (access != "none" && session.createdBy.initiatorId != session.ownerId) echo("This session was created by ${session.createdBy.initiatorId}: " +
-                "its conversation and workspace hold what they asked for, and the agent now acts on them with your GitHub access. Read the transcript (teamcode cloud logs $id) first.", err = true)
+                "its workspace holds what they set up, and the agent acts with your GitHub access. Read the transcript (teamcode cloud logs $id). " +
+                (if (access == "owner") "Their messages not yet read by the agent are not delivered; --access shared lets the agent act on them." else "Everyone who may message it now instructs an agent holding your token."), err = true)
         }
     }
 }

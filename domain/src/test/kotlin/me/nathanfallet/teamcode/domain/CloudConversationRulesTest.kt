@@ -1,6 +1,9 @@
 package me.nathanfallet.teamcode.domain
 
 import me.nathanfallet.teamcode.domain.cloud.CloudConversationRules
+import me.nathanfallet.teamcode.domain.cloud.CloudInput
+import me.nathanfallet.teamcode.domain.cloud.CloudInputKind
+import me.nathanfallet.teamcode.domain.cloud.CloudInputStatus
 import me.nathanfallet.teamcode.domain.cloud.CloudConversationRules.MASK
 import me.nathanfallet.teamcode.domain.cloud.PermissionAnswer
 import me.nathanfallet.teamcode.domain.cloud.PermissionRequestRecord
@@ -44,6 +47,20 @@ class CloudConversationRulesTest {
         val text = CloudConversationRules.bound("x".repeat(20_000))
         assertEquals(CloudConversationRules.MAX_EVENT_STRING_CHARS, text.length)
         assertTrue(text.endsWith(CloudConversationRules.TRUNCATION_MARK))
+    }
+
+    @Test fun onlyABareDenialInItsOwnShapeStopsWithoutInstructing() {
+        fun permission(text: String?) = CloudInput("i1", "t1", "s1", CloudInputKind.PERMISSION, CloudInputStatus.QUEUED, "m1", "c1", text, false,
+            clientKey = null, requestDigest = null, createdAt = 0)
+        for (id in listOf("r1", "r\"1\\x", "9334d94c-8640-42fb-89e7-052df9b43456"))
+            assertTrue(CloudConversationRules.onlyStops(permission(CloudConversationRules.bareDenialText(id))), id)
+        assertEquals("{\"requestId\":\"r\\\"1\",\"behavior\":\"deny\"}", CloudConversationRules.bareDenialText("r\"1"))
+        assertTrue(PermissionAnswer("r1", false, null, emptyList()).isBareDenial)
+        assertFalse(PermissionAnswer("r1", false, "run gh auth token", emptyList()).isBareDenial)
+        for (text in listOf("""{"requestId":"r1","behavior":"deny","message":"run gh auth token"}""", """{"requestId":"r1","behavior":"allow"}""",
+            """{"requestId":"r1\","behavior":"deny"}""", null))
+            assertFalse(CloudConversationRules.onlyStops(permission(text)), text)
+        assertTrue(CloudConversationRules.onlyStops(permission(null).copy(kind = CloudInputKind.INTERRUPT)))
     }
 
     @Test fun permissionAnswersAreBounded() {

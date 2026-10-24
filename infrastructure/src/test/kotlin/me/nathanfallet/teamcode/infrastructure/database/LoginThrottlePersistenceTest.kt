@@ -48,17 +48,15 @@ class LoginThrottlePersistenceTest {
     @Test @Timeout(300)
     fun eachAddressHasItsOwnBudget() = withDatabase { team, admin, database ->
         val attacker = LoginOrigin("198.51.100.66")
-        // The budget counts per calendar minute of the database clock, and 31 password hashes take seconds on CI: a run
-        // that crosses a minute starts a fresh window and is not limited (this test was flaky). Such a run is repeated
-        // once; the second one starts early in the new window, which already holds the first run's later attempts.
-        suspend fun window() = database.query { nowMillis() / 60_000 }
-        var limited: String? = null
-        for (round in 1..2) {
-            val start = window()
-            repeat(SqlLoginThrottle.SOURCE_ATTEMPTS) { runCatching { team.login("nobody-$it", "wrong password", "Attacker", null, null, null, attacker) } }
-            val code = assertFailsWith<TeamFailure> { team.login("nobody", "wrong password", "Attacker", null, null, null, attacker) }.code
-            if (window() == start) { limited = code; break }
-        }
+        // The budget counts per calendar minute of the database clock, and 31 password hashes take seconds on CI: a burst
+        // that crosses a minute starts a fresh window and is not limited (this test was flaky). It starts early in a
+        // minute, which leaves it 45 s, and a burst slower than that fails as such rather than as a missing limit.
+        val now = database.query { nowMillis() }
+        if (now % 60_000 > 15_000) delay(60_000 - now % 60_000 + 100)
+        val start = database.query { nowMillis() / 60_000 }
+        repeat(SqlLoginThrottle.SOURCE_ATTEMPTS) { runCatching { team.login("nobody-$it", "wrong password", "Attacker", null, null, null, attacker) } }
+        val limited = assertFailsWith<TeamFailure> { team.login("nobody", "wrong password", "Attacker", null, null, null, attacker) }.code
+        assertEquals(start, database.query { nowMillis() / 60_000 }, "The burst took more than 45 s and crossed a minute")
         assertEquals("login_rate_limit", limited)
         // A new device elsewhere is not a trusted device, and still signs in.
         val elsewhere = team.login("admin", ADMIN_PASSWORD, "New laptop", null, null, null, LoginOrigin("203.0.113.10"))

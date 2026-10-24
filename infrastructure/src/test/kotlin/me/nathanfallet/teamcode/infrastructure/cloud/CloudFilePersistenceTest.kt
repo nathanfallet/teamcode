@@ -42,7 +42,7 @@ class CloudFilePersistenceTest {
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster)
         val runner = RunnerChannelUseCase(store)
         val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
         val files = CloudFileService(SqlCloudFileStore(database), store, conversation, object : CloudFileStorage {
             override suspend fun active(teamId: String) = artifacts.testedConnection(teamId)
             override suspend fun any(teamId: String) = artifacts.connection(teamId)

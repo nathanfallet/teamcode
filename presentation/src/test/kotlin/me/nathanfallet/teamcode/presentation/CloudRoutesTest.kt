@@ -608,7 +608,7 @@ class CloudRoutesTest {
         application {
             configureGateway(gateway, team = logins, cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
                 cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, FakeCluster, logins = { logins.authenticate(it) }), remoteHosts = true),
-                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations)),
+                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
                 deviceDaemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemons, sleep = {}), sessions), publicOrigin = "http://localhost")
         }
         assertTrue("cloud.sessions.remote.daemon.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)

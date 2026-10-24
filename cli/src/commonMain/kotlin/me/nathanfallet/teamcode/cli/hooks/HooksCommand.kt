@@ -85,12 +85,21 @@ private class HookShow : SuspendingCliktCommand(name = "show") {
             HookDigest.problem(hook, artifact)?.let { throw CliktError("The hook was refused ($it): its files do not match the approved digest.") }
             echo(describe(hook))
             echo("digest ${HookText.visible(hook.digest, keepLines = false)}")
+            var withheld = false
             for (file in artifact.files) {
                 val bytes = checkNotNull(file.contentBase64.decodeBase64()).toByteArray()
                 val text = bytes.decodeToString()
                 echo("\n--- ${HookText.visible("${file.path} (${file.mode}, ${file.size} bytes)", keepLines = false)} ---")
                 // Characters that would hide or reorder code are shown as <U+XXXX>, never interpreted by the terminal.
-                echo(if (text.encodeToByteArray().contentEquals(bytes) && text.none { it.isISOControl() && it !in "\n\r\t" }) HookText.visible(text) else "(binary content not shown)")
+                val readable = text.encodeToByteArray().contentEquals(bytes) && text.none { it.isISOControl() && it !in "\n\r\t" }
+                if (!readable) withheld = true
+                echo(if (readable) HookText.visible(text) else "(binary content not shown)")
+            }
+            if (withheld) {
+                // Content that was not shown was not read: approving it takes an explicit --digest.
+                echo("\nSome files were not shown. Inspect them yourself before approving with teamcode hooks approve " +
+                    "${HookText.visible(hook.name, keepLines = false)} --digest ${HookText.visible(hook.digest, keepLines = false)}.", err = true)
+                return@use
             }
             // approve records this version, and only this one, unless --digest names another.
             if (teamHooksSupported()) shownDigests().record(hook.name, hook.digest)

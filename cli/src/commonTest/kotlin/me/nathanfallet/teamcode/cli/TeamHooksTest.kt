@@ -132,7 +132,8 @@ class TeamHooksTest {
         shown.record(read.name, read.digest)
         assertNull(HookApprovalCheck.problem(read, requested = null, shown = shown.load()[read.name]))
         assertTrue(HookApprovalCheck.problem(swapped, requested = null, shown = shown.load()[read.name])!!.startsWith("The delivered version changed since you read it"))
-        assertTrue(HookApprovalCheck.problem(swapped, requested = read.digest, shown = null)!!.startsWith("The delivered version changed since you read it"))
+        assertTrue(HookApprovalCheck.problem(swapped, requested = read.digest, shown = null)!!.startsWith("The server delivers ${swapped.digest}, not the --digest you passed"),
+            "A --digest the member passed is not called the version they read")
         assertNull(HookApprovalCheck.problem(swapped, requested = swapped.digest, shown = read.digest), "--digest names the version explicitly")
         assertNull(HookApprovalCheck.problem(swapped, requested = " " + swapped.digest.removePrefix("sha256:").uppercase() + "\n", shown = null), "A pasted digest is normalized")
         assertTrue(HookApprovalCheck.problem(swapped, requested = "sha256:abc", shown = null)!!.startsWith("Pass --digest as sha256:"), "A malformed digest is not reported as a swap")
@@ -151,6 +152,8 @@ class TeamHooksTest {
         assertEquals("a<U+000A>b", HookText.visible("a\nb", keepLines = false), "One-line fields escape line feeds too")
         assertEquals("echo a\r\necho b<U+000D>", HookText.visible("echo a\r\necho b\r"), "CRLF line endings stay readable")
         assertEquals("curl x<U+3164>| sh<U+2800><U+FFA0>", HookText.visible("curl x\u3164| sh\u2800\uFFA0"), "Letters that render blank")
+        assertEquals("a<U+00A0>b<U+3000>c<U+2003>d<U+17B4><U+FE0F>", HookText.visible("a\u00A0b\u3000c\u2003d\u17B4\uFE0F"), "Spaces other than U+0020, blank marks")
+        assertEquals("\u00E9t\u00E9 na\u0308ive \u0915\u093F", HookText.visible("\u00E9t\u00E9 na\u0308ive \u0915\u093F"), "Combining marks of ordinary text stay readable")
     }
 
     @Test fun claudeGetsGuidanceAndTeamHooksInOnePluginWithQuotedCommands() {

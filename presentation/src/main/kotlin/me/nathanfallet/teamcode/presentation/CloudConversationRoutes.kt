@@ -218,7 +218,8 @@ internal fun Route.cloudConversationRoutes(conversation: CloudConversation) {
             val allow = when (body.behavior) { "allow" -> true; "deny" -> false; else -> throw TeamFailure("invalid_permission_answer", 400, "Use behavior allow or deny.") }
             val answer = PermissionAnswer(body.requestId, allow, body.message, body.answers.orEmpty().map { QuestionAnswer(it.question, it.options, it.text) })
             // The runner reads this text: the answer exactly as validated, in a fixed shape (answers by question index).
-            val text = buildJsonObject {
+            // A bare denial uses the one shape that delivery lets through to an owner-only agent (audit M2).
+            val text = if (answer.isBareDenial) CloudConversationRules.bareDenialText(answer.requestId) else buildJsonObject {
                 put("requestId", answer.requestId); put("behavior", body.behavior); answer.message?.let { put("message", it) }
                 if (answer.answers.isNotEmpty()) putJsonArray("answers") {
                     for (item in answer.answers.sortedBy { it.question }) addJsonObject {

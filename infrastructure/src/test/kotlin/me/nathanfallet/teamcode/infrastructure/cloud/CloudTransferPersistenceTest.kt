@@ -28,7 +28,7 @@ class CloudTransferPersistenceTest {
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients))
         val runner = RunnerChannelUseCase(store)
         val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
         val team = SqlTeamService(database)
         val inference = RunnerInferenceUseCase(store, SqlCloudInferenceCredentialStore(database))
     }

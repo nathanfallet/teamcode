@@ -62,7 +62,7 @@ class ApiDocsTest {
                 RunnerInferenceUseCase(sessionStore, stub()), RunnerGitHubUseCase(sessionStore, stub())),
             github = GitHubLinkService(stub(), stub(), stub()),
             cloudConversation = CloudConversationService(conversationStore, sessionStore, access).let { conversation ->
-                CloudConversation(conversation, access, RunnerConversationUseCase(sessionStore, conversationStore),
+                CloudConversation(conversation, access, RunnerConversationUseCase(sessionStore, conversationStore, { _, _ -> false }),
                     me.nathanfallet.teamcode.domain.team.TeamEventService(stub<me.nathanfallet.teamcode.domain.team.TeamEventStore>()),
                     files = CloudFileService(stub(), sessionStore, conversation, stub(), stub()))
             },

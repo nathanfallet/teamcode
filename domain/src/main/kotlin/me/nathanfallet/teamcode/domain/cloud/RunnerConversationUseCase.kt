@@ -25,10 +25,10 @@ data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredS
 class RunnerConversationUseCase(
     private val sessions: CloudSessionStore,
     private val store: CloudConversationStore,
+    /** Whether a member has linked GitHub; see [CloudConversationService]. Required: the delivery guard must not fail open. */
+    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-    /** Whether a member has linked GitHub; see [CloudConversationService]. */
-    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean = { _, _ -> false },
 ) {
     suspend fun agent(teamId: String, sessionId: String, epoch: Int): RunnerAgentConfig {
         val session = live(teamId, sessionId, epoch)
