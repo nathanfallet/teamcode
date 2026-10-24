@@ -1,0 +1,1 @@
+ALTER TABLE cloud_sessions ADD github_access VARCHAR(16) DEFAULT 'owner' NOT NULL;

@@ -4,6 +4,8 @@ import com.github.ajalt.clikt.command.SuspendingCliktCommand
 import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.*
 import com.github.ajalt.clikt.parameters.arguments.argument
+import com.github.ajalt.clikt.parameters.options.help
+import com.github.ajalt.clikt.parameters.options.option
 import me.nathanfallet.teamcode.api.models.EffectiveHookView
 import me.nathanfallet.teamcode.cli.config.configPath
 import me.nathanfallet.teamcode.cli.loadConfig
@@ -42,9 +44,12 @@ private suspend fun delivered(client: TeamCodeClient, name: String): EffectiveHo
     return client.hookManifest().hooks.find { it.name == name } ?: throw CliktError("No team hook named $name is delivered to you.")
 }
 
-private fun describe(hook: EffectiveHookView) = "${hook.name} ${hook.version}: runs ${hook.definition.command} on " +
+/** One line per hook; every field comes from the server and is printed with its hidden characters made visible. */
+private fun describe(hook: EffectiveHookView) = HookText.visible("${hook.name} ${hook.version}: runs ${hook.definition.command} on " +
     hook.definition.events.sorted().joinToString(", ") + (hook.definition.matcher?.let { " (matcher $it)" } ?: "") +
-    ", timeout ${hook.definition.timeoutSeconds} s"
+    ", timeout ${hook.definition.timeoutSeconds} s", keepLines = false)
+
+private fun shownDigests() = HookShownDigests(teamHooksRoot() / "shown.json")
 
 private class HookList : SuspendingCliktCommand(name = "list") {
     override fun help(context: Context) = "List the team hooks delivered to you and your decision for each version."
@@ -79,24 +84,41 @@ private class HookShow : SuspendingCliktCommand(name = "show") {
             val artifact = client.hookArtifact(hook.name, hook.version)
             HookDigest.problem(hook, artifact)?.let { throw CliktError("The hook was refused ($it): its files do not match the approved digest.") }
             echo(describe(hook))
-            echo("digest ${hook.digest}")
+            echo("digest ${HookText.visible(hook.digest, keepLines = false)}")
+            var withheld = false
             for (file in artifact.files) {
                 val bytes = checkNotNull(file.contentBase64.decodeBase64()).toByteArray()
                 val text = bytes.decodeToString()
-                echo("\n--- ${file.path} (${file.mode}, ${file.size} bytes) ---")
-                echo(if (text.encodeToByteArray().contentEquals(bytes) && text.none { it.isISOControl() && it !in "\n\r\t" }) text else "(binary content not shown)")
+                echo("\n--- ${HookText.visible("${file.path} (${file.mode}, ${file.size} bytes)", keepLines = false)} ---")
+                // Characters that would hide or reorder code, controls included, are shown as <U+XXXX>, never interpreted by
+                // the terminal; only content that is not UTF-8 is withheld.
+                val readable = text.encodeToByteArray().contentEquals(bytes)
+                if (!readable) withheld = true
+                echo(if (readable) HookText.visible(text) else "(binary content not shown)")
             }
+            if (withheld) {
+                // Content that was not shown was not read: approving it takes the digest above, passed explicitly.
+                echo("\nSome files are not UTF-8 text and were not shown, so this version is not recorded as read. Inspect them yourself, " +
+                    "then pass the digest above to teamcode hooks approve --digest.", err = true)
+                return@use
+            }
+            // approve records this version, and only this one, unless --digest names another.
+            if (teamHooksSupported()) shownDigests().record(hook.name, hook.digest)
+            echo("\nApprove this version with teamcode hooks approve ${HookText.visible(hook.name, keepLines = false)}.")
         }
     }
 }
 
 private class HookApprove : SuspendingCliktCommand(name = "approve") {
     private val name by argument(help = "The hook to approve.")
-    override fun help(context: Context) = "Approve the delivered version of a team hook: it is verified, installed, and run by your next teamcode run."
+    private val digest by option("--digest").help("The digest of the version you reviewed (sha256:...). By default, the version teamcode hooks show printed last.")
+    override fun help(context: Context) = "Approve the version of a team hook you read with teamcode hooks show: it is verified, installed, and run by your next teamcode run."
     override suspend fun run() {
         if (!teamHooksSupported()) throw CliktError("Team hooks are not installed on Windows yet.")
         sdk(loadConfig()).use { client ->
             val hook = delivered(client, name)
+            // The version the member read, never one delivered since (audit M5).
+            HookApprovalCheck.problem(hook, digest, shownDigests().load()[hook.name])?.let { throw CliktError(it) }
             val sync = teamHookSync(client)
             sync.ensure(hook)
             HookApprovals(teamHooksRoot() / "approvals.json").record(hook.name, HookApproval(hook.digest, approved = true))
@@ -112,7 +134,7 @@ private class HookRefuse : SuspendingCliktCommand(name = "refuse") {
         sdk(loadConfig()).use { client ->
             val hook = delivered(client, name)
             HookApprovals(teamHooksRoot() / "approvals.json").record(hook.name, HookApproval(hook.digest, approved = false))
-            echo("Refused ${hook.name} ${hook.version}. Your agents do not run it; the team is not notified.")
+            echo("Refused ${HookText.visible("${hook.name} ${hook.version}", keepLines = false)}. Your agents do not run it; the team is not notified.")
         }
     }
 }

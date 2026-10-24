@@ -27,8 +27,8 @@ class CloudTransferPersistenceTest {
         val transfers = CloudTransferService(store, transferStore, sessions, recipients)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster, transfers = CompleteCloudTransferUseCase(store, transferStore, cluster, recipients))
         val runner = RunnerChannelUseCase(store)
-        val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val conversation = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
         val team = SqlTeamService(database)
         val inference = RunnerInferenceUseCase(store, SqlCloudInferenceCredentialStore(database))
     }
@@ -414,7 +414,7 @@ class CloudTransferPersistenceTest {
         assertEquals(CloudEventType.TRANSFER, ra.conversation.events(t.recipient, s.id, 0, null, 10).events.last().type)
         val readerKey = keys.create(t.recipient, recipient, "transcript reader", setOf(ServiceScope.CLOUD_READ), 1)
         val reader = rb.team.authenticate(readerKey.accessToken)!!
-        val stream = CloudConversationService(ra.conversations, ra.store, ra.access)
+        val stream = CloudConversationService(ra.conversations, ra.store, ra.access, { _, _ -> false })
         val opened = CompletableDeferred<Unit>()
         val following = async {
             try { stream.follow(reader, s.id, 0, emit = { opened.complete(Unit) }, idle = {}); "ended" }

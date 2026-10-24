@@ -193,6 +193,8 @@ Administrators hold every permission on every session. For members, the team's p
 
 The default policy (version 0) gives everyone all four permissions on their own sessions, which is the behavior before this feature. A member without `create` gets `403 cloud_permission_denied` on creation, including when an administrator creates on the member's behalf. A session that a member cannot reach at all stays a `404`; a reachable one without the needed permission is `403 cloud_permission_denied`. Policy rules never widen lifecycle routes (pause, resume, delete stay owner and administrator only). Saving checks that members and groups exist (`422 member_not_found`, `group_not_found`) and is audited.
 
+A `message` grant does not reach the agent of an owner who linked GitHub: that agent holds the owner's token, so only the owner instructs it unless the owner shares the session ([GitHub access](cloud-sessions.md#who-instructs-an-agent-that-holds-the-token)). Administrators and team-scope `message` grants get `403 github_owner_only` on messages, files and permission answers there; interrupts and transcripts are unchanged.
+
 Groups come from a `CloudGroupDirectory`. TeamCode has no groups yet, so group rules are refused until the directory is wired to them; the rules and their evaluation are tested with a directory fake.
 
 ## CLI

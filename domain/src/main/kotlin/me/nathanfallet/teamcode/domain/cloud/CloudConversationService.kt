@@ -11,11 +11,16 @@ data class InputRequest(val text: String?, val wake: Boolean, val clientKey: Str
 /**
  * Transcript reads, messages, interrupts and attachments for members. Each call is authorized with the caller's own
  * rights through [CloudAccessService]; a session the caller can neither see nor reach through the policy is `404`.
+ *
+ * [githubLinked] tells whether a member has linked GitHub: the agent of such a member's session holds their token, so
+ * only the owner instructs it unless the owner shared the session ([CloudGitHubAccess]).
  */
 class CloudConversationService(
     private val store: CloudConversationStore,
     private val sessions: CloudSessionStore,
     private val access: CloudAccessService,
+    /** Required: the owner-only guard must not fail open when it is not wired. */
+    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : CloudInitialMessages {
@@ -71,6 +76,7 @@ class CloudConversationService(
         if (request.fileIds.size > CloudFileRules.MAX_FILES_PER_MESSAGE || request.fileIds.toSet().size != request.fileIds.size)
             throw TeamFailure("invalid_files", 400, "Name at most ${CloudFileRules.MAX_FILES_PER_MESSAGE} distinct files.")
         val session = open(principal, id, CloudPermission.MESSAGE)
+        requireGitHubInstructor(principal, session)
         val input = newInput(principal, session, CloudInputKind.MESSAGE, text, request)
         val fileBytes = if (request.fileIds.isEmpty()) 0 else CloudFileRules.messageLimit(sessions.settings(principal.teamId))
         return when (val outcome = store.insertInput(NewInput(input.copy(wake = request.wake), request.expectedLastEventSeq, session.ownerId, fileIds = request.fileIds, fileBytes = fileBytes), CloudConversationRules.MAX_PENDING_INPUTS)) {
@@ -86,6 +92,7 @@ class CloudConversationService(
     suspend fun authorizeMessage(principal: Principal, id: String): CloudSession {
         val session = open(principal, id, CloudPermission.MESSAGE)
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw ended()
+        requireGitHubInstructor(principal, session)
         return session
     }
 
@@ -109,6 +116,8 @@ class CloudConversationService(
     suspend fun answer(principal: Principal, id: String, answer: PermissionAnswer, request: InputRequest): InputOutcome {
         CloudConversationRules.validatePermissionAnswer(answer)
         val session = open(principal, id, CloudPermission.MESSAGE)
+        // A bare denial only stops a tool use, like an interrupt: it stays open to everyone with `message`.
+        if (!answer.isBareDenial) requireGitHubInstructor(principal, session)
         val approver = session.ownerId == principal.member.id || principal.isCloudAdministrator
         val input = newInput(principal, session, CloudInputKind.PERMISSION, request.text, request.copy(wake = false))
         // Checked by the store under the session lock, after an idempotent retry was replayed (a retry of an answer
@@ -122,6 +131,19 @@ class CloudConversationService(
             CloudConversationRules.checkAnswer(asked, answer, approver, context.currentEpoch)
         }
         return store.insertInput(NewInput(input, null, session.ownerId, permissionRequestId = answer.requestId, permissionCheck = check), CloudConversationRules.MAX_PENDING_INPUTS)
+    }
+
+    /**
+     * Audit M2: an agent that holds its owner's GitHub token does what its messages say, including printing the token.
+     * In [CloudGitHubAccess.OWNER] mode, while the owner has linked GitHub, only the owner sends it messages and answers
+     * its permission requests; an interrupt or a bare denial only stops a turn and stays open to everyone with `message`.
+     * Delivery checks again ([RunnerConversationUseCase]): an input accepted earlier (owner not linked yet, session
+     * shared then) never reaches an agent that now holds the token.
+     */
+    private suspend fun requireGitHubInstructor(principal: Principal, session: CloudSession) {
+        if (!CloudConversationRules.ownerOnly(session, principal.member.id) || !githubLinked(session.teamId, session.ownerId)) return
+        throw TeamFailure("github_owner_only", 403, "This session's agent holds its owner's GitHub token, so only the owner instructs it. " +
+            "The owner can share it with teamcode cloud github ${session.id} --access shared.")
     }
 
     suspend fun inputs(principal: Principal, id: String, beforeId: String?, limit: Int): CloudInputPage {

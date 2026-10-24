@@ -27,8 +27,8 @@ class CloudConversationPersistenceTest {
         val sessions = CloudSessionService(store, access = access)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster)
         val runner = RunnerChannelUseCase(store)
-        val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val conversation = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
     }
     /** Groups do not exist in TeamCode yet; this directory stands in for one. */
     private class Groups : CloudGroupDirectory {
@@ -55,7 +55,8 @@ class CloudConversationPersistenceTest {
                 val (admin, colleague, other) = members(a)
                 val profile = administration(ra, admin, setOf(colleague.member.id, other.member.id))
                 val session = ready(ra, rb, admin, colleague, profile)
-                messagesAndTranscript(ra, rb, admin, colleague, session)
+                githubAccess(ra, rb, admin, colleague, session)
+                messagesAndTranscript(ra, rb, admin, colleague, ra.store.find(admin.teamId, session.id)!!)
                 accessPolicy(ra, rb, admin, colleague, other, groups, profile, session)
                 wakeAndRedelivery(ra, rb, admin, colleague, session)
                 retentionAndCancellation(ra, rb, admin, colleague, session)
@@ -90,6 +91,16 @@ class CloudConversationPersistenceTest {
         ra.runner.register(admin.teamId, created.id, 1, pod)
         rb.runner.heartbeat(admin.teamId, created.id, 1, ready = true)
         return ra.store.find(admin.teamId, created.id)!!.also { assertEquals(READY, it.state) }
+    }
+
+    /** The owner's GitHub access choice is stored with the session and read by every replica (audit M2). */
+    private suspend fun githubAccess(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {
+        assertEquals(CloudGitHubAccess.OWNER, rb.store.find(admin.teamId, s.id)!!.githubAccess)
+        assertEquals("not_found", assertFailsWith<TeamFailure> { ra.sessions.setGitHubAccess(admin, null, s.id, CloudGitHubAccess.SHARED) }.code)
+        assertEquals(CloudGitHubAccess.SHARED, ra.sessions.setGitHubAccess(colleague, null, s.id, CloudGitHubAccess.SHARED).githubAccess)
+        assertEquals(CloudGitHubAccess.SHARED, rb.store.find(admin.teamId, s.id)!!.githubAccess)
+        assertEquals(CloudGitHubAccess.OWNER, rb.sessions.setGitHubAccess(colleague, null, s.id, CloudGitHubAccess.OWNER).githubAccess)
+        assertEquals(CloudGitHubAccess.OWNER, ra.store.find(admin.teamId, s.id)!!.githubAccess)
     }
 
     private suspend fun messagesAndTranscript(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, s: CloudSession) {

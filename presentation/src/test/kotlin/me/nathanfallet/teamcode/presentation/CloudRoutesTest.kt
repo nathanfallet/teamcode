@@ -23,7 +23,7 @@ class CloudRoutesTest {
         val sessions = linkedMapOf<String, CloudSession>()
         val keys = mutableMapOf<String, Pair<String, String>>()
         var clock = 1_000L
-        val profile = CloudProfile("profile-id", "default", "toolchain", 1, CloudProfileSpec("cluster-id", "teamcode", "registry.example/toolchain:1"), setOf(colleague.id), 1, 1)
+        var profile = CloudProfile("profile-id", "default", "toolchain", 1, CloudProfileSpec("cluster-id", "teamcode", "registry.example/toolchain:1"), setOf(colleague.id), 1, 1)
         /** A profile assigned to nobody: only administrators may use it. */
         val reserved = CloudProfile("reserved-id", "default", "reserved", 1, profile.spec, emptySet(), 1, 1)
         override suspend fun now() = clock++
@@ -608,7 +608,7 @@ class CloudRoutesTest {
         application {
             configureGateway(gateway, team = logins, cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), FakeCluster),
                 cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, FakeCluster, logins = { logins.authenticate(it) }), remoteHosts = true),
-                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations)),
+                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access, { _, _ -> false }), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
                 deviceDaemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemons, sleep = {}), sessions), publicOrigin = "http://localhost")
         }
         assertTrue("cloud.sessions.remote.daemon.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
@@ -771,6 +771,64 @@ class CloudRoutesTest {
                 runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))
             }.code)
         } finally { runner.close() }
+    }
+
+    /**
+     * A session created on someone's behalf runs the creator's instructions: it gets no GitHub token until its owner
+     * turns GitHub access on (audit M2). Only the owner changes the access, and turning it off waits for a pause,
+     * because the runner keeps a token it already received until that token expires.
+     */
+    @Test fun aSessionCreatedOnSomeonesBehalfGetsNoGitHubTokenUntilItsOwnerAllowsIt() = testApplication {
+        val store = Store()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity? =
+                if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
+        }
+        val github = GitHubAccessSource { _, member ->
+            if (member == colleague.id) GitHubAccess.Linked(GitHubUserToken("ghu_colleague_token", 99, "octo", 42)) else GitHubAccess.NotLinked
+        }
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster), github = RunnerGitHubUseCase(store, github)),
+                publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(admin, "admin-session", "default"), colleague.id, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        assertEquals(colleague.id, created.ownerId)
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.ACTIVE)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1, ownerId = colleague.id)
+        assertTrue("cloud.sessions.github-access.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        assertTrue("\"githubAccess\":\"none\"" in client.get("/api/v1/cloud/sessions/s1") { bearerAuth("colleague") }.bodyAsText())
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
+        suspend fun access(token: String, value: String, onBehalf: String? = null) = client.put("/api/v1/cloud/sessions/s1/github") {
+            bearerAuth(token); onBehalf?.let { header("TeamCode-On-Behalf-Of", it) }; contentType(ContentType.Application.Json); setBody("""{"access":"$value"}""")
+        }
+        try {
+            val refused = runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1))
+            assertEquals("not_linked", refused.status, "The creator's instructions never run with the owner's token"); assertNull(refused.token)
+            assertEquals(HttpStatusCode.NotFound, access("admin", "owner").status, "Only the owner turns GitHub access on")
+            assertEquals(HttpStatusCode.Forbidden, access("admin", "owner", onBehalf = colleague.id).status, "Not even on the owner's behalf")
+            assertEquals(HttpStatusCode.BadRequest, access("colleague", "everyone").status)
+            val granted = access("colleague", "owner")
+            assertEquals(HttpStatusCode.OK, granted.status); assertTrue("\"githubAccess\":\"owner\"" in granted.bodyAsText())
+            assertEquals("ghu_colleague_token", runner.runnerGitHub(RunnerGitHubRequest("default", "s1", 1)).token)
+            val running = access("colleague", "none")
+            assertEquals(HttpStatusCode.Conflict, running.status, "A running agent keeps a token it received: turning access off waits for a pause")
+            assertTrue("session_not_paused" in running.bodyAsText())
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED, desiredState = DesiredState.PAUSED)
+            assertEquals(HttpStatusCode.OK, access("colleague", "none").status)
+            store.sessions["s1"] = store.sessions.getValue("s1").copy(githubAccess = CloudGitHubAccess.OWNER, environment = CloudEnvironmentSpec(requireGitHub = true))
+            assertEquals(HttpStatusCode.UnprocessableEntity, access("colleague", "none").status, "A profile that requires GitHub cannot run without it")
+        } finally { runner.close() }
+        // A session the owner created stays as before: the owner's token, with nothing to turn on.
+        val own = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Own", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        assertEquals(CloudGitHubAccess.OWNER, own.githubAccess)
+        // A profile that requires GitHub cannot work without the owner's consent: it is refused up front, not failed later.
+        store.profile = store.profile.copy(spec = store.profile.spec.copy(environment = CloudEnvironmentSpec(requireGitHub = true)))
+        assertEquals("github_owner_consent", assertFailsWith<TeamFailure> {
+            sessions.create(Principal(admin, "admin-session", "default"), colleague.id, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null)
+        }.code)
     }
 
     @Test fun runnerReadsTheVariablesOfTheExecutionOwnerOnlyWhileTheSessionRuns() = testApplication {

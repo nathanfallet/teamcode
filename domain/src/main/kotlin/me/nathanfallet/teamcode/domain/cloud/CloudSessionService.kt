@@ -47,6 +47,7 @@ class CloudSessionService(
         val profile = store.profile(principal.teamId, draft.profileId) ?: throw missingProfile()
         val owner = store.member(principal.teamId, actor.effectiveMemberId)
             ?: throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
+        val onBehalf = actor.effectiveMemberId != principal.member.id
         if (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds) throw unassignedProfile(owner.id == principal.member.id)
         // The owner must hold `create` under the access policy, also when an administrator creates on their behalf.
         access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
@@ -79,7 +80,11 @@ class CloudSessionService(
             workspace = CloudWorkspace(claimName(id), spec.storageClass ?: cluster.defaultStorageClass, spec.workspaceSizeGibibytes),
             createdAt = now, updatedAt = now,
             environment = CloudEnvironmentRules.merge(spec.environment, draft.environment).also(CloudEnvironmentRules::validate),
+            // Created on someone's behalf, the session runs the creator's instructions: no GitHub token until its owner allows it (audit M2).
+            githubAccess = if (onBehalf) CloudGitHubAccess.NONE else CloudGitHubAccess.OWNER,
         )
+        if (onBehalf && session.environment.requireGitHub) throw TeamFailure("github_owner_consent", 422,
+            "This profile requires GitHub, and a session created on someone's behalf has no GitHub access until its owner allows it. Ask the owner to create the session.")
         val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
         // Queued after the session commits, idempotently: if this step fails, the client's retry with the same
         // Idempotency-Key replays the creation and queues the message then.
@@ -267,6 +272,35 @@ class CloudSessionService(
                     current.copy(desiredState = DesiredState.PAUSED, pauseRequestedAt = current.pauseRequestedAt ?: now, pauseForce = force || current.pauseForce, updatedAt = now),
                     CloudWrite(actor = actor, auditAction = "cloud.session.paused", reconcileAt = now),
                 )
+            }
+        } ?: throw missing()
+    }
+
+    /**
+     * The owner chooses whose instructions an agent holding their GitHub token follows ([CloudGitHubAccess]). Only the
+     * owner, signed in or through their own key, never on their behalf: the choice consents to the use of their token.
+     * Turning the token off waits for a pause, because a running agent keeps a token it already received until it
+     * expires; turning it on or sharing applies to the next renewal and the next message.
+     */
+    suspend fun setGitHubAccess(principal: Principal, onBehalfOf: String?, id: String, access: CloudGitHubAccess): CloudSession {
+        if (onBehalfOf != null && onBehalfOf != principal.member.id) throw TeamFailure("github_owner_only", 403, "Only the session owner chooses who uses their GitHub access.")
+        val actor = actor(principal, null)
+        val found = store.find(principal.teamId, id)
+        if (found == null || found.ownerId != principal.member.id) throw missing()
+        if (found.kind == CloudSessionKind.REMOTE) throw TeamFailure("github_access_unsupported", 409, "A remote session uses the GitHub access of the device it runs on.")
+        return transition(principal.teamId, id) { current ->
+            val now = store.now()
+            when {
+                current.ownerId != principal.member.id -> throw missing()
+                current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.state == CloudSessionState.TRANSFERRING || current.transferId != null -> throw TeamFailure("session_transferring", 409, "The session is being transferred.")
+                current.githubAccess == access -> null
+                access == CloudGitHubAccess.NONE && current.environment.requireGitHub -> throw TeamFailure("github_required", 422,
+                    "This session's profile requires GitHub: it cannot run without GitHub access.")
+                access == CloudGitHubAccess.NONE && current.state != CloudSessionState.PAUSED -> throw TeamFailure("session_not_paused", 409,
+                    "A running agent keeps the GitHub token it already received. Pause the session, then turn GitHub access off.")
+                else -> CloudTransition(current.copy(githubAccess = access, updatedAt = now),
+                    CloudWrite(actor = actor, auditAction = "cloud.session.github_access_changed", reconcileAt = null))
             }
         } ?: throw missing()
     }

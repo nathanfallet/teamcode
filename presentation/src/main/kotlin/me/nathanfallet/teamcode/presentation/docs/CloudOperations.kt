@@ -157,7 +157,8 @@ private fun ApiCatalog.cloudAdministration() {
         summary = "The cloud access policy"
         description = "Rules granting `create`, `attach`, `message` and `transcript` to `everyone`, `member:<id>` or " +
             "`group:<id>`, on their own sessions (`own`) or every team session (`team`). Administrators hold every " +
-            "permission. Administrators only."
+            "permission. A `message` grant does not reach the agent of an owner who linked GitHub, unless the owner shared " +
+            "the session (`PUT /cloud/sessions/{id}/github`). Administrators only."
         responses { ok<CloudAccessPolicyView>("The policy.") }
     }
     put("/api/v1/cloud/access") {
@@ -273,6 +274,22 @@ private fun ApiCatalog.cloudSessions() {
             ok<CloudSessionView>("Accepted: the session is pausing.", HttpStatusCode.Accepted)
             notFound("No such session (`not_found`).")
             conflict("The session cannot pause now (`invalid_transition`, `session_preparing`, `session_transferring`, `session_busy`).")
+        }
+    }
+    put("/api/v1/cloud/sessions/{id}/github") {
+        operationId = "setCloudSessionGitHubAccess"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Choose who instructs an agent that holds your GitHub token"
+        description = "`owner`: the owner's token, instructed by the owner only while they have linked GitHub (others get " +
+            "`403 github_owner_only` on messages, files and permission answers). `shared`: the owner's token, instructed by everyone " +
+            "the access policy lets message the session. `none`: no GitHub token; a session created on someone's behalf starts " +
+            "here. Only the owner, never on their behalf (`cloud.sessions.github-access.v1`). Turning access off waits for a pause."
+        parameters { sessionId() }
+        body<CloudGitHubAccessRequest>("`access`: `owner`, `shared` or `none`.")
+        responses {
+            ok<CloudSessionView>("The session with its new `githubAccess`.")
+            badRequest("An unknown mode (`invalid_github_access`).")
+            notFound("No such session among the caller's own (`not_found`).")
+            conflict("A running session cannot turn access off (`session_not_paused`), or the session is ending, transferring or remote (`session_not_running`, `session_transferring`, `github_access_unsupported`).")
         }
     }
     post("/api/v1/cloud/sessions/{id}/resume") {

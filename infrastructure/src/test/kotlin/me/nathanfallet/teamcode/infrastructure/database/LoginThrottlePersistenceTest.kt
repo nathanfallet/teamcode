@@ -46,10 +46,19 @@ class LoginThrottlePersistenceTest {
     }
 
     @Test @Timeout(300)
-    fun eachAddressHasItsOwnBudget() = withTeam { team, admin ->
+    fun eachAddressHasItsOwnBudget() = withDatabase { team, admin, database ->
         val attacker = LoginOrigin("198.51.100.66")
+        // The budget counts per calendar minute of the database clock, and 31 password hashes take seconds on CI: a burst
+        // that crosses a minute starts a fresh window and is not limited (this test was flaky). It starts in the first
+        // half of a minute, which leaves it 30 s (seconds on CI), and a burst slower than that fails as such rather than
+        // as a missing limit.
+        val now = database.query { nowMillis() }
+        if (now % 60_000 > 30_000) delay(60_000 - now % 60_000 + 100)
+        val start = database.query { nowMillis() / 60_000 }
         repeat(SqlLoginThrottle.SOURCE_ATTEMPTS) { runCatching { team.login("nobody-$it", "wrong password", "Attacker", null, null, null, attacker) } }
-        assertEquals("login_rate_limit", assertFailsWith<TeamFailure> { team.login("nobody", "wrong password", "Attacker", null, null, null, attacker) }.code)
+        val limited = assertFailsWith<TeamFailure> { team.login("nobody", "wrong password", "Attacker", null, null, null, attacker) }.code
+        assertEquals(start, database.query { nowMillis() / 60_000 }, "The burst was too slow and crossed a minute")
+        assertEquals("login_rate_limit", limited)
         // A new device elsewhere is not a trusted device, and still signs in.
         val elsewhere = team.login("admin", ADMIN_PASSWORD, "New laptop", null, null, null, LoginOrigin("203.0.113.10"))
         assertEquals(admin.member.id, elsewhere.principal.member.id)

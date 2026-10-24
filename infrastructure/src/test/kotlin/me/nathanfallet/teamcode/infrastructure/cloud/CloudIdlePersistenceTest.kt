@@ -20,11 +20,11 @@ class CloudIdlePersistenceTest {
         val conversations = SqlCloudConversationStore(database)
         val access = CloudAccessService(conversations, store)
         val admin = CloudAdministrationService(SqlCloudAdminStore(database, cipher), cluster)
-        val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
+        val conversation = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(1) })
         val sessions = CloudSessionService(store, access = access, initialMessages = conversation)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster, activity = conversations)
         val runner = RunnerChannelUseCase(store)
-        val agent = RunnerConversationUseCase(store, conversations, sleep = { delay(1) })
+        val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
     }
 
     @Test fun initialMessageAndIdlePause() = runBlocking {

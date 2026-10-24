@@ -252,7 +252,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && environment != null) listOf("team.environment.v1") else emptyList()) +
                     (if (team != null && cloudOn()) listOfNotNull<List<String>>(
                         if (cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else null,
-                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1", "cloud.profiles.member.v1") else null,
+                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1", "cloud.profiles.member.v1", "cloud.sessions.github-access.v1") else null,
                         if (cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else null,
                         if (cloudSessions != null && cloudRunner != null && cloudConversation != null) listOf("cloud.transcript.v1", "cloud.messages.v1", "cloud.attach.v1", "cloud.access.v1", "cloud.permissions.v1", "cloud.transcript.live.v1", "cloud.sessions.waiting.v1") else null,
                         if (cloudSessions != null && cloudConversation?.events != null) listOf("cloud.events.v1") else null,

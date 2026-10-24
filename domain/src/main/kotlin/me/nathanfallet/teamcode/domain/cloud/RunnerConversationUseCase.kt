@@ -25,6 +25,8 @@ data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredS
 class RunnerConversationUseCase(
     private val sessions: CloudSessionStore,
     private val store: CloudConversationStore,
+    /** Whether a member has linked GitHub; see [CloudConversationService]. Required: the delivery guard must not fail open. */
+    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -90,7 +92,12 @@ class RunnerConversationUseCase(
                 val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH).let { inputs ->
                     val unsupported = if (acceptsFiles) emptyList() else inputs.filter { it.files.isNotEmpty() }
                     if (unsupported.isNotEmpty()) store.acknowledge(sessionId, epoch, unsupported.map { RunnerInputAck(it.id, false, "files_unsupported") })
-                    inputs - unsupported.toSet()
+                    // Checked again at delivery (audit M2): a non-owner's input accepted while the owner had no link, or
+                    // while the session was shared, never reaches an agent that now holds the owner's token.
+                    val held = (inputs - unsupported.toSet()).filter { CloudConversationRules.ownerOnly(session, it.authorId) && !CloudConversationRules.onlyStops(it) }
+                        .takeIf { it.isNotEmpty() && githubLinked(teamId, session.ownerId) }.orEmpty()
+                    if (held.isNotEmpty()) store.acknowledge(sessionId, epoch, held.map { RunnerInputAck(it.id, false, "github_owner_only") })
+                    inputs - unsupported.toSet() - held.toSet()
                 }
                 if (delivered.isNotEmpty()) return RunnerInputs(delivered, session.desiredState)
             }
