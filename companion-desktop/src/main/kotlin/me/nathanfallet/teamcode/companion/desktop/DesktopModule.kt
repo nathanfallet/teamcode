@@ -33,9 +33,6 @@ internal fun desktopOverrides(environment: DesktopEnvironment): Module = module 
     } binds arrayOf(CliAccountLink::class)
     single { CliProcesses(get()) }
     single { CliLocator(get(), get()) }
-    single {
-        RemoteHostSupervisor(get(), get(), get(), get(), get(), get(), get(), get<PlatformInfo>().appVersion, RemoteHostSupervisor.recordsDirectory(environment.configPath))
-    }
     single { CliInstaller(get()) }
-    single<LocalHost> { DesktopLocalHost(get(), get(), get(), get(), get<PlatformInfo>().appVersion, get(), get()) }
+    single<LocalHost> { DesktopLocalHost(get(), get(), get(), get(), get<PlatformInfo>().appVersion, installer = get()) }
 }

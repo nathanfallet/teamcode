@@ -153,6 +153,36 @@ class DeviceDaemonPersistenceTest {
         assertEquals(1, sessions.host(laptop, first.id).currentEpoch)
         assertEquals(emptyList(), daemon.poll(laptop, 0, "1.0.0").orders)
 
+        // Paused, then woken by a message from the phone: the session is back in the daemon's queue, as `resuming`.
+        // Nothing else starts its host (the desktop app no longer supervises hosts); a session the device started
+        // itself, without a folder, stays out of the queue when woken.
+        val runner = RunnerChannelUseCase(sessionStore)
+        val reconciler = ReconcileCloudSessionsUseCase(sessionStore, FakeClusterPort())
+        val conversations = SqlCloudConversationStore(b)
+        val access = CloudAccessService(conversations, sessionStore)
+        val conversation = CloudConversationService(conversations, sessionStore, access, sleep = { delay(1) })
+        suspend fun pass() { b.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }; reconciler() }
+        suspend fun pauseHosted(id: String, epoch: Int) {
+            runner.register(laptop.teamId, id, epoch, CloudSessionService.hostExecutionName(epoch))
+            runner.heartbeat(laptop.teamId, id, epoch, ready = true)
+            sessions.pause(phone, null, id, false)
+            pass()
+            runner.checkpoint(laptop.teamId, id, epoch, completed = true)
+            pass()
+            assertEquals(PAUSED, sessionStore.find(laptop.teamId, id)!!.state)
+        }
+        pauseHosted(first.id, 1)
+        val local = sessions.list(laptop, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single { it.name == "Local" }
+        pauseHosted(local.id, sessions.host(laptop, local.id).currentEpoch)
+        assertEquals(emptyList(), daemon.poll(laptop, 0, "1.0.0").orders, "A paused session waits for a message")
+        for (id in listOf(first.id, local.id)) conversation.send(phone, id, InputRequest("Continue", true, null, null, null))
+        pass()
+        assertEquals(RESUMING to CloudSessionService.WAITING_HOST, sessionStore.find(laptop.teamId, local.id)!!.let { it.state to it.phase })
+        val woken = daemon.poll(laptop, 0, "1.0.0").orders.single()
+        assertEquals(DaemonOrder(first.id, "api", "api", "claude", RemotePermissionMode.BYPASS, RESUMING, woken.requestedAt), woken)
+        assertEquals(2, sessions.host(laptop, first.id).currentEpoch)
+        assertEquals(emptyList(), daemon.poll(laptop, 0, "1.0.0").orders)
+
         // A waiting poll returns as soon as an order arrives, without a transaction held between reads.
         var started: String? = null
         onSleep = { if (started == null) started = (sessions.createRemote(phone, null, draft(folder = "teamcode"), null) as CloudCreateOutcome.Created).session.id }

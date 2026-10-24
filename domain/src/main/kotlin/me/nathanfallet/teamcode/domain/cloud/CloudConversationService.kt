@@ -191,7 +191,7 @@ class CloudConversationService(
         if (session.transferId != null || session.state == TRANSFERRING) return false
         val owner = sessions.member(teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired) return false
-        // A remote session has no profile: it wakes into waiting for its host, which the desktop app of that device starts.
+        // A remote session has no profile: it wakes into waiting for its host, which that device's daemon starts (or `teamcode remote resume`).
         if (session.kind != CloudSessionKind.REMOTE) {
             val profile = sessions.profile(teamId, session.profileId)
             if (profile == null || (!owner.role.isAdministrator && owner.id !in profile.assignedMemberIds)) return false

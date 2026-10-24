@@ -133,7 +133,7 @@ private class RemoteResume : SuspendingCliktCommand(name = "resume") {
     }
 }
 
-/** `teamcode remote host`: the host itself, in the foreground; `--detach`, `--attach` and the desktop app start it in the background. */
+/** `teamcode remote host`: the host itself, in the foreground; `--detach`, `--attach` and the device's daemon start it in the background. */
 private class RemoteHost : SuspendingCliktCommand(name = "host") {
     override fun help(context: Context) = "Host a remote session of this device in the foreground until it pauses (what teamcode remote resume --detach runs in the background)."
     private val session by argument("SESSION")

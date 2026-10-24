@@ -48,9 +48,8 @@ internal suspend fun attachSession(client: TeamCodeClient, sessionId: String, ec
 
 /**
  * For `teamcode attach` on a remote session recorded on this device: a callback that starts its host in the
- * background once a message woke it, so a member in a terminal does not need the desktop app to wake it. Null for a
- * cloud session, another device's session, one this device has no record of, or one its daemon hosts. Also says when the
- * host is not running.
+ * background once a message woke it, for a session the daemon does not host. Null for a cloud session, another
+ * device's session, one this device has no record of, or one its daemon hosts. Also says when the host is not running.
  */
 internal suspend fun localHostWaker(client: TeamCodeClient, sessionId: String, notice: (String) -> Unit): (suspend () -> Unit)? {
     val record = RemoteSessions().load(sessionId) ?: return null

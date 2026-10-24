@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """The desktop app's sessions on this device, end to end: its wiring (`DesktopSmokeTest`, on the JVM) with the native CLI
 and the server jar on an isolated MySQL, with a stand-in Claude Code. The CLI signs in from a terminal; the app finds
-it, shows its account, starts a session in a folder with a first message, wakes the paused session (its supervisor
-starts the host) and sees `teamcode logout`. No provider is contacted. Requires docker.
+it, shows its account, starts a session in a folder with a first message, pauses it and sees `teamcode logout`. No provider is contacted. Requires docker.
 
     python3 scripts/smoke-desktop.py --binary cli/build/bin/macosArm64/debugExecutable/teamcode.kexe --jar app/build/libs/app-all.jar
 """
@@ -141,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='teamcode-desktop-smoke-') as directory:
             assert token not in text and password not in text and (private == server_log or initial not in text), f'A credential reached {private.name}'
             assert private == server_log or 'hello' not in text, f'A prompt reached {private.name}'
         print('Desktop smoke passed: the CLI account from a terminal login, On this device with a first message answered, '
-              'a paused session woken and its host started by the supervisor, teamcode logout seen by the app.')
+              'a pause from the app, teamcode logout seen by the app.')
     finally:
         # Hosts this script's run started and a failure left running: their exact PIDs, found by the session id.
         for session_id in session_ids:
