@@ -15,7 +15,8 @@ class TrustedProxies(ranges: List<String>) {
     private val ranges = ranges.map(::range)
 
     /** The address of the client: [peer], or the last forwarded address that is not a trusted proxy when [peer] is one. */
-    fun clientAddress(peer: String, forwardedFor: List<String>): String {
+    fun clientAddress(peer: String, forwardedFor: List<String>): String = canonical(walk(peer, forwardedFor))
+    private fun walk(peer: String, forwardedFor: List<String>): String {
         if (ranges.isEmpty()) return peer
         var client = peer
         val hops = forwardedFor.flatMap { it.split(',') }.map { it.trim() }
@@ -34,6 +35,8 @@ class TrustedProxies(ranges: List<String>) {
 
     companion object {
         val NONE = TrustedProxies(emptyList())
+        /** One spelling per address (IPv4-mapped IPv6 as IPv4, IPv6 uncompressed and lowercase), so it is one throttle key. */
+        private fun canonical(address: String): String = literal(address)?.hostAddress ?: address
         /** Comma-separated ranges; a blank value trusts nothing. */
         fun parse(value: String?): TrustedProxies = TrustedProxies(value.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() })
 

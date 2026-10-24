@@ -47,6 +47,15 @@ class ServiceKeyCreatorPersistenceTest {
         assertTrue(t.keys.list(t.owner, t.member.member.id).none { it.id == forMember.metadata.id })
     }
 
+    @Test @Timeout(300)
+    fun keysCreatedForOthersAreRevokedWhenTheirCreatorsPasswordIsReset() = withTeam { t ->
+        val forMember = t.keys.create(t.admin, t.member.member.id, "Support app", setOf(ServiceScope.INFERENCE), 30)
+        val byMember = t.keys.create(t.member, t.member.member.id, "Member CI", setOf(ServiceScope.INFERENCE), 30)
+        t.team.resetPassword(t.owner, t.admin.member.id)
+        assertNull(t.team.authenticate(forMember.accessToken))
+        assertNotNull(t.team.authenticate(byMember.accessToken))
+    }
+
     private class Team(val team: SqlTeamService, val keys: SqlServiceKeyService, val owner: Principal, val admin: Principal, val second: Principal, val member: Principal)
     private fun withTeam(block: suspend (Team) -> Unit) = runBlocking {
         MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->

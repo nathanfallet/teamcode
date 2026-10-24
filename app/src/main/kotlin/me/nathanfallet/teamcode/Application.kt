@@ -51,7 +51,8 @@ fun main() {
         System.getenv("TEAMCODE_DATABASE_POOL_SIZE")?.toInt() ?: Database.DEFAULT_POOL_SIZE,
     ).also { it.migrate() } else null
     val providerHttp = HttpClient(CIO) { followRedirects = false; install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 30_000 } }
-    val cipher = database?.let { CredentialCipher(Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." })) }
+    val encryptionKey = database?.let { Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." }) }
+    val cipher = encryptionKey?.let { CredentialCipher(it) }
     val accountStore = database?.let { SqlAccountStore(it, cipher!!) }
     val accounts = accountStore?.let { AccountManagement(it, ClaudeAccountVerifier(providerHttp), mapOf("codex" to CodexAccountVerifier(providerHttp))) }
     val admission = database?.let { SqlAdmissionStore(it) }
@@ -68,7 +69,7 @@ fun main() {
     val mcpAccess = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlMcpAccessStore(it) }
     val gateway = if (database != null) CancellableGateway(PoolGateway(admission!!, credentialSource!!, transports, modelPolicies!!, routes, queued = me.nathanfallet.teamcode.domain.capacity.AwaitAdmissionUseCase(admission)), cancellation!!) else FixtureGatewayService()
     // The dashboard's trusted-browser cookie is signed with a key derived from the encryption key (audit M3).
-    val team = database?.let { SqlTeamService(it, browsers = me.nathanfallet.teamcode.infrastructure.secrets.TrustedBrowsers(Base64.getDecoder().decode(System.getenv("TEAMCODE_ENCRYPTION_KEY")!!))) }
+    val team = database?.let { SqlTeamService(it, browsers = me.nathanfallet.teamcode.infrastructure.secrets.TrustedBrowsers(encryptionKey!!)) }
     val trustedProxies = me.nathanfallet.teamcode.presentation.TrustedProxies.parse(System.getenv("TEAMCODE_TRUSTED_PROXIES"))
     val workers = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     if (accountStore != null) {

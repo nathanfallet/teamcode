@@ -41,10 +41,12 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         val wellFormed = username.length in 1..64 && password.length in 1..1024
         // A device the member signed in from before has its own backoff, and no source budget: nobody else can lock it.
         val failureKey = database.query {
-            val trusted = if (wellFormed) trustedDevice(this, normalized, installationId, origin.browser) else null
+            // The member the collation matches (case and accents folded), so spellings of one username share one counter.
+            val memberId = if (wellFormed) Members.select(Members.id).where { (Members.teamId eq "default") and (Members.username eq normalized) }.singleOrNull()?.get(Members.id) else null
+            val trusted = memberId?.let { trustedDevice(this, it, installationId, origin.browser) }
             when {
                 trusted != null -> trusted
-                SqlLoginThrottle.admitSource(this, SqlLoginThrottle.sourceKey(origin.sourceAddress)) -> SqlLoginThrottle.usernameKey(normalized)
+                SqlLoginThrottle.admitSource(this, SqlLoginThrottle.sourceKey(origin.sourceAddress)) -> SqlLoginThrottle.accountKey(memberId, normalized)
                 else -> null
             }
         } ?: throw TeamFailure("login_rate_limit", 429, "Too many login attempts from this address. Try again in a minute.")
@@ -80,9 +82,8 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
     /** Deletes throttling rows nobody needs any more; bounded, for the maintenance pass. */
     suspend fun purgeLoginThrottle(limit: Int = 500): Int = database.query { SqlLoginThrottle.purge(this, limit) }
     /** The failure key of a CLI or app installation, or a dashboard browser, this member already signed in from. */
-    private fun trustedDevice(c: JdbcTransaction, username: String, installationId: String?, browser: String?): String? {
+    private fun trustedDevice(c: JdbcTransaction, memberId: String, installationId: String?, browser: String?): String? {
         if (installationId == null && browser.isNullOrEmpty()) return null
-        val memberId = Members.select(Members.id).where { (Members.teamId eq "default") and (Members.username eq username) }.singleOrNull()?.get(Members.id) ?: return null
         if (installationId != null && !Devices.select(Devices.id).where { (Devices.memberId eq memberId) and (Devices.installationId eq installationId) }.limit(1).empty())
             return SqlLoginThrottle.deviceKey(memberId, "installation:$installationId")
         if (!browser.isNullOrEmpty() && browsers?.verify(browser, memberId, c.nowMillis()) == true)
@@ -110,7 +111,7 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
             val hash = Members.select(Members.passwordHash).where { Members.id eq actor.member.id }.forUpdate().single()[Members.passwordHash]
             if (!passwords.verify(current, hash)) throw denied()
             Members.update({ Members.id eq actor.member.id }) { it[passwordHash] = passwords.hash(replacement); it[mustChangePassword] = false; it[failedLogins] = 0; it[lockedUntil] = 0 }
-            SqlLoginThrottle.clear(SqlLoginThrottle.usernameKey(actor.member.username))
+            SqlLoginThrottle.clear(SqlLoginThrottle.accountKey(actor.member.id, actor.member.username))
             Tokens.deleteWhere { memberId eq actor.member.id }
             audit(actor.teamId, actor.member.id, "member.password_changed", actor.member.id)
         } }
@@ -156,7 +157,9 @@ class SqlTeamService(private val database: Database, private val passwords: Pass
         access.resetPassword(actor, target, hasOtherReadyOwner(principal.teamId, id))
         val password = Passwords.secret()
         Members.update({ Members.id eq id }) { it[passwordHash] = passwords.hash(password); it[mustChangePassword] = true; it[failedLogins] = 0; it[lockedUntil] = 0 }
-        SqlLoginThrottle.clear(SqlLoginThrottle.usernameKey(target.username))
+        SqlLoginThrottle.clear(SqlLoginThrottle.accountKey(target.id, target.username))
+        // A reset is how a compromised administrator is recovered: the keys they created for others end with it.
+        if (target.role.isAdministrator) revokeKeysCreatedForOthers(this, principal, id)
         Tokens.deleteWhere { memberId eq id }
         audit(principal.teamId, principal.member.id, "member.password_reset", id)
         NewMember(target.copy(passwordChangeRequired = true), password)

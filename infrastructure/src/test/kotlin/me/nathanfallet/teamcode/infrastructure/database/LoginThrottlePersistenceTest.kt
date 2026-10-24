@@ -59,7 +59,7 @@ class LoginThrottlePersistenceTest {
     @Test @Timeout(300)
     fun theUsernameBackoffDoublesAndAPasswordResetClearsIt() = withDatabase { team, admin, database ->
         val created = team.createMember(admin, "colleague", Role.MEMBER)
-        val key = SqlLoginThrottle.usernameKey("colleague")
+        val key = SqlLoginThrottle.accountKey(created.member.id, "colleague")
         suspend fun lockedFor() = database.query { val row = LoginThrottle.selectAll().where { LoginThrottle.key eq key }.single(); row[LoginThrottle.lockedUntil] - nowMillis() }
         repeat(SqlLoginThrottle.FREE_FAILURES) { failure("invalid_credentials") { team.login("colleague", "wrong password $it", "Attacker") } }
         assertTrue(lockedFor() in 50_000..60_000, "One minute at the fifth failure")
@@ -73,7 +73,20 @@ class LoginThrottlePersistenceTest {
         assertTrue(team.login("colleague", reset.temporaryPassword, "Colleague").principal.member.passwordChangeRequired)
         // Unknown usernames back off exactly like existing ones, so the lock does not tell which exist.
         repeat(SqlLoginThrottle.FREE_FAILURES) { failure("invalid_credentials") { team.login("ghost", "wrong password $it", "Attacker") } }
-        assertTrue(database.query { LoginThrottle.selectAll().where { LoginThrottle.key eq SqlLoginThrottle.usernameKey("ghost") }.single()[LoginThrottle.lockedUntil] > nowMillis() })
+        assertTrue(database.query { LoginThrottle.selectAll().where { LoginThrottle.key eq SqlLoginThrottle.accountKey(null, "ghost") }.single()[LoginThrottle.lockedUntil] > nowMillis() })
+    }
+
+    @Test @Timeout(300)
+    fun spellingsTheCollationMatchesShareTheMembersCounter() = withTeam { team, _ ->
+        // The username column folds case and accents: each spelling reaches the same member, so it must not get fresh tries.
+        for (spelling in listOf("ádmin", "àdmin", "âdmin", "ädmin", "ADMÍN")) failure("invalid_credentials") { team.login(spelling, "wrong password", "Attacker") }
+        failure("invalid_credentials") { team.login("admin", ADMIN_PASSWORD, "Attacker") }
+    }
+
+    @Test fun ipv6ClientsAreKeyedByTheirSlash64() {
+        assertEquals(SqlLoginThrottle.sourceKey("2001:db8:1:2:0:0:0:1"), SqlLoginThrottle.sourceKey("2001:db8:1:2:ffff:0:0:9"))
+        assertNotEquals(SqlLoginThrottle.sourceKey("2001:db8:1:2:0:0:0:1"), SqlLoginThrottle.sourceKey("2001:db8:1:3:0:0:0:1"))
+        assertNotEquals(SqlLoginThrottle.sourceKey("203.0.113.1"), SqlLoginThrottle.sourceKey("203.0.113.2"))
     }
 
     @Test @Timeout(300)
@@ -98,9 +111,9 @@ class LoginThrottlePersistenceTest {
     @Test @Timeout(300)
     fun oldRowsArePurged() = withDatabase { team, _, database ->
         repeat(2) { runCatching { team.login("purge-$it", "wrong password", "Attacker") } }
-        database.query { LoginThrottle.update({ LoginThrottle.key eq SqlLoginThrottle.usernameKey("purge-0") }) { it[updatedAt] = nowMillis() - SqlLoginThrottle.RETENTION_MILLIS - 1 } }
+        database.query { LoginThrottle.update({ LoginThrottle.key eq SqlLoginThrottle.accountKey(null, "purge-0") }) { it[updatedAt] = nowMillis() - SqlLoginThrottle.RETENTION_MILLIS - 1 } }
         assertEquals(1, team.purgeLoginThrottle())
-        assertEquals(listOf(false, true), listOf("purge-0", "purge-1").map { name -> database.query { !LoginThrottle.selectAll().where { LoginThrottle.key eq SqlLoginThrottle.usernameKey(name) }.empty() } })
+        assertEquals(listOf(false, true), listOf("purge-0", "purge-1").map { name -> database.query { !LoginThrottle.selectAll().where { LoginThrottle.key eq SqlLoginThrottle.accountKey(null, name) }.empty() } })
     }
 
     @Test fun trustedBrowserCookiesAreBoundToTheMemberTheKeyAndTheirAge() {

@@ -21,8 +21,11 @@ internal object SqlLoginThrottle {
     /** Failures older than this are forgotten, and their rows purged. */
     const val RETENTION_MILLIS = 24 * 3_600_000L
 
-    fun sourceKey(address: String?) = Passwords.digest("source:" + (address ?: "unknown"))
-    fun usernameKey(username: String) = Passwords.digest("username:" + username.lowercase())
+    /** An IPv6 client is keyed by its /64, the block one subscriber usually gets, so it cannot rotate addresses within it. */
+    fun sourceKey(address: String?) = Passwords.digest("source:" + (address?.let(::sourceBlock) ?: "unknown"))
+    /** An existing member is keyed by id, an unknown username by its lowercase text. */
+    fun accountKey(memberId: String?, username: String) =
+        Passwords.digest(if (memberId != null) "member:$memberId" else "username:" + username.lowercase())
     fun deviceKey(memberId: String, device: String) = Passwords.digest("device:$memberId:$device")
 
     /** Counts the attempt (a refusal too, capped) and tells whether it is within the source's budget. */
@@ -56,6 +59,12 @@ internal object SqlLoginThrottle {
     /** One minute at the [FREE_FAILURES]th failure, doubling with each further one, at most [MAX_LOCK_MILLIS]. */
     fun lockMillis(failures: Int): Long = minOf(FIRST_LOCK_MILLIS shl minOf(failures - FREE_FAILURES, 10), MAX_LOCK_MILLIS)
 
+    /** The canonical address from the presentation layer (`InetAddress.hostAddress`); IPv6 reduced to its first four groups. */
+    internal fun sourceBlock(address: String): String {
+        if (':' !in address) return address
+        val groups = address.substringBefore('%').split(':')
+        return if (groups.size == 8) groups.take(4).joinToString(":") { it.lowercase().trimStart('0').ifEmpty { "0" } } + "::/64" else address.lowercase()
+    }
     private fun lock(c: JdbcTransaction, key: String): ResultRow {
         val now = c.nowMillis()
         LoginThrottle.upsert(onUpdate = { it[LoginThrottle.key] = LoginThrottle.key }) { it[LoginThrottle.key] = key; it[updatedAt] = now }

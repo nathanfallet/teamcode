@@ -75,7 +75,7 @@ An administrator creating a key for another member (`--member`, the member-scope
 
 - **Not for an owner.** Only an owner can create a key for an owner (`403 owner_required`); an administrator cannot mint a credential that acts as an owner.
 - **No administrator scope.** `admin:cloud`, `team:read`, `skills:publish`, `skills:assign` and `hooks:publish` are refused on a key created for someone else, even for another administrator or by an owner (`400 invalid_service_key`). The member who will own such a key creates it from their own interactive login.
-- **Revoked with its creator.** Disabling the administrator who created it, or removing their administrator role, revokes every key they created for other members, in the same transaction (journaled `service_key.revoked_with_creator`). Keys created before TeamCode recorded the creator are not covered: list them with `teamcode keys list --member MEMBER_ID` and replace them.
+- **Revoked with its creator.** Disabling the administrator who created it, removing their administrator role, or resetting their password (the recovery of a compromised account), revokes every key they created for other members, in the same transaction (journaled `service_key.revoked_with_creator`). Keys created before TeamCode recorded the creator are not covered: list them with `teamcode keys list --member MEMBER_ID` and replace them.
 
 Creation writes the one-time credential to stdout (JSON with `--json`); save it directly in an appropriate secret store. The accompanying notice goes to stderr. Subsequent list operations return only metadata. The dashboard/API likewise reveal the secret only in the successful creation response, with no-store headers; TeamCode does not log it or retain recoverable plaintext.
 
