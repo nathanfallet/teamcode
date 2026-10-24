@@ -19,12 +19,22 @@ enum class SessionState(val wire: String, val group: SessionGroup) {
     }
 }
 
-/** The list's filters: running or about to, paused, ended. */
+/** What a state belongs to: running or about to, paused, ended. */
 enum class SessionGroup {
     ACTIVE, PAUSED, ENDED;
 
     /** The states the server is asked for; [UNKNOWN][SessionState.UNKNOWN] is never sent. */
     val states: List<SessionState> get() = SessionState.entries.filter { it.group == this && it != SessionState.UNKNOWN }
+}
+
+/** The list's status filter: every session, the ones still usable (active and paused together), or the ended ones. */
+enum class SessionFilter(val groups: Set<SessionGroup>) {
+    ALL(SessionGroup.entries.toSet()), OPEN(setOf(SessionGroup.ACTIVE, SessionGroup.PAUSED)), ENDED(setOf(SessionGroup.ENDED));
+
+    /** The states the server is asked for. */
+    val states: List<SessionState> get() = groups.flatMap { it.states }
+
+    operator fun contains(state: SessionState): Boolean = state.group in groups
 }
 
 /** Whose sessions the list shows: the member's own, or the whole team's (administrators). */
@@ -38,11 +48,6 @@ enum class SessionKind(val wire: String) {
         /** A server without remote sessions sends no kind: its sessions are cloud sessions. */
         fun of(wire: String?): SessionKind = if (wire == REMOTE.wire) REMOTE else CLOUD
     }
-}
-
-/** The list's filter by where sessions run; shown only when the server announces remote sessions. */
-enum class KindFilter(val kinds: Set<SessionKind>) {
-    ALL(setOf(SessionKind.CLOUD, SessionKind.REMOTE)), CLOUD(setOf(SessionKind.CLOUD)), REMOTE(setOf(SessionKind.REMOTE))
 }
 
 /**

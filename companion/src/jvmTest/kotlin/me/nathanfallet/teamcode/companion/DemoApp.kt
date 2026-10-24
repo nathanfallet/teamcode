@@ -8,7 +8,7 @@ import kotlinx.coroutines.runBlocking
 import me.nathanfallet.teamcode.companion.di.appModules
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactPage
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
-import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
@@ -84,11 +84,11 @@ internal fun demoSessions() = FakeSessionRepository().apply {
             .copy(name = name, repositories = listOf("acme/web", "acme/api", "acme/infra")[index % 3].let { listOf(it) }, effort = if (index % 2 == 0) "high" else null)
     }
     active.forEach { byId[it.id] = it }
-    pages = { group, _ ->
-        when (group) {
-            SessionGroup.ACTIVE -> SessionPage(active, null)
-            SessionGroup.PAUSED -> SessionPage(listOf(cloudSession("p1", SessionState.PAUSED, createdAt = DEMO_NOW - 300 * minute).copy(name = "Refactor the settings screen")), null)
-            SessionGroup.ENDED -> SessionPage(emptyList(), null)
+    val paused = cloudSession("p1", SessionState.PAUSED, createdAt = DEMO_NOW - 300 * minute).copy(name = "Refactor the settings screen")
+    pages = { filter, _ ->
+        when (filter) {
+            SessionFilter.OPEN, SessionFilter.ALL -> SessionPage(active + paused, null)
+            SessionFilter.ENDED -> SessionPage(emptyList(), null)
         }
     }
     changes = flow { emit(LiveUpdate.Opened(false)); awaitCancellation() }

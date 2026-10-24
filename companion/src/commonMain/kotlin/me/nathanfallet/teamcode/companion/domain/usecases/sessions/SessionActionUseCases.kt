@@ -100,7 +100,7 @@ fun List<PendingMessage>.reconciled(events: List<TranscriptEvent>): List<Pending
     }
 }
 
-/** Interrupt, pause and resume. An interrupt with nothing running is not a failure. */
+/** Interrupt, pause, resume and end. An interrupt with nothing running is not a failure. */
 class ControlSessionUseCase(private val sessions: SessionRepository, private val guard: AccountGuard, private val ids: IdGenerator) {
     /** A key for one interruption: the caller keeps it until the server answered, so a retry never interrupts a later turn. */
     fun interruptKey(): String = ids.newId()
@@ -117,6 +117,7 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
 
     suspend fun pause(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.pause(accountId, sessionId) }
     suspend fun resume(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.resume(accountId, sessionId) }
+    suspend fun end(accountId: String, sessionId: String) = guard(accountId) { sessions.end(accountId, sessionId) }
 
     companion object {
         /** Pause and resume are offered to the owner and to administrators. */
@@ -127,6 +128,8 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
          * resume it instead (the server refuses an explicit resume from elsewhere).
          */
         fun canResume(session: CloudSession): Boolean = !session.remote && (session.state == SessionState.PAUSED || session.state == SessionState.PAUSING)
+        /** A session is ended once; the server deletes its workspace with it. A failed one can be ended too. */
+        fun canEnd(session: CloudSession): Boolean = session.state != SessionState.TERMINATED
         /** A remote session is never transferred (`409 remote_not_transferable`): its files stay on its device. */
         fun canTransfer(session: CloudSession): Boolean = !session.remote
         fun canMessage(session: CloudSession): Boolean = session.state.group != SessionGroup.ENDED && session.state != SessionState.TRANSFERRING

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
@@ -81,6 +82,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.LinkButton
 import me.nathanfallet.teamcode.companion.presentation.components.NavBar
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
+import me.nathanfallet.teamcode.companion.presentation.theme.Radii
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
 import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
@@ -142,6 +144,10 @@ import me.nathanfallet.teamcode.companion.resources.session_ended
 import me.nathanfallet.teamcode.companion.resources.session_live
 import me.nathanfallet.teamcode.companion.resources.session_load_older
 import me.nathanfallet.teamcode.companion.resources.session_menu_pause
+import me.nathanfallet.teamcode.companion.resources.action_cancel
+import me.nathanfallet.teamcode.companion.resources.session_menu_end
+import me.nathanfallet.teamcode.companion.resources.session_end_title
+import me.nathanfallet.teamcode.companion.resources.session_end_body
 import me.nathanfallet.teamcode.companion.resources.session_menu_resume
 import me.nathanfallet.teamcode.companion.resources.session_nothing_older
 import me.nathanfallet.teamcode.companion.resources.session_paused_dock
@@ -235,10 +241,11 @@ fun SessionScreen(
     }
 }
 
-/** "…": pause or resume (owner and administrators), and the artifacts this session published. */
+/** "…": pause, resume or end (owner and administrators), and the artifacts this session published. */
 @Composable
 private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    var confirmEnd by remember { mutableStateOf(false) }
     val session = state.session
     Box {
         TcIconButton(PhosphorIcons.Regular.DotsThree, stringResource(Res.string.session_actions), onClick = { open = true }, modifier = Modifier.testTag("session-menu"))
@@ -254,6 +261,31 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
             DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(18.dp)) },
                 onClick = { open = false; onOpenArtifacts() }, modifier = Modifier.testTag("session-artifacts"))
             if (session != null) menuItems(session) { open = false }
+            if (session != null && state.canControl && ControlSessionUseCase.canEnd(session)) {
+                DropdownMenuItem(text = { Text(stringResource(Res.string.session_menu_end), color = TeamCode.colors.danger) },
+                    leadingIcon = { Icon(PhosphorIcons.Regular.Stop, null, Modifier.size(18.dp), tint = TeamCode.colors.danger) },
+                    enabled = !state.acting, onClick = { open = false; confirmEnd = true }, modifier = Modifier.testTag("end"))
+            }
+        }
+    }
+    if (confirmEnd) EndSessionDialog(onConfirm = { confirmEnd = false; viewModel.end() }, onDismiss = { confirmEnd = false })
+}
+
+/** Ending a session deletes its workspace and cannot be undone: asked first. */
+@Composable
+private fun EndSessionDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val colors = TeamCode.colors
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("end-confirm"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResource(Res.string.session_end_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.session_end_body), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
+                TcButton(stringResource(Res.string.session_menu_end), onClick = onConfirm, kind = ButtonKind.DANGER, modifier = Modifier.weight(1f).testTag("end-confirm-yes"))
+            }
         }
     }
 }

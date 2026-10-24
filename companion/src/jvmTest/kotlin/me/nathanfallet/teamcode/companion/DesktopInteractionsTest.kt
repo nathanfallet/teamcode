@@ -114,7 +114,7 @@ class DesktopInteractionsTest {
         val state = SidebarState(
             account = account("a1"), accounts = listOf(account("a1")),
             sessions = (0 until 3).map { cloudSession("s$it", SessionState.READY).copy(name = "Session $it") }, sessionsLoading = false, finishedTurns = setOf("s2"),
-            artifacts = emptyList(), artifactsLoading = false, selection = SidebarSelection.None, now = 10_000, sessionsFilter = "Paused",
+            artifacts = emptyList(), artifactsLoading = false, selection = SidebarSelection.None, now = 10_000, sessionsFilter = "Ended",
         )
         val actions = SidebarActions(
             onNewSession = {}, onOpenSession = { opened += "session ${it.id}" }, onOpenSessionArtifacts = {}, onAllSessions = {}, onOpenArtifact = {}, onAllArtifacts = {},
@@ -128,7 +128,7 @@ class DesktopInteractionsTest {
         waitForIdle()
         assertEquals(listOf("session s2"), opened)
         // The filter of the shared list, and the search row with its shortcut.
-        onNodeWithText("SESSIONS · PAUSED").assertExists()
+        onNodeWithText("SESSIONS · ENDED").assertExists()
         onNodeWithText("⌘K").assertExists()
         onNodeWithTag("sidebar-search").performClick()
         assertEquals(listOf("session s2", "search"), opened)

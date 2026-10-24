@@ -127,7 +127,7 @@ class FakeFeatures(var features: Set<String> = setOf("cloud.sessions.v1", "cloud
 /** Sessions answered from a map; the feed is whatever [changes] emits. */
 class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository {
     val calls = mutableListOf<String>()
-    var pages: (me.nathanfallet.teamcode.companion.domain.models.SessionGroup, String?) -> me.nathanfallet.teamcode.companion.domain.models.SessionPage =
+    var pages: (me.nathanfallet.teamcode.companion.domain.models.SessionFilter, String?) -> me.nathanfallet.teamcode.companion.domain.models.SessionPage =
         { _, _ -> me.nathanfallet.teamcode.companion.domain.models.SessionPage(emptyList(), null) }
     val byId = mutableMapOf<String, me.nathanfallet.teamcode.companion.domain.models.CloudSession>()
     var sessionFailure: Exception? = null
@@ -136,11 +136,11 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     /** Suspends each list load until released, to change things while it is in flight. */
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, group: me.nathanfallet.teamcode.companion.domain.models.SessionGroup, before: String?,
+    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, filter: me.nathanfallet.teamcode.companion.domain.models.SessionFilter, before: String?,
         kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
-        calls += "list $scope $group $before" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")
+        calls += "list $scope $filter $before" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")
         gate?.await()
-        return pages(group, before)
+        return pages(filter, before)
     }
     override suspend fun session(accountId: String, sessionId: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
         calls += "get $sessionId"
@@ -180,6 +180,8 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     }
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
+    override suspend fun end(accountId: String, sessionId: String) { calls += "end $sessionId"; endFailure?.let { throw it } }
+    var endFailure: Exception? = null
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
     override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>) =
         changes.also { calls += "feed" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",") }

@@ -1,22 +1,21 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.sessions
 
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
-import me.nathanfallet.teamcode.companion.domain.models.KindFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 
 /**
- * The sessions one list shows (one [scope], one [group], the [kind]s it filters on), newest first as the server orders them, and the sessions
+ * The sessions one list shows (one [scope], one status [filter]), newest first as the server orders them, and the sessions
  * with a turn finished since they were last opened. Pure: every change returns a new list.
  */
 data class SessionList(
     val scope: SessionScope,
-    val group: SessionGroup,
+    val filter: SessionFilter,
     val memberId: String,
-    val kind: KindFilter = KindFilter.ALL,
     val sessions: List<CloudSession> = emptyList(),
     /** Null once every page is loaded. */
     val nextBefore: String? = null,
@@ -55,8 +54,6 @@ data class SessionList(
      */
     fun applied(change: SessionChange): Pair<SessionList, String?> {
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
-        // The feed carries every kind; one this list filters out is not read.
-        if (change.kind != null && change.kind !in kind.kinds) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
         // Only a known end: a phase this app does not know (a newer server) is not taken for one.
         val finished = change.turnPhase in FINISHED_PHASES
@@ -64,7 +61,7 @@ data class SessionList(
         if (current == null) {
             // A turn runs only in an active session; a session already read and found elsewhere is read again only when
             // an event says its state changed.
-            val mayBelong = if (change.state == null) group == SessionGroup.ACTIVE && change.sessionId !in outside else change.state.group == group
+            val mayBelong = if (change.state == null) SessionGroup.ACTIVE in filter.groups && change.sessionId !in outside else change.state in filter
             return copy(finishedTurns = marks) to change.sessionId.takeIf { mayBelong }
         }
         // A turn of a session the list still shows as preparing, pausing...: its state moved without an event, read it.
@@ -99,7 +96,7 @@ data class SessionList(
     fun opened(sessionId: String): SessionList = copy(finishedTurns = finishedTurns - sessionId)
 
     private fun belongs(session: CloudSession) =
-        session.state.group == group && session.kind in kind.kinds && (scope == SessionScope.TEAM || session.ownerId == memberId)
+        session.state in filter && (scope == SessionScope.TEAM || session.ownerId == memberId)
 
     private companion object {
         val NEWEST_FIRST = compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id }
