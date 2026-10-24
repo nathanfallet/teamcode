@@ -19,9 +19,11 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import re
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def system():
@@ -54,6 +56,28 @@ def version_file(root):
     if os_name == 'windows':
         return root / 'app' / 'resources' / 'teamcode-desktop-version'
     return root / 'lib' / 'app' / 'resources' / 'teamcode-desktop-version'
+
+
+# What a failed call to an Apple service looks like when the service, not the app, is at fault: the same patterns and the
+# same waits (15, 30, 60, 120 and 240 s, 6 tries) as `apple()` in the notarization step of .github/workflows/build.yml.
+APPLE_TRANSIENT = re.compile(
+    r'network connection was lost|NSURLErrorDomain|could not connect|timed out|timeout|CloudKit|Error 68|offline|'
+    r'temporarily unavailable|Service Unavailable|(HTTP|status( code)?)\D*5\d\d|internal error|connection (reset|refused)', re.I)
+
+
+def apple(command, sleep=time.sleep):
+    """Run a command that asks Apple's servers (stapler, Gatekeeper); retry only when the failure is a transient one."""
+    for attempt in range(1, 7):
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        output = result.stdout + result.stderr
+        print(output, end='', flush=True)
+        if result.returncode == 0:
+            return 0
+        if attempt == 6 or not APPLE_TRANSIENT.search(output):
+            return result.returncode
+        delay = min(15 * 2 ** (attempt - 1), 240)
+        print(f'Apple service failure (try {attempt} of 6): {" ".join(command[:3])}; trying again in {delay}s', flush=True)
+        sleep(delay)
 
 
 def require(condition, message):
@@ -138,7 +162,7 @@ def main():
                 for command in (['codesign', '--verify', '--deep', '--strict', str(root)],
                                 ['spctl', '--assess', '--type', 'execute', str(root)],
                                 ['xcrun', 'stapler', 'validate', str(root)]):
-                    require(subprocess.run(command, timeout=120).returncode == 0, ' '.join(command[:2]) + ' refused the installed app')
+                    require(apple(command) == 0, ' '.join(command[:2]) + ' refused the installed app')
             elif system() == 'linux':
                 require(root.is_symlink() and os.readlink(root) == version, 'current does not name the installed version')
                 require((home / '.local' / 'share' / 'applications' / 'teamcode-desktop.desktop').is_file(), 'no menu entry')
