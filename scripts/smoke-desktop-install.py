@@ -93,6 +93,10 @@ def show_installer_log(temporary, msi, control, root):
         data = log.read_bytes()
         text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
         lines = text.splitlines()
+        where = re.compile(r'INSTALLDIR|TARGETDIR|APPLICATIONFOLDER|ALLUSERS|PERUSER|INSTALLLEVEL|ProgramFiles64Folder|TeamCode\.exe|Programs\\|CreateFolders|Action start|Action ended', re.I)
+        print('--- lines naming the install location ---\n' + '\n'.join(l[:300] for l in [l for l in lines if where.search(l)][:150]) + '\n--- end ---', flush=True)
+        for candidate in (Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'TeamCode', Path(os.environ.get('LOCALAPPDATA', '')) / 'TeamCode'):
+            print(f'--- {candidate} exists={candidate.is_dir()} ---', flush=True)
         print(f'--- {log.name}: last 120 of {len(lines)} lines ---\n' + '\n'.join(lines[-120:]) + '\n--- end ---', flush=True)
     shown = sorted(str(p.relative_to(root)) for p in root.rglob('*') if len(p.relative_to(root).parts) <= 3)[:80] if root.is_dir() else None
     print(f'--- {root} exists={root.is_dir()}; first entries: {shown} ---', flush=True)
