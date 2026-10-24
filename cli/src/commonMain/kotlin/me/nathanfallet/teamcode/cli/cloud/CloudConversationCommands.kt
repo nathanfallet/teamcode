@@ -230,7 +230,9 @@ internal class CloudAttach : SuspendingCliktCommand(name = "attach") {
     override fun help(context: Context) = "Attach to a session: follow its transcript and send each input line as a message. A question of the agent opens " +
         "as a picker on a terminal, one question at a time (arrows, space, enter; left goes back); otherwise a line answers it: an option index " +
         "(several separated by commas for a multi-select question) or your own answer. /allow or /deny [reason] decides a permission request, " +
-        "/message TEXT sends a message whatever waits, /interrupt stops the current turn; /detach, Ctrl-C or end of input detaches."
+        "/message TEXT sends a message whatever waits, /interrupt stops the current turn; /detach, Ctrl-C or end of input detaches. " +
+        "/attach PATH [message] (or /file) uploads a file for the next message, sent with it at once when a message follows the path; " +
+        "/files lists the pending files and /unattach drops them."
     private val id by argument()
     private val tail by option("--tail", help = "Recent events to show first (default 20).").int().default(20)
     private val readOnly by option("--read-only", help = "Only follow the transcript.").flag()
@@ -250,7 +252,7 @@ internal suspend fun attachToSession(client: TeamCodeClient, id: String, tail: I
     echo: (String) -> Unit, notice: (String) -> Unit): Nothing {
     var lease = client.attachCloudSession(id)
     val canSend = !readOnly && CloudPermissions.MESSAGE in lease.permissions
-    notice("Attached to $id." + if (canSend) " Type a message and press Enter; /interrupt, /detach." else " Read-only.")
+    notice("Attached to $id." + if (canSend) " Type a message and press Enter; /attach PATH adds a file, /interrupt, /detach." else " Read-only.")
     // A remote session of this device: a message that wakes it also starts its host here.
     val wakeHost = if (canSend && !noWake) me.nathanfallet.teamcode.cli.remote.localHostWaker(client, id, notice) else null
     // Requests and questions still open, so a typed line or a picker can answer them. Only touched from this thread.
@@ -266,7 +268,9 @@ internal suspend fun attachToSession(client: TeamCodeClient, id: String, tail: I
     // answers questions by index.
     val terminal = Terminal()
     val raw = if (canSend && terminal.terminalInfo.interactive) terminal.enterRawModeOrNull() else null
-    val keys = raw?.let { KeyAttach(requests, { terminal.updateSize().width }) { text -> terminal.rawPrint(text) } }
+    // Files for the next message (`/attach`); their list stays under the transcript on a terminal.
+    val files = AttachFiles(client, id)
+    val keys = raw?.let { KeyAttach(requests, { terminal.updateSize().width }, status = { files.pending.line() }) { text -> terminal.rawPrint(text) } }
     // Raw mode is left before any exit, so the shell gets its terminal back.
     val leave: (Int) -> Nothing = { code -> keys?.close(); raw?.close(); SystemExit.exit(code) }
     val say: (String) -> Unit = keys?.let { it::print } ?: notice
@@ -296,24 +300,20 @@ internal suspend fun attachToSession(client: TeamCodeClient, id: String, tail: I
             }, say, leave)
         }
         /** Handles one typed line; false detaches. */
-        suspend fun line(line: String): Boolean {
-            when {
-                line.isBlank() -> Unit
-                line.trim() == "/detach" -> return false
-                !canSend -> say("This attachment is read-only.")
-                line.trim() == "/interrupt" -> try { say(client.interruptCloudSession(id, Uuid.random().toString()).line()) }
-                    catch (error: TeamCodeException) { say("Interrupt refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
-                else -> when (val action = requests.handle(line)) {
-                    is AttachAction.Notice -> say(action.text)
-                    is AttachAction.Answer -> answerRequest(client, id, requests, action, say, prompt = keys == null)
-                    is AttachAction.Message -> try {
-                        val sent = sendWithRetry(client, id, SendCloudMessageRequest(action.text, wake = !noWake), Uuid.random().toString(), say)
-                        if (sent.woke) { say("The session was paused and is resuming."); wakeHost?.invoke() }
-                    } catch (error: TeamCodeException) { say("Message refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
-                }
-            }
-            return true
-        }
+        suspend fun line(line: String): Boolean = attachLine(line, canSend, requests, files, say,
+            interrupt = {
+                try { say(client.interruptCloudSession(id, Uuid.random().toString()).line()) }
+                catch (error: TeamCodeException) { say("Interrupt refused (${error.code ?: "HTTP ${error.statusCode}"}).") }
+            },
+            answer = { action -> answerRequest(client, id, requests, action, say, prompt = keys == null) },
+            send = { text ->
+                val fileIds = files.pending.ids
+                try {
+                    val sent = sendWithRetry(client, id, SendCloudMessageRequest(text, wake = !noWake, fileIds = fileIds), Uuid.random().toString(), say)
+                    if (fileIds.isNotEmpty()) files.sent()
+                    if (sent.woke) { say("The session was paused and is resuming."); wakeHost?.invoke() }
+                } catch (error: TeamCodeException) { say(if (fileIds.isEmpty()) "Message refused (${error.code ?: "HTTP ${error.statusCode}"})." else files.refused(error)) }
+            })
         // Not a child of this scope: a blocked read cannot be cancelled and must not hold the detach. It only reads;
         // the input is handled here, on the thread that follows the transcript.
         val pressed = Channel<Key>(Channel.UNLIMITED)
@@ -347,6 +347,33 @@ internal suspend fun attachToSession(client: TeamCodeClient, id: String, tail: I
     if (!readable) SystemExit.exit(1)
     // A blocked stdin read cannot be cancelled; leave without waiting for it.
     SystemExit.exit(0)
+}
+
+/**
+ * One line typed in `attach`; false detaches. `/detach` detaches whatever waits; a read-only attachment sends nothing.
+ * [files] takes the file commands, a pasted path and the answer to its "attach? (y/N)"; then `/interrupt`, and
+ * [requests] decides whether the line answers an open question or is a message. A message goes out by [send], which
+ * carries the pending files.
+ */
+internal suspend fun attachLine(line: String, canSend: Boolean, requests: AttachRequests, files: AttachFiles, say: (String) -> Unit,
+    interrupt: suspend () -> Unit, answer: suspend (AttachAction.Answer) -> Unit, send: suspend (String) -> Unit): Boolean {
+    if (line.trim() == "/detach") return false
+    if (line.isBlank() && !files.asking) return true
+    if (!canSend) { say("This attachment is read-only."); return true }
+    when (val outcome = files.handle(line, idle = requests.waiting() == null, say)) {
+        AttachFiles.Outcome.Done -> Unit
+        is AttachFiles.Outcome.Send -> send(outcome.text)
+        AttachFiles.Outcome.NotFiles -> when {
+            line.isBlank() -> Unit
+            line.trim() == "/interrupt" -> interrupt()
+            else -> when (val action = requests.handle(line)) {
+                is AttachAction.Notice -> say(action.text)
+                is AttachAction.Answer -> answer(action)
+                is AttachAction.Message -> send(action.text)
+            }
+        }
+    }
+    return true
 }
 
 /**

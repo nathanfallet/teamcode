@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.client
 
 import kotlinx.coroutines.*
+import kotlin.coroutines.ContinuationInterceptor
 import kotlin.uuid.Uuid
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -14,6 +15,8 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.writeFully
+import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
 import io.ktor.http.*
@@ -581,6 +584,113 @@ class TeamCodeClient(
         idempotencyKey?.let { require(CloudHeaders.idempotencyKey.matches(it)) { "Invalid idempotency key." } }
         return coded(HttpMethod.Post, "/api/v1/cloud/sessions/$id/messages", input) { idempotencyKey?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) } }
     }
+
+    // Files sent with messages (`cloud.files.v1`).
+    /** Whether the caller's team can send files now and its limits; [CloudFilePolicyView.reason] says why it cannot. */
+    suspend fun cloudFilePolicy(): CloudFilePolicyView = coded(HttpMethod.Get, "/api/v1/cloud/files/policy", null as Unit?)
+
+    /** [uploadCloudFile] for bytes already in memory. */
+    suspend fun uploadCloudFile(sessionId: String, name: String, bytes: ByteArray, contentType: String? = null, idempotencyKey: String = Uuid.random().toString(),
+        attempts: Int = UPLOAD_ATTEMPTS, onRetry: (Throwable) -> Unit = {}, onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }): CloudFileView =
+        uploadCloudFile(sessionId, name, CloudFileSource.of(bytes), contentType, idempotencyKey, attempts, onRetry, onProgress)
+
+    /**
+     * Uploads one file to [sessionId] (`POST /cloud/sessions/{id}/files`), streamed from [source] in 64 KiB chunks;
+     * send the returned id in a message's [SendCloudMessageRequest.fileIds]. [name] is the file's name, which the server
+     * cleans; [contentType] a guess ([CloudFileTypes.forName]), since the server recognizes the type from the bytes.
+     *
+     * Every attempt sends the same [idempotencyKey], so a retry never stores the file twice. A network failure, `408`,
+     * `429` other than [CloudFiles.UPLOAD_QUOTA] and `5xx` are retried up to [attempts] times in all, with backoff (or
+     * the server's `Retry-After` up to 30 s); [onRetry] is told before each wait. Other refusals throw
+     * [TeamCodeException] with the server's code at once, a source that cannot be read [CloudFileReadException].
+     * The SHA-256 of the bytes sent is compared to the one the server stored: a difference throws [TeamCodeException]
+     * with code [FILE_INTEGRITY_FAILED]. [onProgress] runs on the caller's dispatcher with the bytes sent so far, from 0
+     * at the start of each attempt.
+     */
+    suspend fun uploadCloudFile(sessionId: String, name: String, source: CloudFileSource, contentType: String? = null, idempotencyKey: String = Uuid.random().toString(),
+        attempts: Int = UPLOAD_ATTEMPTS, onRetry: (Throwable) -> Unit = {}, onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }): CloudFileView {
+        identifier(sessionId)
+        require(name.isNotBlank() && name.length <= 1024 && name.none { it.isISOControl() }) { "Invalid file name." }
+        require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        require(attempts in 1..10) { "Use 1 to 10 attempts." }
+        val type = contentType?.let { ContentType.parse(it) } ?: ContentType.Application.OctetStream
+        // Progress is reported where the caller runs (a UI thread, the CLI's input loop), not on the engine's writer.
+        val caller = currentCoroutineContext()[ContinuationInterceptor] ?: Dispatchers.Unconfined
+        val report: suspend (Long) -> Unit = { sent -> withContext(caller) { onProgress(sent, source.size) } }
+        var wait = 1_000L
+        var attempt = 1
+        while (true) {
+            try {
+                return sendCloudFile(sessionId, name, source, type, idempotencyKey, report)
+            } catch (error: CancellationException) { throw error }
+            catch (error: CloudFileReadException) { throw error }
+            catch (error: TeamCodeException) {
+                val transient = error.statusCode == 408 || error.statusCode in 500..599 || (error.statusCode == 429 && error.code != CloudFiles.UPLOAD_QUOTA)
+                if (!transient || attempt >= attempts) throw error
+                onRetry(error)
+                delay(error.retryAfterSeconds?.takeIf { it in 1..30 }?.times(1_000) ?: wait)
+            } catch (error: Exception) {
+                if (attempt >= attempts) throw error
+                onRetry(error)
+                delay(wait)
+            }
+            wait = (wait * 2).coerceAtMost(15_000)
+            attempt++
+        }
+    }
+
+    private suspend fun sendCloudFile(sessionId: String, name: String, source: CloudFileSource, type: ContentType, idempotencyKey: String, report: suspend (Long) -> Unit): CloudFileView {
+        val digest = okio.HashingSink.sha256(okio.blackholeSink())
+        // Set when the source failed: the engine may surface it wrapped, or as the cancellation of the request.
+        var unreadable: CloudFileReadException? = null
+        fun unreadable(message: String, cause: Throwable? = null): Nothing = throw CloudFileReadException(message, cause).also { unreadable = it }
+        val body = object : io.ktor.http.content.OutgoingContent.WriteChannelContent() {
+            override val contentLength = source.size
+            override val contentType = type
+            override suspend fun writeTo(channel: io.ktor.utils.io.ByteWriteChannel) {
+                try { write(channel) } catch (error: CloudFileReadException) {
+                    // The body ends in error, never as a shorter or longer file, whatever the engine does with the throw.
+                    channel.cancel(error); throw error
+                }
+            }
+            private suspend fun write(channel: io.ktor.utils.io.ByteWriteChannel) {
+                report(0)
+                val raw = try { source.open() } catch (error: CancellationException) { throw error } catch (error: Exception) { unreadable("The file cannot be read.", error) }
+                raw.use { input ->
+                    val buffer = kotlinx.io.Buffer()
+                    var sent = 0L
+                    while (true) {
+                        val count = try { input.readAtMostTo(buffer, UPLOAD_CHUNK_BYTES) } catch (error: CancellationException) { throw error } catch (error: Exception) { unreadable("The file cannot be read.", error) }
+                        if (count < 0) break
+                        sent += count
+                        if (sent > source.size) unreadable("The file grew while it was sent.")
+                        val bytes = buffer.readByteArray()
+                        digest.write(okio.Buffer().write(bytes), bytes.size.toLong())
+                        channel.writeFully(bytes)
+                        report(sent)
+                    }
+                    if (sent != source.size) unreadable("The file changed while it was sent.")
+                }
+                channel.flush()
+            }
+        }
+        val response = try {
+            http.request("$origin/api/v1/cloud/sessions/$sessionId/files") {
+                method = HttpMethod.Post; authenticate(); parameter("name", name)
+                header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey); setBody(body)
+                timeout { requestTimeoutMillis = UPLOAD_TIMEOUT_MILLIS }
+            }
+        } catch (error: CancellationException) {
+            currentCoroutineContext().ensureActive(); throw unreadable ?: error
+        } catch (error: Exception) { throw unreadable ?: error }
+        unreadable?.let { throw it }
+        if (!response.status.isSuccess()) throw failure(response)
+        val file: CloudFileView = response.body()
+        if (file.size != source.size || !file.sha256.equals(digest.hash.hex(), ignoreCase = true))
+            throw TeamCodeException(0, "The server stored other bytes than the ones sent.", FILE_INTEGRITY_FAILED)
+        return file
+    }
+
     suspend fun interruptCloudSession(id: String, idempotencyKey: String? = null): CloudInputView {
         identifier(id)
         idempotencyKey?.let { require(CloudHeaders.idempotencyKey.matches(it)) { "Invalid idempotency key." } }
@@ -879,6 +989,13 @@ class TeamCodeClient(
          * Reconnecting replays the same event, so a caller stops (or updates) instead of retrying forever.
          */
         const val MALFORMED_EVENT = "malformed_event"
+        /** The [TeamCodeException.code] of an upload whose stored SHA-256 or size differs from the bytes sent (status `0`). */
+        const val FILE_INTEGRITY_FAILED = "file_integrity_failed"
+        /** Attempts of [uploadCloudFile] by default, the first included. */
+        const val UPLOAD_ATTEMPTS = 5
+        private const val UPLOAD_CHUNK_BYTES = 64L * 1024
+        /** 100 MiB, the largest file a team may allow, over a slow link. */
+        private const val UPLOAD_TIMEOUT_MILLIS = 15 * 60_000L
         // The server validates the names; this only keeps what would break the comma-separated query out.
         private val TEAM_EVENT_TYPE = Regex("[A-Za-z0-9_.:-]{1,128}")
         private const val MAX_TEAM_EVENT_TYPES = 64

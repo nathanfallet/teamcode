@@ -198,11 +198,19 @@ object CloudPermissions {
 
 /** `cloud.files.v1` limits and refusals, as the server applies them. */
 object CloudFiles {
+    /** The capability a server advertises when it takes files. */
+    const val FEATURE = "cloud.files.v1"
     const val MAX_FILES_PER_MESSAGE = 5
     const val FILE_TOO_LARGE = "file_too_large"
     const val FILE_TYPE_NOT_ALLOWED = "file_type_not_allowed"
     const val UPLOAD_QUOTA = "upload_quota"
     const val STORAGE_NOT_CONFIGURED = "file_storage_not_configured"
+    /** `503`: the team's bucket did not answer; sending the file again may work. */
+    const val STORAGE_UNAVAILABLE = "file_storage_unavailable"
+    /** `409` on a message: a named file expired, was sent already or belongs to someone else. */
+    const val FILE_UNAVAILABLE = "file_unavailable"
+    /** `413` on a message: its files together exceed the team's per-message limit. */
+    const val FILES_TOO_LARGE = "files_too_large"
     /** The reason a message with files is rejected for a runner that does not download them. */
     const val UNSUPPORTED = "files_unsupported"
 }

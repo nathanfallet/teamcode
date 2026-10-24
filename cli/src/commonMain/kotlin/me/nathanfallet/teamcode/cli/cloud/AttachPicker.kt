@@ -114,10 +114,11 @@ internal class QuestionPicker(val requestId: String, private val questions: List
 
 /**
  * `attach` on a terminal in raw mode: the newest open question shown as a [QuestionPicker], otherwise a message line
- * (with a hint while a tool use waits for `/allow` or `/deny`), both in a [LiveArea] under the transcript. Not
+ * (with a hint while a tool use waits for `/allow` or `/deny`, and the [status] line, the files pending for the next
+ * message), both in a [LiveArea] under the transcript. Not
  * thread-safe: `attach` calls it from the thread that follows the transcript.
  */
-internal class KeyAttach(private val requests: AttachRequests, private val columns: () -> Int, write: (String) -> Unit) {
+internal class KeyAttach(private val requests: AttachRequests, private val columns: () -> Int, private val status: () -> String? = { null }, write: (String) -> Unit) {
     sealed interface Step {
         data object None : Step
         data object Detach : Step
@@ -138,7 +139,7 @@ internal class KeyAttach(private val requests: AttachRequests, private val colum
         return pickers.getOrPut(waiting.id) { QuestionPicker(waiting.id, questions) }
     }
 
-    private fun lines(): List<String> = picker()?.lines(width()) ?: listOfNotNull(requests.prompt()?.let { fit(it, width()) }, editor.line(width()))
+    private fun lines(): List<String> = picker()?.lines(width()) ?: listOfNotNull(requests.prompt()?.let { fit(it, width()) }, status()?.let { fit(it, width()) }, editor.line(width()))
 
     /** Prints a transcript line or a notice above the live area. */
     fun print(text: String) = area.print(text, lines())
