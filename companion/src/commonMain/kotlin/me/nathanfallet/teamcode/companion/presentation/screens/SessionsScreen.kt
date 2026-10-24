@@ -70,6 +70,8 @@ import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.KindChips
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
+import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
+import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
 import me.nathanfallet.teamcode.companion.presentation.components.Segmented
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
@@ -155,7 +157,8 @@ fun SessionsScreen(
                 if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { onNewSession(account) },
                     kind = IconButtonKind.FILLED, modifier = Modifier.testTag("new-session"))
             }
-            account?.let { AccountPill(it, onSwitchAccount) }
+            // The sidebar lists the accounts on a wide window.
+            if (!LocalWideLayout.current) account?.let { AccountPill(it, onSwitchAccount) }
             if (account != null && account.signedIn) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Segmented(
                     listOf(SessionGroup.ACTIVE to stringResource(Res.string.sessions_active), SessionGroup.PAUSED to stringResource(Res.string.sessions_paused), SessionGroup.ENDED to stringResource(Res.string.sessions_ended)),
@@ -294,18 +297,31 @@ private fun ScopePill(scope: SessionScope, onScope: (SessionScope) -> Unit) {
 @Composable
 private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dimmed: Boolean, showKind: Boolean, onClick: () -> Unit) {
     val colors = TeamCode.colors
-    TcCard(Modifier.alpha(if (dimmed) 0.7f else 1f).testTag("session-${session.id}"), borderColor = if (finished) colors.accentDim else colors.line, onClick = onClick) {
+    val dense = LocalDense.current && LocalWideLayout.current
+    TcCard(Modifier.alpha(if (dimmed) 0.7f else 1f).testTag("session-${session.id}"), borderColor = if (finished) colors.accentDim else colors.line, onClick = onClick,
+        padding = if (dense) 12.dp else 14.dp, spacing = if (dense) 5.dp else 7.dp) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (finished) Dot(colors.accentText, Modifier.testTag("finished-${session.id}"))
             Text(session.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             StateChip(session.state)
         }
         val details = listOfNotNull(session.agentKind, session.model, session.effort, phaseLabel(session)).joinToString(" · ")
+        // A remote session has no repository to clone: the folder it runs in tells it apart instead.
+        val where = if (session.remote) session.host?.directoryName.orEmpty() else session.repositories.joinToString(", ")
+        if (dense) {
+            // A wide pointer-first window: one line of details under the name, the card is a list row.
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (showKind || session.remote) KindChips(session)
+                Text(listOf(details, where).filter { it.isNotEmpty() }.joinToString("  ·  "), style = MetaStyle, color = colors.muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (finished) Text(stringResource(Res.string.sessions_turn_finished), color = colors.accentText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(relativeTime(session.lastActivityAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)
+            }
+            return@TcCard
+        }
         if (details.isNotEmpty()) Text(details, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (showKind || session.remote) KindChips(session)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            // A remote session has no repository to clone: the folder it runs in tells it apart instead.
-            val where = if (session.remote) session.host?.directoryName.orEmpty() else session.repositories.joinToString(", ")
             Text(where, style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (finished) Text(stringResource(Res.string.sessions_turn_finished), color = colors.accentText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             Text(relativeTime(session.lastActivityAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)

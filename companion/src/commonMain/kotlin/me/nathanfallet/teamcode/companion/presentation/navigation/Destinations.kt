@@ -41,3 +41,11 @@ data class TransfersRoute(val accountId: String)
 /** The subscription accounts of an account's server, and adding one with a provider sign-in. */
 @Serializable
 data class SubscriptionAccountsRoute(val accountId: String)
+
+/** The content panel of the wide layout: the active account's full session list, with its filters. */
+@Serializable
+object SessionsListRoute
+
+/** The content panel of the wide layout: the account and the app's settings (the Account tab of a phone). */
+@Serializable
+object AccountRoute

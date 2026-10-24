@@ -135,6 +135,9 @@ compose.desktop {
             // signed (no paid signing service): SmartScreen warns on first launch.
             macOS {
                 bundleID = "me.nathanfallet.teamcode.desktop"
+                // The app's icons, made from the mobile apps' icon (icons/): the macOS shape (a rounded square with a
+                // margin) for the bundle and the Dock, the same picture in .ico and .png for Windows and Linux.
+                iconFile.set(project.file("icons/TeamCode.icns"))
                 providers.environmentVariable("TEAMCODE_MACOS_SIGNING_IDENTITY").orNull?.let { name ->
                     signing {
                         sign.set(true)
@@ -154,6 +157,7 @@ compose.desktop {
             // looks for it (the CLI owns %LOCALAPPDATA%\TeamCode). The upgrade code never changes, so a new version replaces
             // the previous one.
             windows {
+                iconFile.set(project.file("icons/TeamCode.ico"))
                 perUserInstall = true
                 // One folder level, no separator, on purpose. The plugin passes the path quoted in an @argfile, where a
                 // backslash escapes the next character: "Programs\TeamCode" became "ProgramsTeamCode". And for a per-user
@@ -164,6 +168,7 @@ compose.desktop {
                 menu = true
                 shortcut = true
             }
+            linux { iconFile.set(project.file("icons/TeamCode.png")) }
             // Installers take MAJOR.MINOR.PATCH only: the TeamCode version without its pre-release suffix. macOS refuses
             // a major version of 0, and the packages carry TeamCode's real version, so packaging a 0.x fails (below).
             packageVersion = desktopPackageVersion

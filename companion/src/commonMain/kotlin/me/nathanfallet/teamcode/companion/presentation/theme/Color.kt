@@ -35,6 +35,10 @@ data class TeamCodeColors(
     val shade: Color,
     val code: Color,
     val skeleton: Color,
+    /** Under the pointer: a row or a card the mouse is over. */
+    val hover: Color,
+    /** The desktop and tablet sidebar. */
+    val sidebar: Color,
     val isDark: Boolean,
 )
 
@@ -60,6 +64,8 @@ val DarkPalette = TeamCodeColors(
     shade = Color(0x99000000),
     code = Color(0xFF0B1117),
     skeleton = Color(0xFF1A2530),
+    hover = Color(0xFF17212B),
+    sidebar = Color(0xFF0E141A),
     isDark = true,
 )
 
@@ -85,6 +91,8 @@ val LightPalette = TeamCodeColors(
     shade = Color(0x590B0F14),
     code = Color(0xFFF4F6F8),
     skeleton = Color(0xFFE3E9EE),
+    hover = Color(0xFFE6ECF1),
+    sidebar = Color(0xFFEBEFF3),
     isDark = false,
 )
 

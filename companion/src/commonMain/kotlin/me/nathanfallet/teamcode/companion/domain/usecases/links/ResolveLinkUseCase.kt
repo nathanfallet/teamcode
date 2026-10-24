@@ -4,6 +4,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.ARTIFACT_ID
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.normalizeOrigin
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.trimTyped
 
 /** Where a link leads. */
 sealed interface LinkTarget {
@@ -23,7 +24,7 @@ sealed interface LinkTarget {
  */
 class ResolveLinkUseCase(private val accounts: AccountRepository) {
     operator fun invoke(link: String): LinkTarget? {
-        val trimmed = link.trim()
+        val trimmed = link.trimTyped()
         val url = if (trimmed.startsWith(SCHEME, ignoreCase = true)) {
             val query = trimmed.substring(SCHEME.length).substringBefore('#')
             val encoded = query.split('&').firstOrNull { it.startsWith("url=") }?.removePrefix("url=") ?: return null

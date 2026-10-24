@@ -7,8 +7,11 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
+import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
+import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
 import androidx.compose.ui.test.onFirst
-import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.runDesktopComposeUiTest
@@ -87,6 +90,19 @@ class DesktopScreenshots {
                     clickText("Fix the flaky login test")
                     mainClock.advanceTimeBy(1_000); waitForIdle()
                     shot(output, "$name$suffix-2-session")
+                    // The full artifact list: "See more" in the sidebar, the Artifacts tab on a phone (before: the tab).
+                    val more = onAllNodesWithTag("sidebar-all-artifacts").fetchSemanticsNodes().isNotEmpty()
+                    if (more) onAllNodesWithTag("sidebar-all-artifacts").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+                    else if (onAllNodesWithTag("back").fetchSemanticsNodes().isNotEmpty()) {
+                        onAllNodesWithTag("back").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+                        mainClock.advanceTimeBy(1_000); waitForIdle()
+                        onAllNodesWithTag("tab-artifacts").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+                    }
+                    mainClock.advanceTimeBy(1_000); waitForIdle()
+                    shot(output, "$name$suffix-3-artifacts")
+                    runOnUiThread { AppCommands.send(AppCommand.NEW_SESSION) }
+                    mainClock.advanceTimeBy(1_000); waitForIdle()
+                    shot(output, "$name$suffix-4-new-session")
                 }
             }
         }
@@ -116,7 +132,19 @@ class DesktopScreenshots {
 
     private fun DesktopComposeUiTest.shot(output: File, name: String) {
         waitForIdle()
-        ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(output, "$name.png"))
+        // Every root, the window's and those of dialogs and menus over it, drawn where it sits.
+        val roots = onAllNodes(isRoot())
+        val count = roots.fetchSemanticsNodes().size
+        val base = roots[0].captureToImage().toAwtImage()
+        val image = java.awt.image.BufferedImage(base.width, base.height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val canvas = image.createGraphics()
+        for (index in 0 until count) {
+            val node = roots[index]
+            val bounds = node.fetchSemanticsNode().boundsInWindow
+            canvas.drawImage(node.captureToImage().toAwtImage(), bounds.left.toInt(), bounds.top.toInt(), null)
+        }
+        canvas.dispose()
+        ImageIO.write(image, "png", File(output, "$name.png"))
     }
 
     private fun demoModule() = module {
@@ -132,7 +160,7 @@ class DesktopScreenshots {
         single<AuthRepository> { FakeAuthRepository() }
         single<InstallationIdentity> { FixedInstallation }
         single<Clock> { FixedClock(NOW) }
-        single<FeaturesRepository> { FakeFeatures(setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1", "cloud.sessions.remote.v1")) }
+        single<FeaturesRepository> { FakeFeatures(setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1", "cloud.sessions.remote.v1", "artifacts.v1")) }
         single<SessionRepository> { demoSessions() }
         single<TranscriptRepository> { demoTranscript() }
         single<ArtifactRepository> { demoArtifacts() }

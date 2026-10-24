@@ -20,6 +20,9 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
+import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
+import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -75,8 +78,98 @@ import org.koin.core.parameter.parametersOf
 enum class MainTab { SESSIONS, ARTIFACTS, ACCOUNT }
 
 /**
- * The signed-in app: three tabs over a bottom bar. The new-session sheet and the account switcher open over it;
- * sessions and artifacts are pushed above it by the navigation.
+ * The sheets (dialogs on a wide window) the signed-in app opens over its content: a new session (on the desktop, first
+ * where it runs), a session on this device, the account switcher. Shared by the phone's tabs and the wide layout.
+ */
+class MainSheets internal constructor(
+    newSessionFor: MutableState<String?>,
+    chooserFor: MutableState<String?>,
+    localSessionFor: MutableState<String?>,
+    localDirectory: MutableState<String?>,
+    switcher: MutableState<Boolean>,
+    /** The desktop alone hosts sessions on the device: there, a new session first asks where it runs. */
+    val localHost: LocalHost?,
+) {
+    var newSessionFor by newSessionFor
+    var chooserFor by chooserFor
+    var localSessionFor by localSessionFor
+    /** `teamcode ui DIRECTORY`: the app opens on a new session there, with the CLI's account (sessions here use it). */
+    var localDirectory by localDirectory
+    var switcher by switcher
+
+    fun newSession(accountId: String) { if (localHost != null) chooserFor = accountId else newSessionFor = accountId }
+}
+
+@Composable
+fun rememberMainSheets(): MainSheets {
+    val koin = getKoin()
+    val localHost = remember { koin.getOrNull<LocalHost>() }
+    val sheets = MainSheets(
+        rememberSaveable { mutableStateOf<String?>(null) }, rememberSaveable { mutableStateOf<String?>(null) },
+        rememberSaveable { mutableStateOf<String?>(null) }, rememberSaveable { mutableStateOf<String?>(null) },
+        rememberSaveable { mutableStateOf(false) }, localHost,
+    )
+    LaunchedEffect(localHost) {
+        localHost?.takeInitialDirectory()?.let { directory ->
+            sheets.localDirectory = directory
+            sheets.localSessionFor = Account.CLI_ACCOUNT_ID
+        }
+    }
+    return sheets
+}
+
+/** Shows whichever of [sheets] is open. */
+@Composable
+fun MainSheetsHost(
+    sheets: MainSheets,
+    settings: SettingsViewModel,
+    onOpenSession: (accountId: String, sessionId: String) -> Unit,
+    onSignInAgain: (Account) -> Unit,
+    onAddAccount: () -> Unit,
+    onManageAccounts: () -> Unit,
+) {
+    val settingsState by settings.uiState.collectAsStateWithLifecycle()
+    sheets.newSessionFor?.let { accountId ->
+        SheetViewModels {
+            val viewModel: NewSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId)) }
+            NewSessionSheet(viewModel, onDismiss = { sheets.newSessionFor = null }, onCreated = { session ->
+                sheets.newSessionFor = null
+                onOpenSession(accountId, session.id)
+            })
+        }
+    }
+    sheets.chooserFor?.let { accountId ->
+        NewSessionChooserSheet(
+            onHere = { sheets.chooserFor = null; sheets.localDirectory = null; sheets.localSessionFor = accountId },
+            onCloud = { sheets.chooserFor = null; sheets.newSessionFor = accountId },
+            onDismiss = { sheets.chooserFor = null },
+        )
+    }
+    sheets.localSessionFor?.let { accountId ->
+        SheetViewModels {
+            val viewModel: LocalSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId, sheets.localDirectory)) }
+            LocalSessionSheet(viewModel, onDismiss = { sheets.localSessionFor = null; sheets.localDirectory = null }, onStarted = { sessionId ->
+                sheets.localSessionFor = null
+                sheets.localDirectory = null
+                onOpenSession(accountId, sessionId)
+            })
+        }
+    }
+    if (sheets.switcher) AccountSwitcherSheet(
+        accounts = settingsState.accounts,
+        activeAccountId = settingsState.activeAccountId,
+        onSwitch = { settings.switchTo(it); sheets.switcher = false },
+        onSignInAgain = { sheets.switcher = false; onSignInAgain(it) },
+        onAddAccount = { sheets.switcher = false; onAddAccount() },
+        onManage = { sheets.switcher = false; onManageAccounts() },
+        onDismiss = { sheets.switcher = false },
+    )
+}
+
+/**
+ * The signed-in app on a narrow window (a phone, a tablet in a narrow split): three tabs over a bottom bar. The
+ * new-session sheet and the account switcher open over it; sessions and artifacts are pushed above it by the
+ * navigation. A wide window shows [WideMainScreen] instead.
  */
 @Composable
 fun MainScreen(
@@ -91,24 +184,19 @@ fun MainScreen(
     settings: SettingsViewModel = koinViewModel(),
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
-    var newSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
-    // The desktop alone hosts sessions on the device: there, a new session first asks where it runs.
-    val koin = getKoin()
-    val localHost = remember { koin.getOrNull<LocalHost>() }
-    var chooserFor by rememberSaveable { mutableStateOf<String?>(null) }
-    var localSessionFor by rememberSaveable { mutableStateOf<String?>(null) }
-    // `teamcode ui DIRECTORY`: the app opens on a new session there, with the CLI's account (sessions here use it).
-    var localDirectory by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(localHost) {
-        localHost?.takeInitialDirectory()?.let { directory ->
-            localDirectory = directory
-            localSessionFor = Account.CLI_ACCOUNT_ID
+    val sheets = rememberMainSheets()
+    val homeState by home.uiState.collectAsStateWithLifecycle()
+    val account = homeState.account
+    LaunchedEffect(Unit) {
+        AppCommands.commands.collect { command ->
+            when (command) {
+                AppCommand.NEW_SESSION -> home.uiState.value.account?.takeIf { it.signedIn }?.let { sheets.newSession(it.id) }
+                AppCommand.SHOW_SESSIONS -> tab = MainTab.SESSIONS
+                AppCommand.SHOW_ARTIFACTS -> tab = MainTab.ARTIFACTS
+                AppCommand.SHOW_ACCOUNT -> tab = MainTab.ACCOUNT
+            }
         }
     }
-    var switcher by rememberSaveable { mutableStateOf(false) }
-    val homeState by home.uiState.collectAsStateWithLifecycle()
-    val settingsState by settings.uiState.collectAsStateWithLifecycle()
-    val account = homeState.account
 
     Column(Modifier.fillMaxSize().background(TeamCode.colors.background)) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -116,8 +204,8 @@ fun MainScreen(
                 MainTab.SESSIONS -> SessionsScreen(
                     onSignInAgain = onSignInAgain,
                     onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
-                    onNewSession = { if (localHost != null) chooserFor = it.id else newSessionFor = it.id },
-                    onSwitchAccount = { switcher = true },
+                    onNewSession = { sheets.newSession(it.id) },
+                    onSwitchAccount = { sheets.switcher = true },
                     titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
                     viewModel = home,
                 )
@@ -125,53 +213,19 @@ fun MainScreen(
                     val viewModel: ArtifactsViewModel = koinViewModel(key = "artifacts-${account.id}") { parametersOf(ArtifactsRoute(account.id)) }
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
                 } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
-                MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { switcher = true },
+                MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
                     onOpenSubscriptions = { onOpenSubscriptions(it.id) }, viewModel = settings)
             }
         }
         TabBar(tab) { tab = it }
     }
 
-    newSessionFor?.let { accountId ->
-        SheetViewModels {
-            val viewModel: NewSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId)) }
-            NewSessionSheet(viewModel, onDismiss = { newSessionFor = null }, onCreated = { session ->
-                newSessionFor = null
-                onOpenSession(accountId, session.id)
-            })
-        }
-    }
-    chooserFor?.let { accountId ->
-        NewSessionChooserSheet(
-            onHere = { chooserFor = null; localDirectory = null; localSessionFor = accountId },
-            onCloud = { chooserFor = null; newSessionFor = accountId },
-            onDismiss = { chooserFor = null },
-        )
-    }
-    localSessionFor?.let { accountId ->
-        SheetViewModels {
-            val viewModel: LocalSessionViewModel = koinViewModel { parametersOf(NewSessionRoute(accountId, localDirectory)) }
-            LocalSessionSheet(viewModel, onDismiss = { localSessionFor = null; localDirectory = null }, onStarted = { sessionId ->
-                localSessionFor = null
-                localDirectory = null
-                onOpenSession(accountId, sessionId)
-            })
-        }
-    }
-    if (switcher) AccountSwitcherSheet(
-        accounts = settingsState.accounts,
-        activeAccountId = settingsState.activeAccountId,
-        onSwitch = { settings.switchTo(it); switcher = false },
-        onSignInAgain = { switcher = false; onSignInAgain(it) },
-        onAddAccount = { switcher = false; onAddAccount() },
-        onManage = { switcher = false; tab = MainTab.ACCOUNT },
-        onDismiss = { switcher = false },
-    )
+    MainSheetsHost(sheets, settings, onOpenSession, onSignInAgain, onAddAccount, onManageAccounts = { tab = MainTab.ACCOUNT })
 }
 
 /** A tab that needs a signed-in account while the active one is signed out. */
 @Composable
-private fun SignedOutTab(title: String, account: Account?, onSignInAgain: (Account) -> Unit) {
+internal fun SignedOutTab(title: String, account: Account?, onSignInAgain: (Account) -> Unit) {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(start = 16.dp, end = 16.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             LargeTitle(title)

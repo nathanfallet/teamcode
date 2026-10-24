@@ -27,6 +27,8 @@ class ArtifactUseCasesTest {
         val encoded = viewer.replace(":", "%3A").replace("/", "%2F").replace("?", "%3F").replace("=", "%3D")
         assertEquals(LinkTarget.Artifact("a1", id, 3), resolve("teamcode://open?url=$encoded"))
         assertEquals(LinkTarget.Artifact("a1", id, null), resolve("https://team.example/artifact/$id"))
+        // Pasted with what a keyboard or a chat app adds around it.
+        assertEquals(LinkTarget.Artifact("a1", id, null), resolve(" \u200Bhttps://team.example/artifact/$id\n"))
         // The same server spelled with its default port, and another account on another port.
         assertEquals(LinkTarget.Artifact("a1", id, null), resolve("https://TEAM.example:443/artifact/$id"))
         assertEquals(LinkTarget.Artifact("a2", id, null), resolve("https://other.example:8443/artifact/$id"))

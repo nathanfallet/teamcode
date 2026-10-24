@@ -90,7 +90,7 @@ import org.jetbrains.compose.resources.stringResource
  * typed into a hidden field and never shown back.
  */
 @Composable
-fun SubscriptionAccountsScreen(viewModel: SubscriptionAccountsViewModel, onBack: () -> Unit, backLabel: String = stringResource(Res.string.account_title)) {
+fun SubscriptionAccountsScreen(viewModel: SubscriptionAccountsViewModel, onBack: (() -> Unit)?, backLabel: String = stringResource(Res.string.account_title)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
     Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap(), horizontalAlignment = Alignment.CenterHorizontally) {

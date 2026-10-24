@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +60,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcSheet
+import me.nathanfallet.teamcode.companion.domain.usecases.auth.trimTyped
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
 import me.nathanfallet.teamcode.companion.presentation.components.dismissKeyboardOnTap
 import me.nathanfallet.teamcode.companion.presentation.components.Tone
@@ -96,7 +98,7 @@ import org.jetbrains.compose.resources.stringResource
 fun ArtifactsScreen(
     viewModel: ArtifactsViewModel,
     forSession: Boolean,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onOpen: (Artifact) -> Unit,
     onOpenLink: (String) -> Boolean,
     backLabel: String = stringResource(Res.string.action_back),
@@ -162,19 +164,23 @@ private fun LinkSheet(onOpenLink: (String) -> Boolean, onDismiss: () -> Unit) {
     var link by remember { mutableStateOf("") }
     var refused by remember { mutableStateOf(false) }
     val colors = TeamCode.colors
+    fun open() {
+        // What a keyboard added around the link goes, in the field too.
+        link = link.trimTyped()
+        refused = !onOpenLink(link)
+        if (!refused) onDismiss()
+    }
     TcSheet(onDismiss) {
         SheetHeader(stringResource(Res.string.artifacts_open_link), trailing = {
             TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.GHOST, small = true)
         })
         Column(Modifier.navigationBarsPadding().imePadding().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             TcTextField(link, { link = it; refused = false }, label = stringResource(Res.string.artifacts_link_label), placeholder = "https://", mono = true, error = refused,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false), tag = "artifact-link")
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false), tag = "artifact-link",
+                onSubmit = { if (link.isNotBlank()) open() })
             if (refused) Text(stringResource(Res.string.artifacts_link_unknown), color = colors.danger, fontSize = 13.sp, modifier = Modifier.testTag("error"))
             Text(stringResource(Res.string.artifacts_link_hint), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
-            TcButton(stringResource(Res.string.artifacts_link_submit), onClick = {
-                refused = !onOpenLink(link.trim())
-                if (!refused) onDismiss()
-            }, enabled = link.isNotBlank(), modifier = Modifier.padding(top = 8.dp).testTag("artifact-link-open"))
+            TcButton(stringResource(Res.string.artifacts_link_submit), onClick = ::open, enabled = link.isNotBlank(), modifier = Modifier.padding(top = 8.dp).testTag("artifact-link-open"))
         }
     }
 }

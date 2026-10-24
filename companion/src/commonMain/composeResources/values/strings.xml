@@ -427,4 +427,11 @@
     <string name="session_refusal_unknown">it gave the reason %1$s.</string>
     <string name="session_refusal_none">it gave no reason.</string>
     <string name="session_phase_waiting_host">waiting for the device</string>
+    <!-- The sidebar of a wide window (desktop, tablet) -->
+    <string name="sidebar_see_more">See more</string>
+    <string name="sidebar_open">Open</string>
+    <string name="sidebar_switch_to">Switch to this account</string>
+    <string name="sidebar_artifacts_empty">No artifact yet</string>
+    <string name="sidebar_signed_out">Signed out. Sign in again</string>
+    <string name="sidebar_resize">Resize the sidebar</string>
 </resources>

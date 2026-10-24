@@ -97,7 +97,7 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Suppress("DEPRECATION") // LocalClipboardManager: plain text is all the link needs, on every platform.
 @Composable
-fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: () -> Unit, backLabel: String = stringResource(Res.string.artifacts_title)) {
+fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabel: String = stringResource(Res.string.artifacts_title)) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LifecycleStartEffect(viewModel) {
         viewModel.start()

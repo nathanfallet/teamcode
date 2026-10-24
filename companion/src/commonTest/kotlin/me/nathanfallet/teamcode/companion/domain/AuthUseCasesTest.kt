@@ -38,8 +38,14 @@ class AuthUseCasesTest {
         assertEquals("https://team.example", normalizeOrigin("Https://Team.example"))
         assertEquals("https://team.example", normalizeOrigin("https://team.example:443"))
         assertEquals("https://team.example:8443", normalizeOrigin("https://team.example:08443"))
+        // What a phone keyboard or a paste leaves around the address: spaces, line breaks, invisible characters, the
+        // period typed after a double space.
+        assertEquals("https://team.example", normalizeOrigin("\nhttps://team.example \t"))
+        assertEquals("https://team.example", normalizeOrigin("\u200Bteam.example\uFEFF"))
+        assertEquals("https://team.example", normalizeOrigin("team.example /"))
+        assertEquals("https://team.example", normalizeOrigin("team.example. "))
         for (invalid in listOf("http://team.example", "http://[::1]:8080", "https://team.example/path", "https://user:pw@team.example", "https://team.example?x=1",
-            "https://team.example#x", "ftp://team.example", "https://", "https://team..example", "https://team.example:70000", ""))
+            "https://team.example#x", "ftp://team.example", "https://", "https://team..example", "https://team.example..", "https://team.example:70000", "", " \n "))
             assertFailsWith<CompanionException.InvalidOrigin>(invalid) { normalizeOrigin(invalid) }
     }
 
