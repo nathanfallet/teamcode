@@ -104,6 +104,31 @@ class DesktopShellTest {
         }
     }
 
+    @Test fun theUpdateBannerStartsBelowMacsTitleBar() {
+        val updater = object : me.nathanfallet.teamcode.companion.domain.services.AppUpdater {
+            override val appVersion = "1.2.0"
+            override suspend fun cliVersion() = "1.2.0"
+            override suspend fun latestVersion() = "1.3.0"
+            override suspend fun update(output: (String) -> Unit) = Unit
+            override fun quit() = Unit
+        }
+        val extra = org.koin.dsl.module {
+            single<me.nathanfallet.teamcode.companion.domain.services.AppUpdater> { updater }
+            single<me.nathanfallet.teamcode.companion.domain.services.Clock> { me.nathanfallet.teamcode.companion.domain.services.Clock { 1_000_000_000L } }
+        }
+        app(modules = demoModules() + me.nathanfallet.teamcode.companion.di.updateModule + extra,
+            content = { CompositionLocalProvider(LocalWindowTitleBar provides WindowTitleBar.MAC) { App() } }) {
+            repeat(10) {
+                if (onAllNodesWithTag("update-banner").fetchSemanticsNodes().isNotEmpty()) return@repeat
+                Thread.sleep(500); mainClock.advanceTimeBy(1_000); waitForIdle()
+            }
+            val banner = onNodeWithTag("update-banner").getBoundsInRoot()
+            // The banner heads the panel, under the window buttons' bar and above the panel's content.
+            assertTrue(banner.top >= WindowTitleBar.MAC.height, "banner $banner")
+            assertTrue(onNodeWithTag("content-panel").getBoundsInRoot().top >= banner.bottom, "panel")
+        }
+    }
+
     @Test fun underMacsTitleBarTheSidebarHeaderSitsBesideTheWindowButtons() {
         app(content = { CompositionLocalProvider(LocalWindowTitleBar provides WindowTitleBar.MAC) { App() } }) {
             val header = onNodeWithTag("sidebar-header").getBoundsInRoot()

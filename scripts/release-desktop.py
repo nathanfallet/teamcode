@@ -112,7 +112,7 @@ def extra(package, target, revision, output):
 
 
 def assemble(inputs, revision, source_commit, output):
-    """`desktop-manifest.json` for all five targets, from staged records whose files still match."""
+    """`desktop-manifest.json` for all four targets, from staged records whose files still match."""
     release.version(revision); release.commit(source_commit)
     assets = {}
     for target in TARGETS:
@@ -153,7 +153,7 @@ def sums(directory):
     (directory / 'SHA256SUMS').write_text(''.join(f'{release.digest(path)}  {path.name}\n' for path in files))
 
 
-TARGET_LABELS = {'macos-arm64': 'macOS (Apple silicon)', 'macos-x64': 'macOS (Intel)', 'windows-x64': 'Windows (x64)',
+TARGET_LABELS = {'macos-arm64': 'macOS (Apple silicon)', 'windows-x64': 'Windows (x64)',
                  'linux-x64': 'Linux (x64)', 'linux-arm64': 'Linux (arm64)'}
 KIND_LABELS = {'zip': 'app (zip)', 'dmg': 'disk image', 'msi': 'per-user installer', 'tar.gz': 'folder (tar.gz)',
                'deb': 'Debian/Ubuntu package', 'rpm': 'Fedora/RHEL package'}

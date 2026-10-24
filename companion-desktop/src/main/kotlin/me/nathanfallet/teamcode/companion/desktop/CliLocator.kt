@@ -43,7 +43,29 @@ class CliProcesses(private val environment: DesktopEnvironment) {
         CliResult(if (exited) process.exitValue() else null, synchronized(stdout) { stdout.toString() }, synchronized(stderr) { stderr.toString() })
     }
 
-    private companion object { const val MAX_OUTPUT = 262_144 }
+    /**
+     * Runs the CLI like [run], passing each line of its output on as it comes ([line] gets the text and whether it came
+     * from standard error, at most [MAX_LINE] characters). Returns the exit code, or null when it still runs after the
+     * delay: it is then left to finish on its own, never signalled.
+     */
+    suspend fun stream(executable: String, arguments: List<String>, timeoutMillis: Long, line: (String, Boolean) -> Unit): Int? = withContext(Dispatchers.IO) {
+        val builder = ProcessBuilder(listOf(executable) + arguments)
+            .redirectInput(ProcessBuilder.Redirect.from(File(if (environment.os == DesktopEnvironment.Os.WINDOWS) "NUL" else "/dev/null")))
+        builder.environment().putAll(environment.cliVariables())
+        val process = builder.start()
+        val readers = listOf(process.inputStream to false, process.errorStream to true).map { (stream, error) ->
+            Thread { stream.bufferedReader().useLines { lines -> lines.forEach { line(it.take(MAX_LINE), error) } } }.apply { isDaemon = true; start() }
+        }
+        val exited = runInterruptible { process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS) }
+        if (!exited) return@withContext null
+        readers.forEach { it.join(2_000) }
+        process.exitValue()
+    }
+
+    private companion object {
+        const val MAX_OUTPUT = 262_144
+        const val MAX_LINE = 2_000
+    }
 }
 
 /**

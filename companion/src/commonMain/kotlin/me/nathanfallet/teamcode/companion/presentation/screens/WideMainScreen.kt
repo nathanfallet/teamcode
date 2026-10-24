@@ -6,9 +6,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.VerticalDragHandle
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -58,6 +60,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import androidx.window.core.layout.WindowSizeClass
 import me.nathanfallet.teamcode.companion.domain.models.Account
+import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.navigation.AccountRoute
@@ -254,10 +257,11 @@ fun WideMainScreen(
             }
         },
         detailPane = {
-            AnimatedPane {
-                // Under macOS's title bar, the panel starts below it: the bar above it stays the window's to drag and zoom.
+            // Under macOS's title bar the panel starts below it (the bar stays the window's to drag and zoom); the update banner heads it.
+            AnimatedPane { Column(Modifier.fillMaxSize().windowTitleBarPadding()) {
+                UpdateBanner()
                 NavHost(
-                    detail, startDestination = SessionsListRoute, modifier = Modifier.fillMaxSize().windowTitleBarPadding().testTag("content-panel"),
+                    detail, startDestination = SessionsListRoute, modifier = Modifier.weight(1f).fillMaxWidth().testTag("content-panel"),
                     enterTransition = { fadeIn(tween(120)) }, exitTransition = { fadeOut(tween(90)) },
                     popEnterTransition = { fadeIn(tween(120)) }, popExitTransition = { fadeOut(tween(90)) },
                 ) {
@@ -303,7 +307,7 @@ fun WideMainScreen(
                             onOpenSubscriptions = { detail.navigate(SubscriptionAccountsRoute(it.id)) }, viewModel = settings)
                     }
                 }
-            }
+            } }
         },
         paneExpansionState = expansion,
         paneExpansionDragHandle = { state ->

@@ -14,7 +14,7 @@ object ReleaseFormat {
     const val MAX_MANIFEST_BYTES = 16 * 1024
     const val MAX_SIGNATURE_BYTES = 2048
     const val MAX_BINARY_BYTES = 256L * 1024 * 1024
-    val targets = setOf("macos-arm64", "macos-x64", "linux-arm64", "linux-x64", "windows-x64")
+    val targets = setOf("macos-arm64", "linux-arm64", "linux-x64", "windows-x64")
     private const val NUMBER = "(?:0|[1-9][0-9]*)"
     private const val PART = "(?:$NUMBER|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
     private val versionPattern = Regex("$NUMBER\\.$NUMBER\\.$NUMBER(?:-$PART(?:\\.$PART)*)?")
