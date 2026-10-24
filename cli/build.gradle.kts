@@ -71,6 +71,10 @@ kotlin {
             }
         }
         if (target.name.startsWith("linux")) {
+            // Keeps OpenSSL (linked by Ktor's Curl engine) usable until exit; see tls_exit.def.
+            target.compilations.getByName("main").cinterops.create("tlsExit") {
+                definitionFile.set(project.file("src/nativeInterop/cinterop/tls_exit.def"))
+            }
             // Test-only destructor that checks the TLS library is still usable once atexit() handlers have run.
             target.compilations.getByName("test").cinterops.create("tlsExitProbe") {
                 definitionFile.set(project.file("src/nativeInterop/cinterop/tls_exit_probe.def"))
