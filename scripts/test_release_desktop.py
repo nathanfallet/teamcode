@@ -96,7 +96,7 @@ class ReleaseDesktopTest(unittest.TestCase):
             not_msi = root / 'x.msi'; not_msi.write_bytes(b'MZ' + b'\0' * 100)
             with self.assertRaisesRegex(ValueError, 'installer database'):
                 desktop.stage(not_msi, 'windows-x64', self.revision, self.source_commit, root / 'out')
-            zipped = package(root / 'app.zip', 'macos-x64')
+            zipped = package(root / 'app.zip', 'macos-arm64')
             with self.assertRaisesRegex(ValueError, 'gzip'):
                 desktop.stage(zipped, 'linux-x64', self.revision, self.source_commit, root / 'out')
             self.assertFalse((root / 'out').exists())

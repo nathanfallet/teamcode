@@ -271,7 +271,7 @@ fun TcCard(
             // The hover tint goes under the border, which stays visible.
             .then(if (onClick != null) Modifier.hoverHighlight(Radii.card) else Modifier)
             .border(1.dp, borderColor, Radii.card)
-            .then(if (onClick != null) Modifier.handCursor().clickable(onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.focusRing(Radii.card).handCursor().clickable(onClick = onClick) else Modifier)
             .padding(horizontal = padding, vertical = padding - 1.dp),
         verticalArrangement = Arrangement.spacedBy(spacing),
         content = content,

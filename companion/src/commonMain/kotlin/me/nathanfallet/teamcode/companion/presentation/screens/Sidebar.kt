@@ -51,6 +51,7 @@ import com.adamglin.phosphoricons.regular.Copy
 import com.adamglin.phosphoricons.regular.FileText
 import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.GearSix
+import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.Plus
 import com.adamglin.phosphoricons.regular.SignIn
 import com.adamglin.phosphoricons.regular.UserSwitch
@@ -63,8 +64,11 @@ import me.nathanfallet.teamcode.companion.presentation.components.BrandGlyph
 import me.nathanfallet.teamcode.companion.presentation.components.ContextMenuBox
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
+import me.nathanfallet.teamcode.companion.presentation.components.LocalWindowTitleBar
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
+import me.nathanfallet.teamcode.companion.presentation.components.arrowKeyNavigation
+import me.nathanfallet.teamcode.companion.presentation.components.focusRing
 import me.nathanfallet.teamcode.companion.presentation.components.handCursor
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.components.hoverHighlight
@@ -81,6 +85,9 @@ import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.settings_add_account
 import me.nathanfallet.teamcode.companion.resources.settings_title
 import me.nathanfallet.teamcode.companion.resources.sidebar_artifacts_empty
+import me.nathanfallet.teamcode.companion.resources.palette_search
+import me.nathanfallet.teamcode.companion.resources.sidebar_filtered
+import me.nathanfallet.teamcode.companion.resources.sidebar_mark_read
 import me.nathanfallet.teamcode.companion.resources.sidebar_open
 import me.nathanfallet.teamcode.companion.resources.sidebar_see_more
 import me.nathanfallet.teamcode.companion.resources.sidebar_signed_out
@@ -113,6 +120,9 @@ data class SidebarState(
     val artifactsError: String? = null,
     val selection: SidebarSelection,
     val now: Long,
+    /** The filter the shared lists are on when it is not their default (Paused, Team...): shown by the section titles. */
+    val sessionsFilter: String? = null,
+    val artifactsFilter: String? = null,
 )
 
 /** What the sidebar's rows do. */
@@ -127,26 +137,49 @@ class SidebarActions(
     val onSignInAgain: (Account) -> Unit,
     val onAddAccount: () -> Unit,
     val onSettings: () -> Unit,
+    /** Clears a session's finished-turn mark without opening it. */
+    val onMarkSessionRead: (CloudSession) -> Unit = {},
+    /** The link "Copy link" copies: the viewer page on the account's own server; null hides the entry. */
+    val artifactLink: (Artifact) -> String? = { null },
+    /** Opens the command palette; null: no search row. */
+    val onSearch: (() -> Unit)? = null,
+    /** The palette's shortcut as the platform writes it (⌘K, Ctrl+K), shown on the search row. */
+    val searchShortcut: String = "",
 )
 
 /**
  * The wide layout's sidebar, from top to bottom: Sessions (the most recent, "See more" opens them all in the content
  * panel), Artifacts (the same), and Accounts pinned at the bottom. Rows take a hover, a hand cursor and a right-click
- * menu; the open item is marked.
+ * menu; the open item is marked. Up and Down move the keyboard focus from row to row, Enter opens the focused one.
+ * The lists are the first rows of the content panel's own (one load and one live feed for both): when the panel's list
+ * is filtered, the section title says on what.
  */
 @Composable
 fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = Modifier) {
     val colors = TeamCode.colors
     val account = state.account
-    Column(modifier.fillMaxSize().background(colors.sidebar).windowInsetsPadding(WindowInsets.statusBars).windowInsetsPadding(WindowInsets.navigationBars).testTag("sidebar")) {
-        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+    Column(modifier.fillMaxSize().background(colors.sidebar).windowInsetsPadding(WindowInsets.statusBars).windowInsetsPadding(WindowInsets.navigationBars).arrowKeyNavigation().testTag("sidebar")) {
+        // Under macOS's title bar, the header sits in the bar, beside the window's buttons, and its button fits the bar's height.
+        val titleBar = LocalWindowTitleBar.current
+        val inBar = titleBar.height > 0.dp
+        Row(
+            Modifier.fillMaxWidth().testTag("sidebar-header")
+                .then(if (inBar) Modifier.padding(start = titleBar.start, end = 8.dp, bottom = 6.dp).height(titleBar.height) else Modifier.padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 6.dp)),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
             BrandGlyph(size = 20.dp)
-            Text("TeamCode", color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("TeamCode", color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.weight(1f))
             if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { actions.onNewSession(account) },
-                kind = IconButtonKind.OUTLINED, modifier = Modifier.testTag("sidebar-new-session"))
+                kind = IconButtonKind.OUTLINED, modifier = Modifier.then(if (inBar) Modifier.size(titleBar.height - 2.dp) else Modifier).testTag("sidebar-new-session"))
+        }
+        actions.onSearch?.let { search ->
+            Box(Modifier.padding(horizontal = 8.dp)) {
+                SidebarRow(PhosphorIcons.Regular.MagnifyingGlass, stringResource(Res.string.palette_search), selected = false, onClick = search, tag = "sidebar-search", tint = colors.muted,
+                    trailing = { Text(actions.searchShortcut, style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted, maxLines = 1) })
+            }
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp)) {
-            SidebarHeader(stringResource(Res.string.sessions_title))
+            SidebarHeader(stringResource(Res.string.sessions_title), state.sessionsFilter)
             when {
                 account != null && !account.signedIn -> SidebarRow(PhosphorIcons.Regular.SignIn, stringResource(Res.string.sidebar_signed_out), selected = false, tint = colors.warn,
                     onClick = { actions.onSignInAgain(account) }, tag = "sidebar-sign-in-again")
@@ -157,7 +190,7 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
             if (account?.signedIn == true) SeeMore(state.selection == SidebarSelection.AllSessions, actions.onAllSessions, "sidebar-all-sessions")
 
             Spacer(Modifier.height(14.dp))
-            SidebarHeader(stringResource(Res.string.artifacts_title))
+            SidebarHeader(stringResource(Res.string.artifacts_title), state.artifactsFilter)
             when {
                 account != null && !account.signedIn -> Unit
                 state.artifactsLoading && state.artifacts.isEmpty() -> repeat(3) { SkeletonRow(it) }
@@ -179,8 +212,9 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
 }
 
 @Composable
-private fun SidebarHeader(text: String) {
-    Text(text.uppercase(), style = MetaStyle.copy(fontSize = 11.sp, letterSpacing = 0.08.em), color = TeamCode.colors.muted, fontWeight = FontWeight.SemiBold,
+private fun SidebarHeader(text: String, filter: String? = null) {
+    val title = filter?.let { stringResource(Res.string.sidebar_filtered, text, it) } ?: text
+    Text(title.uppercase(), style = MetaStyle.copy(fontSize = 11.sp, letterSpacing = 0.08.em), color = TeamCode.colors.muted, fontWeight = FontWeight.SemiBold,
         modifier = Modifier.padding(start = 8.dp, top = 8.dp, bottom = 4.dp).semantics { heading() })
 }
 
@@ -213,6 +247,7 @@ private fun SidebarRow(
             .clip(RowShape)
             .background(if (selected) colors.chip else Color.Transparent)
             .then(if (selected) Modifier else Modifier.hoverHighlight(RowShape))
+            .focusRing(RowShape)
             .handCursor()
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.selected = selected }
@@ -239,6 +274,8 @@ private fun SessionRow(session: CloudSession, state: SidebarState, actions: Side
         DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_open)) }, onClick = { close(); actions.onOpenSession(session) })
         DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(16.dp)) },
             onClick = { close(); actions.onOpenSessionArtifacts(session) })
+        if (finished) DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_mark_read)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Check, null, Modifier.size(16.dp)) },
+            onClick = { close(); actions.onMarkSessionRead(session) })
     }) {
         SidebarRow(
             icon = null, label = session.name, selected = state.selection == SidebarSelection.Session(session.id), onClick = { actions.onOpenSession(session) },
@@ -268,8 +305,10 @@ private fun ArtifactRow(artifact: Artifact, state: SidebarState, actions: Sideba
     val clipboard = LocalClipboardManager.current
     ContextMenuBox(menu = { close ->
         DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_open)) }, onClick = { close(); actions.onOpenArtifact(artifact) })
-        DropdownMenuItem(text = { Text(stringResource(Res.string.artifact_copy_link)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Copy, null, Modifier.size(16.dp)) },
-            onClick = { close(); clipboard.setText(AnnotatedString(artifact.url)) })
+        actions.artifactLink(artifact)?.let { link ->
+            DropdownMenuItem(text = { Text(stringResource(Res.string.artifact_copy_link)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Copy, null, Modifier.size(16.dp)) },
+                onClick = { close(); clipboard.setText(AnnotatedString(link)) })
+        }
     }) {
         SidebarRow(
             PhosphorIcons.Regular.FileText, artifact.title, selected = state.selection == SidebarSelection.Artifact(artifact.id), onClick = { actions.onOpenArtifact(artifact) },

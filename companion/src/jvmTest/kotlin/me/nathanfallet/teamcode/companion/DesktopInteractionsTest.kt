@@ -15,6 +15,13 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsSelected
+import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.FileText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.semantics.getOrNull
@@ -101,8 +108,79 @@ class DesktopInteractionsTest {
         assertEquals(listOf("all sessions", "all artifacts", "session s0", "switch a2"), opened)
         onAllNodesWithTag("sidebar-new-session").assertCountEquals(1)
     }
+
+    @Test fun theArrowsMoveThroughTheSidebarAndEnterOpensTheFocusedRow() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        val state = SidebarState(
+            account = account("a1"), accounts = listOf(account("a1")),
+            sessions = (0 until 3).map { cloudSession("s$it", SessionState.READY).copy(name = "Session $it") }, sessionsLoading = false, finishedTurns = setOf("s2"),
+            artifacts = emptyList(), artifactsLoading = false, selection = SidebarSelection.None, now = 10_000, sessionsFilter = "Paused",
+        )
+        val actions = SidebarActions(
+            onNewSession = {}, onOpenSession = { opened += "session ${it.id}" }, onOpenSessionArtifacts = {}, onAllSessions = {}, onOpenArtifact = {}, onAllArtifacts = {},
+            onSwitchAccount = {}, onSignInAgain = {}, onAddAccount = {}, onSettings = {}, onSearch = { opened += "search" }, searchShortcut = "⌘K",
+        )
+        setContent { TeamCodeTheme { Sidebar(state, actions) } }
+        onNodeWithTag("sidebar-session-s0").requestFocus()
+        onNodeWithTag("sidebar-session-s0").performKeyInput { pressKey(Key.DirectionDown); pressKey(Key.DirectionDown) }
+        onNodeWithTag("sidebar-session-s2").assertIsFocused()
+        onNodeWithTag("sidebar-session-s2").performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(listOf("session s2"), opened)
+        // The filter of the shared list, and the search row with its shortcut.
+        onNodeWithText("SESSIONS · PAUSED").assertExists()
+        onNodeWithText("⌘K").assertExists()
+        onNodeWithTag("sidebar-search").performClick()
+        assertEquals(listOf("session s2", "search"), opened)
+    }
+
+    @Test fun cmdOrCtrlKIsThePalettesShortcut() = runComposeUiTest {
+        val commands = mutableListOf<me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand>()
+        setContent {
+            TeamCodeTheme {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.onPreviewKeyEvent { event -> me.nathanfallet.teamcode.companion.shortcut(event)?.let { commands += it; true } ?: false }) {
+                    TcTextField("", {}, tag = "field")
+                }
+            }
+        }
+        onNodeWithTag("field").performClick()
+        onNodeWithTag("field").performKeyInput { withKeyDown(Key.MetaLeft) { pressKey(Key.K) } }
+        onNodeWithTag("field").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        waitForIdle()
+        assertEquals(List(2) { me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand.COMMAND_PALETTE }, commands)
+    }
 }
 
 private fun hasTestTagPrefix(prefix: String) = androidx.compose.ui.test.SemanticsMatcher("tag starts with $prefix") { node ->
     node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)?.startsWith(prefix) == true
+}
+
+/** The command palette alone: typing filters, the arrows move the selection, Enter runs it and closes. */
+@OptIn(ExperimentalTestApi::class)
+class CommandPaletteViewTest {
+    @Test fun typingFiltersTheArrowsMoveAndEnterRuns() = runComposeUiTest {
+        val ran = mutableListOf<String>()
+        var open by mutableStateOf(true)
+        val items = listOf("Alpha report", "Beta report", "Gamma notes").mapIndexed { index, title ->
+            me.nathanfallet.teamcode.companion.presentation.screens.PaletteItem("i$index", me.nathanfallet.teamcode.companion.presentation.screens.PaletteSection.ARTIFACTS, title,
+                com.adamglin.PhosphorIcons.Regular.FileText) { ran += title }
+        }
+        setContent { TeamCodeTheme { if (open) me.nathanfallet.teamcode.companion.presentation.screens.CommandPalette(items, onDismiss = { open = false }) } }
+        waitForIdle()
+        onNodeWithTag("palette-field").performTextInput("report")
+        waitForIdle()
+        onNodeWithTag("palette-i2").assertDoesNotExist()
+        onNodeWithTag("palette-i0").assertIsSelected()
+        onNodeWithTag("palette-field").performKeyInput { pressKey(Key.DirectionDown) }
+        waitForIdle()
+        onNodeWithTag("palette-i1").assertIsSelected()
+        // Wraps around.
+        onNodeWithTag("palette-field").performKeyInput { pressKey(Key.DirectionDown) }
+        waitForIdle()
+        onNodeWithTag("palette-i0").assertIsSelected()
+        onNodeWithTag("palette-field").performKeyInput { pressKey(Key.DirectionUp); pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(listOf("Beta report"), ran)
+        assertFalse(open)
+    }
 }

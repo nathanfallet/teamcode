@@ -6,7 +6,7 @@ Application replicas share one MySQL database and one credential encryption key.
 | --- | --- |
 | First administrator | Team row lock and committed creation; only the creator receives the temporary password |
 | Sessions, revocation and team roles | Hashed session tokens, effective ownership and current member state read from MySQL; ownership/recovery changes serialize under the team lock |
-| Global login budget | One shared database-clock fixed window, 120 attempts/minute across API/dashboard/replicas; per-member lockout also persists |
+| Sign-in throttling | Shared database-clock windows of 30 attempts/minute per source address across API/dashboard/replicas, and persisted failure backoff per username and per known device ([details](team-roles.md#sign-in-throttling)) |
 | Admission, weighted budgets and concurrency | Team lock, fresh authorization, atomic reservation across member/group/account/pool constraints |
 | Agent launches | Shared credential-bound lifecycle, original reservation links, atomic lifetime accounting, run policy and current delivery metadata; no sticky sessions |
 | Groups and delegated managers | Shared scoped assignments, current authorization, cumulative caps and original reservation/group snapshots; no process cache |
@@ -32,7 +32,7 @@ Scheduled quota polling uses one database lease per account and persistent last-
 
 ## Evidence
 
-`ReplicaPersistenceTest` uses two independent Hikari pools against MySQL 8.4. It covers concurrent migrations/bootstrap, cross-replica session revocation, competing admissions, exactly-once completion/usage, abandoned reservations, single refresh ownership, interrupted-refresh recovery, import/refresh conflicts, worker lease reclamation, stale-owner fencing, persistent polling order and a shared login budget.
+`ReplicaPersistenceTest` uses two independent Hikari pools against MySQL 8.4. It covers concurrent migrations/bootstrap, cross-replica session revocation, competing admissions, exactly-once completion/usage, abandoned reservations, single refresh ownership, interrupted-refresh recovery, import/refresh conflicts, worker lease reclamation, stale-owner fencing, persistent polling order and a per-address login budget shared by both pools.
 
 `scripts/smoke-replicas.py --jar app/build/libs/app-all.jar` starts two actual server processes against its own isolated database. It checks concurrent startup, one bootstrap password, shared sessions, members and groups, scoped manager revocation and pause enforcement, password revocation on the other replica, abrupt process termination/restart, readiness versus liveness during database outage, recovery and logout revocation. It stops only its own children and test database and never contacts real providers.
 

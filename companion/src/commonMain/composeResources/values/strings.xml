@@ -434,4 +434,16 @@
     <string name="sidebar_artifacts_empty">No artifact yet</string>
     <string name="sidebar_signed_out">Signed out. Sign in again</string>
     <string name="sidebar_resize">Resize the sidebar</string>
+    <string name="sidebar_mark_read">Mark as read</string>
+    <string name="sidebar_filtered">%1$s · %2$s</string>
+    <!-- The command palette (Cmd+K or Ctrl+K) -->
+    <string name="palette_title">Command palette</string>
+    <string name="palette_search">Search</string>
+    <string name="palette_placeholder">Search sessions, artifacts and actions</string>
+    <string name="palette_actions">Actions</string>
+    <string name="palette_no_match">Nothing matches</string>
+    <string name="palette_hint">↑ ↓ to move · Enter to open · Esc to close</string>
+    <string name="palette_switch_to">Switch to %1$s</string>
+    <string name="palette_all_sessions">All sessions</string>
+    <string name="palette_all_artifacts">All artifacts</string>
 </resources>

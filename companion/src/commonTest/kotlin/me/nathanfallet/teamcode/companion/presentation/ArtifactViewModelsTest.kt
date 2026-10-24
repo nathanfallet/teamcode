@@ -47,7 +47,7 @@ class ArtifactViewModelsTest {
 
     @Test fun theGalleryLoadsOnePageAtATimeAndAScopeChangeStartsOver() = runTest(dispatcher) {
         artifacts.pages = { scope, before -> if (before == null) ArtifactPage(listOf(artifact("${scope.wire}-1")), "c1") else ArtifactPage(listOf(artifact("${scope.wire}-2")), null) }
-        val model = ArtifactsViewModel(ArtifactsRoute("a1", sessionId = "s1"), LoadArtifactsUseCase(artifacts, features, guard))
+        val model = ArtifactsViewModel(ArtifactsRoute("a1", sessionId = "s1"), LoadArtifactsUseCase(artifacts, features, guard), accounts)
         settle()
         assertEquals(listOf("team-1"), model.uiState.value.artifacts.map { it.id })
         model.loadMore(); model.loadMore()
@@ -61,9 +61,16 @@ class ArtifactViewModelsTest {
         assertEquals(listOf("mine-1"), model.uiState.value.artifacts.map { it.id })
     }
 
+    @Test fun aGalleryLinkIsTheViewerPageOnTheAccountsOwnServerNotTheLinkTheServerAnswered() = runTest(dispatcher) {
+        val model = ArtifactsViewModel(ArtifactsRoute("a1"), LoadArtifactsUseCase(artifacts, features, guard), accounts)
+        val answered = artifact("r1").copy(url = "https://elsewhere.example/phish")
+        assertEquals("${accounts.accounts.value.first { it.id == "a1" }.origin}/artifact/r1", model.viewerUrl(answered))
+        assertNull(ArtifactsViewModel(ArtifactsRoute("gone"), LoadArtifactsUseCase(artifacts, features, guard), accounts).viewerUrl(answered))
+    }
+
     @Test fun theGallerySaysWhenTheServerHasNoArtifacts() = runTest(dispatcher) {
         features.features = emptySet()
-        val model = ArtifactsViewModel(ArtifactsRoute("a1"), LoadArtifactsUseCase(artifacts, features, guard))
+        val model = ArtifactsViewModel(ArtifactsRoute("a1"), LoadArtifactsUseCase(artifacts, features, guard), accounts)
         settle()
         assertNotNull(model.uiState.value.error)
         assertTrue(artifacts.calls.isEmpty())

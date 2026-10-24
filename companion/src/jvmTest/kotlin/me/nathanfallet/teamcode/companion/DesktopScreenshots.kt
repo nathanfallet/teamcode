@@ -11,6 +11,10 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommands
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
@@ -104,12 +108,30 @@ class DesktopScreenshots {
                     mainClock.advanceTimeBy(1_000); waitForIdle()
                     shot(output, "$name$suffix-4-new-session")
                 }
+                // The desktop's own: a right-click menu on a card, and the command palette.
+                if (name == "desktop-1200" && theme == ThemePreference.DARK) {
+                    scene(size.first, size.second, theme) {
+                        onAllNodesWithTag("sidebar-all-artifacts").onFirst().performSemanticsAction(SemanticsActions.OnClick)
+                        mainClock.advanceTimeBy(1_000); waitForIdle()
+                        onAllNodesWithTag("artifact-r1").onFirst().performMouseInput { rightClick(Offset(260f, 40f)) }
+                        mainClock.advanceTimeBy(1_000); waitForIdle()
+                        shot(output, "$name-5-card-menu")
+                    }
+                    scene(size.first, size.second, theme) {
+                        runOnUiThread { AppCommands.send(AppCommand.COMMAND_PALETTE) }
+                        mainClock.advanceTimeBy(1_000); waitForIdle()
+                        shot(output, "$name-6-palette")
+                        onAllNodesWithTag("palette-field").onFirst().performTextInput("ci")
+                        mainClock.advanceTimeBy(1_000); waitForIdle()
+                        shot(output, "$name-7-palette-search")
+                    }
+                }
             }
         }
     }
 
     internal fun scene(width: Int, height: Int, theme: ThemePreference, extra: List<org.koin.core.module.Module> = emptyList(), block: DesktopComposeUiTest.() -> Unit) {
-        val koin = startKoin { modules(appModules(demoModule()) + demoOverrides() + extra) }.koin
+        val koin = startKoin { modules(demoModules() + extra) }.koin
         koin.get<PreferencesRepository>().setTheme(theme)
         try {
             // Rendered at 2x: the window is twice the size in pixels and the content sees a density of 2.
@@ -147,90 +169,5 @@ class DesktopScreenshots {
         ImageIO.write(image, "png", File(output, "$name.png"))
     }
 
-    private fun demoModule() = module {
-        single<Settings> { MapSettings() }
-        single<CredentialStore> { credentials().also { store -> runBlocking { demoAccounts.forEach { store.write(it.id, "token") } } } }
-        single<io.ktor.client.engine.HttpClientEngineFactory<*>> { io.ktor.client.engine.java.Java }
-        single<PlatformInfo> { FakePlatform }
-        single<SecureRandom> { JavaSecureRandom }
-    }
-
-    private fun demoOverrides() = module {
-        single<AccountRepository> { InMemoryAccountRepository(demoAccounts) }
-        single<AuthRepository> { FakeAuthRepository() }
-        single<InstallationIdentity> { FixedInstallation }
-        single<Clock> { FixedClock(NOW) }
-        single<FeaturesRepository> { FakeFeatures(setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1", "cloud.sessions.remote.v1", "artifacts.v1")) }
-        single<SessionRepository> { demoSessions() }
-        single<TranscriptRepository> { demoTranscript() }
-        single<ArtifactRepository> { demoArtifacts() }
-        single<SessionFileRepository> { FakeFileRepository() }
-        single<DeviceRepository> { FakeDeviceRepository() }
-        single<TransferRepository> { FakeTransferRepository() }
-        single<SubscriptionAccountRepository> { FakeSubscriptionAccountRepository() }
-    }
-
-    private val demoAccounts = listOf(
-        account("a1", origin = "https://code.acme.dev", username = "ada", expiresAt = Long.MAX_VALUE),
-        account("a2", origin = "https://teamcode.example.org", memberId = "m9", username = "ada.lovelace", expiresAt = Long.MAX_VALUE),
-    )
-
-    private fun demoSessions() = FakeSessionRepository().apply {
-        val minute = 60_000L
-        val names = listOf(
-            "Fix the flaky login test" to SessionState.ACTIVE, "Migrate billing to the new API" to SessionState.READY,
-            "Review the release checklist" to SessionState.READY, "Speed up the CI cache" to SessionState.ACTIVE,
-            "Write the onboarding guide" to SessionState.READY, "Upgrade Kotlin to 2.4" to SessionState.PREPARING,
-            "Audit the payment webhooks" to SessionState.READY, "Prototype the search page" to SessionState.READY,
-        )
-        val active = names.mapIndexed { index, (name, state) ->
-            cloudSession("s$index", state, createdAt = NOW - (index * 17 + 2) * minute, host = if (index == 3) laptop() else null)
-                .copy(name = name, repositories = listOf("acme/web", "acme/api", "acme/infra")[index % 3].let { listOf(it) }, effort = if (index % 2 == 0) "high" else null)
-        }
-        active.forEach { byId[it.id] = it }
-        pages = { group, _ ->
-            when (group) {
-                SessionGroup.ACTIVE -> SessionPage(active, null)
-                SessionGroup.PAUSED -> SessionPage(listOf(cloudSession("p1", SessionState.PAUSED, createdAt = NOW - 300 * minute).copy(name = "Refactor the settings screen")), null)
-                SessionGroup.ENDED -> SessionPage(emptyList(), null)
-            }
-        }
-        changes = flow { emit(LiveUpdate.Opened(false)); awaitCancellation() }
-    }
-
-    private fun demoTranscript() = object : TranscriptRepository {
-        override suspend fun page(accountId: String, sessionId: String, before: Long?): TranscriptPage {
-            val at = NOW - 600_000
-            val events = listOf(
-                TranscriptEvent.UserMessage(1, at, "The login test fails about once in ten runs on CI. Can you find out why and fix it?", "in-1", "m1"),
-                TranscriptEvent.AgentMessage(2, at + 5_000, "I'll start by reading the test and running it in a loop to reproduce the failure.", null),
-                TranscriptEvent.ToolCall(3, at + 6_000, "t1", "Bash", "{\n  \"command\": \"./gradlew :web:test --tests LoginTest --rerun\"\n}", "./gradlew :web:test --tests LoginTest --rerun", null),
-                TranscriptEvent.ToolResult(4, at + 40_000, "t1", "BUILD SUCCESSFUL in 31s", false, 0, null),
-                TranscriptEvent.ToolCall(5, at + 41_000, "t2", "Read", "{\n  \"file_path\": \"web/src/test/LoginTest.kt\"\n}", "web/src/test/LoginTest.kt", null),
-                TranscriptEvent.ToolResult(6, at + 42_000, "t2", "class LoginTest { ... }", false, null, null),
-                TranscriptEvent.AgentMessage(7, at + 60_000,
-                    "Found it: the test reads the session cookie before the redirect completes. **The fix** waits for the redirect, then asserts:\n\n" +
-                        "```kotlin\nwaitUntil { page.url.endsWith(\"/home\") }\nassertNotNull(cookies[\"session\"])\n```\n\nI ran it 50 times locally without a failure.", null),
-                TranscriptEvent.Turn(8, at + 61_000, TurnPhase.entries.first { it.wire == "completed" }, 61_000, 6),
-                TranscriptEvent.UserMessage(9, at + 120_000, "Great, open a pull request with that change.", "in-2", "m1"),
-            )
-            return TranscriptPage(events, null, 9)
-        }
-        override fun follow(accountId: String, sessionId: String, after: Long) = flow<LiveUpdate<TranscriptEvent>> { emit(LiveUpdate.Opened(false)); awaitCancellation() }
-    }
-
-    private fun demoArtifacts() = FakeArtifactRepository().apply {
-        val titles = listOf("Q3 latency report", "Login flakiness analysis", "Release 2.4 checklist", "Billing API migration plan", "CI cache benchmark",
-            "Onboarding guide draft", "Webhook audit findings", "Search page prototype")
-        val list = titles.mapIndexed { index, title ->
-            artifact("r$index", title, version = index % 3 + 1, updatedAt = NOW - (index * 45 + 5) * 60_000L).copy(description = "Published by a session: $title.")
-        }
-        list.forEach { byId[it.id] = it }
-        pages = { _, _ -> ArtifactPage(list, null) }
-    }
-
-    private companion object {
-        const val NOW = 1_800_000_000_000L
-    }
 }
 

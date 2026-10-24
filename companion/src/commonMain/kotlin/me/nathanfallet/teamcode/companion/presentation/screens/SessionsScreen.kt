@@ -49,6 +49,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.CaretDown
+import com.adamglin.phosphoricons.regular.Check
+import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.Plus
 import com.adamglin.phosphoricons.regular.TerminalWindow
 import com.adamglin.phosphoricons.regular.Warning
@@ -65,6 +67,8 @@ import me.nathanfallet.teamcode.companion.presentation.components.BrandGlyph
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
+import me.nathanfallet.teamcode.companion.presentation.components.ContextMenuBox
+import me.nathanfallet.teamcode.companion.presentation.components.arrowKeyNavigation
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
@@ -87,6 +91,9 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
+import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
+import me.nathanfallet.teamcode.companion.resources.sidebar_mark_read
+import me.nathanfallet.teamcode.companion.resources.sidebar_open
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
 import me.nathanfallet.teamcode.companion.resources.home_signed_out
 import me.nathanfallet.teamcode.companion.resources.new_session_title
@@ -122,7 +129,10 @@ import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * The Sessions tab: the active account's cloud sessions, kept current by the team feed while the tab is visible.
- * [onNewSession] opens the new-session sheet, [onSwitchAccount] the account switcher.
+ * [onNewSession] opens the new-session sheet, [onSwitchAccount] the account switcher. A right click on a card opens
+ * its menu; Up and Down move the keyboard focus between cards, Enter opens the focused one. [follow]: the screen starts
+ * and stops the list's feed with its lifecycle; false when the list is shared with a caller that does (the wide layout's
+ * sidebar shows it too).
  */
 @Composable
 fun SessionsScreen(
@@ -132,14 +142,17 @@ fun SessionsScreen(
     onSwitchAccount: () -> Unit = {},
     /** More buttons of the title for a signed-in account (the transfers list). */
     titleActions: @Composable (Account) -> Unit = {},
+    /** The session's artifacts, from the card's menu; null: no such entry. */
+    onOpenSessionArtifacts: ((Account, CloudSession) -> Unit)? = null,
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
+    follow: Boolean = true,
     clock: Clock = koinInject(),
 ) {
     val home by viewModel.uiState.collectAsStateWithLifecycle()
     val state by sessionsViewModel.uiState.collectAsStateWithLifecycle()
     // Streams are open only while the screen is visible: closed in the background, resumed on return.
-    LifecycleStartEffect(sessionsViewModel) {
+    if (follow) LifecycleStartEffect(sessionsViewModel) {
         sessionsViewModel.start()
         onStopOrDispose { sessionsViewModel.stop() }
     }
@@ -180,7 +193,7 @@ fun SessionsScreen(
         LaunchedEffect(nearEnd, list?.nextBefore) { if (nearEnd) sessionsViewModel.loadMore() }
         val error = state.error ?: home.error
         LazyColumn(
-            Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).testTag("sessions"),
+            Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("sessions"),
             state = listState,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -207,9 +220,17 @@ fun SessionsScreen(
                 items(3, key = { "skeleton-$it" }) { index -> SkeletonCard(index) }
             }
             items(sessions, key = { it.id }) { session ->
-                SessionCard(session, finished = list?.finishedTurns?.contains(session.id) == true, now = now, dimmed = error != null, showKind = state.remoteSessions) {
-                    sessionsViewModel.opened(session.id)
-                    account?.let { onOpenSession(it, session) }
+                val finished = list?.finishedTurns?.contains(session.id) == true
+                val open = { sessionsViewModel.opened(session.id); account?.let { onOpenSession(it, session) }; Unit }
+                ContextMenuBox(menu = { close ->
+                    DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_open)) }, onClick = { close(); open() }, modifier = Modifier.testTag("menu-open"))
+                    if (onOpenSessionArtifacts != null && account != null) DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) },
+                        leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(16.dp)) }, onClick = { close(); onOpenSessionArtifacts(account, session) },
+                        modifier = Modifier.testTag("menu-artifacts"))
+                    if (finished) DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_mark_read)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Check, null, Modifier.size(16.dp)) },
+                        onClick = { close(); sessionsViewModel.opened(session.id) }, modifier = Modifier.testTag("menu-mark-read"))
+                }) {
+                    SessionCard(session, finished = finished, now = now, dimmed = error != null, showKind = state.remoteSessions, onClick = open)
                 }
             }
             item(key = "end") {

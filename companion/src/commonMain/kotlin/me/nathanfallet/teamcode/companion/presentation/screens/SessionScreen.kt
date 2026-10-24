@@ -35,6 +35,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -59,6 +61,7 @@ import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.Pause
 import com.adamglin.phosphoricons.regular.Play
 import com.adamglin.phosphoricons.regular.Stop
+import kotlinx.coroutines.flow.drop
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
@@ -326,14 +329,37 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
     val colors = TeamCode.colors
     val items = remember(state.transcript.events) { transcriptItems(state.transcript.events) }
     val listState = rememberLazyListState()
-    // Follow the newest event while the member is at the bottom; leave the position alone when reading older ones.
-    val atBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
-    // Keyed on the newest event, not the last item: a tool's result or a folded run grows the tail under the same item.
-    LaunchedEffect(state.transcript.events.lastOrNull()?.seq, state.running, state.pending.size) {
-        // The bottom item's index from the new items, not from the last layout, which has not measured them yet.
-        if (atBottom) listState.scrollToItem(items.size + 1)
+    // The transcript opens on its last message and follows the newest one while the member stays at the bottom; scrolled
+    // up to read older ones, the position is left alone until they come back down. Decided by the member's own scrolling,
+    // not by the last layout: items that grow after their first measure (rendered Markdown, a tool's result, a folded run)
+    // would otherwise leave the list above the bottom, at its top when the session opens.
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        // Only when a scroll ends: the first value is no gesture, and a transcript measured before this ran must still be pinned.
+        snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling -> if (!scrolling) follow = !listState.canScrollForward }
     }
-    LazyColumn(modifier.widthIn(max = ContentWidth).fillMaxWidth().testTag("transcript"), state = listState, contentPadding = PaddingValues(vertical = 8.dp)) {
+    // Hidden until the first page is pinned to the bottom: the transcript never shows its top, then jumps.
+    var settled by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { Triple(listState.layoutInfo.totalItemsCount, listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { it.offset + it.size }, listState.canScrollForward) }
+            .collect { (count, _, below) ->
+                // Never while the member scrolls: their gesture wins, and decides whether to follow when it ends.
+                if (follow && below && count > 0 && !listState.isScrollInProgress) {
+                    // At the next measure, without an animation: the last item, past its end so a bottom item taller than
+                    // the window (pending messages) shows its end; the list stops at its bottom.
+                    listState.requestScrollToItem(count - 1, 1_000_000)
+                }
+            }
+    }
+    LaunchedEffect(state.loaded, items.isEmpty()) {
+        if (!state.loaded) return@LaunchedEffect
+        // One frame for the pinning above to run on the loaded page.
+        withFrameNanos { }
+        withFrameNanos { }
+        settled = true
+    }
+    LazyColumn(modifier.widthIn(max = ContentWidth).fillMaxWidth().alpha(if (settled || !state.loaded) 1f else 0f).testTag("transcript"), state = listState,
+        contentPadding = PaddingValues(vertical = 8.dp)) {
         item(key = "top") {
             when {
                 state.loadingOlder -> BusyRow(true)

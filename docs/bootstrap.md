@@ -4,7 +4,7 @@ The release pipeline generates `install.sh` and `install.ps1` from the exact pub
 
 ## Install a release
 
-macOS Apple Silicon/Intel or glibc Linux ARM64/x64, as your own user:
+macOS Apple Silicon or glibc Linux ARM64/x64, as your own user:
 
 ```sh
 curl -fsSL https://github.com/nathanfallet/teamcode/releases/latest/download/install.sh | sh

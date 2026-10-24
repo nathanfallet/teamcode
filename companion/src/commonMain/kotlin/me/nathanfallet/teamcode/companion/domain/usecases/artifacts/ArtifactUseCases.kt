@@ -31,12 +31,15 @@ class GetArtifactUseCase(private val artifacts: ArtifactRepository, private val 
     suspend operator fun invoke(accountId: String, artifactId: String): ArtifactDetails = guard(accountId) {
         if (!ARTIFACT_ID.matches(artifactId)) throw CompanionException.NotFound()
         val origin = accounts.accounts.value.firstOrNull { it.id == accountId }?.origin ?: throw CompanionException.Unauthorized()
-        ArtifactDetails(artifacts.artifact(accountId, artifactId), artifacts.versions(accountId, artifactId), "$origin/artifact/$artifactId")
+        ArtifactDetails(artifacts.artifact(accountId, artifactId), artifacts.versions(accountId, artifactId), artifactViewerUrl(origin, artifactId))
     }
 
     /** The artifact alone, to see whether a newer version was published. */
     suspend fun current(accountId: String, artifactId: String): Artifact = guard(accountId) { artifacts.artifact(accountId, artifactId) }
 }
+
+/** The viewer page of [artifactId] on the account's server ([origin]): the one link the app opens and shares. */
+fun artifactViewerUrl(origin: String, artifactId: String): String = "$origin/artifact/$artifactId"
 
 /** A ticket checked for this account's server, and the directory the viewer may navigate in. */
 data class OpenedArtifact(val ticket: ArtifactTicket, val prefix: String)

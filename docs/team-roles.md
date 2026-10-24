@@ -18,7 +18,18 @@ There must remain another **enabled owner who has changed their temporary passwo
 
 Only a currently authenticated interactive owner can create/promote another owner, change any owner account, or reset an owner's password. Administrators receive `owner_required` HTTP 403 for these operations, including self-promotion. Service keys cannot perform them. Role/disable/password mutations share the team lock and revalidate current authentication. Two owners concurrently trying to relinquish their roles cannot both succeed.
 
-Every global role or disabled-state write revokes the affected member's interactive sessions and service keys. Their devices, group assignments, reservations, weighted policies and historical charges remain. An ownership grant therefore requires the promoted member to sign in again; a copied old token cannot gain new owner authority.
+Every global role or disabled-state write revokes the affected member's interactive sessions and service keys. Their devices, group assignments, reservations, weighted policies and historical charges remain. An ownership grant therefore requires the promoted member to sign in again; a copied old token cannot gain new owner authority. Disabling an owner or administrator, removing their administrator role, or resetting their password also revokes the service keys they created for other members (see [service keys](service-keys.md#keys-created-for-another-member)).
+
+## Sign-in throttling
+
+Failed sign-ins are slowed down without letting anyone lock a member out of the devices they already use. The state is in MySQL, shared by the API, the dashboard and every replica.
+
+- **Known devices.** A login from a CLI or app installation already registered for the member ([devices](devices.md)), or from a browser that signed in to the dashboard as that member before, has its own failure counter. Failures sent from elsewhere never lock it, and it is not counted in any address's budget. The browser is recognised by an `HttpOnly`, `SameSite=Strict` cookie, `teamcode_trusted_browser`, sent only to the sign-in form, renewed at each dashboard sign-in and valid 400 days. It is signed with a key derived from `TEAMCODE_ENCRYPTION_KEY` and only proves an earlier sign-in: it never authenticates anything, and the password is still required.
+- **Other clients** (a new device, a new browser, a script) get 30 attempts a minute per source address (an IPv6 client per /64), whatever the username (`429 login_rate_limit`), and share one failure counter per username, existing or not.
+- **Backoff.** Each counter allows 5 consecutive failures, then locks for 1 minute, doubling with each further failure up to 15 minutes (`401 invalid_credentials`, the same answer as a wrong password). Attempts during a lock do not count. A successful sign-in clears its counter; a password change or an administrator's reset clears the member's. An existing member has one counter whatever the spelling the collation matches (case, accents); an unknown username is counted by its lowercase text. Counters with no failure in 24 hours are forgotten.
+- **Timing.** A locked or unknown username still runs the password hash, so the answer time does not tell which usernames exist.
+
+**Behind a reverse proxy**, set `TEAMCODE_TRUSTED_PROXIES` to the proxy's addresses or CIDR ranges, comma-separated (for example `10.0.0.0/8` for an in-cluster ingress controller; with the Helm chart, `trustedProxies`). The server then reads the client's address from `X-Forwarded-For`, the last address that is not a trusted proxy. Nothing is trusted by default, because a client could otherwise choose its address by sending the header; without it, every client behind the proxy shares the proxy's budget, which slows down only the sign-ins of new devices and browsers when someone floods the server.
 
 ## Dashboard and API
 

@@ -251,6 +251,9 @@ internal fun releaseFailureMessage(code: String, detail: String? = null): String
         "release_not_managed" ->
             "This TeamCode CLI is not a managed installation ($code): it was copied by hand or built from source, so it cannot update itself. " +
                 "Install it once with the install script (see the README), which keeps your login and settings; later updates then work."
+        "release_target_missing" ->
+            "This TeamCode release has no build for this computer ($code). macOS on Intel is no longer supported: the last release with an Intel build is 1.0.1 " +
+                "(https://github.com/nathanfallet/teamcode/releases/tag/1.0.1). On any other system, check the version with `teamcode update --check`."
         "release_http_404" ->
             "This TeamCode release or one of its files is not published on GitHub ($code). Check the version with `teamcode update --check`."
         else -> if (code.startsWith("release_http_5"))

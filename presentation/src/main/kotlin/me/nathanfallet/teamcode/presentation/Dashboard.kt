@@ -28,6 +28,11 @@ internal fun ApplicationCall.sessionCookie(value: String, origin: String, maxAge
         response.cookies.append(Cookie("teamcode_session", value, path = path, httpOnly = true, secure = origin.startsWith("https://"), maxAge = maxAge, extensions = mapOf("SameSite" to if (path == "/artifact") "Lax" else "Strict")))
 }
 internal val SESSION_COOKIE_PATHS = listOf("/dashboard", "/artifact")
+/** Proof that a member signed in from this browser before, so an attacker's failures on their username do not lock it out. */
+internal const val TRUSTED_BROWSER_COOKIE = "teamcode_trusted_browser"
+/** Sent only to the sign-in form's submission; 400 days, the longest lifetime browsers keep. */
+internal fun ApplicationCall.trustedBrowserCookie(value: String, origin: String) =
+    response.cookies.append(Cookie(TRUSTED_BROWSER_COOKIE, value, path = "/dashboard/login", httpOnly = true, secure = origin.startsWith("https://"), maxAge = 400 * 86_400, extensions = mapOf("SameSite" to "Strict")))
 internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, githubLinks: Boolean = false, overview: OverviewSources = OverviewSources()) {
     val origin = publicOrigin.trimEnd('/')
     get("/") { call.respondRedirect("/dashboard") }
@@ -44,8 +49,10 @@ internal fun Route.dashboardRoutes(team: TeamService, publicOrigin: String, gith
     }
     post("/dashboard/login") {
         val input = call.form(origin, authenticated = false)
-        val session = team.login(input["username"].orEmpty(), input["password"].orEmpty(), "Web dashboard")
+        val session = team.login(input["username"].orEmpty(), input["password"].orEmpty(), "Web dashboard", null, null, null,
+            LoginOrigin(call.clientAddress(), call.request.cookies[TRUSTED_BROWSER_COOKIE].orEmpty()))
         call.sessionCookie(session.token, origin)
+        session.trustedBrowser?.let { call.trustedBrowserCookie(it, origin) }
         call.respondRedirect(if (session.principal.member.passwordChangeRequired) "/dashboard/password" else loginNext(call.request.queryParameters["next"]) ?: "/dashboard")
     }
     get("/dashboard") {
