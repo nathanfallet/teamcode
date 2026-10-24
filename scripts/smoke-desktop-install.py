@@ -85,7 +85,7 @@ def require(condition, message):
         raise SystemExit('Desktop acceptance failed: ' + message)
 
 
-def show_installer_log(temporary):
+def show_installer_log(temporary, msi, control):
     """What the Windows installer left behind, before the temporary folder holding it is deleted with the run's work."""
     log = temporary / 'teamcode-desktop-msiexec.log'
     print(f'--- installer diagnostics: {log} exists={log.is_file()}; {temporary} holds {sorted(p.name for p in temporary.iterdir())} ---', flush=True)
@@ -97,6 +97,22 @@ def show_installer_log(temporary):
     if system() == 'windows':
         subprocess.run(['tasklist', '/V', '/FI', 'IMAGENAME eq msiexec.exe'], timeout=60)
         subprocess.run(['sc', 'query', 'msiserver'], timeout=60)
+        # Control experiment: the same package installed by msiexec itself, without the CLI, to tell a broken package or
+        # runner from a broken launch by the CLI.
+        direct = temporary / 'direct-msiexec.log'
+        if not control:
+            return
+        try:
+            result = subprocess.run(['msiexec.exe', '/i', str(msi), '/qn', '/norestart', '/l*v', str(direct), 'MSIINSTALLPERUSER=1'], timeout=300)
+            print(f'--- direct msiexec exited with {result.returncode} ---', flush=True)
+        except subprocess.TimeoutExpired:
+            print('--- direct msiexec did not finish within 300 s ---', flush=True)
+        if direct.is_file():
+            data = direct.read_bytes()
+            text = data.decode('utf-16' if data[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
+            print('--- direct-msiexec.log, last 80 lines ---\n' + '\n'.join(text.splitlines()[-80:]) + '\n--- end ---', flush=True)
+        else:
+            print('--- direct msiexec wrote no log ---', flush=True)
 
 
 def main():
@@ -129,7 +145,7 @@ def main():
             output = result.stdout + result.stderr
             print(f'$ teamcode ui --bundle {source.name} --yes --no-launch -> {result.returncode}\n{output}', flush=True)
             if result.returncode != 0:
-                show_installer_log(temporary)
+                show_installer_log(temporary, bundle / package, 'Windows installer' in output)
             return result.returncode, output
 
         # One modified byte in the middle of the package: refused before anything opens it, nothing installed.
