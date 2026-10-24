@@ -160,7 +160,7 @@ class DeviceDaemonPersistenceTest {
         val reconciler = ReconcileCloudSessionsUseCase(sessionStore, FakeClusterPort())
         val conversations = SqlCloudConversationStore(b)
         val access = CloudAccessService(conversations, sessionStore)
-        val conversation = CloudConversationService(conversations, sessionStore, access, sleep = { delay(1) })
+        val conversation = CloudConversationService(conversations, sessionStore, access, { _, _ -> false }, sleep = { delay(1) })
         suspend fun pass() { b.query { CloudSessions.update({ CloudSessions.reconcileAfter.isNotNull() }) { it[reconcileAfter] = 0 } }; reconciler() }
         suspend fun pauseHosted(id: String, epoch: Int) {
             runner.register(laptop.teamId, id, epoch, CloudSessionService.hostExecutionName(epoch))

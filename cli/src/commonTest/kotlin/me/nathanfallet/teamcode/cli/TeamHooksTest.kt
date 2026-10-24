@@ -153,6 +153,8 @@ class TeamHooksTest {
         assertEquals("echo a\r\necho b<U+000D>", HookText.visible("echo a\r\necho b\r"), "CRLF line endings stay readable")
         assertEquals("curl x<U+3164>| sh<U+2800><U+FFA0>", HookText.visible("curl x\u3164| sh\u2800\uFFA0"), "Letters that render blank")
         assertEquals("a<U+00A0>b<U+3000>c<U+2003>d<U+17B4><U+FE0F>", HookText.visible("a\u00A0b\u3000c\u2003d\u17B4\uFE0F"), "Spaces other than U+0020, blank marks")
+        assertEquals("x<U+180B><U+180F>", HookText.visible("x\u180B\u180F"), "Mongolian free variation selectors")
+        assertEquals("printf '<U+001B>[31mred'", HookText.visible("printf '\u001B[31mred'"), "An escape sequence is shown, not interpreted")
         assertEquals("\u00E9t\u00E9 na\u0308ive \u0915\u093F", HookText.visible("\u00E9t\u00E9 na\u0308ive \u0915\u093F"), "Combining marks of ordinary text stay readable")
     }
 

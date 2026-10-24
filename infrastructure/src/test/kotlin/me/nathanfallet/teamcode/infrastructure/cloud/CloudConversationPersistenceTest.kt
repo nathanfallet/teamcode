@@ -27,7 +27,7 @@ class CloudConversationPersistenceTest {
         val sessions = CloudSessionService(store, access = access)
         val reconciler = ReconcileCloudSessionsUseCase(store, cluster)
         val runner = RunnerChannelUseCase(store)
-        val conversation = CloudConversationService(conversations, store, access, sleep = { delay(1) })
+        val conversation = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(1) })
         val agent = RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(1) })
     }
     /** Groups do not exist in TeamCode yet; this directory stands in for one. */

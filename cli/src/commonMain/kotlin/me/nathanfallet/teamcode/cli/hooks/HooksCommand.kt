@@ -90,15 +90,16 @@ private class HookShow : SuspendingCliktCommand(name = "show") {
                 val bytes = checkNotNull(file.contentBase64.decodeBase64()).toByteArray()
                 val text = bytes.decodeToString()
                 echo("\n--- ${HookText.visible("${file.path} (${file.mode}, ${file.size} bytes)", keepLines = false)} ---")
-                // Characters that would hide or reorder code are shown as <U+XXXX>, never interpreted by the terminal.
-                val readable = text.encodeToByteArray().contentEquals(bytes) && text.none { it.isISOControl() && it !in "\n\r\t" }
+                // Characters that would hide or reorder code, controls included, are shown as <U+XXXX>, never interpreted by
+                // the terminal; only content that is not UTF-8 is withheld.
+                val readable = text.encodeToByteArray().contentEquals(bytes)
                 if (!readable) withheld = true
                 echo(if (readable) HookText.visible(text) else "(binary content not shown)")
             }
             if (withheld) {
-                // Content that was not shown was not read: approving it takes an explicit --digest.
-                echo("\nSome files were not shown. Inspect them yourself before approving with teamcode hooks approve " +
-                    "${HookText.visible(hook.name, keepLines = false)} --digest ${HookText.visible(hook.digest, keepLines = false)}.", err = true)
+                // Content that was not shown was not read: approving it takes the digest above, passed explicitly.
+                echo("\nSome files are not UTF-8 text and were not shown, so this version is not recorded as read. Inspect them yourself, " +
+                    "then pass the digest above to teamcode hooks approve --digest.", err = true)
                 return@use
             }
             // approve records this version, and only this one, unless --digest names another.

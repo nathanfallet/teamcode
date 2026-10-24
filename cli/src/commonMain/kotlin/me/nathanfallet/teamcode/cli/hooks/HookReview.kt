@@ -34,8 +34,10 @@ internal object HookText {
         c.isISOControl() -> true
         code in 0x200B..0x200F || code in 0x2028..0x202E || code in 0x2060..0x206F -> true
         code == 0xFEFF || code == 0x00AD || code == 0x061C || code == 0x180E || code == 0x034F || code in 0xFFF9..0xFFFB -> true
-        // Letters, marks and symbols that render blank: Hangul fillers, Khmer inherent vowels, the Braille blank, variation selectors.
-        code == 0x115F || code == 0x1160 || code == 0x3164 || code == 0xFFA0 || code == 0x2800 || code == 0x17B4 || code == 0x17B5 || code in 0xFE00..0xFE0F -> true
+        // Letters, marks and symbols that render blank: Hangul fillers, Khmer inherent vowels, the Braille blank, variation
+        // selectors (Mongolian free ones included).
+        code == 0x115F || code == 0x1160 || code == 0x3164 || code == 0xFFA0 || code == 0x2800 || code == 0x17B4 || code == 0x17B5 ||
+            code in 0xFE00..0xFE0F || code in 0x180B..0x180F -> true
         // Every space but the ordinary one (no-break, ideographic, en, em... spaces look like it and are not it).
         c.category == CharCategory.SPACE_SEPARATOR -> c != ' '
         else -> c.category == CharCategory.FORMAT || c.category == CharCategory.LINE_SEPARATOR || c.category == CharCategory.PARAGRAPH_SEPARATOR

@@ -19,9 +19,10 @@ class CloudConversationService(
     private val store: CloudConversationStore,
     private val sessions: CloudSessionStore,
     private val access: CloudAccessService,
+    /** Required: the owner-only guard must not fail open when it is not wired. */
+    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-    private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean = { _, _ -> false },
 ) : CloudInitialMessages {
     override suspend fun queue(principal: Principal, session: CloudSession, text: String) {
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return

@@ -176,7 +176,7 @@ class CloudConversationRoutesTest {
         val store = Sessions(listOf(admin, colleague, other))
         val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
         val access = CloudAccessService(conversations, store)
-        val service = CloudConversationService(conversations, store, access, sleep = { delay(20) })
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(20) })
         val sessions = CloudSessionService(store, access = access, initialMessages = service)
         val conversation = CloudConversation(service, access,
             RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(20) }))
@@ -378,7 +378,7 @@ class CloudConversationRoutesTest {
                 override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
                 override suspend fun settings(actor: Principal) = CloudSettings()
                 override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
-            }, cluster), cloudConversation = CloudConversation(CloudConversationService(conversations, store, access), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
+            }, cluster), cloudConversation = CloudConversation(CloudConversationService(conversations, store, access, { _, _ -> false }), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
                 publicOrigin = "http://localhost")
         }
         val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
@@ -463,7 +463,7 @@ class CloudConversationRoutesTest {
             override suspend fun any(teamId: String) = connection
         }
         val access = CloudAccessService(conversations, store)
-        val service = CloudConversationService(conversations, store, access)
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false })
         val sessions = CloudSessionService(store, access = access)
         val fileService = CloudFileService(files, store, service, storage, bucket)
         application {
@@ -667,7 +667,7 @@ class CloudConversationRoutesTest {
         val store = Sessions(listOf(admin, colleague, other))
         val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
         val access = CloudAccessService(conversations, store)
-        val service = CloudConversationService(conversations, store, access)
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false })
         val sessions = CloudSessionService(store, access = access)
         application {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {

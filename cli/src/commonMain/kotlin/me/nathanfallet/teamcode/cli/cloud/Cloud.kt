@@ -242,7 +242,7 @@ private class CloudGitHub : SuspendingCliktCommand(name = "github") {
             echo("GitHub: " + GITHUB_ACCESS_HELP.getValue(session.githubAccess ?: access))
             if (access != "none" && session.createdBy.initiatorId != session.ownerId) echo("This session was created by ${session.createdBy.initiatorId}: " +
                 "its workspace holds what they set up, and the agent acts with your GitHub access. Read the transcript (teamcode cloud logs $id). " +
-                (if (access == "owner") "Their messages not yet read by the agent are not delivered; --access shared lets the agent act on them." else "Everyone who may message it now instructs an agent holding your token."), err = true)
+                (if (access == "owner") "While you have GitHub linked, their messages not yet read by the agent are not delivered; --access shared lets the agent act on them." else "Everyone who may message it now instructs an agent holding your token."), err = true)
         }
     }
 }
