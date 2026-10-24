@@ -24,7 +24,8 @@ fun networkFailure(error: Throwable): NetworkFailure? {
     val names = chain.map { it::class.simpleName.orEmpty() }
     fun named(vararg candidates: String) = names.any { name -> candidates.any(name::contains) }
     val packages = chain.map { it::class.qualifiedName.orEmpty() }
-    val fromHttpStack = packages.any { name -> HTTP_PACKAGES.any(name::startsWith) } || named(*ENGINE_NAMES) ||
+    // The curl engine throws plain IllegalStateExceptions; its messages name the request it failed.
+    val fromHttpStack = packages.any { name -> HTTP_PACKAGES.any(name::startsWith) } || named(*ENGINE_NAMES) || mentions(CURL_TEXT) ||
         chain.any { it is ConnectTimeoutException || it is SocketTimeoutException || it is HttpRequestTimeoutException }
     if (!fromHttpStack) return null
     when {
@@ -72,6 +73,7 @@ private val URL = Regex("((?:https?|wss?)://[^/\\s\"'<>?#]+)[^\\s\"'<>]*")
 // a lowercase host name such as `tls.example.com` in an engine message must not look like a TLS failure.
 private val HTTP_PACKAGES = listOf("io.ktor.", "java.net.", "javax.net.", "okhttp3.", "java.nio.channels.UnresolvedAddress")
 private val ENGINE_NAMES = arrayOf("Curl", "Darwin", "WinHttp")
+private val CURL_TEXT = listOf("CurlRequestData(", "Connection failed for request", "TLS verification failed for request")
 private val HEADER_TEXT = listOf("Header line length limit exceeded", "Failed to parse response header", "Line exceeds limit")
 private val PROXY_TEXT = listOf("resolve proxy", "from proxy", "CONNECT tunnel failed", "Proxy CONNECT", "proxy server", "web proxy", "Proxy Authentication")
 private val TLS_TEXT = listOf("SSL", "TLS", "certificate", "Certificate", "security error")

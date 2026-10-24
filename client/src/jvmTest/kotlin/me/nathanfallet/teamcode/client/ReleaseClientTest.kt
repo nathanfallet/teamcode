@@ -189,11 +189,16 @@ class ReleaseClientTest {
             CurlIllegalStateException("Connection failed for request. Reason: Send failure") to "release_network_failure",
             IllegalStateException("Header line length limit exceeded") to "release_response_invalid",
             UnsupportedOperationException("unexpected") to "release_unexpected_failure",
+            // As the Linux curl engine really throws them (seen on Ubuntu without CA certificates): plain IllegalStateExceptions.
+            IllegalStateException("TLS verification failed for request: CurlRequestData(url='https://api.github.com/x', method='GET', content: 0 bytes). Reason: SSL peer certificate or SSH remote key was not OK") to "release_tls_failure",
+            IllegalStateException("Connection failed for request: CurlRequestData(url='https://api.github.com/x', method='GET', content: 0 bytes). Reason: Could not resolve hostname") to "release_dns_failure",
         )) client { throw thrown }.use { transport ->
             val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
             assertEquals(code, error.code, thrown.toString())
-            assertEquals(thrown.message?.let { "${thrown::class.simpleName}: $it" } ?: thrown::class.simpleName, error.detail)
+            assertEquals(releaseFailureDetail(thrown), error.detail)
+            assertFalse(error.detail.orEmpty().contains("/x"), error.detail)
         }
+        assertEquals("ConnectException: Connection refused", releaseFailureDetail(java.net.ConnectException("Connection refused")))
         client { respond("", HttpStatusCode.Forbidden, headersOf("x-ratelimit-remaining" to listOf("0"), "x-ratelimit-reset" to listOf("${System.currentTimeMillis() / 1000 + 600}"))) }.use { transport ->
             val error = assertFailsWith<ReleaseDownloadException> { transport.latestVersion() }
             assertEquals("release_rate_limited", error.code)

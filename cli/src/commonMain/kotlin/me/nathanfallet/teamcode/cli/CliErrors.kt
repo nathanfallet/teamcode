@@ -211,7 +211,7 @@ private const val TEST_HOSTS = "test access with `curl -sSI https://api.github.c
  * stays in the output for diagnostics, support and scripts (the smoke scripts match on it).
  */
 internal fun releaseFailureMessage(code: String, detail: String? = null): String {
-    val cause = detail?.let { " Cause: $it." } ?: ""
+    val cause = detail?.let { " Cause: $it" + if (it.last() in ".…!?") "" else "." } ?: ""
     return when (code) {
         "release_installation_busy" ->
             "TeamCode installation is busy ($code): an agent session started by TeamCode is still running, or the installation is being modified. Close all agent sessions, then run the command again (for example `teamcode update`)."
