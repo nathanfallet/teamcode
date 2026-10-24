@@ -94,6 +94,10 @@ class UpdateBannerViewModelTest {
         assertEquals(UpdateBannerState.Hidden, model.uiState.value)
         // The attempt counts: the next one waits for the interval rather than retrying at each restart.
         assertEquals(1_000_000_000L, preferences.lastAttemptMillis)
+        // Offline at startup: the next check comes an hour later, not six.
+        updater.failure = null
+        advanceTimeBy(UpdatePolicy.MIN_CHECK_INTERVAL_MILLIS); runCurrent()
+        assertEquals(UpdateBannerState.Available("1.3.0"), model.uiState.value)
     }
 
     @Test fun checksRepeatEverySixHoursAndAtMostHourlyAcrossRestarts() = banner {
@@ -107,13 +111,14 @@ class UpdateBannerViewModelTest {
         runCurrent()
         assertEquals(1, updater.checks)
         assertEquals(UpdateBannerState.Hidden, restarted.uiState.value)
-        // Six hours later, one of them checks again, and the other shows its result without a request of its own.
-        advanceTimeBy(UpdatePolicy.CHECK_INTERVAL_MILLIS); runCurrent()
+        // Once the hour is over, the restarted one checks; the first one waits for its six hours.
+        advanceTimeBy(UpdatePolicy.MIN_CHECK_INTERVAL_MILLIS); runCurrent()
         assertEquals(2, updater.checks)
-        assertEquals(UpdateBannerState.Available("1.3.0"), first.uiState.value)
         assertEquals(UpdateBannerState.Available("1.3.0"), restarted.uiState.value)
-        advanceTimeBy(UpdatePolicy.CHECK_INTERVAL_MILLIS); runCurrent()
+        assertEquals(UpdateBannerState.Hidden, first.uiState.value)
+        advanceTimeBy(UpdatePolicy.CHECK_INTERVAL_MILLIS - UpdatePolicy.MIN_CHECK_INTERVAL_MILLIS); runCurrent()
         assertEquals(3, updater.checks)
+        assertEquals(UpdateBannerState.Available("1.3.0"), first.uiState.value)
     }
 
     @Test fun aClosedVersionStaysClosedAndANewerOneShows() = banner {
@@ -169,7 +174,7 @@ class UpdateBannerViewModelTest {
         assertEquals(1, updater.quits)
     }
 
-    @Test fun anUnexpectedFailureIsWordedAndClosingItDoesNotHideTheVersion() = banner {
+    @Test fun anUnexpectedFailureIsWordedAndClosingItClosesTheVersion() = banner {
         val updater = FakeUpdater().apply { updateFailure = IllegalStateException("secret detail") }
         val model = viewModel(updater)
         runCurrent()
@@ -177,7 +182,7 @@ class UpdateBannerViewModelTest {
         assertEquals("The update failed unexpectedly. Run teamcode update in a terminal to see why.", assertIs<UpdateBannerState.Failed>(model.uiState.value).message)
         model.dismiss()
         assertEquals(UpdateBannerState.Hidden, model.uiState.value)
-        assertEquals(null, preferences.dismissedVersion)
+        assertEquals("1.3.0", preferences.dismissedVersion)
     }
 
     @Test fun aFailureTheAppWasReopenedWithShowsFirst() = banner {

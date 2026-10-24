@@ -19,7 +19,7 @@ class DesktopAppUpdaterTest {
         version: String = "1.2.0",
         check: String = "echo '{\"currentVersion\":\"1.2.0\",\"latestVersion\":\"1.3.0\",\"updateAvailable\":true}'",
         update: String = "echo 'Selected TeamCode 1.3.0.'; echo '1.3.0' > '${File(directory, "version").path}'",
-        ui: String = "echo 'Installed TeamCode Desktop 1.3.0.'; echo 'TeamCode Desktop 1.3.0 is installed: it reopens once the running app has quit.'",
+        ui: String = "echo 'TeamCode Desktop installs version 1.3.0 once the running app has quit, then reopens.'",
     ): File {
         // Built-ins only: the CLI runs with the test's PATH, this directory alone.
         File(directory, "version").writeText(version + "\n")
@@ -90,7 +90,7 @@ class DesktopAppUpdaterTest {
         assertTrue("Selected TeamCode 1.3.0." in lines)
         // The app's installation runs on the CLI's new version.
         assertTrue("Installing TeamCode Desktop 1.3.0…" in lines)
-        assertTrue(lines.last().startsWith("TeamCode Desktop 1.3.0 is installed"))
+        assertTrue(lines.last().startsWith("TeamCode Desktop installs version 1.3.0"))
     } }
 
     @Test fun aFailedCliUpdateStopsBeforeTheApp() = withTemporaryDirectory { directory -> runTest {

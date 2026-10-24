@@ -48,7 +48,7 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
     private val bundle by option("--bundle", help = "Install from an offline directory with desktop-manifest.json, desktop-manifest.sig and the package.")
     private val noService by option("--no-service", help = "After installing the desktop app, do not install the local service or check its login startup.").flag()
     private val restartApp by option("--restart-app", metavar = "PID", help = "Install or update the desktop app, then reopen it once the running app with this process id has quit " +
-        "(what TeamCode Desktop's Update button runs). On Windows, where the running app keeps its files open, the installation itself waits for it to quit.").long()
+        "(what TeamCode Desktop's Update button runs). The installation itself waits for the app to quit: its files are never replaced under it.").long()
     private val waitFor by option("--wait-for", hidden = true, help = "Wait for this process to exit before installing and opening the app (the hand-off --restart-app starts).").long()
     override fun help(context: Context) = "Open TeamCode Desktop, installing the version of this CLI first when it is missing or older " +
         "(signed manifest, SHA-256 and, on macOS, the Developer ID signature are checked; no administrator rights)."
@@ -68,8 +68,9 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
             echo("TeamCode Desktop (process $waited) was still running after ${RESTART_WAIT.inWholeMinutes} minutes: nothing was installed or opened.", err = true)
             throw CliOperationException("desktop_restart_timeout")
         }
-        // Windows: the running app holds its files, so the installation runs once it has quit, in a process of its own.
-        if (restart != null && os == "windows") {
+        // The installation runs once the app has quit, in a process of its own: on Windows the running app holds its
+        // files, and on macOS and Linux a running JVM still loads classes and native libraries from its bundle.
+        if (restart != null) {
             handOff(listOf("ui", "--yes", "--wait-for", restart.toString()) + if (noService) listOf("--no-service") else emptyList(), config)
             echo("TeamCode Desktop installs version $VERSION once the running app has quit, then reopens.")
             return@releaseOperation
@@ -98,19 +99,16 @@ internal class Ui : SuspendingCliktCommand(name = "ui") {
             val app = try { ui.prepare() } catch (error: Exception) {
                 // The app already quit for this update: it is reopened on the version still installed, which says why.
                 if (waited == null || error is kotlinx.coroutines.CancellationException) throw error
-                locations.installed().firstOrNull()?.let { previous ->
-                    try { launch(os, previous, listOf("--config-path", config, "--update-error", describeFailure(error, null).message.take(1_000)), config) }
-                    catch (_: Exception) { }
+                val previous = locations.installed().firstOrNull()
+                if (previous == null) echo("No TeamCode Desktop is left to reopen: run teamcode ui to install it again.", err = true)
+                else try { launch(os, previous, listOf("--config-path", config, "--update-error", describeFailure(error, null).message.take(1_000)), config) }
+                catch (relaunch: Exception) {
+                    if (relaunch is kotlinx.coroutines.CancellationException) throw relaunch
+                    echo("TeamCode Desktop could not be reopened: ${describeFailure(relaunch, null).message}", err = true)
                 }
                 throw error
             } ?: return@releaseOperation
             if (noLaunch) { echo("TeamCode Desktop ${app.version} is installed: ${app.root}"); return@releaseOperation }
-            if (restart != null) {
-                // The new app opens once this one has quit: a second instance would start beside it otherwise.
-                handOff(listOf("ui", "--wait-for", restart.toString(), "--no-service"), config)
-                echo("TeamCode Desktop ${app.version} is installed: it reopens once the running app has quit.")
-                return@releaseOperation
-            }
             val arguments = listOf("--config-path", config) + (folder?.let { listOf("--directory", it) } ?: emptyList())
             launch(os, app, arguments, config)
             echo("Opened TeamCode Desktop ${app.version}.")

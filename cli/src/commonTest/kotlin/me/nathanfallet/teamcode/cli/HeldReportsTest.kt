@@ -9,24 +9,26 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** `teamcode run`: nothing reaches the terminal while the agent owns it; the latest notice is printed once it exited. */
+/** `teamcode run`: nothing reaches the terminal while the agent owns it; each distinct notice is printed once it exited. */
 class HeldReportsTest {
     @Test fun nothingIsWrittenWhileTheAgentRunsAndTheNoticeFollowsItsExit() = runTest {
         val printed = mutableListOf<String>()
         val reported = CompletableDeferred<Unit>()
         val code = withHeldReports(printed::add, { report ->
+            report("TeamCode 1.0.0 is available. Run teamcode update to install it.")
             report("Release notifications unavailable; check installation permissions.")
             report("TeamCode 1.0.0 is available. Run teamcode update to install it.")
             reported.complete(Unit)
             awaitCancellation()
         }) {
             reported.await()
-            // The watcher has reported twice while the agent runs: the terminal stays untouched.
+            // The watcher has reported three times while the agent runs: the terminal stays untouched.
             assertTrue(printed.isEmpty())
             0
         }
         assertEquals(0, code)
-        assertEquals(listOf("TeamCode 1.0.0 is available. Run teamcode update to install it."), printed)
+        // The later warning does not hide the notice, and the repeated notice is printed once.
+        assertEquals(listOf("TeamCode 1.0.0 is available. Run teamcode update to install it.", "Release notifications unavailable; check installation permissions."), printed)
     }
 
     @Test fun theNoticeFollowsAFailedAgentToo() = runTest {

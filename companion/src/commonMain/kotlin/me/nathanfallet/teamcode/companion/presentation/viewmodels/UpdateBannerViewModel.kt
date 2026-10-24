@@ -45,24 +45,27 @@ class UpdateBannerViewModel(
 
     init {
         viewModelScope.launch {
-            while (true) {
-                // Within the hour of the last attempt (another window, a restart) the last result is shown again.
-                refresh()
-                delay(UpdatePolicy.CHECK_INTERVAL_MILLIS)
-            }
+            while (true) delay(refresh())
         }
     }
 
-    /** One check: the network one when due, the last result otherwise; silent on failure. */
-    internal suspend fun refresh() {
+    /**
+     * One check: the network one when due, the last result otherwise (within the hour of the last attempt: another
+     * window, a restart); silent on failure. Returns how long to wait before the next one: [UpdatePolicy.CHECK_INTERVAL_MILLIS]
+     * after a check that worked, an hour after one that failed (offline at startup), the rest of the hour otherwise.
+     */
+    internal suspend fun refresh(): Long {
         val now = clock.nowMillis()
-        val latest = if (UpdatePolicy.nextCheckDelay(now, preferences.lastAttemptMillis) > 0) preferences.latestVersion else {
+        val wait = UpdatePolicy.nextCheckDelay(now, preferences.lastAttemptMillis)
+        var next = wait
+        val latest = if (wait > 0) preferences.latestVersion else {
             preferences.lastAttemptMillis = now
             try {
-                updater.latestVersion().also { preferences.latestVersion = it }
+                updater.latestVersion().also { preferences.latestVersion = it; next = UpdatePolicy.CHECK_INTERVAL_MILLIS }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
+                next = UpdatePolicy.MIN_CHECK_INTERVAL_MILLIS
                 preferences.latestVersion
             }
         }
@@ -75,6 +78,7 @@ class UpdateBannerViewModel(
                 else -> target?.let { UpdateBannerState.Available(it) } ?: UpdateBannerState.Hidden
             }
         }
+        return next
     }
 
     /** Updates the CLI and the app, then quits so that the new version opens. */
@@ -104,11 +108,11 @@ class UpdateBannerViewModel(
         }
     }
 
-    /** "Not now": the banner of this version does not show again. A failure is only closed: the next check offers it again. */
+    /** "Not now", or closing a failure: the banner of this version does not show again; a newer version does. */
     fun dismiss() {
         when (val current = state.value) {
             is UpdateBannerState.Available -> preferences.dismissedVersion = current.version
-            is UpdateBannerState.Failed -> Unit
+            is UpdateBannerState.Failed -> current.version?.let { preferences.dismissedVersion = it }
             else -> return
         }
         state.value = UpdateBannerState.Hidden

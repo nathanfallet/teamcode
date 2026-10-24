@@ -14,10 +14,10 @@ import me.nathanfallet.teamcode.companion.domain.services.AppUpdater
  * signature checks (the app never downloads or verifies a release itself):
  * - the check is `teamcode update --check --json` (or, for a CLI older than `--json`, the text of `update --check`);
  * - the update is `teamcode update` (managed installation; running agent sessions keep their version and the local
- *   service restarts when they end), then `teamcode ui --yes --restart-app PID`, which installs the app of the CLI's
- *   new version with the checks of `teamcode ui` (signed manifest, SHA-256, the Developer ID on macOS) and hands the
- *   reopening to a process of its own, started detached, which waits for this app to quit. On Windows, where a running
- *   app keeps its files open, that process also does the installation once the app has quit.
+ *   service restarts when they end), then `teamcode ui --yes --restart-app PID`, which hands the installation to a process
+ *   of its own, started detached: once this app has quit, it installs the app of the CLI's new version with the checks
+ *   of `teamcode ui` (signed manifest, SHA-256, the Developer ID on macOS) and opens it. Never under the running app:
+ *   Windows keeps its files open, and a running JVM still loads classes and native libraries from its bundle.
  * The app only reads the CLI's output; it never signals the CLI.
  */
 class DesktopAppUpdater(
@@ -81,7 +81,7 @@ class DesktopAppUpdater(
     companion object {
         private const val CHECK_TIMEOUT_MILLIS = 60_000L
         private const val UPDATE_TIMEOUT_MILLIS = 20 * 60_000L
-        private const val INSTALL_TIMEOUT_MILLIS = 30 * 60_000L
+        private const val INSTALL_TIMEOUT_MILLIS = 5 * 60_000L
         private const val MAX_ERROR_LINES = 4
 
         /** Clikt's refusal of an option an older CLI does not know. */

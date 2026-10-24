@@ -1,7 +1,5 @@
 package me.nathanfallet.teamcode.companion
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -20,7 +18,6 @@ import androidx.compose.ui.input.key.type
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
-import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.isWideWindow
 import me.nathanfallet.teamcode.companion.presentation.components.pointerFirstPlatform
 import me.nathanfallet.teamcode.companion.presentation.navigation.AppCommand
@@ -44,10 +41,7 @@ fun App(menuShortcuts: Boolean = false) {
                 modifier = Modifier.fillMaxSize().then(if (menuShortcuts) Modifier else Modifier.onPreviewKeyEvent { event -> shortcut(event)?.let { AppCommands.send(it); true } ?: false }),
                 color = MaterialTheme.colorScheme.background,
             ) {
-                Column {
-                    UpdateBanner()
-                    Box(Modifier.weight(1f)) { TeamCodeNavHost(root) }
-                }
+                TeamCodeNavHost(root)
             }
         }
     }

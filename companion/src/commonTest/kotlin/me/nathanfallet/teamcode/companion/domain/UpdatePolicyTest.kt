@@ -29,6 +29,15 @@ class UpdatePolicyTest {
         assertEquals("1.3.0", UpdatePolicy.target("1.3.0", "1.2.0", "1.3.0"))
     }
 
+    @Test fun nothingBelowTheAppsOwnVersionIsOffered() {
+        // An app newer than the CLI and the latest release: no banner offering an older version.
+        assertNull(UpdatePolicy.target("1.4.0", "1.2.0", "1.3.0"))
+        assertNull(UpdatePolicy.target("1.4.0", "1.3.0", null))
+        // A prerelease sorts below its release, as in SemVer.
+        assertEquals("1.4.0", UpdatePolicy.target("1.4.0-rc.1", "1.4.0-rc.1", "1.4.0"))
+        assertNull(UpdatePolicy.target("1.4.0", "1.4.0", "1.4.0-rc.2"))
+    }
+
     @Test fun nothingIsOfferedWithoutACliOrForADevelopmentBuild() {
         assertNull(UpdatePolicy.target("1.2.0", null, "1.3.0"))
         assertNull(UpdatePolicy.target("0.1.0-SNAPSHOT", "1.2.0", "1.3.0"))

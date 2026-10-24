@@ -36,7 +36,7 @@ import org.koin.mp.KoinPlatform
 import org.koin.compose.viewmodel.koinViewModel
 
 /**
- * "Update available" above the whole app: one click updates the CLI and the app together, then reopens the app on the
+ * "Update available" at the top of the content panel: one click updates the CLI and the app together, then reopens the app on the
  * new version.
  *
  * Desktop only (macOS, Windows, Linux), decided by the platform and never by the window's size: it shows only where
@@ -76,7 +76,7 @@ fun UpdateBannerContent(state: UpdateBannerState, onUpdate: () -> Unit, onDismis
                     is UpdateBannerState.Available -> "Update available: TeamCode ${state.version}" to
                         "Updates the CLI and this app, then reopens TeamCode. Agent sessions keep running."
                     is UpdateBannerState.Updating -> "Updating TeamCode to ${state.version}…" to state.output.lastOrNull()
-                    is UpdateBannerState.Restarting -> "TeamCode ${state.version} is installed" to "Reopening TeamCode…"
+                    is UpdateBannerState.Restarting -> "The CLI is on TeamCode ${state.version}" to "TeamCode closes, installs the new app and reopens by itself in a minute or two."
                     is UpdateBannerState.Failed -> (state.version?.let { "The update to TeamCode $it failed" } ?: "The update failed") to state.message
                     UpdateBannerState.Hidden -> return@Row
                 }
