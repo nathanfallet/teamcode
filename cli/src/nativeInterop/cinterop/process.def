@@ -3,3 +3,23 @@ package = me.nathanfallet.teamcode.cli.interop.process
 
 linkerOpts.osx = -framework Security -framework CoreFoundation
 linkerOpts.linux = -ldl
+---
+#ifdef __linux__
+#include <stdint.h>
+
+/* The OpenSSL that Ktor's Curl engine links statically into the Linux executable. */
+int OPENSSL_init_crypto(uint64_t opts, const void *settings);
+
+/*
+ * Keeps OpenSSL's global state until the process is gone. Ktor's Curl engine closes asynchronously: HttpClient.close()
+ * returns while its worker thread still frees TLS contexts in curl_multi_cleanup(). By default OpenSSL registers
+ * OPENSSL_cleanup() with atexit(), so exiting right after a request destroyed the locks under that thread and it
+ * crashed with a segmentation fault once the command's output was printed. OPENSSL_INIT_NO_ATEXIT (0x80000) only
+ * takes effect on OpenSSL's first initialization, so this runs as an ELF constructor: before Kotlin's eager
+ * initializers, hence before Ktor's curl_global_init(). The memory is reclaimed by the kernel at exit, and OpenSSL
+ * 4.0 dropped that atexit() registration for the same reason.
+ */
+__attribute__((constructor, used)) static void teamcode_keep_tls_state_until_exit(void) {
+    OPENSSL_init_crypto(0x00080000L, NULL);
+}
+#endif
