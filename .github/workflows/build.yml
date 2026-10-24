@@ -763,6 +763,15 @@ jobs:
           if [[ "$INSTALLATION_TARGET" == windows-* ]]; then suffix=".exe"; fi
           binary="installation-fixtures/second/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}-${INSTALLATION_TARGET}${suffix}"
           python scripts/smoke-automatic-updates.py --binary "$binary" --first-bundle installation-fixtures/first --second-bundle installation-fixtures/second
+      - name: Exercise the service step of install and update on the actual OS service manager
+        shell: bash
+        env:
+          INSTALLATION_TARGET: ${{ matrix.target }}
+        run: |
+          suffix=""
+          if [[ "$INSTALLATION_TARGET" == windows-* ]]; then suffix=".exe"; fi
+          binary="installation-fixtures/second/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}-${INSTALLATION_TARGET}${suffix}"
+          python scripts/smoke-service-setup.py --binary "$binary" --bundle installation-fixtures/first
       - uses: actions/download-artifact@v4
         with:
           name: teamcode-signed-desktop-bundle

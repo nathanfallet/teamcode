@@ -174,6 +174,22 @@ class ServiceSetupTest {
         assertNull(fs.metadataOrNull(scratch.home / ".config"), "Nothing written")
     }
 
+    @Test fun aCliOutsideAManagedInstallationLeavesTheServiceAlone() = scratch { scratch ->
+        val system = FakeSystem(enabled = false, loaded = false, running = false)
+        val setup = setUpService(scratch.config, null, null, cloudRunner = { false }, platform = { error("not read") },
+            home = { error("not read") }, system = system, load = { error("not read") })
+        assertEquals(ServiceSetupOutcome.UNMANAGED, setup.outcome)
+        assertFalse(setup.failed)
+        assertTrue("teamcode service install" in setup.line)
+        assertTrue(system.calls.isEmpty())
+        assertNull(read(scratch.config), "No service written")
+        // The opt-out and the cloud runner still come first.
+        assertEquals(ServiceSetupOutcome.OPTED_OUT, setUpService(scratch.config, null, "--no-service", cloudRunner = { false },
+            platform = { error("not read") }, home = { error("not read") }, system = system).outcome)
+        assertEquals(ServiceSetupOutcome.CLOUD_RUNNER, setUpService(scratch.config, null, null, cloudRunner = { true },
+            platform = { error("not read") }, home = { error("not read") }, system = system).outcome)
+    }
+
     @Test fun aFailureIsReportedWithTheCommandToRunAndNeverThrown() = scratch { scratch ->
         val setup = setUp(scratch, FakeSystem(enabled = false, loaded = false, running = false, failing = "enable"))
         assertEquals(ServiceSetupOutcome.FAILED, setup.outcome)

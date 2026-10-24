@@ -45,15 +45,17 @@ internal suspend fun recoverInstallationService(store: InstallationStore, pendin
 }
 
 /**
- * The service step at the end of `teamcode install`, `teamcode update` and the automatic update job (decisions 10 and 11):
- * install the login service run by this installation's launcher, or check and repair its login startup. The update has
- * already restarted a running service on the new payload (decision 12); this step never undoes it, whatever happens.
+ * The service step at the end of `teamcode install`, `teamcode update`, the automatic update job and `teamcode ui` once it
+ * installed the desktop app (decisions 4, 10 and 11): install the login service run by this installation's launcher, or
+ * check and repair its login startup. The update has already restarted a running service on the new payload
+ * (decision 12); this step never undoes it, whatever happens. A null [store] (a CLI outside a managed installation) is
+ * reported and left alone.
  */
-internal suspend fun setUpInstallationService(store: InstallationStore, configuration: String, optOut: Boolean): ServiceSetup =
-    setUpService(configuration, store.paths.launcher.toString(),
+internal suspend fun setUpInstallationService(store: InstallationStore?, configuration: String, optOut: Boolean): ServiceSetup =
+    setUpService(configuration, store?.paths?.launcher?.toString(),
         if (optOut) "--no-service" else if (!environment("TEAMCODE_NO_SERVICE").isNullOrEmpty()) "TEAMCODE_NO_SERVICE" else null,
         cloudRunner = { insideCloudRunner() }, platform = { servicePlatform() },
         home = { environment("HOME") ?: environment("USERPROFILE") },
         sameExecutable = { executable ->
-            try { sameInstallationPath(executable.toPath(), store.paths.launcher, store.paths.target) } catch (_: Exception) { false }
+            store != null && try { sameInstallationPath(executable.toPath(), store.paths.launcher, store.paths.target) } catch (_: Exception) { false }
         })

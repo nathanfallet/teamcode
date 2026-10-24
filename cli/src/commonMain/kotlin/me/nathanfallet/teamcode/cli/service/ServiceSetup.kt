@@ -58,7 +58,7 @@ internal object SystemLoginService : LoginServiceSystem {
     override suspend fun start(settings: ServiceSettings) = startManagedService(settings)
 }
 
-internal enum class ServiceSetupOutcome { INSTALLED, REPAIRED, UNCHANGED, AT_BOOT, OTHER_EXECUTABLE, OPTED_OUT, CLOUD_RUNNER, FAILED }
+internal enum class ServiceSetupOutcome { INSTALLED, REPAIRED, UNCHANGED, AT_BOOT, OTHER_EXECUTABLE, OPTED_OUT, CLOUD_RUNNER, UNMANAGED, FAILED }
 
 /** The one line `install` and `update` print about the service, on the error stream when [failed]. */
 internal data class ServiceSetup(val outcome: ServiceSetupOutcome, val line: String) {
@@ -66,13 +66,14 @@ internal data class ServiceSetup(val outcome: ServiceSetupOutcome, val line: Str
 }
 
 /**
- * Installs or repairs the login service of [config], run by [executable] (the managed installation's launcher).
+ * Installs or repairs the login service of [config], run by [executable] (the managed installation's launcher, or null
+ * when this CLI is not one: `teamcode ui` from a build output or a copied binary leaves the service alone).
  * Never throws (except cancellation): a failure is a [ServiceSetupOutcome.FAILED] line naming the command to run, so it
  * never undoes the installation or update that ran before it.
  */
 internal suspend fun setUpService(
     config: String,
-    executable: String,
+    executable: String?,
     /** Why this command skips the service (`--no-service`, `TEAMCODE_NO_SERVICE`), or null. */
     optOut: String?,
     cloudRunner: () -> Boolean,
@@ -91,6 +92,8 @@ internal suspend fun setUpService(
         if (optOut != null) return result(ServiceSetupOutcome.OPTED_OUT, "Local TeamCode service: not checked ($optOut).")
         if (!automaticServiceSetup(config)) return result(ServiceSetupOutcome.OPTED_OUT,
             "Local TeamCode service: not checked, automatic setup is off (teamcode service automatic on turns it back on).")
+        if (executable == null) return result(ServiceSetupOutcome.UNMANAGED,
+            "Local TeamCode service: not checked, this teamcode is not a managed installation (teamcode service install sets it up).")
         val identity = platform()
         if (identity.userId == "0") throw CliktError("run it as your own user, not as root")
         val existing = load(config)

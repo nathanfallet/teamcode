@@ -17,6 +17,8 @@ import me.nathanfallet.teamcode.api.models.DesktopReleaseFormat
 import me.nathanfallet.teamcode.api.models.ReleaseAsset
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.CliUserException
+import me.nathanfallet.teamcode.cli.service.ServiceSetup
+import me.nathanfallet.teamcode.cli.service.ServiceSetupOutcome
 import me.nathanfallet.teamcode.cli.update.ReleasePublicKey
 import me.nathanfallet.teamcode.cli.update.VerifyReleaseManifest
 import me.nathanfallet.teamcode.client.DownloadedReleaseMetadata
@@ -226,6 +228,35 @@ class DesktopInstallTest {
         val newer = installer("linux", "linux-x64", FixtureSource(fixture("1.3.0", mapOf("linux-x64" to linuxApp("1.3.0")))))
         assertNull(DesktopUi("1.3.0", locations, newer, {}) { questions += it; false }.prepare())
         assertEquals(listOf("TeamCode Desktop 1.2.3 is older than this CLI. Update it to 1.3.0 (less than 1 MB)?"), questions)
+    }
+
+    @Test fun uiSetsUpTheServiceOnlyAfterInstallingTheAppAndNeverFailsOnIt() = runBlocking {
+        val locations = DesktopLocations("linux", environment::get)
+        val source = FixtureSource(fixture("1.2.3", mapOf("linux-x64" to linuxApp("1.2.3"))))
+        val installer = installer("linux", "linux-x64", source)
+        var steps = 0
+        val lines = mutableListOf<String>()
+        val errors = mutableListOf<String>()
+        fun ui(outcome: ServiceSetupOutcome, line: String, confirm: Boolean) = DesktopUi("1.2.3", locations, installer, { lines += it },
+            service = { steps++; ServiceSetup(outcome, line) }, reportError = { errors += it }) { confirm }
+        // Declined: nothing installed, no service step.
+        assertNull(ui(ServiceSetupOutcome.INSTALLED, "installed", confirm = false).prepare())
+        assertEquals(0, steps)
+        // A failing service step is reported on the error stream; the installed app is still opened.
+        assertEquals("1.2.3", ui(ServiceSetupOutcome.FAILED, "Local TeamCode service: not set up (x).", confirm = true).prepare()?.version)
+        assertEquals(1, steps)
+        assertEquals(listOf("Local TeamCode service: not set up (x)."), errors)
+        // Already installed: the app opens as is, the service step does not run again.
+        assertEquals("1.2.3", ui(ServiceSetupOutcome.INSTALLED, "installed", confirm = false).prepare()?.version)
+        assertEquals(1, steps)
+        // A newer CLI updates the app, then repairs the service; the line goes to the output.
+        val newer = installer("linux", "linux-x64", FixtureSource(fixture("1.3.0", mapOf("linux-x64" to linuxApp("1.3.0")))))
+        val repaired = "Local TeamCode service: repaired (enabled at login); it starts at login."
+        assertEquals("1.3.0", DesktopUi("1.3.0", locations, newer, { lines += it },
+            service = { steps++; ServiceSetup(ServiceSetupOutcome.REPAIRED, repaired) }, reportError = { errors += it }) { true }.prepare()?.version)
+        assertEquals(2, steps)
+        assertEquals(repaired, lines.last())
+        assertEquals(1, errors.size)
     }
 
     companion object {

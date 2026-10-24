@@ -117,6 +117,9 @@ def main():
 
         code, output = ui(bundle)
         require(code == 0 and f'TeamCode Desktop {version} is installed' in output, 'the signed package did not install')
+        # This CLI runs from the bundle, not from a managed installation: the service step says so and changes nothing.
+        require('Local TeamCode service: not checked, this teamcode is not a managed installation' in output,
+                'teamcode ui did not report the service step after installing the app')
         require(version_file(root).read_text().strip() == version, 'the installed app reports another version')
         try:
             if system() == 'macos':
