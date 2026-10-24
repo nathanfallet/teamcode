@@ -19,6 +19,13 @@ class AccountCalls(private val clients: TeamCodeClientProvider, private val acco
     suspend fun <T> withAccount(accountId: String, resource: Boolean = false, call: suspend (TeamCodeClient) -> T): T =
         translateFailures(credentialsFailure = false, resource) { call(client(accountId)) }
 
+    /**
+     * [withAccount] for a long transfer (a file upload), bounded by [timeoutMillis] instead of the short calls' 30 s;
+     * the client bounds each of its attempts itself.
+     */
+    suspend fun <T> withAccountLong(accountId: String, timeoutMillis: Long, call: suspend (TeamCodeClient) -> T): T =
+        translateFailures(credentialsFailure = false, resource = true, timeoutMillis) { call(client(accountId)) }
+
     /** The account's client, for a stream that handles its own failures; an unknown account is signed out. */
     suspend fun client(accountId: String): TeamCodeClient {
         val account = accounts.accounts.value.firstOrNull { it.id == accountId } ?: throw CompanionException.Unauthorized()
@@ -26,12 +33,12 @@ class AccountCalls(private val clients: TeamCodeClientProvider, private val acco
     }
 }
 
-internal suspend fun <T> translateFailures(credentialsFailure: Boolean, resource: Boolean = false, call: suspend () -> T): T = try {
+internal suspend fun <T> translateFailures(credentialsFailure: Boolean, resource: Boolean = false, timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS, call: suspend () -> T): T = try {
     // Every call here is a short request and answer: a stalled server or a captive portal ends as unreachable
     // instead of a spinner that lasts minutes.
     // (Timed on the default dispatcher, in real time, whatever the caller's dispatcher.)
     try {
-        withContext(Dispatchers.Default) { withTimeout(REQUEST_TIMEOUT_MILLIS) { call() } }
+        withContext(Dispatchers.Default) { withTimeout(timeoutMillis) { call() } }
     } catch (_: TimeoutCancellationException) {
         throw CompanionException.Unreachable()
     }

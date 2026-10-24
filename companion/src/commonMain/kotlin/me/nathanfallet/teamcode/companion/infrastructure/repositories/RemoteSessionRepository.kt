@@ -41,8 +41,8 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         client.createCloudSession(CreateCloudSessionRequest(name = session.name, profileId = session.profileId, agent = agent, initialMessage = session.initialMessage), idempotencyKey).domain()
     }
 
-    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt =
-        calls.withAccount(accountId, resource = true) { it.sendCloudMessage(sessionId, SendCloudMessageRequest(text, wake = true), idempotencyKey = clientMessageId).receipt() }
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String>): InputReceipt =
+        calls.withAccount(accountId, resource = true) { it.sendCloudMessage(sessionId, SendCloudMessageRequest(text, wake = true, fileIds = fileIds), idempotencyKey = clientMessageId).receipt() }
 
     override suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt =
         calls.withAccount(accountId, resource = true) { client ->

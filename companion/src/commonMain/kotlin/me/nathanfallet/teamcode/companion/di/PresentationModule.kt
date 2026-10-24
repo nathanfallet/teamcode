@@ -29,7 +29,7 @@ val presentationModule = module {
     viewModelOf(::HomeViewModel)
     viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get(), getOrNull<CliAccountLink>()?.configPath) }
     viewModelOf(::SessionsViewModel)
-    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: SessionRoute) -> SessionViewModel(route, get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { (route: NewSessionRoute) -> NewSessionViewModel(route, get(), get(), get()) }
     // Desktop only: its platform module provides the LocalHost these need.
     viewModel { (route: NewSessionRoute) -> LocalSessionViewModel(route, get(), get()) }

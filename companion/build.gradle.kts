@@ -47,6 +47,8 @@ kotlin {
             implementation(libs.markdown.renderer.m3)
         }
         androidMain.dependencies {
+            // The photo picker, the camera and the document picker of the session's paperclip.
+            implementation(libs.androidx.activity.compose)
             implementation(libs.ktor.client.okhttp)
             implementation(libs.coroutines.android)
         }

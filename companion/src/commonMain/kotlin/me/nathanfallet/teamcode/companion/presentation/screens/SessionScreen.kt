@@ -144,6 +144,19 @@ import me.nathanfallet.teamcode.companion.resources.session_problem
 import me.nathanfallet.teamcode.companion.resources.session_reconnecting
 import me.nathanfallet.teamcode.companion.resources.session_working
 import me.nathanfallet.teamcode.companion.resources.sessions_title
+import me.nathanfallet.teamcode.companion.presentation.components.AttachButton
+import me.nathanfallet.teamcode.companion.presentation.components.MessageFiles
+import me.nathanfallet.teamcode.companion.presentation.components.PendingFileChips
+import me.nathanfallet.teamcode.companion.presentation.components.fileProblemText
+import me.nathanfallet.teamcode.companion.presentation.files.FileDropArea
+import me.nathanfallet.teamcode.companion.presentation.files.rememberFilePicker
+import me.nathanfallet.teamcode.companion.resources.files_dismiss
+import me.nathanfallet.teamcode.companion.resources.files_drop
+import me.nathanfallet.teamcode.companion.resources.files_not_ready
+import me.nathanfallet.teamcode.companion.resources.message_files_invalid
+import me.nathanfallet.teamcode.companion.resources.message_files_too_large
+import me.nathanfallet.teamcode.companion.resources.message_files_unavailable
+import me.nathanfallet.teamcode.companion.resources.message_files_unsupported
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -162,43 +175,54 @@ fun SessionScreen(
         onStopOrDispose { viewModel.stop() }
     }
     val colors = TeamCode.colors
-    Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap()) {
-        NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts, menuItems) }
-        Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.session?.let { Summary(it, state) }
-                state.session?.let { session ->
-                    when {
-                        // Not a failure of the session: its device went quiet, and it goes on once the device is back.
-                        session.hostOffline -> Banner(stringResource(Res.string.session_host_offline, hostName(session.host)), Tone.WARN, Modifier.testTag("host-offline"))
-                        session.problemCode != null -> Banner(stringResource(Res.string.session_problem, session.problemCode), Tone.DANGER, Modifier.testTag("problem"))
+    val messaging = state.session?.let(ControlSessionUseCase::canMessage) == true
+    // The desktop takes files dropped anywhere on the session; the phones have the paperclip only.
+    FileDropArea(enabled = messaging && state.files.canAttach, onDropped = viewModel::attach, modifier = Modifier.fillMaxSize()) { dropping ->
+        Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap()) {
+            NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts, menuItems) }
+            Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.session?.let { Summary(it, state) }
+                    state.session?.let { session ->
+                        when {
+                            // Not a failure of the session: its device went quiet, and it goes on once the device is back.
+                            session.hostOffline -> Banner(stringResource(Res.string.session_host_offline, hostName(session.host)), Tone.WARN, Modifier.testTag("host-offline"))
+                            session.problemCode != null -> Banner(stringResource(Res.string.session_problem, session.problemCode), Tone.DANGER, Modifier.testTag("problem"))
+                        }
+                    }
+                    state.error?.let { error ->
+                        Banner(error, Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
+                            { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::retry, kind = ButtonKind.SECONDARY, small = true) }
+                        } else null)
+                    }
+                    state.notice?.let { notice ->
+                        val text = when (notice) {
+                            is SessionNotice.Text -> notice.text
+                            SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
+                            is SessionNotice.PermissionClosed -> stringResource(when (notice.code) {
+                                "permission_request_answered" -> Res.string.notice_permission_answered
+                                "permission_request_expired" -> Res.string.notice_permission_expired
+                                else -> Res.string.notice_permission_ended
+                            })
+                            is SessionNotice.PermissionInvalid -> if (notice.code == "permission_input_unseen") stringResource(Res.string.notice_permission_input_unseen)
+                                else stringResource(Res.string.notice_permission_invalid, notice.code ?: "400")
+                            SessionNotice.PermissionDenied -> stringResource(Res.string.notice_permission_denied)
+                            is SessionNotice.PermissionRejected -> stringResource(Res.string.notice_permission_rejected, notice.reason ?: "rejected")
+                            SessionNotice.FilesNotReady -> stringResource(Res.string.files_not_ready)
+                        }
+                        Banner(text, Tone.WARN, Modifier.testTag("notice"))
                     }
                 }
-                state.error?.let { error ->
-                    Banner(error, Tone.DANGER, Modifier.testTag("error"), action = if (!state.gone) {
-                        { TcButton(stringResource(Res.string.action_retry), onClick = viewModel::retry, kind = ButtonKind.SECONDARY, small = true) }
-                    } else null)
-                }
-                state.notice?.let { notice ->
-                    val text = when (notice) {
-                        is SessionNotice.Text -> notice.text
-                        SessionNotice.NothingRunning -> stringResource(Res.string.notice_nothing_running)
-                        is SessionNotice.PermissionClosed -> stringResource(when (notice.code) {
-                            "permission_request_answered" -> Res.string.notice_permission_answered
-                            "permission_request_expired" -> Res.string.notice_permission_expired
-                            else -> Res.string.notice_permission_ended
-                        })
-                        is SessionNotice.PermissionInvalid -> if (notice.code == "permission_input_unseen") stringResource(Res.string.notice_permission_input_unseen)
-                            else stringResource(Res.string.notice_permission_invalid, notice.code ?: "400")
-                        SessionNotice.PermissionDenied -> stringResource(Res.string.notice_permission_denied)
-                        is SessionNotice.PermissionRejected -> stringResource(Res.string.notice_permission_rejected, notice.reason ?: "rejected")
-                    }
-                    Banner(text, Tone.WARN, Modifier.testTag("notice"))
-                }
+                ConfirmingLinks { Transcript(state, memberId, viewModel, Modifier.weight(1f)) }
             }
-            ConfirmingLinks { Transcript(state, memberId, viewModel, Modifier.weight(1f)) }
+            state.session?.let { Dock(it, state, viewModel) }
         }
-        state.session?.let { Dock(it, state, viewModel) }
+        if (dropping) {
+            Box(Modifier.fillMaxSize().background(colors.shade).padding(24.dp).testTag("drop-files"), contentAlignment = Alignment.Center) {
+                Text(stringResource(Res.string.files_drop), color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(colors.panel).border(1.dp, colors.accent, RoundedCornerShape(12.dp)).padding(20.dp))
+            }
+        }
     }
 }
 
@@ -355,13 +379,24 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                         }
                     }
                 }
+                state.files.notice?.let { problem ->
+                    Banner(fileProblemText(problem), Tone.WARN, Modifier.testTag("file-notice"), action = {
+                        TcButton(stringResource(Res.string.files_dismiss), onClick = viewModel::dismissFileNotice, kind = ButtonKind.GHOST, small = true)
+                    })
+                }
+                PendingFileChips(state.files.files, onRetry = viewModel::retryFile, onRemove = viewModel::removeFile)
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Only once the server announced `cloud.files.v1`: an older server shows the composer as before.
+                    if (state.files.supported) {
+                        val picker = rememberFilePicker(onPicked = viewModel::attach, onFailed = viewModel::pickFailed)
+                        AttachButton(state.files, picker, onUnavailable = viewModel::explainFiles)
+                    }
                     TcTextField(
                         state.draft, viewModel::onDraftChange, placeholder = stringResource(Res.string.composer_hint), singleLine = false, maxLines = 6,
                         modifier = Modifier.weight(1f), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
                     )
                     TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = viewModel::send, kind = IconButtonKind.FILLED,
-                        enabled = state.draft.isNotBlank(), modifier = Modifier.testTag("send"))
+                        enabled = state.canSend, modifier = Modifier.testTag("send"))
                 }
             }
         }
@@ -377,22 +412,33 @@ private fun DockStatus(text: String, color: androidx.compose.ui.graphics.Color, 
     }
 }
 
+/** A message's refusal: the files' codes in words, any other reason as the server's code. */
+@Composable
+private fun messageRefusal(reason: String?): String = when (reason) {
+    "file_unavailable" -> stringResource(Res.string.message_files_unavailable)
+    "files_too_large" -> stringResource(Res.string.message_files_too_large)
+    "files_unsupported" -> stringResource(Res.string.message_files_unsupported)
+    "invalid_files" -> stringResource(Res.string.message_files_invalid)
+    else -> reason.orEmpty()
+}
+
 @Composable
 private fun PendingBubble(message: PendingMessage, viewModel: SessionViewModel) {
     val colors = TeamCode.colors
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("pending-${message.clientMessageId}"), horizontalAlignment = Alignment.End) {
-        Text(
+        if (message.text.isNotEmpty()) Text(
             message.text,
             modifier = Modifier.widthIn(max = 560.dp).alpha(0.7f).clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
             color = colors.onBubble,
             fontSize = 14.5.sp,
         )
+        MessageFiles(message.files, Modifier.padding(top = 4.dp))
         val failed = message.state == PendingMessage.State.FAILED || message.state == PendingMessage.State.REFUSED
         val status = when (message.state) {
             PendingMessage.State.SENDING -> stringResource(Res.string.pending_sending)
             PendingMessage.State.SENT -> stringResource(if (message.woke) Res.string.pending_woke else Res.string.pending_sent)
             PendingMessage.State.FAILED -> stringResource(Res.string.pending_failed, message.reason ?: "")
-            PendingMessage.State.REFUSED -> stringResource(Res.string.pending_refused, message.reason ?: "")
+            PendingMessage.State.REFUSED -> stringResource(Res.string.pending_refused, messageRefusal(message.reason))
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(status, fontSize = 12.sp, color = if (failed) colors.danger else colors.muted)

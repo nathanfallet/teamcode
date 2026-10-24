@@ -26,8 +26,11 @@ interface SessionRepository {
 
     /** [idempotencyKey]: a retry with the same key and body returns the session the first attempt created. */
     suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession
-    /** [clientMessageId]: a retry returns the first acknowledgement instead of queueing the message twice. */
-    suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt
+    /**
+     * [clientMessageId]: a retry returns the first acknowledgement instead of queueing the message twice. [fileIds]: files
+     * uploaded to this session and not sent yet (`cloud.files.v1`); with files, [text] may be empty.
+     */
+    suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String> = emptyList()): InputReceipt
     /** Answers a permission request; [idempotencyKey]: a retry returns the first acknowledgement, even once consumed. */
     suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt
     suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt

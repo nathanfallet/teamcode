@@ -51,6 +51,12 @@ sealed class CompanionException(message: String) : Exception(message) {
             const val SESSION_CANNOT_ENROLL = "session_cannot_enroll"
         }
     }
+    /**
+     * The server refused a file sent to a session ([code]: `file_too_large`, `upload_quota`, ...; [statusCode] 0 for a
+     * check made here, such as `file_integrity_failed`), or the file could not be read (`file_unreadable`).
+     */
+    class FileRefused(val code: String?, val statusCode: Int, val retryAfterSeconds: Long? = null) :
+        CompanionException("The file was refused" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
     class Server(val statusCode: Int, val code: String?) :
         CompanionException("The server returned HTTP $statusCode" + (code?.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + ".")
 }

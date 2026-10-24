@@ -33,7 +33,7 @@ private class NoSessions : SessionRepository {
     override suspend fun session(accountId: String, sessionId: String): CloudSession = error("unused")
     override suspend fun profiles(accountId: String): List<Profile> = error("unused")
     override suspend fun create(accountId: String, session: NewSession, idempotencyKey: String): CloudSession = error("unused")
-    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): InputReceipt = error("unused")
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String>): InputReceipt = error("unused")
     override suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt = error("unused")
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt = error("unused")
     override suspend fun pause(accountId: String, sessionId: String): CloudSession = error("unused")

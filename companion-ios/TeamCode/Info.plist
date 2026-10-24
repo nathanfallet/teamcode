@@ -17,6 +17,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo to send it to a session's agent.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

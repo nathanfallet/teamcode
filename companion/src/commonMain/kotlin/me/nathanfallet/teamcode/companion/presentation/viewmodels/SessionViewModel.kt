@@ -18,6 +18,9 @@ import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionAnswer
 import me.nathanfallet.teamcode.companion.domain.models.QuestionChoice
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.FileProblem
+import me.nathanfallet.teamcode.companion.domain.models.PickedFile
+import me.nathanfallet.teamcode.companion.domain.usecases.files.SessionFilesUseCase
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
@@ -51,6 +54,8 @@ sealed interface SessionNotice {
     data object PermissionDenied : SessionNotice
     /** An accepted answer the agent did not take (an `input` event rejected it): the request is still open. */
     data class PermissionRejected(val reason: String?) : SessionNotice
+    /** Send was tapped while a file still uploads, or one failed: wait for it, retry it or remove it. */
+    data object FilesNotReady : SessionNotice
 }
 
 /** Where an answer to a permission request stands. */
@@ -105,7 +110,12 @@ data class SessionUiState(
     val drafts: Map<String, PermissionDraft> = emptyMap(),
     /** Requests the server said were closed (`409`) before the transcript did: their card stays hidden. */
     val closedRequests: Set<String> = emptySet(),
+    /** The files of the next message (`cloud.files.v1`). */
+    val files: FilesUiState = FilesUiState(),
 ) {
+    /** Send is offered: some text or an uploaded file, and no file still uploading or failed. */
+    val canSend: Boolean get() = files.ready && (draft.isNotBlank() || files.files.isNotEmpty())
+
     /** The requests still waiting, oldest first; none while the session takes no answer (paused, pausing, ended). */
     val openRequests: List<TranscriptEvent.PermissionRequest> by lazy {
         val state = session?.state
@@ -143,9 +153,14 @@ class SessionViewModel(
     private val control: ControlSessionUseCase,
     private val accounts: AccountRepository,
     private val answerPermission: AnswerPermissionUseCase,
+    /** Null when the app does not send files: no paperclip, messages without files as before. */
+    filesUseCase: SessionFilesUseCase? = null,
 ) : ViewModel() {
     private val state = MutableStateFlow(SessionUiState())
     val uiState: StateFlow<SessionUiState> = state.asStateFlow()
+    private val files = filesUseCase?.let { useCase ->
+        SessionFiles(viewModelScope, route.accountId, route.sessionId, useCase, read = { state.value.files }, write = { change -> state.update { it.copy(files = change(it.files)) } })
+    }
     private val loading = Mutex()
     private var follow: Job? = null
     private var header: Job? = null
@@ -153,6 +168,7 @@ class SessionViewModel(
 
     fun start() {
         started = true
+        files?.load()
         // The transcript does not carry pauses, resumes or a failed pod: the header is read again while visible.
         if (header?.isActive != true) header = viewModelScope.launch {
             while (true) {
@@ -248,18 +264,36 @@ class SessionViewModel(
 
     fun onDraftChange(text: String) = state.update { it.copy(draft = text) }
 
-    /** Shows the message at once, then sends it; the draft is cleared only once it is queued for sending. */
+    /**
+     * Shows the message at once, then sends it with the uploaded files; the draft and the files are cleared only once it
+     * is queued for sending. While a file still uploads or failed, nothing is sent.
+     */
     fun send() {
+        val attached = files?.uploaded() ?: if (state.value.files.files.isEmpty()) emptyList() else null
+        if (attached == null) { state.update { it.copy(notice = SessionNotice.FilesNotReady) }; return }
         val message = try {
-            sendMessage.draft(state.value.draft.trim())
+            sendMessage.draft(state.value.draft.trim(), attached)
         } catch (error: IllegalArgumentException) {
             state.update { it.copy(notice = SessionNotice.Text(error.userMessage())) }
             return
         }
         // A new message replaces what the last action said (a refused draft, nothing to interrupt).
         state.update { it.copy(draft = "", pending = it.pending + message, notice = null) }
+        if (attached.isNotEmpty()) files?.clear()
         deliver(message)
     }
+
+    // ---- Files of the next message ------------------------------------------------------------------------------------
+
+    /** Files picked, dropped or photographed: each is checked, then uploaded at once. */
+    fun attach(picked: List<PickedFile>) { if (picked.isNotEmpty()) files?.attach(picked) }
+    /** The paperclip while files cannot be added (off for the team, or already the most a message carries). */
+    fun explainFiles() { files?.explainUnavailable() }
+    fun retryFile(localId: String) { files?.retry(localId) }
+    fun removeFile(localId: String) { files?.remove(localId) }
+    fun dismissFileNotice() { files?.dismissNotice() }
+    /** A picker failed to hand over a file (it could not be read): said like an unreadable file. */
+    fun pickFailed() = state.update { it.copy(files = it.files.copy(notice = FileProblem.Unreadable)) }
 
     /** Sends a failed message again with the same id: the server never queues it twice. */
     fun retry(clientMessageId: String) {

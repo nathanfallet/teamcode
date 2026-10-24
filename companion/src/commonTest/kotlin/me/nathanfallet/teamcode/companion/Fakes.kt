@@ -157,8 +157,8 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         calls += "create ${session.name} $idempotencyKey"
         return createResult(session)
     }
-    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
-        calls += "send $sessionId $text $clientMessageId"
+    override suspend fun send(accountId: String, sessionId: String, text: String, clientMessageId: String, fileIds: List<String>): me.nathanfallet.teamcode.companion.domain.models.InputReceipt {
+        calls += "send $sessionId $text $clientMessageId" + if (fileIds.isEmpty()) "" else " files=" + fileIds.joinToString(",")
         return sendResult(clientMessageId)
     }
     /** Each answer's acknowledgement; throw from it to fail. */

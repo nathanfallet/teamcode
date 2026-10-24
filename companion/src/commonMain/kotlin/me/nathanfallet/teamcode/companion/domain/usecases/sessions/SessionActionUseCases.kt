@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode.companion.domain.usecases.sessions
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.FilePolicy
+import me.nathanfallet.teamcode.companion.domain.models.UploadedFile
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
@@ -22,6 +24,9 @@ object MessageRules {
 
     fun valid(text: String): Boolean =
         text.isNotBlank() && text.length <= MAX_CHARS && text.none { it.isISOControl() && it != '\n' && it != '\t' && it != '\r' }
+
+    /** A message carrying files may have no text at all. */
+    fun valid(text: String, withFiles: Boolean): Boolean = (withFiles && text.isEmpty()) || valid(text)
 }
 
 /**
@@ -34,16 +39,21 @@ class SendMessageUseCase(
     private val guard: AccountGuard,
     private val ids: IdGenerator,
 ) {
-    fun draft(text: String): PendingMessage {
-        require(MessageRules.valid(text)) { "Write a message of up to ${MessageRules.MAX_CHARS} characters." }
-        return PendingMessage(ids.newId(), text, PendingMessage.State.SENDING)
+    /** [files]: uploaded files the message carries; with files, [text] may be empty. */
+    fun draft(text: String, files: List<UploadedFile> = emptyList()): PendingMessage {
+        require(files.size <= FilePolicy.MAX_FILES) { "A message carries ${FilePolicy.MAX_FILES} files at most." }
+        val sent = if (files.isNotEmpty() && text.isBlank()) "" else text
+        require(MessageRules.valid(sent, withFiles = files.isNotEmpty())) { "Write a message of up to ${MessageRules.MAX_CHARS} characters." }
+        return PendingMessage(ids.newId(), sent, PendingMessage.State.SENDING, files = files)
     }
 
     /** Sends [message] (a new draft or a failed one being retried); never throws except for cancellation. */
     suspend operator fun invoke(accountId: String, sessionId: String, message: PendingMessage): PendingMessage = try {
         val receipt = guard(accountId) {
-            if (Features.MESSAGES !in features.features(accountId)) throw CompanionException.Unsupported(Features.MESSAGES)
-            sessions.send(accountId, sessionId, message.text, message.clientMessageId)
+            val announced = features.features(accountId)
+            if (Features.MESSAGES !in announced) throw CompanionException.Unsupported(Features.MESSAGES)
+            if (message.files.isNotEmpty() && Features.FILES !in announced) throw CompanionException.Unsupported(Features.FILES)
+            sessions.send(accountId, sessionId, message.text, message.clientMessageId, message.files.map { it.id })
         }
         message.received(receipt)
     } catch (error: kotlinx.coroutines.CancellationException) {

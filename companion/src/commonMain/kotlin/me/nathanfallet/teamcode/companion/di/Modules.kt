@@ -48,6 +48,9 @@ import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.LoadArtifact
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.OpenArtifactUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.links.ResolveLinkUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteArtifactRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.SessionFileRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.files.SessionFilesUseCase
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionFileRepository
 import org.koin.dsl.module
 
 /** Implementations; the platform module adds Settings, the CredentialStore, the HTTP engine and PlatformInfo. */
@@ -66,6 +69,7 @@ val infrastructureModule = module {
     single<SessionRepository> { RemoteSessionRepository(get(), get()) }
     single<TranscriptRepository> { RemoteTranscriptRepository(get(), get()) }
     single<ArtifactRepository> { RemoteArtifactRepository(get()) }
+    single<SessionFileRepository> { RemoteSessionFileRepository(get()) }
 }
 
 val domainModule = module {
@@ -92,4 +96,5 @@ val domainModule = module {
     single { GetArtifactUseCase(get(), get(), get()) }
     single { OpenArtifactUseCase(get(), get(), get(), get()) }
     single { ResolveLinkUseCase(get()) }
+    single { SessionFilesUseCase(get(), get(), get(), get()) }
 }
