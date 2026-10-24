@@ -150,6 +150,41 @@ class NewSessionViewModelTest {
         assertEquals(PermissionMode.BYPASS, next.uiState.value.permissionMode)
     }
 
+    @Test fun aDeviceStillListedButOfflineForItsFoldersIsDroppedWithoutReadingAgainAndAgain() = runTest(dispatcher) {
+        // Its presence lags: the list still names it while its folders answer that it is offline.
+        val devices = FakeDeviceRepository().apply {
+            devicesResult = { listOf(hostDevice("d1", "Ada's Mac")) }
+            foldersResult = { DeviceFolders(false, emptyList()) }
+        }
+        val model = viewModel(FakeSessionRepository(), onDevices, devices)
+        settle(); settle(); settle()
+        assertEquals(listOf("devices", "folders d1"), devices.calls)
+        val state = model.uiState.value
+        assertEquals(emptyList(), state.devices); assertNull(state.deviceId); assertFalse(state.loadingDevices); assertFalse(state.loadingFolders)
+        assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error)
+        // Refresh reads it again, once.
+        model.reloadDevices(); settle()
+        assertEquals(listOf("devices", "folders d1", "devices", "folders d1"), devices.calls)
+    }
+
+    @Test fun aClearedNameIsTakenFromTheFolderAgainAndAnotherDeviceClearsTheFoldersName() = runTest(dispatcher) {
+        val devices = FakeDeviceRepository().apply {
+            devicesResult = { listOf(hostDevice("d1"), hostDevice("d2")) }
+            foldersResult = { id -> DeviceFolders(true, listOf(DeviceFolder("f-$id", "app-$id", null), DeviceFolder("g-$id", "web-$id", null))) }
+        }
+        val model = viewModel(FakeSessionRepository(), onDevices, devices)
+        settle()
+        model.onDevice("d1"); settle()
+        model.onFolder("f-d1")
+        assertEquals("app-d1", model.uiState.value.name)
+        model.onDevice("d2"); settle()
+        // No folder chosen on the other device: the first device's folder no longer names the session.
+        assertEquals("", model.uiState.value.name)
+        model.onName("Mine"); model.onName("")
+        model.onFolder("g-d2")
+        assertEquals("web-d2", model.uiState.value.name)
+    }
+
     @Test fun aDeviceGoneOfflineIsRefusedSaidAndDroppedAndARetryKeepsItsKey() = runTest(dispatcher) {
         val sessions = FakeSessionRepository()
         var online = listOf(hostDevice("d1", "Ada's Mac"))

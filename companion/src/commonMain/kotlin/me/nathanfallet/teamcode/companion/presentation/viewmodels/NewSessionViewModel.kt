@@ -117,7 +117,8 @@ class NewSessionViewModel(
     fun onTarget(target: SessionTarget) {
         if (target == SessionTarget.DEVICE && !state.value.onDevices) return
         edit { it.copy(target = target) }
-        if (target == SessionTarget.DEVICE && state.value.devices == null && !state.value.loadingDevices) reloadDevices()
+        // Read again at each switch: a device listed earlier may have gone offline since.
+        if (target == SessionTarget.DEVICE && !state.value.loadingDevices) reloadDevices()
     }
 
     /**
@@ -147,8 +148,9 @@ class NewSessionViewModel(
 
     fun onDevice(id: String) {
         if (state.value.creating || state.value.devices?.none { it.id == id } != false) return
-        if (id == state.value.deviceId && state.value.folders != null) return
-        edit { it.copy(deviceId = id, folders = null, folderId = null) }
+        // The same device again only reads its folders again after they failed.
+        if (id == state.value.deviceId && state.value.folders != null && state.value.error == null) return
+        edit { it.copy(deviceId = id, folders = null).withFolder(null) }
         loadFoldersOf(id)
     }
 
@@ -166,9 +168,11 @@ class NewSessionViewModel(
                 throw error
             } catch (error: Exception) {
                 if (state.value.deviceId != deviceId) return@launch
-                change { it.copy(loadingFolders = false, folders = it.folders ?: emptyList(), error = error.userMessage()) }
-                // The device went offline or is gone: the list no longer offers it.
-                if (error.isDeviceGone()) reloadDevices(keepError = true)
+                // The device went offline or is gone: the list no longer offers it. Dropped here without reading the list
+                // again, which could still name it (its presence lags) and lead back here.
+                if (error.isDeviceGone()) change {
+                    it.copy(devices = it.devices?.filter { device -> device.id != deviceId }, deviceId = null, folders = null, loadingFolders = false, error = error.userMessage()).withFolder(null)
+                } else change { it.copy(loadingFolders = false, folders = it.folders ?: emptyList(), error = error.userMessage()) }
             }
         }
     }
@@ -181,21 +185,22 @@ class NewSessionViewModel(
     fun onAgent(value: String) = edit { it.copy(agent = value) }
     fun onPermissionMode(mode: PermissionMode) = edit { it.copy(permissionMode = mode) }
     fun onProfile(id: String) = edit { it.copy(profileId = id) }
-    fun onName(value: String) = edit { it.copy(name = value, nameEdited = true) }
+    // A name cleared lets the folder name the session again.
+    fun onName(value: String) = edit { it.copy(name = value, nameEdited = value.isNotBlank()) }
     fun onModel(value: String) = edit { it.copy(model = value) }
     fun onEffort(value: String) = edit { it.copy(effort = value) }
     fun onMessage(value: String) = edit { it.copy(message = value) }
 
-    private fun edit(change: (NewSessionUiState) -> NewSessionUiState) {
+    private fun edit(update: (NewSessionUiState) -> NewSessionUiState) {
         if (state.value.creating) return
-        change { change(it).copy(error = null) }
+        change { update(it).copy(error = null) }
     }
 
     /** Applies [change]; what is sent changed (a field, the first message now announced, a device dropped): a new creation. */
     private fun change(update: (NewSessionUiState) -> NewSessionUiState) {
         val before = state.value
         val after = update(before)
-        if (after.form() != before.form()) key = ids.newId()
+        if (after.sent() != before.sent()) key = ids.newId()
         state.value = after
     }
 
@@ -205,10 +210,9 @@ class NewSessionViewModel(
         change { it.copy(creating = true, error = null) }
         viewModelScope.launch {
             try {
-                val session = when (val form = current.form()) {
-                    is NewDeviceSession -> createOnDevice(route.accountId, form, key)
-                    is NewSession -> createSession(route.accountId, form, key)
-                    else -> error("Unknown form.")
+                val session = when (current.target) {
+                    SessionTarget.DEVICE -> createOnDevice(route.accountId, current.deviceForm(), key)
+                    SessionTarget.CLOUD -> createSession(route.accountId, current.cloudForm(), key)
                 }
                 change { it.copy(creating = false, created = session) }
             } catch (error: CancellationException) {
@@ -225,17 +229,22 @@ class NewSessionViewModel(
 
     private fun NewSessionUiState.withFolder(id: String?): NewSessionUiState {
         val folder = folders?.firstOrNull { it.id == id }
-        return copy(folderId = folder?.id, name = if (nameEdited || folder == null) name else folder.name)
+        // Unless the member named it, the session takes the folder's name, and none without a folder.
+        return copy(folderId = folder?.id, name = if (nameEdited) name else folder?.name.orEmpty())
     }
 
     /**
      * The form as sent: an edit that changes nothing sent (a trailing space) keeps the key, so a retry never creates twice.
      * The permission mode is kept by the device form only: a cloud session has none.
      */
-    private fun NewSessionUiState.form(): Any = when (target) {
-        SessionTarget.CLOUD -> NewSession(name, profileId.orEmpty(), model, effort, message.takeIf { acceptsMessage }).normalized()
-        SessionTarget.DEVICE -> NewDeviceSession(name, deviceId.orEmpty(), folderId.orEmpty(), agent, model, effort, permissionMode, message.takeIf { acceptsMessage }).normalized()
+    private fun NewSessionUiState.sent(): Any = when (target) {
+        SessionTarget.CLOUD -> cloudForm()
+        SessionTarget.DEVICE -> deviceForm()
     }
+
+    private fun NewSessionUiState.cloudForm() = NewSession(name, profileId.orEmpty(), model, effort, message.takeIf { acceptsMessage }).normalized()
+    private fun NewSessionUiState.deviceForm() =
+        NewDeviceSession(name, deviceId.orEmpty(), folderId.orEmpty(), agent, model, effort, permissionMode, message.takeIf { acceptsMessage }).normalized()
 
     private fun Exception.isDeviceGone() = this is CompanionException.DeviceRefused && (code == CompanionException.DeviceRefused.DEVICE_OFFLINE || code == DEVICE_NOT_FOUND)
 

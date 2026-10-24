@@ -79,6 +79,8 @@ class DeviceSessionUseCasesTest {
         }
         sessions.createOnDeviceResult = { throw CompanionException.Server(500, "internal") }
         assertFailsWith<CompanionException.Server> { create("a1", form, "k") }
+        // No session started with Bypass: the next launch does not start from it.
+        assertEquals(PermissionMode.ASK, preferences.permissionMode)
     }
 
     @Test fun aFormWithoutDeviceFolderOrKnownAgentIsNeverSent() = runTest {

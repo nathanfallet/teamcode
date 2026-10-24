@@ -49,11 +49,11 @@ class LocalSessionViewModel(
     private val start: StartLocalSessionUseCase,
     private val host: LocalHost,
     /** Keeps the permission mode of the last launch, here and on another device alike. */
-    private val preferences: PreferencesRepository? = null,
+    private val preferences: PreferencesRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(
         (route.directory?.let { LocalSessionUiState(directory = it, name = StartLocalSessionUseCase.defaultName(it)) } ?: LocalSessionUiState())
-            .copy(bypassPermissions = preferences?.permissionMode == PermissionMode.BYPASS),
+            .copy(bypassPermissions = preferences.permissionMode == PermissionMode.BYPASS),
     )
     val uiState: StateFlow<LocalSessionUiState> = state.asStateFlow()
 
@@ -120,8 +120,9 @@ class LocalSessionViewModel(
         viewModelScope.launch {
             try {
                 val request = LocalSessionRequest(current.directory, current.agent, current.name, current.model, current.effort, current.bypassPermissions)
-                preferences?.setPermissionMode(if (current.bypassPermissions) PermissionMode.BYPASS else PermissionMode.ASK)
                 val started = start(route.accountId, request, current.message)
+                // Kept once the session started with it, as for a session on another device.
+                preferences.setPermissionMode(if (current.bypassPermissions) PermissionMode.BYPASS else PermissionMode.ASK)
                 state.update { it.copy(starting = false, started = started) }
             } catch (error: CancellationException) {
                 throw error

@@ -183,7 +183,9 @@ private fun DeviceFields(state: NewSessionUiState, viewModel: NewSessionViewMode
         if (!devices.isNullOrEmpty()) Group(Modifier.selectableGroup()) {
             devices.forEachIndexed { index, device ->
                 if (index > 0) GroupDivider()
-                Option(deviceName(device), systemOf(device.platform, device.osVersion), selected = state.deviceId == device.id, tag = "device-${device.id}") { viewModel.onDevice(device.id) }
+                val system = systemOf(device.platform, device.osVersion)
+                val subtitle = if (device.current) listOfNotNull(stringResource(Res.string.new_session_device_this), system).joinToString(" · ") else system
+                Option(device.name, subtitle, selected = state.deviceId == device.id, tag = "device-${device.id}") { viewModel.onDevice(device.id) }
             }
         }
     }
@@ -225,8 +227,8 @@ private fun PermissionFields(state: NewSessionUiState, viewModel: NewSessionView
     }
 }
 
-@Composable
-private fun deviceName(device: HostDevice): String = if (device.current) stringResource(Res.string.new_session_device_this) else device.name
+/** The device's own name, also in sentences ("Start on Ada's Mac"); "This device" marks it in the list only. */
+private fun deviceName(device: HostDevice): String = device.name
 
 @Composable
 private fun Option(title: String, subtitle: String?, selected: Boolean, tag: String, onClick: () -> Unit) {

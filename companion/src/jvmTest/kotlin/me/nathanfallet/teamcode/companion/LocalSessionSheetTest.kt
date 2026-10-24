@@ -21,6 +21,8 @@ import me.nathanfallet.teamcode.companion.presentation.screens.LocalSessionSheet
 import me.nathanfallet.teamcode.companion.presentation.screens.NewSessionChooserSheet
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCodeTheme
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionViewModel
+import com.russhwolf.settings.MapSettings
+import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsPreferencesRepository
 import kotlin.test.*
 
 /** "New session on this device" on the desktop target: the choice, what the CLI needs first, the form. */
@@ -36,7 +38,7 @@ class LocalSessionSheetTest {
     private fun model(host: Host): LocalSessionViewModel {
         val features = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS)
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))
-        return LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, features, SendMessageUseCase(FakeSessionRepository(), features, guard, SequenceIds())), host)
+        return LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, features, SendMessageUseCase(FakeSessionRepository(), features, guard, SequenceIds())), host, SettingsPreferencesRepository(MapSettings()))
     }
 
     @Test fun theChoiceOpensEitherForm() = runComposeUiTest {

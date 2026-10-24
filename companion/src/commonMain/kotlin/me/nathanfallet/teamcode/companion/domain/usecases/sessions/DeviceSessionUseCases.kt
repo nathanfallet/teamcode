@@ -37,7 +37,7 @@ class LoadDeviceFoldersUseCase(private val devices: DeviceRepository, private va
 
 /**
  * Starts a session on one of the member's devices, in one of its folders, with the permission mode chosen now, which is
- * kept for the next launch. The caller keeps [idempotencyKey] for the form, as for a cloud session. The server's
+ * kept for the next launch once the server created the session. The caller keeps [idempotencyKey] for the form, as for a cloud session. The server's
  * refusals about the device (offline, folder no longer offered, ...) are [CompanionException.DeviceRefused].
  */
 class CreateDeviceSessionUseCase(
@@ -59,8 +59,10 @@ class CreateDeviceSessionUseCase(
             require(MessageRules.valid(message)) { "Write a first message of up to ${MessageRules.MAX_CHARS} characters." }
             if (Features.INITIAL_MESSAGE !in announced) throw CompanionException.Unsupported(Features.INITIAL_MESSAGE)
         }
+        val session = deviceRefusals { sessions.createOnDevice(accountId, sent, idempotencyKey) }
+        // Kept once a session started with it: a refused launch leaves the previous choice.
         preferences.setPermissionMode(sent.permissionMode)
-        deviceRefusals { sessions.createOnDevice(accountId, sent, idempotencyKey) }
+        session
     }
 
     private companion object {

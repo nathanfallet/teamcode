@@ -31,6 +31,7 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRout
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LocalSessionViewModel
 import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsPreferencesRepository
+import com.russhwolf.settings.MapSettings
 import kotlin.test.*
 
 private class FakeLocalHost(var availability: LocalAvailability = LocalAvailability.Ready) : LocalHost {
@@ -66,7 +67,7 @@ class LocalSessionViewModelTest {
 
     @Test fun theFolderNamesTheSessionAndTheFirstMessageGoesThroughTheServer() = runTest(dispatcher) {
         val host = FakeLocalHost()
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         assertEquals(LocalAvailability.Ready, model.uiState.value.availability)
         assertFalse(model.uiState.value.canStart)
@@ -90,7 +91,7 @@ class LocalSessionViewModelTest {
     }
 
     @Test fun thePermissionModeOfTheLastLaunchComesBackOnThisDeviceToo() = runTest(dispatcher) {
-        val settings = com.russhwolf.settings.MapSettings()
+        val settings = MapSettings()
         val host = FakeLocalHost()
         val first = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(settings))
         settle()
@@ -106,7 +107,7 @@ class LocalSessionViewModelTest {
     @Test fun aFirstMessageThatFailsIsSaidAndTheSessionStillOpens() = runTest(dispatcher) {
         val host = FakeLocalHost()
         sessions.sendResult = { throw CompanionException.Unreachable() }
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         model.chooseDirectory(); model.onMessage("Hello"); settle()
         model.create(); settle()
@@ -116,7 +117,7 @@ class LocalSessionViewModelTest {
 
     @Test fun whatTheCliNeedsIsShownAndCheckedAgain() = runTest(dispatcher) {
         val host = FakeLocalHost(LocalAvailability.CliMissing("curl -fsSL https://example/install.sh | sh"))
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         assertIs<LocalAvailability.CliMissing>(model.uiState.value.availability)
         model.chooseDirectory(); settle()
@@ -128,14 +129,14 @@ class LocalSessionViewModelTest {
 
     @Test fun aServerWithoutRemoteSessionsIsSaidBeforeTheCliIsLookedFor() = runTest(dispatcher) {
         val host = FakeLocalHost(LocalAvailability.CliMissing("x"))
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, FakeFeatures(), SendMessageUseCase(sessions, FakeFeatures(), guard, SequenceIds())), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, FakeFeatures(), SendMessageUseCase(sessions, FakeFeatures(), guard, SequenceIds())), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         assertEquals(LocalAvailability.ServerUnsupported, model.uiState.value.availability)
     }
 
     @Test fun theClisRefusalIsShownAsIs() = runTest(dispatcher) {
         val host = FakeLocalHost().apply { failure = LocalHostException("Choose a project directory: /Users/ada itself.") }
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         model.chooseDirectory(); settle()
         model.create(); settle()
@@ -151,7 +152,7 @@ class LocalSessionViewModelTest {
 
     @Test fun installingTheCliShowsItsOutputThenChecksAgain() = runTest(dispatcher) {
         val host = FakeLocalHost(LocalAvailability.CliMissing("curl … | sh", canInstall = true))
-        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         assertIs<LocalAvailability.CliMissing>(model.uiState.value.availability)
         model.installCli(); settle()
@@ -162,7 +163,7 @@ class LocalSessionViewModelTest {
         val failing = FakeLocalHost(LocalAvailability.CliMissing("curl … | sh", canInstall = true)).apply {
             installFailure = LocalHostException("The downloaded install script is not the one this app was built with. Nothing was run.")
         }
-        val refused = LocalSessionViewModel(NewSessionRoute("cli"), useCase(failing), failing)
+        val refused = LocalSessionViewModel(NewSessionRoute("cli"), useCase(failing), failing, SettingsPreferencesRepository(MapSettings()))
         settle()
         refused.installCli(); settle()
         assertEquals("The downloaded install script is not the one this app was built with. Nothing was run.", refused.uiState.value.error)
@@ -172,7 +173,7 @@ class LocalSessionViewModelTest {
 
     @Test fun aFolderGivenByTeamcodeUiIsChosenAlready() = runTest(dispatcher) {
         val host = FakeLocalHost()
-        val model = LocalSessionViewModel(NewSessionRoute("cli", "/Users/ada/git/paywall"), useCase(host), host)
+        val model = LocalSessionViewModel(NewSessionRoute("cli", "/Users/ada/git/paywall"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
         settle()
         assertEquals("/Users/ada/git/paywall", model.uiState.value.directory)
         assertEquals("paywall", model.uiState.value.name)
