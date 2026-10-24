@@ -46,6 +46,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainTab
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.GitHubLinkScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SubscriptionAccountsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
 import me.nathanfallet.teamcode.companion.presentation.screens.TransfersScreen
@@ -60,6 +61,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactViewMo
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.RootViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.GitHubLinkViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
@@ -177,6 +179,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onAddAccount = { navController.navigate(AddServerRoute) },
                 onOpenTransfers = { accountId -> navController.navigate(TransfersRoute(accountId)) },
                 onOpenSubscriptions = { accountId -> navController.navigate(SubscriptionAccountsRoute(accountId)) },
+                onOpenGitHub = { accountId -> navController.navigate(GitHubLinkRoute(accountId)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -198,6 +201,11 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val route = entry.toRoute<SubscriptionAccountsRoute>()
             val viewModel: SubscriptionAccountsViewModel = koinViewModel { parametersOf(route) }
             SubscriptionAccountsScreen(viewModel, onBack = { navController.popBackStack() })
+        }
+        composable<GitHubLinkRoute> { entry ->
+            val route = entry.toRoute<GitHubLinkRoute>()
+            val viewModel: GitHubLinkViewModel = koinViewModel { parametersOf(route) }
+            GitHubLinkScreen(viewModel, onBack = { navController.popBackStack() })
         }
         composable<TransfersRoute> { entry ->
             val route = entry.toRoute<TransfersRoute>()
@@ -284,5 +292,6 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<ArtifactsRoute>() -> toRoute<ArtifactsRoute>()
     destination.hasRoute<TransfersRoute>() -> toRoute<TransfersRoute>()
     destination.hasRoute<SubscriptionAccountsRoute>() -> toRoute<SubscriptionAccountsRoute>()
+    destination.hasRoute<GitHubLinkRoute>() -> toRoute<GitHubLinkRoute>()
     else -> null
 }

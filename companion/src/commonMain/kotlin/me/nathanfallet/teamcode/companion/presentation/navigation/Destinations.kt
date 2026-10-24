@@ -42,6 +42,10 @@ data class TransfersRoute(val accountId: String)
 @Serializable
 data class SubscriptionAccountsRoute(val accountId: String)
 
+/** The member's GitHub link on an account's server: which account is linked, and linking with GitHub's device flow. */
+@Serializable
+data class GitHubLinkRoute(val accountId: String)
+
 /** The content panel of the wide layout: the active account's full session list, with its filters. */
 @Serializable
 object SessionsListRoute

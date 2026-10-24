@@ -26,4 +26,6 @@ object Features {
     const val DEVICE_SESSIONS = "cloud.sessions.remote.daemon.v1"
     /** Files sent with messages: `POST …/files`, then their ids in the message's `fileIds`. */
     const val FILES = "cloud.files.v1"
+    /** The member's GitHub link (`/github/link`), offered with cloud sessions and kept when they are off. */
+    const val GITHUB_LINK = "github.link.v1"
 }
