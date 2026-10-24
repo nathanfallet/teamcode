@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Render both database modes and check deployment contracts without a Kubernetes connection."""
+import json
 import subprocess
+import tempfile
 import yaml
 
 chart = 'helm/teamcode'
@@ -31,6 +33,26 @@ for external in (False, True):
     assert any(doc['kind'] == 'StatefulSet' for doc in documents) != external
     assert any(doc['kind'] == 'HorizontalPodAutoscaler' for doc in documents) == external
     assert ('replicas' not in deployment['spec']) == external
+    # Session pods' network policy: on by default, internet to public addresses only (the server applies it).
+    assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY']['value'] == 'true'
+    assert env['TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET']['value'] == 'true'
+    assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS']['value'] == ''
+    assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']['value']) == []
+    policies = [doc for doc in documents if doc['kind'] == 'NetworkPolicy']
+    if external:
+        assert not policies, 'No MySQL policy without the bundled MySQL'
+    else:
+        # The bundled MySQL accepts only this release's server pods, on 3306.
+        mysql = next(doc for doc in documents if doc['kind'] == 'StatefulSet')
+        policy = policies[0]
+        assert len(policies) == 1 and policy['spec']['policyTypes'] == ['Ingress']
+        assert policy['spec']['podSelector']['matchLabels'].items() <= mysql['spec']['template']['metadata']['labels'].items()
+        (rule,) = policy['spec']['ingress']
+        assert rule['ports'] == [{'protocol': 'TCP', 'port': 3306}]
+        (peer,) = rule['from']
+        assert set(peer) == {'podSelector'}
+        assert peer['podSelector']['matchLabels'].items() <= deployment['spec']['template']['metadata']['labels'].items()
+        assert not peer['podSelector']['matchLabels'].items() <= mysql['spec']['template']['metadata']['labels'].items()
     if external:
         ingress = next(doc for doc in documents if doc['kind'] == 'Ingress')
         assert ingress['metadata']['annotations']['nginx.ingress.kubernetes.io/proxy-buffering'] == 'off'
@@ -39,7 +61,20 @@ for external in (False, True):
         annotations = ingress['metadata']['annotations']
         assert not any('snippet' in key or 'hide-headers' in key or 'custom-headers' in key for key in annotations), annotations
         assert 'content-security-policy' not in yaml.safe_dump(ingress).lower()
+# The operator's session egress settings reach the server as written.
+values = {'publicUrl': 'https://teamcode.example.org', 'mysql': {'networkPolicy': {'enabled': False}}, 'cloudSessions': {'networkPolicy': {
+    'enabled': True, 'internet': False, 'blockedCidrs': ['203.0.113.0/24', '2001:db8::/32'],
+    'extraEgress': [{'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ingress-nginx'}}}], 'ports': [{'protocol': 'TCP', 'port': 443}]}]}}}
+with tempfile.NamedTemporaryFile('w', suffix='.yaml') as handle:
+    yaml.safe_dump(values, handle)
+    handle.flush()
+    documents = [doc for doc in yaml.safe_load_all(subprocess.run(['helm', 'template', 'test', chart, '-f', handle.name], check=True, capture_output=True, text=True).stdout) if doc]
+env = {item['name']: item['value'] for item in next(doc for doc in documents if doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env'] if 'value' in item}
+assert env['TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET'] == 'false'
+assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == '203.0.113.0/24,2001:db8::/32'
+assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']) == values['cloudSessions']['networkPolicy']['extraEgress']
+assert not any(doc['kind'] == 'NetworkPolicy' for doc in documents), 'mysql.networkPolicy.enabled=false renders no policy'
 # Misconfigured installations must fail at render time.
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0
-print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes and draining.')
+print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes, draining, the MySQL network policy and the session egress settings.')

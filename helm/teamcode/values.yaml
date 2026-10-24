@@ -98,6 +98,26 @@ topologySpreadConstraints: []
 extraEnv: []
 javaToolOptions: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
 
+# Network access of cloud session pods. Before every session pod, the server applies the NetworkPolicy
+# `teamcode-sessions` to the session namespace (it needs `patch` on networkpolicies there): no ingress, egress to DNS
+# and, with `internet`, to public addresses only (link-local and cloud metadata, RFC 1918, carrier-grade NAT and
+# unique-local ranges are excluded). An operator setting on purpose: a dashboard administrator cannot widen it.
+# See docs/cloud-sessions.md#session-network-policy.
+cloudSessions:
+  networkPolicy:
+    # false leaves session pods unrestricted unless the cluster's own policies apply; not recommended.
+    enabled: true
+    # false: only DNS and `extraEgress` (the TeamCode server, git hosts, a registry mirror or proxy must be listed).
+    internet: true
+    # Further CIDRs removed from the internet rule, for a pod, service or node range outside the private ranges.
+    blockedCidrs: []
+    # NetworkPolicy egress rules appended verbatim (`to` and `ports` only; an ipBlock may not reach link-local), for
+    # example the ingress controller when session pods reach the server URL inside the cluster:
+    # - to:
+    #     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+    #   ports: [{protocol: TCP, port: 443}]
+    extraEgress: []
+
 # Optional single MySQL instance for a self-contained installation, using the tested official 8.4 image.
 # For production HA, disable this and supply an externally managed MySQL 8.4 JDBC URL below.
 mysql:
@@ -105,6 +125,9 @@ mysql:
   image: mysql:8.4
   database: teamcode
   jdbcUrl: ""
+  # Ingress to the bundled MySQL only from the TeamCode server pods of this release, on 3306.
+  networkPolicy:
+    enabled: true
   persistence:
     size: 10Gi
     storageClass: ""

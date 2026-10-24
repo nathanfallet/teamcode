@@ -46,6 +46,8 @@ data class KubernetesPodOptions(
     val runAsUser: Long = 1000,
     /** The agent's UID: it must not be the runner's, whose files and projected token it must never read. */
     val agentRunAsUser: Long = 1001,
+    /** Applied to the session namespace before every pod; set by the operator, see [SessionNetworkPolicy]. */
+    val network: SessionNetworkPolicy = SessionNetworkPolicy(),
 ) {
     init {
         // The runner refuses plain HTTP except on loopback, and a pod's loopback is not the server.
@@ -148,8 +150,25 @@ class KubernetesClusterPort(
         // PersistentVolumes are cluster-wide and carry no TeamCode label: read them all, with a larger page budget.
         list(clusterId, "/api/v1/persistentvolumes", null, maxPages = 200).map(::volume).filter { it.managed && (it.phase == "Released" || it.phase == "Failed") }
 
+    /**
+     * Applies the namespace's [SessionNetworkPolicy] first, on every pod, so a policy deleted or changed by hand is
+     * restored before the next pod starts; a refusal creates no pod ([SessionNetworkPolicyRefusedException]).
+     */
     override suspend fun createPod(clusterId: String, request: PodRequest) {
-        create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request))
+        val pods = options()
+        if (pods.network.enabled) applyNetworkPolicy(clusterId, request.namespace, pods.network)
+        create(clusterId, "/api/v1/namespaces/${segment(request.namespace)}/pods", podManifest(request, pods))
+    }
+
+    /**
+     * Server-side apply (`PATCH` with `application/apply-patch+yaml`, field manager `teamcode`, forced): creates the
+     * policy or replaces the fields TeamCode owns in one idempotent call. Needs `patch` on `networkpolicies`.
+     */
+    private suspend fun applyNetworkPolicy(clusterId: String, namespace: String, policy: SessionNetworkPolicy) {
+        val path = "/apis/networking.k8s.io/v1/namespaces/${segment(namespace)}/networkpolicies/${SessionNetworkPolicy.NAME}?fieldManager=teamcode&force=true"
+        val response = call(clusterId, HttpMethod.Patch, path, policy.manifest(), contentType = APPLY_PATCH)
+        if (response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.Forbidden) throw SessionNetworkPolicyRefusedException()
+        if (!response.status.isSuccess()) throw ClusterApiException(response.status.value)
     }
 
     override suspend fun pod(clusterId: String, namespace: String, name: String): PodObservation? =
@@ -365,13 +384,14 @@ class KubernetesClusterPort(
         throw ClusterApiException(507) // More objects than one pass may read; refuse rather than act on a partial list.
     }
 
-    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?, accept: String = JSON): HttpResponse {
+    private suspend fun call(clusterId: String, method: HttpMethod, path: String, body: JsonObject?, accept: String = JSON,
+                             contentType: ContentType = ContentType.Application.Json): HttpResponse {
         val client = client(clusterId)
         return client.http.request(client.connection.apiUrl.trimEnd('/') + path) {
             this.method = method
             bearerAuth(client.connection.token)
             header(HttpHeaders.Accept, accept)
-            if (body != null) { contentType(ContentType.Application.Json); setBody(body.toString()) }
+            if (body != null) { contentType(contentType); setBody(body.toString()) }
         }
     }
     private suspend fun parse(response: HttpResponse): JsonObject {
@@ -468,6 +488,8 @@ class KubernetesClusterPort(
         private const val MAX_RESPONSE_CHARS = 16 * 1024 * 1024
         private val safeReason = Regex("[A-Za-z]{1,64}")
         private const val JSON = "application/json"
+        /** JSON is YAML, so the manifest is sent as built. */
+        private val APPLY_PATCH = ContentType("application", "apply-patch+yaml")
         /** Metadata only, with no fallback to a full list: the API server answers `406` rather than send secret data. */
         internal const val METADATA_ONLY = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
         private val DEFAULT_CLASS_ANNOTATIONS = listOf("storageclass.kubernetes.io/is-default-class", "storageclass.beta.kubernetes.io/is-default-class")

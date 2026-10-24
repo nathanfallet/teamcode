@@ -145,7 +145,9 @@ fun main() {
     val artifactObjects = me.nathanfallet.teamcode.infrastructure.artifacts.S3ObjectStore(artifactHttp)
     // Cloud sessions are configured on the dashboard; the former variables only seed an empty database. Files sent to
     // sessions use the artifact bucket.
-    val cloud = database?.let { CloudServer(it, cipher!!, origin, artifactObjects) }?.also {
+    // The session pods' network policy is the operator's: deployment variables only, an invalid value stops the start.
+    val sessionNetwork = me.nathanfallet.teamcode.infrastructure.cloud.SessionNetworkPolicy.fromEnvironment(System::getenv)
+    val cloud = database?.let { CloudServer(it, cipher!!, origin, artifactObjects, sessionNetwork) }?.also {
         // The seed is a convenience: a database error here is reported and the stored runtime is reread later.
         try { runBlocking { it.start(initialCloudRuntime()) } }
         catch (error: CancellationException) { throw error }

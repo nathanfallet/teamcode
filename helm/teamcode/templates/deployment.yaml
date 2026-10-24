@@ -80,6 +80,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: encryption-key
+            - name: TEAMCODE_CLOUD_SESSION_NETWORK_POLICY
+              value: {{ .Values.cloudSessions.networkPolicy.enabled | quote }}
+            - name: TEAMCODE_CLOUD_SESSION_EGRESS_INTERNET
+              value: {{ .Values.cloudSessions.networkPolicy.internet | quote }}
+            - name: TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS
+              value: {{ join "," .Values.cloudSessions.networkPolicy.blockedCidrs | quote }}
+            - name: TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA
+              value: {{ toJson .Values.cloudSessions.networkPolicy.extraEgress | quote }}
             - name: JAVA_TOOL_OPTIONS
               value: {{ .Values.javaToolOptions | quote }}
             {{- with .Values.extraEnv }}

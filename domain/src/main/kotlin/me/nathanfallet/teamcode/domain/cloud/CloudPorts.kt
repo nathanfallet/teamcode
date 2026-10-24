@@ -126,6 +126,12 @@ data class ManagedObjects(val pods: List<PodObservation>, val claims: List<Strin
 data class TokenIdentity(val namespace: String, val serviceAccount: String, val podName: String?, val podUid: String?)
 
 /**
+ * The cluster refused the session namespace's network policy (HTTP 401 or 403): the service account may not manage
+ * NetworkPolicies there. No pod is created without the policy, so the start fails with `network_policy_refused`.
+ */
+class SessionNetworkPolicyRefusedException : Exception("The cluster's service account may not apply the session network policy.")
+
+/**
  * The cluster boundary. All calls are idempotent: creating an existing object succeeds and deleting a missing
  * one succeeds. No implementation may hold a database transaction while calling the cluster.
  */
@@ -137,6 +143,10 @@ interface ClusterPort {
     suspend fun volume(clusterId: String, name: String): VolumeObservation?
     /** Released or failed volumes whose claim was a TeamCode workspace. */
     suspend fun orphanedVolumes(clusterId: String): List<VolumeObservation>
+    /**
+     * Creates the session pod. An implementation that restricts session network access applies that restriction
+     * first, and throws [SessionNetworkPolicyRefusedException] without creating the pod when the cluster refuses it.
+     */
     suspend fun createPod(clusterId: String, request: PodRequest)
     suspend fun pod(clusterId: String, namespace: String, name: String): PodObservation?
     suspend fun deletePod(clusterId: String, namespace: String, name: String, force: Boolean)

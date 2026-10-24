@@ -41,6 +41,10 @@ rules:
 - apiGroups: [""]
   resources: [pods, persistentvolumeclaims]
   verbs: [get, list, create, delete]
+# The session network policy, applied by server-side apply before every pod.
+- apiGroups: [networking.k8s.io]
+  resources: [networkpolicies]
+  verbs: [patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -126,6 +130,52 @@ DOCKERFILE = textwrap.dedent("""\
 """)
 
 
+# A session-like pod (TeamCode's label, so the policy selects it) and a control pod without it.
+PROBES = f"""
+apiVersion: v1
+kind: Pod
+metadata: {{name: probe-session, namespace: {NAMESPACE}, labels: {{app.kubernetes.io/managed-by: teamcode}}}}
+spec: {{containers: [{{name: probe, image: {IMAGE}, imagePullPolicy: Never, command: [sleep, "600"]}}]}}
+---
+apiVersion: v1
+kind: Pod
+metadata: {{name: probe-control, namespace: {NAMESPACE}}}
+spec: {{containers: [{{name: probe, image: {IMAGE}, imagePullPolicy: Never, command: [sleep, "600"]}}]}}
+"""
+
+
+def check_network_policy(kubectl):
+    """The policy the server applied exists and is enforced: a session pod resolves names but reaches neither the API
+    server's service, a node, nor the metadata address; the control pod reaches the service, so the CNI enforces."""
+    policy = json.loads(run(*kubectl, "get", "networkpolicy", "teamcode-sessions", "-n", NAMESPACE, "-o", "json", capture=True))
+    assert policy["spec"]["podSelector"] == {"matchLabels": {"app.kubernetes.io/managed-by": "teamcode"}}, policy["spec"]
+    run(*kubectl, "apply", "-f", "-", stdin=PROBES)
+    run(*kubectl, "wait", "--for=condition=Ready", "pod/probe-session", "pod/probe-control", "-n", NAMESPACE, "--timeout=120s")
+    service = run(*kubectl, "get", "service", "kubernetes", "-n", "default", "-o", "jsonpath={.spec.clusterIP}", capture=True)
+    node = run(*kubectl, "get", "nodes", "-o", "jsonpath={.items[0].status.addresses[?(@.type=='InternalIP')].address}", capture=True)
+
+    def reaches(pod, address, port):
+        probe = subprocess.run([*kubectl, "exec", "-n", NAMESPACE, pod, "--", "nc", "-w", "3", address, str(port)],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        return probe.returncode == 0
+
+    def resolves(pod):
+        return subprocess.run([*kubectl, "exec", "-n", NAMESPACE, pod, "--", "nslookup", "kubernetes.default.svc.cluster.local"],
+                              capture_output=True, text=True).returncode == 0
+
+    if not reaches("probe-control", service, 443):
+        sys.exit("Kind smoke failed: the control pod cannot reach the API server, so enforcement cannot be told apart.")
+    failures = [name for name, ok in [
+        ("DNS resolves from a session pod", resolves("probe-session")),
+        ("a session pod cannot reach the API server's service", not reaches("probe-session", service, 443)),
+        ("a session pod cannot reach the node", not reaches("probe-session", node, 6443)),
+        ("a session pod cannot reach the metadata address", not reaches("probe-session", "169.254.169.254", 80)),
+    ] if not ok]
+    if failures:
+        sys.exit("Kind smoke failed: " + "; ".join(failures))
+    run(*kubectl, "delete", "pod", "probe-session", "probe-control", "-n", NAMESPACE, "--wait=false")
+
+
 def run(*command, capture=False, stdin=None, env=None):
     result = subprocess.run(command, check=True, text=True, input=stdin, env=env,
                             stdout=subprocess.PIPE if capture else None)
@@ -180,7 +230,9 @@ def main():
                 os.chmod(path, 0o600)
             env = dict(os.environ, TEAMCODE_KIND_SMOKE_DIR=work)
             run(os.path.join(root, "gradlew"), "--no-daemon", "-p", root, ":infrastructure:test", "--tests", "*KindSmokeTest*", "--rerun", env=env)
-            print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause, resume into a new pod with two replicas, and proven deletion on a real cluster.")
+            check_network_policy(kubectl)
+            print("Kind smoke passed: profile choices, claim, pod, TokenReview, pause, resume into a new pod with two replicas, proven deletion, "
+                  "and the session network policy (applied with patch only, DNS allowed, API server, node and metadata address unreachable) on a real cluster.")
         finally:
             if not args.keep:
                 run("kind", "delete", "cluster", "--name", CLUSTER, "--kubeconfig", kubeconfig)
