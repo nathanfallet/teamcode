@@ -51,7 +51,8 @@ fun main() {
         System.getenv("TEAMCODE_DATABASE_POOL_SIZE")?.toInt() ?: Database.DEFAULT_POOL_SIZE,
     ).also { it.migrate() } else null
     val providerHttp = HttpClient(CIO) { followRedirects = false; install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = 30_000 } }
-    val cipher = database?.let { CredentialCipher(Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." })) }
+    val encryptionKey = database?.let { Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." }) }
+    val cipher = encryptionKey?.let { CredentialCipher(it) }
     val accountStore = database?.let { SqlAccountStore(it, cipher!!) }
     val accounts = accountStore?.let { AccountManagement(it, ClaudeAccountVerifier(providerHttp), mapOf("codex" to CodexAccountVerifier(providerHttp))) }
     val admission = database?.let { SqlAdmissionStore(it) }
@@ -67,6 +68,9 @@ fun main() {
     val cancellation = cancellationStore?.let { RequestCancellationService(it) }
     val mcpAccess = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlMcpAccessStore(it) }
     val gateway = if (database != null) CancellableGateway(PoolGateway(admission!!, credentialSource!!, transports, modelPolicies!!, routes, queued = me.nathanfallet.teamcode.domain.capacity.AwaitAdmissionUseCase(admission)), cancellation!!) else FixtureGatewayService()
+    // The dashboard's trusted-browser cookie is signed with a key derived from the encryption key (audit M3).
+    val team = database?.let { SqlTeamService(it, browsers = me.nathanfallet.teamcode.infrastructure.secrets.TrustedBrowsers(encryptionKey!!)) }
+    val trustedProxies = me.nathanfallet.teamcode.presentation.TrustedProxies.parse(System.getenv("TEAMCODE_TRUSTED_PROXIES"))
     val workers = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     if (accountStore != null) {
         val work = SqlScheduledWork(database!!)
@@ -74,7 +78,7 @@ fun main() {
         workers.launch {
             while (isActive) {
                 try {
-                    work.runDue("maintenance") { admission.maintain(); cancellationStore!!.maintain(); directives!!.update(); mcpAccess!!.maintain() }
+                    work.runDue("maintenance") { admission.maintain(); cancellationStore!!.maintain(); directives!!.update(); mcpAccess!!.maintain(); team!!.purgeLoginThrottle() }
                     monitor.sample()
                 }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode maintenance deadline exceeded.") }
@@ -155,7 +159,6 @@ fun main() {
         catch (error: Exception) { System.err.println("TeamCode could not seed the cloud runtime from the environment (${error::class.simpleName}).") }
         it.launch(workers)
     }
-    val team = database?.let { SqlTeamService(it) }
     val runs = database?.let { me.nathanfallet.teamcode.infrastructure.database.AgentRunServiceImpl(it) }
     val reconciliation = database?.let { me.nathanfallet.teamcode.infrastructure.database.UsageReconciliationServiceImpl(it) }
     val budgetOverrides = database?.let { me.nathanfallet.teamcode.infrastructure.database.BudgetOverrideServiceImpl(it) }
@@ -221,7 +224,7 @@ fun main() {
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
         }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
-            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons) }.start(wait = true)
+            apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons, trustedProxies = trustedProxies) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookHttp.close(); artifactHttp.close(); database?.close() }
 }
 

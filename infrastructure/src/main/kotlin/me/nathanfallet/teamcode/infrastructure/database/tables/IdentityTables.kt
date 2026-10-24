@@ -38,7 +38,7 @@ object Tokens : Table("tokens") {
     val createdAt = long("created_at").nullable()
     val expiresAt = long("expires_at")
     /** Service keys only: the member who created the key (an administrator, when it was created for another member). */
-    val createdBy = varchar("created_by", 36).nullable()
+    val createdBy = varchar("created_by", 36).nullable().index("token_creator")
     override val primaryKey = PrimaryKey(id)
 }
 object AuditEvents : Table("audit_events") {
@@ -58,9 +58,25 @@ object AuditEvents : Table("audit_events") {
     override val primaryKey = PrimaryKey(id)
     init { index("audit_team_time", false, teamId, occurredAt); index("audit_team_id", false, teamId, id) }
 }
+/** The former team-wide login budget; no longer read or written, kept so a rolling upgrade's older replicas still work. */
 object LoginBudget : Table("login_budget") {
     val id = integer("id")
     val windowNumber = long("window_number")
     val attempts = integer("attempts")
     override val primaryKey = PrimaryKey(id)
+}
+/**
+ * Login throttling shared by every replica: an attempt budget per source address, and a failure backoff per username
+ * (any client) or per trusted device of a member. [key] is a SHA-256 digest of the scope, so no username or address is
+ * stored.
+ */
+object LoginThrottle : Table("login_throttle") {
+    val key = char("throttle_key", 64)
+    val windowNumber = long("window_number").default(0)
+    val attempts = integer("attempts").default(0)
+    val failures = integer("failures").default(0)
+    val lockedUntil = long("locked_until").default(0)
+    val updatedAt = long("updated_at")
+    override val primaryKey = PrimaryKey(key)
+    init { index("login_throttle_updated", false, updatedAt, lockedUntil) }
 }

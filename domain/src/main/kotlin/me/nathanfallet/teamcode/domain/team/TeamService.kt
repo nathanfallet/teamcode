@@ -7,9 +7,16 @@ enum class Role {
 }
 data class Member(val id: String, val username: String, val role: Role, val disabled: Boolean, val passwordChangeRequired: Boolean)
 data class Principal(val member: Member, val tokenId: String, val teamId: String, val serviceScopes: Set<ServiceScope>? = null)
-class LoginSession(val token: String, val principal: Principal, val expiresAt: Long) {
+/** [trustedBrowser] is the dashboard's new trusted-browser cookie, for a login that came with a [LoginOrigin.browser]. */
+class LoginSession(val token: String, val principal: Principal, val expiresAt: Long, val trustedBrowser: String? = null) {
     override fun toString() = "LoginSession([REDACTED])"
 }
+/**
+ * Where a login attempt comes from, used for throttling only. [sourceAddress] is the client's address (behind a trusted
+ * proxy, the one it forwarded). [browser] is set for a dashboard login: the browser's trusted-browser cookie, or `""`
+ * when it has none.
+ */
+data class LoginOrigin(val sourceAddress: String? = null, val browser: String? = null)
 class NewMember(val member: Member, val temporaryPassword: String) {
     override fun toString() = "NewMember(member=$member, temporaryPassword=[REDACTED])"
 }
@@ -28,6 +35,9 @@ interface TeamService {
     /** A login that also records the installation's operating system on its device ([DeviceService.validatePlatform]). */
     suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?): LoginSession =
         login(username, password, device, installationId)
+    /** A login with its [origin], so that throttling can tell an attacker's attempts from a member's known devices. */
+    suspend fun login(username: String, password: String, device: String, installationId: String?, platform: String?, osVersion: String?, origin: LoginOrigin): LoginSession =
+        login(username, password, device, installationId, platform, osVersion)
     suspend fun authenticate(token: String): Principal?
     suspend fun logout(principal: Principal)
     suspend fun changePassword(principal: Principal, current: String, replacement: String)

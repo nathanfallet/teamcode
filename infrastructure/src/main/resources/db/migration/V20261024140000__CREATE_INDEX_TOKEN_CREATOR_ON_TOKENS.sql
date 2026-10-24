@@ -1,0 +1,1 @@
+CREATE INDEX token_creator ON tokens (created_by);

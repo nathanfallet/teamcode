@@ -158,15 +158,16 @@ class ReplicaPersistenceTest {
                 workA.runDue("quota/${account.id}") { }
                 assertFalse(account.id in workB.dueAccounts())
 
-                // Both API and dashboard call this same database budget; pod count does not multiply it.
-                a.query { LoginBudget.update { it[attempts] = 0; it[windowNumber] = 0 } }
-                // Avoid a legitimate fixed-window rollover while asserting exactly 120 concurrent admits.
+                // Both API and dashboard call this same database budget per source address; pod count does not multiply it.
+                val source = SqlLoginThrottle.sourceKey("203.0.113.7")
+                // Avoid a legitimate fixed-window rollover while asserting exactly 30 concurrent admits.
                 val elapsed = a.query { nowMillis() % 60_000 }
                 if (elapsed > 50_000) delay(60_000 - elapsed + 50)
-                val budgets = listOf(SqlLoginBudget(a), SqlLoginBudget(b))
-                val allowed = coroutineScope { (0..139).map { n -> async { budgets[n % 2].admit() } }.awaitAll() }
-                assertEquals(120, allowed.count { it })
-                assertFalse(SqlLoginBudget(b).admit())
+                val pools = listOf(a, b)
+                val allowed = coroutineScope { (0..39).map { n -> async { pools[n % 2].query { SqlLoginThrottle.admitSource(this, source) } } }.awaitAll() }
+                assertEquals(SqlLoginThrottle.SOURCE_ATTEMPTS, allowed.count { it })
+                assertFalse(b.query { SqlLoginThrottle.admitSource(this, source) })
+                assertTrue(a.query { SqlLoginThrottle.admitSource(this, SqlLoginThrottle.sourceKey("203.0.113.8")) }, "Another address keeps its own budget")
                 teamB.logout(admin.principal)
                 assertNull(teamA.authenticate(admin.token))
             } }

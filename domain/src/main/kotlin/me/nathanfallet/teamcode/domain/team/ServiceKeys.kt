@@ -143,6 +143,11 @@ interface ServiceKeyService {
     suspend fun revoke(actor: Principal, id: String): String
     companion object {
         const val LIMIT = 20L
+        /**
+         * Scopes only an administrator's key can hold, and only that administrator can give it: an administrator creating
+         * a key for another member cannot grant them (audit M4).
+         */
+        val ADMINISTRATOR_SCOPES = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)
         /** Stored expiry of a key that never expires. */
         const val NO_EXPIRY = Long.MAX_VALUE
         /** [validDays] null requests a key without expiry, which only an administrator may create, for themselves or for another member (see [requireNoExpiryAllowed]). */

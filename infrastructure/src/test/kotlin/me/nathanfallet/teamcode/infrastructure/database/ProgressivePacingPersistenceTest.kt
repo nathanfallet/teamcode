@@ -37,9 +37,8 @@ class ProgressivePacingPersistenceTest {
             Database(container.jdbcUrl, container.username, container.password).use { a ->
                 Database(container.jdbcUrl, container.username, container.password).use { b ->
                     val team = SqlTeamService(a)
-                    val initial = team.bootstrap()!!
-                    team.changePassword(team.login("admin", initial, "pacing-test").principal, initial, "pacing replacement password")
-                    val actor = team.login("admin", "pacing replacement password", "pacing-test").principal
+                    // Sign-in needs the current schema (its throttle table); the pre-upgrade administrator is seeded directly.
+                    val actor = seedLegacyAdministrator(a, "pacing replacement password").principal
                     val colleague = team.createMember(actor, "explicit-limit", Role.MEMBER).member
                     SqlAdmissionStore(a).configure(actor, MemberPolicy(colleague.id, maxConcurrent = 2))
                     a.migrate(); b.migrate()

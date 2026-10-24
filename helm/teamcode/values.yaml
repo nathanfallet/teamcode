@@ -95,6 +95,10 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 topologySpreadConstraints: []
+# Reverse proxies whose X-Forwarded-For the server believes (addresses or CIDR ranges), for sign-in throttling per client
+# address. Empty trusts none: every client behind the ingress then shares the ingress pods' address budget. Set it to the
+# ingress controller pods' range, for example the cluster's pod CIDR ["10.244.0.0/16"]. See docs/team-roles.md.
+trustedProxies: []
 extraEnv: []
 javaToolOptions: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
 
