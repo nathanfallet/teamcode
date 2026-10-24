@@ -32,7 +32,7 @@ rendered as `sha256:<64 lowercase hex>`. The definition is part of the digest, s
 
 Publication needs an interactive administrator login or a service key with the dedicated `hooks:publish` scope, which only a key owned by an administrator can receive (the owner's role is rechecked on every write). It is separate from `skills:publish`: a leaked skills key must not be able to put code on members' computers.
 
-A `hooks:publish` key **cannot pin**, unlike a `skills:publish` key, and cannot unpin, assign members, change the audience of a pinned hook or read the catalog. A leaked hook key can therefore add versions, which deliver nothing, but never choose what runs on a workstation: an administrator reads the version's definition and files on the dashboard (**Read the files**, verified against the digest) and pins it. This is a deliberate difference from [skills](skills.md#pinning-from-ci).
+A `hooks:publish` key **cannot pin**, unlike a skills key with `skills:pin`, and cannot unpin, assign members, change the audience of a pinned hook or read the catalog. A leaked hook key can therefore add versions, which deliver nothing, but never choose what runs on a workstation: an administrator reads the version's definition and files on the dashboard (**Read the files**, verified against the digest) and pins it. This is a deliberate difference from [skills](skills.md#pinning-from-ci).
 
 ```sh
 teamcode keys create --name hooks-ci --scopes hooks:publish --no-expiry --json

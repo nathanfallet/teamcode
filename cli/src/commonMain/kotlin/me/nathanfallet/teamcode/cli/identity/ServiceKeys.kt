@@ -27,7 +27,7 @@ private class KeyList : SuspendingCliktCommand(name = "list") {
 private class KeyCreate : SuspendingCliktCommand(name = "create") {
     private val member by option("--member", help = "Another member ID; requires administrator access.")
     private val name by option("--name").required()
-    private val scopes by option("--scopes", help = "Comma-separated inference,usage:read,guidance,mcp,skills:read,hooks:read,cloud:read,cloud:write permissions (administrators: skills:publish, skills:assign, hooks:publish, admin:cloud, team:read).").default("inference")
+    private val scopes by option("--scopes", help = "Comma-separated inference,usage:read,guidance,mcp,skills:read,hooks:read,cloud:read,cloud:write permissions (administrators: skills:publish, skills:pin, skills:assign, hooks:publish, admin:cloud, team:read).").default("inference")
     private val days by option("--days", help = "Lifetime in days, 1–90 (default 30). Exclusive with --no-expiry.").int()
     private val noExpiry by option("--no-expiry", help = "Create a key that never expires; revoke it to end it. Administrators only, for themselves or with --member. Exclusive with --days.").flag()
     private val json by option("--json", help = "Return the one-time credential and metadata as JSON.").flag()

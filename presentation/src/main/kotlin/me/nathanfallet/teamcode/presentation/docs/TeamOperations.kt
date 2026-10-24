@@ -169,7 +169,7 @@ internal fun ApiCatalog.teamOperations() {
             description = "Creates a key acting as its owner with only the chosen scopes, and returns its secret once " +
                 "(`accessToken`). `validDays` is 1 to 90 (30 when omitted); an explicit `null` creates a key without " +
                 "expiry, which only an administrator may request (for themselves or, with the member route, for another member). " +
-                "`skills:publish`, `skills:assign`, `hooks:publish`, `admin:cloud` and `team:read` need a key owned and created by an administrator. The key records who created it (`createdBy`)." +
+                "`skills:publish`, `skills:pin`, `skills:assign`, `hooks:publish`, `admin:cloud` and `team:read` need a key owned and created by an administrator. The key records who created it (`createdBy`)." +
                 if (member) " Administrators only; the member must be enabled and have replaced a temporary password. Only an owner creates one for an owner (`owner_required`), " +
                     "and the key is revoked when its creator is disabled or loses the administrator role." else ""
             if (member) parameters { pathId("memberId", "The member's identifier.") }

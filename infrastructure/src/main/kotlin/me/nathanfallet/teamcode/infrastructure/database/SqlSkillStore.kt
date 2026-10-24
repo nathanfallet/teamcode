@@ -39,7 +39,7 @@ class SqlSkillStore(private val database: Database) : SkillStore {
     }
 
     override suspend fun publish(actor: Principal, name: String, version: String, artifact: SkillArtifact, pin: Boolean, allMembers: Boolean): SkillPublication {
-        if (allMembers) actor.requireSkillAudienceWriter() else actor.requireSkillPublisher()
+        actor.requireSkillPublication(pin, allMembers)
         // Short team-locked step: create the catalog entry once. The team lock also serializes admission, so the
         // content insert below holds only this skill's row lock.
         var createdHere = false
@@ -128,8 +128,8 @@ class SqlSkillStore(private val database: Database) : SkillStore {
         }
     }
 
-    /** Open to skill publishers, so a `skills:publish` key can approve a version it published earlier. */
-    override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name, { requireSkillPublisher() }) { row, now ->
+    /** Open to publishing keys with `skills:pin`, so CI can approve a version it published earlier. */
+    override suspend fun pin(actor: Principal, name: String, version: String): Skill = write(actor, name, { requireSkillPinner() }) { row, now ->
         if (row[Skills.retiredAt] != null) throw TeamFailure("skill_retired", 409, "Restore this skill before pinning a version.")
         val target = versionRow(row[Skills.id], version)
         if (target[SkillVersions.retiredAt] != null) throw TeamFailure("skill_version_retired", 409, "This version is retired and cannot be pinned.")

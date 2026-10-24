@@ -14,6 +14,12 @@ enum class ServiceScope(val wire: String) {
      * a key owned by an administrator. Separate so that a leaked publishing key cannot widen who receives a skill.
      */
     SKILLS_ASSIGN("skills:assign"),
+    /**
+     * With `skills:publish`, also pin a version (`pin` at publication, or `PUT /skills/{name}/pin`), which chooses the
+     * version delivered to members. Only valid for a key owned by an administrator. Separate so that a leaked publishing
+     * key cannot change what members' agents receive unless the administrator who created it chose that (audit L3).
+     */
+    SKILLS_PIN("skills:pin"),
     /** Download the owner's effective team hooks. */
     HOOKS_READ("hooks:read"),
     /**
@@ -147,7 +153,7 @@ interface ServiceKeyService {
          * Scopes only an administrator's key can hold, and only that administrator can give it: an administrator creating
          * a key for another member cannot grant them (audit M4).
          */
-        val ADMINISTRATOR_SCOPES = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)
+        val ADMINISTRATOR_SCOPES = setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.SKILLS_PIN, ServiceScope.HOOKS_PUBLISH, ServiceScope.ADMIN_CLOUD, ServiceScope.TEAM_READ)
         /** Stored expiry of a key that never expires. */
         const val NO_EXPIRY = Long.MAX_VALUE
         /** [validDays] null requests a key without expiry, which only an administrator may create, for themselves or for another member (see [requireNoExpiryAllowed]). */

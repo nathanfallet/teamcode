@@ -33,15 +33,16 @@ internal fun ApiCatalog.skillOperations() {
             "without an explicit decision, members who join later included (`skill.allMembers` confirms it; servers " +
             "advertising `team.skills.all-members.v1` support it); `false` leaves the audience as it is. Republishing " +
             "the same content is safe (200, `created: false`), with or without these flags. A `skills:publish` key " +
-            "must be owned by an administrator; it can publish and pin, but cannot assign or read the catalog. " +
-            "`allMembers` also needs the `skills:assign` scope on the key (403 `credential_scope` otherwise)."
+            "must be owned by an administrator; it can publish, but cannot assign or read the catalog. `pin` also needs " +
+            "the `skills:pin` scope on the key and `allMembers` the `skills:assign` scope (403 `credential_scope` " +
+            "otherwise, nothing stored; servers advertising `team.skills.pin-scope.v1` require `skills:pin`)."
         parameters { skillName() }
         body<PublishSkillVersionRequest>("The version label and its files, base64-encoded (`mode` is `file` or `executable`).")
         responses {
             ok<PublishSkillVersionResponse>("The version already existed with the same content (`created: false`).")
             ok<PublishSkillVersionResponse>("Published.", HttpStatusCode.Created)
             badRequest("An invalid name, version, path, mode or base64 content (`invalid_skill_artifact`).")
-            error(HttpStatusCode.Forbidden, "`allMembers` from a key without `skills:assign` (`credential_scope`).")
+            error(HttpStatusCode.Forbidden, "`pin` from a key without `skills:pin`, or `allMembers` from a key without `skills:assign` (`credential_scope`).")
             conflict("The version exists with other content (`skill_version_conflict`) or is retired (`skill_version_retired`), " +
                 "the skill is retired (`skill_retired`), or a catalog limit is reached (`skill_limit`, `skill_version_limit`).")
             error(HttpStatusCode.PayloadTooLarge, "The body exceeds 8 MiB (`payload_too_large`).")
@@ -51,7 +52,7 @@ internal fun ApiCatalog.skillOperations() {
         operationId = "pinSkillVersion"; tag(ApiTags.SKILLS)
         summary = "Approve a skill version"
         description = "Pins the version every allowed member receives. Updating and rolling back are both a pin. An " +
-            "administrator, or a `skills:publish` key owned by one; the audit journal names the key."
+            "administrator, or a key owned by one that holds `skills:publish` and `skills:pin`; the audit journal names the key."
         parameters { skillName() }
         body<PinSkillRequest>("The version to pin.")
         responses {

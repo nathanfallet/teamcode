@@ -40,7 +40,9 @@ class SkillPersistenceTest {
                 val keys = SqlServiceKeyService(a)
                 // Publication permission: a dedicated scope, valid only on administrator-owned keys.
                 failure("invalid_service_key") { keys.create(admin, member.member.id, "member publisher", setOf(ServiceScope.SKILLS_PUBLISH), 1) }
-                val publisher = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                failure("invalid_service_key") { keys.create(admin, member.member.id, "member pinner", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN), 1) }
+                val storing = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI, store only", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                val publisher = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN), 1).accessToken)!!
                 val inference = teamB.authenticate(keys.create(admin, admin.member.id, "inference CI", setOf(ServiceScope.INFERENCE), 1).accessToken)!!
                 failure("credential_scope") { catalogA.publish(inference, "review", "1.0.0", files("one")) }
                 failure("forbidden") { catalogA.publish(member, "review", "1.0.0", files("one")) }
@@ -116,6 +118,9 @@ class SkillPersistenceTest {
                 catalogA.store.pin(admin, "review", "1.0.0")
                 assertEquals(listOf("1.0.0"), catalogB.effective(member).map { it.version })
 
+                // Audit L3: without skills:pin, a key neither pins at publication nor afterwards; the store refuses it too.
+                failure("credential_scope") { catalogA.publish(storing, "review", "5.0.0", files("five"), pin = true) }
+                failure("credential_scope") { catalogA.store.pin(storing, "review", "1.0.0") }
                 // CI pins what it publishes, in the publication transaction and with the same key; a retry changes nothing.
                 val auto = catalogA.publish(publisher, "review", "5.0.0", files("five"), pin = true)
                 assertTrue(auto.created); assertEquals("5.0.0", auto.skill.pinnedVersion); assertTrue(auto.version.id.isNotEmpty())
@@ -204,7 +209,7 @@ class SkillPersistenceTest {
                 val initial = team.bootstrap()!!
                 team.changePassword(team.login("admin", initial, "fixture").principal, initial, "skill administrator password")
                 val admin = team.login("admin", "skill administrator password", "fixture").principal
-                val publisher = team.authenticate(SqlServiceKeyService(a).create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
+                val publisher = team.authenticate(SqlServiceKeyService(a).create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN), 1).accessToken)!!
                 val ci = SkillCatalog(SqlSkillStore(a)); val dashboard = SkillCatalog(SqlSkillStore(b))
                 repeat(20) { round ->
                     val name = "race-$round"
@@ -276,8 +281,8 @@ class SkillPersistenceTest {
                 val early = joined.member
                 val keys = SqlServiceKeyService(a)
                 failure("invalid_service_key") { keys.create(admin, early.id, "member assigner", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN), 1) }
-                val publisher = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH), 1).accessToken)!!
-                val assigner = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI for everyone", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN), 1).accessToken)!!
+                val publisher = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_PIN), 1).accessToken)!!
+                val assigner = teamB.authenticate(keys.create(admin, admin.member.id, "skills CI for everyone", setOf(ServiceScope.SKILLS_PUBLISH, ServiceScope.SKILLS_ASSIGN, ServiceScope.SKILLS_PIN), 1).accessToken)!!
                 val catalogA = SkillCatalog(SqlSkillStore(a)); val catalogB = SkillCatalog(SqlSkillStore(b))
 
                 // skills:publish alone can choose the version, never widen the audience.

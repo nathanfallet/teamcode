@@ -76,20 +76,26 @@ Content-Type: application/json
 - `409 skill_version_retired`: the version exists but was retired; publish a new version.
 - `409 skill_retired`: the skill was removed from the catalog; restore it first.
 - `400` for invalid names, versions, paths, modes or base64; `413` above the size bound (the request body itself is bounded at 8 MiB).
-- `403 credential_scope` for a key without `skills:publish` (or without `skills:assign` when `allMembers` is set), `403 forbidden` for a member or a non-administrator key.
+- `403 credential_scope` for a key without `skills:publish` (or without `skills:pin` when `pin` is set, or without `skills:assign` when `allMembers` is set), `403 forbidden` for a member or a non-administrator key.
 
 Limits: 500 skills per team, 200 versions per skill.
 
 ### Pinning from CI
 
-A pipeline that should deliver what it publishes, without an administrator pinning each version by hand, adds `"pin": true` to the publication request. It needs no other permission: the same `skills:publish` key, owned by an administrator, publishes and pins.
+A pipeline that should deliver what it publishes, without an administrator pinning each version by hand, adds `"pin": true` to the publication request. The key needs the `skills:pin` scope besides `skills:publish` (both on an administrator's key): `skills:publish` alone stores versions and never changes what members receive.
+
+```sh
+# Once, from an administrator login: a key that publishes and pins.
+teamcode keys create --name skills-ci --scopes skills:publish,skills:pin --no-expiry --json
+```
 
 - The version is stored and pinned in one transaction, so delivery switches to it exactly when the publication commits.
 - It is idempotent. Republishing the same version with the same digest and `pin: true` returns `200 OK` with `created: false` and pins the version unless it is already the pinned one: when another version is pinned (a rollback by re-running an older pipeline) and also when the skill is unpinned. A pipeline that pins therefore undoes an administrator's unpin on its next run, and a stale re-run of an older pipeline rolls delivery back to its version. To stop delivery for good against such a pipeline, retire the version (a retired version is never pinned again), remove the skill from the catalog, or set the members' decisions to *No*. Different content under the label is still `409 skill_version_conflict`, and nothing is pinned.
 - A retired version or a retired skill is refused as for publication (`409 skill_version_retired`, `409 skill_retired`).
 - The same key may call `PUT /api/v1/skills/{name}/pin` to pin any published, non-retired version, for example a rollback without republishing. Unpinning stays with administrators.
 - Each actual pin appends `skill.pinned` with `credentialId` set to the key's id, so the journal shows that the key, not an administrator in the dashboard, changed the delivered version. Interactive pins leave `credentialId` empty, as before. The key's `skill.created` and `skill.version.published` events carry its id too.
-- This gives the key the power to choose the delivered version: a leaked `skills:publish` key can pin any published, non-retired version for every member with *Yes*. Keep it in the CI secret store, prefer an expiring key where rotation is practical, and revoke it at once if it leaks.
+- This gives the key the power to choose the delivered version: a leaked `skills:pin` key can pin any published, non-retired version for every member with *Yes*. Keep it in the CI secret store, prefer an expiring key where rotation is practical, and revoke it at once if it leaks. Skills can carry scripts that members' agents run, which is why pinning is a scope of its own: a leaked key with `skills:publish` only adds versions that deliver nothing until someone pins them (audit L3).
+- **Upgrading.** Before `skills:pin` existed, `skills:publish` also pinned. A pipeline that pins with an older key now gets `403 credential_scope` (the publication is refused whole, nothing is stored): create a key with `skills:publish,skills:pin` and replace the secret. Servers that require the scope advertise `team.skills.pin-scope.v1`.
 - Access decisions still apply: a pinned version reaches only members with an explicit *yes*.
 
 Servers that support the field advertise `team.skills.publish-pin.v1` in `GET /api/v1/capabilities` (readable with any key). An older server ignores the unknown field and publishes without pinning; a client detects this from `version.pinned: false` in the response and should report it instead of assuming delivery.
@@ -102,7 +108,7 @@ By default a pinned skill reaches only members set to *Yes*, so every new skill 
 
 ```sh
 # Once, from an administrator login: a key that publishes, pins and delivers to everyone.
-teamcode keys create --name skills-ci --scopes skills:publish,skills:assign --no-expiry --json
+teamcode keys create --name skills-ci --scopes skills:publish,skills:pin,skills:assign --no-expiry --json
 ```
 
 ```json
@@ -114,7 +120,7 @@ teamcode keys create --name skills-ci --scopes skills:publish,skills:assign --no
 - An explicit *No* still excludes a member, whatever the audience. Use it for a member who must not receive the skill.
 - Each actual change appends `skill.audience.all_members` or `skill.audience.assigned_only` (subject: skill ID), with `credentialId` set to the key's id when a key made it.
 
-**Why a separate `skills:assign` scope.** `skills:publish` already lets a key choose the delivered version, but only for members an administrator set to *Yes*. Delivering to all members widens *who* receives a skill, and skills can carry executable scripts that agents run on members' computers. Keeping it in its own scope means a leaked publishing key cannot push a new skill to every workstation unless the administrator who created the key chose that. Like `skills:publish`, `skills:assign` is valid only on an administrator's key (the owner's role is rechecked on every write), and it grants nothing without `skills:publish`. The audience route itself stays interactive: no key can call it.
+**Why a separate `skills:assign` scope.** `skills:pin` already lets a key choose the delivered version, but only for members an administrator set to *Yes*. Delivering to all members widens *who* receives a skill, and skills can carry executable scripts that agents run on members' computers. Keeping it in its own scope means a leaked publishing key cannot push a new skill to every workstation unless the administrator who created the key chose that. Like `skills:publish`, `skills:assign` is valid only on an administrator's key (the owner's role is rechecked on every write), and it grants nothing without `skills:publish`. The audience route itself stays interactive: no key can call it.
 
 There is no team-wide default ("every new skill goes to all members"): it would grant every future skill from any publisher without anyone choosing it per skill or per key. The publication flag gives the same result for a pipeline that wants it, and the choice stays visible on the key's scopes and in the journal.
 
@@ -167,7 +173,7 @@ jobs:
             "$TEAMCODE_URL/api/v1/skills/review/versions"
 ```
 
-A re-run of the same tag succeeds without creating anything (`200`, `created: false`). Changed content under an existing label fails the job (`409`). The published version is only delivered after it is pinned: by an administrator, or by the workflow itself with `"pin": True` added to the request it builds ([Pinning from CI](#pinning-from-ci)). The example key has no expiry (administrators only); to prefer rotation, use `--days 90` instead and replace the key before it lapses. Revoke it like any other service key when the pipeline is retired.
+A re-run of the same tag succeeds without creating anything (`200`, `created: false`). Changed content under an existing label fails the job (`409`). The published version is only delivered after it is pinned: by an administrator, or by the workflow itself with `"pin": True` added to the request it builds and a key that also holds `skills:pin` ([Pinning from CI](#pinning-from-ci)). The example key has no expiry (administrators only); to prefer rotation, use `--days 90` instead and replace the key before it lapses. Revoke it like any other service key when the pipeline is retired.
 
 ## Administration
 
