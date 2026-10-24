@@ -49,25 +49,33 @@ internal suspend fun attachSession(client: TeamCodeClient, sessionId: String, ec
 /**
  * For `teamcode attach` on a remote session recorded on this device: a callback that starts its host in the
  * background once a message woke it, for a session the daemon does not host. Null for a cloud session, another
- * device's session, one this device has no record of, or one its daemon hosts. Also says when the host is not running.
+ * device's session, one this device has no record of, or one started through the daemon while the daemon is online.
+ * Also says when the host is not running.
  */
-internal suspend fun localHostWaker(client: TeamCodeClient, sessionId: String, notice: (String) -> Unit): (suspend () -> Unit)? {
-    val record = RemoteSessions().load(sessionId) ?: return null
+internal suspend fun localHostWaker(client: TeamCodeClient, sessionId: String, notice: (String) -> Unit, sessions: RemoteSessions = RemoteSessions(),
+    daemonOnline: suspend () -> Boolean = { daemonOnline(client) }): (suspend () -> Unit)? {
+    val record = sessions.load(sessionId) ?: return null
     val session = try { client.cloudSession(sessionId) } catch (error: CancellationException) { throw error } catch (_: TeamCodeException) { return null }
     if (session.kind != CloudSessionKinds.REMOTE) return null
-    // Started through the device's daemon: a message that wakes it puts it back in the daemon's queue.
-    if (session.host?.folderId != null) return null
+    // Started through the device's daemon: a message that wakes it puts it back in the daemon's queue, while the daemon
+    // runs. A stopped daemon takes nothing: this terminal hosts it, as `teamcode remote resume` would.
+    if (session.host?.folderId != null && daemonOnline()) return null
     if (session.host?.online != true)
         notice("Its host is not running on this device: a message wakes the session and starts it here (or run teamcode remote resume $sessionId).")
     var started = false
     return {
         if (!started) try {
             val current = client.cloudSession(sessionId)
-            if (current.host?.online != true) { startBackgroundHost(client, record, current.currentEpoch, notice); started = true }
+            if (current.host?.online != true) { startBackgroundHost(client, record, current.currentEpoch, notice, sessions = sessions); started = true }
         } catch (error: CancellationException) { throw error }
         catch (error: CliUserException) { notice(error.message) }
         catch (_: Exception) { notice("The host could not be started; run teamcode remote resume $sessionId.") }
     }
 }
+
+/** Whether this device's daemon is online to take its sessions; an unreachable answer counts as online (no second host). */
+internal suspend fun daemonOnline(client: TeamCodeClient, windows: Boolean = servicePlatform().os == "windows"): Boolean = try {
+    daemonDevice(client, client.capabilities().features, windows) != null
+} catch (error: CancellationException) { throw error } catch (_: Exception) { true }
 
 private const val HOST_START_MILLIS = 30_000L

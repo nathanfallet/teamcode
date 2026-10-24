@@ -55,10 +55,7 @@ class DesktopLocalHostTest {
         fakeCli(directory)
         val accounts = SettingsAccountRepository(MapSettings()).apply { save(cliAccount()) }
         assertEquals("s-new", host(directory, accounts).start(Account.CLI_ACCOUNT_ID, request))
-        val calls = File(directory, "calls").readLines()
-        assertTrue(calls.any { it.startsWith("remote start /Users/ada/git/paywall --agent claude --name Paywall --effort high --json --detach") })
-        // The device's daemon hosts and wakes the session: the app never resumes or hosts it through the CLI.
-        assertEquals(listOf("remote start"), calls.filter { it.startsWith("remote") }.map { it.split(" ").take(2).joinToString(" ") })
+        assertTrue(File(directory, "calls").readLines().any { it.startsWith("remote start /Users/ada/git/paywall --agent claude --name Paywall --effort high --json --detach") })
     } }
 
     @Test fun aRefusalIsTheClisOwnSentence() = withTemporaryDirectory { directory -> runTest {

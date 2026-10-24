@@ -39,8 +39,8 @@ class DesktopSmokeTest {
             val client = koin.get<TeamCodeClientProvider>().forAccount(Account.CLI_ACCOUNT_ID, account.origin)
             suspend fun texts() = client.cloudEvents(started.sessionId, after = 0, limit = 100).events
                 .filter { it.type == "message.agent" }.mapNotNull { it.data["text"]?.jsonPrimitive?.content }
-            suspend fun until(what: String, seconds: Int = 60, condition: suspend () -> Boolean) {
-                repeat(seconds * 2) { if (condition()) return; delay(500) }
+            suspend fun until(what: String, condition: suspend () -> Boolean) {
+                repeat(120) { if (condition()) return; delay(500) }
                 fail("Timed out waiting for $what")
             }
             until("the first answer") { "echo: hello" in texts() }

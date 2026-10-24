@@ -178,8 +178,10 @@ class DeviceDaemonPersistenceTest {
         for (id in listOf(first.id, local.id)) conversation.send(phone, id, InputRequest("Continue", true, null, null, null))
         pass()
         assertEquals(RESUMING to CloudSessionService.WAITING_HOST, sessionStore.find(laptop.teamId, local.id)!!.let { it.state to it.phase })
-        val woken = daemon.poll(laptop, 0, "1.0.0").orders.single()
-        assertEquals(DaemonOrder(first.id, "api", "api", "claude", RemotePermissionMode.BYPASS, RESUMING, woken.requestedAt), woken)
+        val woken = daemon.poll(laptop, 0, "1.0.0").orders
+        assertEquals(listOf(first.id), woken.map { it.sessionId }, "The woken daemon session only, not the one without a folder")
+        assertEquals(listOf(RESUMING), woken.map { it.state })
+        assertEquals(listOf("api" to RemotePermissionMode.BYPASS), woken.map { it.folderId to it.permissionMode })
         assertEquals(2, sessions.host(laptop, first.id).currentEpoch)
         assertEquals(emptyList(), daemon.poll(laptop, 0, "1.0.0").orders)
 

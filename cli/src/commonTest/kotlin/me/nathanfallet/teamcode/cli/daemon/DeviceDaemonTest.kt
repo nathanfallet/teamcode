@@ -13,7 +13,10 @@ import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.config.configStore
+import me.nathanfallet.teamcode.cli.remote.RemoteSessionRecord
 import me.nathanfallet.teamcode.cli.remote.RemoteSessions
+import me.nathanfallet.teamcode.cli.remote.daemonOnline
+import me.nathanfallet.teamcode.cli.remote.localHostWaker
 import me.nathanfallet.teamcode.cli.remote.awaitDaemonHost
 import me.nathanfallet.teamcode.cli.remote.daemonDevice
 import me.nathanfallet.teamcode.cli.remote.startThroughDaemon
@@ -41,8 +44,10 @@ class DeviceDaemonTest {
             return folders.add(folderPath((home / name).toString(), home, windows = false), null).first
         }
 
+        var lostCheckMillis = 30_000L
+
         fun daemon(version: String = "1.0.0") = DeviceDaemon(server.client(), folders, records, state, hosts, version, { reports += it }, { stop }, home,
-            pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100)
+            pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis)
 
         /** Runs a daemon until [stop], in [scope]. */
         fun start(scope: CoroutineScope, version: String = "1.0.0"): Job { stop = false; return scope.launch { daemon(version).run() } }
@@ -129,6 +134,60 @@ class DeviceDaemonTest {
         waitUntil { "refuse s1 host_failed" in f.server.events }
         f.stop = true
         daemon.join()
+    }
+
+    @Test fun aHostThatStopsAnsweringIsReplacedOnceTheServerPausesItsSession() = test { f ->
+        f.lostCheckMillis = 20
+        val folder = f.folder("project")
+        f.server.queue("silent", folder.id, "project")
+        f.server.queue("owner", folder.id, "project")
+        val daemon = f.start(this)
+        waitUntil { f.hosts.started.size == 2 }
+        // Both hosts hang. The server pauses one for its lost host; the owner pauses the other, whose host is gone too.
+        f.hosts.hang += listOf("silent", "owner")
+        f.server.loseHost("silent")
+        f.server.sessions.getValue("owner").apply { state = "paused"; desiredState = "paused"; phase = null; online = false }
+        waitUntil { f.hosts.started.size == 3 }
+        assertEquals(Triple("silent", 2, "t1"), f.hosts.started.last(), "A new epoch, which fences the silent host")
+        assertTrue("resume silent" in f.server.events)
+        assertTrue(f.reports.any { "session silent stopped answering; resuming it" in it }, f.reports.toString())
+        f.hosts.hang.clear()
+        f.stop = true
+        daemon.join()
+        assertFalse("resume owner" in f.server.events, "Paused by its owner: not resumed")
+    }
+
+    @Test fun aSilentHostIsReplacedAtMostThreeTimesInTheWindow() = test { f ->
+        f.lostCheckMillis = 20
+        val folder = f.folder("project")
+        f.server.queue("s1", folder.id, "project")
+        f.hosts.hang += "s1"
+        val daemon = f.start(this)
+        for (count in 1..3) {
+            waitUntil { f.hosts.started.size == count }
+            f.server.loseHost("s1")
+        }
+        waitUntil { f.reports.any { "stopped answering; not starting it again" in it } }
+        f.hosts.hang.clear()
+        f.stop = true
+        daemon.join()
+        assertEquals(3, f.hosts.started.size)
+        assertEquals(2, f.server.events.count { it == "resume s1" })
+        assertTrue(f.state.read().isEmpty())
+    }
+
+    @Test fun aTerminalWakesADaemonSessionOnlyWhileTheDaemonIsOffline() = test { f ->
+        val folder = f.folder("project")
+        f.server.queue("s1", folder.id, "project")
+        f.records.save(RemoteSessionRecord("s1", (f.home / "project").toString(), "claude"))
+        val client = f.server.client()
+        assertFalse(daemonOnline(client, windows = false), "Never polled: offline")
+        val online = suspend { daemonOnline(client, windows = false) }
+        assertNotNull(localHostWaker(client, "s1", {}, f.records, online), "A stopped daemon takes nothing: the terminal hosts it")
+        f.server.daemonOnline = true
+        assertTrue(daemonOnline(client, windows = false))
+        assertFalse(daemonOnline(client, windows = true), "No daemon hosts sessions on Windows")
+        assertNull(localHostWaker(client, "s1", {}, f.records, online), "The daemon's queue wakes it")
     }
 
     @Test fun aCrashedDaemonsSessionResumesOnlyWhenTheServerPausedItForItsLostHost() = test { f ->
