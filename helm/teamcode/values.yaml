@@ -147,6 +147,9 @@ mysql:
   networkPolicy:
     enabled: true
   persistence:
+    # Read only when the StatefulSet is created: volumeClaimTemplates is immutable, so changing this value on an existing
+    # release makes `helm upgrade` fail (Forbidden: updates to statefulset spec). To grow an existing volume, patch the PVC
+    # (`kubectl patch pvc data-<release>-mysql-0`, on a storage class with allowVolumeExpansion) and leave this value as is.
     size: 10Gi
     storageClass: ""
   # Server settings written to /etc/mysql/conf.d/teamcode.cnf. MySQL 8.4 sizes some memory from the node, not the
