@@ -62,10 +62,10 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         if (directive != null && directive[table.minInterval] > 0 && !readPacingSettings(actor.teamId).observationOnly) {
             val session = directive[table.scopeKey].takeIf { it.isNotEmpty() }
             val sessionFilter = session?.let { Reservations.sessionKey eq it } ?: Op.TRUE
-            val latest = Reservations.createdAt.max()
-            val last = Reservations.select(latest).where {
-                (Reservations.memberId eq actor.member.id) and (Reservations.dayNumber eq now / DAY) and (Reservations.units greater 0) and sessionFilter
-            }.single()[latest] ?: 0L
+            // The day's newest charged admission: a reservation's day is its creation time's, so the day starts the range.
+            val last = Reservations.select(Reservations.createdAt).where {
+                (Reservations.memberId eq actor.member.id) and (Reservations.createdAt greaterEq now / DAY * DAY) and (Reservations.units greater 0) and sessionFilter
+            }.orderBy(Reservations.createdAt to SortOrder.DESC).limit(1).singleOrNull()?.get(Reservations.createdAt) ?: 0L
             if (now - last < directive[table.minInterval]) throw TeamFailure("pacing_delay", 429, "TeamCode is spacing out your requests because the pool's subscription quota is burning fast. Retry in a few seconds.", retryAfterSeconds = RetryWindows.secondsUntil(now, last + directive[table.minInterval]))
             // Pacing only spaces admissions: a directive's concurrency (stored by older replicas) is never a ceiling.
         }
@@ -88,6 +88,7 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         current.groups.forEach { group -> ReservationGroups.insert {
             it[reservationId] = id; it[groupId] = group.group.id; it[dayNumber] = now / DAY; it[expiresAt] = now + 15 * 60_000
         } }
+        addDailyUnits(actor.teamId, now / DAY, actor.member.id, policy.poolId.orEmpty(), chosen.poolId.orEmpty(), current.groups.map { it.group.id }, units)
         runId?.let { recordRunAdmission(it, units, affinity, provider, model, now) }
         Reservation(id, chosen, units)
     }
@@ -106,7 +107,8 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
         require(actualUnits == null || actualUnits in 0..100_000_000)
         val winner = database.query {
             lockTeam(reservation.account.identity.teamId)
-            val before = Reservations.select(Reservations.units, Reservations.runId, Reservations.teamId, Reservations.memberId, Reservations.accountId, Reservations.dayNumber)
+            val before = Reservations.select(Reservations.units, Reservations.runId, Reservations.teamId, Reservations.memberId, Reservations.accountId, Reservations.dayNumber,
+                Reservations.poolId, Reservations.sourcePoolId)
                 .where { Reservations.id eq reservation.id }.singleOrNull()
             val changed = Reservations.update({ (Reservations.id eq reservation.id) and (Reservations.state eq "ACTIVE") }) {
                 it[state] = if (actualUnits == null) "UNCERTAIN" else "SETTLED"; it[units] = actualUnits ?: reservation.units
@@ -116,6 +118,11 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
                     it[chargedUnits] = chargedUnits + ((actualUnits ?: reservation.units) - before[Reservations.units])
                     if (completed) it[AgentRuns.completed] = AgentRuns.completed + 1
                 }
+            }
+            if (changed == 1 && before != null) {
+                val delta = (actualUnits ?: reservation.units) - before[Reservations.units]
+                if (delta != 0L) addDailyUnits(before[Reservations.teamId], before[Reservations.dayNumber], before[Reservations.memberId], before[Reservations.poolId],
+                    before[Reservations.sourcePoolId], reservationGroupIds(reservation.id), delta)
             }
             if (changed == 1 && completed) GatewayTotals.update({ GatewayTotals.teamId eq reservation.account.identity.teamId }) { it[GatewayTotals.completed] = GatewayTotals.completed + 1 }
             before.takeIf { changed == 1 }
@@ -236,6 +243,8 @@ class SqlAdmissionStore(private val database: Database) : AdmissionStore, Admiss
             QuotaHistory.deleteWhere(limit = 1000) { observedAt less now - 7 * DAY }
             // Unknown charges must remain reviewable, including after an expired process lease.
             Reservations.deleteWhere(limit = 1000) { (dayNumber less now / DAY - 90) and (state inList listOf("SETTLED", "RECONCILED")) }
+            // Admission reads only the current day; earlier totals are kept as long as their reservations.
+            ReservationDailyUnits.deleteWhere(limit = 1000) { dayNumber less now / DAY - 90 }
             AgentRuns.deleteWhere(limit = 1000) {
                 (heartbeatAt less now - 90 * DAY) and (lastRequestAt.isNull() or (lastRequestAt less now - 90 * DAY)) and
                     (endedAt.isNull() or (endedAt less now - 90 * DAY)) and

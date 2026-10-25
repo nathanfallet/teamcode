@@ -41,7 +41,12 @@ object Reservations : Table("reservations") {
     val sourcePoolId = varchar("source_pool_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
+        // No longer read by admission; replicas of the previous version still sum the member's day through it during a rollout.
         index("member_daily", false, memberId, dayNumber)
+        // Newest first for the pacing check: the latest admission is the first entry read, not a scan of the day.
+        index("member_recent", false, memberId, createdAt, units)
+        index("member_session_recent", false, memberId, sessionKey, createdAt, units)
+        index("reservation_retention", false, dayNumber, state)
         index("member_active", false, memberId, state, expiresAt)
         index("active_account", false, accountId, state, expiresAt)
         index("pool_daily", false, teamId, poolId, dayNumber)
@@ -51,6 +56,19 @@ object Reservations : Table("reservations") {
         index("run_active", false, runId, state, expiresAt)
         index("reconciliation_pending", false, teamId, state, createdAt, id)
     }
+}
+/**
+ * Units charged per UTC day, kept equal to the matching sums over [Reservations] by every write that changes a reservation's
+ * units, in the same team-locked transaction. Admission reads a few rows by primary key instead of every reservation of the day.
+ */
+object ReservationDailyUnits : Table("reservation_daily_units") {
+    val dayNumber = long("day_number")
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
+    /** `member`, `pool` (home charges), `lent` (units a pool's accounts served for another pool) or `group`. */
+    val scope = varchar("scope", 8)
+    val scopeId = varchar("scope_id", 36)
+    val units = long("units")
+    override val primaryKey = PrimaryKey(dayNumber, teamId, scope, scopeId)
 }
 object QuotaWindows : Table("quota_windows") {
     val accountId = reference("account_id", Accounts.id, onDelete = ReferenceOption.NO_ACTION, onUpdate = ReferenceOption.NO_ACTION, fkName = "quota_windows_ibfk_1")

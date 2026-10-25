@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS reservation_daily_units (day_number BIGINT, team_id VARCHAR(36), scope VARCHAR(8), scope_id VARCHAR(36), units BIGINT NOT NULL, CONSTRAINT pk_reservation_daily_units PRIMARY KEY (day_number, team_id, scope, scope_id), CONSTRAINT fk_reservation_daily_units_team_id__id FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE ON UPDATE RESTRICT);

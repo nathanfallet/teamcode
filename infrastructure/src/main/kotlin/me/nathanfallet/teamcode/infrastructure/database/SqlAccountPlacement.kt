@@ -11,14 +11,8 @@ import org.jetbrains.exposed.v1.jdbc.*
 /** Both logical home charges and physical lending count, once each within a pool's limit. */
 internal fun poolSpends(team: String, pools: Set<String>, day: Long): Map<String, Long> {
     if (pools.isEmpty()) return emptyMap()
-    val units = Reservations.units.sum()
-    val logical = Reservations.select(Reservations.poolId, units).where {
-        (Reservations.teamId eq team) and (Reservations.dayNumber eq day) and (Reservations.poolId inList pools)
-    }.groupBy(Reservations.poolId).associate { it[Reservations.poolId] to (it[units] ?: 0L) }
-    val borrowed = Reservations.select(Reservations.sourcePoolId, units).where {
-        (Reservations.teamId eq team) and (Reservations.dayNumber eq day) and (Reservations.sourcePoolId inList pools) and
-            (Reservations.sourcePoolId neq Reservations.poolId)
-    }.groupBy(Reservations.sourcePoolId).associate { it[Reservations.sourcePoolId] to (it[units] ?: 0L) }
+    val logical = readDailyUnits(team, day, DailyScope.POOL, pools)
+    val borrowed = readDailyUnits(team, day, DailyScope.LENT, pools)
     return pools.associateWith { (logical[it] ?: 0L) + (borrowed[it] ?: 0L) }
 }
 

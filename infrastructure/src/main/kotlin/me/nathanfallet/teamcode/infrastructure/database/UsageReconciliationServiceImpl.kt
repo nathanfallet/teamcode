@@ -65,6 +65,7 @@ class UsageReconciliationServiceImpl(private val database: Database) : UsageReco
         Reservations.update({ (Reservations.id eq id) and (Reservations.teamId eq actor.teamId) }) {
             it[state] = "RECONCILED"; it[units] = input.actualUnits
         }
+        addDailyUnits(actor.teamId, row[Reservations.dayNumber], row[Reservations.memberId], row[Reservations.poolId], row[Reservations.sourcePoolId], groupIds, delta)
         row[Reservations.runId]?.let { run -> AgentRuns.update({ (AgentRuns.id eq run) and (AgentRuns.teamId eq actor.teamId) }) {
             it[chargedUnits] = chargedUnits + delta
         } }

@@ -21,10 +21,7 @@ internal fun readGroupUsage(teamId: String, ids: List<String>, now: Long, cache:
 
 internal fun readGroupUsage(teamId: String, ids: List<String>, now: Long): Map<String, GroupUsage> {
     if (ids.isEmpty()) return emptyMap()
-    val units = Reservations.units.sum()
-    val spent = (ReservationGroups innerJoin Reservations).select(ReservationGroups.groupId, units).where {
-        (ReservationGroups.groupId inList ids) and (ReservationGroups.dayNumber eq now / 86_400_000) and (Reservations.teamId eq teamId)
-    }.groupBy(ReservationGroups.groupId).associate { it[ReservationGroups.groupId] to (it[units] ?: 0L) }
+    val spent = readDailyUnits(teamId, now / 86_400_000, DailyScope.GROUP, ids)
     val count = ReservationGroups.reservationId.count()
     val active = (ReservationGroups innerJoin Reservations).select(ReservationGroups.groupId, count).where {
         (ReservationGroups.groupId inList ids) and (ReservationGroups.expiresAt greater now) and (Reservations.expiresAt greater now) and

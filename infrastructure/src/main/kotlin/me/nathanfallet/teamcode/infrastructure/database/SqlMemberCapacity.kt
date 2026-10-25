@@ -9,13 +9,17 @@ import org.jetbrains.exposed.v1.jdbc.*
 internal fun readMemberPolicy(c: JdbcTransaction, member: String): MemberPolicy = MemberPolicies.selectAll().where { MemberPolicies.memberId eq member }
     .singleOrNull()?.let { MemberPolicy(member, it[MemberPolicies.dailyUnits], it[MemberPolicies.maxConcurrent], it[MemberPolicies.poolId], it[MemberPolicies.weight], it[MemberPolicies.allowSharedOverflow]) } ?: MemberPolicy(member)
 internal fun readMemberCapacity(c: JdbcTransaction, policy: MemberPolicy, now: Long, teamId: String, cache: CapacityReadCache = CapacityReadCache()): MemberCapacity {
-    val units = Reservations.units.sum()
+    val day = now / DAY
+    val charged = readDailyUnits(teamId, day, DailyScope.MEMBER, listOf(policy.memberId))[policy.memberId] ?: 0L
     // Reserved: in flight now, an upper estimate settled to the real cost when the request ends. An expired lease stays charged, not reserved.
-    val inFlight = Sum(Case().When((Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now), Reservations.units).Else(longLiteral(0)), LongColumnType())
-    val totals = Reservations.select(units, inFlight).where { (Reservations.memberId eq policy.memberId) and (Reservations.dayNumber eq now / DAY) }.single()
-    val charged = totals[units] ?: 0L
-    val reserved = totals[inFlight] ?: 0L
-    val active = Reservations.selectAll().where { (Reservations.memberId eq policy.memberId) and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now) }.count().toInt()
+    // Bounded by the member's running requests, whatever the day's volume.
+    val count = Reservations.id.count()
+    val inFlight = Sum(Case().When(Reservations.dayNumber eq day, Reservations.units).Else(longLiteral(0)), LongColumnType())
+    val running = Reservations.select(count, inFlight).where {
+        (Reservations.memberId eq policy.memberId) and (Reservations.state eq "ACTIVE") and (Reservations.expiresAt greater now)
+    }.single()
+    val reserved = running[inFlight] ?: 0L
+    val active = running[count].toInt()
     val weight = Coalesce(MemberPolicies.weight, intLiteral(1)).sum()
     val totalWeight = cache.totalWeight.getOrPut(policy.poolId) {
         (Members leftJoin MemberPolicies).select(weight).where {
