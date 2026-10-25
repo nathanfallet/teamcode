@@ -7,9 +7,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -376,12 +376,20 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StateChip(session.state)
-            if (session.remote) KindChips(session)
-            LiveLabel(state)
-            Spacer(Modifier.weight(1f))
-            Text(stringResource(Res.string.session_details), style = MetaStyle.copy(fontSize = 11.5.sp), color = colors.muted)
-            Icon(if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(14.dp))
+            // The weighted chips are measured after the caret, so on a phone they wrap to a second line instead of
+            // squeezing the caret out of the row.
+            FlowRow(
+                Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                StateChip(session.state)
+                if (session.remote) KindChips(session)
+                LiveLabel(state)
+            }
+            Icon(
+                if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = stringResource(Res.string.session_details),
+                tint = colors.muted, modifier = Modifier.size(14.dp),
+            )
         }
         if (!expanded) {
             val line = listOfNotNull(session.agentKind, session.model, session.effort, session.host?.directoryName, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })

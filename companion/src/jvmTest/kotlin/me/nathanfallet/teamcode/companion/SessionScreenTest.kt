@@ -15,13 +15,16 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emptyFlow
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
@@ -76,6 +79,25 @@ class SessionScreenTest {
         onNodeWithText("Asks before acting").assertExists()
         onNodeWithTag("session-menu").performClick()
         onNodeWithTag("resume").assertDoesNotExist()
+    }
+
+    @Test fun onAPhoneTheDetailsCaretStaysBesideALongStateRow() = runComposeUiTest {
+        // The stream never answers, so the row shows its longest state, "CONNECTING", beside the remote chip.
+        val connecting = object : TranscriptRepository by transcripts {
+            override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = flow { awaitCancellation() }
+        }
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.ACTIVE, host = laptop(name = "TeamCode CLI")) }
+        val model = viewModel(sessions, connecting)
+        setContent { TeamCodeTheme { Box(Modifier.size(390.dp, 700.dp)) { SessionScreen(model, memberId = "m1", onBack = {}) } } }
+        waitUntil { model.uiState.value.session != null }
+        waitForIdle()
+        // The toggle is the caret alone: no "Details" label to squeeze, but it still names itself to screen readers.
+        onNodeWithText("Details", useUnmergedTree = true).assertDoesNotExist()
+        val caret = onNodeWithContentDescription("Details", useUnmergedTree = true).getBoundsInRoot()
+        val chip = onNodeWithText("Remote · TeamCode CLI", useUnmergedTree = true).getBoundsInRoot()
+        assertTrue((caret.right - caret.left).value >= 14f, "The caret is ${caret.right - caret.left} wide")
+        assertTrue(onNodeWithTag("summary").getBoundsInRoot().right.value <= 390f)
+        assertTrue((chip.bottom - chip.top).value < 40f, "The remote chip wrapped: ${chip.bottom - chip.top} tall")
     }
 
     @Test fun aSessionWaitingForItsDeviceSaysSoInWords() = runComposeUiTest {
