@@ -135,6 +135,9 @@ cloudSessions:
 
 # Optional single MySQL instance for a self-contained installation, using the tested official 8.4 image.
 # For production HA, disable this and supply an externally managed MySQL 8.4 JDBC URL below.
+# This is the chart's own StatefulSet (templates/mysql.yaml, official mysql image, data in /var/lib/mysql), NOT the
+# Bitnami MySQL subchart: its keys are mysql.resources, mysql.persistence and mysql.config. Bitnami-style keys such as
+# mysql.primary.resources do not exist here; rendering fails on mysql.primary rather than ignoring it.
 mysql:
   enabled: true
   image: mysql:8.4
