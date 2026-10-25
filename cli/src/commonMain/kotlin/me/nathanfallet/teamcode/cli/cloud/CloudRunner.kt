@@ -29,6 +29,8 @@ import okio.Path.Companion.toPath
 internal interface RunnerCalls {
     suspend fun register(): RunnerInstructionView
     suspend fun heartbeat(ready: Boolean): RunnerInstructionView
+    /** A heartbeat that also says whether the agent has background work (subagents, background commands, scheduled wake-ups). */
+    suspend fun heartbeat(ready: Boolean, background: Boolean): RunnerInstructionView = heartbeat(ready)
     suspend fun checkpoint(completed: Boolean): RunnerInstructionView
 }
 
@@ -37,6 +39,8 @@ internal interface RunnerCalls {
  * checkpoint when a pause is requested. The loop does not wait for the next 15-second tick when something changes:
  * the end of the preparation (ready is reported at once), the end of the drain (the checkpoint is sent at once) and a
  * change of the desired state seen by the agent's input long-poll ([wake]) all start the next heartbeat right away.
+ * Each heartbeat also says whether the agent has background work ([RunnerAgent.backgroundWork]), which the server's idle
+ * pause counts for a bounded time.
  * Once the server accepted the checkpoint the runner exits, so the pod stops without waiting for its grace period.
  *
  * `409 execution_fenced` means this execution is fenced: stop and exit without checkpointing; any other `409` is
@@ -109,7 +113,9 @@ internal class RunnerLoop(
             // This heartbeat answers every wake-up so far (a preparation that ended before the first one, in particular).
             wakeUps.tryReceive()
             val ready = prepared()
-            val instruction = when (val outcome = attempt { calls.heartbeat(ready = ready) }) {
+            // The agent's background work keeps the session from the idle pause; it only runs once the environment is ready.
+            val background = ready && agent?.backgroundWork == true
+            val instruction = when (val outcome = attempt { calls.heartbeat(ready = ready, background = background) }) {
                 is Outcome.Done -> outcome.instruction
                 Outcome.Fenced -> return EXIT_FENCED_OR_DONE
                 Outcome.Conflict -> null
@@ -188,7 +194,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
         val code = untilTerminated({ echo(it, err = true) }) { client.use {
             val calls = object : RunnerCalls {
                 override suspend fun register() = client.runnerRegister(RunnerRegisterRequest(team, session, epoch))
-                override suspend fun heartbeat(ready: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready))
+                override suspend fun heartbeat(ready: Boolean) = heartbeat(ready, background = false)
+                override suspend fun heartbeat(ready: Boolean, background: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready, background))
                 override suspend fun checkpoint(completed: Boolean) = client.runnerCheckpoint(RunnerCheckpointRequest(team, session, epoch, completed))
             }
             val preparation = object : PreparationCalls {
@@ -249,10 +256,14 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                 // The owner's environment variables: in the agent's environment at each start and, for Claude Code,
                 // asked of this process again before each Bash command through a script that holds no value.
                 val variables = RunnerVariables({ client.runnerVariables(RunnerVariablesRequest(team, session, epoch)) }, log = { echo(it, err = true) })
+                // The agent's `Stop` hook reports its scheduled wake-ups on the same socket; the agent host is built below.
+                var wakeups: (Int) -> Unit = {}
+                var stateHook: String? = null
                 val environmentScript = environment("TEAMCODE_CREDENTIAL_SOCKET")?.takeIf { it.isNotBlank() }?.let { credential ->
                     try {
                         val socket = EnvironmentBroker.socketFor(credential)
-                        val broker = EnvironmentBroker(listenUnix(socket), variables, log = { message -> echo(message, err = true) })
+                        val broker = EnvironmentBroker(listenUnix(socket), variables, log = { message -> echo(message, err = true) }, wakeups = { wakeups(it) })
+                        stateHook = "${AgentEnvironment.quote(binary)} cloud agent-state --socket ${AgentEnvironment.quote(socket)}"
                         scope.launch { broker.serve() }
                         EnvironmentBroker.scriptFor(credential).also { path ->
                             FileSystem.SYSTEM.write(path.toPath()) { writeUtf8(AgentEnvironment.cloudScript(binary, socket)) }
@@ -276,7 +287,8 @@ internal class CloudRunner : SuspendingCliktCommand(name = "runner") {
                         if (inference.unsupported) null else AgentInferenceEndpoint(port, localToken)
                     }, tools = tools, variables = agentVariables,
                     // The pod's `uploads` volume, mounted read-only in the agent's container; an older pod spec has none.
-                    uploads = environment("TEAMCODE_UPLOADS_DIR")?.takeIf { it.isNotBlank() }?.let { SessionUploads.pod(it) })
+                    uploads = environment("TEAMCODE_UPLOADS_DIR")?.takeIf { it.isNotBlank() }?.let { SessionUploads.pod(it) }, stateHook = stateHook)
+                wakeups = agent::scheduledWakeups
                 // Preparation commands run where the agent runs, never beside the projected token; the runner masks their
                 // output and a writer in the agent's container keeps the log.
                 val logFile = EnvironmentPreparation.logFile(workspace, epoch)

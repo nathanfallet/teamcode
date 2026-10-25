@@ -54,7 +54,7 @@ class CloudConversationRoutesTest {
         override suspend fun claimDue(owner: String, leaseMillis: Long, limit: Int) = emptyList<CloudSession>()
         override suspend fun release(sessionId: String, owner: String, reconcileAt: Long?) = Unit
         override suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int) = StartOutcome.Conflict
-        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean) = true
+        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean, background: Boolean) = true
         override suspend fun liveObjects(clusterId: String) = LiveObjects(emptySet(), emptySet())
         override suspend fun namespaces(clusterId: String) = emptySet<String>()
         override suspend fun recordGarbageCollection(clusterId: String, orphanedVolumes: Int) = Unit

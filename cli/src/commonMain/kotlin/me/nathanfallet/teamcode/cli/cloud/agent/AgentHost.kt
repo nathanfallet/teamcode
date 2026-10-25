@@ -30,6 +30,11 @@ internal interface RunnerAgent {
     fun onInstructionChange(changed: () -> Unit) {}
     /** The server terminated the session: it never runs again, so what it keeps on this host can go at [stop]. */
     fun sessionEnded() {}
+    /**
+     * Whether the agent has background work: tasks in flight (subagents, background commands, monitors) or scheduled
+     * wake-ups. Reported with each heartbeat; the server's idle pause counts it, up to the team's cap.
+     */
+    val backgroundWork: Boolean get() = false
 }
 
 /** The agent half of the runner channel, bound to one session epoch. */
@@ -88,8 +93,21 @@ internal class AgentHost(
      * no file support, so the server rejects such messages (`files_unsupported`) instead of delivering their text alone.
      */
     private val uploads: SessionUploads? = null,
+    /**
+     * A shell command Claude Code runs on `Stop` to hand the runner the number of its scheduled wake-ups
+     * (`teamcode cloud agent-state`, see [CloudAgentState]); null reports none. Added to the team hooks' settings.
+     */
+    private val stateHook: String? = null,
 ) : RunnerAgent {
     override var fenced = false; private set
+    /** Scheduled wake-ups of the current agent process, from its last `Stop` ([scheduledWakeups]); 0 for a new process. */
+    @kotlin.concurrent.Volatile private var wakeups = 0
+    /** Background tasks of the current agent process ([AgentAdapter.backgroundTasks]) or scheduled wake-ups; none without a process. */
+    override val backgroundWork: Boolean get() = backgroundTasksInFlight || (adapter != null && wakeups > 0)
+    /** Background tasks in flight (subagents, background commands, monitors): the work a stop of the agent kills. */
+    val backgroundTasksInFlight: Boolean get() = (adapter?.backgroundTasks ?: 0) > 0
+    /** Records [count] scheduled wake-ups, reported by the agent's `Stop` hook through the runner's environment socket. */
+    fun scheduledWakeups(count: Int) { wakeups = count.coerceAtLeast(0) }
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
     private val lock = Mutex()
     /** Serializes writes to the agent's stdin (fair, so lines keep their order). */
@@ -149,8 +167,19 @@ internal class AgentHost(
         }?.let { (child, lines) -> if (lines.isNotEmpty()) write(child, lines) }
         val limit = (deadline ?: (now() + DEFAULT_DRAIN_MILLIS)) - SAFETY_MARGIN_MILLIS
         suspend fun running() = lock.withLock { adapter?.turnActive == true && process?.exitCode() == null }
-        while (now() < limit && running()) sleep(250)
+        // Background tasks (subagents, background commands, monitors) die with the agent: the drain waits for them too, and
+        // for the turn in which Claude Code reports their end. Scheduled wake-ups are not waited for: `--resume` restores them.
+        suspend fun tasks() = lock.withLock { if (process?.exitCode() == null) adapter?.backgroundTasks ?: 0 else 0 }
+        if (tasks() > 0) log("Pausing: waiting for the agent's background work to end before checkpointing.")
+        while (now() < limit && (running() || tasks() > 0)) sleep(250)
         var clean = true
+        val left = tasks()
+        if (left > 0) {
+            // Said in the transcript: the pause stops work the member may expect to finish.
+            clean = false
+            lock.withLock { enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", "background_stopped"); put("tasks", left) }) }
+            log("Pausing: $left background task${if (left == 1) "" else "s"} of the agent did not end before the pause deadline; stopping ${if (left == 1) "it" else "them"}.")
+        }
         if (running()) {
             clean = false
             lock.withLock { process?.let { child -> adapter?.interrupt()?.let { child to it } } }?.let { (child, lines) -> write(child, lines) }
@@ -331,7 +360,7 @@ internal class AgentHost(
         val next = agentAdapter(config, clientVersion, now, readableDirectories = listOfNotNull(uploadsDirectory))
         val (command, environment) = launch(config.kind, next.command(resume))
         val child = start(command, environment, workingDirectory)
-        process = child; adapter = next; resumed = resume
+        process = child; adapter = next; resumed = resume; wakeups = 0
         val startup = next.startup(resume, workingDirectory)
         writeLock.withLock { for (line in startup) child.writeLine(line) }
         reader = scope.launch { readLoop(child, next) }
@@ -351,7 +380,7 @@ internal class AgentHost(
         val endpoint = inference?.invoke() ?: return base to owner + AGENT_ENVIRONMENT
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
-        val hooks = tools?.hooks(kind).orEmpty().let(::cloudHookSettings)?.let { listOf("--settings", it) }.orEmpty()
+        val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" })?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
             hookToken = false, artifacts = tools?.artifacts())
@@ -399,7 +428,7 @@ internal class AgentHost(
                 }
                 if (!stopping) enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", "exited"); put("exitCode", code) })
                 if (active.turnActive && !stopping) enqueue(CloudEventTypes.TURN, buildJsonObject { put("phase", "failed") })
-                process = null; adapter = null; resumed = null
+                process = null; adapter = null; resumed = null; wakeups = 0
             }
         }
     }

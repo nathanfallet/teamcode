@@ -80,6 +80,26 @@ internal class CloudEnvironment : SuspendingCliktCommand(name = "environment") {
 }
 
 /**
+ * `teamcode cloud agent-state --socket PATH`: the runner's `Stop` hook in a Claude Code session. Reads the hook input on
+ * standard input (at most 8 MiB), hands the number of scheduled wake-ups to the runner ([reportWakeups]) and always exits
+ * 0 without output, so it never changes the agent's turn. The rest of the input is dropped.
+ */
+internal class CloudAgentState : SuspendingCliktCommand(name = "agent-state") {
+    override val hiddenFromHelp = true
+    override fun help(context: Context) = "Report the agent's scheduled wake-ups to the session runner (run by the agent's Stop hook, not by hand)."
+    private val socket by option("--socket", help = "The runner's environment socket.").required()
+    override suspend fun run() {
+        val input = StringBuilder()
+        for (line in generateSequence(::readlnOrNull)) {
+            if (input.length + line.length > MAX_INPUT_CHARS) break
+            input.append(line).append('\n')
+        }
+        reportWakeups(socket, scheduledWakeups(input.toString()))
+    }
+    private companion object { const val MAX_INPUT_CHARS = 8 * 1_048_576 }
+}
+
+/**
  * `teamcode cloud preparation-log FILE`: appends the lines of standard input to the preparation log, keeping its last
  * 4 MiB. The runner starts it in the agent's container, so the file on the workspace is opened by the agent's UID and
  * never by the runner, and sends it the output of each preparation command with known secrets already masked.

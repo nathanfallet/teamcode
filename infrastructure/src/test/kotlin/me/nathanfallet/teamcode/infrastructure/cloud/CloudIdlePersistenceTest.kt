@@ -106,6 +106,30 @@ class CloudIdlePersistenceTest {
                 a.query { CloudSessionAttachments.update({ CloudSessionAttachments.sessionId eq created.id }) { it[leaseUntil] = 1 } }
                 rb.conversations.purgeTranscripts(100)
                 assertEquals(0L, a.query { CloudSessionAttachments.selectAll().where { CloudSessionAttachments.sessionId eq created.id }.count() })
+                ra.sessions.delete(admin, null, created.id)
+
+                // Background work of the agent (a subagent, a background command, a scheduled wake-up), reported by the
+                // runner's heartbeats, keeps an idle session running; work that never ends counts for the team's cap only.
+                val busy = (ra.sessions.create(member, null, draft(profile, "Run the long suite"), key("create-3")) as CloudCreateOutcome.Created).session
+                pass(ra); pass(ra)
+                val busyPod = CloudSessionService.podName(busy.id, 1)
+                cluster.start(busyPod); pass(ra)
+                ra.runner.register(teamId, busy.id, 1, busyPod)
+                rb.runner.heartbeat(teamId, busy.id, 1, ready = true)
+                ra.agent.acknowledge(teamId, busy.id, 1, rb.agent.inputs(teamId, busy.id, 1, 0).map { RunnerInputAck(it.id, true, null) })
+                rb.runner.heartbeat(teamId, busy.id, 1, ready = true, background = true)
+                idleFor(a, busy.id, 6)
+                pass(rb)
+                assertEquals(DesiredState.RUNNING, ra.store.find(teamId, busy.id)!!.desiredState, "Background work still running is activity")
+                val stretch = ra.store.execution(busy.id, 1)!!
+                assertNotNull(stretch.backgroundSince)
+                rb.runner.heartbeat(teamId, busy.id, 1, ready = true, background = true)
+                assertEquals(stretch.backgroundSince, ra.store.execution(busy.id, 1)!!.backgroundSince, "An unbroken stretch keeps its start")
+                // Reported for 250 minutes: it counted until 240 minutes after its start, ten minutes ago, past the 5-minute timeout.
+                a.query { CloudExecutions.update({ CloudExecutions.sessionId eq busy.id }) { it[backgroundSince] = nowMillis() - 250 * 60_000L } }
+                rb.runner.heartbeat(teamId, busy.id, 1, ready = true, background = true)
+                pass(rb)
+                assertEquals(DesiredState.PAUSED, ra.store.find(teamId, busy.id)!!.desiredState, "Background work that never ends does not keep a session running forever")
             } }
         }
     }

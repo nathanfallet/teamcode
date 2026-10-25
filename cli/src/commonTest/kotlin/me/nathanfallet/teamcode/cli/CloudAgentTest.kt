@@ -31,6 +31,24 @@ class CloudAgentTest {
     private fun obj(line: String) = Json.parseToJsonElement(line).jsonObject
     private fun JsonObject.str(name: String) = (this[name] as JsonPrimitive).content
 
+    @Test fun claudeCountsTheLiveBackgroundTasksItReports() {
+        // `background_tasks_changed` carries the full live set; ambient tasks are Claude Code's own, not the session's work
+        // (https://code.claude.com/docs/en/agent-sdk/typescript#sdkbackgroundtaskschangedmessage).
+        val adapter = ClaudeStreamJsonAdapter(claude)
+        assertEquals(0, adapter.backgroundTasks, "Nothing is emitted at startup: an agent process starts with none")
+        fun changed(tasks: String) = adapter.parse("""{"type":"system","subtype":"background_tasks_changed","tasks":[$tasks],"uuid":"u","session_id":"c1"}""")
+        val output = changed("""{"task_id":"a1","task_type":"local_agent","subagent_type":"general-purpose","description":"Review"},""" +
+            """{"task_id":"b1","task_type":"local_bash","description":"npm test"},{"task_id":"w1","task_type":"local_bash","description":"watch","ambient":true}""")
+        assertTrue(output.events.isEmpty() && output.replies.isEmpty(), "Nothing reaches the transcript")
+        assertEquals(2, adapter.backgroundTasks)
+        assertFalse(adapter.turnActive, "Background work is not a turn")
+        changed("""{"task_id":"w1","task_type":"local_bash","description":"watch","ambient":true}""")
+        assertEquals(0, adapter.backgroundTasks)
+        adapter.parse("""{"type":"system","subtype":"background_tasks_changed","uuid":"u","session_id":"c1"}""")
+        assertEquals(0, adapter.backgroundTasks, "A malformed list counts as none")
+        assertEquals(0, CodexAppServerAdapter(codex, "1").backgroundTasks)
+    }
+
     @Test fun claudeStreamJsonIsBypassResumableAndDropsThinking() {
         val adapter = ClaudeStreamJsonAdapter(claude)
         assertTrue(adapter.takeEvents().isEmpty())
@@ -601,6 +619,75 @@ class CloudAgentTest {
         assertTrue(host.drain(pausedAt + 10 * 60_000), "Nothing runs: a clean stop")
         assertTrue(testScheduler.currentTime - pausedAt < 1_000, "The drain did not wait for a turn that had ended (${testScheduler.currentTime - pausedAt} ms)")
         assertFalse(process.written.any { "\"interrupt\"" in it })
+        job.cancel()
+    }
+
+    @Test fun aPauseWaitsForBackgroundWorkBeforeStoppingTheAgent() = runTest {
+        // A pause (explicit, idle, or the device daemon stopping for `teamcode update`) stopped the agent as soon as its turn
+        // ended, killing the subagents and background commands it still ran: the drain now waits for them, up to its deadline.
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Run the suite in the background", 1)))
+        until { channel.acks.isNotEmpty() }
+        val process = started.single().second
+        process.output.send("""{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"npm test"}]}""")
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { channel.uploaded.count { it.type == CloudEventTypes.TURN } == 2 && host.backgroundWork }
+        val pausedAt = testScheduler.currentTime
+        val drained = async { host.drain(pausedAt + 10 * 60_000) }
+        delay(120_000)
+        assertEquals(0, process.stops, "The agent keeps running while its background work does")
+        assertFalse(drained.isCompleted)
+        // The command ends: Claude Code reports it in a turn of its own, which the drain lets finish.
+        process.output.send("""{"type":"system","subtype":"background_tasks_changed","tasks":[]}""")
+        process.output.send("""{"type":"assistant","message":{"content":[{"type":"text","text":"The suite passed"}]}}""")
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        assertTrue(drained.await(), "Background work that ended in time is a clean stop")
+        assertTrue(testScheduler.currentTime - pausedAt < 130_000)
+        job.cancel()
+    }
+
+    @Test fun scheduledWakeupsAreBackgroundWorkOfTheCurrentAgentProcessOnly() = runTest {
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        host.scheduledWakeups(2)
+        assertFalse(host.backgroundWork, "No agent process, nothing scheduled to fire")
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Check the deploy every 5 minutes", 1)))
+        until { channel.acks.isNotEmpty() }
+        val process = started.single().second
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { channel.uploaded.count { it.type == CloudEventTypes.TURN } == 2 }
+        assertFalse(host.backgroundWork, "A new process starts with none")
+        host.scheduledWakeups(1)
+        assertTrue(host.backgroundWork, "A /loop or a reminder keeps the session from the idle pause")
+        assertFalse(host.backgroundTasksInFlight, "But it is not work a stop kills: --resume restores it")
+        host.scheduledWakeups(0)
+        assertFalse(host.backgroundWork)
+        job.cancel()
+    }
+
+    @Test fun backgroundWorkStillRunningAtThePauseDeadlineIsStoppedAndSaid() = runTest {
+        val channel = FakeChannel()
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, MemoryState(), started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Tail the logs", 1)))
+        until { channel.acks.isNotEmpty() }
+        val process = started.single().second
+        process.output.send("""{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"tail -f"},{"task_id":"a1","task_type":"local_agent","description":"Review"}]}""")
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { host.backgroundWork }
+        val deadline = testScheduler.currentTime + 10 * 60_000
+        assertFalse(host.drain(deadline), "Background work stopped by the pause is not a clean stop")
+        assertTrue(testScheduler.currentTime <= deadline, "Within the pause deadline")
+        assertNotNull(process.exit, "The agent is stopped")
+        until { channel.uploaded.any { it.type == CloudEventTypes.STATUS && (it.data["agent"] as? JsonPrimitive)?.content == "background_stopped" } }
+        assertEquals(2, (channel.uploaded.single { (it.data["agent"] as? JsonPrimitive)?.content == "background_stopped" }.data["tasks"] as JsonPrimitive).int,
+            "The transcript says how much background work the pause stopped")
         job.cancel()
     }
 

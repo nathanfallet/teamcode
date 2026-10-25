@@ -10,6 +10,8 @@ import me.nathanfallet.teamcode.api.models.EnvironmentVariablesView
 import me.nathanfallet.teamcode.cli.cloud.agent.EnvironmentBroker
 import me.nathanfallet.teamcode.cli.cloud.agent.RunnerVariables
 import me.nathanfallet.teamcode.cli.cloud.agent.requestEnvironment
+import me.nathanfallet.teamcode.cli.cloud.agent.reportWakeups
+import me.nathanfallet.teamcode.cli.cloud.agent.scheduledWakeups
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.launch.EnvironmentRefresh
 import me.nathanfallet.teamcode.cli.platform.listenUnix
@@ -87,6 +89,35 @@ class AgentEnvironmentShellTest {
                 writePrivateFile(values, AgentEnvironment.script(second.variables, second.withdrawn.toSet()))
                 assertEquals("<unset> two", bash(values, "printf '%s %s' \"\${NPM_TOKEN-<unset>}\" \"\$OTHER_VALUE\"", mapOf("NPM_TOKEN" to "it's one")))
                 assertNull(withContext(Dispatchers.IO) { requestEnvironment(directory.resolve("missing.sock").toString()) }, "No runner: no answer, no failure")
+            } finally { listener.close(); server.cancel() }
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test fun theAgentsStopHookHandsItsScheduledWakeupsToTheRunner() = runBlocking {
+        // Claude Code's Stop input lists the session's scheduled wake-ups (https://code.claude.com/docs/en/hooks#stop-input).
+        val stop = """{"hook_event_name":"Stop","last_assistant_message":"secret","background_tasks":[],"session_crons":[""" +
+            """{"id":"c1","schedule":"*/5 * * * *","recurring":true,"prompt":"check the build"},{"id":"c2","schedule":"3 9 * * *","recurring":false,"prompt":"remind"}]}"""
+        assertEquals(2, scheduledWakeups(stop))
+        assertEquals(0, scheduledWakeups("""{"hook_event_name":"Stop","session_crons":[]}"""))
+        assertEquals(0, scheduledWakeups("""{"hook_event_name":"Stop"}"""), "An older Claude Code reports none")
+        assertEquals(0, scheduledWakeups("not json"))
+        val big = "x".repeat(1_100_000)
+        assertEquals(1, scheduledWakeups("""{"last_assistant_message":"$big","session_crons":[{"id":"c1"}]}"""), "Too large to parse: a non-empty list as a key")
+        assertEquals(0, scheduledWakeups("""{"last_assistant_message":"\"session_crons\":[{$big","session_crons":[]}"""))
+        val directory = Files.createTempDirectory("tc-env")
+        try {
+            val socket = directory.resolve("environment.sock").toString()
+            val reported = mutableListOf<Int>()
+            val listener = listenUnix(socket)
+            val server = launch(Dispatchers.IO) { EnvironmentBroker(listener, RunnerVariables({ EnvironmentVariablesView(emptyMap()) }), wakeups = { synchronized(reported) { reported += it } }).serve() }
+            try {
+                assertTrue(withContext(Dispatchers.IO) { reportWakeups(socket, 2) })
+                assertTrue(withContext(Dispatchers.IO) { reportWakeups(socket, 1_000_000) }, "Written, but not a count: ignored")
+                assertTrue(withContext(Dispatchers.IO) { reportWakeups(socket, 0) })
+                repeat(100) { if (synchronized(reported) { reported.size } < 2) Thread.sleep(20) }
+                assertEquals(setOf(2, 0), synchronized(reported) { reported.toSet() })
+                assertEquals(2, synchronized(reported) { reported.size })
+                assertFalse(withContext(Dispatchers.IO) { reportWakeups(directory.resolve("missing.sock").toString(), 1) }, "No runner: nothing, no failure")
             } finally { listener.close(); server.cancel() }
         } finally { directory.toFile().deleteRecursively() }
     }

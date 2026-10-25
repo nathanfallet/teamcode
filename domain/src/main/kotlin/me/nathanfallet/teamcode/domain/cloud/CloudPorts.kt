@@ -83,8 +83,11 @@ interface CloudSessionStore {
     suspend fun startHostExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, ended: CloudExecution?, actor: CloudActor): CloudSession? =
         throw UnsupportedOperationException("This store does not host remote sessions.")
 
-    /** Records a heartbeat for the current execution; false when the epoch is fenced. */
-    suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean
+    /**
+     * Records a heartbeat for the current execution; false when the epoch is fenced. [background]: the runner reports
+     * background work of the agent, recorded as [CloudIdleRules.heartbeat] says.
+     */
+    suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean, background: Boolean = false): Boolean
 
     /** Sessions (live or not) known for a cluster, for garbage collection of orphaned objects. */
     suspend fun liveObjects(clusterId: String): LiveObjects

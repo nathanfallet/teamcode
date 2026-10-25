@@ -237,7 +237,11 @@ private class Manage(private val operation: String) : SuspendingCliktCommand(nam
                 if (!selected.atBoot && automaticServiceSetup(selected.config))
                     echo("Stopped. teamcode update and the automatic update job start it again; teamcode service automatic off keeps it stopped.")
             }
-            "restart" -> { echo("Draining the local proxy before restarting."); stop(selected); start(selected) }
+            "restart" -> {
+                echo("Draining the local proxy before restarting. Remote sessions this device's daemon hosts pause and resume after the restart; " +
+                    "their agents first finish their turn and the background work they still run (subagents, background commands), for up to 10 minutes.")
+                stop(selected); start(selected)
+            }
             "uninstall" -> {
                 if (!ownsRegistration(selected)) throw CliktError("The registration is missing. Repair it with service install before uninstalling.")
                 stop(selected)

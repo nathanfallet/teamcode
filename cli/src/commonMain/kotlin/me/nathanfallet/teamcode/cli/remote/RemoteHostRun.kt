@@ -26,6 +26,10 @@ import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.Path.Companion.toPath
+import kotlin.time.Clock
+import me.nathanfallet.teamcode.cli.update.BackgroundInstallationLease
+import me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart
+import me.nathanfallet.teamcode.cli.update.managedInstallation
 
 /** The run label that ties the host's registered run to its session, for quotas, budgets and the runs page. */
 internal const val SESSION_RUN_LABEL = "teamcode.session"
@@ -55,11 +59,12 @@ internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSes
     if (accepted != null) report("Hosting session $session (epoch $epoch) for this device's daemon, in ${record.directory}.")
     // Started by `remote start` or `resume`, the host holds the installation lease: an update defers the local service's
     // restart until it ends, as for `teamcode run`. Started by the daemon, it holds none (decision 12): it does not use the
-    // service's proxy, and that restart is what pauses it, before the new daemon resumes it on the new version.
+    // service's proxy, and that restart is what pauses it, before the new daemon resumes it on the new version. It holds
+    // one only while its agent has background work in flight ([BackgroundInstallationLease]), so an update does not kill it.
     val lease = if (accepted != null) null else me.nathanfallet.teamcode.cli.update.agentInstallationLease(loadService(configPath())?.executable, report)
     try {
         trackedRun(client, record.agent, "interactive", "team.runs.v1" in features, report = report, labels = mapOf(SESSION_RUN_LABEL to session)) { runId ->
-            hostExecution(client, record, team, epoch, runId, features, report, stopRequested)
+            hostExecution(client, record, team, epoch, runId, features, report, stopRequested, daemonHosted = accepted != null)
         }
     } finally {
         try { lease?.close() } finally {
@@ -72,11 +77,12 @@ internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSes
 internal data class AcceptedHost(val teamId: String, val epoch: Int)
 
 private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionRecord, team: String, epoch: Int, runId: String?, features: List<String>,
-    report: (String) -> Unit, stopRequested: () -> Boolean): Int = coroutineScope {
+    report: (String) -> Unit, stopRequested: () -> Boolean, daemonHosted: Boolean = false): Int = coroutineScope {
     val session = record.sessionId
     val calls = object : RunnerCalls {
         override suspend fun register() = client.runnerRegister(RunnerRegisterRequest(team, session, epoch))
-        override suspend fun heartbeat(ready: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready))
+        override suspend fun heartbeat(ready: Boolean) = heartbeat(ready, background = false)
+        override suspend fun heartbeat(ready: Boolean, background: Boolean) = client.runnerHeartbeat(RunnerHeartbeatRequest(team, session, epoch, ready, background))
         override suspend fun checkpoint(completed: Boolean) = client.runnerCheckpoint(RunnerCheckpointRequest(team, session, epoch, completed))
     }
     val channel = object : AgentChannel {
@@ -105,6 +111,12 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
             inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report))
         val loop = RunnerLoop(calls, log = report, agent = agent)
+        // A daemon's host: while the agent's background work runs, an update waits before restarting the service (which pauses this session).
+        val backgroundLease = if (!daemonHosted) null else launch {
+            BackgroundInstallationLease({ agent.backgroundTasksInFlight }, BackgroundInstallationLease::acquireNow, {
+                managedInstallation()?.let { store -> applyPendingServiceRestart(store, report = report) }
+            }, now = { Clock.System.now().toEpochMilliseconds() }).run()
+        }
         val work = async {
             try { loop.run() }
             catch (error: RunnerLoop.RunnerRefused) {
@@ -120,7 +132,7 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
             currentCoroutineContext().ensureActive()
             if (!aborted) throw error
             RunnerLoop.EXIT_FENCED_OR_DONE
-        } finally { stop.cancel() }
+        } finally { stop.cancel(); backgroundLease?.cancel() }
     } finally {
         withContext(NonCancellable) {
             proxy.stop(500, 5_000)

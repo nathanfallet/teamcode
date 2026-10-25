@@ -18,6 +18,7 @@ import me.nathanfallet.teamcode.cli.cloud.agent.CloudAgentSupervisor
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudCredential
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudPreparationLog
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudEnvironment
+import me.nathanfallet.teamcode.cli.cloud.agent.CloudAgentState
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudInstallSkills
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.remote.REMOTE_CAPABILITY
@@ -27,7 +28,7 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 /** `teamcode cloud`: sessions that run on the team's Kubernetes cluster. */
 class Cloud : SuspendingNoOpCliktCommand(name = "cloud") {
     override fun help(context: Context) = "Create and manage cloud sessions on your team's cluster. Requires an interactive login."
-    init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudGitHub(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAnswer(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudPreparationLog(), CloudCredential(), CloudEnvironment(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
+    init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudGitHub(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAnswer(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudPreparationLog(), CloudCredential(), CloudEnvironment(), CloudAgentState(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
 }
 
 /** One row: id, state, name, epoch, last update, kind, and where it runs (the profile of a cloud session, the device of a remote one). */
@@ -212,9 +213,15 @@ private class CloudShow : SuspendingCliktCommand(name = "show") {
 
 private class CloudPause : SuspendingCliktCommand(name = "pause") {
     private val id by argument()
-    private val force by option("--force", help = "Do not wait for the agent to drain; the workspace becomes crash-consistent.").flag()
+    private val force by option("--force", help = "Do not wait for the agent to drain; its background work is stopped and the workspace becomes crash-consistent.").flag()
     private val onBehalfOf by option("--member", help = "Act for this member (TeamCode-On-Behalf-Of); administrators only.")
-    override suspend fun run() { echo(sdk(loadConfig()).use { it.pauseCloudSession(id, force, onBehalfOf) }.line()) }
+    override fun help(context: Context) = "Pause a session: the agent finishes its turn and the background work it still runs (subagents, background " +
+        "commands), for up to 10 minutes; work still running then is stopped, and the transcript says so. Scheduled wake-ups come back on resume."
+    override suspend fun run() {
+        echo(sdk(loadConfig()).use { it.pauseCloudSession(id, force, onBehalfOf) }.line())
+        echo(if (force) "Forced: the agent and any background work it runs stop now." else
+            "The agent finishes its turn and its background work (up to 10 minutes) before the session checkpoints; use --force to stop now.")
+    }
 }
 
 private class CloudResume : SuspendingCliktCommand(name = "resume") {

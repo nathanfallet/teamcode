@@ -90,6 +90,35 @@ class CloudRunnerTest {
         assertEquals(3_000L, checkpointAt, "Checkpointed when the 3-second drain ended, not at the next 15-second heartbeat")
     }
 
+    @Test fun heartbeatsReportTheAgentsBackgroundWork() = runTest {
+        var background = false
+        val agent = object : RunnerAgent {
+            override val fenced = false
+            override val backgroundWork get() = background
+            override suspend fun run() = awaitCancellation()
+            override suspend fun drain(deadline: Long?) = true
+            override fun resumeAfterDrain() = Unit
+            override suspend fun stop() = Unit
+        }
+        val beats = mutableListOf<Pair<Boolean, Boolean>>()
+        val calls = object : RunnerCalls {
+            override suspend fun register() = RunnerInstructionView("running", null, 1)
+            override suspend fun heartbeat(ready: Boolean) = heartbeat(ready, background = false)
+            override suspend fun heartbeat(ready: Boolean, background: Boolean): RunnerInstructionView {
+                beats += ready to background
+                if (beats.size == 3) throw TeamCodeException(409, "fenced", "execution_fenced")
+                return RunnerInstructionView("running", null, 1)
+            }
+            override suspend fun checkpoint(completed: Boolean) = RunnerInstructionView("paused", 0, 1)
+        }
+        var prepared = false
+        launch { delay(20_000); background = true }
+        assertEquals(0, RunnerLoop(calls, agent = agent, prepare = { delay(10_000); prepared = true; true }).run())
+        assertEquals(listOf(false to false, true to false, true to true), beats.take(3),
+            "Unready heartbeats report none; a subagent or background command started later is reported on the next heartbeat")
+        assertTrue(prepared)
+    }
+
     @Test fun aTerminationSignalStopsTheRunnerAndRunsItsCleanup() = runTest {
         var signalled = false
         var cleaned = false

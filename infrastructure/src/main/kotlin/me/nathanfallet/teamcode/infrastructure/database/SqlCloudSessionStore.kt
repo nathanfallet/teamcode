@@ -225,12 +225,21 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         committed
     }
 
-    override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean = database.query {
+    override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean, background: Boolean): Boolean = database.query {
         val current = CloudSessions.select(CloudSessions.currentEpoch).where { CloudSessions.id eq sessionId }.singleOrNull()?.get(CloudSessions.currentEpoch)
         if (current != epoch) return@query false
         val now = nowMillis()
-        CloudExecutions.update({ (CloudExecutions.sessionId eq sessionId) and (CloudExecutions.epoch eq epoch) and (CloudExecutions.state eq ExecutionState.RUNNING.wire) }) {
+        val running = (CloudExecutions.sessionId eq sessionId) and (CloudExecutions.epoch eq epoch) and (CloudExecutions.state eq ExecutionState.RUNNING.wire)
+        // Read by primary key only when background work is reported, to know whether it continues the previous report.
+        // Only heartbeats write these two columns ([writeExecution] leaves them), so a reconciler's stale copy never resets them.
+        val worked = if (!background) null else CloudExecutions.select(CloudExecutions.lastHeartbeatAt, CloudExecutions.backgroundSince, CloudExecutions.backgroundSeenAt)
+            .where { running }.singleOrNull()?.let { row ->
+                CloudIdleRules.heartbeat(CloudExecution(sessionId, epoch, "", ExecutionState.RUNNING, 0, lastHeartbeatAt = row[CloudExecutions.lastHeartbeatAt],
+                    backgroundSince = row[CloudExecutions.backgroundSince], backgroundSeenAt = row[CloudExecutions.backgroundSeenAt]), background = true, now = now)
+            }
+        CloudExecutions.update({ running }) {
             it[lastHeartbeatAt] = now; it[CloudExecutions.runnerReady] = runnerReady
+            if (worked != null) { it[backgroundSince] = worked.backgroundSince; it[backgroundSeenAt] = worked.backgroundSeenAt }
         } == 1
     }
 
@@ -333,6 +342,7 @@ internal fun readExecution(row: ResultRow) = CloudExecution(
     row[CloudExecutions.sessionId], row[CloudExecutions.epoch], row[CloudExecutions.podName], ExecutionState.parse(row[CloudExecutions.state]), row[CloudExecutions.createdAt],
     row[CloudExecutions.registeredAt], row[CloudExecutions.lastHeartbeatAt], row[CloudExecutions.runnerReady], row[CloudExecutions.nodeName], row[CloudExecutions.imageDigest],
     row[CloudExecutions.endedAt], row[CloudExecutions.exitReason], row[CloudExecutions.checkpoint], row[CloudExecutions.ownerId],
+    row[CloudExecutions.backgroundSince], row[CloudExecutions.backgroundSeenAt],
 )
 
 internal fun sessionGuard(expected: CloudSession, leaseOwner: String?, now: Long): Op<Boolean> {

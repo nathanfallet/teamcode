@@ -248,6 +248,10 @@ internal fun activationReport(activation: Activation, store: InstallationStore):
             val running = activation.serviceVersion?.version ?: activation.previous?.version ?: "its current version"
             lines += sessions
             lines += "New sessions and commands use $selected. The local TeamCode service keeps running $running and restarts on $selected when they end."
+            // Remote sessions of the device's daemon count here only while their agent has background work in flight.
+            lines += "Remote sessions this device's daemon hosts count while their agent has background work in flight (subagents, background commands), " +
+                "4 hours at most. To restart now instead, run $COMMAND_NAME service restart: those sessions pause and resume on $selected, " +
+                "and background work that does not end within 10 minutes is stopped."
         }
         ServiceOutcome.NONE -> if (total > 0) { lines += sessions; lines += "New sessions and commands use $selected." }
         ServiceOutcome.FAILED -> lines[0] = "TeamCode $selected remains selected. Launcher: ${store.paths.launcher}"

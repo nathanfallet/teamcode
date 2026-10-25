@@ -38,7 +38,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
     post(RUNNER_PATH + "heartbeat") {
         val body = call.jsonBody<RunnerHeartbeatRequest>()
         val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
-        call.respond(channel.runner.heartbeat(pod.teamId, pod.sessionId, pod.epoch, body.ready).view())
+        call.respond(channel.runner.heartbeat(pod.teamId, pod.sessionId, pod.epoch, body.ready, body.background).view())
     }
     post(RUNNER_PATH + "environment") {
         val body = call.jsonBody<RunnerEnvironmentRequest>()

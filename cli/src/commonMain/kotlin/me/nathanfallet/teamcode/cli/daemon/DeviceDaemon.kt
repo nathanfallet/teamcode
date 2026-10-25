@@ -279,7 +279,7 @@ internal class DeviceDaemon(
     /** Pauses every hosted session, waits for their hosts, then goes offline. */
     private suspend fun shutdown() {
         val live = mutex.withLock { hosted.values.filter { it.process == null || it.process.exitCode() == null } }
-        if (live.isNotEmpty()) report("Stopping: pausing ${live.size} session${if (live.size == 1) "" else "s"}; ${if (live.size == 1) "it resumes" else "they resume"} when the daemon starts again.")
+        if (live.isNotEmpty()) report("Stopping: pausing ${live.size} session${if (live.size == 1) "" else "s"}; ${if (live.size == 1) "it resumes" else "they resume"} when the daemon starts again. Each agent first finishes its turn and its background work, for up to 10 minutes.")
         for (entry in live) {
             // A host of a previous daemon: this one cannot see it exit, so it asks the server whether it still runs.
             if (entry.process == null && !stillRunning(entry)) { sessions.remove(entry.sessionId); continue }

@@ -153,10 +153,11 @@ private class RemoteHost : SuspendingCliktCommand(name = "host") {
 }
 
 private class RemoteStop : SuspendingCliktCommand(name = "stop") {
-    override fun help(context: Context) = "Pause a remote session from any of your devices: the agent finishes its turn, then its host checkpoints and exits. " +
+    override fun help(context: Context) = "Pause a remote session from any of your devices: the agent finishes its turn and the background work it still runs " +
+        "(subagents, background commands; up to 10 minutes, then it is stopped), then its host checkpoints and exits. " +
         "Nothing in its directory is touched; teamcode remote resume SESSION continues it on its device."
     private val session by argument("SESSION")
-    private val force by option("--force", help = "Do not wait for the agent's turn to finish.").flag()
+    private val force by option("--force", help = "Do not wait for the agent's turn or background work to finish.").flag()
 
     override suspend fun run() {
         val paused = sdk(loadConfig()).use { client ->
@@ -166,7 +167,8 @@ private class RemoteStop : SuspendingCliktCommand(name = "stop") {
             client.pauseCloudSession(session, force)
         }
         echo("Session $session: ${paused.state}" + (paused.phase?.let { " ($it)" } ?: "") + ", pausing" +
-            if (paused.host?.online == true) "; its host checkpoints and exits." else ".")
+            if (paused.host?.online == true) (if (force) "; its host stops the agent and its background work now, checkpoints and exits."
+                else "; the agent finishes its turn and its background work (up to 10 minutes), then its host checkpoints and exits.") else ".")
     }
 }
 

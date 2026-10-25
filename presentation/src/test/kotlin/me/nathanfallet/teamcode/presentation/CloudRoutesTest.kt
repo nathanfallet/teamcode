@@ -59,9 +59,9 @@ class CloudRoutesTest {
         override suspend fun claimDue(owner: String, leaseMillis: Long, limit: Int) = emptyList<CloudSession>()
         override suspend fun release(sessionId: String, owner: String, reconcileAt: Long?) = Unit
         override suspend fun startExecution(expected: CloudSession, next: CloudSession, execution: CloudExecution, leaseOwner: String, memberRunningLimit: Int) = StartOutcome.Conflict
-        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean): Boolean {
+        override suspend fun heartbeat(sessionId: String, epoch: Int, runnerReady: Boolean, background: Boolean): Boolean {
             val run = runs[sessionId to epoch]?.takeIf { sessions[sessionId]?.currentEpoch == epoch } ?: return false
-            runs[sessionId to epoch] = run.copy(lastHeartbeatAt = clock, runnerReady = runnerReady)
+            runs[sessionId to epoch] = CloudIdleRules.heartbeat(run, background, clock).copy(lastHeartbeatAt = clock, runnerReady = runnerReady)
             return true
         }
         /** Login sessions with an installation, by token id: two devices of the colleague's. */
@@ -510,6 +510,9 @@ class CloudRoutesTest {
             assertEquals(CloudSessionState.PREPARING, store.sessions.getValue("s1").state)
             runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
             assertEquals(CloudSessionState.READY, store.sessions.getValue("s1").state)
+            assertNull(store.runs.getValue("s1" to 1).backgroundSeenAt, "No background work reported yet")
+            runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true, background = true))
+            assertNotNull(store.runs.getValue("s1" to 1).backgroundSeenAt, "The runner's background work reaches the store")
             assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
                 runner.runnerCheckpoint(RunnerCheckpointRequest("default", "s1", 1, completed = true))
             }.statusCode, "No checkpoint before a pause is requested")
@@ -888,7 +891,9 @@ class CloudRoutesTest {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
                 cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store, variables, github), AuthenticateRunnerUseCase(store, cluster)), publicOrigin = "http://localhost")
         }
-        assertTrue("cloud.environment.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText()).features)
+        val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("admin") }.bodyAsText()).features
+        assertTrue("cloud.environment.v1" in features)
+        assertTrue("cloud.sessions.background-work.v1" in features, "Runners report background work and the idle pause counts it")
         val override = CloudEnvironmentRequest(listOf(CloudRepositoryView("https://github.com/example/api.git", "api", "main", "task-1")), "api")
         val response = client.post("/api/v1/cloud/sessions") {
             bearerAuth("colleague"); header(CloudHeaders.IDEMPOTENCY_KEY, "env-1"); contentType(ContentType.Application.Json)

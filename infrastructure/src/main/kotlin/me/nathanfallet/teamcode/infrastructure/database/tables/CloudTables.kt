@@ -67,6 +67,8 @@ object CloudSettingsTable : Table("cloud_settings") {
     /** Largest file sent to a session and largest total per message, in MiB. */
     val fileMaxMebibytes = integer("file_max_mebibytes").default(20)
     val messageFileMebibytes = integer("message_file_mebibytes").default(25)
+    /** Minutes background work keeps an idle session running, from the start of its unbroken stretch; 0 never. */
+    val backgroundWorkMaxMinutes = integer("background_work_max_minutes").default(240)
     override val primaryKey = PrimaryKey(teamId)
 }
 /** Whether cloud sessions run and how their pods are built; no row until an administrator or the initial seed saves it. */
@@ -202,6 +204,9 @@ object CloudExecutions : Table("cloud_executions") {
     val checkpoint = varchar("checkpoint", 16).nullable()
     /** The owner the execution ran for; null for executions recorded before transfers existed. */
     val ownerId = varchar("owner_id", 36).nullable()
+    /** The agent's background work reported by heartbeats: start of the current or last unbroken stretch, and its last report. Written by heartbeats only. */
+    val backgroundSince = long("background_since").nullable()
+    val backgroundSeenAt = long("background_seen_at").nullable()
     override val primaryKey = PrimaryKey(sessionId, epoch)
 }
 /** The stored outcome of a mutating request, replayed for 24 hours. */

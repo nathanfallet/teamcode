@@ -309,6 +309,12 @@ data class CloudSettingsView(
     val fileMaxMebibytes: Int? = null,
     /** Largest total of one message's files, in MiB (1 to 100, 25 by default). Absent (null) in a `PUT` keeps the stored value. */
     val messageFileMebibytes: Int? = null,
+    /**
+     * Minutes an unbroken stretch of the agent's background work (subagents, background commands, monitors, scheduled
+     * wake-ups) keeps an otherwise idle session running, from its start (`cloud.sessions.background-work.v1`; 1 to 1440,
+     * 240 by default); 0: background work never does. Absent (null) in a `PUT` keeps the stored value.
+     */
+    val backgroundWorkMaxMinutes: Int? = null,
 )
 
 /**
@@ -340,8 +346,12 @@ object CloudHeaders {
 /** Runner channel. The runner authenticates with its projected service-account token, never a member credential. */
 @Serializable
 data class RunnerRegisterRequest(val teamId: String, val sessionId: String, val epoch: Int)
+/**
+ * [background]: the agent has background work in flight (subagents, background commands, monitors) or scheduled
+ * wake-ups, which keeps the session from the idle pause for a bounded time. A server that predates it ignores it.
+ */
 @Serializable
-data class RunnerHeartbeatRequest(val teamId: String, val sessionId: String, val epoch: Int, val ready: Boolean)
+data class RunnerHeartbeatRequest(val teamId: String, val sessionId: String, val epoch: Int, val ready: Boolean, val background: Boolean = false)
 @Serializable
 data class RunnerCheckpointRequest(val teamId: String, val sessionId: String, val epoch: Int, val completed: Boolean)
 /** What the runner must do next: keep running, or pause before [pauseDeadline] (epoch milliseconds). */

@@ -203,6 +203,13 @@ data class CloudExecution(
      * recorded before transfers existed: they predate any change of owner.
      */
     val ownerId: String? = null,
+    /**
+     * Background work of the agent reported by the runner's heartbeats (subagents, background commands, monitors and
+     * scheduled wake-ups): when the current, or last, unbroken stretch of heartbeats reporting it began, and the last
+     * heartbeat that reported it. Null until a heartbeat reports background work. See [CloudIdleRules.backgroundActivity].
+     */
+    val backgroundSince: Long? = null,
+    val backgroundSeenAt: Long? = null,
 )
 
 data class CloudResources(val cpuMillis: Int, val memoryMebibytes: Int)
@@ -292,6 +299,12 @@ data class CloudSettings(
     val fileMaxMebibytes: Int = CloudFileRules.DEFAULT_FILE_MEBIBYTES,
     /** Largest total of the files of one message, in MiB (1 to [CloudFileRules.MAX_MEBIBYTES]). */
     val messageFileMebibytes: Int = CloudFileRules.DEFAULT_MESSAGE_MEBIBYTES,
+    /**
+     * Minutes an unbroken stretch of background work (subagents, background commands, monitors, scheduled wake-ups) keeps
+     * an otherwise idle session from pausing, counted from its start; the idle timeout then runs as usual. 0: background
+     * work never keeps a session running. See [CloudIdleRules.backgroundActivity].
+     */
+    val backgroundWorkMaxMinutes: Int = CloudIdleRules.DEFAULT_BACKGROUND_WORK_MINUTES,
 )
 enum class MemberTransfers(val wire: String) {
     DISABLED("disabled"), OFFER("offer");

@@ -277,5 +277,10 @@ class TeamHooksTest {
         assertEquals(emptyList(), tampered.sync("claude"))
         assertFalse(fs.exists(root / "notify"))
         assertNull(cloudHookSettings(emptyList()))
+        // The runner's own Stop hook (scheduled wake-ups) comes after the team's, and alone when the team has none.
+        val withRunner = Json.parseToJsonElement(assertNotNull(cloudHookSettings(installed, runnerStop = "'/opt/teamcode/teamcode' cloud agent-state --socket '/run/env.sock'"))).jsonObject["hooks"]!!.jsonObject
+        assertEquals(listOf("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'", "'/opt/teamcode/teamcode' cloud agent-state --socket '/run/env.sock'"),
+            withRunner["Stop"]!!.jsonArray.map { it.jsonObject["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content })
+        assertEquals(setOf("Stop"), Json.parseToJsonElement(assertNotNull(cloudHookSettings(emptyList(), runnerStop = "x"))).jsonObject["hooks"]!!.jsonObject.keys)
     }
 }

@@ -17,8 +17,12 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 
 /**
  * Whether an agent waits for a person, from its own `Stop`, `Notification`, `UserPromptSubmit` and `PostToolUse` hooks.
- * Only the event name and, for a notification, its type are read: the prompt, the message, the tool and the paths in
- * the payload are dropped here and never reach TeamCode.
+ * Only the event name, for a notification its type, and for a `Stop` whether background work remains are read: the
+ * prompt, the message, the tool, the commands and the paths in the payload are dropped here and never reach TeamCode.
+ *
+ * A Claude Code `Stop` lists the background tasks still in flight (`background_tasks`: background subagents and commands,
+ * monitors) and the session's scheduled wake-ups (`session_crons`); while either is non-empty the turn ended but the
+ * agent is not waiting for a person (https://code.claude.com/docs/en/hooks#stop-input), so it reports [WORKING].
  */
 internal object HookActivity {
     const val WORKING = RunIdentifiers.ACTIVITY_WORKING
@@ -31,8 +35,9 @@ internal object HookActivity {
         if (input.size > MAXIMUM_PARSED) prefixState(input) else {
             val body = Json.parseToJsonElement(input.decodeToString(throwOnInvalidSequence = true)).jsonObject
             fun text(key: String) = (body[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            fun listed(key: String) = (body[key] as? JsonArray)?.isNotEmpty() == true
             when (text("hook_event_name")) {
-                "Stop" -> WAITING
+                "Stop" -> if (listed("background_tasks") || listed("session_crons")) WORKING else WAITING
                 "Notification" -> WAITING.takeIf { text("notification_type") in ASKING }
                 "UserPromptSubmit", "PostToolUse", "PostToolUseFailure" -> WORKING
                 else -> null
@@ -44,15 +49,21 @@ internal object HookActivity {
     private const val MAXIMUM_PARSED = 65_536
     private val EVENT = Regex(""""hook_event_name"\s*:\s*"([A-Za-z]{1,40})"""")
     private val NOTIFICATION = Regex(""""notification_type"\s*:\s*"([a-z_]{1,40})"""")
+    /**
+     * A non-empty background list as a key of the payload: the quote before the key follows `{`, `,` or a space, which an
+     * escaped quote inside a string (a message that quotes the key) never does.
+     */
+    private val BACKGROUND = Regex("""[{,\s]"(?:background_tasks|session_crons)"\s*:\s*\[\s*\{""")
 
     /**
      * A payload too large to parse (a big tool result) still changes the state: the event name is read from the head, where
-     * Claude Code writes it before the tool input and response. The body itself is never parsed or kept.
+     * Claude Code writes it before the tool input and response. The body itself is never parsed or kept; for a `Stop`, it is
+     * only searched for a non-empty background list ([BACKGROUND]), which may follow a long final message.
      */
     private fun prefixState(input: ByteArray): String? {
         val head = input.decodeToString(0, minOf(input.size, 4_096))
         return when (EVENT.find(head)?.groupValues?.get(1)) {
-            "Stop" -> WAITING
+            "Stop" -> if (BACKGROUND.containsMatchIn(input.decodeToString())) WORKING else WAITING
             "Notification" -> WAITING.takeIf { NOTIFICATION.find(head)?.groupValues?.get(1) in ASKING }
             "UserPromptSubmit", "PostToolUse", "PostToolUseFailure" -> WORKING
             else -> null

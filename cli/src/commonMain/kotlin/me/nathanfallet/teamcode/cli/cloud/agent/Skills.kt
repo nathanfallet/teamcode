@@ -355,6 +355,9 @@ internal interface AgentTools {
     suspend fun claudePlugin(): String? = null
 }
 
+/** The runner's `Stop` hook only hands a count over a local socket. */
+private const val RUNNER_STOP_TIMEOUT_SECONDS = 10
+
 /** Where cloud sessions install team hooks, relative to the agent's home. */
 internal const val CLOUD_HOOKS_DIR = ".teamcode/hooks"
 
@@ -367,9 +370,10 @@ internal data class CloudHook(val name: String, val definition: HookDefinitionVi
 /**
  * Claude Code settings for the installed team hooks, passed with `--settings`: each hook runs its executable from the
  * agent's home through the shell (`"$HOME"/'<dir>/<name>/<command>'`), merged by Claude Code with the agent's own hooks.
+ * [runnerStop], the runner's own `Stop` command ([CloudAgentState]), comes after the team's `Stop` hooks.
  */
-internal fun cloudHookSettings(hooks: List<CloudHook>): String? {
-    val events = hooks.flatMap { HookEvents.forAgent("claude", it.definition) }.distinct().sorted()
+internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null): String? {
+    val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull(runnerStop?.let { "Stop" })).distinct().sorted()
     if (events.isEmpty()) return null
     return buildJsonObject { putJsonObject("hooks") {
         for (event in events) putJsonArray(event) {
@@ -380,6 +384,9 @@ internal fun cloudHookSettings(hooks: List<CloudHook>): String? {
                     put("command", "\"\$HOME\"/" + shellQuote("$CLOUD_HOOKS_DIR/${hook.name}/${hook.definition.command}"))
                     put("timeout", hook.definition.timeoutSeconds)
                 }) }
+            })
+            if (event == "Stop" && runnerStop != null) add(buildJsonObject {
+                putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", runnerStop); put("timeout", RUNNER_STOP_TIMEOUT_SECONDS) }) }
             })
         }
     } }.toString()

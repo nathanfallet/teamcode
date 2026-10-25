@@ -84,6 +84,7 @@ class DeferredActivationTest {
             val lines = activationReport(activation, store)
             assertTrue(lines.any { "1 running agent session keeps running on ${first.version}" in it }, lines.toString())
             assertTrue(lines.any { "keeps running ${first.version} and restarts on ${second.version} when they end" in it }, lines.toString())
+            assertTrue(lines.any { "$COMMAND_NAME service restart" in it && "background work" in it }, "The choice to restart now, and what it stops, is said: $lines")
 
             // Another session start (or any update attempt) cannot restart the service under a live lease.
             assertEquals(PendingRestart.WAITING, applyPendingServiceRestart(store, controls(service)) { fail(it) })

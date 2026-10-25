@@ -31,11 +31,15 @@ class RunnerChannelUseCase(
         return instruction(session)
     }
 
-    /** Liveness plus readiness. `ready = true` ends preparation or restoration: the session becomes `ready`. */
-    suspend fun heartbeat(teamId: String, sessionId: String, epoch: Int, ready: Boolean): RunnerInstruction {
+    /**
+     * Liveness plus readiness. `ready = true` ends preparation or restoration: the session becomes `ready`.
+     * [background]: the agent has background work (subagents, background commands, monitors, scheduled wake-ups), which
+     * keeps the session from the idle pause for a bounded time ([CloudIdleRules.backgroundActivity]).
+     */
+    suspend fun heartbeat(teamId: String, sessionId: String, epoch: Int, ready: Boolean, background: Boolean = false): RunnerInstruction {
         val current = store.find(teamId, sessionId) ?: throw fenced()
         val execution = live(current, epoch)
-        if (execution.state != ExecutionState.RUNNING || !store.heartbeat(sessionId, epoch, ready)) throw fenced()
+        if (execution.state != ExecutionState.RUNNING || !store.heartbeat(sessionId, epoch, ready, background)) throw fenced()
         val session = if (ready && current.desiredState == DesiredState.RUNNING && (current.state == PREPARING || current.state == RESUMING) && !current.preparationFailed) {
             transition(teamId, sessionId) { fresh ->
                 live(fresh, epoch)

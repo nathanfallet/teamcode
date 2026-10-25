@@ -75,6 +75,8 @@ interface AgentAdapter {
     fun openPermissions(): Set<String> = emptySet()
     /** Events the adapter produced outside [parse] (for example a turn started by [message]); emptied by the call. */
     fun takeEvents(): List<AgentEvent> = emptyList()
+    /** Background tasks of the session's work in flight in this agent process (subagents, background commands, monitors); 0 when unknown. */
+    val backgroundTasks: Int get() = 0
 }
 
 private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -127,6 +129,13 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
      */
     private var pending = 0
     override val turnActive get() = pending > 0
+    /**
+     * The live background tasks of the session's work, from Claude Code's last `background_tasks_changed` line, which
+     * carries the full live set (subagents, background commands, monitors, remote agents, backgrounded MCP calls) and is
+     * not emitted at startup; tasks marked `ambient` are Claude Code's own and are left out
+     * (https://code.claude.com/docs/en/agent-sdk/typescript#sdkbackgroundtaskschangedmessage). Nothing of it is uploaded.
+     */
+    override var backgroundTasks = 0; private set
 
     override fun command(resume: String?) = AgentCommand("claude", buildList {
         addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
@@ -238,7 +247,10 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
     override fun parse(line: String): AgentOutput {
         val value = parseObject(line) ?: return AgentOutput()
         return when (value["type"].string()) {
-            "system" -> if (value["subtype"].string() == "init") {
+            "system" -> if (value["subtype"].string() == "background_tasks_changed") {
+                backgroundTasks = value["tasks"].array().orEmpty().count { task -> (task.obj()?.get("ambient") as? JsonPrimitive)?.booleanOrNull != true }
+                AgentOutput()
+            } else if (value["subtype"].string() == "init") {
                 val id = value["session_id"].string()
                 val first = conversationId == null
                 conversationId = id ?: conversationId

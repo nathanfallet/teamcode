@@ -8,6 +8,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import me.nathanfallet.teamcode.api.models.EnvironmentVariablesView
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.platform.UnixConnection
@@ -107,12 +109,17 @@ internal class RunnerVariables(
  * Serves [RunnerVariables] to the agent's commands over a Unix socket on the pod's memory volume: the values stay in
  * the runner's memory, and the agent's container receives them only when one of its commands asks, the way the git
  * helper receives a credential. One request per connection, at most [MAX_CONCURRENT] at once.
+ *
+ * The same socket takes the agent's `Stop` hook report ([CloudAgentState]): `wakeups <n>`, the number of its scheduled
+ * wake-ups, given to [wakeups] and answered with nothing. A count only says whether the session has background work, so
+ * the worst an agent writing it can do is keep its session running up to the team's cap, as a background command would.
  */
 internal class EnvironmentBroker(
     private val listener: UnixListener,
     private val variables: RunnerVariables,
     private val timeoutMillis: Long = 10_000,
     private val log: (String) -> Unit = {},
+    private val wakeups: (Int) -> Unit = {},
 ) {
     private val permits = Semaphore(MAX_CONCURRENT)
 
@@ -127,7 +134,9 @@ internal class EnvironmentBroker(
 
     private suspend fun handle(connection: UnixConnection) {
         try {
-            if (withTimeoutOrNull(timeoutMillis) { connection.readLine(MAX_REQUEST_LINE) } != REQUEST) return
+            val request = withTimeoutOrNull(timeoutMillis) { connection.readLine(MAX_REQUEST_LINE) }
+            if (request != null && request.startsWith(WAKEUPS)) { request.removePrefix(WAKEUPS).toIntOrNull()?.takeIf { it in 0..MAX_WAKEUPS }?.let(wakeups); return }
+            if (request != REQUEST) return
             val answer = try { variables.forCommand() } catch (error: CancellationException) { throw error } catch (_: Exception) {
                 log("The environment variables could not be served."); EnvironmentAnswer()
             }
@@ -137,6 +146,10 @@ internal class EnvironmentBroker(
 
     companion object {
         const val REQUEST = "environment"
+        /** The agent's `Stop` hook report: this prefix, then the number of scheduled wake-ups. */
+        const val WAKEUPS = "wakeups "
+        /** Claude Code holds at most 50 scheduled tasks per session; anything far above is not a count. */
+        const val MAX_WAKEUPS = 1_000
         const val MAX_CONCURRENT = 8
         const val MAX_REQUEST_LINE = 1024
         /** The socket next to the credential socket, on the same memory volume. */
@@ -157,3 +170,21 @@ internal suspend fun requestEnvironment(socket: String, connect: (String) -> Uni
     } finally { connection.close() }
 }
 private const val CLIENT_TIMEOUT_MILLIS = 15_000L
+
+/** Hands [count] scheduled wake-ups to the runner at [socket]; false when it cannot be reached. Nothing is logged. */
+internal suspend fun reportWakeups(socket: String, count: Int, connect: (String) -> UnixConnection = ::connectUnix): Boolean {
+    val connection = try { connect(socket) } catch (_: Exception) { return false }
+    try { return connection.writeLine(EnvironmentBroker.WAKEUPS + count) } finally { connection.close() }
+}
+
+/**
+ * The number of scheduled wake-ups (`session_crons`: `CronCreate`, `ScheduleWakeup`, `/loop`) in a Claude Code `Stop`
+ * hook input (https://code.claude.com/docs/en/hooks#stop-input); nothing else of it is read. An input too large to parse
+ * counts 1 when a non-empty list appears as a key, as in `HookActivity`. 0 for anything else.
+ */
+internal fun scheduledWakeups(input: String): Int = try {
+    if (input.length > MAX_PARSED_HOOK_INPUT) { if (WAKEUP_LIST.containsMatchIn(input)) 1 else 0 }
+    else ((Json.parseToJsonElement(input) as? JsonObject)?.get("session_crons") as? JsonArray)?.size ?: 0
+} catch (_: Exception) { 0 }
+private const val MAX_PARSED_HOOK_INPUT = 1_048_576
+private val WAKEUP_LIST = Regex("""[{,\s]"session_crons"\s*:\s*\[\s*\{""")

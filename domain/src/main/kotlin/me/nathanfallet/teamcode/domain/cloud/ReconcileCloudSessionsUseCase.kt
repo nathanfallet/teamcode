@@ -125,7 +125,7 @@ class ReconcileCloudSessionsUseCase(
                 s.desiredState == DesiredState.PAUSED && s.state != PREPARING -> {
                     commit(s, owner, s.copy(state = PAUSING, phase = "draining", pauseRequestedAt = s.pauseRequestedAt ?: now, updatedAt = now), "cloud.session.pausing"); now
                 }
-                else -> idle(s, owner, now) ?: (now + MONITOR_MILLIS)
+                else -> idle(s, owner, now, execution) ?: (now + MONITOR_MILLIS)
             }
             s.state == PAUSING -> {
                 val checkpointed = execution?.checkpoint == "completed"
@@ -271,20 +271,25 @@ class ReconcileCloudSessionsUseCase(
         if (s.preparationFailed) return fail(s, owner, now, s.failure!!)
         if (s.state == PREPARING && now - execution.createdAt > PREPARE_TIMEOUT_MILLIS)
             return fail(s, owner, now, CloudProblem("prepare_timeout", "The session did not become ready within 30 minutes.", true))
-        idle(s, owner, now)?.let { return it }
+        idle(s, owner, now, execution)?.let { return it }
         return now + MONITOR_MILLIS
     }
 
     /**
-     * Pauses a `ready` session with no activity for its idle timeout: no turn, no message waiting for the agent and
-     * no attachment lease (a member watching the session keeps it running). It is an ordinary pause, so the session
-     * checkpoints and keeps its workspace; a message wakes it again. Inactivity never deletes anything.
+     * Pauses a `ready` session with no activity for its idle timeout: no turn, no message waiting for the agent, no
+     * attachment lease (a member watching the session keeps it running) and no background work of the agent on
+     * [execution] (subagents, background commands, scheduled wake-ups), which counts for the team's
+     * `backgroundWorkMaxMinutes` at most. It is an ordinary pause, so the session checkpoints and keeps its workspace; a
+     * message wakes it again. Inactivity never deletes anything. The settings, leases and inputs are read only once the
+     * session row already looks idle.
      */
-    private suspend fun idle(s: CloudSession, owner: String, now: Long): Long? {
+    private suspend fun idle(s: CloudSession, owner: String, now: Long, execution: CloudExecution?): Long? {
         if (activity == null || !CloudIdleRules.candidate(s)) return null
         val timeout = CloudIdleRules.timeoutMillis(s)
         if (now - s.lastActivityAt < timeout) return null
-        if (now - CloudIdleRules.idleSince(s, activity.lastActivity(s.id, now)) < timeout) return null
+        val background = execution?.backgroundSeenAt?.let { CloudIdleRules.backgroundActivity(execution, store.settings(s.teamId).backgroundWorkMaxMinutes) }
+        if (background != null && now - background < timeout) return null
+        if (now - CloudIdleRules.idleSince(s, activity.lastActivity(s.id, now), background) < timeout) return null
         commit(s, owner, s.copy(desiredState = DesiredState.PAUSED, pauseRequestedAt = now, pauseForce = false, updatedAt = now), "cloud.session.idle_paused")
         return now
     }
