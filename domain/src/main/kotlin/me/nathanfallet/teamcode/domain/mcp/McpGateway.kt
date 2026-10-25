@@ -75,10 +75,18 @@ class McpGateway(
     val limits: McpLimits = McpLimits(),
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
-    /** Names of the MCP servers currently assigned to the member, each reachable on its own endpoint. */
+    /** Whether hosted commands (transport stdio) are served: the server has an MCP host. */
+    val hostsCommands get() = upstream.hostsCommands
+
+    /**
+     * Names of the MCP servers currently assigned to the member, each reachable on its own endpoint. Clients read this
+     * right before listing each server's tools, so the processes of hosted servers are started now, in the background.
+     */
     suspend fun servers(actor: Principal): List<String> {
         actor.requireScope(ServiceScope.MCP)
-        return servers(actor.teamId, actor.member.id).map { it.name }
+        val servers = servers(actor.teamId, actor.member.id)
+        upstream.warm(servers.filter { it.hosted })
+        return servers.map { it.name }
     }
 
     /**
@@ -157,7 +165,7 @@ class McpGateway(
 
     /** Admits, runs and always settles the lease, even when the caller disconnects. */
     private suspend fun <T> run(actor: Principal, server: EffectiveMcpServer, operation: McpOperation, tool: String?, block: suspend () -> Pair<T, Long>): T {
-        val lease = store.admit(actor, McpServerRef(server.name, server.variantId, server.version, server.assignedAt), operation, tool, limits)
+        val lease = store.admit(actor, McpServerRef(server.name, server.variantId, server.version, server.assignedAt, server.hosted), operation, tool, limits)
         val started = monotonicMillis()
         var outcome = McpOutcome.CANCELLED
         var bytes = 0L

@@ -23,7 +23,11 @@ object Variants : Table("variants") {
     val command = varchar("command", 16).nullable()
     val args = text("args").nullable()
     override val primaryKey = PrimaryKey(id)
-    init { uniqueIndex("variant_team_slot_name", teamId, kind, target, name) }
+    init {
+        uniqueIndex("variant_team_slot_name", teamId, kind, target, name)
+        // The MCP host's retain sweep reads every hosted command (transport stdio) of the installation once a minute.
+        index("variant_transport", false, transport)
+    }
 }
 
 /** At most one selected variant per member and slot; kind/target repeat the variant's slot to enforce that uniqueness. */

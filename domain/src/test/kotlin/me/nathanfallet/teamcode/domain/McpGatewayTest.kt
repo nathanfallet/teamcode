@@ -11,7 +11,7 @@ import kotlin.test.*
 class McpGatewayTest {
     private val member = Principal(Member("member", "member", Role.MEMBER, false, false), "token", "team")
 
-    private fun server(name: String, variant: String = "v-$name") = EffectiveMcpServer(name, variant, variant, 1, 0, "https://$name.example.test", emptyMap(), SecretValue("synthetic-$name"))
+    private fun server(name: String, variant: String = "v-$name") = EffectiveMcpServer(name, variant, variant, 1, 0, McpServerTransport.Http("https://$name.example.test"), emptyMap(), SecretValue("synthetic-$name"))
 
     private class Store(var policies: Map<String, McpToolPolicy> = emptyMap()) : McpAccessStore {
         val finished = mutableListOf<McpOutcome>()
@@ -46,7 +46,7 @@ class McpGatewayTest {
     private fun gateway(servers: List<EffectiveMcpServer>, store: Store, upstream: Upstream) =
         McpGateway(ResolveEffectiveVariantsUseCase(object : EffectiveVariantSource {
             override suspend fun state(teamId: String, memberId: String) = MemberVariantState(true, servers.map { server ->
-                val variant = Variant(server.variantId, VariantKind.MCP, server.name, server.variantName, VariantBinding.SHARED, 1, server.endpoint, emptyMap(), true, 0, 0)
+                val variant = Variant(server.variantId, VariantKind.MCP, server.name, server.variantName, VariantBinding.SHARED, 1, (server.transport as McpServerTransport.Http).endpoint, emptyMap(), true, 0, 0)
                 AssignmentCandidate(variant.slot, AssignmentSource.DIRECT, variant, server.credential, null)
             }, emptySet())
         }), store, upstream)

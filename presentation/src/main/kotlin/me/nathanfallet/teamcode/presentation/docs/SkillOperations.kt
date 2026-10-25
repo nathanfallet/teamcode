@@ -236,14 +236,15 @@ internal fun ApiCatalog.variantOperations() {
             "(`transport` `stdio`) instead names a `launcher` (`npm` or `pypi`), a `package` at one exact version " +
             "(`name@1.2.3`, `name==1.2.3`) and up to 32 `args`; `config` holds its visible environment variables and " +
             "`secretVariables` its encrypted ones (up to 16, values of at least 8 characters), which an argument uses as " +
-            "`${'$'}{NAME}`. None of these but the secret variables can change later. It needs the server's MCP host; " +
-            "the gateway does not serve hosted commands yet. Administrators only."
+            "`${'$'}{NAME}`. None of these but the secret variables can change later. It needs the server's MCP host " +
+            "(capability `mcp.gateway.stdio.v1`), which runs it for the gateway. Administrators only."
         body<CreateVariantRequest>("The variant.")
         responses {
             ok<VariantView>("Created.", HttpStatusCode.Created)
             badRequest("An invalid kind, binding, target, endpoint, transport, launcher, package, argument, variable or secret (`invalid_variant`).")
             conflict("A variant of this name exists for the target (`variant_exists`), the limit is reached (`variant_limit`), " +
                 "or a hosted command was declared on a server without an MCP host (`mcp_disabled`).")
+            error(HttpStatusCode.ServiceUnavailable, "The server's MCP host could not be reached to check the launcher (`mcp_host_unreachable`).")
         }
     }
     patch("/api/v1/variants/{id}") {

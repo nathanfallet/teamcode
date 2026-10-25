@@ -56,6 +56,16 @@ python3 scripts/smoke-replicas.py --jar "$teamcode_jar"
 
 These establish real process/native/network behavior with synthetic provider responses: authentication, TLS/streaming, literal launcher arguments and exit status, cancellation while queued, devices, hook protocol, persistent team management and shared database behavior across server processes. They do not consume subscriptions. `smoke-team.py` checks the initial `admin` username with the `owner` role, password replacement, browser member creation, service keys, restart persistence, revocation and audit. Replica scenarios are controlled correctness tests, not sustained-load benchmarks.
 
+Hosted MCP servers (transport stdio) with the real server and [MCP host](mcp.md) jars, two replicas and one isolated MySQL:
+
+```sh
+./gradlew :app:buildFatJar :mcp:buildFatJar
+python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/build/libs/mcp-all.jar"
+python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/build/libs/mcp-all.jar" --fixture
+```
+
+An administrator declares a `SHARED` npm server (`@modelcontextprotocol/server-everything@2.0.0`) and a `PER_MEMBER` PyPI server (`mcp-server-fetch==2026.10.24`) through the API, a member lists and calls them through the gateway as an agent does, and the host is stopped and started again; no answer or log may hold a secret. The default run downloads the real packages (`npx`, `uvx` and Node.js on `PATH`, network needed); `--fixture` runs the host's Node.js fixture server instead, offline. `scripts/smoke-mcp-image.py` checks the host image itself.
+
 ## 2. Small real Claude/Codex requests
 
 Start with one agent rather than a whole matrix. The following launches actual Claude Code through `teamcode run claude`, requests a short Haiku reply and verifies server dispatch/settlement:

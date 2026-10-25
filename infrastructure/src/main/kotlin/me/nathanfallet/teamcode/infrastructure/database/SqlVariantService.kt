@@ -4,6 +4,8 @@ import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import me.nathanfallet.teamcode.domain.mcp.HostedMcpAssignment
+import me.nathanfallet.teamcode.domain.mcp.HostedMcpAssignmentSource
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.variants.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -15,12 +17,13 @@ import org.jetbrains.exposed.v1.jdbc.*
 /**
  * Variants, assignments and exclusions in shared MySQL. Writes take the team lock and revalidate the interactive
  * administrator in the same transaction; audit events carry identifiers only, never values, endpoints or credentials
- * (a hosted command's creation also names its transport, launcher and package). [stdioLaunchers] are the launchers of
- * the server's MCP host; empty, the default, means no host, and declaring a hosted command answers `409 mcp_disabled`.
+ * (a hosted command's creation also names its transport, launcher and package). [stdioLaunchers] reads the launchers
+ * of the server's MCP host, only when a hosted command is declared (outside any transaction, since it may ask the host);
+ * empty, the default, means no host, and declaring a hosted command answers `409 mcp_disabled`.
  */
 class SqlVariantService(
-    private val database: Database, private val cipher: CredentialCipher, private val stdioLaunchers: Set<StdioLauncher> = emptySet(),
-) : VariantService, EffectiveVariantSource {
+    private val database: Database, private val cipher: CredentialCipher, private val stdioLaunchers: suspend () -> Set<StdioLauncher> = { emptySet() },
+) : VariantService, EffectiveVariantSource, HostedMcpAssignmentSource {
     override suspend fun list(actor: Principal): List<Variant> = database.query {
         authorize(this, actor)
         Variants.selectAll().where { Variants.teamId eq actor.teamId }
@@ -31,7 +34,7 @@ class SqlVariantService(
     override suspend fun create(actor: Principal, variant: NewVariant): Variant {
         // Authorization first, so a non-administrator learns nothing, not even whether an MCP host is configured.
         actor.requireAdmin()
-        VariantService.validate(variant, stdioLaunchers)
+        VariantService.validate(variant, if (variant.kind == VariantKind.MCP && variant.transport == McpTransport.STDIO) stdioLaunchers() else emptySet())
         return database.query {
             write(this, actor)
             if (Variants.select(Variants.id).where { Variants.teamId eq actor.teamId }.count() >= VariantService.VARIANT_LIMIT)
@@ -54,6 +57,32 @@ class SqlVariantService(
                 buildJsonObject { put("transport", variant.transport.wire); put("launcher", command.launcher.wire); put("package", command.pkg) }.toString()
             })
             requireVariant(actor.teamId, id)
+        }
+    }
+
+    /**
+     * Three indexed reads for every team, in one transaction: the hosted variants (`variant_transport`), their
+     * assignments (`variant_assignment_variant`), and the disabled members of their teams (`member_recipients`), left
+     * out so their processes stop. Not one join: MySQL would drive it from `members` and read every assignment.
+     */
+    override suspend fun hostedMcpAssignments(limit: Int): List<HostedMcpAssignment>? = database.query {
+        val variants = Variants.select(Variants.id, Variants.teamId, Variants.version, Variants.binding)
+            .where { Variants.transport eq McpTransport.STDIO.wire }.limit(limit + 1).toList()
+        if (variants.size > limit) return@query null
+        if (variants.isEmpty()) return@query emptyList()
+        val rows = VariantAssignments.select(VariantAssignments.variantId, VariantAssignments.memberId, VariantAssignments.assignedAt)
+            .where { VariantAssignments.variantId inList variants.map { it[Variants.id] } }.limit(limit + 1).toList()
+        if (rows.size > limit) return@query null
+        val disabled = Members.select(Members.id)
+            .where { (Members.teamId inList variants.map { it[Variants.teamId] }.distinct()) and (Members.disabled eq true) }
+            .mapTo(HashSet()) { it[Members.id] }
+        val byId = variants.associateBy { it[Variants.id] }
+        rows.mapNotNull { row ->
+            val variant = byId.getValue(row[VariantAssignments.variantId])
+            val binding = VariantBinding.entries.find { it.name == variant[Variants.binding] } ?: return@mapNotNull null
+            row[VariantAssignments.memberId].takeIf { it !in disabled }?.let { member ->
+                HostedMcpAssignment(variant[Variants.teamId], variant[Variants.id], variant[Variants.version], binding, member, row[VariantAssignments.assignedAt])
+            }
         }
     }
 

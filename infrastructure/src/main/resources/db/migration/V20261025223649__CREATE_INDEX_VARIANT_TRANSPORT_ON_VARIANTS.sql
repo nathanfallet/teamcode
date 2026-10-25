@@ -1,0 +1,1 @@
+CREATE INDEX variant_transport ON variants (transport);

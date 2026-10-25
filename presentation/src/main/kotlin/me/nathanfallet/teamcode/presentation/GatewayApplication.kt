@@ -199,7 +199,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (audit != null && team != null) auditRoutes(audit)
         if (skills != null && team != null) skillRoutes(skills, team, publicOrigin)
         if (hooks != null && team != null) hookRoutes(hooks, team, publicOrigin)
-        if (variants != null && team != null) variantRoutes(variants, publicOrigin)
+        if (variants != null && team != null) variantRoutes(variants, publicOrigin, hostedCommands = { mcp?.hostsCommands == true })
         if (environment != null && team != null) environmentRoutes(environment)
         if (mcp != null && team != null) mcpGatewayRoutes(mcp, publicOrigin)
         if (mcpAccess != null && team != null) mcpAdminRoutes(mcpAccess, variants, publicOrigin)
@@ -272,6 +272,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     ).flatten() else emptyList()) +
                     (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
+                    // Hosted commands (transport stdio) are served: the server has an MCP host. Only displays read it.
+                    (if (team != null && mcp?.hostsCommands == true) listOf("mcp.gateway.stdio.v1") else emptyList()) +
                     (if (team != null && github != null) listOf("github.link.v1") else emptyList()) +
                     // Published, served and viewed: whether a team can use them right now is its settings' business.
                     (if (team != null && artifacts != null && artifactViewing != null) listOf("artifacts.v1", "artifacts.policy.v1", "artifacts.tickets.v1") else emptyList())))

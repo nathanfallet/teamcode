@@ -3,15 +3,46 @@ package me.nathanfallet.teamcode.domain.variants
 /** One environment variable the member's execution receives. */
 data class EffectiveEnvironmentVariable(val name: String, val variantId: String, val variantName: String, val version: Int, val assignedAt: Long, val value: SecretValue)
 
-/** One HTTPS MCP server the member may discover and call through the gateway. [credential] is null for a server without one. */
+/** How the gateway reaches one effective MCP server. */
+sealed interface McpServerTransport {
+    /** The variant's HTTPS endpoint. */
+    data class Http(val endpoint: String) : McpServerTransport
+    /**
+     * A hosted command, run by the server's MCP host. [key] names its process there ([StdioProcessKey]); [declaredAt] is
+     * the variant's creation time, the date its dependencies are resolved at.
+     */
+    data class Stdio(val command: StdioCommand, val declaredAt: Long, val key: String) : McpServerTransport
+}
+
+/**
+ * One MCP server the member may discover and call through the gateway. [credential] is null for a server without one;
+ * for a hosted command it is the [StdioEnvironment] object of its secret variables, and [config] its visible variables.
+ */
 data class EffectiveMcpServer(
     val name: String, val variantId: String, val variantName: String, val version: Int, val assignedAt: Long,
-    val endpoint: String, val config: Map<String, String>, val credential: SecretValue?,
-)
+    val transport: McpServerTransport, val config: Map<String, String>, val credential: SecretValue?,
+) {
+    val hosted get() = transport is McpServerTransport.Stdio
+}
+
+/**
+ * The process a hosted command runs in on the MCP host: one per team server for a SHARED variant, one per member for a
+ * PER_MEMBER one. The key changes with the variant's version (a rotated shared secret) and with the member's assignment
+ * time (a rotated member value), so a rotation always gets a new process and the old one is stopped by the retain sweep.
+ */
+object StdioProcessKey {
+    fun of(teamId: String, variantId: String, version: Int, binding: VariantBinding, memberId: String, assignedAt: Long): String {
+        val parts = if (binding == VariantBinding.SHARED) listOf("shared", teamId, variantId, version.toString())
+            else listOf("member", teamId, variantId, version.toString(), memberId, assignedAt.toString())
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(parts.joinToString("\u0000").toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+}
 
 /**
  * [unavailable] lists assigned slots withheld because a stored value could not be decrypted, a delegated credential
- * is missing, or the server is a hosted command the gateway does not serve yet; consumers report them without values.
+ * is missing, or the server is a hosted command this server cannot run (no MCP host, or a definition it does not
+ * read); consumers report them without values.
  * A change of value is visible through `version` (variant edits) or `assignedAt` (a new selection or a rotated member value).
  */
 data class EffectiveVariants(
@@ -53,7 +84,11 @@ object VariantResolution {
  * cloud sessions: it returns decrypted values, so callers must have authenticated the member (or be acting on an
  * authorized session for them) and must never log or return its result to another member.
  */
-class ResolveEffectiveVariantsUseCase(private val source: EffectiveVariantSource) {
+class ResolveEffectiveVariantsUseCase(
+    private val source: EffectiveVariantSource,
+    /** Whether the server has an MCP host to run hosted commands (transport stdio); without one they are withheld. */
+    private val hostedCommands: Boolean = false,
+) {
     suspend operator fun invoke(teamId: String, memberId: String): EffectiveVariants {
         val state = source.state(teamId, memberId)
         if (!state.eligible) return EffectiveVariants.none(memberId)
@@ -70,10 +105,20 @@ class ResolveEffectiveVariantsUseCase(private val source: EffectiveVariantSource
                 candidate.target.kind == VariantKind.ENV ->
                     if (value == null) unavailable += candidate.target
                     else environment += EffectiveEnvironmentVariable(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt, value)
-                // The gateway cannot reach a hosted command (transport stdio) yet: it is withheld, so no client lists a server it cannot call.
-                variant.transport != McpTransport.HTTP || variant.endpoint == null || (variant.binding == VariantBinding.PER_MEMBER && value == null) ->
-                    unavailable += candidate.target
-                else -> servers += EffectiveMcpServer(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt, variant.endpoint, variant.config, value)
+                variant.binding == VariantBinding.PER_MEMBER && value == null -> unavailable += candidate.target
+                variant.transport == McpTransport.HTTP ->
+                    if (variant.endpoint == null) unavailable += candidate.target
+                    else servers += EffectiveMcpServer(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt,
+                        McpServerTransport.Http(variant.endpoint), variant.config, value)
+                // Without an MCP host, or with a command or secret this version cannot read, a hosted command is withheld,
+                // so no client lists a server the gateway cannot call.
+                else -> {
+                    val command = variant.command
+                    if (!hostedCommands || command == null || (value != null && StdioEnvironment.decodeOrNull(value) == null)) unavailable += candidate.target
+                    else servers += EffectiveMcpServer(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt,
+                        McpServerTransport.Stdio(command, variant.createdAt, StdioProcessKey.of(teamId, variant.id, variant.version, variant.binding, memberId, candidate.assignedAt)),
+                        variant.config, value)
+                }
             }
         }
         return EffectiveVariants(memberId, environment, servers, unavailable)

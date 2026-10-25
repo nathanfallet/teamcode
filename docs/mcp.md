@@ -13,12 +13,12 @@ It is the Gradle module `:mcp` and the image `nathanfallet/teamcode-mcp`, publis
 | --- | --- |
 | Host: supervisor, stdio transport, host protocol v1, limits, scrubbing, drain on SIGTERM | Done (`:mcp`) |
 | Image `nathanfallet/teamcode-mcp` (amd64, arm64), its contract test with real npm and PyPI servers | Done (image job of `build.yml`) |
-| Variant model `transport: stdio` (launcher, package, arguments, secret variables); declaration still answers `409 mcp_disabled` | Done ([variants](variants.md#hosted-mcp-commands)) |
+| Variant model `transport: stdio` (launcher, package, arguments, secret variables) | Done ([variants](variants.md#hosted-mcp-commands)) |
 | Helm chart component `mcp` (Deployment, Service, NetworkPolicy, generated token Secret), on by default | Done ([deployment](#deployment-helm)) |
-| Gateway → host wiring (`HostMcpUpstream`, warm-up from `/api/v1/mcp/servers`, `retain` sweep), capability `mcp.gateway.stdio.v1` | Planned |
+| Gateway → host wiring (`HostMcpUpstream`, warm-up from `/api/v1/mcp/servers`, `retain` sweep), capability `mcp.gateway.stdio.v1` | Done ([gateway](mcp-gateway.md#hosted-stdio-servers)) |
 | State in the dashboard, team events `mcp.stdio.*`, companion and CLI views | Planned |
 
-Until the wiring lands, the chart runs the host and gives the server its address and token, but the server does not call it yet and no variant can be stdio.
+The server calls the host when it has its address and token (`TEAMCODE_MCP_URL`, `TEAMCODE_MCP_TOKEN`, set by the chart): administrators can then declare hosted commands, and agents list and call them through the gateway like any MCP server. [The gateway page](mcp-gateway.md#hosted-stdio-servers) describes the server side: process keys, deadlines, warm-up, the retain sweep and how host errors reach the agent.
 
 ## Architecture
 
@@ -181,7 +181,7 @@ The image job of `.github/workflows/build.yml` checks it before the server image
 
 ## Operating and troubleshooting
 
-- `GET /v1/status` (token required; the dashboard will show it) gives each key's state, last failure, exit code, cold start time, memory and scrubbed stderr.
+- `GET /v1/status` (token required; the server reads its launchers when an administrator declares a hosted command; the dashboard will show the rest) gives each key's state, last failure, exit code, cold start time, memory and scrubbed stderr.
 - `start_failed` with `npm error notarget No matching version found … with a date before` in stderr: the pinned version was published after the variant was declared. Declare a new variant.
 - `backoff`: read the stderr in the status, fix the cause, then restart the key (`/v1/stop`).
 - `capacity`: raise `maxProcesses` (and the pod's memory limit) or lower `idleMinutes`.

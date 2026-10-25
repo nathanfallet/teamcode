@@ -60,9 +60,9 @@ class VariantPersistenceTest {
                 second.assign(admin, bob, personalMcp.id, SecretValue("synthetic-bob-delegated"))
                 assertEquals(mapOf("GITHUB_TOKEN" to "synthetic-github-a"), envOf(alice))
                 assertEquals(mapOf("GITHUB_TOKEN" to "synthetic-github-b"), envOf(bob))
-                assertEquals("https://mcp.example.test/team" to "synthetic-team-credential", mcpOf(alice).getValue("tracker").let { it.endpoint to it.credential?.reveal() })
+                assertEquals("https://mcp.example.test/team" to "synthetic-team-credential", mcpOf(alice).getValue("tracker").let { (it.transport as McpServerTransport.Http).endpoint to it.credential?.reveal() })
                 assertEquals(mapOf("workspace" to "core"), mcpOf(alice).getValue("tracker").config)
-                assertEquals("https://mcp.example.test/personal" to "synthetic-bob-delegated", mcpOf(bob).getValue("tracker").let { it.endpoint to it.credential?.reveal() })
+                assertEquals("https://mcp.example.test/personal" to "synthetic-bob-delegated", mcpOf(bob).getValue("tracker").let { (it.transport as McpServerTransport.Http).endpoint to it.credential?.reveal() })
 
                 // A third member without an assignment receives nothing, even though shared variants exist.
                 assertEquals(EffectiveVariants.none(carol), resolveA("default", carol))
@@ -170,7 +170,7 @@ class VariantPersistenceTest {
                 val cipher = CredentialCipher(ByteArray(32) { 41 })
                 val launchers = setOf(StdioLauncher.NPM, StdioLauncher.PYPI)
                 val withoutHost = SqlVariantService(a, cipher)
-                val first = SqlVariantService(a, cipher, launchers); val second = SqlVariantService(b, cipher, launchers)
+                val first = SqlVariantService(a, cipher, { launchers }); val second = SqlVariantService(b, cipher, { launchers })
                 val tracker = StdioCommand(StdioLauncher.NPM, "@acme/tracker-mcp@1.4.2", listOf("--token", "\${TRACKER_TOKEN}"))
                 fun hosted(name: String, binding: VariantBinding = VariantBinding.SHARED, secrets: Map<String, String>? = mapOf("TRACKER_TOKEN" to "synthetic-tracker-shared")) =
                     NewVariant(VariantKind.MCP, "tracker", name, binding, null, mapOf("TRACKER_URL" to "https://tracker.example.test"),
@@ -206,6 +206,19 @@ class VariantPersistenceTest {
                 val effective = ResolveEffectiveVariantsUseCase(second)("default", alice)
                 assertEquals(listOf("wiki"), effective.mcpServers.map { it.name })
                 assertEquals(setOf(VariantTarget(VariantKind.MCP, "fetch"), VariantTarget(VariantKind.MCP, "tracker")), effective.unavailable.toSet())
+                // With an MCP host, both are served, each with its process definition and decrypted variables.
+                val hostedServers = ResolveEffectiveVariantsUseCase(second, hostedCommands = true)("default", alice).mcpServers.associateBy { it.name }
+                assertEquals(setOf("fetch", "tracker", "wiki"), hostedServers.keys)
+                assertEquals(mapOf("FETCH_KEY" to "synthetic-fetch-alice"), StdioEnvironment.decode(hostedServers.getValue("fetch").credential!!))
+                assertEquals(shared.createdAt, (hostedServers.getValue("tracker").transport as McpServerTransport.Stdio).declaredAt)
+                // The retain sweep reads every hosted assignment in one query and computes the keys resolution uses.
+                val assignmentsOfHosted = first.hostedMcpAssignments(100)!!
+                assertEquals(setOf(shared.id, perMember.id), assignmentsOfHosted.map { it.variantId }.toSet())
+                assertEquals(hostedServers.values.mapNotNull { (it.transport as? McpServerTransport.Stdio)?.key }.toSet(), assignmentsOfHosted.map { it.key }.toSet())
+                assertNull(first.hostedMcpAssignments(1), "More than the limit: no list, so nothing is stopped")
+                team.updateMember(admin, alice, Role.MEMBER, disabled = true)
+                assertEquals(emptyList(), first.hostedMcpAssignments(100), "A disabled member's processes stop at the next sweep")
+                team.updateMember(admin, alice, Role.MEMBER, disabled = false)
 
                 // The command and its visible variables are immutable; secrets rotate and bump the version.
                 failure("invalid_variant") { first.update(admin, shared.id, VariantUpdate(shared.version, "team", mapOf("TRACKER_URL" to "https://attacker.test"))) }

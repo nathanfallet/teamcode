@@ -18,6 +18,7 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService
 import me.nathanfallet.teamcode.domain.mcp.*
 import me.nathanfallet.teamcode.domain.variants.EffectiveMcpServer
+import me.nathanfallet.teamcode.domain.variants.McpServerTransport
 
 /** Decides whether the gateway may connect to a host. The default refuses every non-public address. */
 fun interface McpAddressPolicy {
@@ -88,27 +89,24 @@ class HttpMcpUpstream(
         }
     }
 
-    private class Session(val endpoint: String, val credentialHeader: Pair<String, String>?, val secret: String?, val limits: McpLimits) {
+    private class Session(val endpoint: String, val credentialHeader: Pair<String, String>?, secret: String?, val limits: McpLimits) {
         var sessionId: String? = null
         var protocolVersion: String? = null
         var nextId = 1L
         var bytesRead = 0L
-        fun scrub(text: String) = if (secret.isNullOrEmpty()) text else text.replace(secret, "[REDACTED]")
-        /** Scrubs decoded string values and keys, so the result stays valid JSON whatever the secret looks like. */
-        fun scrub(element: JsonElement): JsonElement = when (element) {
-            is JsonObject -> JsonObject(element.entries.associate { (key, value) -> scrub(key) to scrub(value) })
-            is JsonArray -> JsonArray(element.map { scrub(it) })
-            is JsonPrimitive -> if (element is JsonNull || secret.isNullOrEmpty() || !element.content.contains(secret)) element else JsonPrimitive(scrub(element.content))
-        }
-        fun scrub(element: JsonObject) = scrub(element as JsonElement) as JsonObject
+        private val scrubber = McpScrubber(listOfNotNull(secret))
+        fun scrub(text: String) = scrubber.scrub(text)
+        fun scrub(element: JsonObject) = scrubber.scrub(element)
     }
 
     private suspend fun <T> session(server: EffectiveMcpServer, limits: McpLimits, timeoutMillis: Long, block: suspend Session.() -> T): T {
-        val uri = URI(server.endpoint)
+        val endpoint = (server.transport as? McpServerTransport.Http)?.endpoint
+            ?: throw McpUpstreamFailure(McpOutcome.UPSTREAM_ERROR, "This MCP server is a hosted command, not an HTTPS endpoint.")
+        val uri = URI(endpoint)
         if (uri.scheme != "https" && !(allowHttp && uri.scheme == "http")) throw McpUpstreamFailure(McpOutcome.UPSTREAM_ERROR, "The MCP endpoint must use HTTPS.")
         val secret = server.credential?.reveal()
         val header = secret?.let { credentialHeader(server.config, it) }
-        val session = Session(server.endpoint, header, secret, limits)
+        val session = Session(endpoint, header, secret, limits)
         val outcome = withTimeoutOrNull(timeoutMillis) {
             addresses.check(uri.host)
             try {

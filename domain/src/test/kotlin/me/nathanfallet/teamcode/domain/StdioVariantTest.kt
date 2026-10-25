@@ -144,18 +144,54 @@ class StdioVariantTest {
         VariantService.validateMemberSecret(http, SecretValue("plain-delegated-credential"))
     }
 
-    @Test fun aHostedCommandIsNotServedYetSoItNeverReachesTheMemberServerList() = runTest {
+    @Test fun withoutAnMcpHostAHostedCommandNeverReachesTheMemberServerList() = runTest {
         val hosted = declared(stdio(secrets = mapOf("TOKEN" to "synthetic-token")))
         val remote = Variant("r", VariantKind.MCP, "tracker", "r", VariantBinding.SHARED, 1, "https://mcp.example.test", emptyMap(), true, 0, 0)
-        val resolve = ResolveEffectiveVariantsUseCase(object : EffectiveVariantSource {
+        val source = object : EffectiveVariantSource {
             override suspend fun state(teamId: String, memberId: String) = MemberVariantState(true, listOf(
                 AssignmentCandidate(hosted.slot, AssignmentSource.DIRECT, hosted, StdioEnvironment.encode(mapOf("TOKEN" to "synthetic-token")), null),
                 AssignmentCandidate(remote.slot, AssignmentSource.DIRECT, remote, SecretValue("synthetic-remote"), null),
             ), emptySet())
-        })
-        val effective = resolve("team", "member")
+        }
+        val effective = ResolveEffectiveVariantsUseCase(source)("team", "member")
         assertEquals(listOf("tracker"), effective.mcpServers.map { it.name })
         assertEquals(listOf(hosted.slot), effective.unavailable)
+        val served = ResolveEffectiveVariantsUseCase(source, hostedCommands = true)("team", "member")
+        assertEquals(listOf("everything", "tracker"), served.mcpServers.map { it.name }.sorted())
+        assertTrue(served.unavailable.isEmpty())
+        val transport = served.mcpServers.single { it.name == "everything" }.transport as McpServerTransport.Stdio
+        assertEquals(everything, transport.command)
+        assertEquals(hosted.createdAt, transport.declaredAt)
+    }
+
+    @Test fun aHostedCommandWithAnUnreadableValueOrNoMemberValueIsWithheld() = runTest {
+        val shared = declared(stdio())
+        val perMember = declared(stdio(binding = VariantBinding.PER_MEMBER)).copy(id = "p", target = "personal")
+        val resolve = ResolveEffectiveVariantsUseCase(object : EffectiveVariantSource {
+            override suspend fun state(teamId: String, memberId: String) = MemberVariantState(true, listOf(
+                // A bare string where the variables object belongs (written by hand, or by an unknown version).
+                AssignmentCandidate(shared.slot, AssignmentSource.DIRECT, shared, SecretValue("synthetic-bare-value"), null),
+                AssignmentCandidate(perMember.slot, AssignmentSource.DIRECT, perMember, null, null),
+            ), emptySet())
+        }, hostedCommands = true)
+        val effective = resolve("team", "member")
+        assertTrue(effective.mcpServers.isEmpty())
+        assertEquals(setOf(shared.slot, perMember.slot), effective.unavailable.toSet())
+    }
+
+    @Test fun aSharedCommandRunsOneProcessForTheTeamAndAPerMemberOneOnePerMember() {
+        fun key(binding: VariantBinding, member: String, version: Int = 1, assignedAt: Long = 10, team: String = "team", variant: String = "v") =
+            StdioProcessKey.of(team, variant, version, binding, member, assignedAt)
+        val shared = key(VariantBinding.SHARED, "alice")
+        assertTrue(Regex("[0-9a-f]{64}").matches(shared), "The MCP host only accepts 64 lowercase hexadecimal characters")
+        assertEquals(shared, key(VariantBinding.SHARED, "bob", assignedAt = 99), "Every member of a SHARED variant shares its process")
+        assertNotEquals(shared, key(VariantBinding.SHARED, "alice", version = 2), "A rotated shared secret bumps the version: new process")
+        assertNotEquals(shared, key(VariantBinding.SHARED, "alice", team = "other"))
+        assertNotEquals(shared, key(VariantBinding.SHARED, "alice", variant = "w"))
+        val alice = key(VariantBinding.PER_MEMBER, "alice")
+        assertNotEquals(alice, key(VariantBinding.PER_MEMBER, "bob"), "PER_MEMBER: one process per member")
+        assertNotEquals(alice, key(VariantBinding.PER_MEMBER, "alice", assignedAt = 11), "A rotated member value changes assignedAt: new process")
+        assertNotEquals(alice, shared)
     }
 
     private fun invalid2(current: Variant, update: VariantUpdate) = assertEquals("invalid_variant", code { VariantService.validate(current, update) }, update.toString())

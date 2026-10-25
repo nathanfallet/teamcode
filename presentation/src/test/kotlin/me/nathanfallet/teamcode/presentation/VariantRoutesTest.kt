@@ -298,7 +298,7 @@ class VariantRoutesTest {
         val listed = client.get("/dashboard/variants") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
         assertTrue(listed.contains("hosted command: npm @acme/tracker-mcp@1.4.2 --token \${TRACKER_TOKEN}"), listed)
         assertTrue(listed.contains("mcp-server-fetch==2025.4.7"))
-        assertTrue(listed.contains("not served yet"))
+        assertTrue(listed.contains("not served: this server has no MCP host"), "This server has no MCP host")
         assertFalse(listed.contains("synthetic-dashboard"))
     }
 }
