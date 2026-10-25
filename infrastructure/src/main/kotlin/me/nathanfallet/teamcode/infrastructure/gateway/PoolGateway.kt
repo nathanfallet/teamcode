@@ -151,6 +151,13 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
     }
 
     private class SafeRetry(val failure: TeamFailure) : RuntimeException()
+
+    /** Best-effort write after the provider answered; cancellation still propagates. */
+    private suspend fun bookkeeping(reservation: Reservation, step: String, block: suspend () -> Unit) {
+        try { block() }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) { System.err.println("TeamCode inference bookkeeping skipped request=${reservation.id} step=$step cause=${error::class.simpleName}") }
+    }
     private suspend fun attempt(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit,
         transport: ProviderTransport, body: JsonObject, model: String, requestedModel: String, reservation: Reservation, translated: Boolean, reauthenticatedAccounts: MutableSet<String>, replyTools: List<ToolDefinition>?) {
         val meter = SseUsageMeter()
@@ -174,11 +181,13 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                     var refreshRejected = false
                     knownCharge = null
                     transport.send(reservation.account, token, body, request.headers - setOf("x-teamcode-run-id", "x-teamcode-workload")) { response ->
-                        transport.requestId(response.headers)?.let { admission.recordProviderRequest(reservation, it) }
+                        // The provider has answered: recording its request id and quota headers is bookkeeping, and a
+                        // database timeout there must not turn a paid answer into a 502 the client retries.
+                        transport.requestId(response.headers)?.let { id -> bookkeeping(reservation, "provider_request") { admission.recordProviderRequest(reservation, id) } }
                         val now = System.currentTimeMillis()
                         val observation = transport.quotaUpdate(reservation.account.id, model, response.headers, now)
                         val observations = observation.windows
-                        admission.observe(reservation.account.id, observation)
+                        bookkeeping(reservation, "quota_observation") { admission.observe(reservation.account.id, observation) }
                         val status = response.status.value
                         upstreamStatus = status
                         val encoding = response.headers["content-encoding"]?.takeIf { it in setOf("gzip", "br", "deflate", "zstd", "identity") } ?: "none"
@@ -240,6 +249,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             if (error is TeamFailure) System.err.println("TeamCode inference failure request=${reservation.id} category=${error.code}")
             if (committed) throw error // Never write a replacement response or replay a committed stream.
             if (error is TeamFailure) throw error
+            // The class names the cause (network, timeout, database) without a message that could carry a body.
+            System.err.println("TeamCode inference failure request=${reservation.id} category=upstream_unavailable cause=${error::class.simpleName}")
             throw TeamFailure("upstream_unavailable", 502, "The provider request could not complete.")
         } finally {
             withContext(NonCancellable) {
