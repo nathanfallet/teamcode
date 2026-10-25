@@ -227,7 +227,8 @@ class GitHubLinkTest {
     @Test fun accessIsRefreshedBeforeExpiryAndRefusedRefreshesRequireANewLink() = runBlocking {
         val apps = Apps(); val links = Links(apps); val github = FakeGitHub()
         val service = GitHubLinkService(apps, links, github)
-        val access = ResolveGitHubAccessUseCase(apps, links, github, maxWaitMillis = 300)
+        val logs = mutableListOf<String>()
+        val access = ResolveGitHubAccessUseCase(apps, links, github, maxWaitMillis = 300, log = { logs += it })
         assertEquals(GitHubAccess.NotLinked, access.userAccess("team", "member-id"), "No App configured")
         service.saveApp(admin, null, input)
         assertEquals(GitHubAccess.NotLinked, access.userAccess("team", "member-id"))
@@ -262,5 +263,14 @@ class GitHubLinkTest {
         val calls = github.calls.size
         assertEquals(GitHubAccess.NotLinked, access.userAccess("team", "member-id"))
         assertEquals(calls, github.calls.size, "No further refresh once GitHub refused it")
+
+        // Every refresh GitHub was asked for leaves one line saying how it ended, never a token.
+        assertEquals(listOf(
+            "TeamCode github refresh member=member-id outcome=refreshed",
+            "TeamCode github refresh member=member-id outcome=failed cause=IOException",
+            "TeamCode github refresh member=member-id outcome=failed cause=IOException",
+            "TeamCode github refresh member=member-id outcome=rejected",
+        ), logs)
+        assertFalse(logs.any { "ghu_" in it || "ghr_" in it || "unreachable" in it })
     }
 }

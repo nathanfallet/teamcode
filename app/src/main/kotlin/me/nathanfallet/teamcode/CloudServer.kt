@@ -91,7 +91,7 @@ class CloudServer(
     val github = GitHubLinkService(githubStore, githubStore, githubClient)
     /** The owner's environment variables come from the variants, resolved at every preparation. */
     private val variables = ResolveCloudVariablesUseCase(ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher)))
-    private val githubAccess = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient)
+    private val githubAccess = ResolveGitHubAccessUseCase(githubStore, githubStore, githubClient, log = { System.out.println(it) })
     /** A remote session's host presents its owner's login; it is resolved like any API call's. */
     private val logins = me.nathanfallet.teamcode.infrastructure.database.SqlTeamService(database)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),

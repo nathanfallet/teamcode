@@ -8,6 +8,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import me.nathanfallet.teamcode.domain.cloud.GitHubAccess
 import me.nathanfallet.teamcode.domain.cloud.GitHubAccessSource
 import me.nathanfallet.teamcode.domain.cloud.GitHubUserToken
+import me.nathanfallet.teamcode.domain.team.TeamFailure
 
 /**
  * A member's GitHub access for their own cloud sessions, from the stored link. A token that expires within
@@ -26,6 +27,11 @@ class ResolveGitHubAccessUseCase(
     private val staleAfterMillis: Long = 60_000L,
     private val refreshTimeoutMillis: Long = 20_000L,
     private val maxWaitMillis: Long = 20_000L,
+    /**
+     * One line per refresh GitHub was asked for: its outcome, never a token, a GitHub body or an exception message.
+     * Without it a link that ends (`reconnect_required`) or fails for hours leaves nothing to tell why.
+     */
+    private val log: (String) -> Unit = {},
 ) : GitHubAccessSource {
     override suspend fun userAccess(teamId: String, memberId: String): GitHubAccess {
         val app = apps.credentials(teamId) ?: return GitHubAccess.NotLinked
@@ -45,16 +51,19 @@ class ResolveGitHubAccessUseCase(
     }
 
     private suspend fun refresh(teamId: String, memberId: String, app: GitHubAppCredentials, claim: GitHubTokenClaim.Refresh, now: Long): GitHubAccess {
+        var failure = "timeout"
         val result = try { withTimeoutOrNull(refreshTimeoutMillis) { github.refresh(app, claim.refreshToken) } }
             catch (error: CancellationException) {
                 withContext(NonCancellable) { links.abandonRefresh(teamId, memberId, claim, reconnect = false) }
+                log(line(memberId, "cancelled"))
                 throw error
             }
-            catch (_: Exception) { null }
+            catch (error: Exception) { failure = (error as? TeamFailure)?.code ?: error::class.simpleName ?: "error"; null }
         return when (result) {
             is GitHubRefresh.Refreshed -> {
                 // GitHub already rotated the refresh token: losing these tokens would force the member to link again.
                 val saved = withContext(NonCancellable) { save(teamId, memberId, claim, result.tokens) }
+                log(line(memberId, when (saved) { true -> "refreshed"; null -> "refreshed_unsaved"; false -> "refreshed_fenced" }))
                 when (saved) {
                     // Saved, or not saved because of a passing database error: the new token is valid either way.
                     true, null -> linked(claim.link, result.tokens.accessToken, result.tokens.accessExpiresAt)
@@ -66,10 +75,12 @@ class ResolveGitHubAccessUseCase(
                 }
             }
             GitHubRefresh.Rejected -> {
+                log(line(memberId, "rejected"))
                 links.abandonRefresh(teamId, memberId, claim, reconnect = true)
                 GitHubAccess.NotLinked
             }
             null -> {
+                log(line(memberId, "failed cause=$failure"))
                 links.abandonRefresh(teamId, memberId, claim, reconnect = false)
                 // A token that is still valid for a while beats no access at all.
                 val expiresAt = claim.link.accessExpiresAt
@@ -87,6 +98,8 @@ class ResolveGitHubAccessUseCase(
         }
         return null
     }
+
+    private fun line(memberId: String, outcome: String) = "TeamCode github refresh member=$memberId outcome=$outcome"
 
     private fun linked(link: GitHubLink, token: String, expiresAt: Long?) =
         GitHubAccess.Linked(GitHubUserToken(token, expiresAt, link.identity.login, link.identity.userId))
