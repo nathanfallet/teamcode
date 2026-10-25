@@ -114,7 +114,7 @@ fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
 private fun AgentText(item: TranscriptItem.Agent) {
     val text = item.event.text
     val parsed = remember(text) { parseMarkdown(text) }
-    SelectionContainer { Markdown(parsed, modifier = Modifier.fillMaxWidth().testTag("agent-${item.key}")) }
+    SelectionContainer { Markdown(parsed, components = remember { transcriptMarkdownComponents() }, modifier = Modifier.fillMaxWidth().testTag("agent-${item.key}")) }
 }
 
 @Composable

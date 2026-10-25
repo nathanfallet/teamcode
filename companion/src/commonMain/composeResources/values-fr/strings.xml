@@ -157,6 +157,8 @@
     <string name="transfer_problem_quota">il n'a aucun quota d'utilisation</string>
     <string name="transfer_problem_limit">il conserve déjà autant de sessions qu'il y est autorisé</string>
     <string name="transfer_problem_timeout">le changement de propriétaire a pris trop de temps</string>
+    <string name="transcript_code_copy">Copier</string>
+    <string name="transcript_code_copied">Copié</string>
     <string name="transcript_truncated">Un événement trop volumineux pour être affiché (%1$s)</string>
     <string name="transcript_from">D'un autre membre</string>
     <string name="link_open_title">Ouvrir ce lien ?</string>

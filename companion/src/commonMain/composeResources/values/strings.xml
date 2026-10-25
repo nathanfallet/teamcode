@@ -157,6 +157,8 @@
     <string name="transfer_problem_quota">they have no usage allowance</string>
     <string name="transfer_problem_limit">they already keep as many sessions as they may</string>
     <string name="transfer_problem_timeout">the change of owner took too long</string>
+    <string name="transcript_code_copy">Copy</string>
+    <string name="transcript_code_copied">Copied</string>
     <string name="transcript_truncated">An event too large to show (%1$s)</string>
     <string name="transcript_from">From another member</string>
     <string name="link_open_title">Open this link?</string>
