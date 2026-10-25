@@ -99,7 +99,9 @@ class LaunchersTest {
     @Test
     fun `variables cannot take over the runtime, the registry or the dependency cut-off`() {
         for (name in listOf("PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "PYTHONPATH", "NPM_CONFIG_REGISTRY", "NPM_CONFIG_BEFORE", "UV_EXCLUDE_NEWER",
-            "UV_INDEX_URL", "PIP_INDEX_URL", "TEAMCODE_MCP_TOKEN", "npm_config_registry", "lower", "1ABC", "A-B")) {
+            "UV_INDEX_URL", "PIP_INDEX_URL", "TEAMCODE_MCP_TOKEN", "npm_config_registry", "lower", "1ABC", "A-B",
+            // TLS, loader and site redirections that would weaken the pinned download or the runtime.
+            "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "PYTHONUSERBASE", "SSLKEYLOGFILE")) {
             invalid(npm(env = mapOf(name to "value")))
             invalid(npm(secrets = mapOf(name to secret)))
         }

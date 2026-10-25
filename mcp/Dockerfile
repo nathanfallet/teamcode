@@ -78,7 +78,7 @@ RUN as_mcp() { setpriv --reuid=10002 --regid=10002 --clear-groups env HOME=/tmp 
     && rm -rf /tmp/* /tmp/.[!.]*
 # The JVM is small next to the processes it supervises; children never see these options (their environment is built from scratch).
 ENV TEAMCODE_MCP_DATA_DIR=/var/mcp \
-    JAVA_TOOL_OPTIONS="-Xmx256m -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
+    JAVA_TOOL_OPTIONS="-Xmx384m -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
 LABEL org.opencontainers.image.source="https://github.com/nathanfallet/teamcode" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.description="TeamCode MCP stdio host"

@@ -125,6 +125,9 @@ class Launchers(private val config: HostConfig) {
             "NODE_OPTIONS", "NODE_PATH", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP",
             "PYTHONHOME", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_CONFIG_GLOBAL",
             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+            // The same environment applies to the download: nothing may weaken its TLS or redirect the loader or the site directories.
+            "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "NODE_V8_COVERAGE", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "SSLKEYLOGFILE",
+            "PYTHONUSERBASE", "PYTHONEXECUTABLE", "PYTHONPLATLIBDIR",
         )
         private val reservedPrefixes = listOf(
             "LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_", "NPM_CONFIG_", "UV_", "PIP_",

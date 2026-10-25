@@ -119,6 +119,19 @@ jobs:
           else
             echo "IMAGE_TAGS=latest,sha-${GITHUB_SHA}" >> "$GITHUB_ENV"
           fi
+      # The MCP stdio host (docs/mcp.md): a Dockerfile image, since it carries Node.js, uv, tini and prlimit next to its
+      # JVM. It is built and checked before anything is pushed, so a failing host never leaves a server tag without its
+      # host; it is pushed after the server image, with the same tags, where the server image is pushed.
+      - name: Build the MCP host jar
+        run: ./gradlew :mcp:buildFatJar
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the MCP host image for amd64 and check its contract
+        run: |
+          docker buildx build --platform linux/amd64 --file mcp/Dockerfile --tag teamcode-mcp:contract --load mcp
+          python3 scripts/smoke-mcp-image.py teamcode-mcp:contract
+      - name: Build the MCP host image for arm64
+        run: docker buildx build --platform linux/arm64 --file mcp/Dockerfile mcp
       - name: Build the image without pushing
         if: ${{ !((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')) }}
         run: ./gradlew :app:buildImage -PimagePlatforms=amd64 "-PimageTags=${IMAGE_TAGS}"
@@ -128,20 +141,7 @@ jobs:
           DOCKER_HUB_USERNAME: nathanfallet
           DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
         run: ./gradlew :app:publishImage "-PimageTags=${IMAGE_TAGS}"
-      # The MCP stdio host (docs/mcp.md): a Dockerfile image, since it carries Node.js, uv, tini and prlimit next to
-      # its JVM. Same tags as the server image, so the chart deploys both at the same version.
-      - name: Build the MCP host jar
-        run: ./gradlew :mcp:buildFatJar
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the MCP host image for amd64 and check its contract
-        run: |
-          docker buildx build --platform linux/amd64 --file mcp/Dockerfile --tag teamcode-mcp:contract --load mcp
-          python3 scripts/smoke-mcp-image.py teamcode-mcp:contract
-      - name: Build the multi-architecture MCP host image without pushing
-        if: ${{ !((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main')) }}
-        run: docker buildx build --platform linux/amd64,linux/arm64 --file mcp/Dockerfile mcp
-      - name: Build and push the multi-architecture MCP host image
+      - name: Push the multi-architecture MCP host image
         if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.full_validation && github.ref == 'refs/heads/main') }}
         env:
           DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}

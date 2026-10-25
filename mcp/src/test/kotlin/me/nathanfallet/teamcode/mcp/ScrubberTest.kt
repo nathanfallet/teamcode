@@ -56,4 +56,13 @@ class ScrubberTest {
         tail.append("xx $first yy\nzz\n")
         assertEquals("zz\n", tail.snapshot())
     }
+
+    @Test
+    fun `printing a request never shows a secret value`() {
+        val spec = ProcessSpec(Launchers.NPM, "x@1.0.0", env = mapOf("API_URL" to "https://api.example.org"), secrets = mapOf("API_TOKEN" to first), declaredAt = 1)
+        for (text in listOf(spec.toString(), OpsRequest("k", spec, "list", deadlineMs = 1, maxResponseBytes = 1).toString(), WarmRequest("k", spec).toString())) {
+            assertFalse(first in text, text)
+            assertTrue("API_TOKEN" in text)
+        }
+    }
 }

@@ -82,11 +82,18 @@ class Supervisor(
             var lastMemoryCheck = 0L
             while (isActive) {
                 delay(config.tickMillis)
-                val now = System.currentTimeMillis()
-                sweep(now)
-                if (now - lastMemoryCheck >= config.memoryCheckMillis) {
-                    lastMemoryCheck = now
-                    withContext(Dispatchers.IO) { checkMemory() }
+                // One failing check must not end idle stops, memory limits and stall detection for good.
+                try {
+                    val now = System.currentTimeMillis()
+                    sweep(now)
+                    if (now - lastMemoryCheck >= config.memoryCheckMillis) {
+                        lastMemoryCheck = now
+                        withContext(Dispatchers.IO) { checkMemory() }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    org.slf4j.LoggerFactory.getLogger("teamcode.mcp").warn("Supervision tick failed: ${error.javaClass.name}")
                 }
             }
         }
@@ -106,10 +113,9 @@ class Supervisor(
             var cold = false
             val outcome = withTimeoutOrNull(request.deadlineMs) {
                 try {
+                    // obtain() counts this operation as a user of the process, so it is never stopped for idleness or room meanwhile.
                     val (process, wasCold) = obtain(entry, request.spec)
                     cold = wasCold
-                    process.users.incrementAndGet()
-                    process.touch()
                     try {
                         phase = Phase.QUEUE
                         process.permits.withPermit {
@@ -143,7 +149,7 @@ class Supervisor(
     fun warm(request: WarmRequest): KeyState {
         validate(request.key)
         val entry = entries.computeIfAbsent(request.key) { Entry(it) }
-        scope.launch { try { obtain(entry, request.spec) } catch (_: HostFailure) {} }
+        scope.launch { try { obtain(entry, request.spec).first.users.decrementAndGet() } catch (_: HostFailure) {} }
         return KeyState(request.key, entry.state())
     }
 
@@ -226,13 +232,16 @@ class Supervisor(
         scope.cancel()
     }
 
+    /** The ready process of the key, or the one being started for it; counted as used until the caller decrements [StdioProcess.users]. */
     private suspend fun obtain(entry: Entry, spec: ProcessSpec): Pair<StdioProcess, Boolean> {
         val fingerprint = fingerprint(spec)
         val starting = entry.mutex.withLock {
             if (closed) throw HostFailure(HostErrors.SHUTTING_DOWN, "The MCP host is shutting down.")
             if (entry.fingerprint != fingerprint) {
-                // Another definition for the same key: the server rotated something it should have put in the key.
+                // Another definition for the same key: the server rotated something it should have put in the key. The
+                // running process and a start in progress belong to the old definition and are not reused.
                 entry.process?.let { retire(entry, it, StopReason.REPLACED) }
+                entry.starting = null
                 entry.backoffUntil = 0
                 synchronized(entry.failureTimes) { entry.failureTimes.clear() }
                 entry.fingerprint = fingerprint
@@ -243,13 +252,16 @@ class Supervisor(
             if (entry.backoffUntil > now) throw HostFailure(HostErrors.BACKOFF,
                 "The MCP server failed more than ${config.crashLimit} times in ${config.crashWindowMillis / 60_000} minutes; the host starts it again in " +
                     "${(entry.backoffUntil - now + 59_999) / 60_000} minutes, or when an administrator restarts it.")
-            entry.process?.takeIf { it.alive }?.let { return it to false }
-            entry.starting ?: scope.async { start(entry, spec) }.also { entry.starting = it }
+            entry.process?.takeIf { it.alive }?.let { it.users.incrementAndGet(); it.touch(); return it to false }
+            entry.starting ?: scope.async { start(entry, spec, fingerprint) }.also { entry.starting = it }
         }
-        return starting.await() to true
+        val process = starting.await()
+        process.users.incrementAndGet()
+        process.touch()
+        return process to true
     }
 
-    private suspend fun start(entry: Entry, spec: ProcessSpec): StdioProcess {
+    private suspend fun start(entry: Entry, spec: ProcessSpec, fingerprint: String): StdioProcess {
         var launched: StdioProcess? = null
         try {
             reserve(entry)
@@ -277,6 +289,11 @@ class Supervisor(
             }
             val elapsed = (System.nanoTime() - started) / 1_000_000
             entry.mutex.withLock {
+                if (entry.fingerprint != fingerprint) {
+                    // Replaced while it started: its callers asked for the old definition, which no longer runs.
+                    retireStarting(entry, process, StopReason.REPLACED)
+                    throw HostFailure(HostErrors.CRASHED, StopReason.REPLACED.message)
+                }
                 entry.starting = null
                 if (closed || entries[entry.key] !== entry) {
                     retireStarting(entry, process, StopReason.SHUTDOWN)
@@ -292,13 +309,15 @@ class Supervisor(
         } catch (cancelled: CancellationException) {
             // The host is shutting down: no process may outlive it.
             launched?.kill()
-            entry.starting = null
+            if (entry.fingerprint == fingerprint) entry.starting = null
             throw cancelled
         } catch (error: Exception) {
             // An unexpected error (a full disk, say) must not leave the key waiting on a failed start forever.
             val failure = error as? HostFailure ?: HostFailure(HostErrors.START_FAILED, "The MCP host could not start the server.")
                 .also { launched?.let { retireStarting(entry, it) } }
             entry.mutex.withLock {
+                // A start replaced by a newer definition says nothing about the key's health.
+                if (entry.fingerprint != fingerprint) return@withLock
                 entry.starting = null
                 if (failure.code !in setOf(HostErrors.CAPACITY, HostErrors.SHUTTING_DOWN)) {
                     entry.lastStartFailed = true
@@ -368,6 +387,7 @@ class Supervisor(
     private fun sweep(now: Long) {
         for (entry in entries.values) {
             val process = entry.process ?: continue
+            process.refreshTree()
             when {
                 process.writeStalledMillis() > config.writeStallMillis -> retire(entry, process, StopReason.WRITE_STALL)
                 process.users.get() > 0 -> {}
@@ -380,7 +400,7 @@ class Supervisor(
     private fun checkMemory() {
         for (entry in entries.values) {
             val process = entry.process ?: continue
-            val rss = memory.rssBytes(process.pids()) ?: continue
+            val rss = try { memory.rssBytes(process.pids()) } catch (_: RuntimeException) { null } ?: continue
             entry.rssBytes = rss
             if (rss > config.processMemoryBytes) retire(entry, process, StopReason.MEMORY)
         }

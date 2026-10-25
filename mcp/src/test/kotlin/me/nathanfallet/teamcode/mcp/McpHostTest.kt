@@ -52,7 +52,7 @@ class McpHostTest {
         assertTrue(list.cold)
         assertEquals(ProcessStates.READY, list.state)
         val names = list.result!!["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
-        assertEquals(13, names.size, "every page of tools/list is read")
+        assertEquals(15, names.size, "every page of tools/list is read")
         assertTrue("echo" in names && "spam" in names)
         val echo = call(key, spec, "echo", buildJsonObject { put("text", "hello") })
         assertFalse(echo.cold)
@@ -175,10 +175,12 @@ class McpHostTest {
             val tooLarge = call(key, spec, "big", buildJsonObject { put("bytes", 100_000) }, maxResponseBytes = 64 * 1024)
             assertEquals(HostErrors.TOO_LARGE, tooLarge.error?.code)
             repeat(3) {
-                // The line is dropped unread, so its call cannot be told apart and times out; the third one also restarts the process.
-                val dropped = call(key, spec, "big", buildJsonObject { put("bytes", 300_000) }, deadlineMs = 1_000)
-                if (it < 2) assertEquals(HostErrors.TIMEOUT, dropped.error?.code)
-                else assertTrue(dropped.error?.code in setOf(HostErrors.TIMEOUT, HostErrors.CRASHED))
+                // The line is dropped unparsed, but its id is read at its start or end: the call fails at once, not at its deadline.
+                val started = System.currentTimeMillis()
+                val dropped = call(key, spec, "big", buildJsonObject { put("bytes", 300_000) }, deadlineMs = 10_000)
+                if (it < 2) assertEquals(HostErrors.TOO_LARGE, dropped.error?.code)
+                else assertTrue(dropped.error?.code in setOf(HostErrors.TOO_LARGE, HostErrors.CRASHED))
+                assertTrue(System.currentTimeMillis() - started < 5_000)
             }
             assertTrue(events.count { it["event"]?.jsonPrimitive?.content == "oversize" } >= 3)
             eventually { process(key)?.pid == null || process(key)?.pid != pid }
@@ -343,7 +345,8 @@ class McpHostTest {
             val spec = spec()
             call(key, spec, "echo")
             eventually { events.any { it["event"]?.jsonPrimitive?.content == "killed" && it["reason"]?.jsonPrimitive?.content == "memory" } }
-            assertEquals("memory", process(key)?.lastFailure)
+            // The failure is recorded when the process has exited, after the kill.
+            eventually { process(key)?.lastFailure == "memory" }
         }
 
     @Test
@@ -363,6 +366,54 @@ class McpHostTest {
         val key = key("unwritable")
         repeat(2) { assertEquals(HostErrors.START_FAILED, call(key, spec(), "echo").error?.code) }
         assertEquals(ProcessStates.FAILED, process(key)?.state)
+    }
+
+    @Test
+    fun `a ping from the server is answered, other requests are refused`() = host {
+        assertEquals("""{"result":{}}""", text(call(key("ping"), spec(), "ping")))
+    }
+
+    @Test
+    fun `a process whose stdin breaks is stopped instead of leaving calls waiting`() = host {
+        val key = key("broken-stdin")
+        val spec = spec(mode = "ignore-term")
+        call(key, spec, "close-stdin")
+        val pid = process(key).pid()
+        val started = System.currentTimeMillis()
+        assertEquals(HostErrors.CRASHED, call(key, spec, "echo", deadlineMs = 15_000).error?.code)
+        assertTrue(System.currentTimeMillis() - started < 10_000)
+        eventually { ProcessHandle.of(pid).isEmpty }
+        assertEquals("ok", text(call(key, spec, "echo", buildJsonObject { put("text", "ok") })))
+    }
+
+    @Test
+    fun `a crash also ends the processes the server started`() = host {
+        val key = key("orphans")
+        val spec = spec()
+        val child = HostProtocol.json.parseToJsonElement(text(call(key, spec, "spawn"))).jsonObject["pid"]!!.jsonPrimitive.long
+        delay(500) // the host learns the tree on its next tick
+        assertEquals(HostErrors.CRASHED, call(key, spec, "crash").error?.code)
+        eventually { ProcessHandle.of(child).isEmpty }
+    }
+
+    @Test
+    fun `the supervision loop survives an error of the memory probe`() =
+        host({ it.copy(idleMillis = 600) }, memory = MemoryProbe { throw IllegalStateException("probe failure") }) {
+            val key = key("probe")
+            call(key, spec(), "echo")
+            delay(500)
+            eventually { process(key)?.pid == null }
+        }
+
+    @Test
+    fun `a new definition for a key that is still starting gets its own process`() = host {
+        val key = key("redefined")
+        val old = spec(mode = "slow-start", env = mapOf("FIXTURE_LABEL" to "old"))
+        val new = spec(mode = "slow-start", env = mapOf("FIXTURE_LABEL" to "new"))
+        assertEquals(HttpStatusCode.Accepted, post(HostProtocol.WARM, HostProtocol.json.encodeToString(WarmRequest.serializer(), WarmRequest(key, old))).status)
+        delay(200)
+        val environment = HostProtocol.json.parseToJsonElement(text(call(key, new, "env"))).jsonObject
+        assertEquals("new", environment["FIXTURE_LABEL"]!!.jsonPrimitive.content)
     }
 
     @Test

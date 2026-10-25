@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A small MCP server over stdio (one JSON-RPC message per line) for the host's tests. The tests install it as `npx`
 // and `uvx`, so it runs through the host's real launch path. FIXTURE_MODE: banner (non-JSON stdout line first),
-// no-tools (no tools capability), exit-at-start, ignore-term (ignores SIGTERM and the end of stdin).
+// no-tools (no tools capability), exit-at-start, ignore-term (ignores SIGTERM and the end of stdin), slow-start
+// (answers initialize after FIXTURE_START_DELAY ms).
 'use strict';
 const { spawn } = require('node:child_process');
 const { createInterface } = require('node:readline');
@@ -13,7 +14,7 @@ const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'str
 if (mode.includes('banner')) process.stdout.write('fixture server starting\n');
 if (mode.includes('ignore-term')) { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }
 process.stderr.write(`fixture stderr secret=${process.env.FIXTURE_SECRET || ''}\n`);
-const names = ['echo', 'slow', 'crash', 'big', 'env', 'secret', 'fail', 'ask', 'change', 'spawn', 'stats', 'stuck', 'spam'];
+const names = ['echo', 'slow', 'crash', 'big', 'env', 'secret', 'fail', 'ask', 'ping', 'change', 'spawn', 'stats', 'stuck', 'spam', 'close-stdin'];
 let added = false;
 const tools = () => (added ? [...names, 'added'] : names).map((name) => ({ name, description: `fixture ${name}`, inputSchema: { type: 'object' } }));
 const pageSize = Number(process.env.FIXTURE_PAGE_SIZE || 1000);
@@ -29,6 +30,7 @@ rl.on('line', async (line) => {
   const error = (code, message) => send({ jsonrpc: '2.0', id: msg.id, error: { code, message } });
   if (msg.method === 'initialize') {
     stats.initialize++;
+    if (mode.includes('slow-start')) await new Promise((resolve) => setTimeout(resolve, Number(process.env.FIXTURE_START_DELAY || 1000)));
     return reply({ protocolVersion: msg.params.protocolVersion, capabilities: mode.includes('no-tools') ? {} : { tools: { listChanged: true } }, serverInfo: { name: 'fixture', version: '1.0.0' } });
   }
   if (msg.method === 'tools/list') {
@@ -52,6 +54,14 @@ rl.on('line', async (line) => {
       send({ jsonrpc: '2.0', id, method: 'sampling/createMessage', params: { messages: [], maxTokens: 1 } });
       return reply(text({ code: (await answer).error?.code }));
     }
+    case 'ping': {
+      const id = `ping-${nextAsk++}`;
+      const answer = new Promise((resolve) => asks.set(id, resolve));
+      send({ jsonrpc: '2.0', id, method: 'ping' });
+      const response = await answer;
+      return reply(text({ result: response.result, code: response.error?.code }));
+    }
+    case 'close-stdin': reply(text('closing')); rl.close(); process.stdin.destroy(); require('node:fs').closeSync(0); return;
     case 'change': added = true; send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }); return reply(text('changed'));
     case 'spawn': return reply(text({ pid: spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }).pid }));
     case 'stats': return reply(text(stats));

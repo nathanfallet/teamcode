@@ -34,6 +34,7 @@ import me.nathanfallet.teamcode.api.BuildInfo
 internal enum class StopReason(val label: String, val failure: Boolean, val message: String) {
     CRASHED("crashed", true, "The MCP server stopped during the call."),
     STDOUT_CLOSED("stdout_closed", true, "The MCP server closed its output during the call."),
+    STDIN_CLOSED("stdin_closed", true, "The MCP server closed its input and was stopped."),
     MEMORY("memory", true, "The MCP server exceeded its memory limit and was stopped."),
     WRITE_STALL("write_stall", true, "The MCP server stopped reading its input and was stopped."),
     NON_JSON("non_json", true, "The MCP server wrote too much invalid output and was stopped."),
@@ -85,6 +86,8 @@ internal class StdioProcess(
     private val writeStartedNanos = AtomicLong(0)
     private val stopReason = AtomicReference<StopReason?>(null)
     private val dead = AtomicBoolean(false)
+    /** Every descendant seen so far: once the root has exited, its children can no longer be listed. */
+    private val tree = ConcurrentHashMap<Long, ProcessHandle>()
     private val nonJsonLines = ArrayDeque<Long>()
     private val oversizeLines = ArrayDeque<Long>()
     private lateinit var reader: Thread
@@ -95,6 +98,12 @@ internal class StdioProcess(
     val alive get() = !dead.get() && stopReason.get() == null
     fun touch() = lastUsed.set(System.currentTimeMillis())
     fun pids(): List<Long> = if (!::process.isInitialized || !process.isAlive) emptyList() else listOf(process.pid()) + process.descendants().map { it.pid() }.toList()
+    /** Called on every supervisor tick. */
+    fun refreshTree() {
+        if (!::process.isInitialized) return
+        process.descendants().forEach { tree.putIfAbsent(it.pid(), it) }
+        tree.values.removeIf { !it.isAlive }
+    }
     fun writeStalledMillis(): Long = writeStartedNanos.get().let { if (it == 0L) 0 else (System.nanoTime() - it) / 1_000_000 }
     /** Claims the stop for [reason]; false when the process is already stopping for another one. */
     fun markStopping(reason: StopReason) = stopReason.compareAndSet(null, reason)
@@ -197,7 +206,13 @@ internal class StdioProcess(
         val input = process.inputStream
         val buffer = ByteArray(64 * 1024)
         val line = ByteArrayOutputStream()
-        var dropping = false
+        // For a dropped line: its first and last bytes, where a JSON-RPC answer carries its id.
+        var head: ByteArray? = null
+        var tail = ByteArray(0)
+        fun keepTail(from: Int, until: Int) {
+            val kept = minOf(EDGE_BYTES, until - from + tail.size)
+            tail = (tail + buffer.copyOfRange(maxOf(from, until - EDGE_BYTES), until)).takeLast(kept).toByteArray()
+        }
         try {
             while (true) {
                 val count = input.read(buffer)
@@ -205,17 +220,28 @@ internal class StdioProcess(
                 var start = 0
                 for (index in 0 until count) {
                     if (buffer[index] != NEWLINE) continue
-                    if (!dropping) line.write(buffer, start, index - start)
-                    if (dropping || line.size() > config.maxLineBytes) oversize() else handle(line.toByteArray())
+                    if (head == null) line.write(buffer, start, index - start) else keepTail(start, index)
+                    if (head == null && line.size() > config.maxLineBytes) {
+                        val bytes = line.toByteArray()
+                        head = bytes.copyOf(EDGE_BYTES)
+                        tail = bytes.takeLast(EDGE_BYTES).toByteArray()
+                    }
+                    head?.let { oversize(it, tail) } ?: handle(line.toByteArray())
                     line.reset()
-                    dropping = false
+                    head = null
+                    tail = ByteArray(0)
                     start = index + 1
                 }
-                if (!dropping) {
+                if (head == null) {
                     line.write(buffer, start, count - start)
                     // Over the limit: the rest of the line is skipped without being kept or parsed.
-                    if (line.size() > config.maxLineBytes) { dropping = true; line.reset() }
-                }
+                    if (line.size() > config.maxLineBytes) {
+                        val bytes = line.toByteArray()
+                        head = bytes.copyOf(EDGE_BYTES)
+                        tail = bytes.takeLast(EDGE_BYTES).toByteArray()
+                        line.reset()
+                    }
+                } else keepTail(start, count)
             }
         } catch (_: IOException) {}
         // The output closed while the process lives on: it can no longer answer.
@@ -234,7 +260,9 @@ internal class StdioProcess(
         val method = (message["method"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         val id = message["id"]
         if (method != null) {
-            if (id != null && id !is JsonNull) {
+            if (id != null && id !is JsonNull && method == "ping") {
+                outbox.offer(buildJsonObject { put("jsonrpc", "2.0"); put("id", id); putJsonObject("result") {} }.toString())
+            } else if (id != null && id !is JsonNull) {
                 // sampling, elicitation, roots and any other request: the host announced no capability, so it never leaves one waiting.
                 outbox.offer(buildJsonObject {
                     put("jsonrpc", "2.0"); put("id", id)
@@ -250,8 +278,12 @@ internal class StdioProcess(
         pending.remove(numeric)?.complete(Reply(message, bytes.size))
     }
 
-    private fun oversize() {
+    private fun oversize(head: ByteArray, tail: ByteArray) {
         events.emit(event("oversize"))
+        // The line was not parsed, but an answer's id sits at its start or its end: that call fails now instead of at its deadline.
+        val id = headId.find(head.decodeToString())?.groupValues?.get(1)?.toLongOrNull()
+            ?: tailId.find(tail.decodeToString())?.groupValues?.get(1)?.toLongOrNull()
+        id?.let { pending.remove(it) }?.completeExceptionally(HostFailure(HostErrors.TOO_LARGE, "The MCP server's answer exceeds the host's limit of ${config.maxLineBytes} bytes."))
         if (count(oversizeLines, config.oversizeWindowMillis, config.oversizeLimit - 1)) requestStop(this, StopReason.OVERSIZE)
     }
 
@@ -275,6 +307,8 @@ internal class StdioProcess(
             }
         } catch (_: InterruptedException) {
         } catch (_: IOException) {
+            // A broken stdin while the process lives on: nothing written will be read, so it cannot answer any more.
+            if (process.isAlive) requestStop(this, StopReason.STDIN_CLOSED)
         } finally {
             writeStartedNanos.set(0)
             try { output.close() } catch (_: IOException) {}
@@ -300,6 +334,16 @@ internal class StdioProcess(
         errors.join(1_000)
         val code = process.exitValue()
         stopReason.compareAndSet(null, StopReason.CRASHED)
+        // npx or uvx may exit and leave the server they started: nothing of the tree outlives its root.
+        val leftovers = tree.values.filter { it.isAlive }
+        if (leftovers.isNotEmpty()) {
+            leftovers.forEach { it.destroy() }
+            daemon("reap") {
+                val deadline = System.currentTimeMillis() + config.terminateWaitMillis
+                while (System.currentTimeMillis() < deadline && leftovers.any { it.isAlive }) Thread.sleep(50)
+                leftovers.filter { it.isAlive }.forEach { it.destroyForcibly() }
+            }
+        }
         val reason = stopReason.get()!!
         dead.set(true)
         for (id in pending.keys.toList()) pending.remove(id)?.completeExceptionally(HostFailure(HostErrors.CRASHED, reason.message))
@@ -316,12 +360,13 @@ internal class StdioProcess(
     suspend fun stop(reason: StopReason) {
         markStopping(reason)
         if (!::process.isInitialized) return
-        val tree = process.descendants().toList()
+        refreshTree()
         val graceful = !reason.failure && run {
             writer.interrupt()
             withTimeoutOrNull(config.closeStdinWaitMillis) { exited.await() } != null
         }
-        val leftovers = (tree + process.descendants().toList()).distinctBy { it.pid() }.filter { it.isAlive }
+        refreshTree()
+        val leftovers = tree.values.filter { it.isAlive }
         if (graceful && leftovers.isEmpty()) return
         if (!graceful || process.isAlive) events.emit(event("killed") { put("reason", reason.label) })
         process.toHandle().destroy()
@@ -364,5 +409,8 @@ internal class StdioProcess(
         const val MAX_TOOLS = 256
         private const val METHOD_NOT_FOUND = -32601
         private const val NEWLINE = '\n'.code.toByte()
+        private const val EDGE_BYTES = 128
+        private val headId = Regex("""^\s*\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"id"\s*:\s*(\d+)\s*[,}]""")
+        private val tailId = Regex("""[,{]\s*"id"\s*:\s*(\d+)\s*}\s*$""")
     }
 }

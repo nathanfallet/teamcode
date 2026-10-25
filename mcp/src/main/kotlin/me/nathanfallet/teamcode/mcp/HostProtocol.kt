@@ -57,7 +57,10 @@ data class ProcessSpec(
     val env: Map<String, String> = emptyMap(),
     val secrets: Map<String, String> = emptyMap(),
     val declaredAt: Long,
-)
+) {
+    /** Never the secret values, nor the arguments (an administrator may have pasted a credential there). */
+    override fun toString() = "ProcessSpec(launcher=$launcher, package=$pkg, args=${args.size}, env=${env.keys}, secrets=${secrets.keys}, declaredAt=$declaredAt)"
+}
 
 @Serializable
 data class OpsRequest(
@@ -69,7 +72,10 @@ data class OpsRequest(
     val arguments: JsonObject? = null,
     val deadlineMs: Long,
     val maxResponseBytes: Int,
-)
+) {
+    /** Never the tool's input. */
+    override fun toString() = "OpsRequest(key=$key, spec=$spec, op=$op, tool=$tool, deadlineMs=$deadlineMs, maxResponseBytes=$maxResponseBytes)"
+}
 
 @Serializable
 data class HostError(val code: String, val message: String)
