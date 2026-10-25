@@ -321,6 +321,49 @@ class SessionViewModelTest {
         assertNull(model.uiState.value.permission)
         model.stop()
     }
+
+        @Test fun aSubagentOpensInPlaceOfTheMainThreadAndThePanelOpensAndCloses() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        assertNull(model.uiState.value.thread)
+        model.openThread("a1")
+        assertEquals("a1", model.uiState.value.thread)
+        model.openThread("a2")
+        assertEquals("a2", model.uiState.value.thread, "Switching goes straight from one subagent to another")
+        model.backToMain()
+        assertNull(model.uiState.value.thread)
+        assertFalse(model.uiState.value.panelOpen)
+        model.togglePanel(); assertTrue(model.uiState.value.panelOpen)
+        model.closePanel(); assertFalse(model.uiState.value.panelOpen)
+        model.togglePanelHidden(); assertTrue(model.uiState.value.panelHidden)
+        model.stop()
+    }
+
+    @Test fun stoppingABackgroundTaskAsksFirstThenSendsOneStop() = runTest(dispatcher) {
+        val model = viewModel()
+        model.start(); settle()
+        model.askStop("b1")
+        assertEquals("b1", model.uiState.value.confirmStop)
+        assertTrue(sessions.calls.none { it.startsWith("stopTask") }, "Nothing is stopped before it is confirmed")
+        model.cancelStop()
+        assertNull(model.uiState.value.confirmStop)
+        assertTrue(sessions.calls.none { it.startsWith("stopTask") })
+        model.askStop("b1"); model.confirmStop(); settle()
+        assertNull(model.uiState.value.confirmStop)
+        assertEquals(1, sessions.calls.count { it.startsWith("stopTask s1 b1 ") })
+        assertEquals(setOf("b1"), model.uiState.value.stopping, "Shown as stopping until the runner's next report drops it")
+        live.send(LiveUpdate.Item(TranscriptEvent.Tasks(60, 60, emptyList(), stoppable = true))); settle()
+        assertTrue(model.uiState.value.stopping.isEmpty(), "The report no longer lists it")
+        // The session stopped meanwhile, or the server refused: said, and nothing stays "stopping".
+        sessions.stopTaskResult = { throw CompanionException.Server(409, "nothing_to_stop") }
+        model.askStop("b2"); model.confirmStop(); settle()
+        assertEquals(SessionNotice.NothingRunning, model.uiState.value.notice)
+        assertTrue(model.uiState.value.stopping.isEmpty())
+        sessions.stopTaskResult = { throw CompanionException.Server(404, "not_found") }
+        model.askStop("b3"); model.confirmStop(); settle()
+        assertIs<SessionNotice.Text>(model.uiState.value.notice)
+        model.stop()
+    }
 }
 
 /** Runs what is due within a second of virtual time; the screens' periodic refreshes never let the scheduler go idle. */

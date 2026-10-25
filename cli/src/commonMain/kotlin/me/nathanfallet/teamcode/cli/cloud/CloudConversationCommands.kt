@@ -72,6 +72,8 @@ internal fun CloudEventView.render(): String {
             // An input left out of the event shows its preview instead, and can only be denied (the server refuses allow).
             "${data.text("toolName") ?: "tool"} ${if (data["question"].isTrue() && data["input"] != null) "" else data["input"]?.toString() ?: data.text("inputPreview")?.let { "$it… (cut; too large to approve, deny only)" } ?: ""}".printable().trimEnd() + if (data["question"].isTrue()) questions(data["input"]) else ""
         CloudEventTypes.PERMISSION_EXPIRED -> "[expired ${data.text("requestId") ?: ""}] ${data.text("message") ?: "No answer in time: the request was denied."}".printable()
+        CloudEventTypes.TASKS -> (data["tasks"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.text("description")?.preview(60) }
+            .let { if (it.isEmpty()) "[tasks] none running" else "[tasks] ${it.size} running: ${it.joinToString(", ")}" }
         else -> "[$type] $data"
     }
     // Every line is agent text: escape sequences never reach the terminal, so none can rewrite a request shown above.

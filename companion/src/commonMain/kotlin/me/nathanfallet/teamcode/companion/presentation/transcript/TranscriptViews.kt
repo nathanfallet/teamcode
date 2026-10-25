@@ -21,6 +21,10 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.adamglin.phosphoricons.regular.Robot
+import me.nathanfallet.teamcode.companion.presentation.screens.SubagentStateChip
+import me.nathanfallet.teamcode.companion.presentation.screens.duration
+import me.nathanfallet.teamcode.companion.resources.subagents_open
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,14 +93,19 @@ fun Modifier.atMostBubbleWidth(): Modifier = layout { measurable, constraints ->
     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
 }
 
+/**
+ * One item. [subagents] names a subagent card's state ([TranscriptItem.Subagent]); [onOpenSubagent] opens its thread,
+ * null where the panel is not offered (its steps then stay folded in the card).
+ */
 @Composable
-fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
+fun TranscriptItemView(item: TranscriptItem, memberId: String?, subagents: Map<String, Subagent> = emptyMap(), onOpenSubagent: ((String) -> Unit)? = null) {
     val indent = if (item.nested) Modifier.padding(start = 20.dp) else Modifier
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).then(indent)) {
         when (item) {
             is TranscriptItem.User -> UserBubble(item.event, memberId)
             is TranscriptItem.Agent -> AgentText(item)
             is TranscriptItem.Tool -> ToolCard(item)
+            is TranscriptItem.Subagent -> SubagentCard(item, subagents[item.call.id], onOpenSubagent)
             is TranscriptItem.Tools -> ToolGroup(item)
             is TranscriptItem.TurnEnd -> TurnSeparator(item.event)
             is TranscriptItem.System -> SystemLine(item.event)
@@ -164,6 +173,35 @@ private fun ToolCard(item: TranscriptItem.Tool) {
                 Code(result.output)
                 result.exitCode?.takeIf { it != 0 }?.let { Text(stringResource(Res.string.transcript_exit_code, it), color = colors.danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
             }
+        }
+    }
+}
+
+/** A subagent's call: its type, description and state, and the way into its own thread. */
+@Composable
+private fun SubagentCard(item: TranscriptItem.Subagent, subagent: Subagent?, onOpen: ((String) -> Unit)?) {
+    val colors = TeamCode.colors
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(colors.panelAlt).border(1.dp, colors.line, shape)
+            .then(if (onOpen != null) Modifier.clickable(role = Role.Button) { onOpen(item.call.id) } else Modifier)
+            .padding(horizontal = 12.dp, vertical = 9.dp).testTag("subagent-card-${item.call.id}"),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(PhosphorIcons.Regular.Robot, contentDescription = null, tint = colors.muted, modifier = Modifier.size(18.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(subagent?.type ?: item.call.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subagent?.description ?: item.call.summary.orEmpty(), fontSize = 12.5.sp, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        subagent?.let {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                SubagentStateChip(it)
+                Text(duration(it.durationMs), style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted)
+            }
+        }
+        if (onOpen != null) {
+            Text(stringResource(Res.string.subagents_open), color = colors.accentText, fontSize = 13.sp)
+            Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.accentText, modifier = Modifier.size(14.dp))
         }
     }
 }

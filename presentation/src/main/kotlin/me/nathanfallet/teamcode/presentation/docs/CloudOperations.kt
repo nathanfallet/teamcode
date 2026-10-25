@@ -487,6 +487,25 @@ private fun ApiCatalog.cloudConversation() {
             conflict("No agent is running (`nothing_to_interrupt`), or the session is not running (`session_not_running`).")
         }
     }
+    post("/api/v1/cloud/sessions/{id}/tasks/stop") {
+        operationId = "stopCloudTask"; tag(ApiTags.CLOUD_CONVERSATION)
+        summary = "Stop a background task"
+        description = "Stops one background task of the running agent (a subagent, a background command, a monitor), named by the `id` " +
+            "of a `tasks` event (`cloud.sessions.background-tasks.v1`). Requires the `message` permission, like an interrupt; delivered " +
+            "before queued messages and never wakes a session. Consumed when the runner handed it to the agent; rejected with " +
+            "`unknown_task` when the task ended meanwhile, or `task_stop_unsupported` when the session's runner cannot stop a task."
+        parameters {
+            sessionId()
+            headerText("Idempotency-Key", IDEMPOTENCY_TEXT)
+        }
+        body<StopCloudTaskRequest>("The task to stop.")
+        responses {
+            ok<CloudInputView>("Accepted.", HttpStatusCode.Accepted)
+            badRequest("A task id that is not 1 to 64 letters, digits, `-` or `_` (`invalid_task`), an invalid key, or `TeamCode-On-Behalf-Of` was sent.")
+            notFound("No such session (`not_found`).")
+            conflict("No agent is running (`nothing_to_stop`).")
+        }
+    }
     post("/api/v1/cloud/sessions/{id}/permissions") {
         operationId = "answerCloudPermission"; tag(ApiTags.CLOUD_CONVERSATION)
         summary = "Answer a permission request"

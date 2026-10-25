@@ -512,7 +512,15 @@ class CloudAgentTest {
         var relay = false
         var deadline = 0
         var live = false
-        override suspend fun agent() = RunnerAgentView("claude", "2.1", "opus", null, "none", permissionRelay = relay, permissionDeadlineMinutes = deadline, liveText = live)
+        var tasks = false
+        var kind = "claude"
+        /** What the host announced at its last poll. */
+        var acceptsTaskStops: Boolean? = null
+        override suspend fun agent() = RunnerAgentView(kind, "2.1", "opus", null, "none", permissionRelay = relay, permissionDeadlineMinutes = deadline, liveText = live, backgroundTasks = tasks)
+        override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean, acceptsTaskStops: Boolean): RunnerInputsView {
+            this.acceptsTaskStops = acceptsTaskStops
+            return RunnerInputsView(inputs(waitMillis))
+        }
         override suspend fun events(events: List<RunnerEventView>): RunnerEventsAckView {
             // An Error, not an Exception: the host cannot swallow it, so a retry loop without pause fails the test.
             if (++attempts > 10_000) throw AssertionError("The host retries the upload without pause")
@@ -531,8 +539,9 @@ class CloudAgentTest {
         override fun clear() { value = null }
     }
 
-    private fun TestScope.host(channel: FakeChannel, state: MemoryState, started: MutableList<Pair<AgentCommand, FakeProcess>>) = AgentHost(channel, { command, environment, _ ->
+    private fun TestScope.host(channel: FakeChannel, state: MemoryState, started: MutableList<Pair<AgentCommand, FakeProcess>>, environments: MutableList<Map<String, String?>> = mutableListOf()) = AgentHost(channel, { command, environment, _ ->
         assertTrue(environment.containsKey("TEAMCODE_CLOUD_TOKEN_FILE") && environment["TEAMCODE_CLOUD_TOKEN_FILE"] == null, "The token path never reaches the agent")
+        environments += environment
         FakeProcess().also { started += command to it }
     }, state, "/workspace", "1.0", now = { testScheduler.currentTime })
 
@@ -720,7 +729,7 @@ class CloudAgentTest {
         val sent = mutableListOf<String>()
         val answers = Channel<String>(Channel.UNLIMITED)
         val polling = object : AgentChannel by channel {
-            override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean): RunnerInputsView { sent += desiredState; return RunnerInputsView(emptyList(), answers.receive()) }
+            override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean, acceptsTaskStops: Boolean): RunnerInputsView { sent += desiredState; return RunnerInputsView(emptyList(), answers.receive()) }
         }
         var changes = 0
         val host = AgentHost(polling, { _, _, _ -> FakeProcess() }, MemoryState(), "/workspace", "1.0", now = { testScheduler.currentTime })
@@ -930,7 +939,7 @@ class CloudAgentTest {
         var failure: Exception? = null
         val announced = mutableListOf<Boolean>()
         override suspend fun agent() = RunnerAgentView(kind, "1", null, null, "none", permissionMode = mode)
-        override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean): RunnerInputsView {
+        override suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean, acceptsTaskStops: Boolean): RunnerInputsView {
             announced += acceptsFiles
             return RunnerInputsView(channel.inputs.receive())
         }
@@ -1216,5 +1225,97 @@ class CloudAgentTest {
         val claude = agentAdapter(AgentSettings("claude", "2.1", null, null, permissionMode = RemotePermissionModes.ASK), "1.0", readableDirectories = listOf("/tmp/teamcode-501/s-1"))
         val arguments = claude.command(null).arguments
         assertEquals(listOf("--add-dir", "/tmp/teamcode-501/s-1"), arguments.subList(arguments.indexOf("--add-dir"), arguments.indexOf("--add-dir") + 2))
+    }
+    @Test fun claudeReportsItsBackgroundTasksWhenTheServerTakesThem() {
+        var clock = 1_000L
+        val adapter = ClaudeStreamJsonAdapter(claude.copy(backgroundTasks = true), now = { clock })
+        fun changed(tasks: String) = adapter.parse("""{"type":"system","subtype":"background_tasks_changed","tasks":[$tasks],"uuid":"u","session_id":"c1"}""").events
+        // `task_started` names the tool call that started the task; `background_tasks_changed` does not.
+        assertTrue(adapter.parse("""{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_1","description":"Review","task_type":"local_agent","uuid":"u","session_id":"c1"}""").events.isEmpty())
+        clock = 5_000L
+        val event = changed("""{"task_id":"a1","task_type":"local_agent","subagent_type":"Explore","description":"Review"},""" +
+            """{"task_id":"b1","task_type":"local_bash","description":"${"x".repeat(300)}"},{"task_id":"w1","task_type":"local_bash","description":"watch","ambient":true}""").single()
+        assertEquals(CloudEventTypes.TASKS, event.type)
+        assertEquals(true, (event.data["stoppable"] as JsonPrimitive).boolean)
+        val tasks = event.data["tasks"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("a1", "b1"), tasks.map { it.str("id") }, "Claude Code's own (ambient) tasks are left out")
+        assertEquals("toolu_1", tasks[0].str("toolUseId")); assertEquals("Explore", tasks[0].str("subagentType")); assertEquals("local_agent", tasks[0].str("type"))
+        assertEquals(1_000L, (tasks[0]["startedAt"] as JsonPrimitive).long, "Started when Claude Code said so")
+        assertEquals(5_000L, (tasks[1]["startedAt"] as JsonPrimitive).long, "Or when the runner first saw it")
+        assertEquals(CloudTasks.MAX_DESCRIPTION_CHARS, tasks[1].str("description").length)
+        assertFalse(tasks[1].containsKey("toolUseId"))
+        clock = 9_000L
+        assertTrue(changed("""{"task_id":"a1","task_type":"local_agent","subagent_type":"Explore","description":"Review"},{"task_id":"b1","task_type":"local_bash","description":"${"x".repeat(300)}"}""").isEmpty(),
+            "The same set again (an ambient task ended) uploads nothing")
+        // A stop goes to Claude Code as its control request; a task it no longer runs is not asked for.
+        val stop = obj(adapter.stopTask("b1").single())
+        assertEquals("control_request", stop.str("type"))
+        assertEquals("stop_task", stop["request"]!!.jsonObject.str("subtype")); assertEquals("b1", stop["request"]!!.jsonObject.str("task_id"))
+        assertTrue(adapter.stopTask("gone").isEmpty())
+        assertTrue(adapter.canStopTasks)
+        val many = changed((1..60).joinToString(",") { """{"task_id":"t$it","task_type":"local_bash","description":"c$it"}""" }).single()
+        assertEquals(CloudTasks.MAX_TASKS, many.data["tasks"]!!.jsonArray.size)
+        assertEquals(60, (many.data["count"] as JsonPrimitive).int, "The event says how many there were")
+        assertEquals(0, changed("").single().data["tasks"]!!.jsonArray.size, "The last one ended: an empty set")
+        // Scheduled wake-ups (the `Stop` hook's `session_crons`): only their number is known, listed beside the tasks.
+        assertEquals(2, (adapter.scheduled(2)!!.data["scheduled"] as JsonPrimitive).int)
+        assertNull(adapter.scheduled(2), "Unchanged")
+        assertEquals(0, adapter.tasksEnded()!!.data["scheduled"]!!.jsonPrimitive.int, "They fire only while the process runs")
+        assertNull(adapter.tasksEnded(), "Nothing to clear")
+        changed("""{"task_id":"b2","task_type":"local_bash","description":"npm test"}""")
+        assertEquals(0, adapter.tasksEnded()!!.data["tasks"]!!.jsonArray.size, "A process that stops with tasks clears the set")
+        // An older server refuses the event type: nothing goes out without its flag.
+        val quiet = ClaudeStreamJsonAdapter(claude)
+        assertTrue(quiet.parse("""{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"npm test"}]}""").events.isEmpty())
+        assertNull(quiet.tasksEnded())
+        assertFalse(CodexAppServerAdapter(codex, "1").canStopTasks)
+    }
+
+    @Test fun hostStopsABackgroundTaskAndForwardsSubagentText() = runTest {
+        val channel = FakeChannel().apply { tasks = true }
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val environments = mutableListOf<Map<String, String?>>()
+        val job = launch { host(channel, MemoryState(), started, environments).run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Run the suite in the background", 1)))
+        until { channel.acks.isNotEmpty() }
+        assertEquals(true, channel.acceptsTaskStops, "The host announces it stops tasks: the server delivers stops to it only then")
+        // Claude Code forwards a subagent's text only when asked; an older one ignores the variable (a flag would fail it).
+        assertEquals("1", environments.single()["CLAUDE_CODE_FORWARD_SUBAGENT_TEXT"])
+        val process = started.single().second
+        process.output.send("""{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"npm test"}]}""")
+        until { channel.uploaded.any { it.type == CloudEventTypes.TASKS } }
+        channel.inputs.send(listOf(RunnerInputView("stop-1", CloudTasks.KIND, "b1", 1), RunnerInputView("stop-2", CloudTasks.KIND, "b9", 1)))
+        until { channel.acks.size == 3 }
+        assertEquals(RunnerInputAckView("stop-1", CloudInputStatuses.CONSUMED), channel.acks[1])
+        assertEquals(RunnerInputAckView("stop-2", CloudInputStatuses.REJECTED, CloudTasks.UNKNOWN), channel.acks[2], "A task that ended meanwhile")
+        assertTrue(process.written.any { "\"stop_task\"" in it && "\"b1\"" in it })
+        assertFalse(process.written.any { "\"b9\"" in it })
+        // The agent stops with the task still listed: the set is cleared, so no client shows a task nobody runs.
+        process.output.send(null); process.exit = 1
+        until { channel.uploaded.count { it.type == CloudEventTypes.TASKS } == 2 }
+        assertEquals(0, channel.uploaded.last { it.type == CloudEventTypes.TASKS }.data["tasks"]!!.jsonArray.size)
+        job.cancel()
+    }
+
+    @Test fun logsShowTheBackgroundTasksInOneLine() {
+        val tasks = buildJsonObject { putJsonArray("tasks") { addJsonObject { put("id", "b1"); put("description", "npm test") }; addJsonObject { put("id", "a1"); put("description", "Review") } } }
+        assertTrue(CloudEventView(1, CloudEventTypes.TASKS, 0, 1, tasks).render().endsWith("[tasks] 2 running: npm test, Review"))
+        assertTrue(CloudEventView(2, CloudEventTypes.TASKS, 0, 1, buildJsonObject { putJsonArray("tasks") {} }).render().endsWith("[tasks] none running"))
+    }
+
+    @Test fun aStopReachingAnAgentThatCannotStopTasksIsRejected() = runTest {
+        val channel = FakeChannel().apply { kind = "codex" }
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val job = launch { host(channel, MemoryState(), started).run() }
+        channel.inputs.send(listOf(RunnerInputView("stop-0", CloudTasks.KIND, "b1", 1)))
+        until { channel.acks.isNotEmpty() }
+        assertEquals(RunnerInputAckView("stop-0", CloudInputStatuses.REJECTED, CloudTasks.UNKNOWN), channel.acks.single(), "No agent runs: no task to stop")
+        assertTrue(started.isEmpty(), "A stop never starts an agent")
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Hello", 1)))
+        until { channel.acks.size == 2 }
+        channel.inputs.send(listOf(RunnerInputView("stop-1", CloudTasks.KIND, "b1", 1)))
+        until { channel.acks.size == 3 }
+        assertEquals(RunnerInputAckView("stop-1", CloudInputStatuses.REJECTED, CloudTasks.UNSUPPORTED), channel.acks.last(), "Codex has no task to stop")
+        job.cancel()
     }
 }

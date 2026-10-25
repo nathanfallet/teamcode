@@ -40,6 +40,8 @@ interface SessionRepository {
     /** Answers a permission request; [idempotencyKey]: a retry returns the first acknowledgement, even once consumed. */
     suspend fun answer(accountId: String, sessionId: String, answer: PermissionAnswer, idempotencyKey: String): InputReceipt
     suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt
+    /** Stops the background task [taskId] of the session's running agent (`cloud.sessions.background-tasks.v1`). */
+    suspend fun stopTask(accountId: String, sessionId: String, taskId: String, idempotencyKey: String): InputReceipt
     suspend fun pause(accountId: String, sessionId: String): CloudSession
     suspend fun resume(accountId: String, sessionId: String): CloudSession
     /** Ends the session and deletes its workspace (`DELETE /cloud/sessions/{id}`); idempotent. */

@@ -699,6 +699,13 @@ class TeamCodeClient(
         idempotencyKey?.let { require(CloudHeaders.idempotencyKey.matches(it)) { "Invalid idempotency key." } }
         return coded(HttpMethod.Post, "/api/v1/cloud/sessions/$id/interrupt", null as Unit?) { idempotencyKey?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) } }
     }
+    /** Stops the background task [taskId] of the session's running agent (`cloud.sessions.background-tasks.v1`). */
+    suspend fun stopCloudTask(id: String, taskId: String, idempotencyKey: String? = null): CloudInputView {
+        identifier(id)
+        require(CloudTasks.TASK_ID.matches(taskId)) { "Invalid task id." }
+        idempotencyKey?.let { require(CloudHeaders.idempotencyKey.matches(it)) { "Invalid idempotency key." } }
+        return coded(HttpMethod.Post, "/api/v1/cloud/sessions/$id/tasks/stop", StopCloudTaskRequest(taskId)) { idempotencyKey?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) } }
+    }
     /**
      * Answers a `permission.request` event (`cloud.permissions.v1`): allow or deny it, or answer its questions by
      * question and option index ([CloudQuestionAnswer]). [idempotencyKey] makes a retry answer once.

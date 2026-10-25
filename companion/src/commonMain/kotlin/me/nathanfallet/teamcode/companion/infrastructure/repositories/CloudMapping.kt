@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CloudSessionView
 import me.nathanfallet.teamcode.api.models.TeamEventView
 import me.nathanfallet.teamcode.companion.domain.models.AgentQuestion
+import me.nathanfallet.teamcode.companion.domain.models.BackgroundTask
 import me.nathanfallet.teamcode.companion.domain.models.AgentQuestionOption
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
@@ -97,6 +98,10 @@ internal fun CloudEventView.domain(): TranscriptEvent {
         CloudEventTypes.INPUT -> TranscriptEvent.InputChanged(seq, at, data.text("inputId"), data.text("status"), data.text("reason"), data.text("requestId"))
         CloudEventTypes.PERMISSION_REQUEST -> permissionRequest(seq, at, data)
         CloudEventTypes.PERMISSION_EXPIRED -> TranscriptEvent.PermissionExpired(seq, at, data.text("requestId"))
+        CloudEventTypes.TASKS -> TranscriptEvent.Tasks(seq, at, (data["tasks"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val task = element as? JsonObject ?: return@mapNotNull null
+            BackgroundTask(task.text("id") ?: return@mapNotNull null, task.text("type") ?: "task", task.text("description").orEmpty(), task.text("subagentType"), task.text("toolUseId"), task["startedAt"].long())
+        }, data["stoppable"].boolean() == true, data["scheduled"].int()?.coerceAtLeast(0) ?: 0)
         "transfer" -> TranscriptEvent.Transferred(seq, at, data.text("fromMemberId"), data.text("toMemberId"))
         else -> TranscriptEvent.Unknown(seq, at, type)
     }

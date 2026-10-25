@@ -211,6 +211,12 @@ internal fun Route.cloudConversationRoutes(conversation: CloudConversation) {
             val key = call.clientKey(null)
             call.respondInput(service.interrupt(call.principal, call.sessionId(), InputRequest(null, false, key, key?.let { digest("interrupt") }, null)))
         }
+        post("/sessions/{id}/tasks/stop") {
+            call.refuseOnBehalf()
+            val body = call.boundedJson<StopCloudTaskRequest>(1024)
+            val key = call.clientKey(null)
+            call.respondInput(service.stopTask(call.principal, call.sessionId(), body.taskId, InputRequest(body.taskId, false, key, key?.let { digest("stop_task\n${body.taskId}") }, null)))
+        }
 
         post("/sessions/{id}/permissions") {
             call.refuseOnBehalf()
@@ -269,7 +275,8 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val body = call.boundedJson<RunnerAgentRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val agent = runner.agent(pod.teamId, pod.sessionId, pod.epoch)
-        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, liveText = agent.liveText, permissionMode = agent.permissionMode?.wire))
+        call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, liveText = agent.liveText, permissionMode = agent.permissionMode?.wire,
+            backgroundTasks = agent.backgroundTasks))
     }
     post(RUNNER_PATH + "events") {
         val body = call.boundedJson<RunnerEventsRequest>(RUNNER_BODY_BYTES)
@@ -285,7 +292,8 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
     post(RUNNER_PATH + "inputs") {
         val body = call.boundedJson<RunnerInputsRequest>(4_096)
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
-        val polled = runner.poll(pod.teamId, pod.sessionId, pod.epoch, body.waitMillis, body.desiredState, acceptsFiles = body.acceptsFiles && conversation.files != null)
+        val polled = runner.poll(pod.teamId, pod.sessionId, pod.epoch, body.waitMillis, body.desiredState, acceptsFiles = body.acceptsFiles && conversation.files != null,
+            acceptsTaskStops = body.acceptsTaskStops)
         call.respond(RunnerInputsView(polled.inputs.map { RunnerInputView(it.id, it.kind.wire, it.text, it.attempts, it.files.map { file -> file.view() }) }, polled.desiredState.wire))
     }
     conversation.files?.let { files ->

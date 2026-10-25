@@ -45,9 +45,10 @@ interface AgentChannel {
     /**
      * [inputs], also returning the session's desired state; the server ends the wait early when it differs from
      * [desiredState], the one the runner last knew. A server without the field answers it as null. [acceptsFiles]
-     * announces that this host downloads the files of a message (`cloud.files.v1`).
+     * announces that this host downloads the files of a message (`cloud.files.v1`), [acceptsTaskStops] that it handles a
+     * stop of a background task (`cloud.sessions.background-tasks.v1`), rejecting it when its agent cannot stop one.
      */
-    suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean = false): RunnerInputsView = RunnerInputsView(inputs(waitMillis))
+    suspend fun poll(waitMillis: Long, desiredState: String, acceptsFiles: Boolean = false, acceptsTaskStops: Boolean = false): RunnerInputsView = RunnerInputsView(inputs(waitMillis))
     suspend fun acknowledge(acks: List<RunnerInputAckView>)
     /** Streams the bytes of the message file [fileId] to [receive], at most [maxBytes]. */
     suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit): Unit = throw UnsupportedOperationException("This channel downloads no file.")
@@ -107,7 +108,11 @@ internal class AgentHost(
     /** Background tasks in flight (subagents, background commands, monitors): the work a stop of the agent kills. */
     val backgroundTasksInFlight: Boolean get() = (adapter?.backgroundTasks ?: 0) > 0
     /** Records [count] scheduled wake-ups, reported by the agent's `Stop` hook through the runner's environment socket. */
-    fun scheduledWakeups(count: Int) { wakeups = count.coerceAtLeast(0) }
+    fun scheduledWakeups(count: Int) {
+        wakeups = count.coerceAtLeast(0)
+        // Members see how many wake-ups are scheduled beside the tasks (`tasks` event), when the server takes it.
+        if (::scope.isInitialized) scope.launch { lock.withLock { adapter?.scheduled(wakeups)?.let { enqueue(it.type, it.data) } } }
+    }
     /** Guards the adapter state and the buffer. Never held while writing to the agent: its stdout must keep draining. */
     private val lock = Mutex()
     /** Serializes writes to the agent's stdin (fair, so lines keep their order). */
@@ -214,7 +219,7 @@ internal class AgentHost(
     private suspend fun inputLoop() {
         var wait = 1_000L
         while (!fenced) {
-            val view = try { channel.poll(INPUT_WAIT_MILLIS, desiredState, uploadsDirectory != null).also { wait = 1_000L } }
+            val view = try { channel.poll(INPUT_WAIT_MILLIS, desiredState, uploadsDirectory != null, acceptsTaskStops = true).also { wait = 1_000L } }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) { if (handle(error)) return; sleep(wait); wait = (wait * 2).coerceAtMost(15_000); continue }
             // A pause (or its cancellation) reaches the runner loop now, through the poll already open, not at its next heartbeat.
@@ -241,6 +246,18 @@ internal class AgentHost(
         if (input.kind == "interrupt") {
             val (child, lines) = lock.withLock { process?.let { it to adapter?.interrupt().orEmpty() } } ?: (null to emptyList())
             if (child == null || lines.isEmpty()) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "no_turn")
+            return if (write(child, lines)) consumed else unavailable
+        }
+        if (input.kind == CloudTasks.KIND) {
+            // Never starts the agent: only a running process has tasks to stop.
+            val taskId = input.text?.takeIf { CloudTasks.TASK_ID.matches(it) } ?: return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, "invalid_input")
+            val (child, lines, supported) = lock.withLock {
+                val active = adapter
+                // No process: nothing runs, so no task either.
+                Triple(process, active?.stopTask(taskId).orEmpty(), active?.canStopTasks ?: true)
+            }
+            if (!supported) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, CloudTasks.UNSUPPORTED)
+            if (child == null || lines.isEmpty()) return RunnerInputAckView(input.id, CloudInputStatuses.REJECTED, CloudTasks.UNKNOWN)
             return if (write(child, lines)) consumed else unavailable
         }
         if (input.kind == "permission") {
@@ -349,7 +366,7 @@ internal class AgentHost(
         reader?.cancel()
         // That reader's tail, which cancels its process's timers, may never run now.
         cancelDeadlines(null)
-        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode) }.also { settings = it }
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks) }.also { settings = it }
         val stored = state.read()
         val resume = stored?.takeIf { it.kind == config.kind && it.version == config.version }?.conversationId
         if (stored != null && resume == null) {
@@ -376,7 +393,9 @@ internal class AgentHost(
      * variables come first, so none of these settings can be replaced by one.
      */
     private suspend fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
-        val owner = variables?.launch(kind).orEmpty()
+        // Claude Code forwards a subagent's text only when asked (`--forward-subagent-text`, v2.1.211); the variable does
+        // the same and an older version ignores it, where the flag would stop it from starting. The owner's own value wins.
+        val owner = (if (kind == "claude") mapOf("CLAUDE_CODE_FORWARD_SUBAGENT_TEXT" to "1") else emptyMap()) + variables?.launch(kind).orEmpty()
         val endpoint = inference?.invoke() ?: return base to owner + AGENT_ENVIRONMENT
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
@@ -428,6 +447,8 @@ internal class AgentHost(
                 }
                 if (!stopping) enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", "exited"); put("exitCode", code) })
                 if (active.turnActive && !stopping) enqueue(CloudEventTypes.TURN, buildJsonObject { put("phase", "failed") })
+                // Its tasks died with it: members no longer see them as running.
+                active.tasksEnded()?.let { enqueue(it.type, it.data) }
                 process = null; adapter = null; resumed = null; wakeups = 0
             }
         }

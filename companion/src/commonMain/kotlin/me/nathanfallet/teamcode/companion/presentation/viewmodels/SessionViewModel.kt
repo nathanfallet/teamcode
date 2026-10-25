@@ -113,7 +113,20 @@ data class SessionUiState(
     val closedRequests: Set<String> = emptySet(),
     /** The files of the next message (`cloud.files.v1`). */
     val files: FilesUiState = FilesUiState(),
+    /** The subagent whose thread shows (its `Agent` call id), null for the main agent's. */
+    val thread: String? = null,
+    /** The subagents panel opened on demand, where it is a screen of its own or slides over the conversation. */
+    val panelOpen: Boolean = false,
+    /** The subagents panel hidden by the member, where it sits beside the conversation. */
+    val panelHidden: Boolean = false,
+    /** The background task whose stop waits for the member's confirmation. */
+    val confirmStop: String? = null,
+    /** Tasks asked to stop that the runner still reports. */
+    val stopping: Set<String> = emptySet(),
 ) {
+    /** The session's agent runs (ready or active): only then has it background tasks. */
+    val agentRuns: Boolean get() = session?.state == SessionState.READY || session?.state == SessionState.ACTIVE
+
     /** Send is offered: some text or an uploaded file, and no file still uploading or failed. */
     val canSend: Boolean get() = files.ready && (draft.isNotBlank() || files.files.isNotEmpty())
 
@@ -207,7 +220,7 @@ class SessionViewModel(
                         is LiveUpdate.Item -> {
                             // A turn starting or ending settles any interruption kept for a retry: a later tap is a new one.
                             if (update.value is TranscriptEvent.Turn) interruptKey = null
-                            state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).copy(live = LiveState.LIVE) }
+                            state.update { it.withTranscript(it.transcript.withLive(update.value)).withTurn(update.value).withTasks(update.value).copy(live = LiveState.LIVE) }
                         }
                         is LiveUpdate.Reconnecting -> { reconnected = true; state.update { it.copy(live = LiveState.RECONNECTING) } }
                         LiveUpdate.Gap -> Unit
@@ -332,6 +345,38 @@ class SessionViewModel(
         interruptKey = null
         if (!interrupted) state.update { it.copy(notice = SessionNotice.NothingRunning) }
     }
+    // ---- Subagents and background tasks -------------------------------------------------------------------------------
+
+    /** Shows the subagent [id]'s thread in place of the main agent's (or beside it, on an extra-large window). */
+    fun openThread(id: String) = state.update { it.copy(thread = id) }
+    fun backToMain() = state.update { it.copy(thread = null) }
+    fun togglePanel() = state.update { it.copy(panelOpen = !it.panelOpen) }
+    fun closePanel() = state.update { it.copy(panelOpen = false) }
+    fun togglePanelHidden() = state.update { it.copy(panelHidden = !it.panelHidden) }
+
+    /** A stop is asked first: it ends work the agent may still need. */
+    fun askStop(taskId: String) = state.update { it.copy(confirmStop = taskId) }
+    fun cancelStop() = state.update { it.copy(confirmStop = null) }
+
+    fun confirmStop() {
+        val taskId = state.value.confirmStop ?: return
+        state.update { it.copy(confirmStop = null, stopping = it.stopping + taskId, notice = null) }
+        viewModelScope.launch {
+            val stopped = try { control.stopTask(route.accountId, route.sessionId, taskId, control.stopKey()) } catch (error: CancellationException) { throw error } catch (error: Exception) {
+                state.update { it.copy(stopping = it.stopping - taskId, notice = SessionNotice.Text(error.userMessage())) }
+                return@launch
+            }
+            if (!stopped) state.update { it.copy(stopping = it.stopping - taskId, notice = SessionNotice.NothingRunning) }
+        }
+    }
+
+    /** A task report drops the stops it no longer lists: they ended. */
+    private fun SessionUiState.withTasks(event: TranscriptEvent): SessionUiState {
+        if (event !is TranscriptEvent.Tasks || stopping.isEmpty()) return this
+        val live = event.tasks.map { it.id }.toSet()
+        return copy(stopping = stopping.filterTo(mutableSetOf()) { it in live })
+    }
+
     fun pause() = act { val session = control.pause(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
     fun resume() = act { val session = control.resume(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
 

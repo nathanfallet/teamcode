@@ -179,6 +179,8 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         return answerResult(answer)
     }
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "interrupt $sessionId $idempotencyKey"; return interruptResult() }
+    var stopTaskResult: () -> me.nathanfallet.teamcode.companion.domain.models.InputReceipt = { me.nathanfallet.teamcode.companion.domain.models.InputReceipt("stop", "queued", false, null) }
+    override suspend fun stopTask(accountId: String, sessionId: String, taskId: String, idempotencyKey: String): me.nathanfallet.teamcode.companion.domain.models.InputReceipt { calls += "stopTask $sessionId $taskId $idempotencyKey"; return stopTaskResult() }
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
     override suspend fun end(accountId: String, sessionId: String) { calls += "end $sessionId"; endFailure?.let { throw it } }
     var endFailure: Exception? = null

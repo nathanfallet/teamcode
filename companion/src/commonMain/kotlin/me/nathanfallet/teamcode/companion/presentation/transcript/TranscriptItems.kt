@@ -32,6 +32,15 @@ sealed interface TranscriptItem {
         override val nested get() = tools.first().nested
         override val seqs get() = tools.flatMap { it.seqs }
     }
+    /**
+     * A subagent's call (the `Agent` tool, `Task` before Claude Code renamed it) and its result: a card that opens the
+     * subagent's own thread, its steps no longer mixed into the thread that started it.
+     */
+    data class Subagent(val call: TranscriptEvent.ToolCall, val result: TranscriptEvent.ToolResult?) : TranscriptItem {
+        override val key get() = call.seq
+        override val nested get() = call.parentToolUseId != null
+        override val seqs get() = listOfNotNull(call.seq, result?.seq)
+    }
     /** The end of a turn: its duration and steps, and whether it failed or was interrupted. */
     data class TurnEnd(val event: TranscriptEvent.Turn) : TranscriptItem {
         override val key get() = event.seq
@@ -73,14 +82,15 @@ fun transcriptItems(events: List<TranscriptEvent>): List<TranscriptItem> {
     }
     for (event in events) {
         val item: TranscriptItem? = when (event) {
-            is TranscriptEvent.ToolCall -> TranscriptItem.Tool(event, results[event.id].takeIf { event.id.isNotEmpty() })
+            is TranscriptEvent.ToolCall -> if (event.name in AGENT_TOOLS && event.id.isNotEmpty()) TranscriptItem.Subagent(event, results[event.id])
+                else TranscriptItem.Tool(event, results[event.id].takeIf { event.id.isNotEmpty() })
             // Shown with its call; alone only when the call is not loaded.
             is TranscriptEvent.ToolResult -> if (event.id.isNotEmpty() && event.id in calls) null else TranscriptItem.Tool(null, event)
             is TranscriptEvent.UserMessage -> TranscriptItem.User(event)
             is TranscriptEvent.AgentMessage -> if (event.text.isBlank()) null else TranscriptItem.Agent(event)
             is TranscriptEvent.Turn -> if (event.phase.finished) TranscriptItem.TurnEnd(event) else null
             is TranscriptEvent.InputChanged -> if (event.status == "rejected" || event.status == "cancelled") TranscriptItem.System(event) else null
-            is TranscriptEvent.Unknown -> null
+            is TranscriptEvent.Unknown, is TranscriptEvent.Tasks -> null
             else -> TranscriptItem.System(event)
         }
         when {

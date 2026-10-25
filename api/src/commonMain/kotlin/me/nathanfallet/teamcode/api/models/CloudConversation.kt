@@ -48,7 +48,13 @@ object CloudEventTypes {
      * `deadlineMinutes`, `message`, the text the agent read).
      */
     const val PERMISSION_EXPIRED = "permission.expired"
-    val all = listOf(USER_MESSAGE, AGENT_MESSAGE, AGENT_MESSAGE_DELTA, TOOL_CALL, TOOL_RESULT, TURN, STATUS, ERROR, INPUT, PERMISSION_REQUEST, PERMISSION_EXPIRED)
+    /**
+     * Runner-written ([CloudTasks.FEATURE]): the agent's live background tasks, the full set each time it changes
+     * (`data.tasks`: `[{id, type, description, subagentType, toolUseId, startedAt}]`, at most [CloudTasks.MAX_TASKS] of
+     * `data.count`; `data.scheduled`: how many scheduled wake-ups the agent holds; `data.stoppable`: whether the runner can stop a task). An empty set when the last one ended or the agent's process stopped. Claude Code sessions only.
+     */
+    const val TASKS = "tasks"
+    val all = listOf(USER_MESSAGE, AGENT_MESSAGE, AGENT_MESSAGE_DELTA, TOOL_CALL, TOOL_RESULT, TURN, STATUS, ERROR, INPUT, PERMISSION_REQUEST, PERMISSION_EXPIRED, TASKS)
 }
 
 /**
@@ -138,6 +144,29 @@ data class AnswerCloudPermissionRequest(
  */
 @Serializable
 data class CloudQuestionAnswer(val question: Int, val options: List<Int> = emptyList(), val text: String? = null)
+
+/** `POST /cloud/sessions/{id}/tasks/stop` ([CloudTasks.FEATURE]): stops the background task [taskId] of the session's running agent. */
+@Serializable
+data class StopCloudTaskRequest(val taskId: String)
+
+/**
+ * `cloud.sessions.background-tasks.v1`: the runner reports the agent's background tasks (subagents, background commands,
+ * monitors) as [CloudEventTypes.TASKS] events, and a member who may message a session stops one of them.
+ */
+object CloudTasks {
+    const val FEATURE = "cloud.sessions.background-tasks.v1"
+    /** The input kind of a stop; its text is the task id. */
+    const val KIND = "stop_task"
+    /** Tasks one event lists at most, and characters of a description; the rest is left out. */
+    const val MAX_TASKS = 50
+    const val MAX_DESCRIPTION_CHARS = 200
+    /** The task ids the server takes: Claude Code's are short letters and digits. */
+    val TASK_ID = Regex("[A-Za-z0-9_-]{1,64}")
+    /** Rejected by a runner (or for a runner) that cannot stop a task: an older one, or Codex. */
+    const val UNSUPPORTED = "task_stop_unsupported"
+    /** Rejected by the runner: no live task has this id (it ended meanwhile). */
+    const val UNKNOWN = "unknown_task"
+}
 
 /** Input acknowledgement levels, in order. `cancelled` and `rejected` are final like `consumed`. */
 object CloudInputStatuses {
@@ -233,11 +262,14 @@ data class RunnerAgentRequest(val teamId: String, val sessionId: String, val epo
  * [permissionDeadlineMinutes]: how long a request waits for an answer before the runner denies it; 0 waits without a deadline.
  * [liveText]: the server takes `message.agent.delta` events, so the runner may stream the agent's text as it is written.
  * [permissionMode]: a remote session's mode on its host (`ask` or `bypass`); null for a cloud session, whose pod is its sandbox.
+ * [backgroundTasks]: the server takes `tasks` events, so the runner may report the agent's background tasks.
  */
 @Serializable
 data class RunnerAgentView(
     val kind: String, val version: String? = null, val model: String? = null, val effort: String? = null, val conversation: String,
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false, val permissionMode: String? = null,
+    /** The server takes [CloudEventTypes.TASKS] events ([CloudTasks.FEATURE]); an older one refuses the batch that holds one. */
+    val backgroundTasks: Boolean = false,
 )
 /** [sequence] is the runner's own counter for this epoch, starting at 1; a retried batch is deduplicated on it. */
 @Serializable
@@ -255,6 +287,11 @@ data class RunnerInputsRequest(
     val teamId: String, val sessionId: String, val epoch: Int, val waitMillis: Long = 20_000, val desiredState: String? = null,
     /** The runner downloads the [RunnerInputView.files] of a message; without it, a message with files is rejected (`files_unsupported`). */
     val acceptsFiles: Boolean = false,
+    /**
+     * The runner stops a background task ([CloudTasks.KIND] inputs); without it, such an input is rejected
+     * (`task_stop_unsupported`) instead of being delivered, so an older runner never reads it as a message.
+     */
+    val acceptsTaskStops: Boolean = false,
 )
 /** [files]: what a message carries; download each from `GET /cloud/runner/files/{id}` and check its [RunnerFileView.sha256]. */
 @Serializable

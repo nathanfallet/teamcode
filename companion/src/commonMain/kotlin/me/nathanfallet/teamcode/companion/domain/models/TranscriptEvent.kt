@@ -46,9 +46,23 @@ sealed interface TranscriptEvent {
     ) : TranscriptEvent
     data class PermissionExpired(override val seq: Long, override val at: Long, val requestId: String?) : TranscriptEvent
     data class Transferred(override val seq: Long, override val at: Long, val fromMemberId: String?, val toMemberId: String?) : TranscriptEvent
+    /**
+     * The agent's live background tasks as its runner reported them, the full set each time (`cloud.sessions.background-tasks.v1`);
+     * [stoppable]: the runner can stop one; [scheduled]: how many scheduled wake-ups the agent holds (Claude Code reports
+     * only their number). An empty set once the last one ended or the agent's process stopped.
+     */
+    data class Tasks(override val seq: Long, override val at: Long, val tasks: List<BackgroundTask>, val stoppable: Boolean, val scheduled: Int = 0) : TranscriptEvent
     /** An event of more than 60 000 bytes, replaced by the server. */
     data class Truncated(override val seq: Long, override val at: Long, val type: String, val originalBytes: Long?) : TranscriptEvent
     data class Unknown(override val seq: Long, override val at: Long, val type: String) : TranscriptEvent
+}
+
+/**
+ * One background task of the agent: a subagent (`local_agent`), a background command or monitor (`local_bash`), a remote
+ * agent. [toolUseId] is the tool call that started it, when the runner knew; [startedAt] the runner's clock.
+ */
+data class BackgroundTask(val id: String, val type: String, val description: String, val subagentType: String?, val toolUseId: String?, val startedAt: Long?) {
+    val subagent: Boolean get() = type == "local_agent"
 }
 
 enum class TurnPhase(val wire: String) {

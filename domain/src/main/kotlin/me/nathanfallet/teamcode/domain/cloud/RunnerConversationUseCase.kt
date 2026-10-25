@@ -9,10 +9,11 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
  * none). [permissionDeadlineMinutes]: the team's deadline for unanswered permission requests, 0 for none. [liveText]: the
  * runner streams the agent's text as `message.agent.delta` events (Claude Code only; Codex sends whole messages).
  * [permissionMode]: a remote session's mode on its host's files; null for a cloud session, whose pod is its sandbox.
+ * [backgroundTasks]: the runner reports the agent's background tasks as `tasks` events (Claude Code only).
  */
 data class RunnerAgentConfig(val kind: String, val version: String?, val model: String?, val effort: String?, val conversation: ConversationResume,
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false,
-    val permissionMode: RemotePermissionMode? = null)
+    val permissionMode: RemotePermissionMode? = null, val backgroundTasks: Boolean = false)
 
 /** Inputs delivered to the runner, and the session's desired state when they were read. */
 data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredState)
@@ -34,7 +35,7 @@ class RunnerConversationUseCase(
         val session = live(teamId, sessionId, epoch)
         return RunnerAgentConfig(session.agentKind, session.agentVersion, session.agentModel, session.agentEffort, session.resumeConversation,
             permissionRelay = session.agentKind == "claude", permissionDeadlineMinutes = sessions.settings(teamId).permissionDeadlineMinutes,
-            liveText = session.agentKind == "claude",
+            liveText = session.agentKind == "claude", backgroundTasks = session.agentKind == "claude",
             permissionMode = session.host?.permissionMode?.takeIf { session.kind == CloudSessionKind.REMOTE })
     }
 
@@ -79,8 +80,10 @@ class RunnerConversationUseCase(
     /**
      * [acceptsFiles]: the runner downloads the files a message carries (`cloud.files.v1`). A runner that does not would hand
      * the agent the text alone, so such a message is rejected for it with `files_unsupported` instead of being delivered.
+     * [acceptsTaskStops]: the runner stops background tasks. An older runner would hand a stop's task id to the agent as
+     * a message, so a stop is rejected for it with `task_stop_unsupported` instead.
      */
-    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?, acceptsFiles: Boolean = false): RunnerInputs {
+    suspend fun poll(teamId: String, sessionId: String, epoch: Int, waitMillis: Long, known: String?, acceptsFiles: Boolean = false, acceptsTaskStops: Boolean = false): RunnerInputs {
         // Only the two states a runner acts on: a deleted session fences the call anyway.
         val knownState = known?.let { wire -> DesiredState.entries.firstOrNull { it.wire == wire && it != DesiredState.TERMINATED }
             ?: throw TeamFailure("invalid_state", 400, "Send the desired state as running or paused.") }
@@ -90,8 +93,10 @@ class RunnerConversationUseCase(
             if (knownState != null && session.desiredState != knownState) return RunnerInputs(emptyList(), session.desiredState)
             if (session.desiredState == DesiredState.RUNNING && (session.state == READY || session.state == ACTIVE)) {
                 val delivered = store.deliver(sessionId, epoch, DELIVERY_BATCH).let { inputs ->
-                    val unsupported = if (acceptsFiles) emptyList() else inputs.filter { it.files.isNotEmpty() }
-                    if (unsupported.isNotEmpty()) store.acknowledge(sessionId, epoch, unsupported.map { RunnerInputAck(it.id, false, "files_unsupported") })
+                    val unsupported = inputs.filter { (!acceptsFiles && it.files.isNotEmpty()) || (!acceptsTaskStops && it.kind == CloudInputKind.STOP_TASK) }
+                    if (unsupported.isNotEmpty()) store.acknowledge(sessionId, epoch, unsupported.map {
+                        RunnerInputAck(it.id, false, if (it.kind == CloudInputKind.STOP_TASK) "task_stop_unsupported" else "files_unsupported")
+                    })
                     // Checked again at delivery (audit M2): a non-owner's input accepted while the owner had no link, or
                     // while the session was shared, never reaches an agent that now holds the owner's token.
                     val held = (inputs - unsupported.toSet()).filter { CloudConversationRules.ownerOnly(session, it.authorId) && !CloudConversationRules.onlyStops(it) }

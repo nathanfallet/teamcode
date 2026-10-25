@@ -104,6 +104,19 @@ import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItem
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptSeparator
 import me.nathanfallet.teamcode.companion.presentation.transcript.indexOfEvent
 import me.nathanfallet.teamcode.companion.presentation.transcript.transcriptItems
+import me.nathanfallet.teamcode.companion.presentation.transcript.Subagent
+import me.nathanfallet.teamcode.companion.presentation.transcript.backgroundCommands
+import me.nathanfallet.teamcode.companion.presentation.transcript.liveTasks
+import me.nathanfallet.teamcode.companion.presentation.transcript.subagentsOf
+import me.nathanfallet.teamcode.companion.presentation.transcript.threadEvents
+import me.nathanfallet.teamcode.companion.resources.subagents_back_to_main
+import me.nathanfallet.teamcode.companion.resources.subagents_thread_empty
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.key
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.LiveState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionNotice
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionUiState
@@ -201,10 +214,35 @@ fun SessionScreen(
     val colors = TeamCode.colors
     val messaging = state.session?.let(ControlSessionUseCase::canMessage) == true
     // The desktop takes files dropped anywhere on the session; the phones have the paperclip only.
+    // What runs in the session, from the transcript already loaded: no request of its own.
+    val events = state.transcript.events
+    val live = remember(events, state.agentRuns) { liveTasks(events, state.agentRuns) }
+    val activeHint = remember(events, live) { subagentsOf(events, state.agentRuns, live?.tasks, 0).any { it.active } || !live?.tasks.isNullOrEmpty() }
+    val now = rememberTicking(activeHint)
+    val work = remember(events, live, state.agentRuns, now) {
+        RunningWork(subagentsOf(events, state.agentRuns, live?.tasks, now), live, live?.tasks?.let { backgroundCommands(it, events) }.orEmpty())
+    }
+    val byId = remember(work) { work.subagents.associateBy { it.id } }
+    val mode = currentSubagentPanelMode()
+    val thread = state.thread?.takeIf { it in byId }
+    val layout = subagentLayout(mode, work.hasContent, state.panelOpen, state.panelHidden, thread != null)
+    val canStop = live?.stoppable == true && messaging && state.agentRuns
+    val openThread = { id: String -> viewModel.openThread(id); if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.closePanel() }
+    val togglePanel = { if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.togglePanel() else viewModel.togglePanelHidden() }
+    val panel = @Composable { modifier: Modifier, onClose: (() -> Unit)?, onHide: (() -> Unit)? ->
+        SubagentPanel(work, thread, state.stopping, canStop, now, onOpen = openThread,
+            onMain = { viewModel.backToMain(); if (mode == SubagentPanelMode.SCREEN || mode == SubagentPanelMode.OVERLAY) viewModel.closePanel() },
+            onStop = viewModel::askStop, modifier = modifier, onClose = onClose, onHide = onHide)
+    }
+    val backToMain = stringResource(Res.string.subagents_back_to_main)
     FileDropArea(enabled = messaging && state.files.canAttach, onDropped = viewModel::attach, modifier = Modifier.fillMaxSize()) { dropping ->
         Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap()) {
-            NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts, menuItems) }
-            Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            NavBar(backLabel, onBack, state.session?.name.orEmpty()) {
+                if (work.hasContent) RunningBadge(work, onClick = togglePanel)
+                SessionMenu(state, viewModel, onOpenArtifacts, menuItems)
+            }
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+            Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.session?.let { Summary(it, state) }
                     state.session?.let { session ->
@@ -240,9 +278,34 @@ fun SessionScreen(
                         Banner(text, Tone.WARN, Modifier.testTag("notice"))
                     }
                 }
-                ConfirmingLinks { Transcript(state, memberId, viewModel, Modifier.weight(1f)) }
+                if (layout.threadReplacesMain && thread != null) {
+                    ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = false)
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, Modifier.weight(1f)) } }
+                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, Modifier.weight(1f)) } }
+            }
+            if (layout.threadBeside && thread != null) {
+                Box(Modifier.width(1.dp).fillMaxHeight().background(colors.line))
+                Column(Modifier.weight(1f).fillMaxHeight().testTag("thread-column")) {
+                    ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = true)
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, Modifier.weight(1f)) } }
+                }
+            }
+            if (layout.panel == PanelPlacement.SIDE) {
+                Box(Modifier.width(1.dp).fillMaxHeight().background(colors.line))
+                panel(Modifier.width(SubagentPanelWidth).fillMaxHeight(), null, viewModel::togglePanelHidden)
+            }
             }
             state.session?.let { Dock(it, state, viewModel) }
+        }
+        when (layout.panel) {
+            PanelPlacement.OVERLAY -> SubagentPanelOverlay(viewModel::closePanel) { panel(it, viewModel::closePanel, null) }
+            PanelPlacement.SCREEN -> SubagentPanelScreen { panel(it.windowInsetsPadding(WindowInsets.statusBars), viewModel::closePanel, null) }
+            else -> Unit
+        }
+        state.confirmStop?.let { taskId ->
+            val name = work.commands.firstOrNull { it.task.id == taskId }?.let { it.command ?: it.task.description }
+                ?: work.subagents.firstOrNull { it.taskId == taskId }?.let { "${it.type}: ${it.description}" } ?: taskId
+            StopTaskDialog(name, onConfirm = viewModel::confirmStop, onDismiss = viewModel::cancelStop)
         }
         if (dropping) {
             Box(Modifier.fillMaxSize().background(colors.shade).padding(24.dp).testTag("drop-files"), contentAlignment = Alignment.Center) {
@@ -368,10 +431,16 @@ private fun LiveLabel(state: SessionUiState) {
     }
 }
 
+/**
+ * The main agent's thread ([thread] null), or the subagent [thread]'s own: its events only, a subagent shown as a card
+ * that opens its thread ([onOpenSubagent]). Each thread has its own list state ([key] by the caller), so following the
+ * newest message and keeping the reading position work in each as they always did.
+ */
 @Composable
-private fun Transcript(state: SessionUiState, memberId: String?, viewModel: SessionViewModel, modifier: Modifier) {
+private fun Transcript(state: SessionUiState, thread: String?, subagents: Map<String, Subagent>, memberId: String?, viewModel: SessionViewModel,
+    onOpenSubagent: ((String) -> Unit)?, modifier: Modifier) {
     val colors = TeamCode.colors
-    val items = remember(state.transcript.events) { transcriptItems(state.transcript.events) }
+    val items = remember(state.transcript.events, thread) { transcriptItems(threadEvents(state.transcript.events, thread)) }
     val listState = rememberLazyListState()
     // The transcript opens on its last message and follows the newest one while the member stays at the bottom; scrolled
     // up to read older ones, the position is left alone until they come back down. Decided by the member's own scrolling,
@@ -419,14 +488,17 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
             when {
                 state.loadingOlder -> BusyRow(true)
                 state.transcript.nextBefore != null -> TcButton(stringResource(Res.string.session_load_older), onClick = viewModel::loadOlder, kind = ButtonKind.GHOST, small = true)
-                state.loaded && items.isNotEmpty() -> TranscriptSeparator(stringResource(Res.string.session_nothing_older))
+                // A subagent's thread starts with its call: "nothing older" speaks of the whole conversation.
+                thread == null && state.loaded && items.isNotEmpty() -> TranscriptSeparator(stringResource(Res.string.session_nothing_older))
                 !state.loaded -> BusyRow(state.error == null)
             }
         }
-        items(items, key = { it.key }) { TranscriptItemView(it, memberId) }
+        items(items, key = { it.key }) { TranscriptItemView(it, memberId, subagents, onOpenSubagent) }
         item(key = "bottom") {
-            if (state.loaded && items.isEmpty()) Text(stringResource(Res.string.session_empty), modifier = Modifier.fillMaxWidth().padding(16.dp), color = colors.muted, textAlign = TextAlign.Center)
-            state.pending.forEach { PendingBubble(it, viewModel) }
+            if (state.loaded && items.isEmpty()) Text(stringResource(if (thread == null) Res.string.session_empty else Res.string.subagents_thread_empty),
+                modifier = Modifier.fillMaxWidth().padding(16.dp), color = colors.muted, textAlign = TextAlign.Center)
+            // Messages go to the main agent: they show in its thread.
+            if (thread == null) state.pending.forEach { PendingBubble(it, viewModel) }
         }
     }
 }

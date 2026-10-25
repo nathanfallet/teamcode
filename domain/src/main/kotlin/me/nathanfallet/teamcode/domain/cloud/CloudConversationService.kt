@@ -106,6 +106,21 @@ class CloudConversationService(
     }
 
     /**
+     * Stops the background task [taskId] (a subagent, a background command, a monitor) of the running agent. Like an
+     * interrupt it only stops something: everyone who may message the session may do it, it never wakes a session, and
+     * the input records who asked. The runner rejects a task that ended meanwhile (`unknown_task`); a runner that cannot
+     * stop one never receives it (`task_stop_unsupported`, [RunnerConversationUseCase.poll]).
+     */
+    suspend fun stopTask(principal: Principal, id: String, taskId: String, request: InputRequest): InputOutcome {
+        CloudConversationRules.validateTaskId(taskId)
+        val session = open(principal, id, CloudPermission.MESSAGE)
+        if ((session.state != READY && session.state != ACTIVE) || session.desiredState != DesiredState.RUNNING)
+            throw TeamFailure("nothing_to_stop", 409, "The session has no running agent whose tasks could be stopped.")
+        val input = newInput(principal, session, CloudInputKind.STOP_TASK, taskId, request.copy(wake = false))
+        return store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+    }
+
+    /**
      * Answers a `permission.request` of the running agent. Like an interrupt it concerns the running turn: it is
      * delivered before queued messages, never wakes a session, and needs a running agent. [request] carries the
      * answer as the runner reads it ([PermissionAnswer] encoded by the transport layer).

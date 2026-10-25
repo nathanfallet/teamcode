@@ -5,6 +5,7 @@ import kotlin.uuid.Uuid
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.CloudEventTypes
 import me.nathanfallet.teamcode.api.models.CloudQuestionAnswer
+import me.nathanfallet.teamcode.api.models.CloudTasks
 import me.nathanfallet.teamcode.api.models.CloudTranscriptLimits
 import me.nathanfallet.teamcode.api.models.RemotePermissionModes
 
@@ -28,7 +29,9 @@ data class AgentSettings(val kind: String, val version: String?, val model: Stri
      * always bypasses. With `ask`, Claude Code keeps its permission checks (each request is relayed) and Codex runs in
      * its `workspace-write` sandbox, limited to the session's directory.
      */
-    val permissionMode: String? = null) {
+    val permissionMode: String? = null,
+    /** The server takes `tasks` events ([CloudTasks.FEATURE]): the agent's background tasks are reported to the session's members. */
+    val backgroundTasks: Boolean = false) {
     /** Whether the agent skips its own permission checks and sandbox. */
     val bypass get() = permissionMode != RemotePermissionModes.ASK
 }
@@ -77,6 +80,14 @@ interface AgentAdapter {
     fun takeEvents(): List<AgentEvent> = emptyList()
     /** Background tasks of the session's work in flight in this agent process (subagents, background commands, monitors); 0 when unknown. */
     val backgroundTasks: Int get() = 0
+    /** Whether this agent stops one background task on request ([stopTask]). */
+    val canStopTasks: Boolean get() = false
+    /** Lines stopping the live background task [taskId]; empty when no such task runs (or this agent cannot stop one). */
+    fun stopTask(taskId: String): List<String> = emptyList()
+    /** The empty `tasks` event to upload when the process stops while it still listed tasks; null when there is nothing to clear. */
+    fun tasksEnded(): AgentEvent? = null
+    /** Records [count] scheduled wake-ups (the `Stop` hook's `session_crons`); the `tasks` event to upload when that changed it. */
+    fun scheduled(count: Int): AgentEvent? = null
 }
 
 private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -119,7 +130,7 @@ private fun resultText(content: JsonElement?): String = when (content) {
  * [readableDirectories] (the session's uploads directory, where the files of a message are written) are given with
  * `--add-dir`, so Claude Code reads them without a permission request in `ask` mode.
  */
-class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Long = { 0L }, private val readableDirectories: List<String> = emptyList()) : AgentAdapter {
+class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val now: () -> Long = { 0L }, private val readableDirectories: List<String> = emptyList()) : AgentAdapter {
     private val live = LiveText(now)
     override var conversationId: String? = null; private set
     /**
@@ -136,6 +147,61 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
      * (https://code.claude.com/docs/en/agent-sdk/typescript#sdkbackgroundtaskschangedmessage). Nothing of it is uploaded.
      */
     override var backgroundTasks = 0; private set
+    override val canStopTasks get() = true
+
+    /** The live tasks of the last `background_tasks_changed`, ambient ones left out, in Claude Code's order. */
+    private var liveTasks: List<JsonObject> = emptyList()
+    /** The tool call that started each task and when, from its `task_started`, the oldest forgotten past [MAX_TASK_ORIGINS]. */
+    private val taskOrigins = LinkedHashMap<String, Pair<String?, Long>>()
+    private fun remember(id: String, origin: Pair<String?, Long>) {
+        if (id !in taskOrigins && taskOrigins.size >= MAX_TASK_ORIGINS) taskOrigins.remove(taskOrigins.keys.first())
+        taskOrigins[id] = origin
+    }
+    /** What the last `tasks` event said, so an unchanged set (an ambient task that came or went) uploads nothing. */
+    private var reportedTasks: JsonArray? = null
+    private var reportedScheduled = 0
+    /** Scheduled wake-ups (`CronCreate`, `ScheduleWakeup`, `/loop`) from the last `Stop`; Claude Code reports only how many. */
+    private var scheduledCount = 0
+
+    /**
+     * The `tasks` event for the live set ([CloudEventTypes.TASKS]): each task's id, type, description (at most
+     * [CloudTasks.MAX_DESCRIPTION_CHARS]), subagent type, starting tool call and start time, at most [CloudTasks.MAX_TASKS]
+     * with the full [count]. Null when the server does not take it or nothing changed.
+     */
+    private fun tasksEvent(): AgentEvent? {
+        if (!settings.backgroundTasks) return null
+        val tasks = buildJsonArray {
+            for ((id, task) in liveTasks.take(CloudTasks.MAX_TASKS).mapNotNull { task -> task["task_id"].string()?.let { it to task } }) addJsonObject {
+                val origin = taskOrigins[id]
+                put("id", id)
+                put("type", task["task_type"].string()?.cut(MAX_PERMISSION_FIELD_CHARS) ?: "task")
+                put("description", task["description"].string().orEmpty().cut(CloudTasks.MAX_DESCRIPTION_CHARS))
+                task["subagent_type"].string()?.let { put("subagentType", it.cut(MAX_PERMISSION_FIELD_CHARS)) }
+                origin?.first?.let { put("toolUseId", it.cut(MAX_PERMISSION_FIELD_CHARS)) }
+                origin?.second?.let { put("startedAt", it) }
+            }
+        }
+        if (tasks == reportedTasks && scheduledCount == reportedScheduled) return null
+        reportedTasks = tasks; reportedScheduled = scheduledCount
+        return AgentEvent(CloudEventTypes.TASKS, buildJsonObject { put("tasks", tasks); put("count", liveTasks.size); put("scheduled", scheduledCount); put("stoppable", true) })
+    }
+
+    override fun stopTask(taskId: String): List<String> = if (liveTasks.none { it["task_id"].string() == taskId }) emptyList() else listOf(buildJsonObject {
+        // The control request the Agent SDK's `stopTask` sends (`SDKControlStopTaskRequest`).
+        put("type", "control_request"); put("request_id", Uuid.random().toString()); putJsonObject("request") { put("subtype", "stop_task"); put("task_id", taskId) }
+    }.toString())
+
+    override fun tasksEnded(): AgentEvent? {
+        if (!settings.backgroundTasks || (reportedTasks.isNullOrEmpty() && reportedScheduled == 0)) return null
+        // Wake-ups fire only while the process runs; `--resume` restores them, and the next `Stop` reports them again.
+        liveTasks = emptyList(); taskOrigins.clear(); scheduledCount = 0
+        return tasksEvent()
+    }
+
+    override fun scheduled(count: Int): AgentEvent? {
+        scheduledCount = count.coerceAtLeast(0)
+        return tasksEvent()
+    }
 
     override fun command(resume: String?) = AgentCommand("claude", buildList {
         addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
@@ -248,7 +314,15 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
         val value = parseObject(line) ?: return AgentOutput()
         return when (value["type"].string()) {
             "system" -> if (value["subtype"].string() == "background_tasks_changed") {
-                backgroundTasks = value["tasks"].array().orEmpty().count { task -> (task.obj()?.get("ambient") as? JsonPrimitive)?.booleanOrNull != true }
+                liveTasks = value["tasks"].array().orEmpty().mapNotNull { task -> task.obj()?.takeIf { (it["ambient"] as? JsonPrimitive)?.booleanOrNull != true } }
+                backgroundTasks = liveTasks.size
+                // A task first seen here (its `task_started` missed or not sent) starts now.
+                liveTasks.mapNotNull { it["task_id"].string() }.forEach { if (it !in taskOrigins) remember(it, null to now()) }
+                AgentOutput(listOfNotNull(tasksEvent()))
+            } else if (value["subtype"].string() == "task_started") {
+                // Only remembered: the live set (`background_tasks_changed`) says when it shows, and a foreground task never does.
+                // A resumed subagent starts again under its id: its new run starts now, from the tool call that resumed it.
+                value["task_id"].string()?.let { id -> remember(id, value["tool_use_id"].string() to now()) }
                 AgentOutput()
             } else if (value["subtype"].string() == "init") {
                 val id = value["session_id"].string()
@@ -348,6 +422,8 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, now: () -> Lo
          * whole (at most about 15 KB of input or 8 KB of preview, plus 8 KB of description) stays well under the server's 60 KB.
          */
         const val MAX_PERMISSION_FIELD_CHARS = 200
+        /** Tasks whose start is remembered (foreground subagents are never listed, so they are only forgotten past this). */
+        const val MAX_TASK_ORIGINS = 500
         /** The request ids the server accepts in an answer (`CloudConversationRules.validatePermissionAnswer`). */
         val PERMISSION_REQUEST_ID = Regex("[\\x21-\\x7E]{1,128}")
         /** The server's transcript limits and the reasoning keys it drops. */

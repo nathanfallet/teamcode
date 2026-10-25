@@ -567,4 +567,47 @@
     <string name="settings_signed_out_unreachable">Déconnecté sur cet appareil. Le serveur est injoignable ; sa session expirera d'elle-même.</string>
     <string name="settings_signed_out_storage">Déconnecté sur cet appareil, mais son stockage sécurisé a refusé l'accès : la session peut rester valide jusqu'à son expiration. Révoque-la depuis la page Appareils du serveur.</string>
     <string name="settings_device_renamed">Cet appareil s'appelle maintenant « %1$s » sur %2$s.</string>
+    <!-- Subagents and background tasks panel -->
+    <string name="subagents_title">En cours dans cette session</string>
+    <string name="subagents_main">Conversation principale</string>
+    <string name="subagents_main_hint">L'agent à qui tu parles</string>
+    <string name="subagents_section">Sous-agents</string>
+    <string name="subagents_commands">Commandes de fond</string>
+    <string name="subagents_monitors">Moniteurs et attentes</string>
+    <string name="subagents_scheduled">Réveils programmés</string>
+    <plurals name="subagents_scheduled_count">
+        <item quantity="one">%1$d réveil programmé par l'agent (un rappel ou un /loop). Claude Code en donne le nombre, pas le détail.</item>
+        <item quantity="other">%1$d réveils programmés par l'agent (des rappels ou un /loop). Claude Code en donne le nombre, pas le détail.</item>
+    </plurals>
+    <plurals name="subagents_running_badge">
+        <item quantity="one">%1$d en cours</item>
+        <item quantity="other">%1$d en cours</item>
+    </plurals>
+    <plurals name="subagents_badge">
+        <item quantity="one">%1$d sous-agent</item>
+        <item quantity="other">%1$d sous-agents</item>
+    </plurals>
+    <string name="subagents_open_panel">Voir ce qui tourne dans cette session</string>
+    <string name="subagents_close_panel">Fermer</string>
+    <string name="subagents_hide_panel">Masquer le panneau</string>
+    <string name="subagents_back_to_main">Conversation principale</string>
+    <string name="subagents_thread_of">Sous-agent : %1$s</string>
+    <string name="subagents_close_thread">Fermer ce sous-agent</string>
+    <string name="subagents_open">Ouvrir</string>
+    <string name="subagents_state_running">En cours</string>
+    <string name="subagents_state_waiting">En attente</string>
+    <string name="subagents_state_done">Terminé</string>
+    <string name="subagents_state_failed">Échec</string>
+    <string name="subagents_state_stopped">Arrêté</string>
+    <string name="subagents_state_background">En arrière-plan</string>
+    <string name="subagents_stopping">Arrêt…</string>
+    <string name="subagents_stop">Arrêter</string>
+    <string name="subagents_stop_title">Arrêter cette tâche ?</string>
+    <string name="subagents_stop_body">« %1$s » s'arrête maintenant. Claude Code dit à l'agent qu'elle a été arrêtée ; ce que la tâche n'avait pas fini est perdu.</string>
+    <string name="subagents_read_only">Le runner de cette session n'arrête pas les tâches : elles sont seulement listées. Mets TeamCode à jour sur l'appareil ou dans l'image cloud pour les arrêter d'ici.</string>
+    <string name="subagents_no_task_reports">Les commandes de fond et les moniteurs s'affichent ici quand le serveur et le runner de la session sont à jour.</string>
+    <string name="subagents_thread_empty">Les étapes de ce sous-agent ne sont pas encore chargées. Charge les événements plus anciens dans la conversation principale, ou attends sa première étape.</string>
+    <string name="subagents_duration_seconds">%1$d s</string>
+    <string name="subagents_duration_minutes">%1$d min %2$d s</string>
+    <string name="subagents_duration_hours">%1$d h %2$d min</string>
 </resources>

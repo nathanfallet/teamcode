@@ -243,7 +243,7 @@ class CloudConversationRoutesTest {
             val runner = sdk("projected-pod-token-1")
             val member = sdk("colleague")
             try {
-                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true, liveText = true), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
+                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true, liveText = true, backgroundTasks = true), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
                     "This server takes permission requests and live text deltas, so the runner relays them, without a deadline by default")
                 store.settings = CloudSettings(permissionDeadlineMinutes = 15)
                 assertEquals(15, runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)).permissionDeadlineMinutes, "The team's deadline reaches the runner")
@@ -701,5 +701,63 @@ class CloudConversationRoutesTest {
             val delivered = runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsFiles = true)).inputs.single()
             assertEquals(RunnerInputView(delivered.id, "message", "hi", 1), delivered)
         } finally { runner.close() }
+    }
+    /**
+     * `cloud.sessions.background-tasks.v1`: the runner's `tasks` events are stored, and a member who may message a running
+     * session stops one of its tasks. The stop is an input like an interrupt (author kept, never wakes a session), delivered
+     * only to a runner that announces it can stop a task: an older one gets it rejected, never read as a message.
+     */
+    @Test fun aMemberStopsABackgroundTaskThroughARunnerThatTakesIt() = testApplication {
+        val store = Sessions(listOf(admin, colleague, other))
+        val conversations = Conversations().also { c -> c.sessionOf = { store.sessions[it] } }
+        val access = CloudAccessService(conversations, store)
+        val service = CloudConversationService(conversations, store, access, { _, _ -> false })
+        val sessions = CloudSessionService(store, access = access)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
+                override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
+                override suspend fun saveCluster(actor: Principal, id: String?, expectedVersion: Int?, input: CloudClusterInput) = error("unused")
+                override suspend fun profiles(actor: Principal) = emptyList<CloudProfile>()
+                override suspend fun member(actor: Principal, memberId: String): Member? = null
+                override suspend fun saveProfile(actor: Principal, id: String?, expectedVersion: Int, name: String, spec: CloudProfileSpec, assignedMemberIds: Set<String>) = error("unused")
+                override suspend fun settings(actor: Principal) = CloudSettings()
+                override suspend fun saveSettings(actor: Principal, settings: CloudSettings) = settings
+            }, cluster), cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster)),
+                cloudConversation = CloudConversation(service, access, RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { })), publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, "opus", null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1, state = CloudSessionState.READY)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.RUNNING, 1)
+        val features = Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features
+        assertTrue(CloudTasks.FEATURE in features)
+        suspend fun stop(token: String, body: String, key: String? = null) = client.post("/api/v1/cloud/sessions/s1/tasks/stop") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody(body); key?.let { header(CloudHeaders.IDEMPOTENCY_KEY, it) }
+        }
+        assertEquals(HttpStatusCode.NotFound, stop("other", """{"taskId":"b1"}""").status, "Only who reaches the session stops its tasks")
+        assertEquals(HttpStatusCode.Forbidden, stop("colleague-read", """{"taskId":"b1"}""").status, "A read-only key stops nothing")
+        assertEquals(HttpStatusCode.BadRequest, stop("colleague", """{"taskId":"not a task id"}""").status)
+        assertEquals(HttpStatusCode.BadRequest, stop("colleague", """{"taskId":""}""").status)
+        val accepted = stop("colleague", """{"taskId":"b1"}""", key = "stop-1")
+        assertEquals(HttpStatusCode.Accepted, accepted.status, accepted.bodyAsText())
+        val input = Serialization.json.decodeFromString<CloudInputView>(accepted.bodyAsText())
+        assertEquals(CloudTasks.KIND, input.kind); assertEquals("colleague-id", input.authorId); assertFalse(input.wake)
+        assertEquals("true", stop("colleague", """{"taskId":"b1"}""", key = "stop-1").headers[CloudHeaders.IDEMPOTENCY_REPLAYED])
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this) } }
+        try {
+            assertTrue(runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)).backgroundTasks, "This server takes tasks events")
+            // An older runner would read the task id as a message: the stop is rejected for it instead.
+            assertTrue(runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0)).inputs.isEmpty())
+            assertEquals(CloudTasks.UNSUPPORTED, conversations.inputs.getValue(input.id).reason)
+            val again = Serialization.json.decodeFromString<CloudInputView>(stop("colleague", """{"taskId":"b2"}""").bodyAsText())
+            assertEquals(listOf(RunnerInputView(again.id, CloudTasks.KIND, "b2", 1)), runner.runnerInputs(RunnerInputsRequest("default", "s1", 1, 0, acceptsTaskStops = true)).inputs)
+            val ack = runner.runnerEvents(RunnerEventsRequest("default", "s1", 1, listOf(RunnerEventView(1, CloudEventTypes.TASKS,
+                buildJsonObject { putJsonArray("tasks") { addJsonObject { put("id", "b2"); put("type", "local_bash"); put("description", "npm test") } }; put("stoppable", true) }))))
+            assertEquals(1, ack.acceptedThrough)
+            assertEquals(CloudEventType.TASKS, conversations.events.last().type)
+        } finally { runner.close() }
+        store.sessions["s1"] = store.sessions.getValue("s1").copy(state = CloudSessionState.PAUSED, generation = 2)
+        val paused = stop("colleague", """{"taskId":"b3"}""")
+        assertEquals(HttpStatusCode.Conflict, paused.status); assertTrue("nothing_to_stop" in paused.bodyAsText())
     }
 }

@@ -68,6 +68,8 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
 
     override suspend fun interrupt(accountId: String, sessionId: String, idempotencyKey: String): InputReceipt =
         calls.withAccount(accountId, resource = true) { it.interruptCloudSession(sessionId, idempotencyKey).receipt() }
+    override suspend fun stopTask(accountId: String, sessionId: String, taskId: String, idempotencyKey: String): InputReceipt =
+        calls.withAccount(accountId, resource = true) { it.stopCloudTask(sessionId, taskId, idempotencyKey).receipt() }
 
     override suspend fun pause(accountId: String, sessionId: String): CloudSession =
         calls.withAccount(accountId, resource = true) { it.pauseCloudSession(sessionId).domain() }

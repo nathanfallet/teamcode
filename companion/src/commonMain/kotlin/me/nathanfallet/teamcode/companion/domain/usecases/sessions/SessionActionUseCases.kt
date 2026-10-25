@@ -117,6 +117,19 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         }
     }
 
+    /** A key for one stop: a retry of the same stop never stops anything twice. */
+    fun stopKey(): String = ids.newId()
+
+    /** Stops the background task [taskId]; false when the session no longer runs an agent (nothing to stop). */
+    suspend fun stopTask(accountId: String, sessionId: String, taskId: String, key: String): Boolean = guard(accountId) {
+        try {
+            sessions.stopTask(accountId, sessionId, taskId, key)
+            true
+        } catch (error: CompanionException.Server) {
+            if (error.statusCode == 409 && error.code == "nothing_to_stop") false else throw error
+        }
+    }
+
     suspend fun pause(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.pause(accountId, sessionId) }
     suspend fun resume(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.resume(accountId, sessionId) }
     suspend fun end(accountId: String, sessionId: String) = guard(accountId) { sessions.end(accountId, sessionId) }

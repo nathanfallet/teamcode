@@ -245,4 +245,81 @@ class SessionScreenTest {
     private fun androidx.compose.ui.test.ComposeUiTest.settle() {
         repeat(3) { Thread.sleep(50); waitForIdle() }
     }
+
+    private fun subagentTranscript(stoppable: Boolean) = object : TranscriptRepository {
+        private fun agent(seq: Long, id: String, description: String, background: Boolean = false) = TranscriptEvent.ToolCall(seq, seq * 1_000, id, "Agent",
+            """{"description":"$description","prompt":"Look","subagent_type":"Explore"${if (background) ""","run_in_background":true""" else ""}}""", description, null)
+        override suspend fun page(accountId: String, sessionId: String, before: Long?) = TranscriptPage(listOf(
+            TranscriptEvent.Turn(1, 1_000, me.nathanfallet.teamcode.companion.domain.models.TurnPhase.STARTED, null, null),
+            TranscriptEvent.UserMessage(2, 2_000, "Review the repository", "i1", "m1"),
+            agent(3, "a1", "Map the modules"),
+            TranscriptEvent.AgentMessage(4, 4_000, "Inside the subagent", "a1"),
+            TranscriptEvent.ToolResult(5, 5_000, "a1", "Three modules", false, null, null),
+            agent(6, "b1", "Watch the build", background = true),
+            TranscriptEvent.ToolResult(7, 7_000, "b1", "Launched", false, null, null),
+            TranscriptEvent.AgentMessage(8, 8_000, "On the main thread", null),
+            TranscriptEvent.Tasks(9, 9_000, listOf(me.nathanfallet.teamcode.companion.domain.models.BackgroundTask("t1", "local_agent", "Watch the build", "Explore", "b1", 6_000)), stoppable),
+        ), nextBefore = null, lastSeq = 9)
+        override fun follow(accountId: String, sessionId: String, after: Long): Flow<LiveUpdate<TranscriptEvent>> = emptyFlow()
+    }
+
+    private fun androidx.compose.ui.test.ComposeUiTest.openPanel() {
+        if (onAllNodesWithTagExists("subagent-panel")) return
+        onNodeWithTag("running-badge").performClick()
+        waitUntil { onAllNodesWithTagExists("subagent-panel") }
+    }
+
+    private fun androidx.compose.ui.test.ComposeUiTest.onAllNodesWithTagExists(tag: String) =
+        onAllNodes(androidx.compose.ui.test.hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test fun noSubagentNoBadgeNorPanel() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.READY) }
+        val model = viewModel(sessions)
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { model.uiState.value.session != null }
+        onNodeWithTag("running-badge").assertDoesNotExist()
+        onNodeWithTag("subagent-panel").assertDoesNotExist()
+    }
+
+    @Test fun aSubagentOpensInItsOwnThreadAndTheMainThreadKeepsItsCard() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.READY) }
+        val model = viewModel(sessions, subagentTranscript(stoppable = true))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { onAllNodesWithTagExists("subagent-card-a1") }
+        onNodeWithTag("running-badge").assertExists()
+        onNodeWithText("Inside the subagent").assertDoesNotExist()
+        onNodeWithTag("subagent-card-a1").performClick()
+        waitUntil { onAllNodesWithTagExists("thread-bar") }
+        onNodeWithText("Inside the subagent").assertExists()
+        onNodeWithText("On the main thread").assertDoesNotExist()
+        onNodeWithTag("thread-back").performClick()
+        waitUntil { !onAllNodesWithTagExists("thread-bar") }
+        onNodeWithText("On the main thread").assertExists()
+    }
+
+    @Test fun stoppingABackgroundSubagentAsksFirst() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.READY) }
+        val model = viewModel(sessions, subagentTranscript(stoppable = true))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { onAllNodesWithTagExists("running-badge") }
+        openPanel()
+        onNodeWithTag("stop-t1").performClick()
+        onNodeWithTag("stop-confirm").assertExists()
+        onNodeWithTag("stop-cancel").performClick()
+        onNodeWithTag("stop-confirm").assertDoesNotExist()
+        assertTrue(sessions.calls.none { it.startsWith("stopTask") }, "Cancelled: nothing sent")
+        onNodeWithTag("stop-t1").performClick()
+        onNodeWithTag("stop-confirm-yes").performClick()
+        waitUntil { sessions.calls.any { it.startsWith("stopTask s1 t1") } }
+    }
+
+    @Test fun withoutStopSupportThePanelIsReadOnlyAndSaysSo() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.READY) }
+        val model = viewModel(sessions, subagentTranscript(stoppable = false))
+        setContent { TeamCodeTheme { SessionScreen(model, memberId = "m1", onBack = {}) } }
+        waitUntil { onAllNodesWithTagExists("running-badge") }
+        openPanel()
+        onNodeWithTag("stop-t1").assertDoesNotExist()
+        onNodeWithTag("panel-note").assertExists()
+    }
 }

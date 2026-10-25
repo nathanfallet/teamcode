@@ -567,4 +567,47 @@
     <string name="settings_signed_out_unreachable">Signed out on this device. The server could not be reached; its session expires on its own.</string>
     <string name="settings_signed_out_storage">Signed out on this device, but its secure storage refused access: the session may stay valid until it expires. Revoke it from the server's Devices page.</string>
     <string name="settings_device_renamed">This device is now “%1$s” on %2$s.</string>
+    <!-- Subagents and background tasks panel -->
+    <string name="subagents_title">Running in this session</string>
+    <string name="subagents_main">Main conversation</string>
+    <string name="subagents_main_hint">The agent you talk to</string>
+    <string name="subagents_section">Subagents</string>
+    <string name="subagents_commands">Background commands</string>
+    <string name="subagents_monitors">Monitors and waits</string>
+    <string name="subagents_scheduled">Scheduled wake-ups</string>
+    <plurals name="subagents_scheduled_count">
+        <item quantity="one">%1$d wake-up scheduled by the agent (a reminder or a /loop). Claude Code reports how many, not what they are.</item>
+        <item quantity="other">%1$d wake-ups scheduled by the agent (reminders or a /loop). Claude Code reports how many, not what they are.</item>
+    </plurals>
+    <plurals name="subagents_running_badge">
+        <item quantity="one">%1$d running</item>
+        <item quantity="other">%1$d running</item>
+    </plurals>
+    <plurals name="subagents_badge">
+        <item quantity="one">%1$d subagent</item>
+        <item quantity="other">%1$d subagents</item>
+    </plurals>
+    <string name="subagents_open_panel">Show what runs in this session</string>
+    <string name="subagents_close_panel">Close</string>
+    <string name="subagents_hide_panel">Hide the panel</string>
+    <string name="subagents_back_to_main">Main conversation</string>
+    <string name="subagents_thread_of">Subagent: %1$s</string>
+    <string name="subagents_close_thread">Close this subagent</string>
+    <string name="subagents_open">Open</string>
+    <string name="subagents_state_running">Running</string>
+    <string name="subagents_state_waiting">Waiting</string>
+    <string name="subagents_state_done">Done</string>
+    <string name="subagents_state_failed">Failed</string>
+    <string name="subagents_state_stopped">Stopped</string>
+    <string name="subagents_state_background">In background</string>
+    <string name="subagents_stopping">Stopping…</string>
+    <string name="subagents_stop">Stop</string>
+    <string name="subagents_stop_title">Stop this task?</string>
+    <string name="subagents_stop_body">“%1$s” stops now. Claude Code tells the agent it was stopped; what the task had not finished is lost.</string>
+    <string name="subagents_read_only">This session's runner does not stop tasks: they are listed only. Update TeamCode on the device or in the cloud image to stop them from here.</string>
+    <string name="subagents_no_task_reports">Background commands and monitors show here once the server and the session's runner are up to date.</string>
+    <string name="subagents_thread_empty">This subagent's steps are not loaded yet. Load earlier events in the main conversation, or wait for its first step.</string>
+    <string name="subagents_duration_seconds">%1$ds</string>
+    <string name="subagents_duration_minutes">%1$dm %2$ds</string>
+    <string name="subagents_duration_hours">%1$dh %2$dm</string>
 </resources>

@@ -10,6 +10,8 @@ enum class CloudEventType(val wire: String) {
     PERMISSION_REQUEST("permission.request"),
     /** The runner denied a request nobody answered within the team's deadline: `{requestId, deadlineMinutes, message}`. */
     PERMISSION_EXPIRED("permission.expired"),
+    /** The agent's live background tasks, the full set each time it changes: `{tasks: [{id, type, description, ...}], stoppable}`. */
+    TASKS("tasks"),
     /** Written by the server when an input is consumed, cancelled or rejected. */
     INPUT("input"),
     /** Written by the server when the session changed owner: `{transferId, fromMemberId, toMemberId, atEpoch}`. */
@@ -33,7 +35,9 @@ data class CloudEventPage(val events: List<CloudEvent>, val firstSeq: Long?, val
 enum class CloudInputKind(val wire: String) {
     MESSAGE("message"), INTERRUPT("interrupt"),
     /** The answer to a `permission.request`; its text is the encoded answer, read by the runner. */
-    PERMISSION("permission");
+    PERMISSION("permission"),
+    /** Stops one background task of the running agent; its text is the task id. Delivered only to a runner that takes it. */
+    STOP_TASK("stop_task");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 
