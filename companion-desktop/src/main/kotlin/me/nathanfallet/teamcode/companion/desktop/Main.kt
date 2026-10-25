@@ -68,6 +68,7 @@ fun main(args: Array<String>) {
             Taskbar.getTaskbar().iconImage = resources.getResourceAsStream("teamcode-app-icon.png")!!.use(ImageIO::read)
     } catch (_: Exception) { }
     val mac = System.getProperty("os.name").orEmpty().startsWith("Mac")
+    val macBar = WindowTitleBar.forMac(System.getProperty("os.version"))
     /** Cmd on macOS, Ctrl elsewhere. */
     fun shortcut(key: Key) = if (mac) KeyShortcut(key, meta = true) else KeyShortcut(key, ctrl = true)
     val tray = try { SystemTray.isSupported() } catch (_: Throwable) { false }
@@ -142,7 +143,7 @@ fun main(args: Array<String>) {
             }
             // macOS hides the bar in fullscreen (the green button too: Compose reads the window's fullscreen from AppKit):
             // the header goes back to its own place there.
-            val titleBar = if (mac && windowState.placement != WindowPlacement.Fullscreen) WindowTitleBar.MAC else WindowTitleBar()
+            val titleBar = if (mac && windowState.placement != WindowPlacement.Fullscreen) macBar else WindowTitleBar()
             val scope = rememberCoroutineScope()
             CompositionLocalProvider(LocalWindowTitleBar provides titleBar) {
                 Box(if (titleBar.height > 0.dp) Modifier.onTitleBarDoubleClick(titleBar.height) {

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import me.nathanfallet.teamcode.companion.presentation.transcript.atMostBubbleWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -75,7 +76,6 @@ import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.ConfirmingLinks
-import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.KindChips
@@ -205,7 +205,7 @@ fun SessionScreen(
         Column(Modifier.fillMaxSize().background(colors.background).dismissKeyboardOnTap()) {
             NavBar(backLabel, onBack, state.session?.name.orEmpty()) { SessionMenu(state, viewModel, onOpenArtifacts, menuItems) }
             Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.session?.let { Summary(it, state) }
                     state.session?.let { session ->
                         when {
@@ -413,7 +413,7 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
         withFrameNanos { }
         settled = true
     }
-    LazyColumn(modifier.widthIn(max = ContentWidth).fillMaxWidth().alpha(if (settled || !state.loaded) 1f else 0f).testTag("transcript"), state = listState,
+    LazyColumn(modifier.fillMaxWidth().alpha(if (settled || !state.loaded) 1f else 0f).testTag("transcript"), state = listState,
         contentPadding = PaddingValues(vertical = 8.dp)) {
         item(key = "top") {
             when {
@@ -456,7 +456,7 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
             Modifier.fillMaxWidth().background(colors.panelAlt).navigationBarsPadding().imePadding().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!ControlSessionUseCase.canMessage(session)) {
                     Text(stringResource(Res.string.composer_ended), color = colors.muted, fontSize = 13.5.sp, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).testTag("composer-ended"))
@@ -504,6 +504,8 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
                         placeholder = if (dictation?.listening() == true) listeningHint() else stringResource(Res.string.composer_hint),
                         modifier = Modifier.weight(1f).focusRequester(field), tag = "composer", shape = RoundedCornerShape(22.dp), minHeight = 44.dp,
                         onSubmit = { if (state.canSend) send() },
+                        // A file or a screenshot pasted into the field goes the way of the paperclip's, when files are on.
+                        onPasteFiles = if (state.files.supported && state.files.canAttach) viewModel::attach else null, onPasteFailed = viewModel::pickFailed,
                         trailing = dictation?.let { { DictationButton(it, { viewModel.uiState.value.draft }, viewModel::onDraftChange, field) } },
                     )
                     TcIconButton(PhosphorIcons.Regular.ArrowUp, stringResource(Res.string.composer_send), onClick = send, kind = IconButtonKind.FILLED,
@@ -539,7 +541,7 @@ private fun PendingBubble(message: PendingMessage, viewModel: SessionViewModel) 
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("pending-${message.clientMessageId}"), horizontalAlignment = Alignment.End) {
         if (message.text.isNotEmpty()) Text(
             message.text,
-            modifier = Modifier.widthIn(max = 560.dp).alpha(0.7f).clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
+            modifier = Modifier.atMostBubbleWidth().alpha(0.7f).clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
             color = colors.onBubble,
             fontSize = 14.5.sp,
         )

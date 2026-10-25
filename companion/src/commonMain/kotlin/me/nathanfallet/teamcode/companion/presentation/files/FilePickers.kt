@@ -28,3 +28,13 @@ expect fun rememberFilePicker(onPicked: (List<PickedFile>) -> Unit, onFailed: ()
  */
 @Composable
 expect fun FileDropArea(enabled: Boolean, onDropped: (List<PickedFile>) -> Unit, modifier: Modifier, content: @Composable (dropping: Boolean) -> Unit)
+
+/**
+ * A field that takes a file or an image pasted into it as if it were picked with the paperclip: what is pasted reaches
+ * `onPasted`, the same attach path as [rememberFilePicker]'s `onPicked`, and `onFailed` is told when it could not be read.
+ * Pasted text still goes to the field. The desktop reads the system clipboard on Ctrl+V or Cmd+V (files copied in the file
+ * manager, a screenshot as a PNG); Android takes what the keyboard or the paste menu hands the field; iOS does not take
+ * files from the clipboard yet. Nothing is intercepted when [enabled] is false.
+ */
+@Composable
+expect fun Modifier.pasteFiles(enabled: Boolean, onPasted: (List<PickedFile>) -> Unit, onFailed: () -> Unit): Modifier

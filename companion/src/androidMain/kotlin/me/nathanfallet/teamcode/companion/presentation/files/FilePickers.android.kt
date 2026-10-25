@@ -13,6 +13,9 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -101,6 +104,38 @@ actual fun rememberFilePicker(onPicked: (List<PickedFile>) -> Unit, onFailed: ()
 @Composable
 actual fun FileDropArea(enabled: Boolean, onDropped: (List<PickedFile>) -> Unit, modifier: Modifier, content: @Composable (dropping: Boolean) -> Unit) {
     Box(modifier) { content(false) }
+}
+
+/**
+ * Android: what the keyboard (a sticker, a GIF, an image) or the paste menu hands the field as content URIs is attached like
+ * a picked file, photos reduced like the library's; plain text stays the field's.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+actual fun Modifier.pasteFiles(enabled: Boolean, onPasted: (List<PickedFile>) -> Unit, onFailed: () -> Unit): Modifier {
+    if (!enabled) return this
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    val pasted by rememberUpdatedState(onPasted)
+    val failed by rememberUpdatedState(onFailed)
+    return contentReceiver { content ->
+        val data = content.clipEntry.clipData
+        val uris = (0 until data.itemCount).mapNotNull { data.getItemAt(it).uri }
+        if (uris.isEmpty()) return@contentReceiver content
+        scope.launch {
+            val files = try {
+                withContext(Dispatchers.IO) {
+                    uris.map { uri ->
+                        val resolver = context.contentResolver
+                        if (resolver.getType(uri)?.startsWith("image/") == true) photo(context, uri, nameOf(resolver, uri)) else document(resolver, uri)
+                    }
+                }
+            } catch (error: CancellationException) { throw error } catch (_: Exception) { listOf(null) }
+            if (files.any { it == null }) failed()
+            files.filterNotNull().takeIf { it.isNotEmpty() }?.let(pasted)
+        }
+        content.consume { item -> item.uri != null }
+    }
 }
 
 /** The document picker's filter: the kinds of files a team may take. */

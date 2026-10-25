@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import me.nathanfallet.teamcode.companion.domain.models.PickedFile
+import me.nathanfallet.teamcode.companion.presentation.files.pasteFiles
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -493,6 +495,9 @@ fun TcTextField(
     onSubmit: (() -> Unit)? = null,
     /** Inside the field, at its end (the composer's microphone). */
     trailing: (@Composable () -> Unit)? = null,
+    /** A file or an image pasted into the field (the composer): attached instead of typed; pasted text still goes in. */
+    onPasteFiles: ((List<PickedFile>) -> Unit)? = null,
+    onPasteFailed: () -> Unit = {},
 ) {
     val colors = TeamCode.colors
     // The field edits a TextFieldValue to insert a line break where the cursor is; the caller keeps a String.
@@ -531,6 +536,7 @@ fun TcTextField(
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
             modifier = Modifier
                 .fillMaxWidth()
+                .then(if (onPasteFiles == null) Modifier else Modifier.pasteFiles(true, onPasteFiles, onPasteFailed))
                 .then(if (onSubmit == null) Modifier else Modifier.onPreviewKeyEvent { event ->
                     when (enterAction(event, singleLine)) {
                         EnterAction.PASS -> false

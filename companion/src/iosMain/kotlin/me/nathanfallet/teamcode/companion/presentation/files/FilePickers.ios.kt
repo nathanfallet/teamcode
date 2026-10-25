@@ -206,3 +206,7 @@ private fun NSData.toByteArray(): ByteArray {
     if (size > 0) bytes.usePinned { memcpy(it.addressOf(0), this.bytes, length) }
     return bytes
 }
+
+/** iOS: files and images are not read from the clipboard yet; pasting text works as before. */
+@Composable
+actual fun Modifier.pasteFiles(enabled: Boolean, onPasted: (List<PickedFile>) -> Unit, onFailed: () -> Unit): Modifier = this

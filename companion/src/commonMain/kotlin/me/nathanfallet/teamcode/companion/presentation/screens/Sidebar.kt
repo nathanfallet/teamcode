@@ -172,7 +172,7 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
             BrandGlyph(size = 20.dp)
             Text("TeamCode", color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.weight(1f))
             if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { actions.onNewSession(account) },
-                kind = IconButtonKind.OUTLINED, modifier = Modifier.then(if (inBar) Modifier.size(titleBar.height - 2.dp) else Modifier).testTag("sidebar-new-session"))
+                kind = IconButtonKind.OUTLINED, modifier = Modifier.then(if (inBar) Modifier.size(minOf(titleBar.height, 28.dp) - 2.dp) else Modifier).testTag("sidebar-new-session"))
         }
         actions.onSearch?.let { search ->
             Box(Modifier.padding(horizontal = 8.dp)) {

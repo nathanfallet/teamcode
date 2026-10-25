@@ -17,7 +17,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.awtTransferable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import java.awt.FileDialog
+import java.awt.Toolkit
+import java.awt.datatransfer.Transferable
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import javax.imageio.ImageIO
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.io.Buffer
 import java.awt.Frame
 import java.awt.datatransfer.DataFlavor
 import java.io.File
@@ -85,3 +105,59 @@ internal fun desktopFiles(files: List<File>): List<PickedFile> = files.filter { 
     val path = file.toPath()
     Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
 }.map { file -> PickedFile(file.name, file.length()) { file.inputStream().asSource() } }
+
+/**
+ * The desktop: Ctrl+V (Cmd+V on macOS, Shift+Insert elsewhere) with files or an image on the clipboard attaches them, as
+ * the paperclip's file dialog would; with anything else the key goes to the field, which pastes its text.
+ */
+@Composable
+actual fun Modifier.pasteFiles(enabled: Boolean, onPasted: (List<PickedFile>) -> Unit, onFailed: () -> Unit): Modifier {
+    if (!enabled) return this
+    val pasted by rememberUpdatedState(onPasted)
+    val failed by rememberUpdatedState(onFailed)
+    val scope = rememberCoroutineScope()
+    val mac = remember { System.getProperty("os.name").orEmpty().startsWith("Mac") }
+    return onPreviewKeyEvent { event ->
+        val paste = event.type == KeyEventType.KeyDown && !event.isAltPressed && when {
+            event.key == Key.V -> if (mac) event.isMetaPressed && !event.isCtrlPressed else event.isCtrlPressed && !event.isMetaPressed
+            event.key == Key.Insert -> !mac && event.isShiftPressed && !event.isCtrlPressed
+            else -> false
+        } && !(event.key == Key.V && event.isShiftPressed)
+        if (!paste) return@onPreviewKeyEvent false
+        val clip = try { Toolkit.getDefaultToolkit().systemClipboard.getContents(null) } catch (_: Exception) { null }
+        if (clip == null || !pastesFiles(clip)) return@onPreviewKeyEvent false
+        scope.launch {
+            val files = try { withContext(Dispatchers.IO) { pastedFiles(clip) } } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+            if (files.isNullOrEmpty()) failed() else pasted(files)
+        }
+        true
+    }
+}
+
+/** Whether the clipboard holds files, or an image alone: what a paste attaches rather than types. */
+internal fun pastesFiles(clip: Transferable): Boolean = try {
+    clip.isDataFlavorSupported(DataFlavor.javaFileListFlavor) ||
+        // An image that comes with text is a copied table or a rich selection: the text is what was meant.
+        (clip.isDataFlavorSupported(DataFlavor.imageFlavor) && !clip.isDataFlavorSupported(DataFlavor.stringFlavor))
+} catch (_: Exception) { false }
+
+/**
+ * The files a paste attaches, null when the clipboard holds neither files nor an image alone ([pastesFiles]). Copied files
+ * go through [desktopFiles] (regular files only, read when sent); an image becomes a PNG named after [now], kept in memory
+ * so that a retry sends it again and no temporary file is left behind.
+ */
+internal fun pastedFiles(clip: Transferable, now: () -> Long = System::currentTimeMillis): List<PickedFile>? {
+    if (!pastesFiles(clip)) return null
+    if (clip.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+        return desktopFiles((clip.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>).orEmpty().filterIsInstance<File>())
+    }
+    val image = clip.getTransferData(DataFlavor.imageFlavor) as? java.awt.Image ?: return emptyList()
+    val width = image.getWidth(null)
+    val height = image.getHeight(null)
+    if (width <= 0 || height <= 0) return emptyList()
+    val buffered = image as? BufferedImage ?: BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB).also { copy ->
+        copy.createGraphics().apply { drawImage(image, 0, 0, null); dispose() }
+    }
+    val bytes = ByteArrayOutputStream().use { out -> if (!ImageIO.write(buffered, "png", out)) return emptyList(); out.toByteArray() }
+    return listOf(PickedFile("pasted-image-${now()}.png", bytes.size.toLong(), "image/png") { Buffer().apply { write(bytes) } })
+}

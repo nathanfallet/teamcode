@@ -78,6 +78,16 @@ data class WindowTitleBar(val height: Dp = 0.dp, val start: Dp = 0.dp) {
          * header starts one button's gap after them.
          */
         val MAC = WindowTitleBar(height = 28.dp, start = 76.dp)
+
+        /**
+         * macOS 26 and later seat the buttons lower (about 20 points from the top) and bigger: the bar is taller so the
+         * header, centered in it, sits on their line instead of above it; the header starts after the wider group.
+         */
+        val MAC_TAHOE = WindowTitleBar(height = 40.dp, start = 84.dp)
+
+        /** The bar of the macOS at [osVersion] (`os.version`: "15.6.1", "26.0"); the older one when unknown. */
+        fun forMac(osVersion: String?): WindowTitleBar =
+            if ((osVersion?.substringBefore('.')?.trim()?.toIntOrNull() ?: 0) >= 26) MAC_TAHOE else MAC
     }
 }
 

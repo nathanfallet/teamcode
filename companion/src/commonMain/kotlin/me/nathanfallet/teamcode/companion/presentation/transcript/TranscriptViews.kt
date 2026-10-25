@@ -13,7 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.layout.layout
+import kotlin.math.roundToInt
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -77,6 +78,15 @@ import org.jetbrains.compose.resources.stringResource
 
 private val UserBubbleShape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
 
+/**
+ * A message bubble takes the room the conversation has, up to nine tenths of it so that it still reads as a message
+ * against the right edge; there is no fixed maximum, a wide window uses its width.
+ */
+fun Modifier.atMostBubbleWidth(): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(maxWidth = (constraints.maxWidth * 0.9f).roundToInt().coerceAtLeast(constraints.minWidth)))
+    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+}
+
 @Composable
 fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
     val indent = if (item.nested) Modifier.padding(start = 20.dp) else Modifier
@@ -103,7 +113,7 @@ private fun UserBubble(event: TranscriptEvent.UserMessage, memberId: String?) {
         SelectionContainer {
             Text(
                 event.text,
-                modifier = Modifier.widthIn(max = 560.dp).clip(UserBubbleShape).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
+                modifier = Modifier.atMostBubbleWidth().clip(UserBubbleShape).background(colors.bubble).padding(horizontal = 12.dp, vertical = 9.dp),
                 color = colors.onBubble,
                 fontSize = 14.5.sp,
                 lineHeight = 21.sp,
