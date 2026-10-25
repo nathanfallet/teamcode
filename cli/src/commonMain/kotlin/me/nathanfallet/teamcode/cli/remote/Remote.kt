@@ -11,7 +11,10 @@ import com.github.ajalt.clikt.parameters.arguments.default
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
+import com.github.ajalt.clikt.parameters.types.long
 import me.nathanfallet.teamcode.cli.daemon.homeDirectory
+import me.nathanfallet.teamcode.cli.daemon.refuseFolder
+import me.nathanfallet.teamcode.cli.daemon.ClaudeTranscripts
 import kotlin.uuid.Uuid
 import kotlinx.serialization.Serializable
 import me.nathanfallet.teamcode.api.Serialization
@@ -41,7 +44,7 @@ import okio.Path.Companion.toPath
  */
 class Remote : SuspendingNoOpCliktCommand(name = "remote") {
     override fun help(context: Context) = "Run sessions on this device that your team's clients follow and drive like cloud sessions."
-    init { subcommands(RemoteStart(), RemoteList(), RemoteResume(), RemoteStop(), RemoteHost()) }
+    init { subcommands(RemoteStart(), RemoteList(), RemoteResume(), RemoteStop(), RemoteHost(), RemoteResumable()) }
 }
 
 internal const val REMOTE_CAPABILITY = "cloud.sessions.remote.v1"
@@ -67,9 +70,15 @@ private class RemoteStart : SuspendingCliktCommand(name = "start") {
     private val detach by option("--detach", help = DETACH_HELP).flag()
     private val attach by option("--attach", help = ATTACH_HELP).flag()
     private val json by option("--json", help = "Print the created session as JSON on standard output (messages go to standard error).").flag()
+    private val resume by option("--resume", help = "Continue one of DIRECTORY's Claude Code conversations on this device (an id from teamcode remote resumable), " +
+        "through this device's daemon: the session starts from a copy (--fork-session) and the conversation stays as it was.")
 
     override suspend fun run() {
         if (detach && attach) throw UsageError("Use --detach or --attach, not both.")
+        resume?.let {
+            if (agent != "claude") throw UsageError("--resume continues a Claude Code conversation: use it with --agent claude.")
+            if (!ResumableSessions.ID.matches(it)) throw UsageError("--resume takes a Claude Code session id (a lowercase UUID).")
+        }
         val path = remoteDirectory(directory)
         val config = loadConfig()
         val code = sdk(config).use { client ->
@@ -80,9 +89,16 @@ private class RemoteStart : SuspendingCliktCommand(name = "start") {
                 directoryName = path.name, permissionMode = if (bypass) RemotePermissionModes.BYPASS else RemotePermissionModes.ASK, initialMessage = message,
             )
             val windows = servicePlatform().os == "windows"
-            daemonDevice(client, features, windows)?.let { device ->
+            // Continuing a conversation goes through the daemon only: no host of this command forks it.
+            val resumeDevice = resume?.let {
+                when (val target = localResumeTarget(client, features, windows)) {
+                    is LocalResume.Ready -> target.deviceId
+                    is LocalResume.Unavailable -> throw CliUserException(localResumeRefusal(target.reason))
+                }
+            }
+            (resumeDevice ?: daemonDevice(client, features, windows))?.let { device ->
                 val report: (String) -> Unit = { echo(it, err = true) }
-                val session = startThroughDaemon(client, device, path, request, agent, homeDirectory(), windows, environment("PATH"), report)
+                val session = startThroughDaemon(client, device, path, request, agent, homeDirectory(), windows, environment("PATH"), report, resumeSessionId = resume)
                 if (json) echo(Serialization.json.encodeToString(session))
                 echo("Remote session ${session.id} on this device, in ${path}; this device's daemon hosts it.", err = true)
                 awaitDaemonHost(client, session.id, session.currentEpoch, report)
@@ -130,6 +146,35 @@ private class RemoteResume : SuspendingCliktCommand(name = "resume") {
             } else host(client, local, current, detach, attach, { echo(it) }) { echo(it, err = true) }
         }
         if (code != 0) SystemExit.exit(code)
+    }
+}
+
+/**
+ * `teamcode remote resumable`: the Claude Code conversations of DIRECTORY on this device that `remote start --resume` can
+ * continue, read here with the daemon's code; nothing of them reaches the server. `--json` is what the desktop app reads.
+ */
+private class RemoteResumable : SuspendingCliktCommand(name = "resumable") {
+    override fun help(context: Context) = "List the Claude Code conversations of DIRECTORY (the current one by default) on this device, the most recent " +
+        "first, that teamcode remote start --resume can continue through this device's daemon: id, last activity, messages, title."
+    private val directory by argument("DIRECTORY", help = "The directory the conversations started in.").default(".")
+    private val limit by option("--limit", help = "At most this many (1 to ${ResumableSessions.MAX_LIMIT}).").int().default(ResumableSessions.DEFAULT_LIMIT)
+    private val before by option("--before", help = "Only those last active before this time (milliseconds), the nextBefore of the previous page.").long()
+    private val json by option("--json", help = "Print the page as JSON on standard output, with the reason when this device cannot continue one.").flag()
+
+    override suspend fun run() {
+        if (limit !in 1..ResumableSessions.MAX_LIMIT) throw UsageError("--limit is between 1 and ${ResumableSessions.MAX_LIMIT}.")
+        if (before?.let { it < 0 } == true) throw UsageError("--before is a time in milliseconds.")
+        val path = remoteDirectory(directory)
+        val windows = servicePlatform().os == "windows"
+        refuseFolder(path, homeDirectory(), windows)
+        val view = sdk(loadConfig()).use { client ->
+            localResumables(ClaudeTranscripts.local(), localResumeTarget(client, requireRemote(client), windows), path, limit, before)
+        }
+        if (json) { echo(Serialization.json.encodeToString(view)); return }
+        view.unavailable?.let { throw CliUserException(localResumeRefusal(it)) }
+        view.sessions.forEach { echo(listOf(it.id, it.lastActiveAt.toString(), "${it.turns} msg", it.title).joinToString("\t")) }
+        if (view.sessions.isEmpty()) echo("No Claude Code conversation of $path on this device.", err = true)
+        view.nextBefore?.let { echo("Older ones: --before $it", err = true) }
     }
 }
 

@@ -38,6 +38,8 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
     val versions = mutableListOf<String?>()
     var createdRequests = mutableListOf<CreateCloudSessionRequest>()
     val features = mutableListOf<List<String>>()
+    /** What the device list says the daemon announced, instead of its last poll's (an older daemon: an empty list). */
+    var deviceFeatures: List<String>? = null
     /** Members waiting for a folder's conversations, handed to the next poll; [answers] holds what the daemon sent back. */
     val listings = mutableListOf<DaemonListingView>()
     val answers = linkedMapOf<String, DaemonListingAnswerRequest>()
@@ -87,7 +89,8 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
         val sessionPath = Regex("/api/v1/cloud/sessions/([a-z0-9-]+)(/[a-z]+)?").matchEntire(path)
         return when {
             path == "/api/v1/capabilities" -> ok(Capabilities(serverVersion = "1.0.0", mode = "team", features = listOf("cloud.sessions.remote.v1") + if (daemonCapability) listOf(DAEMON_CAPABILITY) else emptyList()))
-            path == "/api/v1/devices" -> ok(listOf(DeviceView("d1", "m1", "Laptop", 0, 0, 0, current = true, daemon = if (daemonOnline) DaemonPresenceView(true, 0, versions.lastOrNull()) else null)))
+            path == "/api/v1/devices" -> ok(listOf(DeviceView("d1", "m1", "Laptop", 0, 0, 0, current = true,
+                daemon = if (daemonOnline) DaemonPresenceView(true, 0, versions.lastOrNull(), deviceFeatures ?: features.lastOrNull().orEmpty()) else null)))
             path == "/api/v1/devices/current/daemon/poll" -> {
                 val request = Serialization.json.decodeFromString<DaemonPollRequest>(body)
                 versions += request.version
@@ -122,7 +125,7 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
                 createdRequests += request
                 val folder = folders.firstOrNull { it.id == request.folderId } ?: return error(HttpStatusCode.UnprocessableEntity, "folder_not_published")
                 val id = "5e55i0n-" + Random.nextInt(1000, 9999)
-                queue(id, folder.id, folder.name, request.agent?.kind ?: "claude", request.permissionMode ?: "ask")
+                queue(id, folder.id, folder.name, request.agent?.kind ?: "claude", request.permissionMode ?: "ask", resume = request.resumeSessionId)
                 events += "create $id ${request.deviceId} ${request.folderId}"
                 ok(view(sessions.getValue(id)))
             }

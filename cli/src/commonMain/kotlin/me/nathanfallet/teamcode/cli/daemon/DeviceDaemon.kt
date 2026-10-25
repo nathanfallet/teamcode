@@ -142,9 +142,10 @@ internal class DeviceDaemon(
             catch (_: Exception) { OrderCheck.Refused(RefusalReasons.FOLDER_NOT_CONFIGURED) }
         if (check is OrderCheck.Refused) { refuse(id, check.reason); return true }
         val directory = (check as OrderCheck.Accepted).directory
-        // The conversation to continue is checked and stored once, when this device first hosts the session; a later
-        // order (a pause, a lost host) resumes the session's own conversation.
-        val resume = order.resumeSessionId?.takeIf { records.load(id) == null }
+        // The conversation to continue is checked and stored once, while the session has no conversation of its own yet; a
+        // later order (a pause, a lost host) resumes the session's own conversation. Not the record: `teamcode remote start`
+        // on this device writes it as soon as the session is created, before this daemon takes it.
+        val resume = order.resumeSessionId?.takeIf { records.conversation(id).read() == null }
         if (resume != null && (order.agent != "claude" || !readable { transcripts.belongs(directory, resume) })) {
             refuse(id, RefusalReasons.RESUME_NOT_FOUND); return true
         }
@@ -194,8 +195,8 @@ internal class DeviceDaemon(
             catch (error: TeamCodeException) { report("Session $id could not be hosted (${error.describe()})."); retryAt[id] = now() + retryMillis; return }
             catch (_: Exception) { retryAt[id] = now() + retryMillis; return }
         retryAt.remove(id)
-        // The host's agent starts from this conversation, forked so the original stays as it was on this device. Written
-        // before the record, whose presence means the session's conversation is settled.
+        // The host's agent starts from this conversation, forked so the original stays as it was on this device. Once
+        // written, the session's conversation is settled: the host replaces it with the fork's own id.
         if (resume != null) records.conversation(id).write(AgentState(agent, null, resume, fork = true))
         records.save(RemoteSessionRecord(id, directory, agent))
         sessions.put(DaemonSession(id, host.epoch, DaemonSession.HOSTING))

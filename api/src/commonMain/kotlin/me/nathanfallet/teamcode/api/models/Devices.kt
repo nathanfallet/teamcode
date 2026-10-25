@@ -69,6 +69,26 @@ data class ResumableSessionView(val id: String, val title: String, val lastActiv
 /** [nextBefore]: pass it as `before` for the next page; null on the last one. */
 @Serializable
 data class ResumableSessionsView(val sessions: List<ResumableSessionView>, val nextBefore: Long? = null)
+/**
+ * What `teamcode remote resumable DIRECTORY --json` prints for the desktop app's "On this device": the directory's
+ * conversations, read on this device by the CLI with the daemon's own code and never sent to the server, or
+ * [unavailable], a [LocalResumeReasons] code, when this device cannot start a session that continues one.
+ */
+@Serializable
+data class LocalResumableSessionsView(val sessions: List<ResumableSessionView> = emptyList(), val nextBefore: Long? = null, val unavailable: String? = null)
+
+/** Why this device cannot continue one of its own conversations in a new session (`teamcode remote start --resume`). */
+object LocalResumeReasons {
+    /** The server does not announce `cloud.sessions.remote.resume.v1` (or does not start sessions on devices). */
+    const val SERVER_UNSUPPORTED = "server_unsupported"
+    /** The device's daemon hosts no sessions on this system (Windows). */
+    const val PLATFORM_UNSUPPORTED = "platform_unsupported"
+    /** The device's daemon is not running. */
+    const val DAEMON_OFFLINE = "daemon_offline"
+    /** The running daemon did not announce [DaemonFeatures.RESUME]: an older TeamCode until it restarts. */
+    const val DAEMON_TOO_OLD = "daemon_too_old"
+}
+
 /** The daemon's answer to a [DaemonListingView]: the page, or [refused] with a reason code (`folder_not_configured`…). */
 @Serializable
 data class DaemonListingAnswerRequest(val sessions: List<ResumableSessionView> = emptyList(), val nextBefore: Long? = null, val refused: String? = null)

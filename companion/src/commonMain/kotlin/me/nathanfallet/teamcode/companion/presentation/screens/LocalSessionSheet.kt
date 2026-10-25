@@ -35,6 +35,7 @@ import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.Cloud
 import com.adamglin.phosphoricons.regular.Desktop
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
+import me.nathanfallet.teamcode.companion.domain.services.LocalResumeBlock
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -79,6 +80,14 @@ import me.nathanfallet.teamcode.companion.resources.local_session_other_account
 import me.nathanfallet.teamcode.companion.resources.local_session_start
 import me.nathanfallet.teamcode.companion.resources.local_session_title
 import me.nathanfallet.teamcode.companion.resources.local_session_unsupported
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_cli_old
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_daemon_offline
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_daemon_old
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_hint
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_loading
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_platform
+import me.nathanfallet.teamcode.companion.resources.local_session_resume_server
+import me.nathanfallet.teamcode.companion.resources.new_session_resume
 import me.nathanfallet.teamcode.companion.resources.new_session_cloud
 import me.nathanfallet.teamcode.companion.resources.new_session_cloud_hint
 import me.nathanfallet.teamcode.companion.resources.new_session_effort
@@ -183,6 +192,7 @@ private fun Form(viewModel: LocalSessionViewModel) {
         }
         Text(stringResource(Res.string.local_session_folder_hint), color = colors.muted, fontSize = 12.5.sp)
     }
+    LocalResumeFields(viewModel)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(Res.string.local_session_agent), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Segmented(listOf("claude" to stringResource(Res.string.local_session_agent_claude), "codex" to stringResource(Res.string.local_session_agent_codex)),
@@ -207,6 +217,40 @@ private fun Form(viewModel: LocalSessionViewModel) {
         }
         if (state.bypassPermissions) Banner(stringResource(Res.string.local_session_bypass_warning), Tone.WARN, Modifier.testTag("local-bypass-warning"))
         else Text(stringResource(Res.string.local_session_bypass_hint_off), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+    }
+}
+
+/**
+ * "Resume a session" under the folder, as on another device: None by default, the folder's Claude Code conversations
+ * on this computer once opened. When this computer cannot continue one (its TeamCode service off or too old, Windows,
+ * an older server or CLI), the row is disabled and says why, with Check again.
+ */
+@Composable
+private fun LocalResumeFields(viewModel: LocalSessionViewModel) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    if (!state.showsResume) return
+    val colors = TeamCode.colors
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("resume")) {
+        Text(stringResource(Res.string.new_session_resume), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        val block = state.resumeBlock
+        if (block != null) {
+            val reason = when (block) {
+                LocalResumeBlock.SERVER -> Res.string.local_session_resume_server
+                LocalResumeBlock.PLATFORM -> Res.string.local_session_resume_platform
+                LocalResumeBlock.DAEMON_OFFLINE -> Res.string.local_session_resume_daemon_offline
+                LocalResumeBlock.DAEMON_TOO_OLD -> Res.string.local_session_resume_daemon_old
+                LocalResumeBlock.CLI_TOO_OLD -> Res.string.local_session_resume_cli_old
+            }
+            Text(stringResource(reason), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.testTag("resume-blocked"))
+            if (block != LocalResumeBlock.PLATFORM && block != LocalResumeBlock.SERVER)
+                TcButton(stringResource(Res.string.local_session_check_again), onClick = viewModel::onResumeRetry, kind = ButtonKind.SECONDARY, small = true,
+                    busy = state.loadingResumable, modifier = Modifier.testTag("resume-check-again"))
+            return@Column
+        }
+        ResumePicker(state.resumable, state.resumeId, state.resumeOpen, state.loadingResumable, state.resumableError, state.resumableNext != null,
+            enabled = !state.starting, loadingText = stringResource(Res.string.local_session_resume_loading),
+            onOpen = viewModel::onResumeOpen, onRetry = viewModel::onResumeRetry, onMore = viewModel::onResumeMore, onPick = viewModel::onResume)
+        Text(stringResource(Res.string.local_session_resume_hint), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
     }
 }
 

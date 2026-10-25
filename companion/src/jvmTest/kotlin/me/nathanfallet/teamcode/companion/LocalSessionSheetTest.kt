@@ -7,11 +7,16 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
+import me.nathanfallet.teamcode.companion.domain.services.LocalResumables
+import me.nathanfallet.teamcode.companion.domain.services.LocalResumeBlock
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSessions
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
@@ -33,10 +38,12 @@ class LocalSessionSheetTest {
         override suspend fun availability(accountId: String) = availability
         override suspend fun pickDirectory() = "/Users/ada/git/paywall"
         override suspend fun start(accountId: String, request: LocalSessionRequest) = "s1".also { started += request }
+        var listing: LocalResumables = LocalResumables.Page(ResumableSessions(listOf(ResumableSession(ID, "Fix the flaky login test", 0, 6))))
+        override suspend fun resumable(accountId: String, directory: String, before: Long?) = listing
     }
 
     private fun model(host: Host): LocalSessionViewModel {
-        val features = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS)
+        val features = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS + Features.RESUME_SESSIONS)
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))
         return LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, features, SendMessageUseCase(FakeSessionRepository(), features, guard, SequenceIds())), host, SettingsPreferencesRepository(MapSettings()))
     }
@@ -74,12 +81,59 @@ class LocalSessionSheetTest {
         waitUntil { viewModel.uiState.value.directory.isNotEmpty() }
         onNodeWithTag("local-directory").assertTextContains("/Users/ada/git/paywall")
         onNodeWithTag("local-bypass-warning").assertDoesNotExist()
-        onNodeWithTag("local-bypass").performClick()
-        onNodeWithTag("local-bypass-warning").assertExists()
+        onNodeWithTag("local-bypass").performScrollTo().performClick()
+        onNodeWithTag("local-bypass-warning").performScrollTo().assertExists()
         onNodeWithTag("local-start").assertIsEnabled().performClick()
         waitUntil { opened != null }
         assertEquals("s1", opened)
         assertEquals("paywall", host.started.single().name)
         assertTrue(host.started.single().bypassPermissions)
     }
+
+    @Test fun resumeIsNoneUnderTheFolderThenListsThisComputersConversations() = runComposeUiTest {
+        val host = Host(LocalAvailability.Ready)
+        val viewModel = model(host)
+        var opened: String? = null
+        setContent { TeamCodeTheme { LocalSessionSheet(viewModel, onDismiss = {}, onStarted = { opened = it }) } }
+        waitUntil { viewModel.uiState.value.availability != null }
+        onNodeWithTag("resume").assertDoesNotExist()
+        onNodeWithTag("local-choose-folder").performClick()
+        waitUntil { viewModel.uiState.value.directory.isNotEmpty() }
+        onNodeWithTag("resume-picker").assertTextContains("None")
+        onNodeWithTag("resume-$ID").assertDoesNotExist()
+        onNodeWithTag("resume-picker").performClick()
+        waitUntil { viewModel.uiState.value.resumable != null }
+        onNodeWithTag("resume-$ID").performClick()
+        onNodeWithTag("resume-picker").assertTextContains("Fix the flaky login test")
+        // Codex: no picker, and nothing continued.
+        onNodeWithTag("local-agent-codex").performClick()
+        onNodeWithTag("resume").assertDoesNotExist()
+        onNodeWithTag("local-agent-claude").performClick()
+        onNodeWithTag("resume-picker").assertTextContains("None")
+        onNodeWithTag("resume-picker").performClick()
+        onNodeWithTag("resume-$ID").performClick()
+        onNodeWithTag("local-start").performClick()
+        waitUntil { opened != null }
+        assertEquals(ID, host.started.single().resumeSessionId)
+    }
+
+    @Test fun aStoppedServiceDisablesResumeWithItsReason() = runComposeUiTest {
+        val host = Host(LocalAvailability.Ready).apply { listing = LocalResumables.Unavailable(LocalResumeBlock.DAEMON_OFFLINE) }
+        val viewModel = model(host)
+        setContent { TeamCodeTheme { LocalSessionSheet(viewModel, onDismiss = {}, onStarted = {}) } }
+        waitUntil { viewModel.uiState.value.availability != null }
+        onNodeWithTag("local-choose-folder").performClick()
+        waitUntil { viewModel.uiState.value.directory.isNotEmpty() }
+        onNodeWithTag("resume-picker").performClick()
+        waitUntil { viewModel.uiState.value.resumeBlock != null }
+        onNodeWithTag("resume-blocked").assertTextContains("teamcode service install", substring = true)
+        onNodeWithTag("resume-picker").assertDoesNotExist()
+        onNodeWithTag("local-start").assertIsEnabled()
+        host.listing = LocalResumables.Page(ResumableSessions(emptyList()))
+        onNodeWithTag("resume-check-again").performClick()
+        waitUntil { viewModel.uiState.value.resumeBlock == null && viewModel.uiState.value.resumable != null }
+        onNodeWithTag("resume-empty").assertExists()
+    }
+
+    private companion object { const val ID = "0000000a-aaaa-4bbb-8ccc-00000000000a" }
 }

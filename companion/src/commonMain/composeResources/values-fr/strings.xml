@@ -420,6 +420,13 @@
     <string name="local_session_start">Démarrer sur cet appareil</string>
     <string name="local_session_checking">Vérification de la CLI TeamCode…</string>
     <string name="local_session_check_again">Vérifier à nouveau</string>
+    <string name="local_session_resume_hint">Reprend une conversation Claude Code de ce dossier sur cet ordinateur ; l'originale reste telle quelle. La liste est lue ici par TeamCode et n'est jamais envoyée au serveur.</string>
+    <string name="local_session_resume_loading">Lecture des sessions du dossier sur cet ordinateur…</string>
+    <string name="local_session_resume_daemon_offline">Reprendre une session passe par le service TeamCode de cet ordinateur, qui ne tourne pas. Démarre-le (teamcode service install), puis vérifie à nouveau.</string>
+    <string name="local_session_resume_daemon_old">Le service TeamCode de cet ordinateur est trop ancien pour reprendre une session. Mets-le à jour (teamcode update), puis vérifie à nouveau.</string>
+    <string name="local_session_resume_platform">Reprendre une session passe par le service TeamCode, qui n'héberge pas encore de sessions sous Windows.</string>
+    <string name="local_session_resume_server">Ce serveur ne reprend pas de sessions. Mets-le à jour pour t'en servir.</string>
+    <string name="local_session_resume_cli_old">La CLI TeamCode est trop ancienne pour reprendre une session. Mets-la à jour (teamcode update), puis vérifie à nouveau.</string>
     <string name="local_session_cli_missing">Les sessions sur cet appareil passent par la CLI TeamCode, qui n'est pas installée. Installe-la avec cette commande dans un terminal, puis vérifie à nouveau :</string>
     <string name="local_session_cli_missing_install">Les sessions sur cet appareil passent par la CLI TeamCode, qui n'est pas installée. TeamCode peut l'installer pour toi, sans droits d'administrateur.</string>
     <string name="local_session_install_cli">Installer la CLI TeamCode</string>

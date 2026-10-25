@@ -25,6 +25,12 @@ import me.nathanfallet.teamcode.cli.remote.localHostWaker
 import me.nathanfallet.teamcode.cli.remote.awaitDaemonHost
 import me.nathanfallet.teamcode.cli.remote.daemonDevice
 import me.nathanfallet.teamcode.cli.remote.startThroughDaemon
+import me.nathanfallet.teamcode.cli.remote.LocalResume
+import me.nathanfallet.teamcode.cli.remote.localResumeTarget
+import me.nathanfallet.teamcode.cli.remote.localResumables
+import me.nathanfallet.teamcode.api.models.LocalResumableSessionsView
+import me.nathanfallet.teamcode.api.models.LocalResumeReasons
+import me.nathanfallet.teamcode.api.models.ResumableSessions
 import okio.FileSystem
 import okio.Path
 import kotlin.coroutines.ContinuationInterceptor
@@ -317,6 +323,70 @@ class DeviceDaemonTest {
         val daemon = f.start(this)
         val error = assertFailsWith<CliUserException> { awaitDaemonHost(client, "gone", 0, { }, pollMillis = 10) }
         assertTrue("folder_not_configured" in error.message, error.message)
+        f.stop = true
+        daemon.join()
+    }
+
+    @Test fun onlyAnOnlineDaemonThatResumesLetsThisDeviceContinueItsOwnConversation() = test { f ->
+        val client = f.server.client()
+        val features = listOf(DAEMON_CAPABILITY, ResumableSessions.CAPABILITY)
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_OFFLINE), localResumeTarget(client, features, windows = false),
+            "Without its daemon, this device starts no session that continues a conversation")
+        val daemon = f.start(this)
+        waitUntil { f.server.daemonOnline }
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(DAEMON_CAPABILITY), windows = false))
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(ResumableSessions.CAPABILITY), windows = false))
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.PLATFORM_UNSUPPORTED), localResumeTarget(client, features, windows = true))
+        assertEquals(LocalResume.Ready("d1"), localResumeTarget(client, features, windows = false))
+        f.server.deviceFeatures = emptyList()
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_TOO_OLD), localResumeTarget(client, features, windows = false))
+        f.stop = true
+        daemon.join()
+    }
+
+    @Test fun theListingIsTheDaemonsOwnReadingOfTheFolder() = test { f ->
+        FileSystem.SYSTEM.createDirectories(f.home / "app")
+        FileSystem.SYSTEM.createDirectories(f.home / "empty")
+        f.conversation(f.home / "app", ID_A, "Fix the build")
+        f.conversation(f.home / "other", ID_B, "Elsewhere")
+        // A corrupted transcript and one without a message from the member are not offered.
+        val project = f.claude / ClaudeTranscripts.projectName((f.home / "app").toString())
+        FileSystem.SYSTEM.write(project / "0000000c-aaaa-4bbb-8ccc-00000000000c.jsonl") { writeUtf8("{not json\n\u0000\u0001") }
+        FileSystem.SYSTEM.write(project / "0000000d-aaaa-4bbb-8ccc-00000000000d.jsonl") { writeUtf8("") }
+        val ready = LocalResume.Ready("d1")
+        val listed = localResumables(f.transcripts, ready, f.home / "app", 20, null)
+        assertEquals(listOf(ID_A to "Fix the build"), listed.sessions.map { it.id to it.title })
+        assertNull(listed.unavailable)
+        assertEquals(LocalResumableSessionsView(), localResumables(f.transcripts, ready, f.home / "empty", 20, null), "A folder without a session")
+        // Nothing is read when the device could not continue one anyway.
+        assertEquals(LocalResumableSessionsView(unavailable = LocalResumeReasons.DAEMON_OFFLINE),
+            localResumables(f.transcripts, LocalResume.Unavailable(LocalResumeReasons.DAEMON_OFFLINE), f.home / "app", 20, null))
+    }
+
+    @Test fun remoteStartContinuesAConversationThroughTheDaemonWhichForksIt() = test { f ->
+        val client = f.server.client()
+        val daemon = f.start(this)
+        waitUntil { f.server.daemonOnline }
+        FileSystem.SYSTEM.createDirectories(f.home / "app")
+        f.conversation(f.home / "app", ID_A)
+        f.conversation(f.home / "other", ID_B)
+        val request = CreateCloudSessionRequest(name = "app", kind = CloudSessionKinds.REMOTE, agent = CloudAgentRequest(null, null, "claude"),
+            directoryName = "app", permissionMode = "ask")
+        // Another folder's conversation is refused here, before the folder is added or anything is created.
+        val refused = assertFailsWith<CliUserException> {
+            startThroughDaemon(client, "d1", f.home / "app", request, "claude", f.home, false, null, { }, folders = f.folders, sessions = f.records,
+                resumeSessionId = ID_B, transcripts = f.transcripts)
+        }
+        assertTrue("conversation" in refused.message, refused.message)
+        assertTrue(f.server.createdRequests.isEmpty())
+        assertTrue(f.folders.read().folders.isEmpty())
+
+        val session = startThroughDaemon(client, "d1", f.home / "app", request, "claude", f.home, false, null, { }, folders = f.folders, sessions = f.records,
+            resumeSessionId = ID_A, transcripts = f.transcripts)
+        assertEquals(ID_A, f.server.createdRequests.single().resumeSessionId)
+        awaitDaemonHost(client, session.id, session.currentEpoch, { }, pollMillis = 10)
+        // remote start writes its record before the daemon takes the session: the daemon still forks the conversation.
+        assertEquals(AgentState("claude", null, ID_A, fork = true), f.records.conversation(session.id).read())
         f.stop = true
         daemon.join()
     }

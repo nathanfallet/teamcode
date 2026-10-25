@@ -420,6 +420,13 @@
     <string name="local_session_start">Start on this device</string>
     <string name="local_session_checking">Checking the TeamCode CLI…</string>
     <string name="local_session_check_again">Check again</string>
+    <string name="local_session_resume_hint">Continues a Claude Code conversation of this folder on this computer; the original stays as it was. The list is read here by TeamCode and never sent to the server.</string>
+    <string name="local_session_resume_loading">Reading the folder's sessions on this computer…</string>
+    <string name="local_session_resume_daemon_offline">Resuming a session goes through TeamCode's service on this computer, which is not running. Start it (teamcode service install), then check again.</string>
+    <string name="local_session_resume_daemon_old">TeamCode's service on this computer is too old to resume a session. Update it (teamcode update), then check again.</string>
+    <string name="local_session_resume_platform">Resuming a session goes through TeamCode's service, which does not host sessions on Windows yet.</string>
+    <string name="local_session_resume_server">This server does not resume sessions. Update it to use them.</string>
+    <string name="local_session_resume_cli_old">The TeamCode CLI is too old to resume a session. Update it (teamcode update), then check again.</string>
     <string name="local_session_cli_missing">Sessions on this device run through the TeamCode CLI, which is not installed. Install it with this command in a terminal, then check again:</string>
     <string name="local_session_cli_missing_install">Sessions on this device run through the TeamCode CLI, which is not installed. TeamCode can install it for you, without administrator rights.</string>
     <string name="local_session_install_cli">Install the TeamCode CLI</string>

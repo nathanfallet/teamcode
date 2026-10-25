@@ -23,6 +23,10 @@ import me.nathanfallet.teamcode.companion.domain.services.LocalAvailability
 import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import me.nathanfallet.teamcode.companion.domain.services.LocalHostException
 import me.nathanfallet.teamcode.companion.domain.services.LocalSessionRequest
+import me.nathanfallet.teamcode.companion.domain.services.LocalResumables
+import me.nathanfallet.teamcode.companion.domain.services.LocalResumeBlock
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSessions
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
@@ -47,6 +51,13 @@ private class FakeLocalHost(var availability: LocalAvailability = LocalAvailabil
         availability = LocalAvailability.Ready
     }
     override suspend fun pickDirectory() = picked
+    /** The folders asked for; [listing] answers. */
+    val listed = mutableListOf<Pair<String, Long?>>()
+    var listing: suspend (String, Long?) -> LocalResumables = { _, _ -> LocalResumables.Page(ResumableSessions(emptyList())) }
+    override suspend fun resumable(accountId: String, directory: String, before: Long?): LocalResumables {
+        listed += directory to before
+        return listing(directory, before)
+    }
     override suspend fun start(accountId: String, request: LocalSessionRequest): String {
         failure?.let { throw it }
         started += request
@@ -61,7 +72,7 @@ class LocalSessionViewModelTest {
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     private val sessions = FakeSessionRepository()
-    private val features = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS)
+    private val features = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS + Features.RESUME_SESSIONS)
     private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))
     private fun useCase(host: LocalHost) = StartLocalSessionUseCase(host, features, SendMessageUseCase(sessions, features, guard, SequenceIds()))
 
@@ -143,6 +154,103 @@ class LocalSessionViewModelTest {
         assertEquals("Choose a project directory: /Users/ada itself.", model.uiState.value.error?.text)
         assertNull(model.uiState.value.started)
         assertTrue(model.uiState.value.canStart)
+    }
+
+    private val first = ResumableSession("0000000a-aaaa-4bbb-8ccc-00000000000a", "Fix the build", 1_000, 3)
+    private val second = ResumableSession("0000000b-aaaa-4bbb-8ccc-00000000000b", "Release notes", 500, 1)
+
+    @Test fun resumeIsNoneByDefaultReadOnFirstOpeningAndSentWhenChosen() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { listing = { _, before -> LocalResumables.Page(if (before == null) ResumableSessions(listOf(first), 1_000) else ResumableSessions(listOf(second))) } }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        assertFalse(model.uiState.value.showsResume, "No folder yet")
+        model.chooseDirectory(); settle()
+        assertTrue(model.uiState.value.showsResume)
+        assertNull(model.uiState.value.resumeId)
+        assertTrue(host.listed.isEmpty(), "Nothing is read before the picker opens")
+        model.onResumeOpen(); settle()
+        assertEquals(listOf<Pair<String, Long?>>("/Users/ada/git/paywall" to null), host.listed)
+        assertEquals(listOf(first), model.uiState.value.resumable)
+        model.onResumeMore(); settle()
+        assertEquals(listOf(first, second), model.uiState.value.resumable)
+        model.onResume("not-listed")
+        assertNull(model.uiState.value.resumeId)
+        model.onResume(second.id)
+        assertEquals(second.id, model.uiState.value.resumeId)
+        assertFalse(model.uiState.value.resumeOpen)
+        model.create(); settle()
+        assertEquals(second.id, host.started.single().resumeSessionId)
+    }
+
+    @Test fun anotherFolderOrCodexClearsTheChoice() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { listing = { _, _ -> LocalResumables.Page(ResumableSessions(listOf(first))) } }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.chooseDirectory(); settle()
+        model.onResumeOpen(); settle()
+        model.onResume(first.id)
+        host.picked = "/Users/ada/git/web"
+        model.chooseDirectory(); settle()
+        assertNull(model.uiState.value.resumeId, "A conversation belongs to its folder")
+        assertNull(model.uiState.value.resumable, "Read again for the new folder")
+        model.onResumeOpen(); settle()
+        assertEquals("/Users/ada/git/web", host.listed.last().first)
+        model.onResume(first.id)
+        model.onAgent("codex")
+        assertNull(model.uiState.value.resumeId)
+        assertFalse(model.uiState.value.showsResume, "Claude Code only")
+        model.create(); settle()
+        assertNull(host.started.single().resumeSessionId)
+    }
+
+    @Test fun aListStillLoadingForThePreviousFolderIsDropped() = runTest(dispatcher) {
+        // The first folder's conversations take 5 s to read; another folder is chosen meanwhile.
+        val host = FakeLocalHost().apply { listing = { directory, _ ->
+            if (directory.endsWith("paywall")) { kotlinx.coroutines.delay(5_000); LocalResumables.Page(ResumableSessions(listOf(first))) }
+            else LocalResumables.Page(ResumableSessions(emptyList()))
+        } }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.chooseDirectory(); settle()
+        model.onResumeOpen(); settle()
+        assertTrue(model.uiState.value.loadingResumable)
+        host.picked = "/Users/ada/git/web"
+        model.chooseDirectory(); settle()
+        repeat(6) { settle() }
+        assertNull(model.uiState.value.resumable)
+        assertFalse(model.uiState.value.loadingResumable)
+    }
+
+    @Test fun whyThisDeviceCannotResumeIsSaidAndCheckedAgain() = runTest(dispatcher) {
+        val host = FakeLocalHost().apply { listing = { _, _ -> LocalResumables.Unavailable(LocalResumeBlock.DAEMON_OFFLINE) } }
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), useCase(host), host, SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.chooseDirectory(); settle()
+        model.onResumeOpen(); settle()
+        assertEquals(LocalResumeBlock.DAEMON_OFFLINE, model.uiState.value.resumeBlock)
+        assertFalse(model.uiState.value.resumeOpen, "Nothing to choose from")
+        assertTrue(model.uiState.value.canStart, "A new conversation still starts")
+        host.listing = { _, _ -> LocalResumables.Page(ResumableSessions(listOf(first))) }
+        model.onResumeRetry(); settle()
+        assertNull(model.uiState.value.resumeBlock)
+        assertEquals(listOf(first), model.uiState.value.resumable)
+
+        // A failure of the CLI is said in the picker, with Retry.
+        host.listing = { _, _ -> throw LocalHostException("The TeamCode CLI did not answer in time.") }
+        model.onResumeRetry(); settle()
+        assertEquals("The TeamCode CLI did not answer in time.", model.uiState.value.resumableError?.text)
+    }
+
+    @Test fun aServerWithoutResumeIsSaidWithoutAskingTheCli() = runTest(dispatcher) {
+        val host = FakeLocalHost()
+        val plain = FakeFeatures(FakeFeatures().features + Features.REMOTE_SESSIONS)
+        val model = LocalSessionViewModel(NewSessionRoute("cli"), StartLocalSessionUseCase(host, plain, SendMessageUseCase(sessions, plain, guard, SequenceIds())), host,
+            SettingsPreferencesRepository(MapSettings()))
+        settle()
+        model.chooseDirectory(); settle()
+        model.onResumeOpen(); settle()
+        assertEquals(LocalResumeBlock.SERVER, model.uiState.value.resumeBlock)
+        assertTrue(host.listed.isEmpty())
     }
 
     @Test fun theDefaultNameIsTheFoldersOwnName() {

@@ -69,6 +69,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.systemOf
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionUiState
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.NewSessionViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionTarget
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.Failure
 import me.nathanfallet.teamcode.companion.resources.local_session_agent
 import me.nathanfallet.teamcode.companion.resources.local_session_agent_claude
 import me.nathanfallet.teamcode.companion.resources.local_session_agent_codex
@@ -246,57 +247,71 @@ private fun ResumeFields(state: NewSessionUiState, viewModel: NewSessionViewMode
             Text(stringResource(Res.string.new_session_resume_old_daemon, device), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.testTag("resume-old-daemon"))
             return@Column
         }
-        // Read once per opening of the sheet: relative dates need no refresh while it is open, and the sheet holds no clock.
-        val now = androidx.compose.runtime.remember {
-            (org.koin.mp.KoinPlatform.getKoinOrNull()?.getOrNull<me.nathanfallet.teamcode.companion.domain.services.Clock>()?.nowMillis()) ?: kotlin.time.Clock.System.now().toEpochMilliseconds()
-        }
-        val chosen = state.resumable?.firstOrNull { it.id == state.resumeId }
-        Group {
-            val label = chosen?.title ?: stringResource(Res.string.new_session_resume_none)
-            val opened = state.resumeOpen
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = !state.creating, role = Role.Button, onClick = viewModel::onResumeOpen)
-                    .padding(horizontal = 14.dp, vertical = 8.dp).testTag("resume-picker"),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(label, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    Text(chosen?.let { meta(it, now) } ?: stringResource(Res.string.new_session_resume_none_hint), style = MetaStyle, color = colors.muted)
-                }
-                Icon(if (opened) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, null, tint = colors.muted, modifier = Modifier.size(16.dp))
-            }
-            if (opened) {
-                GroupDivider()
-                val sessions = state.resumable
-                if (state.loadingResumable && sessions == null) {
-                    BusyRow(true)
-                    Text(stringResource(Res.string.new_session_resume_loading), color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
-                }
-                if (state.resumableError != null) Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ErrorText(state.resumableError, Modifier.testTag("resume-error"))
-                    TcButton(stringResource(Res.string.action_retry), onClick = viewModel::onResumeRetry, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("resume-retry"))
-                }
-                if (sessions != null) Column(Modifier.selectableGroup()) {
-                    Option(stringResource(Res.string.new_session_resume_none), stringResource(Res.string.new_session_resume_none_hint), selected = state.resumeId == null, tag = "resume-none") { viewModel.onResume(null) }
-                    sessions.forEach { session ->
-                        GroupDivider()
-                        Option(session.title, meta(session, now), selected = state.resumeId == session.id, tag = "resume-${session.id}") { viewModel.onResume(session.id) }
-                    }
-                    if (sessions.isEmpty() && state.resumableError == null) {
-                        GroupDivider()
-                        Text(stringResource(Res.string.new_session_resume_empty), color = colors.muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).testTag("resume-empty"))
-                    }
-                    if (state.resumableNext != null) {
-                        GroupDivider()
-                        Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                            TcButton(stringResource(Res.string.new_session_resume_more), onClick = viewModel::onResumeMore, kind = ButtonKind.GHOST, small = true,
-                                busy = state.loadingResumable, modifier = Modifier.testTag("resume-more"))
-                        }
-                    }
-                }
-            }
-        }
+        ResumePicker(state.resumable, state.resumeId, state.resumeOpen, state.loadingResumable, state.resumableError, state.resumableNext != null,
+            enabled = !state.creating, loadingText = stringResource(Res.string.new_session_resume_loading),
+            onOpen = viewModel::onResumeOpen, onRetry = viewModel::onResumeRetry, onMore = viewModel::onResumeMore, onPick = viewModel::onResume)
         Text(stringResource(Res.string.new_session_resume_hint, device), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+    }
+}
+
+/**
+ * The picker itself, shared by New session on a device and on this device: closed, it shows the choice (None by
+ * default); opened, the conversations (title, how long ago, how many messages), what is loading or failed with Retry,
+ * an empty folder, and the older ones.
+ */
+@Composable
+internal fun ResumePicker(
+    resumable: List<ResumableSession>?, resumeId: String?, open: Boolean, loading: Boolean, error: Failure?, hasMore: Boolean, enabled: Boolean,
+    loadingText: String, onOpen: () -> Unit, onRetry: () -> Unit, onMore: () -> Unit, onPick: (String?) -> Unit,
+) {
+    val colors = TeamCode.colors
+    // Read once per opening of the sheet: relative dates need no refresh while it is open, and the sheet holds no clock.
+    val now = androidx.compose.runtime.remember {
+        (org.koin.mp.KoinPlatform.getKoinOrNull()?.getOrNull<me.nathanfallet.teamcode.companion.domain.services.Clock>()?.nowMillis()) ?: kotlin.time.Clock.System.now().toEpochMilliseconds()
+    }
+    val chosen = resumable?.firstOrNull { it.id == resumeId }
+    Group {
+        val label = chosen?.title ?: stringResource(Res.string.new_session_resume_none)
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = enabled, role = Role.Button, onClick = onOpen)
+                .padding(horizontal = 14.dp, vertical = 8.dp).testTag("resume-picker"),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(label, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(chosen?.let { meta(it, now) } ?: stringResource(Res.string.new_session_resume_none_hint), style = MetaStyle, color = colors.muted)
+            }
+            Icon(if (open) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, null, tint = colors.muted, modifier = Modifier.size(16.dp))
+        }
+        if (open) {
+            GroupDivider()
+            if (loading && resumable == null) {
+                BusyRow(true)
+                Text(loadingText, color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+            }
+            if (error != null) Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ErrorText(error, Modifier.testTag("resume-error"))
+                TcButton(stringResource(Res.string.action_retry), onClick = onRetry, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("resume-retry"))
+            }
+            if (resumable != null) Column(Modifier.selectableGroup()) {
+                Option(stringResource(Res.string.new_session_resume_none), stringResource(Res.string.new_session_resume_none_hint), selected = resumeId == null, tag = "resume-none") { onPick(null) }
+                resumable.forEach { session ->
+                    GroupDivider()
+                    Option(session.title, meta(session, now), selected = resumeId == session.id, tag = "resume-${session.id}") { onPick(session.id) }
+                }
+                if (resumable.isEmpty() && error == null) {
+                    GroupDivider()
+                    Text(stringResource(Res.string.new_session_resume_empty), color = colors.muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).testTag("resume-empty"))
+                }
+                if (hasMore) {
+                    GroupDivider()
+                    Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                        TcButton(stringResource(Res.string.new_session_resume_more), onClick = onMore, kind = ButtonKind.GHOST, small = true,
+                            busy = loading, modifier = Modifier.testTag("resume-more"))
+                    }
+                }
+            }
+        }
     }
 }
 
