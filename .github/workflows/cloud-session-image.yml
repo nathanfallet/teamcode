@@ -30,6 +30,43 @@ jobs:
         env:
           DOCKER_BUILDKIT: '1'
         run: docker build -t teamcode-session-template docs/cloud-session-image
+      # Each download check must refuse what it guards against, and say why: a build that passes, or fails for
+      # another reason, fails this step. The builds reuse the cached layers of the build above.
+      - name: The download checks refuse what they do not trust
+        env:
+          DOCKER_BUILDKIT: '1'
+          # The 2022 Node.js release keyring (nodejs/release-keys at b9c9f74), which lacks the key that signed
+          # the pinned Node.js release.
+          OLD_NODE_KEYS_COMMIT: b9c9f7455d7fa7764be2f69ed9be95f54bdbc041
+          OLD_NODE_KEYS_SHA256: afa8fd2700b3c8ab627505a5a921367ab5a4f4a8d412aabb46312c8a0c4b5d31
+        run: |
+          set -u
+          failed=0
+          zero=0000000000000000000000000000000000000000000000000000000000000000
+          cd docs/cloud-session-image
+          refused() {
+            name="$1"; message="$2"; shift 2
+            if docker build --progress=plain "$@" . > "refused-${name}.log" 2>&1; then
+              echo "::error::${name}: the build passed"; failed=1; return
+            fi
+            if ! grep -qF "${message}" "refused-${name}.log"; then
+              tail -n 40 "refused-${name}.log"; echo "::error::${name}: the build failed without \"${message}\""; failed=1; return
+            fi
+            echo "${name}: refused (${message})"
+          }
+          refused node-keyring "does not match NODE_RELEASE_KEYS_SHA256" --build-arg NODE_RELEASE_KEYS_SHA256="${zero}"
+          refused node-signature "is not signed by a key of the Node.js release keyring" \
+            --build-arg NODE_RELEASE_KEYS_COMMIT="${OLD_NODE_KEYS_COMMIT}" --build-arg NODE_RELEASE_KEYS_SHA256="${OLD_NODE_KEYS_SHA256}"
+          # The template with another publisher key in place of release-2026.pem: the manifest's keyId names the
+          # real key, so the build must stop on the keyId before the signature check.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 2>/dev/null | openssl pkey -pubout > other.pem
+          awk 'FNR == NR { key = key $0 "\n"; next }
+               /^-----BEGIN PUBLIC KEY-----$/ { printf "%s", key; skip = 1; next }
+               skip && /^-----END PUBLIC KEY-----$/ { skip = 0; next }
+               !skip' other.pem Dockerfile > Dockerfile.other-key
+          if cmp -s Dockerfile Dockerfile.other-key; then echo "::error::the publisher key was not replaced"; exit 1; fi
+          refused release-key-id "is signed by the key" -f Dockerfile.other-key
+          exit "${failed}"
       - name: The runner binary can be copied out as the init container does
         run: |
           mkdir -m 0777 runner
