@@ -130,7 +130,9 @@ class Launchers(private val config: HostConfig) {
             "PYTHONUSERBASE", "PYTHONEXECUTABLE", "PYTHONPLATLIBDIR",
         )
         private val reservedPrefixes = listOf(
-            "LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_", "NPM_CONFIG_", "UV_", "PIP_",
+            "LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_",
+            // The launcher prefixes of the variant model (domain Variants.kt): the host refuses at least what it refuses.
+            "NPM_CONFIG_", "UV_", "PIP_", "NODE_", "PYTHON", "COREPACK_", "SSL", "CURL_",
         )
     }
 }

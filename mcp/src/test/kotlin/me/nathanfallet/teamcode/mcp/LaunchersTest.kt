@@ -101,7 +101,9 @@ class LaunchersTest {
         for (name in listOf("PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD", "PYTHONPATH", "NPM_CONFIG_REGISTRY", "NPM_CONFIG_BEFORE", "UV_EXCLUDE_NEWER",
             "UV_INDEX_URL", "PIP_INDEX_URL", "TEAMCODE_MCP_TOKEN", "npm_config_registry", "lower", "1ABC", "A-B",
             // TLS, loader and site redirections that would weaken the pinned download or the runtime.
-            "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "PYTHONUSERBASE", "SSLKEYLOGFILE")) {
+            "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_ICU_DATA", "GLIBC_TUNABLES", "CURL_CA_BUNDLE", "PYTHONUSERBASE", "SSLKEYLOGFILE",
+            // At least every prefix the variant model refuses (domain Variants.kt), so the host never accepts less.
+            "NODE_REPL_EXTERNAL_MODULE", "PYTHONBREAKPOINT", "COREPACK_NPM_REGISTRY", "SSL_ANYTHING", "CURL_HOME")) {
             invalid(npm(env = mapOf(name to "value")))
             invalid(npm(secrets = mapOf(name to secret)))
         }
