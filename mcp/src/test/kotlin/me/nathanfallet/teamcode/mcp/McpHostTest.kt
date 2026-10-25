@@ -196,7 +196,8 @@ class McpHostTest {
         val pid = process(key).pid()
         call(key, spec, "spam", buildJsonObject { put("lines", 150) }, deadlineMs = 2_000)
         eventually { process(key)?.pid != pid }
-        assertTrue(events.any { it["event"]?.jsonPrimitive?.content == "killed" && it["reason"]?.jsonPrimitive?.content == "non_json" })
+        // The key is freed at once; the stop, and its event, follow in the background.
+        eventually { events.any { it["event"]?.jsonPrimitive?.content == "killed" && it["reason"]?.jsonPrimitive?.content == "non_json" } }
     }
 
     @Test
@@ -296,7 +297,8 @@ class McpHostTest {
         val pid = process(key).pid()
         assertTrue(post(HostProtocol.STOP, """{"key":"$key"}""").bodyAsText().contains("true"))
         eventually(3_000) { ProcessHandle.of(pid).isEmpty }
-        assertTrue(events.any { it["event"]?.jsonPrimitive?.content == "exited" && it["code"]?.jsonPrimitive?.int == 0 })
+        // The exit is reported by the exit watcher, just after the process is gone.
+        eventually { events.any { it["event"]?.jsonPrimitive?.content == "exited" && it["code"]?.jsonPrimitive?.int == 0 } }
     }
 
     @Test
