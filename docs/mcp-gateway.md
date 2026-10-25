@@ -1,6 +1,6 @@
 # MCP gateway (V2, server side)
 
-This page describes the authenticated MCP gateway for the V2 roadmap item [MCP gateway with one endpoint per server](roadmap.md#mcp-gateway-with-one-endpoint-per-server). It builds on [environment and MCP variants](variants.md): an MCP server reaches a member only through an MCP variant assignment, and the gateway is the consumer that turns those assignments into tool discovery and per-call authorization. Each assigned upstream server has its own endpoint; sources are never merged into one MCP server. `teamcode run` connects the launched agent to those endpoints through the local proxy.
+This page describes the authenticated MCP gateway for the V2 roadmap item [MCP gateway with one endpoint per server](roadmap.md#mcp-gateway-with-one-endpoint-per-server). It builds on [environment and MCP variants](variants.md): an MCP server reaches a member only through an MCP variant assignment, and the gateway is the consumer that turns those assignments into tool discovery and per-call authorization. Each assigned upstream server has its own endpoint; sources are never merged into one MCP server. `teamcode run` connects the launched agent to those endpoints through the local proxy. Servers published as stdio packages (npm, PyPI) will run in the internal [MCP stdio host](mcp.md), behind this gateway.
 
 ## Status
 
