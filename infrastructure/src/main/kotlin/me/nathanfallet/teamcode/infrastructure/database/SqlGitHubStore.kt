@@ -156,6 +156,7 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
             // Nothing left to refresh with: use the access token while it lasts, then the member links again.
             if (expiresAt > now + 60_000) return@query GitHubTokenClaim.Ready(link, tokens.accessToken)
             GitHubLinks.update({ GitHubLinks.memberId eq memberId }) { it[state] = GitHubLinkState.RECONNECT_REQUIRED.wire; it[refreshPending] = false }
+            reconnectRequired(teamId, memberId, "refresh_expired")
             return@query GitHubTokenClaim.ReconnectRequired
         }
         // Committed before GitHub is called: a second replica waits instead of spending the same refresh token.
@@ -173,12 +174,19 @@ class SqlGitHubStore(private val database: Database, private val cipher: Credent
     }
 
     override suspend fun abandonRefresh(teamId: String, memberId: String, claim: GitHubTokenClaim.Refresh, reconnect: Boolean) = database.query {
-        GitHubLinks.update({ owned(memberId, teamId, claim) }) {
+        val ended = GitHubLinks.update({ owned(memberId, teamId, claim) }) {
             it[refreshPending] = false
             if (reconnect) it[state] = GitHubLinkState.RECONNECT_REQUIRED.wire
         }
-        Unit
+        if (reconnect && ended == 1) reconnectRequired(teamId, memberId, "refresh_rejected")
     }
+
+    /**
+     * Journals the end of a link that nobody asked for: from here the member's cloud sessions get no GitHub token
+     * (`gh` unauthenticated, `git` anonymous) until they link again, so the journal says when and why. Never a token.
+     */
+    private fun JdbcTransaction.reconnectRequired(teamId: String, memberId: String, reason: String) =
+        audit(teamId, memberId, "github.link.reconnect_required", memberId, memberId, details = """{"reason":"$reason"}""")
 
     /** Only the current refresh owner writes: a replica that was taken over (new start time) or a relink (new version) is fenced. */
     private fun owned(memberId: String, teamId: String, claim: GitHubTokenClaim.Refresh) =

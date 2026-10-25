@@ -135,15 +135,30 @@ class GitHubLinkPersistenceTest {
                 val refreshes = github.refreshes.get()
                 assertEquals(GitHubAccess.NotLinked, ra.access.userAccess(member.teamId, member.member.id))
                 assertEquals(refreshes, github.refreshes.get())
+                // The link does not end silently: the journal says when and why, once, without any token.
+                val ended = a.query { AuditEvents.selectAll().where { AuditEvents.action eq "github.link.reconnect_required" }.toList() }
+                assertEquals(1, ended.size)
+                assertEquals(member.member.id, ended.single()[AuditEvents.subjectId])
+                assertEquals("""{"reason":"refresh_rejected"}""", ended.single()[AuditEvents.details])
+
+                // A link whose refresh token expired ends the same way once its access token is spent.
+                ra.store.saveLink(member.teamId, member.member.id, member, GitHubIdentity(42, "octo"), "Iv23liSynthetic",
+                    GitHubTokens("ghu_spent", System.currentTimeMillis() - 1, "ghr_spent", System.currentTimeMillis() - 1))
+                assertEquals(GitHubAccess.NotLinked, rb.access.userAccess(member.teamId, member.member.id))
+                assertEquals(refreshes, github.refreshes.get())
+                assertEquals(listOf("""{"reason":"refresh_rejected"}""", """{"reason":"refresh_expired"}"""), a.query {
+                    AuditEvents.select(AuditEvents.details).where { AuditEvents.action eq "github.link.reconnect_required" }.orderBy(AuditEvents.id).map { it[AuditEvents.details] }
+                })
 
                 // Unlink: the row and pending attempts are gone, the token is revoked, the journal records each step.
                 ra.service.startDevice(member)
                 rb.service.unlink(admin, member.member.id)
                 assertNull(ra.store.link(member.teamId, member.member.id))
                 assertTrue(a.query { GitHubLinkAttempts.selectAll().empty() })
-                assertTrue("ghu_expired" in github.revoked)
+                assertTrue("ghu_spent" in github.revoked)
                 val actions = a.query { AuditEvents.select(AuditEvents.action).where { AuditEvents.action like "github.%" }.map { it[AuditEvents.action] } }
-                assertEquals(listOf("github.app.saved", "github.app.saved", "github.link.created", "github.link.created", "github.link.created", "github.link.removed"), actions)
+                assertEquals(listOf("github.app.saved", "github.app.saved", "github.link.created", "github.link.created", "github.link.created",
+                    "github.link.reconnect_required", "github.link.created", "github.link.reconnect_required", "github.link.removed"), actions)
             } }
         }
     }
