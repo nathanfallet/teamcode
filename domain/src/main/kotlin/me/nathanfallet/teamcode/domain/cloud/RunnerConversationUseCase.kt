@@ -10,10 +10,14 @@ import me.nathanfallet.teamcode.domain.team.TeamFailure
  * runner streams the agent's text as `message.agent.delta` events (Claude Code only; Codex sends whole messages).
  * [permissionMode]: a remote session's mode on its host's files; null for a cloud session, whose pod is its sandbox.
  * [backgroundTasks]: the runner reports the agent's background tasks as `tasks` events (Claude Code only).
+ * [owner]: the member the execution runs for (the current owner, so the recipient after a transfer), told to the agent.
  */
 data class RunnerAgentConfig(val kind: String, val version: String?, val model: String?, val effort: String?, val conversation: ConversationResume,
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false,
-    val permissionMode: RemotePermissionMode? = null, val backgroundTasks: Boolean = false)
+    val permissionMode: RemotePermissionMode? = null, val backgroundTasks: Boolean = false, val owner: RunnerOwner? = null)
+
+/** The member an execution runs for: their [username] and their linked GitHub account's [githubLogin], if any. */
+data class RunnerOwner(val username: String, val githubLogin: String?)
 
 /** Inputs delivered to the runner, and the session's desired state when they were read. */
 data class RunnerInputs(val inputs: List<CloudInput>, val desiredState: DesiredState)
@@ -29,6 +33,8 @@ class RunnerConversationUseCase(
     /** Whether a member has linked GitHub; see [CloudConversationService]. Required: the delivery guard must not fail open. */
     private val githubLinked: suspend (teamId: String, memberId: String) -> Boolean,
     private val transition: TransitionCloudSessionUseCase = TransitionCloudSessionUseCase(sessions),
+    /** The login of the GitHub account a member linked, or null; only tells the agent who runs the session. */
+    private val githubLogin: suspend (teamId: String, memberId: String) -> String? = { _, _ -> null },
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
     suspend fun agent(teamId: String, sessionId: String, epoch: Int): RunnerAgentConfig {
@@ -36,7 +42,9 @@ class RunnerConversationUseCase(
         return RunnerAgentConfig(session.agentKind, session.agentVersion, session.agentModel, session.agentEffort, session.resumeConversation,
             permissionRelay = session.agentKind == "claude", permissionDeadlineMinutes = sessions.settings(teamId).permissionDeadlineMinutes,
             liveText = session.agentKind == "claude", backgroundTasks = session.agentKind == "claude",
-            permissionMode = session.host?.permissionMode?.takeIf { session.kind == CloudSessionKind.REMOTE })
+            permissionMode = session.host?.permissionMode?.takeIf { session.kind == CloudSessionKind.REMOTE },
+            // Read for the current owner at each execution start: after a transfer, the recipient.
+            owner = sessions.member(teamId, session.ownerId)?.let { RunnerOwner(it.username, githubLogin(teamId, session.ownerId)) })
     }
 
     /**

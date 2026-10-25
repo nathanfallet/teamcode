@@ -276,7 +276,7 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val agent = runner.agent(pod.teamId, pod.sessionId, pod.epoch)
         call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, liveText = agent.liveText, permissionMode = agent.permissionMode?.wire,
-            backgroundTasks = agent.backgroundTasks))
+            backgroundTasks = agent.backgroundTasks, owner = agent.owner?.let { RunnerOwnerView(it.username, it.githubLogin) }))
     }
     post(RUNNER_PATH + "events") {
         val body = call.boundedJson<RunnerEventsRequest>(RUNNER_BODY_BYTES)

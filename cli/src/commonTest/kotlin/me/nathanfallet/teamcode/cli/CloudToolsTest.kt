@@ -265,4 +265,74 @@ class CloudToolsTest {
         val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, "l".repeat(64)), tools))
         assertFalse(codex.arguments.any { it.startsWith("developer_instructions=") }, codex.arguments.toString())
     }
+
+    // Who runs the session: read from the server at each execution start. A transfer changes the owner only between two
+    // executions, and a resumed conversation may keep the instructions it started with, so the new owner is told again.
+
+    private class OwnedChannel(val kind: String, val owner: RunnerOwnerView?) : AgentChannel {
+        val inputs = Channel<List<RunnerInputView>>(Channel.UNLIMITED)
+        override suspend fun agent() = RunnerAgentView(kind, "1", "m", null, "none", owner = owner)
+        override suspend fun events(events: List<RunnerEventView>) = RunnerEventsAckView(events.last().sequence, events.size.toLong())
+        override suspend fun inputs(waitMillis: Long) = inputs.receive()
+        override suspend fun acknowledge(acks: List<RunnerInputAckView>) = Unit
+    }
+    private class Stored(var state: AgentState? = null) : AgentStateStore {
+        override fun read() = state
+        override fun write(state: AgentState) { this.state = state }
+        override fun clear() { state = null }
+    }
+    /** One execution: the command the agent started with and what it was written once the message reached it. */
+    private suspend fun TestScope.execution(kind: String, owner: RunnerOwnerView?, store: Stored, output: List<String> = emptyList()): Pair<AgentCommand, List<String>> {
+        val channel = OwnedChannel(kind, owner)
+        val starts = mutableListOf<Pair<AgentCommand, Process>>()
+        val host = AgentHost(channel, { command, _, _ -> Process().also { starts += command to it } }, store, "/workspace", "1.0",
+            now = { testScheduler.currentTime }, inference = { AgentInferenceEndpoint(41234, "l".repeat(64)) },
+            tools = object : AgentTools { override suspend fun prepare(agent: String) = emptyList<String>() })
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Go", 1)))
+        repeat(200) { if (starts.isEmpty()) delay(50) }
+        val (command, process) = starts.single()
+        output.forEach { process.output.send(it) }
+        repeat(200) { if (process.written.none { "Go" in it }) delay(50) }
+        delay(1_000) // The agent's output is read meanwhile.
+        job.cancel()
+        return command to process.written.toList()
+    }
+    private fun AgentCommand.appended() = arguments.indexOf("--append-system-prompt").takeIf { it >= 0 }?.let { arguments.getOrNull(it + 1) }
+    private val alice = RunnerOwnerView("alice", "alice-gh")
+    private val bob = RunnerOwnerView("bob")
+
+    @Test fun cloudAgentsAreToldWhoTheirExecutionRunsFor() = runTest {
+        val store = Stored()
+        val (claude, written) = execution("claude", alice, store, listOf("""{"type":"system","subtype":"init","session_id":"c-1"}"""))
+        assertEquals("I am alice, known as alice-gh on GitHub.", claude.appended(), claude.arguments.toString())
+        assertFalse(written.any { "I am" in it }, "A new conversation is told in its instructions only")
+        assertEquals(AgentState("claude", "1", "c-1", identity = "I am alice, known as alice-gh on GitHub."), store.state, "Recorded with the conversation")
+        val (codex, _) = execution("codex", bob, Stored())
+        assertTrue(codex.arguments.contains("developer_instructions=\"I am bob.\""), codex.arguments.toString())
+        val (older, _) = execution("claude", null, Stored())
+        assertNull(older.appended(), "An older server names nobody: nothing is said")
+    }
+
+    @Test fun aTransferredConversationIsToldItsNewOwnerOnce() = runTest {
+        // Epoch 1 ran for alice; the session was transferred to bob, whose execution resumes the conversation.
+        val store = Stored(AgentState("claude", "1", "c-1", identity = "I am alice, known as alice-gh on GitHub."))
+        val (resumed, written) = execution("claude", bob, store)
+        assertTrue(resumed.arguments.containsAll(listOf("--resume", "c-1")), resumed.arguments.toString())
+        assertEquals("I am bob.", resumed.appended(), "The instructions name the current owner")
+        val message = written.single { "Go" in it }
+        assertEquals("I am bob.\n\nGo", Json.parseToJsonElement(message).jsonObject["message"]!!.jsonObject["content"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content,
+            "The resumed conversation is told before the owner's message")
+        assertEquals("I am bob.", store.state?.identity)
+        // Bob's next execution: the conversation already knows.
+        val (_, again) = execution("claude", bob, store)
+        assertFalse(again.any { "I am" in it }, again.toString())
+
+        // Codex keeps the developer instructions a thread started with (measured on 0.163): only the message tells it.
+        val codexStore = Stored(AgentState("codex", "1", "t-1", identity = "I am alice, known as alice-gh on GitHub."))
+        val (codex, codexWritten) = execution("codex", bob, codexStore, listOf("""{"id":1,"result":{}}""", """{"id":2,"result":{"thread":{"id":"t-1"}}}"""))
+        assertTrue(codex.arguments.contains("developer_instructions=\"I am bob.\""), codex.arguments.toString())
+        val turn = Json.parseToJsonElement(codexWritten.single { "turn/start" in it }).jsonObject["params"]!!.jsonObject["input"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content
+        assertEquals("I am bob.\n\nGo", turn)
+    }
 }

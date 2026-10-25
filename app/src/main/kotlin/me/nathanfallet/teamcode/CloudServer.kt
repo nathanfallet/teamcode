@@ -110,7 +110,8 @@ class CloudServer(
         }, bucket)
     }
 
-    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore, githubLinked),
+    val conversation = CloudConversation(conversationService, access, RunnerConversationUseCase(store, conversationStore, githubLinked,
+        githubLogin = { teamId, memberId -> githubStore.link(teamId, memberId)?.identity?.login }),
         me.nathanfallet.teamcode.domain.team.TeamEventService(me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore(database)), files = files)
 
     /**

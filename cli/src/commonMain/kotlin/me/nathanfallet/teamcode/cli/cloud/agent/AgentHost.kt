@@ -13,6 +13,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.launch.OwnerIdentity
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
 import me.nathanfallet.teamcode.cli.platform.writePrivateFile
@@ -58,10 +59,11 @@ interface AgentChannel {
 /**
  * The agent's conversation id, kept on the workspace volume so the next pod resumes it. [fork]: the conversation is
  * another one's on the member's device (`cloud.sessions.remote.resume.v1`), continued under a new id at the first start
- * (Claude Code's `--fork-session`) so the original stays as it was; the new id then replaces this state.
+ * (Claude Code's `--fork-session`) so the original stays as it was; the new id then replaces this state. [identity]: the
+ * owner sentence ([OwnerIdentity]) the conversation was last told, so a resume after a transfer tells the new owner.
  */
 @Serializable
-data class AgentState(val kind: String, val version: String? = null, val conversationId: String, val fork: Boolean = false)
+data class AgentState(val kind: String, val version: String? = null, val conversationId: String, val fork: Boolean = false, val identity: String? = null)
 interface AgentStateStore {
     fun read(): AgentState?
     fun write(state: AgentState)
@@ -146,6 +148,13 @@ internal class AgentHost(
     private var instructionChanged: () -> Unit = {}
     /** The uploads directory once prepared, given to the agent at start; null announces no file support. */
     private var uploadsDirectory: String? = null
+    /** The owner sentence the running conversation knows, recorded with its id. Under [lock]. */
+    private var told: String? = null
+    /**
+     * The owner sentence to put before the next message: a resumed conversation keeps the instructions it started with
+     * (Codex keeps its developer instructions, measured on 0.163), so a new owner after a transfer is told there. Under [lock].
+     */
+    private var ownerNote: String? = null
 
     override fun onInstructionChange(changed: () -> Unit) { instructionChanged = changed }
 
@@ -306,7 +315,7 @@ internal class AgentHost(
             }
             text = (listOf(text).filter { it.isNotBlank() } + attached).joinToString("\n\n")
         }
-        val (child, lines) = lock.withLock {
+        val (child, lines, note) = lock.withLock {
             // Stopping for a pause: the message stays queued on the server for the next execution, never lost.
             if (stopping) return null
             val active = try { ensureStarted() } catch (error: CancellationException) { throw error } catch (error: Exception) {
@@ -314,12 +323,19 @@ internal class AgentHost(
                 enqueue(CloudEventTypes.ERROR, buildJsonObject { put("code", "agent_start_failed"); put("message", "The agent process could not start.") })
                 null
             } ?: return unavailable
-            val lines = active.message(text)
+            val note = ownerNote.also { ownerNote = null }
+            val lines = active.message(if (note != null) "$note\n\n$text" else text)
             active.takeEvents().forEach { enqueue(it.type, it.data) }
-            process to lines
+            Triple(process, lines, note)
         }
         if (child == null) return unavailable
-        return if (write(child, lines)) consumed else unavailable
+        if (!write(child, lines)) return unavailable
+        // Told: recorded with the conversation, so the next resume says nothing again. Not written, the next start tells again.
+        if (note != null) lock.withLock {
+            if (process === child) told = note
+            state.read()?.takeIf { stored -> settings?.let { it.kind == stored.kind && it.version == stored.version } == true }?.let { state.write(it.copy(identity = note)) }
+        }
+        return consumed
     }
 
     private sealed interface Attachment {
@@ -371,7 +387,7 @@ internal class AgentHost(
         reader?.cancel()
         // That reader's tail, which cancels its process's timers, may never run now.
         cancelDeadlines(null)
-        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks) }.also { settings = it }
+        val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks, it.owner) }.also { settings = it }
         val stored = state.read()
         val kept = stored?.takeIf { it.kind == config.kind && it.version == config.version }
         val resume = kept?.conversationId
@@ -380,6 +396,11 @@ internal class AgentHost(
             state.clear()
             enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
         }
+        // The agent is told who the execution runs for in its instructions; a resumed conversation whose owner changed
+        // since it was last told (a transfer) is told again before its next message, since its instructions may be kept.
+        val identity = config.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) }
+        ownerNote = identity?.takeIf { resume != null && it != kept?.identity }
+        told = if (resume == null) identity else kept?.identity
         val next = agentAdapter(config, clientVersion, now, readableDirectories = listOfNotNull(uploadsDirectory))
         val (command, environment) = launch(config.kind, next.command(resume, fork = kept?.fork == true))
         val child = start(command, environment, workingDirectory)
@@ -396,7 +417,8 @@ internal class AgentHost(
      * receives only the proxy's random local token, and its own provider credentials are removed from its environment.
      * The owner's team MCP servers are connected through the same proxy, one agent-side server per assignment, and
      * the owner's team hooks installed in the agent's home are added to Claude Code's settings. The owner's environment
-     * variables come first, so none of these settings can be replaced by one.
+     * variables come first, so none of these settings can be replaced by one. The agent is told who the execution runs
+     * for, as the server says at this execution's start: a transfer changes the owner only between two executions.
      */
     private suspend fun launch(kind: String, base: AgentCommand): Pair<AgentCommand, Map<String, String?>> {
         // Claude Code forwards a subagent's text only when asked (`--forward-subagent-text`, v2.1.211); the variable does
@@ -408,7 +430,7 @@ internal class AgentHost(
         val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" })?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
-            hookToken = false, artifacts = tools?.artifacts())
+            hookToken = false, artifacts = tools?.artifacts(), identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
         return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 
@@ -438,7 +460,8 @@ internal class AgentHost(
             val id = active.conversationId
             if (id != null && id != known) {
                 known = id
-                settings?.let { state.write(AgentState(it.kind, it.version, id)) }
+                val identity = lock.withLock { told }
+                settings?.let { state.write(AgentState(it.kind, it.version, id, identity = identity)) }
             }
         }
         val code = child.stop(1_000)

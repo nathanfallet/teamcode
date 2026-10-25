@@ -263,6 +263,8 @@ data class RunnerAgentRequest(val teamId: String, val sessionId: String, val epo
  * [liveText]: the server takes `message.agent.delta` events, so the runner may stream the agent's text as it is written.
  * [permissionMode]: a remote session's mode on its host (`ask` or `bypass`); null for a cloud session, whose pod is its sandbox.
  * [backgroundTasks]: the server takes `tasks` events, so the runner may report the agent's background tasks.
+ * [owner]: the member the execution runs for, read at each execution start (a transfer starts a new one); null from an
+ * older server, and then the agent is not told who runs the session.
  */
 @Serializable
 data class RunnerAgentView(
@@ -270,7 +272,14 @@ data class RunnerAgentView(
     val permissionRelay: Boolean = false, val permissionDeadlineMinutes: Int = 0, val liveText: Boolean = false, val permissionMode: String? = null,
     /** The server takes [CloudEventTypes.TASKS] events ([CloudTasks.FEATURE]); an older one refuses the batch that holds one. */
     val backgroundTasks: Boolean = false,
+    val owner: RunnerOwnerView? = null,
 )
+/**
+ * Who the execution runs for, as the agent is told: the member's [username] and, when they linked GitHub, the linked
+ * account's [githubLogin]. Never an email or a credential.
+ */
+@Serializable
+data class RunnerOwnerView(val username: String, val githubLogin: String? = null)
 /** [sequence] is the runner's own counter for this epoch, starting at 1; a retried batch is deduplicated on it. */
 @Serializable
 data class RunnerEventView(val sequence: Long, val type: String, val data: JsonObject)

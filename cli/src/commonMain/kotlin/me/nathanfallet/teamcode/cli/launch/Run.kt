@@ -85,6 +85,8 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             val artifacts = artifactsAvailable(client, capabilities)
             // Read before the agent starts: it begins with the current values in its environment.
             val variables = assignedVariables(client, capabilities)
+            // Who runs the session, said to the agent: the connected member, read now (never an email or a token).
+            val identity = ownerIdentity(client, capabilities)
             // Whether the agent works or waits for a person: a state only, reported by the hooks that carry guidance.
             val activity = !noActivity && RUN_ACTIVITY_CAPABILITY in capabilities.features
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
@@ -92,7 +94,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                 val service = loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables, terminal)
+                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
@@ -101,7 +103,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables, terminal)
+                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal)
                     } finally { server.stop(500, 5_000) }
                 }
             }
@@ -143,6 +145,16 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
         val accepted = AgentEnvironment.accepted(view.variables)
         if (accepted.isNotEmpty()) echo("Environment variables: ${accepted.keys.joinToString(", ")}.", err = true)
         return accepted
+    }
+    /**
+     * The sentence telling the agent who runs the session ([OwnerIdentity]): the connected member's username and, when
+     * they linked GitHub (`github.link.v1`), the linked login. Never blocks the launch: a failed read says nothing.
+     */
+    private suspend fun ownerIdentity(client: TeamCodeClient, capabilities: Capabilities): String? {
+        val username = try { client.me().username } catch (error: CancellationException) { throw error } catch (_: Exception) { return null }
+        val login = if (GITHUB_LINK_CAPABILITY !in capabilities.features) null
+            else try { client.githubLink().takeIf { it.state != me.nathanfallet.teamcode.api.models.GitHubLinkStates.NOT_LINKED }?.login } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        return OwnerIdentity.sentence(username, login)
     }
     /** The team MCP servers to connect for this launch: names only, never an upstream address or credential. */
     private suspend fun assignedMcpServers(client: TeamCodeClient, capabilities: Capabilities): List<String> {
@@ -190,7 +202,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
     /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
     private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
-    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?, terminal: HeldTerminal): Int {
+    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?, identity: String?, terminal: HeldTerminal): Int {
         val options = arguments.takeWhile { it != "--" }
         val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
@@ -219,16 +231,16 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             echo("The artifact tools could not be prepared; continuing without them.", err = true)
             null
         } else null
-        val codexInstructions = agent != "codex" || artifactServer == null || when {
+        val codexInstructions = agent != "codex" || (artifactServer == null && identity == null) || when {
             hasCodexOverride(arguments, "developer_instructions") -> false
             codexConfigSetsDeveloperInstructions() -> false
             else -> true
         }
-        if (!codexInstructions) echo("Your Codex developer_instructions are kept; publish pages with the teamcode_artifacts tools.", err = true)
+        if (!codexInstructions) echo("Your Codex developer_instructions are kept" + (if (artifactServer != null) "; publish pages with the teamcode_artifacts tools." else "."), err = true)
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer,
-                codexInstructions = codexInstructions)
+                codexInstructions = codexInstructions, identity = identity)
             // The variables go first: TeamCode's own settings always win (the server already refuses their names).
             val environment = variables.orEmpty() + plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment
             val variablesFile = if (agent == "claude" && variables != null) LocalEnvironmentFile.create(client, variables, terminal::report) else null
@@ -249,6 +261,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
 private const val RUN_LABELS_CAPABILITY = "team.runs.labels.v1"
 private const val RUN_ACTIVITY_CAPABILITY = "team.runs.activity.v1"
 private const val ARTIFACTS_POLICY_CAPABILITY = "artifacts.policy.v1"
+private const val GITHUB_LINK_CAPABILITY = "github.link.v1"
 internal const val ENVIRONMENT_CAPABILITY = "team.environment.v1"
 
 /**
@@ -365,7 +378,7 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true, identity: String? = null): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -383,6 +396,8 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         (it.configDir?.let { dir -> listOf("--config-dir", dir) } ?: emptyList()) +
         (runId?.let { id -> listOf("--run", id) } ?: emptyList()) + it.refused.flatMap { path -> listOf("--refuse", path) } }
     val relay = "http://127.0.0.1:$port"
+    // What TeamCode adds to the agent's instructions: who runs the session ([OwnerIdentity]), then the artifact tools.
+    val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }).joinToString("\n\n").ifEmpty { null }
     // Agent options go before a literal "--" delimiter, and after the caller's own options because
     // Claude Code's --mcp-config is variadic and would otherwise swallow a following prompt argument.
     val delimiter = arguments.indexOf("--").let { if (it < 0) arguments.size else it }
@@ -414,11 +429,9 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         // the agent is told to publish through teamcode_artifacts. The `=` form is not variadic, and repeated
         // --disallowedTools add up, so the caller's own list is kept. Claude Code keeps only the last
         // --append-system-prompt, so the caller's text is moved into ours rather than replaced.
-        val (options, appended) = if (artifacts == null) arguments.take(delimiter) to null else withoutAppendedPrompt(arguments.take(delimiter))
-        val artifactOptions = if (artifacts == null) emptyList() else listOf(
-            "--append-system-prompt", appended?.let { "$it\n\n$ARTIFACTS_INSTRUCTIONS" } ?: ARTIFACTS_INSTRUCTIONS,
-            "--disallowedTools=" + CLAUDE_NATIVE_ARTIFACT_TOOLS.joinToString(","),
-        )
+        val (options, appended) = if (instructions == null) arguments.take(delimiter) to null else withoutAppendedPrompt(arguments.take(delimiter))
+        val artifactOptions = instructions?.let { listOf("--append-system-prompt", appended?.let { own -> "$own\n\n$it" } ?: it) }.orEmpty() +
+            if (artifacts == null) emptyList() else listOf("--disallowedTools=" + CLAUDE_NATIVE_ARTIFACT_TOOLS.joinToString(","))
         AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + options + artifactOptions + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
         "TEAMCODE_RUN_ID" to runId,
@@ -434,10 +447,10 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
             // Codex passes a stdio server only the variables it lists: the local token by name, never its value.
             (if (artifacts == null) emptyList() else listOf("-c", "mcp_servers.$ARTIFACTS_MCP_LABEL={command=${toml(artifacts.command)}," +
                 "args=[${artifactArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_ARTIFACTS_URL=${toml(relay)},TEAMCODE_ARTIFACTS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
-            // Codex has no artifact tool of its own; it only gets the instruction, unless the caller set its own
+            // Codex has no artifact tool of its own; it only gets the instructions, unless the caller set its own
             // developer instructions, which an override would replace.
-            (if (artifacts == null || !codexInstructions || hasCodexOverride(arguments, "developer_instructions")) emptyList()
-            else listOf("-c", "developer_instructions=${toml(ARTIFACTS_INSTRUCTIONS)}"))
+            (if (instructions == null || !codexInstructions || hasCodexOverride(arguments, "developer_instructions")) emptyList()
+            else listOf("-c", "developer_instructions=${toml(instructions)}"))
         // Put overrides in the leaf command scope (exec/resume/review), before any literal delimiter.
         // Root overrides can be discarded by exec --ignore-user-config in some Codex versions.
         AgentLaunch(arguments.take(delimiter) + overrides + arguments.drop(delimiter),

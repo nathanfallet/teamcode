@@ -179,7 +179,7 @@ class CloudConversationRoutesTest {
         val service = CloudConversationService(conversations, store, access, { _, _ -> false }, sleep = { delay(20) })
         val sessions = CloudSessionService(store, access = access, initialMessages = service)
         val conversation = CloudConversation(service, access,
-            RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(20) }))
+            RunnerConversationUseCase(store, conversations, { _, _ -> false }, sleep = { delay(20) }, githubLogin = { _, member -> "other-gh".takeIf { member == other.id } }))
         val server = embeddedServer(io.ktor.server.cio.CIO, port = 0, host = "127.0.0.1") {
             configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(object : CloudAdminStore {
                 override suspend fun clusters(actor: Principal) = emptyList<CloudCluster>()
@@ -243,8 +243,13 @@ class CloudConversationRoutesTest {
             val runner = sdk("projected-pod-token-1")
             val member = sdk("colleague")
             try {
-                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true, liveText = true, backgroundTasks = true), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
-                    "This server takes permission requests and live text deltas, so the runner relays them, without a deadline by default")
+                assertEquals(RunnerAgentView("claude", null, "opus", null, "none", permissionRelay = true, liveText = true, backgroundTasks = true, owner = RunnerOwnerView("colleague")), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)),
+                    "This server takes permission requests and live text deltas, so the runner relays them, without a deadline by default; the agent is told who it runs for")
+                // After a transfer the next execution runs for the recipient, with their linked GitHub login (never an email).
+                val owned = store.sessions.getValue("s1")
+                store.sessions["s1"] = owned.copy(ownerId = other.id)
+                assertEquals(RunnerOwnerView("other", "other-gh"), runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)).owner)
+                store.sessions["s1"] = owned
                 store.settings = CloudSettings(permissionDeadlineMinutes = 15)
                 assertEquals(15, runner.runnerAgent(RunnerAgentRequest("default", "s1", 1)).permissionDeadlineMinutes, "The team's deadline reaches the runner")
                 store.settings = CloudSettings()

@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.api.models.CloudQuestionAnswer
 import me.nathanfallet.teamcode.api.models.CloudTasks
 import me.nathanfallet.teamcode.api.models.CloudTranscriptLimits
 import me.nathanfallet.teamcode.api.models.RemotePermissionModes
+import me.nathanfallet.teamcode.api.models.RunnerOwnerView
 
 /** A normalized transcript event before upload. The server masks and bounds it again. */
 data class AgentEvent(val type: String, val data: JsonObject)
@@ -31,7 +32,9 @@ data class AgentSettings(val kind: String, val version: String?, val model: Stri
      */
     val permissionMode: String? = null,
     /** The server takes `tasks` events ([CloudTasks.FEATURE]): the agent's background tasks are reported to the session's members. */
-    val backgroundTasks: Boolean = false) {
+    val backgroundTasks: Boolean = false,
+    /** Who the execution runs for, told to the agent at its start ([me.nathanfallet.teamcode.cli.launch.OwnerIdentity]); null from an older server. */
+    val owner: RunnerOwnerView? = null) {
     /** Whether the agent skips its own permission checks and sandbox. */
     val bypass get() = permissionMode != RemotePermissionModes.ASK
 }
