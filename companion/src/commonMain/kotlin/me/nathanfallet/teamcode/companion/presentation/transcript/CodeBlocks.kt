@@ -43,20 +43,18 @@ import me.nathanfallet.teamcode.companion.resources.transcript_code_copied
 import me.nathanfallet.teamcode.companion.resources.transcript_code_copy
 import org.jetbrains.compose.resources.stringResource
 
-/** A code block needs a copy button from this many lines of content: one line is as quick to select as to copy. */
-internal const val COPY_MIN_LINES = 2
-
 /**
- * What the copy button puts in the clipboard for a code block's content, or null when the block is too short to have
- * one. Exactly the content: no fence lines or language (the renderer already took them off), indentation kept, the
- * trailing newline and blank lines dropped.
+ * What the copy button puts in the clipboard for a code block's content, or null for an empty block (no button). Any
+ * block with content has one, even a single line: a lone command is what one wants to copy. Exactly the content: no
+ * fence lines or language (the renderer already took them off), indentation kept, the trailing newline and blank lines
+ * dropped.
  */
 internal fun copyableCode(code: String): String? {
     val lines = code.lines().map { it.trimEnd('\r') }.dropLastWhile { it.isBlank() }
-    return if (lines.size >= COPY_MIN_LINES) lines.joinToString("\n") else null
+    return if (lines.isEmpty()) null else lines.joinToString("\n")
 }
 
-/** The Markdown components of the agent's text: the renderer's own, with a copy button on multi-line code blocks. */
+/** The Markdown components of the agent's text: the renderer's own, with a copy button on code blocks (inline code has none). */
 internal fun transcriptMarkdownComponents(): MarkdownComponents = markdownComponents(
     codeFence = { MarkdownCodeFence(it.content, it.node, it.typography.code) { code, _, style -> CodeBlock(code, style) } },
     codeBlock = { MarkdownCodeBlock(it.content, it.node, it.typography.code) { code, _, style -> CodeBlock(code, style) } },

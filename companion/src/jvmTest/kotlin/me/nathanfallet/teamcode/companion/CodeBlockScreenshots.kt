@@ -7,7 +7,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runDesktopComposeUiTest
@@ -31,9 +32,9 @@ class CodeBlockScreenshots {
     @Test fun capture() {
         val output = System.getenv("TEAMCODE_SCREENSHOTS")?.takeIf { it.isNotBlank() }?.let(::File) ?: return
         output.mkdirs()
-        val text = "Here is the fix:\n\n```kotlin\nfun greet(name: String): String {\n    return \"Hello, \$name\"\n}\n```\n\nRun it with `./gradlew test`, or:\n\n```\n./gradlew test\n```"
+        val text = "Here is the fix:\n\n```kotlin\nfun greet(name: String): String {\n    return \"Hello, \$name\"\n}\n```\n\nInline code like `./gradlew test` has no button, a one-line block does:\n\n```\n./gradlew test\n```"
         for ((theme, suffix) in listOf(ThemePreference.DARK to "dark", ThemePreference.LIGHT to "light")) {
-            runDesktopComposeUiTest(720, 440) {
+            runDesktopComposeUiTest(720, 520) {
                 setContent {
                     CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides Density(2f)) {
                         TeamCodeTheme(theme) {
@@ -46,7 +47,7 @@ class CodeBlockScreenshots {
                 waitForIdle()
                 fun shot(name: String) { waitForIdle(); ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(output, "$name.png")) }
                 shot("code-copy-$suffix-1")
-                onNodeWithTag("code-copy").performClick()
+                onAllNodesWithTag("code-copy").onFirst().performClick()
                 waitForIdle()
                 shot("code-copy-$suffix-2-copied")
             }

@@ -22,15 +22,15 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** The copy button of a multi-line code block: what it copies, when it is there, and that it never moves the layout. */
+/** The copy button of a code block: what it copies, when it is there, and that it never moves the layout. */
 @OptIn(ExperimentalTestApi::class)
 @Suppress("DEPRECATION")
 class CodeBlockCopyTest {
-    @Test fun twoLinesAreTheThresholdAndAnEmptyOrSingleLineBlockHasNoButton() {
+    @Test fun anyBlockWithContentHasACopyTextAndAnEmptyOneHasNone() {
         assertNull(copyableCode(""))
-        assertNull(copyableCode("one line"))
-        assertNull(copyableCode("one line\n"))
-        assertNull(copyableCode("one line\n\n  \n"))
+        assertNull(copyableCode("\n\n  \n"))
+        assertEquals("./gradlew test", copyableCode("./gradlew test"))
+        assertEquals("./gradlew test", copyableCode("./gradlew test\n"))
         assertEquals("a\nb", copyableCode("a\nb"))
     }
 
@@ -78,9 +78,50 @@ class CodeBlockCopyTest {
         assertEquals("ls -la\ncd ..", copied)
     }
 
-    @Test fun aSingleLineBlockAndInlineCodeHaveNoButton() = runComposeUiTest {
+    @Test fun aSingleLineBlockHasAButtonAndCopiesItsLine() = runComposeUiTest {
+        var copied: String? = null
+        val clipboard = object : ClipboardManager {
+            override fun getText() = copied?.let(::AnnotatedString)
+            override fun setText(annotatedString: AnnotatedString) { copied = annotatedString.text }
+        }
         setContent {
-            TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.Agent(TranscriptEvent.AgentMessage(1, 0, "Use `foo` here:\n\n```\nls -la\n```", null)), memberId = null) } }
+            TeamCodeTheme {
+                CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                    Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.Agent(TranscriptEvent.AgentMessage(1, 0, "```bash\n./gradlew test\n```", null)), memberId = null) }
+                }
+            }
+        }
+        onNodeWithTag("code-copy").performClick()
+        assertEquals("./gradlew test", copied)
+    }
+
+    @Test fun anIndentedBlockHasAButtonAndCopiesItsContent() = runComposeUiTest {
+        var copied: String? = null
+        val clipboard = object : ClipboardManager {
+            override fun getText() = copied?.let(::AnnotatedString)
+            override fun setText(annotatedString: AnnotatedString) { copied = annotatedString.text }
+        }
+        setContent {
+            TeamCodeTheme {
+                CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                    Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.Agent(TranscriptEvent.AgentMessage(1, 0, "Run:\n\n    ./gradlew test\n    ./gradlew build", null)), memberId = null) }
+                }
+            }
+        }
+        onNodeWithTag("code-copy").performClick()
+        assertEquals("./gradlew test\n./gradlew build", copied)
+    }
+
+    @Test fun inlineCodeHasNoButtonEvenAloneOnItsLine() = runComposeUiTest {
+        setContent {
+            TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.Agent(TranscriptEvent.AgentMessage(1, 0, "`./gradlew test`", null)), memberId = null) } }
+        }
+        onNodeWithTag("code-copy").assertDoesNotExist()
+    }
+
+    @Test fun inlineCodeInASentenceHasNoButton() = runComposeUiTest {
+        setContent {
+            TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.Agent(TranscriptEvent.AgentMessage(1, 0, "Use `foo` here.", null)), memberId = null) } }
         }
         onNodeWithTag("code-copy").assertDoesNotExist()
     }
