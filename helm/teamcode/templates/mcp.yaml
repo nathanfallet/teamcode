@@ -4,6 +4,7 @@ through its Service with the host token. It has no database, no encryption key a
 */}}
 {{- if include "teamcode.mcp.enabled" . }}
 {{- $mcp := .Values.mcp }}
+{{- $networkPolicy := $mcp.networkPolicy | default dict }}
 {{- if le (int $mcp.terminationGracePeriodSeconds) (int $mcp.drainSeconds) }}
 {{- fail "mcp.terminationGracePeriodSeconds must be longer than mcp.drainSeconds, or running MCP calls are killed during a rollout" }}
 {{- end }}
@@ -167,7 +168,7 @@ spec:
             sizeLimit: {{ $mcp.dataSizeLimit }}
         - name: tmp
           emptyDir:
-            sizeLimit: 512Mi
+            sizeLimit: {{ $mcp.tmpSizeLimit | default "512Mi" }}
       {{- with $mcp.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -180,7 +181,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- if not $mcp.token.existingSecret }}
+{{- if not (include "teamcode.mcp.existingSecret" .) }}
 ---
 # The host token, generated once: an upgrade reads the existing value back (lookup) and keeps it, and `helm uninstall`
 # leaves the Secret in place. Rotate by deleting it, then `helm upgrade`: both Deployments roll (checksum/mcp-token).
@@ -196,7 +197,8 @@ type: Opaque
 data:
   token: {{ include "teamcode.mcp.generatedToken" . }}
 {{- end }}
-{{- if dig "networkPolicy" "enabled" true $mcp }}
+{{- if dig "enabled" true $networkPolicy }}
+{{- include "teamcode.mcp.checkExtraEgress" ($networkPolicy.extraEgress | default list) }}
 ---
 # Ingress: this release's server pods only, on 8090. Egress: DNS, then the public Internet only (registries and the
 # servers' own APIs), never pod, service, node, private, link-local or metadata addresses. Enforced by CNIs that
@@ -226,20 +228,16 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    {{- if not $mcp.networkPolicy.lockdown }}
+    {{- if not $networkPolicy.lockdown }}
     {{- $exceptV4 := list "0.0.0.0/8" "10.0.0.0/8" "100.64.0.0/10" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.0.0.0/24" "192.168.0.0/16" "198.18.0.0/15" "224.0.0.0/3" "168.63.129.16/32" }}
     {{- /* Not public IPv6, then NAT64 (64:ff9b::/96) and 6to4 (2002::/16) forms of the IPv4 ranges above, so DNS64 clusters keep public IPv4-only sites. */}}
     {{- $exceptV6 := list "::/127" "64:ff9b:1::/48" "2001::/32" "fc00::/7" "fe80::/10" "ff00::/8" "64:ff9b::/104" "2002::/24" "64:ff9b::a00:0/104" "2002:a00::/24" "64:ff9b::6440:0/106" "2002:6440::/26" "64:ff9b::7f00:0/104" "2002:7f00::/24" "64:ff9b::a9fe:0/112" "2002:a9fe::/32" "64:ff9b::ac10:0/108" "2002:ac10::/28" "64:ff9b::c000:0/120" "2002:c000::/40" "64:ff9b::c0a8:0/112" "2002:c0a8::/32" "64:ff9b::c612:0/111" "2002:c612::/31" "64:ff9b::e000:0/99" "2002:e000::/19" "64:ff9b::a83f:8110/128" "2002:a83f:8110::/48" }}
-    {{- range ($mcp.networkPolicy.blockedCidrs | default list) }}
+    {{- range ($networkPolicy.blockedCidrs | default list) }}
     {{- $parts := splitList "/" . }}
-    {{- if or (ne (len $parts) 2) (eq (index $parts 1) "0") }}
-    {{- fail (printf "mcp.networkPolicy.blockedCidrs takes CIDRs narrower than a whole address family: %s" .) }}
-    {{- end }}
-    {{- if contains ":" . }}
+    {{- if eq (include "teamcode.mcp.cidrFamily" .) "6" }}
     {{- $exceptV6 = append $exceptV6 . }}
     {{- else }}
     {{- $octets := splitList "." (index $parts 0) }}
-    {{- if ne (len $octets) 4 }}{{- fail (printf "Not an IPv4 CIDR in mcp.networkPolicy.blockedCidrs: %s" .) }}{{- end }}
     {{- $high := add (mul (atoi (index $octets 0)) 256) (atoi (index $octets 1)) }}
     {{- $low := add (mul (atoi (index $octets 2)) 256) (atoi (index $octets 3)) }}
     {{- $prefix := atoi (index $parts 1) }}
@@ -259,7 +257,7 @@ spec:
             except:
               {{- toYaml $exceptV6 | nindent 14 }}
     {{- end }}
-    {{- with $mcp.networkPolicy.extraEgress }}
+    {{- with $networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}

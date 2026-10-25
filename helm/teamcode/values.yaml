@@ -174,6 +174,12 @@ mcp:
   terminationGracePeriodSeconds: 90
   # The per-process directories (npm and uv caches, a Python per PyPI server), an emptyDir.
   dataSizeLimit: 3Gi
+  # The host's and the processes' temporary files, an emptyDir.
+  tmpSizeLimit: 512Mi
+  # The pod's memory limit is the hard bound for the JVM (at most 384 MiB of heap) and every process tree together;
+  # processMemoryMiB only stops one tree. Measured trees: about 360 MiB for a Node.js server through npx, 200 MiB for
+  # a Python one through uvx (docs/mcp.md#measurements), so 2Gi holds about four busy servers, not maxProcesses of them.
+  # Raise limits.memory (or lower maxProcesses) before declaring more.
   resources:
     requests:
       cpu: 250m

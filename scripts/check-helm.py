@@ -225,7 +225,8 @@ assert objects['Service']['spec']['ports'] == [{'name': 'http', 'port': 8090, 't
 # The server reaches the host through its Service, with the same token.
 server_env = {item['name']: item for item in server_deployment['spec']['template']['spec']['containers'][0]['env']}
 assert server_env['TEAMCODE_MCP_URL']['value'] == 'http://test-teamcode-mcp:8090'
-assert server_env['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {'name': 'test-teamcode-mcp', 'key': 'token'}
+# Optional on the server side: a server pod still starts while the Secret is missing (rotation, operator Secret late).
+assert server_env['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {'name': 'test-teamcode-mcp', 'key': 'token', 'optional': True}
 # The generated Secret: 48 random alphanumeric characters, kept on uninstall, and one value per render shared by the
 # Secret and both checksum annotations (so a rotation rolls the server and the host together).
 secret = objects['Secret']
@@ -314,7 +315,7 @@ assert 'Secret' not in objects and not any(doc['kind'] == 'Secret' for doc in do
 reference = {'name': 'my-mcp', 'key': 'value'}
 assert {i['name']: i for i in objects['Deployment']['spec']['template']['spec']['containers'][0]['env']}['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == reference
 server_pod = server(documents)['spec']['template']
-assert {i['name']: i for i in server_pod['spec']['containers'][0]['env']}['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == reference
+assert {i['name']: i for i in server_pod['spec']['containers'][0]['env']}['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {**reference, 'optional': True}
 assert server_pod['metadata']['annotations']['checksum/mcp-token'] == objects['Deployment']['spec']['template']['metadata']['annotations']['checksum/mcp-token']
 # Off: nothing of the host is rendered and the server gets no MCP variable or annotation.
 for flags in (['--set', 'mcp.enabled=false'], ['--set', 'mcp.enabled=false', '--set', 'podAnnotations.a=b']):
@@ -336,8 +337,53 @@ with tempfile.TemporaryDirectory() as old_dir:
         yaml.safe_dump(old_values, handle)
     documents = render(chart_path=old_chart)
     assert not any('-mcp' in doc['metadata']['name'] for doc in documents)
+    # --set mcp.enabled=true on such a release leaves the block with that key alone: a clear refusal, not a host
+    # deployed from empty settings.
+    result = subprocess.run(['helm', 'template', 'test', old_chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'mcp.enabled=true'],
+                            capture_output=True, text=True)
+    assert result.returncode != 0 and '--reset-then-reuse-values' in result.stderr, result.stderr
+# Null sub-blocks keep their defaults instead of failing on a nil pointer, as for the session egress lists.
+objects = mcp_objects(render('--set', 'mcp.networkPolicy=null', '--set', 'mcp.token=null', '--set', 'mcp.tmpSizeLimit=1Gi'))
+assert 'NetworkPolicy' in objects and 'Secret' in objects
+assert {v['name']: v for v in objects['Deployment']['spec']['template']['spec']['volumes']}['tmp']['emptyDir']['sizeLimit'] == '1Gi'
+# The generated token is read back from the release's existing Secret (lookup, faked here through a probe template that
+# passes fixtures to the same helper): an existing value is kept as is; an absent Secret, or one without the key, gets
+# a new value (install, or rotation after the Secret was deleted).
+with tempfile.TemporaryDirectory() as probe_dir:
+    import shutil
+    probe_chart = f'{probe_dir}/teamcode'
+    shutil.copytree(chart, probe_chart)
+    kept = base64.b64encode(b'k' * 48).decode()
+    with open(f'{probe_chart}/templates/zz-token-probe.yaml', 'w') as probe:
+        probe.write('apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: token-probe\ndata:\n'
+                    f'  existing: {{{{ include "teamcode.mcp.tokenData" (dict "existing" (dict "data" (dict "token" "{kept}"))) | quote }}}}\n'
+                    '  absent: {{ include "teamcode.mcp.tokenData" (dict "existing" dict) | quote }}\n'
+                    '  nokey: {{ include "teamcode.mcp.tokenData" (dict "existing" (dict "data" (dict "other" "eA=="))) | quote }}\n')
+    rendered = subprocess.run(['helm', 'template', 'test', probe_chart, '--set', 'publicUrl=https://teamcode.example.org',
+                               '--show-only', 'templates/zz-token-probe.yaml'], check=True, capture_output=True, text=True).stdout
+    tokens = yaml.safe_load(rendered)['data']
+    assert tokens['existing'] == kept, tokens
+    for fresh in (tokens['absent'], tokens['nokey']):
+        assert re.fullmatch(r'[A-Za-z0-9]{48}', base64.b64decode(fresh).decode())
 # Misconfigurations fail at render time.
-for flags in (['--set', 'mcp.drainSeconds=90'], ['--set', 'mcp.networkPolicy.blockedCidrs={0.0.0.0/0}'], ['--set', 'mcp.networkPolicy.blockedCidrs={10.0.0.1}']):
+def extra(rule):
+    return ['--set-json', 'mcp.networkPolicy.extraEgress=' + json.dumps([rule])]
+
+
+# Accepted extra rules: a private mirror, and a broad block that excepts link-local.
+for rule in ({'to': [{'ipBlock': {'cidr': '10.20.0.0/16'}}]}, {'to': [{'ipBlock': {'cidr': '0.0.0.0/0', 'except': ['169.254.0.0/16']}}]},
+             {'to': [{'ipBlock': {'cidr': '2000::/3'}}]}, {'to': [{'ipBlock': {'cidr': '::/0', 'except': ['fe80::/10']}}]},
+             {'to': [{'namespaceSelector': {}}], 'ports': [{'protocol': 'TCP', 'port': 443}]}):
+    assert mcp_objects(render(*extra(rule)))['NetworkPolicy']['spec']['egress'][-1] == rule
+assert {*canonical(['2001:db8::/32', '192.168.1.0/24'])} <= {*canonical(sum((r['to'][0]['ipBlock']['except'] for r in mcp_objects(render(
+    '--set', 'mcp.networkPolicy.blockedCidrs={2001:db8::/32,192.168.1.0/24}'))['NetworkPolicy']['spec']['egress'][1:3]), []))}
+for flags in (['--set', 'mcp.drainSeconds=90'], *(['--set', f'mcp.networkPolicy.blockedCidrs={{{cidr}}}'] for cidr in (
+        '0.0.0.0/0', '10.0.0.1', '192.168.1.5/33', 'abc.def.1.1/24', '10.0.0.256/24', '::/0', 'fe80::/129', 'example.org/24')),
+        # Extra rules that reach link-local (cloud metadata), as the session policy refuses them.
+        *(extra(rule) for rule in ({'ports': [{'protocol': 'TCP', 'port': 80}]}, {'to': [{'ipBlock': {'cidr': '169.254.169.254/32'}}]},
+                                   {'to': [{'ipBlock': {'cidr': '0.0.0.0/0'}}]}, {'to': [{'ipBlock': {'cidr': '128.0.0.0/2'}}]},
+                                   {'to': [{'ipBlock': {'cidr': 'fe80::1/128'}}]}, {'to': [{'ipBlock': {'cidr': '::/0'}}]},
+                                   {'to': [{'ipBlock': {'cidr': 'fe00::/8'}}]}))):
     result = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', *flags], capture_output=True, text=True)
     assert result.returncode != 0 and 'mcp.' in result.stderr, (flags, result.stderr)
 print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes, draining, the MySQL network policy, the session egress settings and the MCP host (security, labels, token, network policy, on/off).')
