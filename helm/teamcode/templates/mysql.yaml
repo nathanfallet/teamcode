@@ -112,5 +112,5 @@ spec:
         {{- end }}
         resources:
           requests:
-            storage: {{ .Values.mysql.persistence.size }}
+            storage: {{ include "teamcode.mysql.storageSize" (dict "explicit" .Values.mysql.persistence.size "existing" (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "teamcode.mysql.fullname" .))) }}
 {{- end }}

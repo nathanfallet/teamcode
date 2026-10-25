@@ -77,3 +77,18 @@ Create the name of the service account to use
 {{- define "teamcode.mysql.name" -}}
 {{- printf "%s-mysql" (include "teamcode.name" . | trunc 57 | trimSuffix "-") -}}
 {{- end -}}
+
+{{/*
+Size of the bundled MySQL's volume claim template. volumeClaimTemplates is immutable on an existing StatefulSet, so:
+an explicit mysql.persistence.size is used as written; otherwise the size of the release's existing StatefulSet is kept
+(read with lookup, https://helm.sh/docs/chart_template_guide/function_list/#lookup); otherwise (new installation, or
+helm template / --dry-run=client, where lookup returns nothing) 30Gi. Takes a dict: explicit, existing (the StatefulSet
+object or an empty dict).
+*/}}
+{{- define "teamcode.mysql.storageSize" -}}
+{{- $size := "" -}}
+{{- range ((.existing.spec | default dict).volumeClaimTemplates | default list) -}}
+{{- if eq .metadata.name "data" -}}{{- $size = .spec.resources.requests.storage -}}{{- end -}}
+{{- end -}}
+{{- .explicit | default $size | default "30Gi" -}}
+{{- end -}}

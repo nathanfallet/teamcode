@@ -112,6 +112,30 @@ with tempfile.TemporaryDirectory() as packaged:
     rendered = subprocess.run(['helm', 'template', 'test', f'{packaged}/teamcode-9.8.7.tgz', '--set', 'publicUrl=https://teamcode.example.org', '--set', 'image.tag=latest'], check=True, capture_output=True, text=True).stdout
     container = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]
     assert container['image'] == 'nathanfallet/teamcode:latest' and container['imagePullPolicy'] == 'Always'
+# The bundled MySQL's volume size: 30Gi for a new installation (lookup finds nothing outside a cluster), an explicit
+# value as written, and an existing StatefulSet's size kept, since volumeClaimTemplates is immutable. lookup cannot be
+# faked offline, so the helper is rendered from a copy of the chart with a probe template that passes it fixtures.
+def claim_size(flags):
+    rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', *flags],
+                              check=True, capture_output=True, text=True).stdout
+    mysql = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'StatefulSet')
+    return mysql['spec']['volumeClaimTemplates'][0]['spec']['resources']['requests']['storage']
+assert claim_size([]) == '30Gi'
+assert claim_size(['--set', 'mysql.persistence.size=50Gi']) == '50Gi'
+with tempfile.TemporaryDirectory() as probe_dir:
+    import shutil
+    probe_chart = f'{probe_dir}/teamcode'
+    shutil.copytree(chart, probe_chart)
+    existing = '(dict "spec" (dict "volumeClaimTemplates" (list (dict "metadata" (dict "name" "data") "spec" (dict "resources" (dict "requests" (dict "storage" "10Gi")))))))'
+    with open(f'{probe_chart}/templates/zz-size-probe.yaml', 'w') as probe:
+        probe.write('apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: size-probe\ndata:\n'
+                    f'  existing: {{{{ include "teamcode.mysql.storageSize" (dict "explicit" "" "existing" {existing}) | quote }}}}\n'
+                    f'  explicit: {{{{ include "teamcode.mysql.storageSize" (dict "explicit" "50Gi" "existing" {existing}) | quote }}}}\n'
+                    '  absent: {{ include "teamcode.mysql.storageSize" (dict "explicit" "" "existing" dict) | quote }}\n')
+    rendered = subprocess.run(['helm', 'template', 'test', probe_chart, '--set', 'publicUrl=https://teamcode.example.org',
+                               '--show-only', 'templates/zz-size-probe.yaml'], check=True, capture_output=True, text=True).stdout
+    sizes = yaml.safe_load(rendered)['data']
+    assert sizes == {'existing': '10Gi', 'explicit': '50Gi', 'absent': '30Gi'}, sizes
 # Misconfigured installations must fail at render time.
 # A Bitnami-style mysql.primary.resources would be silently ignored and leave the bundled MySQL at its default limit.
 misplaced = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org',
