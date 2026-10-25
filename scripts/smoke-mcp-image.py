@@ -95,9 +95,12 @@ def main(image):
         print("A version newer than the declaration date is refused: " + next(line for line in stderr.splitlines() if "with a date before" in line).strip())
         time.sleep(6)  # one memory reading
         status, body = request(origin, "/v1/status", token)
+        # Absent fields are null: the refused key never started, so it has neither a cold start nor a memory reading.
         for process in body["processes"]:
-            rss = process.get("rssBytes")
-            print(f"{process['package']}: state {process['state']}, cold start {process['coldStartMillis']} ms, RSS {rss and rss >> 20} MiB")
+            rss, cold = process.get("rssBytes"), process.get("coldStartMillis")
+            print(f"{process['package']}: state {process['state']}, cold start {cold} ms, RSS {rss and rss >> 20} MiB")
+            if process["state"] == "ready":
+                assert rss, f"no memory reading for {process['package']}: the /proc probe does not work in the image"
         status, body = request(origin, "/v1/retain", token, {"keys": []})
         assert status == 200 and body["stopped"] == 2, (status, body)  # the refused key has no process
         events = [line for line in docker("logs", container).stdout.splitlines() if line.startswith("{")]
