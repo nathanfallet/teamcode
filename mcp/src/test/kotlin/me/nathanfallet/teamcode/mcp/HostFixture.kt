@@ -53,7 +53,7 @@ class HostFixture(tweak: HostFixture.(HostConfig) -> HostConfig = { it }, memory
             npx = bin.resolve("npx").absolutePathString(), uvx = bin.resolve("uvx").absolutePathString(),
             prlimit = "/usr/bin/prlimit".takeIf { Path(it).isExecutable() },
             path = "${Path(node).parent}:/usr/bin:/bin",
-            drainMinMillis = 0, tickMillis = 100, memoryCheckMillis = 200, closeStdinWaitMillis = 1_000, terminateWaitMillis = 1_500,
+            drainMinMillis = 0, tickMillis = 100, retainGraceMillis = 0, memoryCheckMillis = 200, closeStdinWaitMillis = 1_000, terminateWaitMillis = 1_500,
         ).let { tweak(it) }
         supervisor = Supervisor(config, events = { events += it; EventSink.LOG.emit(it) }, memory = memory)
         server = embeddedServer(Netty, host = "127.0.0.1", port = 0) { mcpHost(config, supervisor) }.start()

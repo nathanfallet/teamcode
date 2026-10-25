@@ -49,7 +49,7 @@ data class McpLimits(
     val serverCallsPerMinute: Int = 1_200,
     val maxServers: Int = 32,
     val maxToolsPerServer: Int = 256,
-    /** A hosted command's start, package download included: added to a hosted server's list deadline and lease. */
+    /** A hosted command's start, package download included: added to a hosted server's deadlines and leases. */
     val stdioStartTimeoutMillis: Long = 45_000,
 ) {
     init {
@@ -61,12 +61,13 @@ data class McpLimits(
         require(stdioStartTimeoutMillis in 1_000..300_000)
     }
     /**
-     * How long the gateway waits for one operation. A hosted server's list may wait for its process to start (the
-     * agent's first list after an idle stop or a host restart); a call does not get longer, since agents give up on a
-     * request after about a minute.
+     * How long the gateway waits for one operation. A hosted server's list or call may also wait for its process to
+     * start (the first operation after an idle stop or a host restart, package download included): the host gives the
+     * start its own bound, so a warm process still answers within the usual deadline, and an agent that gives up earlier
+     * cancels the request.
      */
     fun deadlineMillis(operation: McpOperation, hosted: Boolean = false) =
-        if (operation == McpOperation.CALL) callTimeoutMillis else listTimeoutMillis + (if (hosted) stdioStartTimeoutMillis else 0)
+        (if (operation == McpOperation.CALL) callTimeoutMillis else listTimeoutMillis) + (if (hosted) stdioStartTimeoutMillis else 0)
     /** A lease outlives the operation's own deadline, so a crashed replica's slot is reclaimed shortly after. */
     fun leaseMillis(operation: McpOperation, hosted: Boolean = false) = deadlineMillis(operation, hosted) + 30_000
     /** The longest lease any operation holds: active rows younger than this still count against the concurrency limits. */

@@ -75,7 +75,7 @@ class HostMcpUpstreamTest {
         assertEquals("call", call["op"]!!.jsonPrimitive.content)
         assertEquals("echo", call["tool"]!!.jsonPrimitive.content)
         assertEquals(buildJsonObject { put("text", "hi") }, call["arguments"])
-        assertEquals(limits.callTimeoutMillis, call["deadlineMs"]!!.jsonPrimitive.long)
+        assertEquals(limits.callTimeoutMillis + limits.stdioStartTimeoutMillis, call["deadlineMs"]!!.jsonPrimitive.long)
         for (headers in host.headers) {
             assertEquals("Bearer $token", headers[HttpHeaders.Authorization])
             assertEquals("1", headers["TeamCode-Host-Protocol"])
@@ -107,8 +107,14 @@ class HostMcpUpstreamTest {
             assertEquals(McpOutcome.UPSTREAM_ERROR, failure.outcome)
             assertTrue(failure.message!!.contains(if (code == "shutting_down") "restarting" else "same version"), failure.message)
         }
-        val proxy = upstream(Host { _, _ -> respond("<html>bad gateway</html>", HttpStatusCode.BadGateway) })
-        assertEquals("The MCP host sent an invalid answer.", assertFailsWith<McpUpstreamFailure> { proxy.callTool(server(), "echo", null, limits) }.message)
+        // A proxy without the host behind it is an unreachable host (a list tries once more); a 200 that is not JSON is the host's fault.
+        var proxied = 0
+        val proxy = upstream(Host { _, _ -> proxied++; respond("<html>bad gateway</html>", HttpStatusCode.BadGateway) })
+        assertEquals("The MCP host is unreachable (HTTP 502).", assertFailsWith<McpUpstreamFailure> { proxy.callTool(server(), "echo", null, limits) }.message)
+        assertEquals(McpOutcome.UPSTREAM_ERROR, assertFailsWith<McpUpstreamFailure> { proxy.listTools(server(), limits) }.outcome)
+        assertEquals(3, proxied)
+        val garbled = upstream(Host { _, _ -> respond("not json", HttpStatusCode.OK) })
+        assertEquals("The MCP host sent an invalid answer.", assertFailsWith<McpUpstreamFailure> { garbled.callTool(server(), "echo", null, limits) }.message)
         val large = upstream(Host { _, _ -> json("""{"result":{"content":[{"type":"text","text":"${"x".repeat(4_096 + 1024 * 1024)}"}]},"cold":false,"state":"ready"}""") })
         assertEquals(McpOutcome.TOO_LARGE, assertFailsWith<McpUpstreamFailure> { large.callTool(server(), "echo", null, limits) }.outcome)
         val hostless = HostMcpUpstream(HttpClient(MockEngine { throw IOException("connection refused") }), "http://teamcode-mcp:8090", token)
@@ -164,6 +170,17 @@ class HostMcpUpstreamTest {
         assertEquals(secret, warm["spec"]!!.jsonObject["secrets"]!!.jsonObject["TOKEN"]!!.jsonPrimitive.content)
         HostMcpUpstream(HttpClient(MockEngine { throw IOException("down") }), "http://teamcode-mcp:8090", token).use { it.warm(listOf(server())) }
         upstream.close()
+        // A refused warm-up leaves the key free: the next server list asks again instead of waiting a minute.
+        val refusing = Host { _, _ -> json("""{"error":{"code":"capacity","message":"full"}}""", HttpStatusCode.ServiceUnavailable) }
+        upstream(refusing).use { client ->
+            client.warm(listOf(server()))
+            val until = System.currentTimeMillis() + 5_000
+            while (refusing.requests.isEmpty() && System.currentTimeMillis() < until) delay(20)
+            delay(200)
+            client.warm(listOf(server()))
+            while (refusing.requests.size < 2 && System.currentTimeMillis() < until) delay(20)
+            assertEquals(2, refusing.requests.size)
+        }
     }
 
     @Test fun launchersComeFromTheHostStatusAndAnUnreachableHostIsA503() = runBlocking {
@@ -186,7 +203,11 @@ class HostMcpUpstreamTest {
         assertEquals("mcp_host_unreachable" to 503, failure.code to failure.status)
         assertFailsWith<Exception> { down.retain(listOf(key)) }
         val refusing = upstream(Host { _, _ -> json("""{"error":{"code":"unauthorized","message":"no"}}""", HttpStatusCode.Unauthorized) })
-        assertEquals("mcp_host_unreachable", assertFailsWith<TeamFailure> { refusing.launchers() }.code)
+        assertFailsWith<TeamFailure> { refusing.launchers() }.also { assertEquals("mcp_host_unreachable", it.code); assertTrue(it.message!!.contains("same token"), it.message) }
+        var asked = 0
+        val starting = upstream(Host { _, _ -> asked++; json("""{"version":"1","protocol":"1","launchers":[],"maxProcesses":16,"draining":false,"processes":[]}""") })
+        assertEquals(emptySet(), starting.launchers()); assertEquals(emptySet(), starting.launchers())
+        assertEquals(2, asked, "An empty launcher list is not cached")
         assertFailsWith<IllegalStateException> { refusing.retain(listOf(key)) }
         Unit
     }

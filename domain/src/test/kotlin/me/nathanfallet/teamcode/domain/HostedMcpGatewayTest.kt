@@ -70,7 +70,8 @@ class HostedMcpGatewayTest {
         assertEquals(mapOf("MODE" to "x"), upstream.listed[0].config)
         val limits = McpLimits()
         assertEquals(limits.listTimeoutMillis + limits.stdioStartTimeoutMillis, limits.deadlineMillis(McpOperation.LIST, hosted = true))
-        assertEquals(limits.callTimeoutMillis, limits.deadlineMillis(McpOperation.CALL, hosted = true), "A call does not wait longer: agents give up after about a minute")
+        assertEquals(limits.callTimeoutMillis + limits.stdioStartTimeoutMillis, limits.deadlineMillis(McpOperation.CALL, hosted = true), "A call may also wait for a stopped process to start")
+        assertEquals(limits.callTimeoutMillis, limits.deadlineMillis(McpOperation.CALL))
         assertTrue(limits.leaseMillis(McpOperation.LIST, hosted = true) > limits.leaseMillis(McpOperation.LIST))
         assertTrue(limits.maxLeaseMillis >= limits.leaseMillis(McpOperation.CALL, hosted = true))
     }

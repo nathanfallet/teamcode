@@ -51,6 +51,8 @@ class Supervisor(
     } && (config.prlimit == null || executable(config.prlimit))
 
     private class Entry(val key: String) {
+        /** When this key was first seen: a retain sweep spares it for [HostConfig.retainGraceMillis]. */
+        val createdAt = System.currentTimeMillis()
         val mutex = Mutex()
         @Volatile var process: StdioProcess? = null
         @Volatile var starting: Deferred<StdioProcess>? = null
@@ -153,13 +155,18 @@ class Supervisor(
         return KeyState(request.key, entry.state())
     }
 
-    /** Stops every process whose key is not in [keys] (revoked assignments, deleted variants) and removes its directory. */
+    /**
+     * Stops every process whose key is not in [keys] (revoked assignments, deleted variants) and removes its directory.
+     * A key first seen less than [HostConfig.retainGraceMillis] ago is spared: the server read [keys] from its database
+     * just before, so a process started for an assignment made since then must not be stopped.
+     */
     suspend fun retain(keys: Collection<String>): Int {
         keys.forEach { validate(it) }
         val keep = keys.toSet()
         val stopping = mutableListOf<StdioProcess>()
+        val now = System.currentTimeMillis()
         for ((key, entry) in entries) {
-            if (key in keep) continue
+            if (key in keep || now - entry.createdAt < config.retainGraceMillis) continue
             entry.mutex.withLock {
                 entries.remove(key, entry)
                 entry.process?.let { if (retire(entry, it, StopReason.RETAINED)) stopping += it }

@@ -32,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import me.nathanfallet.teamcode.mcp.HostFixture.Companion.key
@@ -274,6 +275,18 @@ class McpHostTest {
         val oversized = http.post(origin + HostProtocol.OPS) { authorized(); contentType(ContentType.Application.Json); setBody("x".repeat(config.maxRequestBytes + 1)) }
         assertEquals(HttpStatusCode.PayloadTooLarge, oversized.status)
         assertEquals(HttpStatusCode.BadRequest, http.post(origin + HostProtocol.OPS) { authorized(); contentType(ContentType.Application.Json); setBody("{") }.status)
+    }
+
+    @Test
+    fun `a retain sweep spares a key first seen within its grace period`() = host({ it.copy(retainGraceMillis = 1_500) }) {
+        // The server read its list before this assignment existed: the new process survives the sweep.
+        val fresh = key("fresh")
+        call(fresh, spec(), "echo")
+        assertEquals("""{"stopped":0}""", post(HostProtocol.RETAIN, """{"keys":[]}""").bodyAsText())
+        assertNotNull(process(fresh))
+        delay(1_600)
+        assertEquals("""{"stopped":1}""", post(HostProtocol.RETAIN, """{"keys":[]}""").bodyAsText())
+        eventually { process(fresh) == null }
     }
 
     @Test

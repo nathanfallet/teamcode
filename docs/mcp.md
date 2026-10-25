@@ -38,7 +38,7 @@ Internal HTTP on port 8090, released with the server at the same version. Every 
 | --- | --- | --- |
 | `POST /v1/ops` | `{key, spec, op: "list" \| "call", tool?, arguments?, deadlineMs, maxResponseBytes}` | 200 `{result \| error, cold, state}` |
 | `POST /v1/warm` | `{key, spec}` | 202 `{key, state}`; starts the process without waiting |
-| `POST /v1/retain` | `{keys: […]}` | 200 `{stopped}`; stops every process whose key is not listed and removes its directory |
+| `POST /v1/retain` | `{keys: […]}` | 200 `{stopped}`; stops every process whose key is not listed and removes its directory, except one started less than a minute ago (an assignment newer than the caller's read) |
 | `POST /v1/stop` | `{key}` | 200 `{stopped}`; the administrator's "Restart": stops the process and lifts a backoff |
 | `GET /v1/status` | | 200: version, launchers, and per key the state, pid, counters, last failure, cold start time, memory and the last 64 KiB of scrubbed stderr |
 | `GET /health` | | 200 once the JVM serves (no token) |
@@ -196,7 +196,7 @@ From `RealPackagesTest` (`TEAMCODE_MCP_REAL_PACKAGES=1 ./gradlew :mcp:test --tes
 | `@modelcontextprotocol/server-everything@2.0.0` (npm) | 5.8 s | 1.4 s | 2 ms (`echo`) | 363 MiB (`npm exec` and the server) |
 | `mcp-server-fetch==2026.10.24` (PyPI, Python downloaded by uv) | 23.1 s | 0.6 s | network-bound (`fetch`) | 195 MiB |
 
-The 45 s start timeout covers a first PyPI start with its Python download; the planned warm-up from `/api/v1/mcp/servers` exists so that the agent's first `tools/list` does not wait for it.
+The 45 s start timeout covers a first PyPI start with its Python download; the warm-up sent from `/api/v1/mcp/servers` exists so that the agent's first `tools/list` does not wait for it.
 
 ## Tests
 

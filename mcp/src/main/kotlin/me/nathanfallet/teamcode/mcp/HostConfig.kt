@@ -49,6 +49,8 @@ data class HostConfig(
     val oversizeLimit: Int = 3,
     val oversizeWindowMillis: Long = 10 * 60_000L,
     val closeStdinWaitMillis: Long = 2_000,
+    /** A retain sweep spares keys first seen this recently (an assignment made after the server read its list). */
+    val retainGraceMillis: Long = 60_000,
     val terminateWaitMillis: Long = 5_000,
 ) {
     init {

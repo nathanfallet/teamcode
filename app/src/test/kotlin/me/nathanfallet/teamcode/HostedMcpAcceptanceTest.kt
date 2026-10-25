@@ -57,7 +57,7 @@ class HostedMcpAcceptanceTest {
             token = hostToken, host = "127.0.0.1", port = if (port == 0) 8090 else port, dataDir = root.resolve("data"),
             npx = root.resolve("bin/npx").absolutePathString(), uvx = root.resolve("bin/uvx").absolutePathString(),
             prlimit = "/usr/bin/prlimit".takeIf { Path(it).isExecutable() }, path = "${Path(node).parent}:/usr/bin:/bin",
-            drainMinMillis = 0, tickMillis = 100, closeStdinWaitMillis = 500, terminateWaitMillis = 1_000,
+            drainMinMillis = 0, tickMillis = 100, closeStdinWaitMillis = 500, terminateWaitMillis = 1_000, retainGraceMillis = 0,
         )
         val supervisor = Supervisor(config)
         private val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { mcpHost(config, supervisor) }.start()

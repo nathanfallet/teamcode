@@ -64,7 +64,7 @@ python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/bu
 python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/build/libs/mcp-all.jar" --fixture
 ```
 
-An administrator declares a `SHARED` npm server (`@modelcontextprotocol/server-everything@2.0.0`) and a `PER_MEMBER` PyPI server (`mcp-server-fetch==2026.10.24`) through the API, a member lists and calls them through the gateway as an agent does, and the host is stopped and started again; no answer or log may hold a secret. The default run downloads the real packages (`npx`, `uvx` and Node.js on `PATH`, network needed); `--fixture` runs the host's Node.js fixture server instead, offline. `scripts/smoke-mcp-image.py` checks the host image itself.
+An administrator declares a `SHARED` npm server (`@modelcontextprotocol/server-everything@2.0.0`) and a `PER_MEMBER` PyPI server (`mcp-server-fetch==2026.10.24`) through the API, a member lists and calls them through the gateway as an agent does, and the host is stopped and started again; no answer or log may hold a secret. The default run downloads the real packages (`npx`, `uvx` and Node.js on `PATH`, network needed); `--fixture` runs the host's Node.js fixture server instead, offline; CI runs the `--fixture` mode after the replica smoke. `scripts/smoke-mcp-image.py` checks the host image itself.
 
 ## 2. Small real Claude/Codex requests
 

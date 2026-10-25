@@ -199,7 +199,13 @@ fun main() {
         val retain = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase(variants, mcpHost)
         workers.launch {
             while (isActive) {
-                try { work.runDue("mcp/retain", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.INTERVAL_MILLIS, timeoutMillis = 30_000) { retain() } }
+                try { work.runDue("mcp/retain", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.INTERVAL_MILLIS, timeoutMillis = 30_000) {
+                    when (val stopped = retain()) {
+                        null -> System.err.println("TeamCode MCP host retain sweep skipped: more than ${me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.MAX_ASSIGNMENTS} hosted assignments, no process is stopped.")
+                        0 -> Unit
+                        else -> println("TeamCode MCP host retain sweep stopped $stopped unassigned process(es).")
+                    }
+                } }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode MCP host retain sweep deadline exceeded.") }
                 catch (error: CancellationException) { throw error }
                 catch (_: Exception) { System.err.println("TeamCode MCP host retain sweep is temporarily unavailable.") }

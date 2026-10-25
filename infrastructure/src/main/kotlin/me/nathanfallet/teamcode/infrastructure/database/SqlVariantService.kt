@@ -34,7 +34,14 @@ class SqlVariantService(
     override suspend fun create(actor: Principal, variant: NewVariant): Variant {
         // Authorization first, so a non-administrator learns nothing, not even whether an MCP host is configured.
         actor.requireAdmin()
-        VariantService.validate(variant, if (variant.kind == VariantKind.MCP && variant.transport == McpTransport.STDIO) stdioLaunchers() else emptySet())
+        val launchers = if (variant.kind == VariantKind.MCP && variant.transport == McpTransport.STDIO) {
+            try { stdioLaunchers() } catch (unreachable: TeamFailure) {
+                // A malformed declaration is the administrator's to fix whatever the host's state: say so before the 503.
+                VariantService.validate(variant, StdioLauncher.entries.toSet())
+                throw unreachable
+            }
+        } else emptySet()
+        VariantService.validate(variant, launchers)
         return database.query {
             write(this, actor)
             if (Variants.select(Variants.id).where { Variants.teamId eq actor.teamId }.count() >= VariantService.VARIANT_LIMIT)
@@ -70,11 +77,17 @@ class SqlVariantService(
             .where { Variants.transport eq McpTransport.STDIO.wire }.limit(limit + 1).toList()
         if (variants.size > limit) return@query null
         if (variants.isEmpty()) return@query emptyList()
+        // The same eligibility as resolution: a PER_MEMBER assignment without the member's value is withheld, and so is
+        // everything of a disabled member or one with a temporary password (written as two ranges of member_recipients).
+        val shared = variants.filter { it[Variants.binding] == VariantBinding.SHARED.name }.map { it[Variants.id] }
         val rows = VariantAssignments.select(VariantAssignments.variantId, VariantAssignments.memberId, VariantAssignments.assignedAt)
-            .where { VariantAssignments.variantId inList variants.map { it[Variants.id] } }.limit(limit + 1).toList()
+            .where {
+                (VariantAssignments.variantId inList variants.map { it[Variants.id] }) and
+                    (if (shared.isEmpty()) VariantAssignments.memberSecret.isNotNull() else VariantAssignments.memberSecret.isNotNull() or (VariantAssignments.variantId inList shared))
+            }.limit(limit + 1).toList()
         if (rows.size > limit) return@query null
         val disabled = Members.select(Members.id)
-            .where { (Members.teamId inList variants.map { it[Variants.teamId] }.distinct()) and (Members.disabled eq true) }
+            .where { (Members.teamId inList variants.map { it[Variants.teamId] }.distinct()) and ((Members.disabled eq true) or ((Members.disabled eq false) and (Members.mustChangePassword eq true))) }
             .mapTo(HashSet()) { it[Members.id] }
         val byId = variants.associateBy { it[Variants.id] }
         rows.mapNotNull { row ->

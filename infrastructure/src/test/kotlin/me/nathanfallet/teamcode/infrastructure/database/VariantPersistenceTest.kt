@@ -153,7 +153,7 @@ class VariantPersistenceTest {
             } }
         }
     }
-    @Test fun hostedCommandsAreStoredWithEncryptedVariablesButNotServedYet() = runBlocking {
+    @Test fun hostedCommandsAreStoredWithEncryptedVariablesAndServedOnlyWithAHost() = runBlocking {
         MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
             container.start()
             Database(container.jdbcUrl, container.username, container.password).use { a ->
@@ -194,6 +194,10 @@ class VariantPersistenceTest {
                 assertEquals(McpTransport.HTTP to null, read.getValue("team" to "wiki").let { it.transport to it.command }, "An HTTPS variant stays http, without a command")
                 failure("invalid_variant") { first.create(admin, hosted("unpinned").copy(command = tracker.copy(pkg = "@acme/tracker-mcp@latest"))) }
                 failure("invalid_variant") { first.create(admin, hosted("missing", secrets = null)) }
+                // An unreachable host is a 503, but a malformed declaration still says what to fix first.
+                val hostDown = SqlVariantService(a, cipher, { throw TeamFailure("mcp_host_unreachable", 503, "The MCP host could not be reached.") })
+                failure("invalid_variant") { hostDown.create(admin, hosted("unpinned").copy(command = tracker.copy(pkg = "@acme/tracker-mcp@latest"))) }
+                failure("mcp_host_unreachable") { hostDown.create(admin, hosted("down")) }
 
                 // A member value is an object of variables holding every reference; a bare credential is refused.
                 failure("invalid_variant") { first.assign(admin, alice, perMember.id, SecretValue("synthetic-bare-credential")) }
@@ -219,6 +223,14 @@ class VariantPersistenceTest {
                 team.updateMember(admin, alice, Role.MEMBER, disabled = true)
                 assertEquals(emptyList(), first.hostedMcpAssignments(100), "A disabled member's processes stop at the next sweep")
                 team.updateMember(admin, alice, Role.MEMBER, disabled = false)
+                // Like resolution, the sweep keeps nothing for a member with a temporary password or a PER_MEMBER row without its value.
+                val carol = team.createMember(admin, "carol", Role.MEMBER).member.id
+                second.assign(admin, carol, shared.id)
+                assertEquals(setOf(alice), first.hostedMcpAssignments(100)!!.map { it.memberId }.toSet())
+                a.query { VariantAssignments.update({ (VariantAssignments.memberId eq alice) and (VariantAssignments.variantId eq perMember.id) }) { it[memberSecret] = null } }
+                assertEquals(listOf(shared.id), first.hostedMcpAssignments(100)!!.map { it.variantId })
+                assertEquals(listOf("tracker", "wiki"), ResolveEffectiveVariantsUseCase(second, hostedCommands = true)("default", alice).mcpServers.map { it.name }.sorted())
+                first.assign(admin, alice, perMember.id, StdioEnvironment.encode(mapOf("FETCH_KEY" to "synthetic-fetch-alice")))
 
                 // The command and its visible variables are immutable; secrets rotate and bump the version.
                 failure("invalid_variant") { first.update(admin, shared.id, VariantUpdate(shared.version, "team", mapOf("TRACKER_URL" to "https://attacker.test"))) }

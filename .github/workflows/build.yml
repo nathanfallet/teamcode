@@ -46,8 +46,9 @@ jobs:
       - run: python3 scripts/check-module-graph.py
       - run: python3 -m unittest discover -s scripts -p 'test_acceptance_*.py'
       - run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
-      - run: ./gradlew :api:jvmTest :client:jvmTest :client:testAndroidHostTest :api:compileAndroidMain :domain:test :infrastructure:test :presentation:test :config:jvmTest :cli:jvmTest :app:test :mcp:test :app:buildFatJar
+      - run: ./gradlew :api:jvmTest :client:jvmTest :client:testAndroidHostTest :api:compileAndroidMain :domain:test :infrastructure:test :presentation:test :config:jvmTest :cli:jvmTest :app:test :mcp:test :app:buildFatJar :mcp:buildFatJar
       - run: python3 scripts/smoke-replicas.py --jar app/build/libs/app-all.jar
+      - run: python3 scripts/smoke-mcp-stdio.py --jar app/build/libs/app-all.jar --host-jar mcp/build/libs/mcp-all.jar --fixture
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-jar

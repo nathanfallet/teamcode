@@ -24,7 +24,10 @@ data class HostedMcpAssignment(
 
 /** Every team's current hosted-command assignments, in a few bounded, indexed reads. */
 interface HostedMcpAssignmentSource {
-    /** The assignments of enabled members to hosted commands (transport stdio), or null when there are more than [limit]. */
+    /**
+     * The assignments to hosted commands (transport stdio) that resolution would serve (an enabled member without a
+     * temporary password; a PER_MEMBER one with the member's value), or null when there are more than [limit].
+     */
     suspend fun hostedMcpAssignments(limit: Int): List<HostedMcpAssignment>?
 }
 
