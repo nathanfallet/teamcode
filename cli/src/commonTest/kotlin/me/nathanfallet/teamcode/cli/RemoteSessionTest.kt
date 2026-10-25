@@ -3,6 +3,8 @@ package me.nathanfallet.teamcode.cli
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.api.models.RemotePermissionModes
 import me.nathanfallet.teamcode.cli.cloud.agent.*
+import me.nathanfallet.teamcode.cli.daemon.isWindows
+import me.nathanfallet.teamcode.cli.platform.pathStatus
 import me.nathanfallet.teamcode.cli.remote.RemoteSessionRecord
 import me.nathanfallet.teamcode.cli.remote.RemoteSessions
 import me.nathanfallet.teamcode.cli.remote.refuseDirectory
@@ -56,5 +58,23 @@ class RemoteSessionTest {
             assertNull(sessions.load("../config"), "Never a path outside the records")
             assertFailsWith<IllegalArgumentException> { sessions.save(record.copy(sessionId = "../x")) }
         } finally { FileSystem.SYSTEM.deleteRecursively(root, mustExist = false) }
+    }
+
+    @Test fun aConversationWrittenBeforeItsRecordKeepsTheRecordsPrivate() {
+        // A daemon continuing a device's conversation writes it before the record; on Windows a directory created without
+        // the private writes is refused by them afterwards.
+        val root = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "teamcode-remote-${kotlin.random.Random.nextLong().toULong()}" / "remote"
+        try {
+            val sessions = RemoteSessions(root)
+            val id = "8f3c0a2e-1111-4222-8333-944455556666"
+            sessions.conversation(id).write(AgentState("claude", null, "0000000a-aaaa-4bbb-8ccc-00000000000a", fork = true))
+            sessions.save(RemoteSessionRecord(id, "/Users/me/project", "claude"))
+            assertEquals(AgentState("claude", null, "0000000a-aaaa-4bbb-8ccc-00000000000a", fork = true), sessions.conversation(id).read())
+            assertEquals(id, sessions.load(id)?.sessionId)
+            if (!isWindows()) {
+                assertEquals(0x1C0, pathStatus(root.toString())!!.mode, "The records' directory is 0700")
+                assertEquals(0x180, pathStatus((root / "$id.conversation.json").toString())!!.mode, "The conversation is 0600")
+            }
+        } finally { FileSystem.SYSTEM.deleteRecursively(root.parent!!, mustExist = false) }
     }
 }

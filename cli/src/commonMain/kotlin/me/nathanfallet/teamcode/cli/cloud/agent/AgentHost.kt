@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.launch.agentLaunch
 import me.nathanfallet.teamcode.cli.platform.AgentProcess
+import me.nathanfallet.teamcode.cli.platform.writePrivateFile
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
 import okio.Path.Companion.toPath
@@ -641,11 +642,7 @@ internal class FileAgentStateStore(private val path: String) : AgentStateStore {
         if (!FileSystem.SYSTEM.exists(file)) null
         else AgentHost.stateJson.decodeFromString<AgentState>(FileSystem.SYSTEM.read(file) { readUtf8() })
     } catch (_: Exception) { null }
-    override fun write(state: AgentState) {
-        file.parent?.let { FileSystem.SYSTEM.createDirectories(it) }
-        val temporary = "$path.tmp".toPath()
-        FileSystem.SYSTEM.write(temporary) { writeUtf8(AgentHost.stateJson.encodeToString(state)) }
-        FileSystem.SYSTEM.atomicMove(temporary, file)
-    }
+    // Private and atomic, like the records beside it: on Windows a directory created otherwise is refused by their writes.
+    override fun write(state: AgentState) = writePrivateFile(path, AgentHost.stateJson.encodeToString(state))
     override fun clear() { FileSystem.SYSTEM.delete(file, mustExist = false) }
 }
