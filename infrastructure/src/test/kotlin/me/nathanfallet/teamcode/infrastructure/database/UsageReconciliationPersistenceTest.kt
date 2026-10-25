@@ -120,6 +120,8 @@ class UsageReconciliationPersistenceTest {
                 val day = nowMillis() / DAY - 91
                 Reservations.update({ Reservations.runId eq run }) { it[dayNumber] = day; it[expiresAt] = nowMillis() - 1 }
                 ReservationGroups.update({ ReservationGroups.groupId eq group }) { it[dayNumber] = day }
+                // The daily totals move with the reservations they count.
+                ReservationDailyUnits.update({ ReservationDailyUnits.dayNumber eq nowMillis() / DAY }) { it[dayNumber] = day }
             }
             f.admission.maintain()
             val service = UsageReconciliationServiceImpl(f.b)
