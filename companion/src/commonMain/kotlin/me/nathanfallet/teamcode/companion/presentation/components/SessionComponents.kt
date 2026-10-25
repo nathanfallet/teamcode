@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -161,13 +162,15 @@ fun phaseLabel(session: CloudSession): String? = when {
 
 /**
  * Links from agent text open only after the member saw the whole URL, and only `http` or `https` ones, in the
- * system browser: an agent's Markdown can name any target behind any label.
+ * system browser: an agent's Markdown can name any target behind any label. [inApp] goes first and says whether it
+ * opened the link in the app itself (an artifact of the conversation's server, in an overlay); it never confirms.
  */
 @Composable
-fun ConfirmingLinks(content: @Composable () -> Unit) {
+fun ConfirmingLinks(inApp: (String) -> Boolean = { false }, content: @Composable () -> Unit) {
     val system = LocalUriHandler.current
     var pending by remember { mutableStateOf<String?>(null) }
-    val handler = remember(system) { object : UriHandler { override fun openUri(uri: String) { pending = uri } } }
+    val opensInApp by rememberUpdatedState(inApp)
+    val handler = remember(system) { object : UriHandler { override fun openUri(uri: String) { if (!opensInApp(uri)) pending = uri } } }
     CompositionLocalProvider(LocalUriHandler provides handler) { content() }
     pending?.let { uri ->
         val allowed = isWebLink(uri)

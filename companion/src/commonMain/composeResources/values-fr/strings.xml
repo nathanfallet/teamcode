@@ -265,6 +265,8 @@
     <string name="artifact_copied">Lien copié.</string>
     <string name="artifact_open_browser">Ouvrir dans le navigateur</string>
     <string name="artifact_desktop">Les artefacts s'ouvrent dans ton navigateur, sur la page de visualisation de ton serveur.</string>
+    <string name="artifact_unavailable_title">Cet artefact ne s'est pas ouvert</string>
+    <string name="artifact_unavailable_body">Ouvre-le dans le navigateur : la page de ton serveur en dit plus.</string>
     <string name="link_new_server_title">Un nouveau serveur</string>
     <string name="link_new_server">Ce lien est pour %1$s, un serveur auquel cette app n'est pas connectée. Ne t'y connecte que si tu lui fais confiance.</string>
     <string name="link_new_server_confirm">Me connecter</string>

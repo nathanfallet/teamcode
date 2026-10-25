@@ -52,6 +52,7 @@ import com.adamglin.phosphoricons.regular.CaretDown
 import com.adamglin.phosphoricons.regular.Check
 import com.adamglin.phosphoricons.regular.Copy
 import com.adamglin.phosphoricons.regular.FileText
+import com.adamglin.phosphoricons.regular.X
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -73,6 +74,7 @@ import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.action_close
 import me.nathanfallet.teamcode.companion.resources.action_done
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.artifact_choose_version
@@ -85,6 +87,8 @@ import me.nathanfallet.teamcode.companion.resources.artifact_newer
 import me.nathanfallet.teamcode.companion.resources.artifact_open_browser
 import me.nathanfallet.teamcode.companion.resources.artifact_restart
 import me.nathanfallet.teamcode.companion.resources.artifact_show_newer
+import me.nathanfallet.teamcode.companion.resources.artifact_unavailable_body
+import me.nathanfallet.teamcode.companion.resources.artifact_unavailable_title
 import me.nathanfallet.teamcode.companion.resources.artifact_versions
 import me.nathanfallet.teamcode.companion.resources.artifact_versions_title
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
@@ -95,10 +99,16 @@ import org.jetbrains.compose.resources.stringResource
  * managed), then the version shown, its access and owner. On iOS and Android the content shows in a sandboxed web
  * view; the desktop opens the viewer page in the browser. A link inside the content opens outside only after its URL
  * is shown.
+ *
+ * As an overlay ([ArtifactOverlay]), [onClose] puts a close button at the end of the bar instead of the way back, and
+ * an artifact that did not load offers [fallbackUrl], its viewer page, in the browser.
  */
 @Suppress("DEPRECATION") // LocalClipboardManager: plain text is all the link needs, on every platform.
 @Composable
-fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabel: String = stringResource(Res.string.artifacts_title)) {
+fun ArtifactScreen(
+    viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabel: String = stringResource(Res.string.artifacts_title),
+    onClose: (() -> Unit)? = null, fallbackUrl: String? = null,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LifecycleStartEffect(viewModel) {
         viewModel.start()
@@ -118,6 +128,7 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabe
                     onClick = { clipboard.setText(AnnotatedString(url)); copied = true }, modifier = Modifier.testTag("artifact-copy"), tint = if (copied) colors.accentText else null)
                 TcIconButton(PhosphorIcons.Regular.ArrowSquareOut, stringResource(Res.string.artifact_open_browser), onClick = { browser.openUri(url) }, modifier = Modifier.testTag("artifact-browser"))
             }
+            if (onClose != null) TcIconButton(PhosphorIcons.Regular.X, stringResource(Res.string.action_close), onClick = onClose, modifier = Modifier.testTag("artifact-close"))
         }
         state.artifact?.let { artifact ->
             Column(Modifier.fillMaxWidth().background(colors.line).padding(bottom = 1.dp)) {
@@ -159,6 +170,15 @@ fun ArtifactScreen(viewModel: ArtifactViewModel, onBack: (() -> Unit)?, backLabe
         val opened = state.opened
         val description = stringResource(Res.string.artifact_content)
         when {
+            // Nothing to show (no access, gone, offline): the viewer page in the browser says more, under the member's own sign-in there.
+            state.artifact == null && state.error != null && fallbackUrl != null -> Box(Modifier.fillMaxWidth().weight(1f).navigationBarsPadding(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(16.dp)) {
+                    EmptyState(PhosphorIcons.Regular.FileText, stringResource(Res.string.artifact_unavailable_title), stringResource(Res.string.artifact_unavailable_body), dashed = false) {
+                        TcButton(stringResource(Res.string.artifact_open_browser), onClick = { browser.openUri(fallbackUrl) }, icon = PhosphorIcons.Regular.ArrowSquareOut,
+                            modifier = Modifier.testTag("artifact-fallback-browser"))
+                    }
+                }
+            }
             !embedsArtifacts -> state.artifact?.let {
                 Box(Modifier.fillMaxWidth().weight(1f).navigationBarsPadding(), contentAlignment = Alignment.TopCenter) {
                     Column(Modifier.widthIn(max = ContentWidth).fillMaxWidth().padding(16.dp)) {
