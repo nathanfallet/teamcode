@@ -5,8 +5,10 @@ import me.nathanfallet.teamcode.companion.domain.models.requireInput
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.DeviceFolder
+import me.nathanfallet.teamcode.companion.domain.models.DeviceFolders
 import me.nathanfallet.teamcode.companion.domain.models.HostDevice
 import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSessions
 import me.nathanfallet.teamcode.companion.domain.repositories.DeviceRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
@@ -30,10 +32,29 @@ class LoadHostDevicesUseCase(private val devices: DeviceRepository, private val 
  * folders its owner added (`teamcode folders add`). A device whose daemon went offline meanwhile is refused.
  */
 class LoadDeviceFoldersUseCase(private val devices: DeviceRepository, private val guard: AccountGuard) {
-    suspend operator fun invoke(accountId: String, deviceId: String): List<DeviceFolder> = guard(accountId) {
+    suspend operator fun invoke(accountId: String, deviceId: String): List<DeviceFolder> = detailed(accountId, deviceId).folders
+
+    /** The same folders, with whether the device's daemon lists their conversations to continue. */
+    suspend fun detailed(accountId: String, deviceId: String): DeviceFolders = guard(accountId) {
         val found = deviceRefusals { devices.folders(accountId, deviceId) }
         if (!found.online) throw CompanionException.DeviceRefused(CompanionException.DeviceRefused.DEVICE_OFFLINE)
-        found.folders.sortedWith(compareBy<DeviceFolder> { (it.label ?: it.name).lowercase() }.thenBy { it.id })
+        found.copy(folders = found.folders.sortedWith(compareBy<DeviceFolder> { (it.label ?: it.name).lowercase() }.thenBy { it.id }))
+    }
+}
+
+/**
+ * The Claude Code conversations of a device's folder that a new session can continue, the most recent first, read by
+ * the device's daemon when asked (`cloud.sessions.remote.resume.v1`). Only ids, short titles, dates and message counts
+ * come back; the server keeps none of them. Refusals about the device or the folder are [CompanionException.DeviceRefused].
+ */
+class LoadResumableSessionsUseCase(private val devices: DeviceRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
+    suspend operator fun invoke(accountId: String, deviceId: String, folderId: String, before: Long? = null): ResumableSessions = guard(accountId) {
+        if (Features.RESUME_SESSIONS !in features.features(accountId)) throw CompanionException.Unsupported(Features.RESUME_SESSIONS)
+        deviceRefusals { devices.resumable(accountId, deviceId, folderId, PAGE, before) }
+    }
+
+    companion object {
+        const val PAGE = 20
     }
 }
 
@@ -56,6 +77,7 @@ class CreateDeviceSessionUseCase(
         requireInput(sent.name.isNotEmpty() && sent.name.length <= MAX_NAME && sent.name.none(Char::isISOControl), InvalidInput.Problem.SESSION_NAME, MAX_NAME, "Name the session (up to $MAX_NAME characters).")
         val announced = features.features(accountId)
         if (Features.DEVICE_SESSIONS !in announced) throw CompanionException.Unsupported(Features.DEVICE_SESSIONS)
+        if (sent.resumeSessionId != null && Features.RESUME_SESSIONS !in announced) throw CompanionException.Unsupported(Features.RESUME_SESSIONS)
         val message = sent.initialMessage
         if (message != null) {
             requireInput(MessageRules.valid(message), InvalidInput.Problem.FIRST_MESSAGE_LENGTH, MessageRules.MAX_CHARS, "Write a first message of up to ${MessageRules.MAX_CHARS} characters.")

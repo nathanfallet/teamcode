@@ -1,5 +1,9 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package me.nathanfallet.teamcode.api.models
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 
 /** Wire names of the closed session state enum. `phase` is open: clients must tolerate unknown values. */
@@ -165,6 +169,12 @@ data class CreateCloudSessionRequest(
      */
     val deviceId: String? = null,
     val folderId: String? = null,
+    /**
+     * With [deviceId] and [folderId] (`cloud.sessions.remote.resume.v1`, Claude Code only): the conversation of that
+     * folder the session continues, one the device's daemon listed (`GET /devices/{id}/folders/{folderId}/resumable`).
+     * Left out of the body when null, so a request without it is the same as before.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val resumeSessionId: String? = null,
 )
 /**
  * The execution a remote session's host just started (`POST /api/v1/cloud/sessions/{id}/host`): the host calls the

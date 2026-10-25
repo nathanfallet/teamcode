@@ -69,7 +69,7 @@ class CloudServer(
     // A linked owner's agent holds their GitHub token: only the owner instructs it unless they share the session (audit M2).
     private val conversationService = CloudConversationService(conversationStore, store, access,
         githubLinked = githubLinked)
-    private val daemonStore = SqlDeviceDaemonStore(database)
+    private val daemonStore = SqlDeviceDaemonStore(database, cipher)
     val sessions = CloudSessionService(store, access = access, initialMessages = conversationService, daemons = daemonStore)
     /** Members' device daemons: presence, published folders and the queue of sessions to host. */
     val daemons = DeviceDaemonChannel(DeviceDaemonUseCase(daemonStore), sessions)

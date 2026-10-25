@@ -449,6 +449,18 @@
     <string name="new_session_permissions_bypass">Bypass</string>
     <string name="new_session_permissions_ask_hint">Claude Code asks before acting, and you answer from any of your devices; Codex only writes in the folder. Kept for the next session.</string>
     <string name="new_session_permissions_bypass_warning">The agent changes the folder's files and runs commands on %1$s without asking. Kept for the next session.</string>
+    <string name="new_session_resume">Resume a session</string>
+    <string name="new_session_resume_none">None</string>
+    <string name="new_session_resume_none_hint">A new conversation</string>
+    <plurals name="new_session_resume_turns">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+    <string name="new_session_resume_empty">No earlier Claude Code session in this folder.</string>
+    <string name="new_session_resume_more">Show older sessions</string>
+    <string name="new_session_resume_hint">Continues a Claude Code conversation of this folder on %1$s; the original stays as it was. Only its title, date and number of messages reach the server, and only you see them.</string>
+    <string name="new_session_resume_old_daemon">Update TeamCode on %1$s (teamcode update) to resume a session there.</string>
+    <string name="new_session_resume_loading">Reading the folder's sessions on the device…</string>
     <string name="new_session_start_on_device">Start on %1$s</string>
     <string name="session_waiting_host_chip">Waiting for the device</string>
     <string name="session_waiting_host">Waiting for %1$s to start the session. Its TeamCode service picks it up within seconds while the device is online; otherwise it starts once the device is back.</string>
@@ -461,6 +473,7 @@
     <string name="session_refusal_folder_mismatch">the folder's name changed on the device. Choose it again.</string>
     <string name="session_refusal_agent_unsupported">its TeamCode version cannot run this agent. Update TeamCode on the device (teamcode update).</string>
     <string name="session_refusal_host_failed">the agent kept stopping before it was ready. Check the agent on the device, then start a new session.</string>
+    <string name="session_refusal_resume_not_found">the conversation to continue is no longer in this folder on the device. Start a new session.</string>
     <string name="session_refusal_unknown">it gave the reason %1$s.</string>
     <string name="session_refusal_none">it gave no reason.</string>
     <string name="session_phase_waiting_host">waiting for the device</string>
@@ -546,6 +559,9 @@
     <string name="error_device_invalid_folder">Choose one of the folders the device offers.</string>
     <string name="error_device_refused">The server refused to start the session on this device.</string>
     <string name="error_device_refused_code">The server refused to start the session on this device (%1$s).</string>
+    <string name="error_device_resume_unsupported">TeamCode on this device is too old to resume a session. Update it on the device (teamcode update).</string>
+    <string name="error_device_no_answer">The device did not answer in time. Try again.</string>
+    <string name="error_device_resume_folder">The device could not read this folder's sessions (%1$s).</string>
     <string name="error_server_http">The server returned HTTP %1$d.</string>
     <string name="error_server_http_code">The server returned HTTP %1$d (%2$s).</string>
     <string name="error_page_crashed">The page stopped working.</string>

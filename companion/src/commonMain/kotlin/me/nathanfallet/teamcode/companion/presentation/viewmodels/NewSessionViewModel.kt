@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
 import me.nathanfallet.teamcode.companion.domain.models.Profile
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
 import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
 import me.nathanfallet.teamcode.companion.domain.services.IdGenerator
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateDeviceSessionUseCase
@@ -23,6 +24,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateSession
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadDeviceFoldersUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadHostDevicesUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadResumableSessionsUseCase
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
 
 /** Where the new session runs: a pod from a cloud profile, or a folder of one of the member's online devices. */
@@ -45,6 +47,20 @@ data class NewSessionUiState(
     val folders: List<DeviceFolder>? = null,
     val loadingFolders: Boolean = false,
     val folderId: String? = null,
+    /** The server lets a session continue a conversation of the folder (`cloud.sessions.remote.resume.v1`). */
+    val resumes: Boolean = false,
+    /** The chosen device's daemon lists the folder's conversations; false for an older TeamCode there. */
+    val deviceResumes: Boolean = false,
+    /** The folder's conversations, read when the picker first opens; null until then. */
+    val resumable: List<ResumableSession>? = null,
+    /** The cursor of the next, older page; null on the last one. */
+    val resumableNext: Long? = null,
+    val loadingResumable: Boolean = false,
+    /** Why the conversations could not be read, shown in the picker; the form can still start a new conversation. */
+    val resumableError: Failure? = null,
+    val resumeOpen: Boolean = false,
+    /** The conversation the session continues; null, the default, starts a new one. */
+    val resumeId: String? = null,
     val agent: String = "claude",
     /** The last launch's choice, until changed. */
     val permissionMode: PermissionMode = PermissionMode.ASK,
@@ -58,6 +74,9 @@ data class NewSessionUiState(
     val error: Failure? = null,
     val created: CloudSession? = null,
 ) {
+    /** The picker shows on a device, once a folder is chosen, for Claude Code only. */
+    val showsResume: Boolean get() = target == SessionTarget.DEVICE && onDevices && resumes && folderId != null && agent == "claude"
+
     // Not while something loads: its answer can change what is sent, and so the key a retry must reuse.
     val canCreate: Boolean get() = !creating && !loadingProfiles && created == null && name.isNotBlank() && when (target) {
         SessionTarget.CLOUD -> profileId != null
@@ -77,6 +96,7 @@ class NewSessionViewModel(
     private val loadDevices: LoadHostDevicesUseCase,
     private val loadFolders: LoadDeviceFoldersUseCase,
     private val createOnDevice: CreateDeviceSessionUseCase,
+    private val loadResumable: LoadResumableSessionsUseCase,
     preferences: PreferencesRepository,
     private val ids: IdGenerator,
 ) : ViewModel() {
@@ -86,6 +106,7 @@ class NewSessionViewModel(
     private var firstLoad = true
     private var devicesJob: Job? = null
     private var foldersJob: Job? = null
+    private var resumableJob: Job? = null
 
     init { reload() }
 
@@ -101,7 +122,7 @@ class NewSessionViewModel(
                 val start = firstLoad && onDevices && options.profiles.isEmpty()
                 firstLoad = false
                 change {
-                    it.copy(profiles = options.profiles, acceptsMessage = options.acceptsMessage, onDevices = onDevices,
+                    it.copy(profiles = options.profiles, acceptsMessage = options.acceptsMessage, onDevices = onDevices, resumes = options.resumes,
                         target = if (start) SessionTarget.DEVICE else if (onDevices) it.target else SessionTarget.CLOUD,
                         profileId = it.profileId ?: options.profiles.singleOrNull()?.id, loadingProfiles = false)
                 }
@@ -152,7 +173,7 @@ class NewSessionViewModel(
         if (state.value.creating || state.value.devices?.none { it.id == id } != false) return
         // The same device again only reads its folders again after they failed.
         if (id == state.value.deviceId && state.value.folders != null && state.value.error == null) return
-        edit { it.copy(deviceId = id, folders = null).withFolder(null) }
+        edit { it.copy(deviceId = id, folders = null, deviceResumes = false).withFolder(null) }
         loadFoldersOf(id)
     }
 
@@ -162,10 +183,11 @@ class NewSessionViewModel(
         change { it.copy(loadingFolders = true, error = if (keepError) it.error else null) }
         foldersJob = viewModelScope.launch {
             try {
-                val folders = loadFolders(route.accountId, deviceId)
+                val found = loadFolders.detailed(route.accountId, deviceId)
+                val folders = found.folders
                 if (state.value.deviceId != deviceId) return@launch
                 val kept = state.value.folderId?.takeIf { id -> folders.any { it.id == id } } ?: folders.singleOrNull()?.id
-                change { it.copy(folders = folders, loadingFolders = false).withFolder(kept) }
+                change { it.copy(folders = folders, loadingFolders = false, deviceResumes = found.resumes).withFolder(kept) }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -185,7 +207,52 @@ class NewSessionViewModel(
         edit { it.withFolder(id) }
     }
 
-    fun onAgent(value: String) = edit { it.copy(agent = value) }
+    // Codex continues no Claude Code conversation: the choice goes with the agent.
+    fun onAgent(value: String) = edit { if (value == it.agent) it else it.copy(agent = value).withoutResume() }
+
+    /** Opens or closes the picker; the first opening reads the folder's conversations on the device. */
+    fun onResumeOpen() {
+        val current = state.value
+        if (current.creating || !current.showsResume || !current.deviceResumes) return
+        change { it.copy(resumeOpen = !it.resumeOpen) }
+        if (state.value.resumeOpen && current.resumable == null && !current.loadingResumable) loadResumableOf(null)
+    }
+
+    /** Reads the conversations again after a failure. */
+    fun onResumeRetry() { if (state.value.showsResume && state.value.deviceResumes && !state.value.loadingResumable) loadResumableOf(null) }
+
+    /** The next, older page, added under the ones shown. */
+    fun onResumeMore() { state.value.resumableNext?.let { if (!state.value.loadingResumable) loadResumableOf(it) } }
+
+    /** [id] null: none, a new conversation. Closes the picker. */
+    fun onResume(id: String?) {
+        if (id != null && state.value.resumable?.none { it.id == id } != false) return
+        edit { it.copy(resumeId = id, resumeOpen = false) }
+    }
+
+    /** Only the answer for the device and folder still chosen counts. */
+    private fun loadResumableOf(before: Long?) {
+        val deviceId = state.value.deviceId ?: return
+        val folderId = state.value.folderId ?: return
+        resumableJob?.cancel()
+        change { it.copy(loadingResumable = true, resumableError = null) }
+        resumableJob = viewModelScope.launch {
+            try {
+                val page = loadResumable(route.accountId, deviceId, folderId, before)
+                if (state.value.deviceId != deviceId || state.value.folderId != folderId) return@launch
+                change {
+                    val shown = if (before == null) page.sessions else it.resumable.orEmpty() + page.sessions.filter { s -> it.resumable.orEmpty().none { k -> k.id == s.id } }
+                    it.copy(resumable = shown, resumableNext = page.nextBefore, loadingResumable = false)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (state.value.deviceId != deviceId || state.value.folderId != folderId) return@launch
+                val message = error.userMessage()
+                change { it.copy(loadingResumable = false, resumableError = message) }
+            }
+        }
+    }
     fun onPermissionMode(mode: PermissionMode) = edit { it.copy(permissionMode = mode) }
     fun onProfile(id: String) = edit { it.copy(profileId = id) }
     // A name cleared lets the folder name the session again.
@@ -203,6 +270,8 @@ class NewSessionViewModel(
     private fun change(update: (NewSessionUiState) -> NewSessionUiState) {
         val before = state.value
         val after = update(before)
+        // Another device or folder: the conversations read for the previous one no longer count.
+        if (after.deviceId != before.deviceId || after.folderId != before.folderId) resumableJob?.cancel()
         if (after.sent() != before.sent()) key = ids.newId()
         state.value = after
     }
@@ -233,9 +302,15 @@ class NewSessionViewModel(
 
     private fun NewSessionUiState.withFolder(id: String?): NewSessionUiState {
         val folder = folders?.firstOrNull { it.id == id }
-        // Unless the member named it, the session takes the folder's name, and none without a folder.
-        return copy(folderId = folder?.id, name = if (nameEdited) name else folder?.name.orEmpty())
+        // Unless the member named it, the session takes the folder's name, and none without a folder. A conversation
+        // belongs to its folder: another folder (or device, which goes through here) clears the choice and the list.
+        val moved = folder?.id != folderId
+        return copy(folderId = folder?.id, name = if (nameEdited) name else folder?.name.orEmpty()).let { if (moved) it.withoutResume(list = true) else it }
     }
+
+    private fun NewSessionUiState.withoutResume(list: Boolean = false): NewSessionUiState = copy(resumeId = null, resumeOpen = false,
+        resumable = if (list) null else resumable, resumableNext = if (list) null else resumableNext,
+        loadingResumable = if (list) false else loadingResumable, resumableError = if (list) null else resumableError)
 
     /**
      * The form as sent: an edit that changes nothing sent (a trailing space) keeps the key, so a retry never creates twice.
@@ -248,7 +323,8 @@ class NewSessionViewModel(
 
     private fun NewSessionUiState.cloudForm() = NewSession(name, profileId.orEmpty(), model, effort, message.takeIf { acceptsMessage }).normalized()
     private fun NewSessionUiState.deviceForm() =
-        NewDeviceSession(name, deviceId.orEmpty(), folderId.orEmpty(), agent, model, effort, permissionMode, message.takeIf { acceptsMessage }).normalized()
+        NewDeviceSession(name, deviceId.orEmpty(), folderId.orEmpty(), agent, model, effort, permissionMode, message.takeIf { acceptsMessage },
+            resumeSessionId = resumeId.takeIf { showsResume }).normalized()
 
     private fun Exception.isDeviceGone() = this is CompanionException.DeviceRefused && (code == CompanionException.DeviceRefused.DEVICE_OFFLINE || code == DEVICE_NOT_FOUND)
 

@@ -72,6 +72,9 @@ private fun CompanionException.sentence(): Pair<StringResource?, List<Any>> = wh
         "remote_requires_login" -> Res.string.error_device_requires_login to emptyList()
         "device_target_unsupported" -> Res.string.error_device_target_unsupported to emptyList()
         "invalid_folder" -> Res.string.error_device_invalid_folder to emptyList()
+        CompanionException.DeviceRefused.DAEMON_RESUME_UNSUPPORTED -> Res.string.error_device_resume_unsupported to emptyList()
+        "device_no_answer" -> Res.string.error_device_no_answer to emptyList()
+        "folder_not_configured", "folder_missing", "folder_moved", "folder_refused" -> Res.string.error_device_resume_folder to listOf<Any>(code)
         else -> visibleCode(code)?.let { Res.string.error_device_refused_code to listOf<Any>(it) } ?: (Res.string.error_device_refused to emptyList())
     }
     is CompanionException.Server -> visibleCode(code)?.let { Res.string.error_server_http_code to listOf<Any>(statusCode, it) } ?: (Res.string.error_server_http to listOf<Any>(statusCode))

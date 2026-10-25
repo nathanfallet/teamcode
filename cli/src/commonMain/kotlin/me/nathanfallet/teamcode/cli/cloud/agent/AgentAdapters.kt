@@ -56,7 +56,8 @@ interface AgentAdapter {
     val conversationId: String?
     /** True while a turn runs. */
     val turnActive: Boolean
-    fun command(resume: String?): AgentCommand
+    /** [fork]: continue [resume] under a new conversation id, leaving the original as it was (Claude Code only). */
+    fun command(resume: String?, fork: Boolean = false): AgentCommand
     /** Lines written right after the process starts (protocol handshake, thread start or resume). */
     fun startup(resume: String?, workingDirectory: String): List<String>
     /** Lines delivering a member message; may be held until the agent is ready. */
@@ -203,7 +204,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         return tasksEvent()
     }
 
-    override fun command(resume: String?) = AgentCommand("claude", buildList {
+    override fun command(resume: String?, fork: Boolean) = AgentCommand("claude", buildList {
         addAll(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"))
         if (settings.bypass) add("--dangerously-skip-permissions")
         if (settings.permissionRelay) addAll(listOf("--permission-prompt-tool", "stdio"))
@@ -212,6 +213,7 @@ class ClaudeStreamJsonAdapter(private val settings: AgentSettings, private val n
         settings.model?.let { addAll(listOf("--model", it)) }
         settings.effort?.let { addAll(listOf("--effort", it)) }
         resume?.let { addAll(listOf("--resume", it)) }
+        if (fork && resume != null) add("--fork-session")
     })
     override fun startup(resume: String?, workingDirectory: String): List<String> {
         // A resumed conversation starts from the cost it had in the previous process, which this one never saw.
@@ -528,7 +530,7 @@ class CodexAppServerAdapter(private val settings: AgentSettings, private val cli
 
     /** `danger-full-access` in a pod or in bypass mode; on a member's device otherwise, writes stay inside the session's directory. */
     private val sandbox = if (settings.bypass) "danger-full-access" else "workspace-write"
-    override fun command(resume: String?) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"$sandbox\""))
+    override fun command(resume: String?, fork: Boolean) = AgentCommand("codex", listOf("app-server", "-c", "approval_policy=\"never\"", "-c", "sandbox_mode=\"$sandbox\""))
 
     private fun request(method: String, params: JsonObject): String {
         val id = nextId++

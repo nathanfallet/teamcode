@@ -11,6 +11,10 @@ import kotlinx.coroutines.withTimeout
 import me.nathanfallet.teamcode.api.models.CloudAgentRequest
 import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
+import me.nathanfallet.teamcode.api.models.DaemonFeatures
+import me.nathanfallet.teamcode.api.models.DaemonListingAnswerRequest
+import me.nathanfallet.teamcode.api.models.DaemonListingView
+import me.nathanfallet.teamcode.cli.cloud.agent.AgentState
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.config.configStore
 import me.nathanfallet.teamcode.cli.remote.RemoteSessionRecord
@@ -46,8 +50,21 @@ class DeviceDaemonTest {
 
         var lostCheckMillis = 30_000L
 
+        /** This device's Claude Code projects, in the scratch directory. */
+        val claude = root / "claude-projects"
+        val transcripts = ClaudeTranscripts(claude, windows = false)
+
+        /** A Claude Code conversation that started in [directory]. */
+        fun conversation(directory: Path, id: String, prompt: String = "Fix the build", cwd: String = directory.toString()) {
+            val project = claude / ClaudeTranscripts.projectName(directory.toString())
+            FileSystem.SYSTEM.createDirectories(project)
+            FileSystem.SYSTEM.write(project / "$id.jsonl") {
+                writeUtf8("""{"type":"user","cwd":"$cwd","message":{"role":"user","content":"$prompt"}}""" + "\n")
+            }
+        }
+
         fun daemon(version: String = "1.0.0") = DeviceDaemon(server.client(), folders, records, state, hosts, version, { reports += it }, { stop }, home,
-            pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis)
+            transcripts = transcripts, pollWaitMillis = 50, tickMillis = 10, stopWaitMillis = 5_000, retryMillis = 100, lostCheckMillis = lostCheckMillis)
 
         /** Runs a daemon until [stop], in [scope]. */
         fun start(scope: CoroutineScope, version: String = "1.0.0"): Job { stop = false; return scope.launch { daemon(version).run() } }
@@ -60,6 +77,56 @@ class DeviceDaemonTest {
     }
 
     private suspend fun waitUntil(condition: () -> Boolean) = withTimeout(60_000) { while (!condition()) delay(5) }
+
+    @Test fun aMemberWaitingForAFoldersConversationsGetsOnlyThatFolders() = test { f ->
+        val folder = f.folder("project")
+        val other = f.folder("other")
+        f.conversation(f.home / "project", ID_A, "Fix the build")
+        f.conversation(f.home / "other", ID_B, "Elsewhere")
+        f.server.listings += DaemonListingView("r1", folder.id, 20)
+        f.server.listings += DaemonListingView("r2", "unknown", 20)
+        f.server.listings += DaemonListingView("r3", other.id, 1, before = 0)
+        val job = f.start(this)
+        waitUntil { f.server.answers.size == 3 }
+        assertEquals(listOf(DaemonFeatures.RESUME), f.server.features.first(), "The daemon announces what it can do")
+        val answer = f.server.answers.getValue("r1")
+        assertEquals(listOf(ID_A to "Fix the build"), answer.sessions.map { it.id to it.title })
+        assertNull(answer.refused)
+        assertEquals(DaemonListingAnswerRequest(refused = RefusalReasons.FOLDER_NOT_CONFIGURED), f.server.answers.getValue("r2"))
+        assertEquals(emptyList(), f.server.answers.getValue("r3").sessions, "Nothing older than the cursor")
+        assertTrue(f.reports.none { "Fix the build" in it }, "A title is never written in the daemon's log")
+        f.stop = true
+        job.join()
+    }
+
+    @Test fun anOrderContinuingAConversationIsCheckedThenForkedByItsHost() = test { f ->
+        val folder = f.folder("project")
+        f.folder("other")
+        f.conversation(f.home / "project", ID_A)
+        f.conversation(f.home / "other", ID_B)
+        f.server.queue("s1", folder.id, "project", resume = ID_A)
+        f.server.queue("s2", folder.id, "project", resume = ID_B)
+        f.server.queue("s3", folder.id, "project", agent = "codex", resume = ID_A)
+        f.server.queue("s4", folder.id, "project", resume = "not-a-uuid")
+        val job = f.start(this)
+        waitUntil { f.hosts.started.size == 1 && f.server.events.count { it.startsWith("refuse") } == 3 }
+        assertEquals("s1", f.hosts.started.single().first)
+        assertEquals(AgentState("claude", null, ID_A, fork = true), f.records.conversation("s1").read(), "The host forks the device's conversation at its first start")
+        assertTrue("refuse s2 ${RefusalReasons.RESUME_NOT_FOUND}" in f.server.events, "Another folder's conversation is refused")
+        assertTrue("refuse s3 ${RefusalReasons.RESUME_NOT_FOUND}" in f.server.events, "Codex continues no Claude Code conversation")
+        assertTrue("refuse s4 ${RefusalReasons.RESUME_NOT_FOUND}" in f.server.events)
+        assertNull(f.records.conversation("s2").read())
+
+        // Once hosted, a later order of the session (here a lost host) never goes back to the device's conversation.
+        f.records.conversation("s1").write(AgentState("claude", null, "forked-1"))
+        f.stop = true
+        job.join()
+        val again = f.start(this)
+        waitUntil { f.hosts.started.size == 2 }
+        assertEquals(AgentState("claude", null, "forked-1"), f.records.conversation("s1").read())
+        f.stop = true
+        again.join()
+    }
 
     @Test fun anOrderIsAcceptedHostedPausedOnStopAndResumedOnTheNextStart() = test { f ->
         val folder = f.folder("project")
@@ -254,4 +321,9 @@ class DeviceDaemonTest {
     }
 
     private data class DeviceFolderViewOf(val id: String, val name: String, val label: String?)
+
+    private companion object {
+        const val ID_A = "0000000a-aaaa-4bbb-8ccc-00000000000a"
+        const val ID_B = "0000000b-aaaa-4bbb-8ccc-00000000000b"
+    }
 }

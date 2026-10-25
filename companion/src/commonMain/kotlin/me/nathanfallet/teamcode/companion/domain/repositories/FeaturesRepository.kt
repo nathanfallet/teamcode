@@ -24,6 +24,8 @@ object Features {
     const val REMOTE_SESSIONS = "cloud.sessions.remote.v1"
     /** Sessions started on one of the member's online devices by its daemon, in a folder it published (`GET /devices/{id}/folders`). */
     const val DEVICE_SESSIONS = "cloud.sessions.remote.daemon.v1"
+    /** A session on a device continues one of the folder's Claude Code conversations, listed by the device's daemon. */
+    const val RESUME_SESSIONS = "cloud.sessions.remote.resume.v1"
     /** Files sent with messages: `POST …/files`, then their ids in the message's `fileIds`. */
     const val FILES = "cloud.files.v1"
     /** The member's GitHub link (`/github/link`), offered with cloud sessions and kept when they are off. */

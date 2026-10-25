@@ -39,6 +39,7 @@ import me.nathanfallet.teamcode.companion.resources.session_refusal_folder_moved
 import me.nathanfallet.teamcode.companion.resources.session_refusal_folder_refused
 import me.nathanfallet.teamcode.companion.resources.session_refusal_folder_mismatch
 import me.nathanfallet.teamcode.companion.resources.session_refusal_agent_unsupported
+import me.nathanfallet.teamcode.companion.resources.session_refusal_resume_not_found
 import me.nathanfallet.teamcode.companion.resources.session_refusal_host_failed
 import me.nathanfallet.teamcode.companion.resources.session_refusal_none
 import me.nathanfallet.teamcode.companion.resources.session_refusal_unknown
@@ -143,6 +144,7 @@ fun refusalText(session: CloudSession): String {
         "folder_mismatch" -> stringResource(Res.string.session_refusal_folder_mismatch)
         "agent_unsupported" -> stringResource(Res.string.session_refusal_agent_unsupported)
         "host_failed" -> stringResource(Res.string.session_refusal_host_failed)
+        "resume_not_found" -> stringResource(Res.string.session_refusal_resume_not_found)
         null -> stringResource(Res.string.session_refusal_none)
         else -> stringResource(Res.string.session_refusal_unknown, reason)
     }

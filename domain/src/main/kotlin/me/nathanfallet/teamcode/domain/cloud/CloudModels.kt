@@ -48,6 +48,11 @@ data class CloudSessionHost(
      * daemon's own key, never a path. Null for a session started on the device itself (`teamcode remote start`).
      */
     val folderId: String? = null,
+    /**
+     * The conversation of the folder that the session continues (`cloud.sessions.remote.resume.v1`): a Claude Code
+     * session id the device's daemon listed, which it checks again and forks at the first start. Null otherwise.
+     */
+    val resumeSessionId: String? = null,
 )
 /**
  * How a remote session's agent asks for permission on the member's own files, fixed at creation: [ASK] relays Claude
@@ -373,6 +378,8 @@ data class RemoteSessionDraft(
     val deviceId: String? = null,
     /** One of the folders [deviceId]'s daemon published; required with it. */
     val folderId: String? = null,
+    /** A conversation of [folderId] the daemon listed, continued by the session (Claude Code only). */
+    val resumeSessionId: String? = null,
 )
 
 /** Idempotency of a mutating request: scope is team + initiator + route + key, compared on a body digest. */

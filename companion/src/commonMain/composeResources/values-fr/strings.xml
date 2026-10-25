@@ -449,6 +449,18 @@
     <string name="new_session_permissions_bypass">Ne pas demander</string>
     <string name="new_session_permissions_ask_hint">Claude Code demande avant d'agir, et tu réponds depuis n'importe lequel de tes appareils ; Codex n'écrit que dans le dossier. Conservé pour la prochaine session.</string>
     <string name="new_session_permissions_bypass_warning">L'agent modifie les fichiers du dossier et exécute des commandes sur %1$s sans demander. Conservé pour la prochaine session.</string>
+    <string name="new_session_resume">Reprendre une session</string>
+    <string name="new_session_resume_none">Aucune</string>
+    <string name="new_session_resume_none_hint">Une nouvelle conversation</string>
+    <plurals name="new_session_resume_turns">
+        <item quantity="one">%1$d message</item>
+        <item quantity="other">%1$d messages</item>
+    </plurals>
+    <string name="new_session_resume_empty">Aucune session Claude Code antérieure dans ce dossier.</string>
+    <string name="new_session_resume_more">Afficher les sessions plus anciennes</string>
+    <string name="new_session_resume_hint">Reprend une conversation Claude Code de ce dossier sur %1$s ; l'originale reste telle quelle. Seuls son titre, sa date et son nombre de messages parviennent au serveur, et toi seul les vois.</string>
+    <string name="new_session_resume_old_daemon">Mets à jour TeamCode sur %1$s (teamcode update) pour y reprendre une session.</string>
+    <string name="new_session_resume_loading">Lecture des sessions du dossier sur l'appareil…</string>
     <string name="new_session_start_on_device">Démarrer sur %1$s</string>
     <string name="session_waiting_host_chip">En attente de l'appareil</string>
     <string name="session_waiting_host">En attente que %1$s démarre la session. Son service TeamCode la prend en charge en quelques secondes tant que l'appareil est en ligne ; sinon, elle démarre dès qu'il est de retour.</string>
@@ -461,6 +473,7 @@
     <string name="session_refusal_folder_mismatch">le nom du dossier a changé sur l'appareil. Choisis-le à nouveau.</string>
     <string name="session_refusal_agent_unsupported">sa version de TeamCode ne peut pas lancer cet agent. Mets TeamCode à jour sur l'appareil (teamcode update).</string>
     <string name="session_refusal_host_failed">l'agent s'arrêtait sans cesse avant d'être prêt. Vérifie l'agent sur l'appareil, puis démarre une nouvelle session.</string>
+    <string name="session_refusal_resume_not_found">la conversation à reprendre n'est plus dans ce dossier sur l'appareil. Démarre une nouvelle session.</string>
     <string name="session_refusal_unknown">il a donné la raison %1$s.</string>
     <string name="session_refusal_none">il n'a donné aucune raison.</string>
     <string name="session_phase_waiting_host">en attente de l'appareil</string>
@@ -546,6 +559,9 @@
     <string name="error_device_invalid_folder">Choisis l'un des dossiers proposés par l'appareil.</string>
     <string name="error_device_refused">Le serveur a refusé de démarrer la session sur cet appareil.</string>
     <string name="error_device_refused_code">Le serveur a refusé de démarrer la session sur cet appareil (%1$s).</string>
+    <string name="error_device_resume_unsupported">TeamCode sur cet appareil est trop ancien pour reprendre une session. Mets-le à jour sur l'appareil (teamcode update).</string>
+    <string name="error_device_no_answer">L'appareil n'a pas répondu à temps. Réessaie.</string>
+    <string name="error_device_resume_folder">L'appareil n'a pas pu lire les sessions de ce dossier (%1$s).</string>
     <string name="error_server_http">Le serveur a répondu HTTP %1$d.</string>
     <string name="error_server_http_code">Le serveur a répondu HTTP %1$d (%2$s).</string>
     <string name="error_page_crashed">La page a cessé de fonctionner.</string>

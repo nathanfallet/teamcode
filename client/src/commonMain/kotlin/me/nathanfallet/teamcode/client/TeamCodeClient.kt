@@ -229,9 +229,33 @@ class TeamCodeClient(
      * The daemon's channel, with this device's own login: marks the daemon online and waits up to [waitMillis] (at most
      * 20 s on the server) for sessions to host. Call it again at once after each answer.
      */
-    suspend fun pollDeviceDaemon(waitMillis: Long = 20_000, version: String? = null): DaemonPollView {
+    suspend fun pollDeviceDaemon(waitMillis: Long = 20_000, version: String? = null, features: List<String> = emptyList()): DaemonPollView {
         require(waitMillis >= 0) { "Invalid wait." }
-        return request("/api/v1/devices/current/daemon/poll", HttpMethod.Post, DaemonPollRequest(waitMillis, version))
+        return request("/api/v1/devices/current/daemon/poll", HttpMethod.Post, DaemonPollRequest(waitMillis, version, features))
+    }
+    /**
+     * The agent conversations one of the caller's own devices could continue in [folderId], the most recent first
+     * (`cloud.sessions.remote.resume.v1`): the server asks the device's daemon and waits for its answer (a few seconds).
+     * [before] is the previous page's `nextBefore`.
+     */
+    suspend fun resumableSessions(deviceId: String, folderId: String, limit: Int = ResumableSessions.DEFAULT_LIMIT, before: Long? = null): ResumableSessionsView {
+        identifier(deviceId)
+        require(Regex("[A-Za-z0-9_-]{1,64}").matches(folderId)) { "Invalid folder." }
+        require(limit in 1..ResumableSessions.MAX_LIMIT)
+        val response = http.request("$origin/api/v1/devices/$deviceId/folders/$folderId/resumable") {
+            method = HttpMethod.Get; authenticate(); timeout { requestTimeoutMillis = 30_000 }
+            parameter("limit", limit); before?.let { parameter("before", it) }
+        }
+        checkResponse(response)
+        return response.body()
+    }
+    /** The daemon's answer to a member waiting for a folder's conversations ([DaemonPollView.listings]). */
+    suspend fun answerDeviceDaemonListing(requestId: String, answer: DaemonListingAnswerRequest) {
+        identifier(requestId)
+        checkResponse(http.request("$origin/api/v1/devices/current/daemon/listings/$requestId") {
+            method = HttpMethod.Post; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            contentType(ContentType.Application.Json); setBody(answer)
+        })
     }
     /** Marks this device's daemon offline at once, when it stops. */
     suspend fun stopDeviceDaemon() {

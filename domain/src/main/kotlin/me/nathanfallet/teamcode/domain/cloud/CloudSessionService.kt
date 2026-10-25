@@ -128,7 +128,8 @@ class CloudSessionService(
             idleTimeoutMinutes = settings.remoteIdleTimeoutMinutes, lastActivityAt = now, resumeWorkspace = WorkspaceResume.CONSISTENT, resumeConversation = ConversationResume.NONE,
             failure = null, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, pausedAt = null, expiresAt = null,
             terminatedReason = null, waitingSince = null, workspace = CloudWorkspace("", null, 0), createdAt = now, updatedAt = now,
-            kind = CloudSessionKind.REMOTE, host = CloudSessionHost(device, folder?.name ?: draft.directoryName, permissionMode = draft.permissionMode, folderId = folder?.id),
+            kind = CloudSessionKind.REMOTE, host = CloudSessionHost(device, folder?.name ?: draft.directoryName, permissionMode = draft.permissionMode, folderId = folder?.id,
+                resumeSessionId = draft.resumeSessionId),
         )
         val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
         draft.initialMessage?.let { text ->
@@ -191,8 +192,9 @@ class CloudSessionService(
         val device = daemons.owned(principal.teamId, principal.member.id, deviceId) ?: throw DeviceDaemonUseCase.deviceNotFound()
         if (device.daemon?.online != true)
             throw TeamFailure("device_offline", 409, "${device.name} is offline: its TeamCode daemon is not connected. Start it on the device, or choose another one.")
-        val folder = device.folders.find { it.id == folderId }
-            ?: throw TeamFailure("folder_not_published", 422, "${device.name} does not offer this folder. Add it on the device with teamcode folders add.")
+        // Only a daemon that lists conversations checks and forks one; an older one would start a new conversation instead.
+        if (draft.resumeSessionId != null) DeviceDaemonUseCase.requireResume(device)
+        val folder = device.folders.find { it.id == folderId } ?: throw DeviceDaemonUseCase.folderNotPublished(device.name)
         if (draft.directoryName != null && draft.directoryName != folder.name)
             throw TeamFailure("invalid_directory_name", 400, "The directory of a session started on a device is its folder's name; omit directoryName.")
         return device.id to folder
@@ -375,6 +377,11 @@ class CloudSessionService(
             if (draft.agentKind !in REMOTE_AGENTS) throw TeamFailure("invalid_agent", 400, "Use the agent claude or codex.")
             val directory = draft.directoryName
             if (draft.deviceId == null && draft.folderId != null) throw TeamFailure("invalid_folder", 400, "A folderId needs the deviceId whose daemon published it.")
+            draft.resumeSessionId?.let { resume ->
+                if (draft.deviceId == null) throw TeamFailure("invalid_resume", 400, "A resumeSessionId needs the deviceId and folderId of the conversation it continues.")
+                if (!DeviceDaemonRules.validConversationId(resume)) throw TeamFailure("invalid_resume", 400, "Send the id of a conversation the device listed (a lowercase UUID).")
+                if (draft.agentKind != "claude") throw TeamFailure("resume_unsupported", 400, "Only a Claude Code session continues a conversation of the device.")
+            }
             if ((draft.deviceId == null || directory != null) && (directory == null || !DeviceDaemonRules.validDirectoryName(directory)))
                 throw TeamFailure("invalid_directory_name", 400, "Send the directory's name (its last segment, 1–255 characters), never its path.")
         }

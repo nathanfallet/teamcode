@@ -54,6 +54,8 @@ class CloudAgentTest {
         assertTrue(adapter.takeEvents().isEmpty())
         assertEquals(listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
             "--model", "opus", "--effort", "high", "--resume", "c1"), adapter.command("c1").arguments)
+        assertEquals(listOf("--resume", "c1", "--fork-session"), adapter.command("c1", fork = true).arguments.takeLast(3))
+        assertFalse("--fork-session" in adapter.command(null, fork = true).arguments, "Nothing to fork without a conversation")
         assertTrue(adapter.interrupt().isEmpty(), "No turn, nothing to interrupt")
         val message = obj(adapter.message("Fix it").single())
         assertEquals("user", message.str("type"))
@@ -608,6 +610,33 @@ class CloudAgentTest {
         channel.inputs.send(listOf(RunnerInputView("in-3", "message", "Again", 1)))
         until { started.size == 2 }
         assertEquals(listOf("--resume", "c1"), started[1].first.arguments.takeLast(2))
+        nextJob.cancel()
+    }
+
+    @Test fun aConversationOfTheDeviceIsForkedOnceThenTheSessionResumesItsOwn() = runTest {
+        // `cloud.sessions.remote.resume.v1`: the daemon stored the device's conversation, marked to fork.
+        val channel = FakeChannel()
+        val state = MemoryState(AgentState("claude", "2.1", "0000000a-aaaa-4bbb-8ccc-000000000001", fork = true))
+        val started = mutableListOf<Pair<AgentCommand, FakeProcess>>()
+        val host = host(channel, state, started)
+        val job = launch { host.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-1", "message", "Go on", 1)))
+        until { started.isNotEmpty() }
+        val (command, process) = started.single()
+        assertEquals(listOf("--resume", "0000000a-aaaa-4bbb-8ccc-000000000001", "--fork-session"), command.arguments.takeLast(3))
+        process.output.send("""{"type":"system","subtype":"init","session_id":"forked-1"}""")
+        until { state.value?.conversationId == "forked-1" }
+        assertEquals(AgentState("claude", "2.1", "forked-1"), state.value, "The fork's own id replaces the device's, unmarked")
+        process.output.send("""{"type":"result","subtype":"success","is_error":false}""")
+        until { channel.uploaded.count { it.type == CloudEventTypes.TURN } == 2 }
+        assertTrue(host.drain(testScheduler.currentTime + 120_000))
+        job.cancel()
+
+        val next = host(channel, state, started)
+        val nextJob = launch { next.run() }
+        channel.inputs.send(listOf(RunnerInputView("in-2", "message", "Again", 1)))
+        until { started.size == 2 }
+        assertEquals(listOf("--resume", "forked-1"), started[1].first.arguments.takeLast(2), "Never forked again")
         nextJob.cancel()
     }
 

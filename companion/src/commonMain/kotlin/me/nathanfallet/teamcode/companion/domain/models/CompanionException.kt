@@ -85,13 +85,21 @@ sealed class CompanionException(message: String) : Exception(message) {
             "remote_requires_login" -> "Only the device's owner, signed in with a password, starts a session on it."
             "device_target_unsupported" -> "This server does not start sessions on your devices. Update it to use them."
             "invalid_folder" -> "Choose one of the folders the device offers."
+            DAEMON_RESUME_UNSUPPORTED -> "TeamCode on this device is too old to continue a conversation. Update it on the device (teamcode update)."
+            "device_no_answer" -> "The device did not answer in time. Try again."
+            "resume_unsupported" -> "Only a Claude Code session continues a conversation of the device."
+            "invalid_resume" -> "Choose one of the conversations the device listed."
             else -> "The server refused to start the session on this device" + (code.takeIf { it.matches(CODE) }?.let { " ($it)" } ?: "") + "."
         },
     ) {
         companion object {
             const val DEVICE_OFFLINE = "device_offline"
             /** The codes the server answers about a device or its folders; any other failure keeps its own type. */
-            val CODES = setOf(DEVICE_OFFLINE, "folder_not_published", "device_not_found", "remote_requires_login", "device_target_unsupported", "invalid_folder")
+            const val DAEMON_RESUME_UNSUPPORTED = "daemon_resume_unsupported"
+            val CODES = setOf(DEVICE_OFFLINE, "folder_not_published", "device_not_found", "remote_requires_login", "device_target_unsupported", "invalid_folder",
+                DAEMON_RESUME_UNSUPPORTED, "device_no_answer", "resume_unsupported", "invalid_resume",
+                // The daemon's own reasons for not reading a folder's conversations.
+                "folder_not_configured", "folder_missing", "folder_moved", "folder_refused")
         }
     }
     class Server(val statusCode: Int, val code: String?) :

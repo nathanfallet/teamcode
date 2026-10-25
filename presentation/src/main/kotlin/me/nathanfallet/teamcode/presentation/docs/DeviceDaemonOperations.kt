@@ -17,11 +17,33 @@ internal fun ApiCatalog.deviceDaemonOperations() {
             "from another client, woken by a message, or whose host was lost before it was ready. With `waitMillis` " +
             "(at most `maxWaitMillis`, 20 s), the call waits for one. The daemon checks `folderId` against its own " +
             "configuration, then starts the session with `POST /api/v1/cloud/sessions/{id}/host` or refuses it. Poll " +
-            "again at once after each answer."
-        body<DaemonPollRequest>("How long to wait, and the daemon's version.")
+            "again at once after each answer. A daemon that announces `resume.v1` in `features` " +
+            "(`cloud.sessions.remote.resume.v1`) also gets `listings`, members waiting for a folder's conversations, which it " +
+            "answers with `POST /api/v1/devices/current/daemon/listings/{id}`, and orders carry `resumeSessionId`, the " +
+            "conversation of the folder the session continues, which it checks before accepting (refused " +
+            "`resume_not_found` otherwise)."
+        body<DaemonPollRequest>("How long to wait, the daemon's version, and its features.")
         responses {
             ok<DaemonPollView>("The sessions to host; empty after the wait.")
-            badRequest("An invalid version (`invalid_version`).")
+            badRequest("An invalid version (`invalid_version`) or features (`invalid_features`).")
+            error(HttpStatusCode.UnprocessableEntity, "Not the device's own interactive login (`daemon_requires_device`).")
+        }
+    }
+    post("/api/v1/devices/current/daemon/listings/{id}") {
+        operationId = "answerDeviceDaemonListing"; tag(ApiTags.DEVICES)
+        summary = "Answer a listing of conversations"
+        description = "$DAEMON_LOGIN Answers a member waiting for a folder's conversations (`cloud.sessions.remote.resume.v1`): " +
+            "at most 50, each an id (the Claude Code session id, a lowercase UUID), a one-line title of at most 80 " +
+            "characters, the time of its last activity and the number of messages the member sent, the most recent first, " +
+            "with `nextBefore` when more are older; or `refused` alone, a reason code such as `folder_missing`. Nothing else " +
+            "of a conversation is sent. The server keeps the answer encrypted until the member's request reads it, removes " +
+            "it then, and never logs it."
+        parameters { pathId("id", "The listing's `requestId`.") }
+        body<DaemonListingAnswerRequest>("The page of conversations, or the refusal.")
+        responses {
+            empty("Delivered to the waiting member.")
+            badRequest("More than 50 conversations, an invalid id, title, time or count, or a refusal with conversations (`invalid_listing`), or an invalid reason (`invalid_reason`).")
+            notFound("Nobody waits for it any more, or another device's listing (`listing_not_found`).")
             error(HttpStatusCode.UnprocessableEntity, "Not the device's own interactive login (`daemon_requires_device`).")
         }
     }
@@ -63,6 +85,31 @@ internal fun ApiCatalog.deviceDaemonOperations() {
             notFound("No such session started through this device's daemon (`not_found`).")
             conflict("Another device's session (`remote_host_mismatch`, `remote_host_removed`), or a session that no longer waits for its host (`not_waiting_host`).")
             error(HttpStatusCode.UnprocessableEntity, "Not the device's own interactive login (`daemon_requires_device`).")
+        }
+    }
+    get("/api/v1/devices/{id}/folders/{folderId}/resumable") {
+        operationId = "listResumableSessions"; tag(ApiTags.DEVICES)
+        summary = "List a folder's conversations to continue"
+        description = "The Claude Code conversations of a published folder that a new session can continue " +
+            "(`cloud.sessions.remote.resume.v1`), the most recent first: id, title (the name given to the conversation, its " +
+            "summary, or the start of its first message, at most 80 characters), last activity and number of messages. The " +
+            "server holds no transcript: it asks the device's daemon, which reads them on the device, and waits for its " +
+            "answer up to 10 s. Only the device's owner reads them; a title may hold anything the member typed. Pass the " +
+            "previous page's `nextBefore` as `before` for the next one. Start a session from one with " +
+            "`POST /api/v1/cloud/sessions` and `resumeSessionId`."
+        parameters {
+            pathId("id", "The device's identifier.")
+            pathId("folderId", "One of the folders the device published.")
+            queryNumber("limit", "From 1 to 50; 20 by default.")
+            queryNumber("before", "The previous page's `nextBefore` (milliseconds).")
+        }
+        responses {
+            ok<ResumableSessionsView>("The page of conversations; empty when the folder has none.")
+            badRequest("An invalid limit (`invalid_limit`) or cursor (`invalid_cursor`).")
+            notFound("Not one of the caller's devices (`device_not_found`).")
+            conflict("The daemon is offline (`device_offline`) or too old to list conversations (`daemon_resume_unsupported`).")
+            error(HttpStatusCode.UnprocessableEntity, "A folder the device does not offer (`folder_not_published`), or one its daemon refuses to read (`folder_not_configured`, `folder_missing`, `folder_moved`, `folder_refused`).")
+            error(HttpStatusCode.GatewayTimeout, "The daemon did not answer in time (`device_no_answer`).")
         }
     }
     get("/api/v1/devices/{id}/folders") {

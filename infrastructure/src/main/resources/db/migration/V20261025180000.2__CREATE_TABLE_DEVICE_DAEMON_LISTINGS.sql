@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS device_daemon_listings (id VARCHAR(36) PRIMARY KEY, device_id VARCHAR(36) NOT NULL, folder_id VARCHAR(64) NOT NULL, max_results INT NOT NULL, before_at BIGINT NULL, expires_at BIGINT NOT NULL, answered_at BIGINT NULL, answer_envelope TEXT NULL, CONSTRAINT device_daemon_listings_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE);
+CREATE INDEX device_daemon_listing_open ON device_daemon_listings (device_id, answered_at, expires_at);

@@ -54,6 +54,7 @@ import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSess
 import me.nathanfallet.teamcode.companion.domain.repositories.DeviceRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateDeviceSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadDeviceFoldersUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadResumableSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadHostDevicesUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
 import org.koin.dsl.module
@@ -98,6 +99,7 @@ val domainModule = module {
     single { CreateSessionUseCase(get(), get(), get()) }
     single { LoadHostDevicesUseCase(get(), get(), get()) }
     single { LoadDeviceFoldersUseCase(get(), get()) }
+    single { LoadResumableSessionsUseCase(get(), get(), get()) }
     single { CreateDeviceSessionUseCase(get(), get(), get(), get()) }
     // Resolved only where a LocalHost exists (the desktop's platform module).
     single { StartLocalSessionUseCase(get(), get(), get()) }

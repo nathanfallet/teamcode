@@ -69,7 +69,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[claimName] = created.workspace.claimName; it[storageClass] = created.workspace.storageClass; it[workspaceSize] = created.workspace.sizeGibibytes
             it[environment] = encodeEnvironment(created.environment)
             it[kind] = created.kind.wire; it[hostDeviceId] = created.host?.deviceId; it[hostDirectoryName] = created.host?.directoryName
-            it[permissionMode] = created.host?.permissionMode?.wire; it[hostFolderId] = created.host?.folderId
+            it[permissionMode] = created.host?.permissionMode?.wire; it[hostFolderId] = created.host?.folderId; it[hostResumeSessionId] = created.host?.resumeSessionId
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true

@@ -167,6 +167,8 @@ object CloudSessions : Table("cloud_sessions") {
     val permissionMode = varchar("permission_mode", 16).nullable()
     /** The published folder a device's daemon was asked to start the session in (its key, never a path); null otherwise. */
     val hostFolderId = varchar("host_folder_id", 64).nullable()
+    /** The device's conversation a session started there continues (`cloud.sessions.remote.resume.v1`). */
+    val hostResumeSessionId = varchar("host_resume_session_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)

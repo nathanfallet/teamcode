@@ -4,8 +4,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import me.nathanfallet.teamcode.api.models.CloudHostView
+import me.nathanfallet.teamcode.api.models.DaemonFeatures
+import me.nathanfallet.teamcode.api.models.DaemonListingAnswerRequest
+import me.nathanfallet.teamcode.api.models.DaemonListingView
 import me.nathanfallet.teamcode.api.models.DaemonOrderView
 import me.nathanfallet.teamcode.api.models.DeviceFolderView
+import me.nathanfallet.teamcode.cli.cloud.agent.AgentState
 import me.nathanfallet.teamcode.cli.CliOperationException
 import me.nathanfallet.teamcode.cli.platform.DetachedProcess
 import me.nathanfallet.teamcode.cli.remote.RemoteSessionRecord
@@ -14,6 +18,7 @@ import me.nathanfallet.teamcode.cli.remote.describe
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.Path
+import okio.Path.Companion.toPath
 import kotlin.time.TimeSource
 
 /** Starts the host of one accepted session: `teamcode remote host SESSION --accepted-epoch N --team T`, its output in [log]. */
@@ -31,6 +36,10 @@ internal fun interface HostLauncher {
  *   reason, or accepted (`POST /cloud/sessions/{id}/host` opens the epoch and takes it out of the queue) and handed to a
  *   host process ([HostLauncher]) that runs the session with the existing runner code. The session's permission mode,
  *   agent and conversation come from the server and `remote/`, exactly as for `teamcode remote host`.
+ * - **Resume.** A member waiting for a folder's Claude Code conversations ([DaemonListingView]) gets their ids, short
+ *   titles, last activity and message counts ([ClaudeTranscripts]), nothing else. An order that continues one
+ *   ([DaemonOrderView.resumeSessionId]) is refused (`resume_not_found`) unless it is one of that folder's conversations;
+ *   accepted, its conversation id is stored for the host, which forks it (`--resume ID --fork-session`) at its first start.
  * - **Supervision.** A host that exits while its session should still run on that epoch is started again on a new
  *   epoch, at most [maxStarts] times in [startWindowMillis]; the session is then refused (`host_failed`) if it is still
  *   queued. A host that stops answering without exiting (or a previous daemon's host, which this one cannot see exit)
@@ -53,6 +62,7 @@ internal class DeviceDaemon(
     private val stopRequested: () -> Boolean,
     private val home: Path?,
     private val windows: Boolean = false,
+    private val transcripts: ClaudeTranscripts = ClaudeTranscripts.local(),
     private val pollWaitMillis: Long = 20_000,
     private val tickMillis: Long = 2_000,
     private val stopWaitMillis: Long = 540_000,
@@ -94,9 +104,11 @@ internal class DeviceDaemon(
         var online = false
         while (true) {
             try {
-                val answer = client.pollDeviceDaemon(pollWaitMillis, version)
+                val answer = client.pollDeviceDaemon(pollWaitMillis, version, listOf(DaemonFeatures.RESUME))
                 if (!online) { report("Online: waiting for sessions to host."); online = true }
                 failures = 0
+                // A member waits for each listing: answered first, without the lock (it only reads files).
+                answer.listings.forEach { list(it) }
                 val acted = mutex.withLock { answer.orders.count { handle(it) } }
                 // Orders this daemon cannot act on yet (a host still starting, a retry later) come back at once: do not spin.
                 if (answer.orders.isNotEmpty() && acted == 0) delay(IDLE_MILLIS)
@@ -129,10 +141,36 @@ internal class DeviceDaemon(
         val check = try { checkOrder(order.folderId, order.directoryName, order.agent, folders.read(), home, windows) }
             catch (_: Exception) { OrderCheck.Refused(RefusalReasons.FOLDER_NOT_CONFIGURED) }
         if (check is OrderCheck.Refused) { refuse(id, check.reason); return true }
+        val directory = (check as OrderCheck.Accepted).directory
+        // The conversation to continue is checked and stored once, when this device first hosts the session; a later
+        // order (a pause, a lost host) resumes the session's own conversation.
+        val resume = order.resumeSessionId?.takeIf { records.load(id) == null }
+        if (resume != null && (order.agent != "claude" || !readable { transcripts.belongs(directory, resume) })) {
+            refuse(id, RefusalReasons.RESUME_NOT_FOUND); return true
+        }
         if (!startAllowed(id, now)) { refuse(id, RefusalReasons.HOST_FAILED); return true }
-        accept(id, (check as OrderCheck.Accepted).directory, order.agent)
+        accept(id, directory, order.agent, resume)
         return true
     }
+
+    /** Answers a member waiting for [listing]'s conversations; an answer that cannot be sent expires on the server. */
+    private suspend fun list(listing: DaemonListingView) {
+        val answer = try {
+            val folder = folders.read().folders.firstOrNull { it.id == listing.folderId }
+            val check = folder?.let { checkOrder(it.id, it.path.toPath().name, "claude", folders.read(), home, windows) }
+                ?: OrderCheck.Refused(RefusalReasons.FOLDER_NOT_CONFIGURED)
+            when (check) {
+                is OrderCheck.Refused -> DaemonListingAnswerRequest(refused = check.reason)
+                is OrderCheck.Accepted -> transcripts.list(check.directory, listing.limit, listing.before).let { DaemonListingAnswerRequest(it.sessions, it.nextBefore) }
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { DaemonListingAnswerRequest(refused = RefusalReasons.FOLDER_NOT_CONFIGURED) }
+        try { client.answerDeviceDaemonListing(listing.requestId, answer) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { /* The member's request has ended or expired. */ }
+    }
+
+    private inline fun readable(block: () -> Boolean) = try { block() } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
 
     private suspend fun refuse(id: String, reason: String) {
         report("Refused session $id ($reason).")
@@ -149,13 +187,16 @@ internal class DeviceDaemon(
     }
 
     /** Opens the session's epoch on this device, records it, and starts its host. */
-    private suspend fun accept(id: String, directory: String, agent: String) {
+    private suspend fun accept(id: String, directory: String, agent: String, resume: String? = null) {
         starts.getOrPut(id) { mutableListOf() }.add(now())
         val host: CloudHostView = try { client.hostCloudSession(id) }
             catch (error: CancellationException) { throw error }
             catch (error: TeamCodeException) { report("Session $id could not be hosted (${error.describe()})."); retryAt[id] = now() + retryMillis; return }
             catch (_: Exception) { retryAt[id] = now() + retryMillis; return }
         retryAt.remove(id)
+        // The host's agent starts from this conversation, forked so the original stays as it was on this device. Written
+        // before the record, whose presence means the session's conversation is settled.
+        if (resume != null) records.conversation(id).write(AgentState(agent, null, resume, fork = true))
         records.save(RemoteSessionRecord(id, directory, agent))
         sessions.put(DaemonSession(id, host.epoch, DaemonSession.HOSTING))
         val process = try { launcher.start(id, host.epoch, host.teamId, records.log(id)) }

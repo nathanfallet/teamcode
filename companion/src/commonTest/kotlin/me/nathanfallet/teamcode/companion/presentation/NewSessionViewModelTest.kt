@@ -36,6 +36,9 @@ import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateDeviceSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadDeviceFoldersUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadHostDevicesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadResumableSessionsUseCase
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSessions
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsPreferencesRepository
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionTarget
 import kotlin.test.*
@@ -51,7 +54,8 @@ class NewSessionViewModelTest {
     private fun viewModel(sessions: FakeSessionRepository, features: FakeFeatures, devices: FakeDeviceRepository) = NewSessionViewModel(
         NewSessionRoute("a1"), LoadProfilesUseCase(sessions, features, guard), CreateSessionUseCase(sessions, features, guard),
         LoadHostDevicesUseCase(devices, features, guard), LoadDeviceFoldersUseCase(devices, guard),
-        CreateDeviceSessionUseCase(sessions, features, SettingsPreferencesRepository(settings), guard), SettingsPreferencesRepository(settings), SequenceIds(),
+        CreateDeviceSessionUseCase(sessions, features, SettingsPreferencesRepository(settings), guard), LoadResumableSessionsUseCase(devices, features, guard),
+        SettingsPreferencesRepository(settings), SequenceIds(),
     )
     private val onDevices = FakeFeatures(FakeFeatures().features + Features.DEVICE_SESSIONS + Features.INITIAL_MESSAGE)
 
@@ -209,6 +213,105 @@ class NewSessionViewModelTest {
         assertEquals(CompanionException.DeviceRefused("device_offline").message, state.error?.text)
         assertEquals(emptyList(), state.devices); assertNull(state.deviceId); assertFalse(state.canCreate)
         assertNull(state.created)
+    }
+}
+
+/** `cloud.sessions.remote.resume.v1` in the new-session form. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class NewSessionResumeTest {
+    private val dispatcher = StandardTestDispatcher()
+    @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
+    @AfterTest fun tearDown() = Dispatchers.resetMain()
+    private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))
+    private val settings = MapSettings()
+    private val resumes = FakeFeatures(FakeFeatures().features + Features.DEVICE_SESSIONS + Features.RESUME_SESSIONS)
+    private val a = ResumableSession("0000000a-aaaa-4bbb-8ccc-00000000000a", "Fix the login bug", 1_000, 4)
+    private val b = ResumableSession("0000000b-aaaa-4bbb-8ccc-00000000000b", "Release checklist", 500, 1)
+
+    private fun viewModel(sessions: FakeSessionRepository, features: FakeFeatures, devices: FakeDeviceRepository) = NewSessionViewModel(
+        NewSessionRoute("a1"), LoadProfilesUseCase(sessions, features, guard), CreateSessionUseCase(sessions, features, guard),
+        LoadHostDevicesUseCase(devices, features, guard), LoadDeviceFoldersUseCase(devices, guard),
+        CreateDeviceSessionUseCase(sessions, features, SettingsPreferencesRepository(settings), guard), LoadResumableSessionsUseCase(devices, features, guard),
+        SettingsPreferencesRepository(settings), SequenceIds(),
+    )
+
+    private fun devices(resumes: Boolean = true) = FakeDeviceRepository().apply {
+        devicesResult = { listOf(hostDevice("d1", "Ada's Mac"), hostDevice("d2", "Linux box")) }
+        foldersResult = { id -> DeviceFolders(true, if (id == "d1") listOf(DeviceFolder("f1", "app", "~/git/app"), DeviceFolder("f2", "web", "~/git/web")) else listOf(DeviceFolder("f9", "infra", null)), resumes) }
+        resumableResult = { _, folder, before -> if (folder == "f1" && before == null) ResumableSessions(listOf(a), nextBefore = 1_000) else if (folder == "f1") ResumableSessions(listOf(b)) else ResumableSessions(emptyList()) }
+    }
+
+    @Test fun nothingIsChosenByDefaultTheListIsReadWhenOpenedAndTheChoiceIsSent() = runTest(dispatcher) {
+        val sessions = FakeSessionRepository()
+        val devices = devices()
+        val model = viewModel(sessions, resumes, devices)
+        settle()
+        assertEquals(SessionTarget.DEVICE, model.uiState.value.target, "No cloud profile: on a device at once")
+        model.onDevice("d1"); settle()
+        assertFalse(model.uiState.value.showsResume, "Not before a folder is chosen")
+        model.onFolder("f1")
+        assertTrue(model.uiState.value.showsResume)
+        assertNull(model.uiState.value.resumeId, "None by default")
+        assertTrue(devices.calls.none { it.startsWith("resumable") }, "Nothing is read on the device until the picker opens")
+        model.onResumeOpen(); settle()
+        assertEquals(listOf(a), model.uiState.value.resumable)
+        assertEquals("resumable d1 f1 20", devices.calls.last())
+        model.onResumeMore(); settle()
+        assertEquals(listOf(a, b), model.uiState.value.resumable, "The older page goes under the first")
+        model.onResume("not-listed")
+        assertNull(model.uiState.value.resumeId)
+        model.onResume(a.id)
+        assertEquals(a.id, model.uiState.value.resumeId); assertFalse(model.uiState.value.resumeOpen)
+        model.create(); settle()
+        assertEquals(a.id, sessions.deviceCreations.single().first.resumeSessionId)
+    }
+
+    @Test fun anotherFolderDeviceOrAgentClearsTheChoice() = runTest(dispatcher) {
+        val sessions = FakeSessionRepository()
+        val model = viewModel(sessions, resumes, devices())
+        settle()
+        fun choose() { model.onFolder("f1"); model.onResumeOpen(); settle(); model.onResume(a.id) }
+        model.onDevice("d1"); settle()
+        choose()
+        model.onFolder("f2")
+        assertNull(model.uiState.value.resumeId); assertNull(model.uiState.value.resumable, "The list belongs to its folder")
+        choose()
+        model.onDevice("d2"); settle()
+        assertNull(model.uiState.value.resumeId); assertNull(model.uiState.value.resumable)
+        model.onDevice("d1"); settle()
+        choose()
+        model.onAgent("codex")
+        assertNull(model.uiState.value.resumeId); assertFalse(model.uiState.value.showsResume, "Claude Code only")
+        model.onAgent("claude")
+        assertNull(model.uiState.value.resumeId, "Not brought back")
+        // The key follows what is sent: a choice made then undone sends the same as before.
+        model.onResume(a.id)
+        model.onResume(null)
+        model.create(); settle()
+        assertNull(sessions.deviceCreations.single().first.resumeSessionId)
+    }
+
+    @Test fun anOlderDaemonOrServerHidesOrExplainsThePickerAndAFailureIsShownInIt() = runTest(dispatcher) {
+        val old = viewModel(FakeSessionRepository(), resumes, devices(resumes = false))
+        settle(); old.onDevice("d1"); settle(); old.onFolder("f1")
+        assertTrue(old.uiState.value.showsResume); assertFalse(old.uiState.value.deviceResumes)
+        old.onResumeOpen(); settle()
+        assertNull(old.uiState.value.resumable, "Nothing is asked of a daemon that cannot answer")
+
+        val olderServer = viewModel(FakeSessionRepository(), FakeFeatures(FakeFeatures().features + Features.DEVICE_SESSIONS), devices())
+        settle(); olderServer.onDevice("d1"); settle(); olderServer.onFolder("f1")
+        assertFalse(olderServer.uiState.value.showsResume)
+
+        val failing = devices().apply { resumableResult = { _, _, _ -> throw CompanionException.Server(504, "device_no_answer") } }
+        val model = viewModel(FakeSessionRepository(), resumes, failing)
+        settle(); model.onDevice("d1"); settle(); model.onFolder("f1")
+        model.onResumeOpen(); settle()
+        assertEquals(CompanionException.DeviceRefused("device_no_answer").message, model.uiState.value.resumableError?.text)
+        assertNull(model.uiState.value.error, "The form itself can still start a new conversation")
+        assertTrue(model.uiState.value.canCreate)
+        failing.resumableResult = { _, _, _ -> ResumableSessions(listOf(a)) }
+        model.onResumeRetry(); settle()
+        assertEquals(listOf(a), model.uiState.value.resumable); assertNull(model.uiState.value.resumableError)
     }
 }
 

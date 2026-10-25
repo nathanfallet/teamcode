@@ -197,6 +197,8 @@ internal object RefusalReasons {
     const val AGENT_UNSUPPORTED = "agent_unsupported"
     /** The host kept stopping before it was ready. */
     const val HOST_FAILED = "host_failed"
+    /** The conversation to continue is not one of the folder's Claude Code conversations on this device (any more). */
+    const val RESUME_NOT_FOUND = "resume_not_found"
 }
 
 internal sealed interface OrderCheck {

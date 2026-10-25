@@ -28,7 +28,7 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
     class Session(
         val id: String, val folderId: String?, val directoryName: String, val agent: String = "claude", val permissionMode: String = "ask",
         var state: String = "creating", var phase: String? = "waiting_host", var desiredState: String = "running",
-        var epoch: Int = 0, var online: Boolean = false, var failure: CloudProblemView? = null,
+        var epoch: Int = 0, var online: Boolean = false, var failure: CloudProblemView? = null, val resume: String? = null,
     )
 
     val sessions = linkedMapOf<String, Session>()
@@ -37,9 +37,13 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
     var daemonOnline = false
     val versions = mutableListOf<String?>()
     var createdRequests = mutableListOf<CreateCloudSessionRequest>()
+    val features = mutableListOf<List<String>>()
+    /** Members waiting for a folder's conversations, handed to the next poll; [answers] holds what the daemon sent back. */
+    val listings = mutableListOf<DaemonListingView>()
+    val answers = linkedMapOf<String, DaemonListingAnswerRequest>()
 
-    fun queue(id: String, folderId: String, directoryName: String, agent: String = "claude", permissionMode: String = "ask") {
-        sessions[id] = Session(id, folderId, directoryName, agent, permissionMode)
+    fun queue(id: String, folderId: String, directoryName: String, agent: String = "claude", permissionMode: String = "ask", resume: String? = null) {
+        sessions[id] = Session(id, folderId, directoryName, agent, permissionMode, resume = resume)
     }
 
     private fun queued() = sessions.values.filter { it.folderId != null && it.phase == "waiting_host" && it.desiredState == "running" && it.state != "terminated" }
@@ -87,10 +91,16 @@ internal class FakeDaemonServer(private val dispatcher: CoroutineDispatcher, pri
             path == "/api/v1/devices/current/daemon/poll" -> {
                 val request = Serialization.json.decodeFromString<DaemonPollRequest>(body)
                 versions += request.version
+                features += request.features
                 daemonOnline = true
-                if (queued().isEmpty()) delay(minOf(request.waitMillis, 50))
-                val orders = queued().map { DaemonOrderView(it.id, it.folderId!!, it.directoryName, it.agent, it.permissionMode, it.state, 0) }
-                ok(DaemonPollView(orders, 60_000, 20_000))
+                if (queued().isEmpty() && listings.isEmpty()) delay(minOf(request.waitMillis, 50))
+                val orders = queued().map { DaemonOrderView(it.id, it.folderId!!, it.directoryName, it.agent, it.permissionMode, it.state, 0, it.resume) }
+                val asked = listings.toList().also { listings.clear() }
+                ok(DaemonPollView(orders, 60_000, 20_000, asked))
+            }
+            path.startsWith("/api/v1/devices/current/daemon/listings/") -> {
+                answers[path.removePrefix("/api/v1/devices/current/daemon/listings/")] = Serialization.json.decodeFromString<DaemonListingAnswerRequest>(body)
+                HttpStatusCode.NoContent to ""
             }
             path == "/api/v1/devices/current/daemon" && method == HttpMethod.Delete -> { daemonOnline = false; events += "offline"; HttpStatusCode.NoContent to "" }
             path == "/api/v1/devices/current/folders" -> {

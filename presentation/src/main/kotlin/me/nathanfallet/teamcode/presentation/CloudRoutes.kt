@@ -172,7 +172,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val idempotency = IdempotencyRequest("POST /cloud/sessions", key, sha256(canonical))
             val outcome = when (input.kind ?: CloudSessionKind.CLOUD.wire) {
                 CloudSessionKind.CLOUD.wire -> {
-                    if (input.directoryName != null || input.permissionMode != null || input.agent?.kind != null || input.deviceId != null || input.folderId != null)
+                    if (input.directoryName != null || input.permissionMode != null || input.agent?.kind != null || input.deviceId != null || input.folderId != null || input.resumeSessionId != null)
                         throw TeamFailure("invalid_session", 400, "A cloud session takes its agent from its profile and has no directory or permission mode.")
                     val draft = CloudSessionDraft(input.name, input.profileId ?: throw TeamFailure("invalid_session", 400, "Send the profileId of a cloud session."),
                         input.image, input.agent?.model, input.agent?.effort, input.labels, input.idleTimeoutMinutes,
@@ -186,7 +186,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
                         ?: RemotePermissionMode.ASK
                     if (input.deviceId == null && input.directoryName == null) throw TeamFailure("invalid_directory_name", 400, "Send the name of the session's directory.")
                     val draft = RemoteSessionDraft(input.name, input.agent?.kind ?: throw TeamFailure("invalid_agent", 400, "Send the agent of a remote session: claude or codex."),
-                        input.agent?.model, input.agent?.effort, input.labels, input.directoryName, mode, input.initialMessage, input.deviceId, input.folderId)
+                        input.agent?.model, input.agent?.effort, input.labels, input.directoryName, mode, input.initialMessage, input.deviceId, input.folderId, input.resumeSessionId)
                     sessions.createRemote(call.principal, onBehalfOf, draft, idempotency)
                 }
                 else -> throw TeamFailure("invalid_kind", 400, "Use kind cloud or remote.")

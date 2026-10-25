@@ -18,8 +18,21 @@ data class HostDevice(
  */
 data class DeviceFolder(val id: String, val name: String, val label: String?)
 
-/** A device's folders, read now; [online] is false once its daemon stopped answering. */
-data class DeviceFolders(val online: Boolean, val folders: List<DeviceFolder>)
+/**
+ * A device's folders, read now; [online] is false once its daemon stopped answering. [resumes]: its daemon lists a
+ * folder's conversations to continue (`cloud.sessions.remote.resume.v1`); false for an older TeamCode on the device.
+ */
+data class DeviceFolders(val online: Boolean, val folders: List<DeviceFolder>, val resumes: Boolean = false)
+
+/**
+ * A Claude Code conversation of a device's folder that a new session can continue: its id, a short title (its name,
+ * summary or first message, cut by the device), its last activity and the number of messages sent in it. Nothing
+ * else of the conversation leaves the device.
+ */
+data class ResumableSession(val id: String, val title: String, val lastActiveAt: Long, val turns: Int)
+
+/** A page of [sessions], the most recent first; [nextBefore] reads the next one, null on the last. */
+data class ResumableSessions(val sessions: List<ResumableSession>, val nextBefore: Long? = null)
 
 /** How the agent of a session on a device acts: it asks before acting, or acts without asking. */
 enum class PermissionMode(val wire: String) {
@@ -43,9 +56,11 @@ data class NewDeviceSession(
     val effort: String?,
     val permissionMode: PermissionMode,
     val initialMessage: String?,
+    /** A conversation of the folder the session continues (Claude Code only); null starts a new one. */
+    val resumeSessionId: String? = null,
 ) {
     fun normalized(): NewDeviceSession = copy(
         name = name.trim(), model = model?.trim()?.ifEmpty { null }, effort = effort?.trim()?.ifEmpty { null },
-        initialMessage = initialMessage?.takeIf { it.isNotBlank() },
+        initialMessage = initialMessage?.takeIf { it.isNotBlank() }, resumeSessionId = resumeSessionId?.takeIf { agent == "claude" },
     )
 }

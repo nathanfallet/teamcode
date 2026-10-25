@@ -17,7 +17,24 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import com.adamglin.PhosphorIcons
+import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.CaretDown
+import com.adamglin.phosphoricons.regular.CaretUp
+import androidx.compose.foundation.clickable
+import org.jetbrains.compose.resources.pluralStringResource
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
+import me.nathanfallet.teamcode.companion.resources.new_session_resume
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_empty
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_hint
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_loading
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_more
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_none
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_none_hint
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_old_daemon
+import me.nathanfallet.teamcode.companion.resources.new_session_resume_turns
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -206,12 +223,87 @@ private fun DeviceFields(state: NewSessionUiState, viewModel: NewSessionViewMode
             Text(stringResource(Res.string.new_session_folder_hint), color = colors.muted, fontSize = 12.5.sp)
         }
     }
+    ResumeFields(state, viewModel, deviceName)
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(Res.string.local_session_agent), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Segmented(listOf("claude" to stringResource(Res.string.local_session_agent_claude), "codex" to stringResource(Res.string.local_session_agent_codex)),
             selected = state.agent, onSelect = viewModel::onAgent, modifier = Modifier.fillMaxWidth(), tag = { "agent-$it" })
     }
 }
+
+/**
+ * "Resume a session", under the folder: closed and set to None by default; opened, it lists the folder's Claude Code
+ * conversations the device read now (title, how long ago, how many messages). Another folder or device clears it.
+ */
+@Composable
+private fun ResumeFields(state: NewSessionUiState, viewModel: NewSessionViewModel, deviceName: String?) {
+    if (!state.showsResume) return
+    val colors = TeamCode.colors
+    val device = deviceName ?: stringResource(Res.string.new_session_device).lowercase()
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("resume")) {
+        Text(stringResource(Res.string.new_session_resume), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        if (!state.deviceResumes) {
+            Text(stringResource(Res.string.new_session_resume_old_daemon, device), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.testTag("resume-old-daemon"))
+            return@Column
+        }
+        // Read once per opening of the sheet: relative dates need no refresh while it is open, and the sheet holds no clock.
+        val now = androidx.compose.runtime.remember {
+            (org.koin.mp.KoinPlatform.getKoinOrNull()?.getOrNull<me.nathanfallet.teamcode.companion.domain.services.Clock>()?.nowMillis()) ?: kotlin.time.Clock.System.now().toEpochMilliseconds()
+        }
+        val chosen = state.resumable?.firstOrNull { it.id == state.resumeId }
+        Group {
+            val label = chosen?.title ?: stringResource(Res.string.new_session_resume_none)
+            val opened = state.resumeOpen
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = !state.creating, role = Role.Button, onClick = viewModel::onResumeOpen)
+                    .padding(horizontal = 14.dp, vertical = 8.dp).testTag("resume-picker"),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(label, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(chosen?.let { meta(it, now) } ?: stringResource(Res.string.new_session_resume_none_hint), style = MetaStyle, color = colors.muted)
+                }
+                Icon(if (opened) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, null, tint = colors.muted, modifier = Modifier.size(16.dp))
+            }
+            if (opened) {
+                GroupDivider()
+                val sessions = state.resumable
+                if (state.loadingResumable && sessions == null) {
+                    BusyRow(true)
+                    Text(stringResource(Res.string.new_session_resume_loading), color = colors.muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                }
+                if (state.resumableError != null) Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ErrorText(state.resumableError, Modifier.testTag("resume-error"))
+                    TcButton(stringResource(Res.string.action_retry), onClick = viewModel::onResumeRetry, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("resume-retry"))
+                }
+                if (sessions != null) Column(Modifier.selectableGroup()) {
+                    Option(stringResource(Res.string.new_session_resume_none), stringResource(Res.string.new_session_resume_none_hint), selected = state.resumeId == null, tag = "resume-none") { viewModel.onResume(null) }
+                    sessions.forEach { session ->
+                        GroupDivider()
+                        Option(session.title, meta(session, now), selected = state.resumeId == session.id, tag = "resume-${session.id}") { viewModel.onResume(session.id) }
+                    }
+                    if (sessions.isEmpty() && state.resumableError == null) {
+                        GroupDivider()
+                        Text(stringResource(Res.string.new_session_resume_empty), color = colors.muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp).testTag("resume-empty"))
+                    }
+                    if (state.resumableNext != null) {
+                        GroupDivider()
+                        Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                            TcButton(stringResource(Res.string.new_session_resume_more), onClick = viewModel::onResumeMore, kind = ButtonKind.GHOST, small = true,
+                                busy = state.loadingResumable, modifier = Modifier.testTag("resume-more"))
+                        }
+                    }
+                }
+            }
+        }
+        Text(stringResource(Res.string.new_session_resume_hint, device), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+    }
+}
+
+/** "2 h ago · 5 messages". */
+@Composable
+private fun meta(session: ResumableSession, now: Long): String =
+    relativeTime(session.lastActiveAt, now) + " · " + pluralStringResource(Res.plurals.new_session_resume_turns, session.turns, session.turns)
 
 /** Ask or bypass, chosen at each launch; the last choice comes back the next time. */
 @Composable

@@ -109,6 +109,7 @@ class SqlDeviceService(private val database: Database) : DeviceService {
         .where { (Tokens.memberId eq member) and (Tokens.expiresAt greater now) and Tokens.serviceScopes.isNull() }
         .orderBy(Tokens.expiresAt to SortOrder.DESC, Tokens.id to SortOrder.ASC).limit(50).toList()
     private fun ResultRow.device(active: Int, current: Boolean, now: Long) = Device(get(Devices.id), get(Devices.memberId), get(Devices.name), get(Devices.createdAt), get(Devices.lastLoginAt), active, current,
-        get(Devices.platform), get(Devices.osVersion), DaemonPresence.of(get(Devices.daemonSeenAt), get(Devices.daemonVersion), now))
+        get(Devices.platform), get(Devices.osVersion), DaemonPresence.of(get(Devices.daemonSeenAt), get(Devices.daemonVersion), now,
+            get(Devices.daemonFeatures)?.split(',')?.filter { it.isNotBlank() }.orEmpty()))
     private fun missing() = TeamFailure("not_found", 404, "Device or session not found.")
 }

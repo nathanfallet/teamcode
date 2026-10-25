@@ -16,6 +16,8 @@ object Devices : Table("devices") {
     /** The last poll of the device's daemon (database clock); null when it never connected or said it stopped. */
     val daemonSeenAt = long("daemon_seen_at").nullable()
     val daemonVersion = varchar("daemon_version", 32).nullable()
+    /** What the daemon announced at the same poll, comma-separated (`resume.v1`); null for an older daemon. */
+    val daemonFeatures = varchar("daemon_features", 255).nullable()
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("device_member_installation", memberId, installationId) }
 }
@@ -30,4 +32,23 @@ object DeviceFolders : Table("device_folders") {
     // Read in order by the primary key's prefix, without a sort; an id appears once per device.
     override val primaryKey = PrimaryKey(deviceId, position)
     init { uniqueIndex("device_folder_id", deviceId, folderId) }
+}
+
+/**
+ * Members waiting for a device's daemon to list a folder's conversations (`cloud.sessions.remote.resume.v1`). A row
+ * lives while its member waits (seconds) and is removed then; one left by a stopped replica expires and goes at the
+ * device's next request. The answer is encrypted: the titles it holds never rest in clear text.
+ */
+object DeviceDaemonListings : Table("device_daemon_listings") {
+    val id = varchar("id", 36)
+    val deviceId = reference("device_id", Devices.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "device_daemon_listings_device")
+    val folderId = varchar("folder_id", 64)
+    val maxResults = integer("max_results")
+    val before = long("before_at").nullable()
+    val expiresAt = long("expires_at")
+    val answeredAt = long("answered_at").nullable()
+    val answer = text("answer_envelope").nullable()
+    override val primaryKey = PrimaryKey(id)
+    // The daemon's poll: the device's open requests (unanswered, unexpired) in order, from the index alone.
+    init { index("device_daemon_listing_open", false, deviceId, answeredAt, expiresAt) }
 }

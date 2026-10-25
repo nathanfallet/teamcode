@@ -30,6 +30,8 @@ import me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCal
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionRepository
 import me.nathanfallet.teamcode.companion.domain.models.DeviceFolder
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSession
+import me.nathanfallet.teamcode.companion.domain.models.ResumableSessions
 import me.nathanfallet.teamcode.companion.domain.models.HostDevice
 import me.nathanfallet.teamcode.companion.domain.models.NewDeviceSession
 import me.nathanfallet.teamcode.companion.domain.models.PermissionMode
@@ -328,6 +330,22 @@ class RemoteSessionRepositoryTest {
             assertTrue(body.contains(part), body)
         // The folder's name is the server's to fill: the app never sends a directory, let alone a path.
         assertFalse(body.contains("\"directoryName\":\""), body); assertFalse(body.contains("\"profileId\":\""), body)
+        assertFalse(body.contains("resumeSessionId"), "A new conversation sends no resumeSessionId, as before")
+        json(remote, HttpStatusCode.Created)
+        sessions.createOnDevice("a1", form.copy(agent = "claude", resumeSessionId = "0000000a-aaaa-4bbb-8ccc-00000000000a"), "key-2")
+        assertTrue((requests.last().body as OutgoingContent.ByteArrayContent).bytes().decodeToString().contains("\"resumeSessionId\":\"0000000a-aaaa-4bbb-8ccc-00000000000a\""))
+    }
+
+    @Test fun aFoldersConversationsAreReadThroughTheServerWithTheDaemonsFeatures() = runTest {
+        json("""{"deviceId":"d1","daemon":{"online":true,"lastSeenAt":3,"features":["resume.v1"]},"folders":[{"id":"f1","name":"app"}]}""")
+        assertTrue(devices.folders("a1", "d1").resumes)
+        json("""{"deviceId":"d1","daemon":{"online":true,"lastSeenAt":3},"folders":[{"id":"f1","name":"app"}]}""")
+        assertFalse(devices.folders("a1", "d1").resumes, "An older daemon announces nothing")
+        json("""{"sessions":[{"id":"0000000a-aaaa-4bbb-8ccc-00000000000a","title":"Fix the build","lastActiveAt":5,"turns":2}],"nextBefore":5}""")
+        val page = devices.resumable("a1", "d1", "f1", 20, 9)
+        assertEquals(ResumableSessions(listOf(ResumableSession("0000000a-aaaa-4bbb-8ccc-00000000000a", "Fix the build", 5, 2)), 5), page)
+        assertEquals("/api/v1/devices/d1/folders/f1/resumable", requests.last().url.encodedPath)
+        assertEquals("20" to "9", requests.last().url.parameters["limit"] to requests.last().url.parameters["before"])
     }
 
     @Test fun aRefusedSessionKeepsOnlyTheDaemonsReasonCode() = runTest {

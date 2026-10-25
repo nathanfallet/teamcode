@@ -155,13 +155,14 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
  * What the new-session form offers: the cloud profiles, whether the server takes a first message with the session, and
  * whether it starts sessions on the member's online devices (`cloud.sessions.remote.daemon.v1`).
  */
-data class NewSessionOptions(val profiles: List<Profile>, val acceptsMessage: Boolean, val onDevices: Boolean = false)
+data class NewSessionOptions(val profiles: List<Profile>, val acceptsMessage: Boolean, val onDevices: Boolean = false, val resumes: Boolean = false)
 
 class LoadProfilesUseCase(private val sessions: SessionRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
     suspend operator fun invoke(accountId: String): NewSessionOptions = guard(accountId) {
         val announced = features.features(accountId, refresh = true)
         if (Features.SESSIONS !in announced) throw CompanionException.Unsupported(Features.SESSIONS)
-        NewSessionOptions(sessions.profiles(accountId), Features.INITIAL_MESSAGE in announced && Features.MESSAGES in announced, Features.DEVICE_SESSIONS in announced)
+        NewSessionOptions(sessions.profiles(accountId), Features.INITIAL_MESSAGE in announced && Features.MESSAGES in announced, Features.DEVICE_SESSIONS in announced,
+            Features.DEVICE_SESSIONS in announced && Features.RESUME_SESSIONS in announced)
     }
 }
 

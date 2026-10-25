@@ -48,6 +48,7 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         val request = CreateCloudSessionRequest(
             name = session.name, agent = CloudAgentRequest(session.model, session.effort, kind = session.agent), initialMessage = session.initialMessage,
             kind = CloudSessionKinds.REMOTE, permissionMode = session.permissionMode.wire, deviceId = session.deviceId, folderId = session.folderId,
+            resumeSessionId = session.resumeSessionId,
         )
         client.createCloudSession(request, idempotencyKey).domain()
     }

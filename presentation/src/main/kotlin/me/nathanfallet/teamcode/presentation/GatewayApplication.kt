@@ -266,7 +266,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1", "cloud.transfer.recipients.v1") else null,
                         // Remote sessions need their host's runner channel and the conversation it relays.
                         if (cloudSessions != null && cloudRunner?.remoteHosts == true && cloudConversation != null) listOf("cloud.sessions.remote.v1") else null,
-                        if (deviceDaemons != null && deviceDaemons.sessions.startsOnDevices && cloudRunner?.remoteHosts == true && cloudConversation != null) listOf("cloud.sessions.remote.daemon.v1") else null,
+                        if (deviceDaemons != null && deviceDaemons.sessions.startsOnDevices && cloudRunner?.remoteHosts == true && cloudConversation != null)
+                            listOf("cloud.sessions.remote.daemon.v1", ResumableSessions.CAPABILITY) else null,
                         if (cloudSessions != null && cloudAdmin != null) listOf("cloud.keys.v1") else null,
                     ).flatten() else emptyList()) +
                     (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +

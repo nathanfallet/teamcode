@@ -190,7 +190,12 @@ private fun ApiCatalog.cloudSessions() {
             "`deviceId` and `folderId` (`cloud.sessions.remote.daemon.v1`), it runs on that device instead, one of the " +
             "caller's own, started by its daemon in one of the folders it published (`GET /api/v1/devices/{id}/folders`); " +
             "omit `directoryName`, which is the folder's name. Only the device's owner, signed in interactively, starts " +
-            "one, and only while its daemon is online: nothing is queued for a device that is offline."
+            "one, and only while its daemon is online: nothing is queued for a device that is offline. With " +
+            "`resumeSessionId` as well (`cloud.sessions.remote.resume.v1`, Claude Code only), the session continues that " +
+            "conversation of the folder, one the daemon listed (`GET /api/v1/devices/{id}/folders/{folderId}/resumable`): " +
+            "the daemon checks it again and the agent forks it at its first start, leaving the original as it was. Refused " +
+            "`invalid_resume` (not a lowercase UUID, or without `deviceId`), `resume_unsupported` (another agent) and " +
+            "`daemon_resume_unsupported` (a daemon too old)."
         parameters {
             headerText("Idempotency-Key", IDEMPOTENCY_TEXT, required = true)
             onBehalfOf()

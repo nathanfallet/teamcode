@@ -9,6 +9,7 @@ import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
+import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
 import org.testcontainers.mysql.MySQLContainer
 import kotlin.test.*
@@ -27,7 +28,7 @@ class DeviceDaemonPersistenceTest {
             Database(container.jdbcUrl, container.username, container.password).use { b ->
                 coroutineScope { listOf(a, b).map { async(Dispatchers.IO) { it.migrate() } }.awaitAll() }
                 a.query {
-                    val drift = MigrationUtils.statementsRequiredForDatabaseMigration(Devices, DeviceFolders, CloudSessions, withLogs = false)
+                    val drift = MigrationUtils.statementsRequiredForDatabaseMigration(Devices, DeviceFolders, CloudSessions, DeviceDaemonListings, withLogs = false)
                     assertEquals(emptyList(), drift, "The reviewed migration matches the Exposed tables")
                 }
                 scenario(a, b)
@@ -48,11 +49,12 @@ class DeviceDaemonPersistenceTest {
         val browser = team.login("daemon-colleague", password, "Browser").principal
         val key = team.authenticate(SqlServiceKeyService(a).create(laptop, laptop.member.id, "ci", setOf(ServiceScope.CLOUD_WRITE, ServiceScope.CLOUD_READ), 1).accessToken)!!
 
-        val daemonStore = SqlDeviceDaemonStore(a)
+        val cipher = CredentialCipher(ByteArray(32) { 3 })
+        val daemonStore = SqlDeviceDaemonStore(a, cipher)
         var onSleep: suspend () -> Unit = {}
         val daemon = DeviceDaemonUseCase(daemonStore, sleep = { onSleep() })
         val sessionStore = SqlCloudSessionStore(b)
-        val sessions = CloudSessionService(sessionStore, daemons = SqlDeviceDaemonStore(b))
+        val sessions = CloudSessionService(sessionStore, daemons = SqlDeviceDaemonStore(b, cipher))
         val devices = SqlDeviceService(b)
         val laptopId = sessionStore.deviceOf(laptop)!!
         val adminDevice = sessionStore.deviceOf(admin)!!
@@ -192,6 +194,8 @@ class DeviceDaemonPersistenceTest {
         assertEquals(listOf(started), waited.map { it.sessionId })
         onSleep = {}
 
+        resume(a, daemonStore, sessions, devices, laptop, desktop, phone, admin, laptopId, ::draft)
+
         // A daemon that says it stops is offline at once: nothing new can be started there.
         daemon.offline(laptop)
         assertNull(devices.devices(phone).single { it.id == laptopId }.daemon)
@@ -205,6 +209,63 @@ class DeviceDaemonPersistenceTest {
         // Removing the device removes its folders with it.
         devices.revokeDevice(phone, laptopId)
         assertEquals(0L, a.query { DeviceFolders.selectAll().where { DeviceFolders.deviceId eq laptopId }.count() })
+    }
+
+    /** `cloud.sessions.remote.resume.v1`, on the scenario's laptop: listings relayed through the database, and a session continuing one. */
+    private suspend fun resume(a: Database, daemonStore: SqlDeviceDaemonStore, sessions: CloudSessionService, devices: SqlDeviceService, laptop: Principal, desktop: Principal,
+        phone: Principal, admin: Principal, laptopId: String, draft: (String?, String?) -> RemoteSessionDraft) {
+        fun draft() = draft("api", laptopId)
+        // Resume (`cloud.sessions.remote.resume.v1`): an older daemon is never asked, and a session never continues there.
+        var onSleep: suspend () -> Unit = {}
+        val daemon = DeviceDaemonUseCase(daemonStore, sleep = { onSleep() })
+        val conversationId = "0000000a-aaaa-4bbb-8ccc-00000000000a"
+        failure("daemon_resume_unsupported") { daemon.resumable(phone, laptopId, "api", 20, null) }
+        failure("daemon_resume_unsupported") { sessions.createRemote(phone, null, draft().copy(resumeSessionId = conversationId), null) }
+        // A new daemon announces it (after the previous one said it stopped, as an update does).
+        daemon.offline(laptop)
+        val features = listOf(DeviceDaemonRules.RESUME_FEATURE)
+        failure("invalid_features") { daemon.poll(laptop, 0, "1.1.0", listOf("Resume v1")) }
+        daemon.poll(laptop, 0, "1.1.0", features)
+        assertEquals(features, devices.devices(phone).single { it.id == laptopId }.daemon!!.features)
+        assertEquals(features, daemon.owned(phone, laptopId).daemon!!.features)
+        failure("invalid_limit") { daemon.resumable(phone, laptopId, "api", 0, null) }
+        failure("invalid_limit") { daemon.resumable(phone, laptopId, "api", DeviceDaemonRules.MAX_LISTING_LIMIT + 1, null) }
+        failure("folder_not_published") { daemon.resumable(phone, laptopId, "old", 20, null) }
+        failure("device_not_found") { daemon.resumable(admin, laptopId, "api", 20, null) }
+        assertEquals(emptyList(), daemon.poll(laptop, 0, "1.1.0", features).listings)
+
+        // The member waits; the laptop's daemon gets the request at its poll and answers it. Another device cannot.
+        val page = ResumableAnswer(listOf(ResumableSession(conversationId, "Fix the build", 1_000, 3)), nextBefore = 1_000)
+        var sealed: String? = null
+        onSleep = {
+            daemon.poll(laptop, 0, "1.1.0", features).listings.singleOrNull()?.let { listing ->
+                assertEquals(DaemonListing(listing.requestId, "api", 20, 5_000), listing)
+                assertEquals(emptyList(), daemon.poll(desktop, 0, null, features).listings, "Another device of the owner sees nothing")
+                failure("listing_not_found") { daemon.answer(desktop, listing.requestId, page) }
+                failure("invalid_listing") { daemon.answer(laptop, listing.requestId, ResumableAnswer(listOf(ResumableSession("../x", "t", 0, 1)))) }
+                failure("invalid_listing") { daemon.answer(laptop, listing.requestId, ResumableAnswer(listOf(ResumableSession(conversationId, "a\nb", 0, 1)))) }
+                daemon.answer(laptop, listing.requestId, page)
+                sealed = a.query { DeviceDaemonListings.select(DeviceDaemonListings.answer).where { DeviceDaemonListings.id eq listing.requestId }.single()[DeviceDaemonListings.answer] }
+                failure("listing_not_found") { daemon.answer(laptop, listing.requestId, page) }
+            }
+        }
+        assertEquals(page, daemon.resumable(phone, laptopId, "api", 20, 5_000))
+        assertTrue(sealed!!.startsWith("v1:") && "Fix the build" !in sealed!!, "The titles never rest in clear text")
+        assertEquals(0L, a.query { DeviceDaemonListings.selectAll().count() }, "The request is gone once answered")
+        onSleep = { daemon.poll(laptop, 0, "1.1.0", features).listings.singleOrNull()?.let { daemon.answer(laptop, it.requestId, ResumableAnswer(emptyList(), refused = "folder_missing")) } }
+        failure("folder_missing") { daemon.resumable(phone, laptopId, "api", 20, null) }
+        onSleep = {}
+        failure("device_no_answer") { daemon.resumable(phone, laptopId, "api", 20, null) }
+        assertEquals(0L, a.query { DeviceDaemonListings.selectAll().count() }, "Nor kept after a wait that ended without an answer")
+
+        // Starting from a listed conversation: the order carries it to the daemon, which checks it against its folder.
+        failure("invalid_resume") { sessions.createRemote(phone, null, draft().copy(resumeSessionId = "../../etc"), null) }
+        failure("invalid_resume") { sessions.createRemote(laptop, null, draft(null, null).copy(directoryName = "api", resumeSessionId = conversationId), null) }
+        failure("resume_unsupported") { sessions.createRemote(phone, null, draft().copy(agentKind = "codex", resumeSessionId = conversationId), null) }
+        val resumed = (sessions.createRemote(phone, null, draft().copy(resumeSessionId = conversationId), null) as CloudCreateOutcome.Created).session
+        assertEquals(conversationId, daemon.poll(laptop, 0, "1.1.0", features).orders.single { it.sessionId == resumed.id }.resumeSessionId)
+        sessions.refuseHost(laptop, resumed.id, "resume_not_found")
+
     }
 
     private suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)

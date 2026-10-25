@@ -54,9 +54,13 @@ interface AgentChannel {
     suspend fun file(fileId: String, maxBytes: Long, receive: (ByteArray, Int) -> Unit): Unit = throw UnsupportedOperationException("This channel downloads no file.")
 }
 
-/** The agent's conversation id, kept on the workspace volume so the next pod resumes it. */
+/**
+ * The agent's conversation id, kept on the workspace volume so the next pod resumes it. [fork]: the conversation is
+ * another one's on the member's device (`cloud.sessions.remote.resume.v1`), continued under a new id at the first start
+ * (Claude Code's `--fork-session`) so the original stays as it was; the new id then replaces this state.
+ */
 @Serializable
-data class AgentState(val kind: String, val version: String? = null, val conversationId: String)
+data class AgentState(val kind: String, val version: String? = null, val conversationId: String, val fork: Boolean = false)
 interface AgentStateStore {
     fun read(): AgentState?
     fun write(state: AgentState)
@@ -368,14 +372,15 @@ internal class AgentHost(
         cancelDeadlines(null)
         val config = settings ?: retrying { channel.agent() }.let { AgentSettings(it.kind, it.version, it.model, it.effort, it.permissionRelay, it.permissionDeadlineMinutes, it.liveText, it.permissionMode, it.backgroundTasks) }.also { settings = it }
         val stored = state.read()
-        val resume = stored?.takeIf { it.kind == config.kind && it.version == config.version }?.conversationId
+        val kept = stored?.takeIf { it.kind == config.kind && it.version == config.version }
+        val resume = kept?.conversationId
         if (stored != null && resume == null) {
             // Another agent or version: never resume across them; history stays in the transcript.
             state.clear()
             enqueue(CloudEventTypes.STATUS, buildJsonObject { put("agent", config.kind); put("conversation", "transcript_only") })
         }
         val next = agentAdapter(config, clientVersion, now, readableDirectories = listOfNotNull(uploadsDirectory))
-        val (command, environment) = launch(config.kind, next.command(resume))
+        val (command, environment) = launch(config.kind, next.command(resume, fork = kept?.fork == true))
         val child = start(command, environment, workingDirectory)
         process = child; adapter = next; resumed = resume; wakeups = 0
         val startup = next.startup(resume, workingDirectory)

@@ -222,6 +222,10 @@ class FakeDeviceRepository : me.nathanfallet.teamcode.companion.domain.repositor
         { me.nathanfallet.teamcode.companion.domain.models.DeviceFolders(true, emptyList()) }
     override suspend fun onlineDevices(accountId: String) = devicesResult().also { calls += "devices" }
     override suspend fun folders(accountId: String, deviceId: String) = foldersResult(deviceId).also { calls += "folders $deviceId" }
+    var resumableResult: (deviceId: String, folderId: String, before: Long?) -> me.nathanfallet.teamcode.companion.domain.models.ResumableSessions =
+        { _, _, _ -> me.nathanfallet.teamcode.companion.domain.models.ResumableSessions(emptyList()) }
+    override suspend fun resumable(accountId: String, deviceId: String, folderId: String, limit: Int, before: Long?) =
+        resumableResult(deviceId, folderId, before).also { calls += "resumable $deviceId $folderId $limit" + (before?.let { " before=$it" } ?: "") }
 }
 
 fun hostDevice(id: String, name: String = "Device $id", current: Boolean = false) =
