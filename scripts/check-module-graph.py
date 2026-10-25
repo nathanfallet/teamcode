@@ -8,6 +8,8 @@ allowed = {
     'api': set(), 'client': {'api'}, 'config': set(), 'cli': {'client', 'config'}, 'domain': set(),
     'infrastructure': {'domain'}, 'presentation': {'api', 'domain'},
     'app': {'api', 'domain', 'infrastructure', 'presentation'},
+    # The MCP stdio host: no database, no domain, no infrastructure (docs/mcp.md).
+    'mcp': {'api'},
     'companion': {'client'}, 'companion-android': {'companion'}, 'companion-desktop': {'companion', 'config', 'client'},
 }
 for module, dependencies in allowed.items():
