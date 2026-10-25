@@ -170,7 +170,8 @@ fun main() {
     val audit = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlAuditService(it) }
     val skills = database?.let { me.nathanfallet.teamcode.domain.skills.SkillCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlSkillStore(it)) }
     val hooks = database?.let { me.nathanfallet.teamcode.domain.hooks.HookCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlHookStore(it)) }
-    val variants = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(it, cipher!!) }
+    // No MCP host is wired yet, so declaring a hosted MCP command (transport stdio) answers 409 mcp_disabled.
+    val variants = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(it, cipher!!, stdioLaunchers = emptySet()) }
     /** A member's own environment variables, for `teamcode run`: resolved from the variants on every read. */
     val environment = variants?.let { me.nathanfallet.teamcode.domain.variants.ResolveOwnEnvironmentUseCase(
         me.nathanfallet.teamcode.domain.cloud.ResolveCloudVariablesUseCase(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(it))) }

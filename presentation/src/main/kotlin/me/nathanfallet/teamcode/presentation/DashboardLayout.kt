@@ -164,7 +164,7 @@ input[readonly]{color:var(--muted)}
 .drop .pick{display:inline;color:var(--accent);cursor:pointer;text-decoration:underline;font-weight:500}
 .choice{display:flex;align-items:flex-start;gap:10px}.choice>span{font-weight:400}
 [hidden]{display:none!important}
-.variant-form:has(input[name=kind][value=ENV]:checked) .only-mcp,.variant-form:has(input[name=kind][value=MCP]:checked) .only-env,.variant-form:has(input[name=binding][value=PER_MEMBER]:checked) .only-shared{display:none}
+.variant-form:has(input[name=kind][value=ENV]:checked) .only-mcp,.variant-form:has(input[name=kind][value=MCP]:checked) .only-env,.variant-form:has(input[name=binding][value=PER_MEMBER]:checked) .only-shared,.variant-form:has(input[name=transport][value=http]:checked) .only-stdio,.variant-form:has(input[name=transport][value=stdio]:checked) .only-http{display:none}
 .hint{display:block;margin-top:5px;font-size:12.5px;font-weight:400;color:var(--muted)}
 .hint strong{color:var(--text);font-weight:600}
 fieldset{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 14px}legend{padding:0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}

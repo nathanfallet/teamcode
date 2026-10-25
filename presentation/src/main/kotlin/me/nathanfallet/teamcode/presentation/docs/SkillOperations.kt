@@ -232,19 +232,26 @@ internal fun ApiCatalog.variantOperations() {
         operationId = "createVariant"; tag(ApiTags.VARIANTS)
         summary = "Create a variant"
         description = "`binding` is `SHARED` (one secret for everyone) or `PER_MEMBER` (each member's own secret at " +
-            "assignment). An MCP variant needs its `endpoint`, which cannot change later. Administrators only."
+            "assignment). An MCP variant needs its `endpoint`, which cannot change later. A hosted MCP command " +
+            "(`transport` `stdio`) instead names a `launcher` (`npm` or `pypi`), a `package` at one exact version " +
+            "(`name@1.2.3`, `name==1.2.3`) and up to 32 `args`; `config` holds its visible environment variables and " +
+            "`secretVariables` its encrypted ones (up to 16, values of at least 8 characters), which an argument uses as " +
+            "`${'$'}{NAME}`. None of these but the secret variables can change later. It needs the server's MCP host; " +
+            "the gateway does not serve hosted commands yet. Administrators only."
         body<CreateVariantRequest>("The variant.")
         responses {
             ok<VariantView>("Created.", HttpStatusCode.Created)
-            badRequest("An invalid kind, binding, target, endpoint or secret (`invalid_variant`).")
-            conflict("A variant of this name exists for the target (`variant_exists`), or the limit is reached (`variant_limit`).")
+            badRequest("An invalid kind, binding, target, endpoint, transport, launcher, package, argument, variable or secret (`invalid_variant`).")
+            conflict("A variant of this name exists for the target (`variant_exists`), the limit is reached (`variant_limit`), " +
+                "or a hosted command was declared on a server without an MCP host (`mcp_disabled`).")
         }
     }
     patch("/api/v1/variants/{id}") {
         operationId = "updateVariant"; tag(ApiTags.VARIANTS)
         summary = "Change a variant"
         description = "Replaces the name and configuration. A null `secret` keeps the stored one unless `clearSecret`. " +
-            "`expectedVersion` must be the current version. Administrators only."
+            "A hosted command keeps its command and visible variables (send `config` unchanged); `secretVariables` " +
+            "replaces its secret variables. `expectedVersion` must be the current version. Administrators only."
         parameters { pathId("id", "The variant's identifier.") }
         body<UpdateVariantRequest>("The new name, configuration and optional secret.")
         responses {
@@ -296,7 +303,8 @@ internal fun ApiCatalog.variantOperations() {
     put("/api/v1/members/{memberId}/variants") {
         operationId = "assignVariant"; tag(ApiTags.VARIANTS)
         summary = "Assign a variant to a member"
-        description = "Replaces the member's variant for the variant's target. A `PER_MEMBER` variant needs `memberSecret`. Administrators only."
+        description = "Replaces the member's variant for the variant's target. A `PER_MEMBER` variant needs `memberSecret`, " +
+            "or `memberSecretVariables` for a hosted command, holding every variable its arguments use. Administrators only."
         parameters { pathId("memberId", "The member's identifier.") }
         body<AssignVariantRequest>("The variant and, for a per-member variant, the member's secret.")
         responses {
