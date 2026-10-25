@@ -5,8 +5,8 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.isDirectory
-import kotlin.io.path.isExecutable
 import kotlin.io.path.name
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +48,7 @@ class Supervisor(
     @Volatile private var closed = false
     private val launchersPresent: Boolean = config.launchers.all { launcher ->
         if (launcher == Launchers.NPM) executable(config.npx) && executable("node") else executable(config.uvx)
-    }
+    } && (config.prlimit == null || executable(config.prlimit))
 
     private class Entry(val key: String) {
         val mutex = Mutex()
@@ -250,6 +250,7 @@ class Supervisor(
     }
 
     private suspend fun start(entry: Entry, spec: ProcessSpec): StdioProcess {
+        var launched: StdioProcess? = null
         try {
             reserve(entry)
             val dirs = ProcessDirs(config.dataDir.resolve(entry.key))
@@ -258,6 +259,7 @@ class Supervisor(
             val process = StdioProcess(entry.key, plan, dirs, config, events, describe,
                 onExit = { process, reason, code -> exited(entry, process, reason, code) },
                 requestStop = { process, reason -> retire(entry, process, reason) })
+            launched = process
             val started = System.nanoTime()
             try {
                 withTimeout(config.startTimeoutMillis) {
@@ -287,7 +289,15 @@ class Supervisor(
             }
             events.emit(process.event("started") { put("pid", process.pid ?: -1); put("coldStartMillis", elapsed) })
             return process
-        } catch (failure: HostFailure) {
+        } catch (cancelled: CancellationException) {
+            // The host is shutting down: no process may outlive it.
+            launched?.kill()
+            entry.starting = null
+            throw cancelled
+        } catch (error: Exception) {
+            // An unexpected error (a full disk, say) must not leave the key waiting on a failed start forever.
+            val failure = error as? HostFailure ?: HostFailure(HostErrors.START_FAILED, "The MCP host could not start the server.")
+                .also { launched?.let { retireStarting(entry, it) } }
             entry.mutex.withLock {
                 entry.starting = null
                 if (failure.code !in setOf(HostErrors.CAPACITY, HostErrors.SHUTTING_DOWN)) {
@@ -380,9 +390,7 @@ class Supervisor(
         if (!HostProtocol.KEY.matches(key)) throw HostFailure(HostErrors.BAD_REQUEST, "A key is 64 lowercase hexadecimal characters.")
     }
 
-    private fun executable(command: String): Boolean =
-        if ('/' in command) java.nio.file.Path.of(command).isExecutable()
-        else config.path.split(':').any { it.isNotEmpty() && java.nio.file.Path.of(it, command).isExecutable() }
+    private fun executable(command: String): Boolean = StdioProcess.resolve(command, config.path) != null
 
     private fun fingerprint(spec: ProcessSpec): String {
         val canonical = HostProtocol.json.encodeToString(ProcessSpec.serializer(), spec.copy(env = spec.env.toSortedMap(), secrets = spec.secrets.toSortedMap()))

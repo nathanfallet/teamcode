@@ -38,7 +38,7 @@ import me.nathanfallet.teamcode.mcp.HostFixture.Companion.key
 import me.nathanfallet.teamcode.mcp.HostFixture.Companion.text
 
 class McpHostTest {
-    private fun host(tweak: HostConfig.() -> HostConfig = { this }, memory: MemoryProbe = MemoryProbe.SYSTEM, block: suspend HostFixture.() -> Unit) =
+    private fun host(tweak: HostFixture.(HostConfig) -> HostConfig = { it }, memory: MemoryProbe = MemoryProbe.SYSTEM, block: suspend HostFixture.() -> Unit) =
         HostFixture(tweak, memory).use { runBlocking { it.block() } }
 
     private fun ProcessStatus?.pid() = checkNotNull(this?.pid)
@@ -67,6 +67,13 @@ class McpHostTest {
         assertEquals(listOf("--yes", "--", "fixture@1.0.0", "stdio", "--verbose"), stats["argv"]!!.jsonArray.map { it.jsonPrimitive.content })
         assertTrue(events.any { it["event"]?.jsonPrimitive?.content == "started" })
     }
+
+    @Test
+    fun `launcher commands are found on the processes' PATH, not the host's`() =
+        host({ it.copy(npx = "npx", path = "$bin:${it.path}") }) {
+            // The JVM's own PATH does not contain the fixture's directory: only the configured PATH does.
+            assertEquals("ok", text(call(key("path"), spec(), "echo", buildJsonObject { put("text", "ok") })))
+        }
 
     @Test
     fun `a pypi process runs through uvx with its pinned package`() = host {
@@ -144,7 +151,7 @@ class McpHostTest {
     }
 
     @Test
-    fun `calls beyond the in-flight limit wait, then fail as busy`() = host({ copy(maxInFlightPerProcess = 1) }) {
+    fun `calls beyond the in-flight limit wait, then fail as busy`() = host({ it.copy(maxInFlightPerProcess = 1) }) {
         val key = key("busy")
         val spec = spec()
         call(key, spec, "echo")
@@ -160,7 +167,7 @@ class McpHostTest {
 
     @Test
     fun `an answer over the request's limit is refused and lines over the host's limit are dropped, then restart the process`() =
-        host({ copy(maxLineBytes = 256 * 1024) }) {
+        host({ it.copy(maxLineBytes = 256 * 1024) }) {
             val key = key("large")
             val spec = spec()
             call(key, spec, "echo")
@@ -191,7 +198,7 @@ class McpHostTest {
     }
 
     @Test
-    fun `a process that stops reading stdin is restarted`() = host({ copy(writeStallMillis = 1_000) }) {
+    fun `a process that stops reading stdin is restarted`() = host({ it.copy(writeStallMillis = 1_000) }) {
         val key = key("stuck")
         val spec = spec()
         call(key, spec, "stuck")
@@ -310,7 +317,7 @@ class McpHostTest {
     }
 
     @Test
-    fun `idle processes stop, and at capacity the oldest idle one makes room`() = host({ copy(idleMillis = 600, maxProcesses = 1) }) {
+    fun `idle processes stop, and at capacity the oldest idle one makes room`() = host({ it.copy(idleMillis = 600, maxProcesses = 1) }) {
         val first = key("first")
         val second = key("second")
         val spec = spec()
@@ -348,6 +355,14 @@ class McpHostTest {
         assertEquals(HostErrors.INVALID_SPEC, call(key("invalid"), spec().copy(pkg = "fixture@latest"), "echo").error?.code)
         val badKey = post(HostProtocol.OPS, HostProtocol.json.encodeToString(OpsRequest.serializer(), OpsRequest("../etc", spec(), "list", deadlineMs = 5_000, maxResponseBytes = 1_024)))
         assertEquals(HttpStatusCode.BadRequest, badKey.status)
+    }
+
+    @Test
+    fun `an unexpected start error fails the operation without leaving the key stuck`() = host({ it.copy(dataDir = java.nio.file.Files.createTempFile("teamcode-mcp", ".file")) }) {
+        // The data directory is a file: creating the key's directories fails with an I/O error.
+        val key = key("unwritable")
+        repeat(2) { assertEquals(HostErrors.START_FAILED, call(key, spec(), "echo").error?.code) }
+        assertEquals(ProcessStates.FAILED, process(key)?.state)
     }
 
     @Test

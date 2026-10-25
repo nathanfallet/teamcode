@@ -34,9 +34,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * A real host on a loopback port, whose `npx` and `uvx` are the Node.js fixture server: every test goes through the
  * production launch path (argv, environment, prlimit when present), the stdio transport and the HTTP surface.
  */
-class HostFixture(tweak: HostConfig.() -> HostConfig = { this }, memory: MemoryProbe = MemoryProbe.SYSTEM) : AutoCloseable {
+class HostFixture(tweak: HostFixture.(HostConfig) -> HostConfig = { it }, memory: MemoryProbe = MemoryProbe.SYSTEM) : AutoCloseable {
     val root: Path = Files.createTempDirectory("teamcode-mcp-test")
-    private val bin: Path = Files.createDirectories(root.resolve("bin"))
+    val bin: Path = Files.createDirectories(root.resolve("bin"))
     val token = "test-token-" + "k".repeat(40)
     val events = CopyOnWriteArrayList<JsonObject>()
     val config: HostConfig
@@ -54,7 +54,7 @@ class HostFixture(tweak: HostConfig.() -> HostConfig = { this }, memory: MemoryP
             prlimit = "/usr/bin/prlimit".takeIf { Path(it).isExecutable() },
             path = "${Path(node).parent}:/usr/bin:/bin",
             drainMinMillis = 0, tickMillis = 100, memoryCheckMillis = 200, closeStdinWaitMillis = 1_000, terminateWaitMillis = 1_500,
-        ).tweak()
+        ).let { tweak(it) }
         supervisor = Supervisor(config, events = { events += it; EventSink.LOG.emit(it) }, memory = memory)
         server = embeddedServer(Netty, host = "127.0.0.1", port = 0) { mcpHost(config, supervisor) }.start()
         origin = "http://127.0.0.1:" + runBlocking { server.engine.resolvedConnectors().first().port }

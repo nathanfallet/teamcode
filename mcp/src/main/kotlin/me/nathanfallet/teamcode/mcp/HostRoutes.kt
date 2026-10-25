@@ -7,6 +7,7 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationStopPreparing
 import io.ktor.server.request.receiveChannel
+import io.ktor.server.request.uri
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -95,6 +96,12 @@ private suspend fun ApplicationCall.handle(block: suspend () -> Unit) {
     try { block() } catch (failure: HostFailure) {
         val status = if (failure.code == HostErrors.SHUTTING_DOWN) HttpStatusCode.ServiceUnavailable else HttpStatusCode.BadRequest
         refuse(status, failure.code, failure.message.orEmpty())
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        // Neither the message nor the stack trace: they could quote a path or a value of the request.
+        org.slf4j.LoggerFactory.getLogger("teamcode.mcp").error("Unexpected ${error.javaClass.name} while serving ${request.uri}")
+        refuse(HttpStatusCode.InternalServerError, "internal", "The MCP host failed unexpectedly.")
     }
 }
 

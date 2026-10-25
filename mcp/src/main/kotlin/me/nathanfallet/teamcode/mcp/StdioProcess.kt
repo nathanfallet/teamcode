@@ -89,6 +89,7 @@ internal class StdioProcess(
     private val oversizeLines = ArrayDeque<Long>()
     private lateinit var reader: Thread
     private lateinit var writer: Thread
+    private lateinit var errors: Thread
 
     val pid: Long? get() = if (::process.isInitialized) process.pid() else null
     val alive get() = !dead.get() && stopReason.get() == null
@@ -101,7 +102,10 @@ internal class StdioProcess(
     /** Starts the process. No shell: the argv goes to execve as built by [Launchers]. */
     suspend fun launch() = withContext(Dispatchers.IO) {
         dirs.all.forEach { Files.createDirectories(it) }
-        val builder = ProcessBuilder(plan.command).directory(plan.workDir.toFile())
+        // ProcessBuilder looks a bare command up on the JVM's own PATH: resolve it on the process's PATH instead.
+        val program = resolve(plan.command.first(), plan.environment["PATH"].orEmpty())
+            ?: throw HostFailure(HostErrors.START_FAILED, "${plan.command.first()} is not installed on this host.").also { dead.set(true); exited.complete(-1) }
+        val builder = ProcessBuilder(listOf(program) + plan.command.drop(1)).directory(plan.workDir.toFile())
         builder.environment().clear()
         builder.environment().putAll(plan.environment)
         process = try { builder.start() } catch (_: IOException) {
@@ -111,7 +115,7 @@ internal class StdioProcess(
         }
         reader = daemon("reader") { readStdout() }
         writer = daemon("writer") { writeStdin() }
-        daemon("stderr") { readStderr() }
+        errors = daemon("stderr") { readStderr() }
         process.onExit().thenRun { daemon("exit") { onProcessExit() } }
     }
 
@@ -291,8 +295,9 @@ internal class StdioProcess(
     }
 
     private fun onProcessExit() {
-        // Answers written just before the exit are still read.
+        // Answers and diagnostics written just before the exit are still read.
         reader.join(1_000)
+        errors.join(1_000)
         val code = process.exitValue()
         stopReason.compareAndSet(null, StopReason.CRASHED)
         val reason = stopReason.get()!!
@@ -329,6 +334,14 @@ internal class StdioProcess(
         withTimeoutOrNull(config.terminateWaitMillis) { exited.await() }
     }
 
+    /** Immediate SIGKILL of the process and its descendants, when the host cannot wait (its own cancellation). */
+    fun kill() {
+        markStopping(StopReason.SHUTDOWN)
+        if (!::process.isInitialized) return
+        process.descendants().forEach { it.destroyForcibly() }
+        process.destroyForcibly()
+    }
+
     fun event(name: String, extra: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit = {}) = buildJsonObject {
         put("event", name)
         describe.forEach { (key, value) -> put(key, value) }
@@ -339,6 +352,12 @@ internal class StdioProcess(
         Thread.ofPlatform().daemon().name("mcp-${key.take(12)}-$name").start(body)
 
     companion object {
+        /** [command] itself when it holds a slash, else the first executable of that name on [path]. */
+        fun resolve(command: String, path: String): String? =
+            if ('/' in command) command.takeIf { java.nio.file.Path.of(it).let { file -> Files.isRegularFile(file) && Files.isExecutable(file) } }
+            else path.split(':').filter { it.isNotEmpty() }.map { java.nio.file.Path.of(it, command) }
+                .firstOrNull { Files.isRegularFile(it) && Files.isExecutable(it) }?.toString()
+
         /** Newest first, as the gateway's HTTP upstream. */
         val PROTOCOL_VERSIONS = listOf("2025-11-25", "2025-06-18", "2025-03-26")
         const val MAX_LIST_PAGES = 16
