@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonPrimitive
 import me.nathanfallet.teamcode.api.models.CloudAgentRequest
 import me.nathanfallet.teamcode.api.models.CloudSessionKinds
 import me.nathanfallet.teamcode.api.models.CreateCloudSessionRequest
@@ -59,7 +60,7 @@ class DeviceDaemonTest {
             val project = claude / ClaudeTranscripts.projectName(directory.toString())
             FileSystem.SYSTEM.createDirectories(project)
             FileSystem.SYSTEM.write(project / "$id.jsonl") {
-                writeUtf8("""{"type":"user","cwd":"$cwd","message":{"role":"user","content":"$prompt"}}""" + "\n")
+                writeUtf8("""{"type":"user","cwd":${JsonPrimitive(cwd)},"message":{"role":"user","content":${JsonPrimitive(prompt)}}}""" + "\n")
             }
         }
 

@@ -15,14 +15,14 @@ class ClaudeTranscriptsTest {
     private val ids = (1..9).map { "0000000$it-aaaa-4bbb-8ccc-00000000000$it" }
 
     private fun user(text: String, cwd: String, extra: String = "") =
-        """{"type":"user","sessionId":"s","cwd":"$cwd","timestamp":"2026-10-25T10:00:00Z"$extra,"message":{"role":"user","content":${quote(text)}}}"""
+        """{"type":"user","sessionId":"s","cwd":${quote(cwd)},"timestamp":"2026-10-25T10:00:00Z"$extra,"message":{"role":"user","content":${quote(text)}}}"""
     private fun quote(text: String) = buildString {
         append('"')
         for (char in text) when (char) { '"' -> append("\\\""); '\\' -> append("\\\\"); '\n' -> append("\\n"); '\t' -> append("\\t"); else -> append(char) }
         append('"')
     }
-    private fun assistant(cwd: String) = """{"type":"assistant","cwd":"$cwd","message":{"role":"assistant","content":[{"type":"text","text":"Sure."}]}}"""
-    private fun toolResult(cwd: String) = """{"type":"user","cwd":"$cwd","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"file body"}]}}"""
+    private fun assistant(cwd: String) = """{"type":"assistant","cwd":${quote(cwd)},"message":{"role":"assistant","content":[{"type":"text","text":"Sure."}]}}"""
+    private fun toolResult(cwd: String) = """{"type":"user","cwd":${quote(cwd)},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"file body"}]}}"""
 
     /** A Claude config directory and a project folder, with [lastWrite] taken from a map so the order never depends on the clock. */
     private fun scratch(block: (root: Path, folder: String, write: (String, Long, List<String>) -> Unit, transcripts: ClaudeTranscripts) -> Unit) {
@@ -104,6 +104,20 @@ class ClaudeTranscriptsTest {
         assertEquals(listOf(ids[1]), transcripts.list(twin, 20).sessions.map { it.id })
         assertFalse(transcripts.belongs(folder, ids[1]), "An id of another folder is refused")
         assertTrue(transcripts.belongs(twin, ids[1]))
+    }
+
+    @Test fun aWindowsFolderOffersItsConversations() {
+        // A Windows cwd is written with escaped backslashes; the fixtures must escape it too, or every line is skipped as unreadable.
+        val root = FileSystem.SYSTEM_TEMPORARY_DIRECTORY / ("teamcode-transcripts " + secureRandomBytes(8).toByteString().hex())
+        val folder = "C:\\Users\\Ada\\my_app.v2"
+        val project = root / "projects" / ClaudeTranscripts.projectName(folder)
+        try {
+            fs.createDirectories(project)
+            fs.write(project / "${ids[0]}.jsonl") { writeUtf8(user("Fix the build", folder) + "\n") }
+            val transcripts = ClaudeTranscripts(root / "projects", windows = true)
+            assertEquals(listOf(ids[0]), transcripts.list(folder, 20).sessions.map { it.id })
+            assertTrue(transcripts.belongs(folder, ids[0]))
+        } finally { fs.deleteRecursively(root) }
     }
 
     @Test fun onlyUuidTranscriptsAreReadAndIdsAreChecked() = scratch { _, folder, write, transcripts ->
