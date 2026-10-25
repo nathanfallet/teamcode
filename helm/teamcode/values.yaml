@@ -146,9 +146,20 @@ mysql:
   persistence:
     size: 10Gi
     storageClass: ""
+  # Server settings written to /etc/mysql/conf.d/teamcode.cnf. MySQL 8.4 sizes some memory from the node, not the
+  # container: the TempTable engine may take 3% of the node's RAM with a 1 GiB minimum (temptable_max_ram), which alone
+  # reaches a 1 GiB limit. These bounds keep mysqld under mysql.resources.limits.memory; keep them in step when changing
+  # either. Binary logs (on by default, kept 30 days) are purged after 2 days: the bundled instance has no replica.
+  config: |
+    [mysqld]
+    innodb_buffer_pool_size = 384M
+    temptable_max_ram = 128M
+    tmp_table_size = 32M
+    max_heap_table_size = 32M
+    binlog_expire_logs_seconds = 172800
   resources:
     requests:
       cpu: 250m
-      memory: 512Mi
-    limits:
       memory: 1Gi
+    limits:
+      memory: 2Gi

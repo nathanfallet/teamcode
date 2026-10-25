@@ -59,6 +59,16 @@ for external in (False, True):
         assert set(peer) == {'podSelector'}
         assert peer['podSelector']['matchLabels'].items() <= deployment['spec']['template']['metadata']['labels'].items()
         assert not peer['podSelector']['matchLabels'].items() <= mysql['spec']['template']['metadata']['labels'].items()
+        # The bundled MySQL reads the chart's bounded memory settings, and a changed setting rolls its pod.
+        config = next(doc for doc in documents if doc['kind'] == 'ConfigMap' and doc['metadata']['name'] == mysql['metadata']['name'])
+        cnf = config['data']['teamcode.cnf']
+        assert cnf.lstrip().startswith('[mysqld]') and 'temptable_max_ram' in cnf and 'innodb_buffer_pool_size' in cnf, cnf
+        mysql_pod = mysql['spec']['template']
+        assert 'checksum/mysql-config' in mysql_pod['metadata']['annotations']
+        (mysql_container,) = mysql_pod['spec']['containers']
+        mount = next(m for m in mysql_container['volumeMounts'] if m['name'] == 'config')
+        assert mount['mountPath'] == '/etc/mysql/conf.d/teamcode.cnf' and mount['subPath'] == 'teamcode.cnf'
+        assert mysql_container['resources']['limits']['memory'] == '2Gi'
     if external:
         ingress = next(doc for doc in documents if doc['kind'] == 'Ingress')
         assert ingress['metadata']['annotations']['nginx.ingress.kubernetes.io/proxy-buffering'] == 'off'
@@ -103,6 +113,10 @@ with tempfile.TemporaryDirectory() as packaged:
     container = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]
     assert container['image'] == 'nathanfallet/teamcode:latest' and container['imagePullPolicy'] == 'Always'
 # Misconfigured installations must fail at render time.
+# A Bitnami-style mysql.primary.resources would be silently ignored and leave the bundled MySQL at its default limit.
+misplaced = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org',
+                            '--set', 'mysql.primary.resources.limits.memory=4Gi'], capture_output=True, text=True)
+assert misplaced.returncode != 0 and 'mysql.resources' in misplaced.stderr, misplaced.stderr
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0
 print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes, draining, the MySQL network policy and the session egress settings.')

@@ -74,7 +74,7 @@ kubectl --namespace teamcode port-forward service/teamcode 8080:8080
 
 ## External database and availability
 
-The bundled MySQL StatefulSet is a convenience, **not a highly available database**. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it). **Upgrading:** on a CNI that enforces NetworkPolicy, a backup job, exporter or any other pod that connects to the bundled MySQL directly stops reaching it; disable the policy or route it through the server pods' labels. For production database failover and managed backups, use an external MySQL 8.4 service:
+The bundled MySQL StatefulSet is a convenience, **not a highly available database**. Its memory is bounded twice: `mysql.resources` (default request 1Gi, limit 2Gi) and the server settings in `mysql.config`, mounted as `/etc/mysql/conf.d/teamcode.cnf`. MySQL 8.4 sizes the TempTable engine from the node's RAM (at least 1 GiB) rather than the container's limit, so raise both together; the chart refuses the Bitnami-style `mysql.primary.*` keys, which it would otherwise ignore. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it). **Upgrading:** on a CNI that enforces NetworkPolicy, a backup job, exporter or any other pod that connects to the bundled MySQL directly stops reaching it; disable the policy or route it through the server pods' labels. For production database failover and managed backups, use an external MySQL 8.4 service:
 
 ```yaml
 mysql:
