@@ -14,11 +14,11 @@ It is the Gradle module `:mcp` and the image `nathanfallet/teamcode-mcp`, publis
 | Host: supervisor, stdio transport, host protocol v1, limits, scrubbing, drain on SIGTERM | Done (`:mcp`) |
 | Image `nathanfallet/teamcode-mcp` (amd64, arm64), its contract test with real npm and PyPI servers | Done (image job of `build.yml`) |
 | Variant model `transport: stdio` (launcher, package, arguments, secret variables) | Planned |
-| Helm chart component `mcp` (Deployment, Service, NetworkPolicy, generated token Secret) | Planned |
+| Helm chart component `mcp` (Deployment, Service, NetworkPolicy, generated token Secret), on by default | Done ([deployment](#deployment-helm)) |
 | Gateway → host wiring (`HostMcpUpstream`, warm-up from `/api/v1/mcp/servers`, `retain` sweep), capability `mcp.gateway.stdio.v1` | Planned |
 | State in the dashboard, team events `mcp.stdio.*`, companion and CLI views | Planned |
 
-Until the wiring lands, the image can be built and run, but no server calls it and no variant can be stdio.
+Until the wiring lands, the chart runs the host and gives the server its address and token, but the server does not call it yet and no variant can be stdio.
 
 ## Architecture
 
@@ -147,7 +147,31 @@ The process `RLIMIT_NPROC` set by `prlimit` counts every thread of the pod's use
 - The host has no database access, no encryption key, no Kubernetes token. It receives the secrets of one process per request and keeps them in memory only (the process environment, the scrubber).
 - Never logged: arguments after substitution, environment, inputs, outputs, stderr. The host logs one JSON event per line on stdout (`started`, `exited`, `killed`, `oversize`, `backoff`, `start_failed`) with the key's first 12 characters, the launcher and the package.
 - Risk accepted by the plan: processes share the pod and its UID, so a malicious pinned package could read its neighbours' environment through `/proc` and send it out. The mitigations are the administrator-only declaration, exact versions frozen at the declaration date, no install scripts, separate caches and the pod's isolation (no database, key or cluster access; the chart's NetworkPolicy). A pod per key is the planned evolution if that is not enough.
-- The pod the chart will run: UID 10002, read-only root file system, no capability, `seccompProfile: RuntimeDefault`, no service account token, writable `/var/mcp` and `/tmp` only, ingress from the server pods only, egress to the public Internet only.
+- The pod the chart runs: UID 10002, read-only root file system, no capability, `seccompProfile: RuntimeDefault`, no service account token, writable `/var/mcp` and `/tmp` only, ingress from the server pods only, egress to the public Internet only.
+
+## Deployment (Helm)
+
+The chart's `mcp` block (`helm/teamcode/values.yaml`) is on by default: a plain `helm upgrade` deploys the host and generates its token, with nothing to create first. `mcp.enabled: false` renders none of it, and the release is then exactly what it was without the block.
+
+| Object | Name | What it is |
+| --- | --- | --- |
+| Deployment | `<release>-mcp` | One replica, `nathanfallet/teamcode-mcp` at the server's tag (`mcp.image.tag`, else `image.tag`, else the chart's `appVersion`), rolling with `maxSurge: 1` and `maxUnavailable: 0`, 90 s of termination grace for the 75 s drain. Probes: startup and liveness on `/health`, readiness on `/ready`. No PodDisruptionBudget: with one replica it would block node drains |
+| Service | `<release>-mcp` | ClusterIP on 8090; the server reads it as `TEAMCODE_MCP_URL=http://<release>-mcp:8090` |
+| ServiceAccount | `<release>-mcp` | No Role or RoleBinding, `automountServiceAccountToken: false` |
+| Secret | `<release>-mcp` | Key `token`: 48 random alphanumeric characters, generated at install, mounted by the host and the server as `TEAMCODE_MCP_TOKEN`, never printed |
+| NetworkPolicy | `<release>-mcp` | Below |
+
+The pod runs as UID 10002 with a read-only root file system, no capability, no privilege escalation, `seccompProfile: RuntimeDefault`, `enableServiceLinks: false`, and two `emptyDir` volumes: `/var/mcp` (`mcp.dataSizeLimit`, 3Gi: the per-key directories, npm and uv caches, a Python per PyPI server) and `/tmp` (512Mi). Requests: 250m CPU, 512Mi of memory, 1Gi of ephemeral storage; limits: 2Gi of memory, 4Gi of ephemeral storage. Its labels (`app.kubernetes.io/name: teamcode-mcp`) never include the server's selector labels, so the server's Service, its PodDisruptionBudget and the bundled MySQL's NetworkPolicy never select it.
+
+**Token.** The chart reads the existing Secret back with Helm's [`lookup`](https://helm.sh/docs/chart_template_guide/function_list/#lookup) on every upgrade and keeps its value; the Secret carries `helm.sh/resource-policy: keep`, so `helm uninstall` (or `mcp.enabled: false`) leaves it in place. `lookup` sees nothing under `helm template` and `helm install|upgrade --dry-run=client`, which therefore show a new value each time; `--dry-run=server` and a real `helm upgrade` read the existing one. A chart rendered outside the cluster (Argo CD, Flux with `helm template`) would generate a new token at every sync: set `mcp.token.existingSecret` (and `mcp.token.key`, `token` by default) to a Secret of your own, of at least 32 characters, instead. To rotate, delete the Secret and run `helm upgrade`: both Deployments carry the annotation `checksum/mcp-token`, so the server and the host roll together with the new value. For an `existingSecret`, the annotation follows its value as `lookup` reads it, so changing it then running `helm upgrade` rolls both too.
+
+**NetworkPolicy** (`mcp.networkPolicy`, on by default, enforced by CNIs that implement NetworkPolicy):
+
+- ingress: this release's server pods only (the server's selector labels), on TCP 8090;
+- egress: DNS (port 53, UDP and TCP), then every public address on every port: `0.0.0.0/0` and `::/0` minus the ranges of the [cloud session policy](cloud-sessions.md#session-network-policy) (RFC 1918, carrier-grade NAT, loopback, link-local and cloud metadata, Azure's WireServer, unique-local, multicast and reserved, plus their NAT64 and 6to4 forms). The database, the cluster's pods, services and nodes, and a private API server are out of reach; a managed cluster whose API endpoint is public needs it in `blockedCidrs` (the pod has no service account token either way);
+- `blockedCidrs` adds ranges (an IPv4 range is also blocked in its NAT64 and 6to4 forms), `extraEgress` appends rules verbatim (an internal npm or PyPI mirror, a proxy), and `lockdown: true` removes the Internet rule, leaving DNS and `extraEgress` only.
+
+`scripts/check-helm.py` checks the default render (pod security, labels disjoint from the server's, server variables, one generated token shared by the Secret and both checksums, the policy's ranges against `SessionNetworkPolicy.kt`), `mcp.enabled=false`, `existingSecret`, the operator's network settings, a release reused from a chart without the block, and the render-time refusals; CI validates the default, disabled and `existingSecret` renders with kubeconform.
 
 ## Image
 

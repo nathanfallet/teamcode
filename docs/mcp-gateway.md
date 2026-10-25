@@ -65,10 +65,10 @@ Some MCP servers only exist as a local command (`npx some-server`, `uvx some-ser
 
 What exists today is the model: an [MCP variant](variants.md#hosted-mcp-commands) with `transport: stdio`, its launcher (`npm` or `pypi`), its package at one exact version, its arguments, its visible variables and its encrypted secret variables, declared by an interactive administrator through `POST /api/v1/variants` or `/dashboard/variants`. Nothing runs yet:
 
-- this version of the server has no MCP host configured, so declaring a hosted command answers `409 mcp_disabled` ("No MCP host is configured on this server (Helm: mcp.enabled)");
+- this version of the server does not call an MCP host yet, so declaring a hosted command answers `409 mcp_disabled` ("No MCP host is configured on this server (Helm: mcp.enabled)"), even where the chart already runs one;
 - a hosted variant that already exists (declared by a later version, then rolled back) is never served: effective resolution lists it in `unavailable`, so `GET /api/v1/mcp/servers` does not name it and no agent gets a server it cannot call.
 
-The MCP host, its image, its chart component and the gateway's connection to it come in later changes; [variants](variants.md#hosted-mcp-commands) describes what is stored and validated.
+The [MCP host](mcp.md), its image and its chart component (`mcp`, on by default) exist; the gateway's connection to it comes in a later change. [Variants](variants.md#hosted-mcp-commands) describes what is stored and validated.
 
 ## Upstream client
 

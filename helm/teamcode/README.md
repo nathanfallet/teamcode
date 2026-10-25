@@ -1,6 +1,6 @@
 # TeamCode on Kubernetes
 
-This chart follows the structure of the [pkg chart](https://github.com/guimauvedigital/pkg/tree/main/helm/pkg), adapted for TeamCode. It deploys two stateless server replicas and, optionally, a single persistent MySQL 8.4 instance. No Redis, sticky sessions, provider credential files or shared application volumes are required. Kubernetes 1.25+ and a default storage class are required for the bundled database.
+This chart follows the structure of the [pkg chart](https://github.com/guimauvedigital/pkg/tree/main/helm/pkg), adapted for TeamCode. It deploys stateless server replicas, the [MCP stdio host](../../docs/mcp.md) (one pod, on by default) and, optionally, a single persistent MySQL 8.4 instance. No Redis, sticky sessions, provider credential files or shared application volumes are required. Kubernetes 1.25+ and a default storage class are required for the bundled database.
 
 ## Install
 
@@ -17,7 +17,7 @@ Provision a Kubernetes Secret named `teamcode-secrets` in the target namespace u
 | `encryption-key` | Base64 encoding of exactly 32 cryptographically random bytes, generated once |
 | `mysql-root-password` | Independent root password, required only for bundled MySQL |
 
-An encryption key can be generated with `openssl rand -base64 32`. Keep it in your secret manager and backups; never regenerate it on rollout. Helm does not generate secrets, embed them in release values or rotate them. Existing MySQL volumes do not change database passwords when Secret values change: perform database credential rotation explicitly.
+An encryption key can be generated with `openssl rand -base64 32`. Keep it in your secret manager and backups; never regenerate it on rollout. Helm does not generate these secrets, embed them in release values or rotate them; its only generated secret is the MCP host's internal token ([below](#mcp-stdio-host)). Existing MySQL volumes do not change database passwords when Secret values change: perform database credential rotation explicitly.
 
 Create a values file with your public origin and TLS ingress:
 
@@ -72,6 +72,28 @@ For local access without ingress, use `publicUrl: http://localhost:8080` and:
 kubectl --namespace teamcode port-forward service/teamcode 8080:8080
 ```
 
+## MCP stdio host
+
+The `mcp` block runs the MCP host: the component that will run the team's hosted MCP servers (pinned npm and PyPI packages) for the MCP gateway, one process per server, in a pod of its own with no database, encryption key or Kubernetes token. It is **on by default** and needs nothing from you: `helm upgrade` deploys a Deployment, a Service, a ServiceAccount, a NetworkPolicy and a Secret, all named `<release>-mcp`, and gives the server pods `TEAMCODE_MCP_URL` and `TEAMCODE_MCP_TOKEN`. The image is `nathanfallet/teamcode-mcp` at the server's tag, so both always run the same version. This version of the server does not call the host yet; the gateway's connection comes in a later release. The pod costs about 200 MiB at rest (512Mi requested, 2Gi limit).
+
+```yaml
+mcp:
+  enabled: true          # false: none of it is rendered, and no hosted stdio server can be declared
+  token:
+    existingSecret: ""   # empty: the chart generates the Secret <release>-mcp, key `token`
+  npmRegistry: ""        # mirrors; empty: registry.npmjs.org and pypi.org
+  pypiIndex: ""
+  networkPolicy:
+    enabled: true        # ingress from the server pods only; egress to DNS and the public Internet only
+    lockdown: false
+    blockedCidrs: []
+    extraEgress: []
+```
+
+**The token is generated once.** The chart creates the Secret `<release>-mcp` with 48 random characters, reads it back with `lookup` on every upgrade so it never changes on its own, and marks it `helm.sh/resource-policy: keep`, so `helm uninstall` leaves it. `helm template` and `--dry-run=client` cannot read the cluster and show a new value each time (`--dry-run=server` shows the kept one). If you render the chart outside the cluster (Argo CD, Flux with `helm template`), set `mcp.token.existingSecret` to a Secret you provide (at least 32 characters, key `mcp.token.key`). To rotate, `kubectl delete secret <release>-mcp`, then `helm upgrade`: the server and the host roll together (annotation `checksum/mcp-token`).
+
+**Upgrading an existing release:** the plain `helm upgrade` you already run adds the host; nothing else changes (the bundled MySQL's StatefulSet is untouched), and the server pods roll once for their two new variables. Then check `kubectl rollout status deployment/<release>-mcp`. A release upgraded with `--reuse-values` keeps the previous chart's values, which have no `mcp` block: the host is then not deployed until you pass `--set mcp.enabled=true` (or `--reset-then-reuse-values`). On a CNI that enforces NetworkPolicy, the host reaches public addresses only: an internal npm or PyPI mirror must be added to `extraEgress`, and a managed cluster's public API endpoint to `blockedCidrs`. See [MCP host deployment](../../docs/mcp.md#deployment-helm).
+
 ## External database and availability
 
 The bundled MySQL StatefulSet is a convenience, **not a highly available database**. Its memory is bounded twice: `mysql.resources` (default request 1Gi, limit 2Gi) and the server settings in `mysql.config`, mounted as `/etc/mysql/conf.d/teamcode.cnf`. MySQL 8.4 sizes the TempTable engine from the node's RAM (at least 1 GiB) rather than the container's limit, so raise both together; this is the chart's own StatefulSet on the official `mysql` image, **not the Bitnami MySQL subchart**: configure it with `mysql.resources`, `mysql.persistence` and `mysql.config`, never `mysql.primary.*`, which the chart refuses at render time instead of silently ignoring. `mysql.persistence.size` is empty by default: a new installation gets a 30Gi volume, and an upgrade keeps the size the existing StatefulSet was created with, read from the cluster with Helm's [`lookup`](https://helm.sh/docs/chart_template_guide/function_list/#lookup), because a StatefulSet's volume claim template cannot change. `lookup` returns nothing under `helm template` and `--dry-run=client`, which therefore show 30Gi; `helm upgrade --install` and `--dry-run=server` read the real size. To grow an existing volume, patch its PVC (`kubectl patch pvc data-<release>-mysql-0 -p '{"spec":{"resources":{"requests":{"storage":"50Gi"}}}}'`, on a storage class with `allowVolumeExpansion`), never the chart value. A NetworkPolicy lets only this release's TeamCode server pods reach it, on 3306 (`mysql.networkPolicy.enabled: false` removes it). **Upgrading:** on a CNI that enforces NetworkPolicy, a backup job, exporter or any other pod that connects to the bundled MySQL directly stops reaching it; disable the policy or route it through the server pods' labels. For production database failover and managed backups, use an external MySQL 8.4 service:
@@ -107,4 +129,4 @@ python3 scripts/check-helm.py
 helm template teamcode ./helm/teamcode --set publicUrl=https://teamcode.example.org
 ```
 
-CI lints/renders bundled and external database configurations, validates Kubernetes schemas and builds the server image. `scripts/smoke-replicas.py` exercises two real JVM servers against an isolated MySQL without contacting providers. Helm rendering and two-process tests do not claim that your Kubernetes cluster, storage class, ingress or backup system has been tested.
+CI lints/renders bundled and external database configurations and the MCP host on, off and with an operator token, validates Kubernetes schemas and builds the server and MCP host images. `scripts/smoke-replicas.py` exercises two real JVM servers against an isolated MySQL without contacting providers. Helm rendering and two-process tests do not claim that your Kubernetes cluster, storage class, ingress or backup system has been tested.

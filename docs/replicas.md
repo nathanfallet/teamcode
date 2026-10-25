@@ -17,6 +17,7 @@ Application replicas share one MySQL database and one credential encryption key.
 | Credentials | AES-GCM envelopes, account row lock, credential versions and committed refresh intent |
 | Policy and account edits | Database transactions; no process cache |
 | Model routes | Team-scoped SQL rules, version-checked updates/deletes and current authorization |
+| Hosted stdio MCP processes | Not server state: one [MCP host](mcp.md) Deployment owns them as a cache, every replica reaches it through its Service, and each request carries everything it needs; a host restart only loses the cache |
 
 Only request buffers, open sockets, immutable configuration and local CPU-concurrency protection remain in memory. The in-memory allowance reference exists only in test sources and is not packaged in the server. Admission windows, session expiry and worker leases use the shared database clock. Model routing reads shared versioned SQL rules. Future session affinity and opaque provider state must follow the same database-backed model.
 

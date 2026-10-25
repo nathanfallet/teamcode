@@ -86,6 +86,8 @@ jobs:
           curl --fail --location --retry 2 https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
           helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org | ./kubeconform -strict -summary
           helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org --set mysql.enabled=false --set mysql.jdbcUrl=jdbc:mysql://db:3306/teamcode --set autoscaling.enabled=true | ./kubeconform -strict -summary
+          helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org --set mcp.enabled=false | ./kubeconform -strict -summary
+          helm template teamcode "chart-dist/teamcode-${ORG_GRADLE_PROJECT_teamcodeVersion}.tgz" --set publicUrl=https://teamcode.example.org --set mcp.token.existingSecret=teamcode-mcp-token --set 'mcp.networkPolicy.blockedCidrs={203.0.113.0/24,2001:db8::/32}' | ./kubeconform -strict -summary
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: teamcode-helm-chart

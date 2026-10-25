@@ -92,3 +92,77 @@ object or an empty dict).
 {{- end -}}
 {{- .explicit | default $size | default "30Gi" -}}
 {{- end -}}
+
+{{/*
+The MCP stdio host (docs/mcp.md). Its pods carry their own name label, never teamcode.selectorLabels: the server's
+Service, PodDisruptionBudget and the bundled MySQL's NetworkPolicy select pods by those, and must not match the host.
+A release upgraded with --reuse-values from a chart without the `mcp` block has no .Values.mcp: nothing is rendered.
+*/}}
+{{- define "teamcode.mcp.enabled" -}}
+{{- if dig "enabled" false (.Values.mcp | default dict) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "teamcode.mcp.fullname" -}}
+{{- printf "%s-mcp" (include "teamcode.fullname" . | trunc 59 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "teamcode.mcp.name" -}}
+{{- printf "%s-mcp" (include "teamcode.name" . | trunc 59 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "teamcode.mcp.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "teamcode.mcp.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{- define "teamcode.mcp.labels" -}}
+helm.sh/chart: {{ include "teamcode.chart" . }}
+{{ include "teamcode.mcp.selectorLabels" . }}
+app.kubernetes.io/component: mcp
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{/* Where the host's token is read: the operator's existingSecret, or the Secret the chart generates. */}}
+{{- define "teamcode.mcp.tokenSecretName" -}}
+{{- .Values.mcp.token.existingSecret | default (include "teamcode.mcp.fullname" .) -}}
+{{- end -}}
+
+{{- define "teamcode.mcp.tokenSecretKey" -}}
+{{- if .Values.mcp.token.existingSecret -}}{{- .Values.mcp.token.key | default "token" -}}{{- else -}}token{{- end -}}
+{{- end -}}
+
+{{/*
+The generated token, base64-encoded as Secret data: the value of the release's existing Secret when there is one (read
+with lookup, so an upgrade keeps it), otherwise 48 random alphanumeric characters. Computed once per render and kept in
+.Values.mcp (shared by every template of the chart), so the Secret and both checksum annotations see the same value.
+lookup returns nothing under `helm template` and `--dry-run=client`: they show a new value every time.
+*/}}
+{{- define "teamcode.mcp.generatedToken" -}}
+{{- if not (hasKey .Values.mcp "__generatedToken") -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "teamcode.mcp.fullname" .) -}}
+{{- $data := (($existing | default dict).data | default dict) -}}
+{{- $_ := set .Values.mcp "__generatedToken" (get $data "token" | default (randAlphaNum 48 | b64enc)) -}}
+{{- end -}}
+{{- index .Values.mcp "__generatedToken" -}}
+{{- end -}}
+
+{{/*
+Changes when the token changes, so the server and host pods roll together after a rotation (annotation
+checksum/mcp-token). For an existingSecret, the hash of its current value when lookup can read it.
+*/}}
+{{- define "teamcode.mcp.tokenChecksum" -}}
+{{- if .Values.mcp.token.existingSecret -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace .Values.mcp.token.existingSecret -}}
+{{- $data := (($existing | default dict).data | default dict) -}}
+{{- get $data (include "teamcode.mcp.tokenSecretKey" .) | default (printf "%s/%s" .Values.mcp.token.existingSecret (include "teamcode.mcp.tokenSecretKey" .)) | sha256sum -}}
+{{- else -}}
+{{- include "teamcode.mcp.generatedToken" . | sha256sum -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "teamcode.mcp.url" -}}
+{{- printf "http://%s:%d" (include "teamcode.mcp.fullname" .) 8090 -}}
+{{- end -}}
