@@ -176,8 +176,9 @@ class VariantPersistenceTest {
                     NewVariant(VariantKind.MCP, "tracker", name, binding, null, mapOf("TRACKER_URL" to "https://tracker.example.test"),
                         secrets?.let(StdioEnvironment::encode), McpTransport.STDIO, tracker)
 
-                // Without an MCP host, nothing is written.
+                // Without an MCP host, nothing is written; a member is refused before learning whether a host exists.
                 failure("mcp_disabled") { withoutHost.create(admin, hosted("team")) }
+                failure("forbidden") { withoutHost.create(team.login("alice", "alice replacement password", "Variants").principal, hosted("team")) }
                 assertEquals(emptyList(), first.list(admin))
 
                 val shared = first.create(admin, hosted("team"))
@@ -233,6 +234,10 @@ class VariantPersistenceTest {
                 failure("credential_scope") { first.create(team.authenticate(key.accessToken)!!, hosted("from-key")) }
                 second.delete(admin, shared.id)
                 assertEquals(listOf("fetch", "wiki"), first.list(admin).map { it.target })
+                // A stored command this version cannot read withholds only that server, never the team's list or resolution.
+                a.query { Variants.update({ Variants.id eq perMember.id }) { it[args] = "not json" } }
+                assertNull(first.list(admin).single { it.id == perMember.id }.command)
+                assertEquals(listOf("wiki"), ResolveEffectiveVariantsUseCase(first)("default", alice).mcpServers.map { it.name })
             } }
         }
     }

@@ -29,6 +29,8 @@ class SqlVariantService(
     }
 
     override suspend fun create(actor: Principal, variant: NewVariant): Variant {
+        // Authorization first, so a non-administrator learns nothing, not even whether an MCP host is configured.
+        actor.requireAdmin()
         VariantService.validate(variant, stdioLaunchers)
         return database.query {
             write(this, actor)
@@ -234,7 +236,8 @@ class SqlVariantService(
         // hosted command, without a command when the launcher is unknown, which resolution withholds.
         val transport = McpTransport.entries.find { it.wire == row[Variants.transport] } ?: McpTransport.STDIO
         val command = StdioLauncher.entries.find { it.wire == row[Variants.command] }?.let { launcher ->
-            val packageThenArgs = Json.decodeFromString<List<String>>(row[Variants.args] ?: "[]")
+            // An unreadable list fails only this variant (no command, so unavailable), never the team's whole list or resolution.
+            val packageThenArgs = try { Json.decodeFromString<List<String>>(row[Variants.args] ?: "[]") } catch (_: IllegalArgumentException) { emptyList() }
             packageThenArgs.firstOrNull()?.let { StdioCommand(launcher, it, packageThenArgs.drop(1)) }
         }
         return Variant(

@@ -59,7 +59,8 @@ class StdioVariantTest {
 
     @Test fun environmentNamesFollowTheReservedListAndTheLauncherSettingsStayOutOfReach() {
         for (name in listOf("PATH", "HOME", "LD_PRELOAD", "NODE_OPTIONS", "TEAMCODE_MCP_TOKEN", "NPM_CONFIG_REGISTRY", "NPM_CONFIG_IGNORE_SCRIPTS",
-            "UV_INDEX_URL", "UV_EXCLUDE_NEWER", "PIP_INDEX_URL", "lower", "WITH SPACE", "HTTPS_PROXY")) {
+            "UV_INDEX_URL", "UV_EXCLUDE_NEWER", "PIP_INDEX_URL", "lower", "WITH SPACE", "HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED",
+            "PYTHONBREAKPOINT", "PYTHONUSERBASE", "COREPACK_HOME", "SSLKEYLOGFILE", "CURL_CA_BUNDLE")) {
             invalid(stdio(config = mapOf(name to "value")))
             invalid(stdio(secrets = mapOf(name to "synthetic-value")))
         }
@@ -83,6 +84,18 @@ class StdioVariantTest {
         val encoded = StdioEnvironment.encode(mapOf("B_TOKEN" to "synthetic-b", "A_TOKEN" to "synthetic-a"))
         assertEquals(mapOf("A_TOKEN" to "synthetic-a", "B_TOKEN" to "synthetic-b"), StdioEnvironment.decode(encoded))
         assertEquals("SecretValue([REDACTED])", encoded.toString())
+    }
+
+    @Test fun secretVariablesNeverBecomeACredentialOrAnEnvironmentValue() {
+        val variables = StdioEnvironment.encode(mapOf("TOKEN" to "synthetic-token"))
+        invalid(NewVariant(VariantKind.MCP, "tracker", "team", VariantBinding.SHARED, "https://mcp.example.test", sharedSecret = variables))
+        invalid(NewVariant(VariantKind.ENV, "TOKEN", "org", VariantBinding.SHARED, sharedSecret = variables))
+        val http = Variant("h", VariantKind.MCP, "tracker", "h", VariantBinding.SHARED, 1, "https://mcp.example.test", emptyMap(), true, 0, 0)
+        invalid2(http, VariantUpdate(1, "h", sharedSecret = variables))
+        val delegated = http.copy(binding = VariantBinding.PER_MEMBER, hasSharedSecret = false)
+        assertEquals("invalid_variant", code { VariantService.validateMemberSecret(delegated, variables) })
+        // A JSON string typed as a bare secret is not secret variables either.
+        invalid(stdio().copy(sharedSecret = SecretValue("""{"TOKEN":"synthetic-token"}""")))
     }
 
     @Test fun transportsDoNotMix() {

@@ -251,6 +251,9 @@ class VariantRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, assign("""{"variantId":"$ownId","memberSecret":"synthetic-bare-member"}""").status)
         assertEquals(HttpStatusCode.OK, assign("""{"variantId":"$ownId","memberSecretVariables":{"FETCH_KEY":"synthetic-fetch-member"}}""").status)
 
+        // An empty object means no secret variables, as an empty dashboard field does; variables on an HTTPS server are refused.
+        assertEquals(HttpStatusCode.Created, post("""{"kind":"MCP","target":"open","name":"team","transport":"stdio","launcher":"npm","package":"server-memory@0.6.2","secretVariables":{}}""").status)
+        assertEquals(HttpStatusCode.BadRequest, post("""{"kind":"MCP","target":"wiki","name":"bad","endpoint":"https://mcp.example.test","secretVariables":{"TOKEN":"synthetic-misplaced"}}""").status)
         val remote = post("""{"kind":"MCP","target":"wiki","name":"team","endpoint":"https://mcp.example.test"}""")
         assertTrue(remote.bodyAsText().contains("\"transport\":\"http\""))
         val listed = client.get("/api/v1/variants") { bearerAuth("admin") }.bodyAsText()
@@ -276,6 +279,7 @@ class VariantRoutesTest {
             "&args=--token%0A%24%7BTRACKER_TOKEN%7D%0A&variables=TRACKER_URL%3Dhttps%3A%2F%2Ftracker.example.test&secret_variables=TRACKER_TOKEN%3Dsynthetic-dashboard-token" +
             "&endpoint=https%3A%2F%2Fignored.test&config=ignored%3Dyes&secret_mcp=ignored-credential"
         assertEquals(HttpStatusCode.Conflict, submit("/dashboard/variants", form).status)
+        assertEquals(0, registry.variants.size)
         registry.launchers = setOf(StdioLauncher.NPM, StdioLauncher.PYPI)
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants", form).status)
         registry.variants.values.single().let {
@@ -284,6 +288,8 @@ class VariantRoutesTest {
             assertEquals(mapOf("TRACKER_URL" to "https://tracker.example.test"), it.config)
         }
         assertEquals(listOf(mapOf("TRACKER_TOKEN" to "synthetic-dashboard-token")), registry.secrets.map { StdioEnvironment.decode(SecretValue(it)) })
+        // A repeated variable is refused rather than one line silently replacing the other.
+        assertEquals(HttpStatusCode.BadRequest, submit("/dashboard/variants", form.replace("name=team", "name=twice").replace("synthetic-dashboard-token", "synthetic-dashboard-token%0ATRACKER_TOKEN%3Dsynthetic-dashboard-second")).status)
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants", "kind=MCP&mcp_target=fetch&name=own&binding=PER_MEMBER&transport=stdio&launcher=pypi&package=mcp-server-fetch%3D%3D2025.4.7&args=--key%3D%24%7BFETCH_KEY%7D&secret_variables=LEFT%3Dover-from-shared").status)
         val own = registry.variants.keys.last()
         assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/assign", "member=admin-id&variant=$own&secret=&secret_variables=FETCH_KEY%3Dsynthetic-dashboard-member").status)

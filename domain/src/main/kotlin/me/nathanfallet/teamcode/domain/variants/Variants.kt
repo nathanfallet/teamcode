@@ -30,7 +30,7 @@ enum class AssignmentSource(val precedence: Int) { DIRECT(300), GROUP(200), BULK
 data class VariantTarget(val kind: VariantKind, val name: String)
 
 /** A secret that never prints itself. Callers read [reveal] only to hand it to an authorized execution. */
-class SecretValue(private val value: String) {
+open class SecretValue(private val value: String) {
     fun reveal() = value
     override fun toString() = "SecretValue([REDACTED])"
     override fun equals(other: Any?) = other is SecretValue && other.value == value
@@ -89,8 +89,8 @@ data class NewVariant(
  * shared values, member values, rotation and bulk assignment work as for any variant. Encoded with sorted names.
  */
 object StdioEnvironment {
-    fun encode(values: Map<String, String>): SecretValue =
-        SecretValue(buildJsonObject { values.toSortedMap().forEach { (name, value) -> put(name, value) } }.toString())
+    fun encode(values: Map<String, String>): SecretVariables =
+        SecretVariables(buildJsonObject { values.toSortedMap().forEach { (name, value) -> put(name, value) } }.toString())
     /** The variables, or a 400 when the secret is not a JSON object of strings. */
     fun decode(secret: SecretValue): Map<String, String> = decodeOrNull(secret)
         ?: throw TeamFailure("invalid_variant", 400, "A hosted command takes its secrets as variables: an object of NAME and value strings.")
@@ -100,6 +100,12 @@ object StdioEnvironment {
         return parsed.mapValues { (_, value) -> (value as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null }
     }
 }
+
+/**
+ * Secret variables as entered, made only by [StdioEnvironment.encode]. Validation tells them from a bare secret, so
+ * variables never become an HTTPS credential or an environment value, and a bare string never a hosted command's secrets.
+ */
+class SecretVariables internal constructor(json: String) : SecretValue(json)
 
 /**
  * Replaces the mutable fields. A null [sharedSecret] keeps the stored one unless [clearSharedSecret] removes it.
@@ -161,8 +167,11 @@ interface VariantService {
             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
         )
         private val reservedEnvPrefixes = listOf("LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_")
-        /** A hosted command's variables cannot change how its launcher resolves or installs the package. */
-        private val reservedLauncherPrefixes = listOf("NPM_CONFIG_", "UV_", "PIP_")
+        /**
+         * A hosted command's variables can change neither how its launcher resolves or installs the package nor how its
+         * Node.js or Python runtime loads code and checks certificates (`NODE_TLS_REJECT_UNAUTHORIZED`, `PYTHONBREAKPOINT`...).
+         */
+        private val reservedLauncherPrefixes = listOf("NPM_CONFIG_", "UV_", "PIP_", "NODE_", "PYTHON", "COREPACK_", "SSL", "CURL_")
         private const val SEMVER = """(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?"""
         /** `name@1.2.3` or `@scope/name@1.2.3`: npm's lowercase names and one exact semantic version, no range or tag. */
         private val npmPackage = Regex("""(@[a-z0-9~][a-z0-9._~-]*/)?[a-z0-9~][a-z0-9._~-]*@$SEMVER""")
@@ -200,7 +209,7 @@ interface VariantService {
             if (hosted) {
                 val command = variant.command!!
                 if (command.launcher !in stdioLaunchers) throw invalid("This server's MCP host does not offer the ${command.launcher.wire} launcher.")
-                if (variant.binding == VariantBinding.SHARED) requireReferences(command, variant.sharedSecret?.let(StdioEnvironment::decode).orEmpty())
+                if (variant.binding == VariantBinding.SHARED) requireReferences(command, variant.sharedSecret?.let { validateStdioSecrets(it, variant.config) }.orEmpty())
             }
         }
         fun validate(current: Variant, update: VariantUpdate) {
@@ -214,7 +223,7 @@ interface VariantService {
                 if (update.config != current.config)
                     throw invalid("A hosted command's variables are fixed at creation, since they decide where its secrets go. Send them unchanged, or create another variant.")
                 if (update.clearSharedSecret) requireReferences(command, emptyMap())
-                update.sharedSecret?.let { requireReferences(command, StdioEnvironment.decode(it)) }
+                update.sharedSecret?.let { requireReferences(command, validateStdioSecrets(it, current.config)) }
             }
         }
         fun validateMemberSecret(binding: VariantBinding, secret: SecretValue?) {
@@ -226,7 +235,11 @@ interface VariantService {
         fun validateMemberSecret(variant: Variant, secret: SecretValue?) {
             validateMemberSecret(variant.binding, secret)
             val command = variant.command
-            if (secret == null || variant.kind != VariantKind.MCP || variant.transport != McpTransport.STDIO || command == null) return
+            if (secret == null) return
+            if (variant.kind != VariantKind.MCP || variant.transport != McpTransport.STDIO || command == null) {
+                if (secret is SecretVariables) throw invalid("Secret variables are for hosted commands only: send this member's value or credential.")
+                return
+            }
             requireReferences(command, validateStdioSecrets(secret, variant.config))
         }
         private fun validateFields(
@@ -236,6 +249,7 @@ interface VariantService {
             if (name.isBlank() || name.length > 120 || name.any(Char::isISOControl)) throw invalid("Use a variant name of 1–120 characters without control characters.")
             secret?.let(::validateSecret)
             if (kind == VariantKind.ENV) {
+                if (secret is SecretVariables) throw invalid("Secret variables are for hosted commands only: send a value.")
                 if (endpoint != null || config.isNotEmpty()) throw invalid("Environment variants have a value only, no endpoint or configuration.")
                 return
             }
@@ -247,6 +261,7 @@ interface VariantService {
                 return
             }
             if (command != null) throw invalid("An HTTPS MCP variant has no command.")
+            if (secret is SecretVariables) throw invalid("Secret variables are for hosted commands only: send a secret.")
             validateEndpoint(endpoint ?: throw invalid("An MCP variant needs an HTTPS endpoint."))
             if (config.size > 32 || config.any { (key, value) -> !configKey.matches(key) || value.length > 1024 || value.any(Char::isISOControl) })
                 throw invalid("Use at most 32 configuration entries with simple keys and values of at most 1024 characters.")
@@ -268,6 +283,7 @@ interface VariantService {
         }
         /** Secret variables: at most 16, unreserved names that no visible variable uses, values of at least 8 characters. */
         private fun validateStdioSecrets(secret: SecretValue, variables: Map<String, String>): Map<String, String> {
+            if (secret !is SecretVariables) throw invalid("A hosted command takes its secrets as named secret variables, not as one bare secret.")
             val values = StdioEnvironment.decode(secret)
             if (values.isEmpty() || values.size > STDIO_SECRET_LIMIT) throw invalid("Use 1–$STDIO_SECRET_LIMIT secret variables.")
             if (values.keys.any { !stdioName(it) || it in variables }) throw invalid("Use unreserved environment names for secret variables, different from the visible ones.")
