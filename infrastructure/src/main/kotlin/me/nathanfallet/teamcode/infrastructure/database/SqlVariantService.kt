@@ -2,6 +2,8 @@ package me.nathanfallet.teamcode.infrastructure.database
 
 import java.util.UUID
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.variants.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
@@ -12,9 +14,13 @@ import org.jetbrains.exposed.v1.jdbc.*
 
 /**
  * Variants, assignments and exclusions in shared MySQL. Writes take the team lock and revalidate the interactive
- * administrator in the same transaction; audit events carry identifiers only, never values, endpoints or credentials.
+ * administrator in the same transaction; audit events carry identifiers only, never values, endpoints or credentials
+ * (a hosted command's creation also names its transport, launcher and package). [stdioLaunchers] are the launchers of
+ * the server's MCP host; empty, the default, means no host, and declaring a hosted command answers `409 mcp_disabled`.
  */
-class SqlVariantService(private val database: Database, private val cipher: CredentialCipher) : VariantService, EffectiveVariantSource {
+class SqlVariantService(
+    private val database: Database, private val cipher: CredentialCipher, private val stdioLaunchers: Set<StdioLauncher> = emptySet(),
+) : VariantService, EffectiveVariantSource {
     override suspend fun list(actor: Principal): List<Variant> = database.query {
         authorize(this, actor)
         Variants.selectAll().where { Variants.teamId eq actor.teamId }
@@ -23,7 +29,9 @@ class SqlVariantService(private val database: Database, private val cipher: Cred
     }
 
     override suspend fun create(actor: Principal, variant: NewVariant): Variant {
-        VariantService.validate(variant)
+        // Authorization first, so a non-administrator learns nothing, not even whether an MCP host is configured.
+        actor.requireAdmin()
+        VariantService.validate(variant, stdioLaunchers)
         return database.query {
             write(this, actor)
             if (Variants.select(Variants.id).where { Variants.teamId eq actor.teamId }.count() >= VariantService.VARIANT_LIMIT)
@@ -37,8 +45,14 @@ class SqlVariantService(private val database: Database, private val cipher: Cred
                 it[name] = variant.name; it[binding] = variant.binding.name; it[version] = 1; it[endpoint] = variant.endpoint
                 it[config] = Json.encodeToString(variant.config); it[sharedSecret] = variant.sharedSecret?.let { secret -> seal(secret, actor.teamId, id) }
                 it[createdAt] = now; it[updatedAt] = now
+                if (variant.kind == VariantKind.MCP && variant.transport == McpTransport.STDIO) variant.command?.let { command ->
+                    it[transport] = variant.transport.wire; it[Variants.command] = command.launcher.wire; it[args] = Json.encodeToString(listOf(command.pkg) + command.args)
+                }
             }
-            audit(actor.teamId, actor.member.id, "variant.created", id)
+            audit(actor.teamId, actor.member.id, "variant.created", id, details = variant.command?.takeIf { variant.transport == McpTransport.STDIO }?.let { command ->
+                // Which code the server will run, so the journal can answer it; never the arguments, variables or values.
+                buildJsonObject { put("transport", variant.transport.wire); put("launcher", command.launcher.wire); put("package", command.pkg) }.toString()
+            })
             requireVariant(actor.teamId, id)
         }
     }
@@ -74,7 +88,7 @@ class SqlVariantService(private val database: Database, private val cipher: Cred
         write(this, actor)
         requireMember(actor.teamId, memberId)
         val variant = requireVariant(actor.teamId, variantId, lock = true)
-        VariantService.validateMemberSecret(variant.binding, memberSecret)
+        VariantService.validateMemberSecret(variant, memberSecret)
         if (excluded(memberId, variant.slot)) throw TeamFailure("variant_excluded", 409, "This member is excluded from this target. Remove the exclusion first.")
         val now = nowMillis()
         VariantAssignments.deleteWhere { (VariantAssignments.memberId eq memberId) and (kind eq variant.kind.name) and (target eq variant.target) }
@@ -217,9 +231,19 @@ class SqlVariantService(private val database: Database, private val cipher: Cred
     private fun open(envelope: String, team: String, variant: String, member: String? = null) =
         SecretValue(cipher.decrypt(envelope, context(team, variant, member)).toString(Charsets.UTF_8))
     private fun context(team: String, variant: String, member: String?) = listOfNotNull("variant", team, variant, member).joinToString(":")
-    private fun variant(row: ResultRow) = Variant(
-        row[Variants.id], VariantKind.valueOf(row[Variants.kind]), row[Variants.target], row[Variants.name], VariantBinding.valueOf(row[Variants.binding]),
-        row[Variants.version], row[Variants.endpoint], Json.decodeFromString(row[Variants.config]), row[Variants.sharedSecret] != null,
-        row[Variants.createdAt], row[Variants.updatedAt],
-    )
+    private fun variant(row: ResultRow): Variant {
+        // A transport or launcher this version does not know (written by a newer replica) is never served: it reads as a
+        // hosted command, without a command when the launcher is unknown, which resolution withholds.
+        val transport = McpTransport.entries.find { it.wire == row[Variants.transport] } ?: McpTransport.STDIO
+        val command = StdioLauncher.entries.find { it.wire == row[Variants.command] }?.let { launcher ->
+            // An unreadable list fails only this variant (no command, so unavailable), never the team's whole list or resolution.
+            val packageThenArgs = try { Json.decodeFromString<List<String>>(row[Variants.args] ?: "[]") } catch (_: IllegalArgumentException) { emptyList() }
+            packageThenArgs.firstOrNull()?.let { StdioCommand(launcher, it, packageThenArgs.drop(1)) }
+        }
+        return Variant(
+            row[Variants.id], VariantKind.valueOf(row[Variants.kind]), row[Variants.target], row[Variants.name], VariantBinding.valueOf(row[Variants.binding]),
+            row[Variants.version], row[Variants.endpoint], Json.decodeFromString(row[Variants.config]), row[Variants.sharedSecret] != null,
+            row[Variants.createdAt], row[Variants.updatedAt], transport, command,
+        )
+    }
 }

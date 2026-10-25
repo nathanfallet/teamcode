@@ -9,18 +9,38 @@ A **variant** is a named, versioned value for one **slot**:
 | Kind | Slot (`target`) | Variant holds | Secret part |
 | --- | --- | --- | --- |
 | `ENV` | One environment variable name, e.g. `GITHUB_TOKEN` (`[A-Z_][A-Z0-9_]*`, at most 128) | The value | The value itself |
-| `MCP` | One MCP server name, e.g. `tracker` (`[a-z0-9][a-z0-9._-]*`, at most 64) | HTTPS endpoint and non-secret configuration (`key=value`, at most 32 entries) | The credential, optional for a server without authentication |
+| `MCP` | One MCP server name, e.g. `tracker` (`[a-z0-9][a-z0-9._-]*`, at most 64) | HTTPS endpoint and non-secret configuration (`key=value`, at most 32 entries), or a [hosted command](#hosted-mcp-commands) and its visible variables | The credential, optional for a server without authentication; for a hosted command, its secret variables |
 
 Each variant has a **binding**:
 
 - `SHARED`: one encrypted value on the variant (a team-wide environment value or a shared MCP credential).
 - `PER_MEMBER`: no value on the variant; each assignment carries the member's own encrypted value (an individual environment value or a delegated MCP credential).
 
-Several variants can exist for the same slot (`org-a` and `org-b` for `GITHUB_TOKEN`). Names are unique per slot (case-insensitively, following the MySQL collation). Kind, slot, binding and the MCP endpoint are immutable after creation; create another variant to change them. An immutable endpoint means stored shared or delegated credentials can never be redirected to a new host by an edit. A shared MCP credential can be replaced or cleared (`clearSecret`); a shared environment value can only be replaced.
+Several variants can exist for the same slot (`org-a` and `org-b` for `GITHUB_TOKEN`). Names are unique per slot (case-insensitively, following the MySQL collation). Kind, slot, binding, the MCP transport and endpoint, and a hosted command with its visible variables are immutable after creation; create another variant to change them. An immutable endpoint means stored shared or delegated credentials can never be redirected to a new host by an edit. A shared MCP credential can be replaced or cleared (`clearSecret`); a shared environment value can only be replaced.
 
 Environment names that would take over the process, its dynamic loader, proxies/certificates or the agent's own TeamCode/provider connection are refused: for example `PATH`, `HOME`, `NODE_OPTIONS`, `HTTPS_PROXY` and the prefixes `LD_`, `DYLD_`, `TEAMCODE_`, `ANTHROPIC_`, `CLAUDE_`, `OPENAI_`, `CODEX_`, `XDG_`, `GIT_CONFIG_` (full list in `VariantService`).
 
 Every update increments `version`, and an update must send the version it read (`expectedVersion`), so two administrators cannot silently overwrite each other. Assignments point to the variant, not to a version: an update applies to every assignee on their next resolution.
+
+## Hosted MCP commands
+
+An MCP variant reaches its server in one of two ways, its **transport**: `http` (the default, and the value of every variant created before this field existed) calls its HTTPS endpoint; `stdio` runs a package on the server's MCP host (see [the gateway](mcp-gateway.md#hosted-stdio-servers)). A hosted command is made of:
+
+| Field | Rule | Can change? |
+| --- | --- | --- |
+| `launcher` | `npm` (run by `npx`) or `pypi` (run by `uvx`), among the launchers the server's MCP host offers | No |
+| `package` | One exact version: `name@1.2.3` or `@scope/name@1.2.3` on npm (a full semantic version, no range, tag or URL), `name==1.2.3` on PyPI (no range, wildcard, extra, marker or URL), at most 256 characters | No |
+| `args` | At most 32 arguments of 1–512 characters, without control characters, passed as they are with no shell. `${NAME}` in an argument is replaced at launch by the secret variable `NAME`, which must exist | No |
+| `config` | Visible environment variables (`NAME=value`, at most 32, values of at most 1,024 characters). Names follow the environment rules below, and `NPM_CONFIG_*`, `UV_*`, `PIP_*`, `NODE_*`, `PYTHON*`, `COREPACK_*`, `SSL*` and `CURL_*` are reserved too, so a variant can neither redirect the registry, turn install scripts back on, nor change how the Node.js or Python runtime loads code or checks certificates (`NODE_TLS_REJECT_UNAUTHORIZED`, `PYTHONBREAKPOINT`) | No: they decide where the secrets go (an `API_URL`, for example), like an endpoint |
+| Secret variables | One encrypted envelope holding a JSON object `{"NAME":"value"}`: at most 16 variables, names as for visible ones and different from them, each value at least 8 characters (shorter values could not be masked in the server's output without hiding ordinary text), 16,384 characters in all | Yes, all at once, as any shared secret or member value |
+
+The secret variables use the same envelopes as any variant (`shared_secret` for `SHARED`, `member_secret` on the assignment for `PER_MEMBER`), so shared and per-member values, rotation, bulk assignment and exclusions work unchanged. A `SHARED` command's variables must define every `${NAME}` its arguments use, and cannot be cleared while an argument uses one; a `PER_MEMBER` command's member value must hold them all at assignment. A bare credential is refused for a hosted command: its secrets are always named variables; the other way round, secret variables are refused for an HTTPS server or an environment variable. Arguments are visible to administrators: a credential belongs in a secret variable referenced as `${NAME}`. With `SHARED`, every assigned member uses the same process, so anything the server keeps in memory is visible to all of them; the dashboard says so.
+
+A hosted command is declared by an interactive administrator only, like every variant: a service key is refused, even one of an administrator. The variant's creation time is kept as the date its dependencies will be resolved at (so a version published later is not picked up). The journal's `variant.created` event names its transport, launcher and package (`details`), never its arguments, variables or values.
+
+**Not served yet.** This server has no MCP host configured: declaring a hosted command answers `409 mcp_disabled`, and a hosted variant already in the database (written by a later version) is listed in `unavailable` by effective resolution, so members' clients never see a server the gateway cannot call. Existing hosted variants can still be renamed, rotated, assigned and deleted.
+
+API fields: `transport`, `launcher`, `package`, `args`, `config` and `secretVariables` on `POST /api/v1/variants`; `secretVariables` on `PATCH` (send `config` unchanged); `memberSecretVariables` on `PUT /api/v1/members/{memberId}/variants`. `VariantView` returns `transport` (MCP variants only), `launcher`, `package` and `args`; never a secret value. The dashboard form offers "Remote server (HTTPS)" or "Hosted command" and lists a hosted variant with the exact command it declares.
 
 ## Assignments and exclusions
 
@@ -49,7 +69,7 @@ It is a trusted server-side port: it does not authenticate anyone. Callers must 
 
 - Secret values (shared values, shared credentials, member values, delegated credentials) are stored as AES-256-GCM envelopes through the existing `CredentialCipher`, with the authenticated context `variant:<team>:<variant>[:<member>]`. An envelope copied to another row does not decrypt.
 - Secret values are write-only. API responses and the dashboard only say `hasSharedSecret` / `hasMemberSecret`. Request DTOs and `SecretValue` redact themselves in `toString`.
-- The audit journal records metadata only: `variant.created`, `variant.updated`, `variant.deleted` and `variant.bulk_assigned` (subject: the variant ID); `variant.assigned` (also written once per member affected by a bulk assignment), `variant.unassigned`, `variant.excluded` and `variant.included` (subject: the member ID). Values, endpoints and configuration never enter the journal. The journal has a single subject per event, so a member event does not name the slot or variant; the current assignment view does.
+- The audit journal records metadata only: `variant.created`, `variant.updated`, `variant.deleted` and `variant.bulk_assigned` (subject: the variant ID); `variant.assigned` (also written once per member affected by a bulk assignment), `variant.unassigned`, `variant.excluded` and `variant.included` (subject: the member ID). Values, endpoints and configuration never enter the journal; a hosted command's `variant.created` names its transport, launcher and package in `details`, never its arguments or variables. The journal has a single subject per event, so a member event does not name the slot or variant; the current assignment view does.
 - Endpoints and configuration are **not** secret: administrators can read them. Put credentials in the secret field, never in the endpoint URL (URLs with user information are refused; a query string is accepted and visible) or in configuration.
 - Endpoints are only syntactically checked (HTTPS, host, no user information or fragment). Refusing loopback, link-local and private destinations happens in the MCP gateway at connection time, after DNS resolution (see [its limits](mcp-gateway.md#upstream-client)).
 
@@ -60,7 +80,7 @@ All endpoints require an interactive administrator. Service/CI keys are refused,
 | Method and path | Purpose |
 | --- | --- |
 | `GET /api/v1/variants` | List variant metadata |
-| `POST /api/v1/variants` | Create (`kind`, `target`, `name`, `binding`, `endpoint`, `config`, `secret`) |
+| `POST /api/v1/variants` | Create (`kind`, `target`, `name`, `binding`, `endpoint`, `config`, `secret`; for a [hosted command](#hosted-mcp-commands), `transport`, `launcher`, `package`, `args`, `secretVariables`) |
 | `PATCH /api/v1/variants/{id}` | Replace `name` and `config`; `secret` replaces the shared value, `clearSecret` removes a shared MCP credential; requires `expectedVersion` |
 | `DELETE /api/v1/variants/{id}` | Delete a variant and its assignments |
 | `POST /api/v1/variants/{id}/bulk-assign` | Bulk-assign a shared variant; returns `assigned`, `keptDirect`, `excluded` |
@@ -75,7 +95,7 @@ Capabilities advertise `team.variants.v1`. The dashboard page is `/dashboard/var
 
 ## Persistence
 
-Tables `variants`, `variant_assignments` (primary key member/kind/target, so at most one selection per slot) and `variant_exclusions` (same key), generated from the Exposed definitions in `infrastructure/database/tables/VariantTables.kt`. The generator emitted the `variants` table twice across two files; the reviewed migration keeps one file with the three tables in dependency order. A test checks that the migrated schema matches the Exposed tables. At most 500 variants per team; secret values are at most 16,384 characters.
+Tables `variants`, `variant_assignments` (primary key member/kind/target, so at most one selection per slot) and `variant_exclusions` (same key), generated from the Exposed definitions in `infrastructure/database/tables/VariantTables.kt`. Hosted commands added three columns to `variants`: `transport` (`http` by default), `command` (the launcher) and `args` (a JSON array: the package, then the arguments), added by one `ALTER TABLE` so that they arrive together, appended in place by MySQL 8.4 (`ALGORITHM=INSTANT` is chosen without rebuilding the table). A stored command this version cannot read withholds only that server. The generator emitted the `variants` table twice across two files; the reviewed migration keeps one file with the three tables in dependency order. A test checks that the migrated schema matches the Exposed tables. At most 500 variants per team; secret values are at most 16,384 characters.
 
 ## Delivery to agents
 

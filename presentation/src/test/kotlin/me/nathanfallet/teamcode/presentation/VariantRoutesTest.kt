@@ -16,14 +16,17 @@ class VariantRoutesTest {
         val secrets = mutableListOf<String>()
         val assignments = mutableListOf<VariantAssignment>()
         val exclusions = mutableListOf<Pair<String, VariantTarget>>()
+        /** The MCP host's launchers; empty, as on a server without one. */
+        var launchers = emptySet<StdioLauncher>()
         var writes = 0
         private fun write(actor: Principal) { actor.requireAdmin(); writes++ }
         override suspend fun list(actor: Principal): List<Variant> { actor.requireAdmin(); return variants.values.toList() }
         override suspend fun create(actor: Principal, variant: NewVariant): Variant {
-            write(actor); VariantService.validate(variant)
+            write(actor); VariantService.validate(variant, launchers)
             variant.sharedSecret?.let { secrets += it.reveal() }
             val id = "00000000-0000-0000-0000-${variants.size.toString().padStart(12, '0')}"
-            return Variant(id, variant.kind, variant.target, variant.name, variant.binding, 1, variant.endpoint, variant.config, variant.sharedSecret != null, 1, 1).also { variants[id] = it }
+            return Variant(id, variant.kind, variant.target, variant.name, variant.binding, 1, variant.endpoint, variant.config, variant.sharedSecret != null, 1, 1,
+                variant.transport, variant.command).also { variants[id] = it }
         }
         override suspend fun update(actor: Principal, id: String, update: VariantUpdate): Variant {
             write(actor)
@@ -36,7 +39,7 @@ class VariantRoutesTest {
         override suspend fun assign(actor: Principal, memberId: String, variantId: String, memberSecret: SecretValue?): VariantAssignment {
             write(actor)
             val variant = variants[variantId] ?: throw TeamFailure("not_found", 404, "Variant not found.")
-            VariantService.validateMemberSecret(variant.binding, memberSecret)
+            VariantService.validateMemberSecret(variant, memberSecret)
             memberSecret?.let { secrets += it.reveal() }
             return VariantAssignment(memberId, variant.slot, variant.id, variant.name, variant.version, AssignmentSource.DIRECT, memberSecret != null, 1).also { assignments += it }
         }
@@ -200,5 +203,102 @@ class VariantRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, submit("kind=MCP&mcp_target=tracker&name=bad&binding=SHARED").status)
         assertEquals(HttpStatusCode.BadRequest, submit("kind=MCP&mcp_target=tracker&name=bad&binding=SHARED&endpoint=http%3A%2F%2Fplain.test").status)
         assertEquals(3, registry.variants.size)
+    }
+
+    @Test fun hostedCommandsAreDeclaredThroughTheApiWithWriteOnlyVariables() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway, team = team(), variants = registry) }
+        suspend fun post(body: String, token: String = "admin") = client.post("/api/v1/variants") { bearerAuth(token); contentType(ContentType.Application.Json); setBody(body) }
+        val hosted = """{"kind":"MCP","target":"tracker","name":"team","transport":"stdio","launcher":"npm","package":"@acme/tracker-mcp@1.4.2",""" +
+            """"args":["--token","${'$'}{TRACKER_TOKEN}"],"config":{"TRACKER_URL":"https://tracker.example.test"},"secretVariables":{"TRACKER_TOKEN":"synthetic-tracker-token"}}"""
+
+        // Without an MCP host, the server says so instead of storing a server nothing could run.
+        val disabled = post(hosted)
+        assertEquals(HttpStatusCode.Conflict, disabled.status)
+        assertTrue(disabled.bodyAsText().contains("mcp_disabled"))
+        assertTrue(registry.variants.isEmpty())
+
+        registry.launchers = setOf(StdioLauncher.NPM, StdioLauncher.PYPI)
+        // Only an interactive administrator declares one: never a member, a service key or a temporary password.
+        for (token in listOf("member", "service", "temporary")) assertEquals(HttpStatusCode.Forbidden, post(hosted, token).status, token)
+        val created = post(hosted)
+        assertEquals(HttpStatusCode.Created, created.status)
+        val view = me.nathanfallet.teamcode.api.Serialization.json.decodeFromString<me.nathanfallet.teamcode.api.models.VariantView>(created.bodyAsText())
+        assertEquals(listOf("stdio", "npm", "@acme/tracker-mcp@1.4.2"), listOf(view.transport, view.launcher, view.pkg))
+        assertEquals(listOf("--token", "\${TRACKER_TOKEN}"), view.args)
+        assertNull(view.endpoint)
+        assertTrue(view.hasSharedSecret)
+        assertEquals(StdioCommand(StdioLauncher.NPM, "@acme/tracker-mcp@1.4.2", listOf("--token", "\${TRACKER_TOKEN}")), registry.variants.values.single().command)
+        assertEquals(mapOf("TRACKER_TOKEN" to "synthetic-tracker-token"), StdioEnvironment.decode(SecretValue(registry.secrets.single())))
+        val id = registry.variants.keys.single()
+
+        assertEquals(HttpStatusCode.BadRequest, post(hosted.replace("\"stdio\"", "\"sse\"").replace("\"team\"", "\"other\"")).status)
+        assertEquals(HttpStatusCode.BadRequest, post(hosted.replace("\"npm\"", "\"cargo\"").replace("\"team\"", "\"other\"")).status)
+        assertEquals(HttpStatusCode.BadRequest, post(hosted.replace("1.4.2", "latest").replace("\"team\"", "\"other\"")).status)
+        // One secret field at a time: a bare secret beside variables is refused rather than one silently winning.
+        assertEquals(HttpStatusCode.BadRequest, post(hosted.replace("\"secretVariables\"", "\"secret\":\"synthetic-bare\",\"secretVariables\"").replace("\"team\"", "\"other\"")).status)
+
+        val rotated = client.patch("/api/v1/variants/$id") { bearerAuth("admin"); contentType(ContentType.Application.Json)
+            setBody("""{"expectedVersion":1,"name":"team","config":{"TRACKER_URL":"https://tracker.example.test"},"secretVariables":{"TRACKER_TOKEN":"synthetic-tracker-rotated"}}""") }
+        assertEquals(HttpStatusCode.OK, rotated.status)
+        assertEquals(HttpStatusCode.BadRequest, client.patch("/api/v1/variants/$id") { bearerAuth("admin"); contentType(ContentType.Application.Json)
+            setBody("""{"expectedVersion":2,"name":"team","config":{"TRACKER_URL":"https://attacker.test"}}""") }.status)
+
+        val own = post("""{"kind":"MCP","target":"fetch","name":"own","binding":"PER_MEMBER","transport":"stdio","launcher":"pypi","package":"mcp-server-fetch==2025.4.7","args":["--key=${'$'}{FETCH_KEY}"]}""")
+        assertEquals(HttpStatusCode.Created, own.status)
+        val ownId = registry.variants.keys.last()
+        suspend fun assign(body: String) = client.put("/api/v1/members/admin-id/variants") { bearerAuth("admin"); contentType(ContentType.Application.Json); setBody(body) }
+        assertEquals(HttpStatusCode.BadRequest, assign("""{"variantId":"$ownId","memberSecret":"synthetic-bare-member"}""").status)
+        assertEquals(HttpStatusCode.OK, assign("""{"variantId":"$ownId","memberSecretVariables":{"FETCH_KEY":"synthetic-fetch-member"}}""").status)
+
+        // An empty object means no secret variables, as an empty dashboard field does; variables on an HTTPS server are refused.
+        assertEquals(HttpStatusCode.Created, post("""{"kind":"MCP","target":"open","name":"team","transport":"stdio","launcher":"npm","package":"server-memory@0.6.2","secretVariables":{}}""").status)
+        assertEquals(HttpStatusCode.BadRequest, post("""{"kind":"MCP","target":"wiki","name":"bad","endpoint":"https://mcp.example.test","secretVariables":{"TOKEN":"synthetic-misplaced"}}""").status)
+        val remote = post("""{"kind":"MCP","target":"wiki","name":"team","endpoint":"https://mcp.example.test"}""")
+        assertTrue(remote.bodyAsText().contains("\"transport\":\"http\""))
+        val listed = client.get("/api/v1/variants") { bearerAuth("admin") }.bodyAsText()
+        assertTrue(listed.contains("mcp-server-fetch==2025.4.7"))
+        for (secret in registry.secrets) for (value in StdioEnvironment.decodeOrNull(SecretValue(secret))?.values ?: listOf(secret))
+            for (body in listOf(created.bodyAsText(), rotated.bodyAsText(), own.bodyAsText(), listed)) assertFalse(body.contains(value), value)
+        assertTrue(listOf("synthetic-tracker-rotated", "synthetic-fetch-member").all { value -> registry.secrets.any { it.contains(value) } })
+    }
+
+    @Test fun dashboardFormDeclaresAHostedCommandOnlyWhenTheServerHasAnMcpHost() = testApplication {
+        val registry = Registry()
+        application { configureGateway(gateway, team = team(), publicOrigin = "http://localhost", variants = registry) }
+        suspend fun submit(path: String, body: String) = client.post(path) {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, "http://localhost")
+            contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=session&$body")
+        }
+        val page = client.get("/dashboard/variants") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        for (text in listOf("Remote server (HTTPS)", "Hosted command", "mcp.enabled", "Exact version", "Secret variables"))
+            assertTrue(page.contains(text), text)
+        for (field in listOf("transport", "launcher", "package", "args", "variables", "secret_variables")) assertTrue(page.contains("name=\"$field\""), field)
+
+        val form = "kind=MCP&mcp_target=tracker&name=team&binding=SHARED&transport=stdio&launcher=npm&package=%40acme%2Ftracker-mcp%401.4.2" +
+            "&args=--token%0A%24%7BTRACKER_TOKEN%7D%0A&variables=TRACKER_URL%3Dhttps%3A%2F%2Ftracker.example.test&secret_variables=TRACKER_TOKEN%3Dsynthetic-dashboard-token" +
+            "&endpoint=https%3A%2F%2Fignored.test&config=ignored%3Dyes&secret_mcp=ignored-credential"
+        assertEquals(HttpStatusCode.Conflict, submit("/dashboard/variants", form).status)
+        assertEquals(0, registry.variants.size)
+        registry.launchers = setOf(StdioLauncher.NPM, StdioLauncher.PYPI)
+        assertEquals(HttpStatusCode.Found, submit("/dashboard/variants", form).status)
+        registry.variants.values.single().let {
+            assertEquals(McpTransport.STDIO, it.transport); assertNull(it.endpoint)
+            assertEquals(StdioCommand(StdioLauncher.NPM, "@acme/tracker-mcp@1.4.2", listOf("--token", "\${TRACKER_TOKEN}")), it.command)
+            assertEquals(mapOf("TRACKER_URL" to "https://tracker.example.test"), it.config)
+        }
+        assertEquals(listOf(mapOf("TRACKER_TOKEN" to "synthetic-dashboard-token")), registry.secrets.map { StdioEnvironment.decode(SecretValue(it)) })
+        // A repeated variable is refused rather than one line silently replacing the other.
+        assertEquals(HttpStatusCode.BadRequest, submit("/dashboard/variants", form.replace("name=team", "name=twice").replace("synthetic-dashboard-token", "synthetic-dashboard-token%0ATRACKER_TOKEN%3Dsynthetic-dashboard-second")).status)
+        assertEquals(HttpStatusCode.Found, submit("/dashboard/variants", "kind=MCP&mcp_target=fetch&name=own&binding=PER_MEMBER&transport=stdio&launcher=pypi&package=mcp-server-fetch%3D%3D2025.4.7&args=--key%3D%24%7BFETCH_KEY%7D&secret_variables=LEFT%3Dover-from-shared").status)
+        val own = registry.variants.keys.last()
+        assertEquals(HttpStatusCode.Found, submit("/dashboard/variants/assign", "member=admin-id&variant=$own&secret=&secret_variables=FETCH_KEY%3Dsynthetic-dashboard-member").status)
+        assertEquals(mapOf("FETCH_KEY" to "synthetic-dashboard-member"), StdioEnvironment.decode(SecretValue(registry.secrets.last())))
+
+        val listed = client.get("/dashboard/variants") { header(HttpHeaders.Cookie, "teamcode_session=admin") }.bodyAsText()
+        assertTrue(listed.contains("hosted command: npm @acme/tracker-mcp@1.4.2 --token \${TRACKER_TOKEN}"), listed)
+        assertTrue(listed.contains("mcp-server-fetch==2025.4.7"))
+        assertTrue(listed.contains("not served yet"))
+        assertFalse(listed.contains("synthetic-dashboard"))
     }
 }

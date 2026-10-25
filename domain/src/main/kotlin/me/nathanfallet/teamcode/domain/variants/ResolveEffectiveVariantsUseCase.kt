@@ -3,16 +3,16 @@ package me.nathanfallet.teamcode.domain.variants
 /** One environment variable the member's execution receives. */
 data class EffectiveEnvironmentVariable(val name: String, val variantId: String, val variantName: String, val version: Int, val assignedAt: Long, val value: SecretValue)
 
-/** One MCP server the member may discover and call through the gateway. [credential] is null for a server without one. */
+/** One HTTPS MCP server the member may discover and call through the gateway. [credential] is null for a server without one. */
 data class EffectiveMcpServer(
     val name: String, val variantId: String, val variantName: String, val version: Int, val assignedAt: Long,
     val endpoint: String, val config: Map<String, String>, val credential: SecretValue?,
 )
 
 /**
- * [unavailable] lists assigned slots withheld because a stored value could not be decrypted or a delegated credential
- * is missing; consumers report them without values. A change of value is visible through `version` (variant edits)
- * or `assignedAt` (a new selection or a rotated member value).
+ * [unavailable] lists assigned slots withheld because a stored value could not be decrypted, a delegated credential
+ * is missing, or the server is a hosted command the gateway does not serve yet; consumers report them without values.
+ * A change of value is visible through `version` (variant edits) or `assignedAt` (a new selection or a rotated member value).
  */
 data class EffectiveVariants(
     val memberId: String, val environment: List<EffectiveEnvironmentVariable>, val mcpServers: List<EffectiveMcpServer>,
@@ -70,7 +70,9 @@ class ResolveEffectiveVariantsUseCase(private val source: EffectiveVariantSource
                 candidate.target.kind == VariantKind.ENV ->
                     if (value == null) unavailable += candidate.target
                     else environment += EffectiveEnvironmentVariable(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt, value)
-                variant.endpoint == null || (variant.binding == VariantBinding.PER_MEMBER && value == null) -> unavailable += candidate.target
+                // The gateway cannot reach a hosted command (transport stdio) yet: it is withheld, so no client lists a server it cannot call.
+                variant.transport != McpTransport.HTTP || variant.endpoint == null || (variant.binding == VariantBinding.PER_MEMBER && value == null) ->
+                    unavailable += candidate.target
                 else -> servers += EffectiveMcpServer(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt, variant.endpoint, variant.config, value)
             }
         }

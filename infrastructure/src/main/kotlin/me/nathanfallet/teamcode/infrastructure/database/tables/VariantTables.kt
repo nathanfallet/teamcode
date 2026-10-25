@@ -3,7 +3,7 @@ package me.nathanfallet.teamcode.infrastructure.database.tables
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 
-/** Named environment/MCP variants. Secret values are AES-GCM envelopes bound to the variant identity. */
+/** Named environment/MCP variants. Secret values are AES-GCM envelopes bound to the variant identity; a hosted command keeps its secret variables in the same envelopes. */
 object Variants : Table("variants") {
     val id = varchar("id", 36)
     val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE)
@@ -17,6 +17,11 @@ object Variants : Table("variants") {
     val sharedSecret = text("shared_secret").nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
+    /** How an MCP variant is reached: `http` (its endpoint, and the value of every older row) or `stdio` (a hosted command). */
+    val transport = varchar("transport", 16).default("http")
+    /** A hosted command's launcher (`npm` or `pypi`), and its package then arguments as a JSON array. Null otherwise. */
+    val command = varchar("command", 16).nullable()
+    val args = text("args").nullable()
     override val primaryKey = PrimaryKey(id)
     init { uniqueIndex("variant_team_slot_name", teamId, kind, target, name) }
 }

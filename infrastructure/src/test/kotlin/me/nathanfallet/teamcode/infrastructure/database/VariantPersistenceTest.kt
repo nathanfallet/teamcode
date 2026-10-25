@@ -153,5 +153,94 @@ class VariantPersistenceTest {
             } }
         }
     }
+    @Test fun hostedCommandsAreStoredWithEncryptedVariablesButNotServedYet() = runBlocking {
+        MySQLContainer("mysql:8.4").withDatabaseName("teamcode").withTmpFs(mapOf("/var/lib/mysql" to "rw,nosuid,size=1g")).use { container ->
+            container.start()
+            Database(container.jdbcUrl, container.username, container.password).use { a ->
+            Database(container.jdbcUrl, container.username, container.password).use { b ->
+                a.migrate(); b.migrate()
+                val team = SqlTeamService(a)
+                val initial = team.bootstrap()!!
+                team.changePassword(team.login("admin", initial, "Variants").principal, initial, "variant administrator password")
+                val admin = team.login("admin", "variant administrator password", "Variants").principal
+                val alice = team.createMember(admin, "alice", Role.MEMBER).let { created ->
+                    team.changePassword(team.login("alice", created.temporaryPassword, "Variants").principal, created.temporaryPassword, "alice replacement password")
+                    created.member.id
+                }
+                val cipher = CredentialCipher(ByteArray(32) { 41 })
+                val launchers = setOf(StdioLauncher.NPM, StdioLauncher.PYPI)
+                val withoutHost = SqlVariantService(a, cipher)
+                val first = SqlVariantService(a, cipher, launchers); val second = SqlVariantService(b, cipher, launchers)
+                val tracker = StdioCommand(StdioLauncher.NPM, "@acme/tracker-mcp@1.4.2", listOf("--token", "\${TRACKER_TOKEN}"))
+                fun hosted(name: String, binding: VariantBinding = VariantBinding.SHARED, secrets: Map<String, String>? = mapOf("TRACKER_TOKEN" to "synthetic-tracker-shared")) =
+                    NewVariant(VariantKind.MCP, "tracker", name, binding, null, mapOf("TRACKER_URL" to "https://tracker.example.test"),
+                        secrets?.let(StdioEnvironment::encode), McpTransport.STDIO, tracker)
+
+                // Without an MCP host, nothing is written; a member is refused before learning whether a host exists.
+                failure("mcp_disabled") { withoutHost.create(admin, hosted("team")) }
+                failure("forbidden") { withoutHost.create(team.login("alice", "alice replacement password", "Variants").principal, hosted("team")) }
+                assertEquals(emptyList(), first.list(admin))
+
+                val shared = first.create(admin, hosted("team"))
+                val remote = first.create(admin, NewVariant(VariantKind.MCP, "wiki", "team", VariantBinding.SHARED, "https://mcp.example.test/wiki"))
+                val perMember = second.create(admin, hosted("own", VariantBinding.PER_MEMBER, null)
+                    .copy(target = "fetch", config = emptyMap(), command = StdioCommand(StdioLauncher.PYPI, "mcp-server-fetch==2025.4.7", listOf("--api-key=\${FETCH_KEY}"))))
+                val read = second.list(admin).associateBy { it.name to it.target }
+                assertEquals(McpTransport.STDIO to tracker, read.getValue("team" to "tracker").let { it.transport to it.command })
+                assertEquals(mapOf("TRACKER_URL" to "https://tracker.example.test"), read.getValue("team" to "tracker").config)
+                assertNull(read.getValue("team" to "tracker").endpoint)
+                assertTrue(read.getValue("team" to "tracker").hasSharedSecret)
+                assertEquals(StdioLauncher.PYPI, read.getValue("own" to "fetch").command?.launcher)
+                assertEquals(McpTransport.HTTP to null, read.getValue("team" to "wiki").let { it.transport to it.command }, "An HTTPS variant stays http, without a command")
+                failure("invalid_variant") { first.create(admin, hosted("unpinned").copy(command = tracker.copy(pkg = "@acme/tracker-mcp@latest"))) }
+                failure("invalid_variant") { first.create(admin, hosted("missing", secrets = null)) }
+
+                // A member value is an object of variables holding every reference; a bare credential is refused.
+                failure("invalid_variant") { first.assign(admin, alice, perMember.id, SecretValue("synthetic-bare-credential")) }
+                failure("invalid_variant") { first.assign(admin, alice, perMember.id, StdioEnvironment.encode(mapOf("OTHER_KEY" to "synthetic-fetch-alice"))) }
+                first.assign(admin, alice, perMember.id, StdioEnvironment.encode(mapOf("FETCH_KEY" to "synthetic-fetch-alice")))
+                second.assign(admin, alice, shared.id)
+                second.assign(admin, alice, remote.id)
+
+                // Assigned hosted commands are withheld, so the member's server list only names servers the gateway can call.
+                val effective = ResolveEffectiveVariantsUseCase(second)("default", alice)
+                assertEquals(listOf("wiki"), effective.mcpServers.map { it.name })
+                assertEquals(setOf(VariantTarget(VariantKind.MCP, "fetch"), VariantTarget(VariantKind.MCP, "tracker")), effective.unavailable.toSet())
+
+                // The command and its visible variables are immutable; secrets rotate and bump the version.
+                failure("invalid_variant") { first.update(admin, shared.id, VariantUpdate(shared.version, "team", mapOf("TRACKER_URL" to "https://attacker.test"))) }
+                failure("invalid_variant") { first.update(admin, shared.id, VariantUpdate(shared.version, "team", shared.config, clearSharedSecret = true)) }
+                val rotated = second.update(admin, shared.id, VariantUpdate(shared.version, "Team", shared.config, StdioEnvironment.encode(mapOf("TRACKER_TOKEN" to "synthetic-tracker-rotated"))))
+                assertEquals(2 to tracker, rotated.version to rotated.command)
+                // An existing variant stays manageable when the host goes away.
+                assertEquals("renamed", withoutHost.update(admin, shared.id, VariantUpdate(rotated.version, "renamed", shared.config)).name)
+
+                // Secrets stay encrypted; the journal names the transport and package, never variables, arguments or values.
+                a.query {
+                    val stored = Variants.selectAll().map { listOf(it[Variants.sharedSecret].orEmpty(), it[Variants.args].orEmpty(), it[Variants.config]) }.flatten() +
+                        VariantAssignments.selectAll().map { it[VariantAssignments.memberSecret].orEmpty() }
+                    assertTrue(stored.none { it.contains("synthetic") })
+                    val row = Variants.selectAll().where { Variants.id eq shared.id }.single()
+                    assertEquals(listOf("stdio", "npm"), listOf(row[Variants.transport], row[Variants.command]))
+                    val created = AuditEvents.selectAll().where { (AuditEvents.action eq "variant.created") and (AuditEvents.subjectId eq shared.id) }.single()[AuditEvents.details]
+                    assertEquals("""{"transport":"stdio","launcher":"npm","package":"@acme/tracker-mcp@1.4.2"}""", created)
+                    assertNull(AuditEvents.selectAll().where { (AuditEvents.action eq "variant.created") and (AuditEvents.subjectId eq remote.id) }.single()[AuditEvents.details])
+                    val audit = AuditEvents.selectAll().where { AuditEvents.action like "variant.%" }.map { "${it[AuditEvents.subjectId]} ${it[AuditEvents.details]}" }
+                    assertTrue(audit.none { it.contains("synthetic") || it.contains("TRACKER") || it.contains("--token") || it.contains("example.test") }, audit.toString())
+                }
+
+                // A service key never declares a hosted command, even its administrator's.
+                val key = SqlServiceKeyService(a).create(admin, admin.member.id, "Variant writer", ServiceScope.entries.toSet(), 1)
+                failure("credential_scope") { first.create(team.authenticate(key.accessToken)!!, hosted("from-key")) }
+                second.delete(admin, shared.id)
+                assertEquals(listOf("fetch", "wiki"), first.list(admin).map { it.target })
+                // A stored command this version cannot read withholds only that server, never the team's list or resolution.
+                a.query { Variants.update({ Variants.id eq perMember.id }) { it[args] = "not json" } }
+                assertNull(first.list(admin).single { it.id == perMember.id }.command)
+                assertEquals(listOf("wiki"), ResolveEffectiveVariantsUseCase(first)("default", alice).mcpServers.map { it.name })
+            } }
+        }
+    }
+
     private suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)
 }

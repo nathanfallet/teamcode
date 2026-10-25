@@ -19,6 +19,7 @@ This page describes the authenticated MCP gateway for the V2 roadmap item [MCP g
 | `teamcode run claude` / `teamcode run codex` connecting one agent-side MCP server per assigned server, for the launch only | Done; not yet exercised with a real agent |
 | Cloud sessions: the runner connects the owner's servers to the agent through its loopback relay with the execution credential, see [cloud sessions](cloud-sessions.md#team-mcp-servers-and-skills) | Done; not yet exercised with a real agent |
 | Resources, prompts, sampling, elicitation, server-initiated notifications | Not supported |
+| Hosted stdio servers: an MCP variant with `transport: stdio` (a pinned npm or PyPI package run by the server's MCP host), see [below](#hosted-stdio-servers) | Model, API and dashboard only: declaration is refused without an MCP host (`409 mcp_disabled`) and the gateway does not serve them yet |
 
 ## Endpoint and protocol
 
@@ -57,6 +58,17 @@ The gateway connects to the variant's HTTPS endpoint with the credential of the 
 Credentials never reach the workstation: they are not part of any response, error or journal row, and every upstream result, tool definition and error message is scrubbed of the credential before it is returned, in case an upstream echoes it. Scrubbing works on the decoded JSON tree (string values, keys and bare tokens), so the result stays valid JSON, and an error message is scrubbed before it is truncated.
 
 **Delegated OAuth.** Only the minimal base exists: an administrator stores a member's delegated token at assignment, and replacing or removing the assignment rotates or revokes it. A member-driven authorization flow with the upstream server (OAuth discovery, consent, refresh-token rotation, member-initiated revocation) is not implemented. An expired delegated token makes the upstream answer 401, which the member sees as a tool error until an administrator updates the assignment.
+
+## Hosted stdio servers
+
+Some MCP servers only exist as a local command (`npx some-server`, `uvx some-server`). TeamCode runs them on the server side, never on a workstation or in a session pod: a separate `mcp` component of the chart (the MCP host, with no database, encryption key or Kubernetes access) starts each one on demand, and the gateway calls it instead of an HTTPS endpoint. Clients see no difference: a hosted server is one more `teamcode-<name>` HTTP server behind `/mcp/<name>`, with the same assignments, tool policies, limits and journal.
+
+What exists today is the model: an [MCP variant](variants.md#hosted-mcp-commands) with `transport: stdio`, its launcher (`npm` or `pypi`), its package at one exact version, its arguments, its visible variables and its encrypted secret variables, declared by an interactive administrator through `POST /api/v1/variants` or `/dashboard/variants`. Nothing runs yet:
+
+- this version of the server has no MCP host configured, so declaring a hosted command answers `409 mcp_disabled` ("No MCP host is configured on this server (Helm: mcp.enabled)");
+- a hosted variant that already exists (declared by a later version, then rolled back) is never served: effective resolution lists it in `unavailable`, so `GET /api/v1/mcp/servers` does not name it and no agent gets a server it cannot call.
+
+The MCP host, its image, its chart component and the gateway's connection to it come in later changes; [variants](variants.md#hosted-mcp-commands) describes what is stored and validated.
 
 ## Upstream client
 
