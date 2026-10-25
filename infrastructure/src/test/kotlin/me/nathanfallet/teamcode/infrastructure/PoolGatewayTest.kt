@@ -35,6 +35,25 @@ class PoolGatewayTest {
             assertTrue(store.didSettle)
         }
     }
+    @Test fun aDatabaseFailureWhileRecordingProviderHeadersDoesNotDiscardTheProviderAnswer(): Unit = runBlocking {
+        // Production 25/10/2026: the provider answered 200, recording its request id and quota headers hit a lock
+        // wait, and the caller got 502 upstream_unavailable for an answer the subscription had already paid for.
+        val store = FakeAdmission(account).apply { failBookkeeping = true }
+        var calls = 0
+        HttpClient(MockEngine { calls++; respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(
+            HttpHeaders.ContentType to listOf("text/event-stream"), "request-id" to listOf("req_fixture_001"))) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val output = StringBuilder()
+            gateway.forward(request()) { head, chunks ->
+                assertEquals(200, head.status)
+                chunks.collect { output.append(it.decodeToString()) }
+            }
+            assertEquals(1, calls)
+            assertTrue(output.contains("message_stop"))
+            assertTrue(store.didSettle)
+            assertNotNull(store.settled)
+        }
+    }
     @Test fun everyRefusalIsLoggedWithItsCodeMemberAndReasonOnly() {
         val full = TeamFailure("queue_full", 503, "The TeamCode admission queue is full.\nRetry \"shortly\".", retryAfterSeconds = 15)
         assertEquals("TeamCode inference refused member=m-1 code=queue_full status=503 retryAfter=15 reason=\"The TeamCode admission queue is full. Retry 'shortly'.\"",
@@ -574,7 +593,12 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     override suspend fun preferredTarget(actor: Principal, affinity: RequestAffinity): RouteTarget? = affinities[affinity]
     override suspend fun statistics() = AdmissionStatistics(0, 0)
     val providerRequests = mutableListOf<Pair<String, String>>()
-    override suspend fun recordProviderRequest(reservation: Reservation, requestId: String) { providerRequests += reservation.id to requestId }
+    /** Simulates the shared database timing out (lock wait, exhausted pool) while the provider answer is already in hand. */
+    var failBookkeeping = false
+    override suspend fun recordProviderRequest(reservation: Reservation, requestId: String) {
+        if (failBookkeeping) throw java.sql.SQLTransientException("Lock wait timeout exceeded")
+        providerRequests += reservation.id to requestId
+    }
     val charges = mutableListOf<Long?>()
     val settlementCompletions = mutableListOf<Boolean>()
     val observations = mutableListOf<Pair<String, QuotaUpdate>>()
@@ -605,7 +629,10 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     override suspend fun configurePool(actor: Principal, budget: PoolBudget) = budget
     override suspend fun quotas(actor: Principal) = emptyList<AccountQuota>()
     override suspend fun observe(accountId: String, observations: List<AccountQuota>) = Unit
-    override suspend fun observe(accountId: String, update: QuotaUpdate) { observations += accountId to update }
+    override suspend fun observe(accountId: String, update: QuotaUpdate) {
+        if (failBookkeeping) throw java.sql.SQLTransientException("Lock wait timeout exceeded")
+        observations += accountId to update
+    }
     override suspend fun isQuotaExhausted(accountId: String, model: String) = model in knownExhaustedModels
     override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) { cooled = true; this.reconnect = reconnect }
 }
