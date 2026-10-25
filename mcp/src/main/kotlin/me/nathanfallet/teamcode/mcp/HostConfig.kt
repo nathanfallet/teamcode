@@ -56,6 +56,7 @@ data class HostConfig(
     init {
         require(token.length >= MIN_TOKEN_LENGTH) { "TEAMCODE_MCP_TOKEN must hold at least $MIN_TOKEN_LENGTH characters." }
         require(port in 1..65_535) { "TEAMCODE_MCP_PORT must be a TCP port." }
+        require(retainGraceMillis in 0..3_600_000) { "TEAMCODE_MCP_RETAIN_GRACE_SECONDS must be 0 to 3600." }
         require(launchers.isNotEmpty() && launchers.all { it in Launchers.ALL }) { "TEAMCODE_MCP_LAUNCHERS takes npm and/or pypi." }
         require(maxProcesses in 1..256 && maxInFlightPerProcess in 1..256) { "Use 1 to 256 processes and in-flight requests per process." }
         require(processMemoryBytes >= 64L * 1024 * 1024) { "TEAMCODE_MCP_PROCESS_MEMORY_MIB must be at least 64." }
@@ -89,6 +90,7 @@ data class HostConfig(
                 path = value("TEAMCODE_MCP_PATH") ?: defaults.path,
                 prlimit = when (val prlimit = value("TEAMCODE_MCP_PRLIMIT")) { null -> defaults.prlimit; "none" -> null; else -> prlimit },
                 drainMillis = long("TEAMCODE_MCP_DRAIN_SECONDS")?.let { it * 1_000 } ?: defaults.drainMillis,
+                retainGraceMillis = long("TEAMCODE_MCP_RETAIN_GRACE_SECONDS")?.let { it * 1_000 } ?: defaults.retainGraceMillis,
             )
         }
     }

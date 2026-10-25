@@ -59,7 +59,7 @@ def main(image):
         "--tmpfs", "/tmp:rw,nosuid,size=512m",
         # emptyDir in the chart: executable, since uv installs Python there and npm links its binaries there.
         "--tmpfs", "/var/mcp:rw,exec,nosuid,size=3g,uid=10002,gid=10002,mode=0700",
-        "--env", f"TEAMCODE_MCP_TOKEN={token}", "--publish", "127.0.0.1::8090", image,
+        "--env", f"TEAMCODE_MCP_TOKEN={token}", "--env", "TEAMCODE_MCP_RETAIN_GRACE_SECONDS=0", "--publish", "127.0.0.1::8090", image,
     ).stdout.strip()
     try:
         port = docker("port", container, "8090/tcp").stdout.strip().splitlines()[0].rsplit(":", 1)[1]

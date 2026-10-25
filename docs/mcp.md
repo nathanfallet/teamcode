@@ -139,6 +139,7 @@ The process `RLIMIT_NPROC` set by `prlimit` counts every thread of the pod's use
 | `TEAMCODE_MCP_IDLE_MINUTES` | 15 | Idle stop |
 | `TEAMCODE_MCP_STDIO_START_TIMEOUT_MS` | 45000 | Start, downloads included |
 | `TEAMCODE_MCP_DRAIN_SECONDS` | 75 | Wait for running operations on SIGTERM; the pod's termination grace period must be longer |
+| `TEAMCODE_MCP_RETAIN_GRACE_SECONDS` | 60 | A retain sweep spares a process started this recently (0–3600; tests use 0) |
 | `TEAMCODE_MCP_PATH` | `/usr/local/bin:/usr/bin:/bin` | The only `PATH` processes see |
 | `TEAMCODE_MCP_PRLIMIT` | `prlimit` | `none` runs without it (development machines) |
 
