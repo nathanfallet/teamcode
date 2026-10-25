@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -158,10 +160,13 @@ private fun ToolCard(item: TranscriptItem.Tool) {
             .clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 10.dp).testTag("tool-${item.key}"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(item.call?.name ?: stringResource(Res.string.transcript_output), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (failed) colors.danger else colors.text)
-            Text(item.call?.summary.orEmpty(), style = MetaStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.muted, modifier = Modifier.weight(1f))
-            Icon(if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(item.call?.name ?: stringResource(Res.string.transcript_output), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (failed) colors.danger else colors.text)
+                Text(item.call?.summary.orEmpty(), style = MetaStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.muted, modifier = Modifier.weight(1f, fill = false))
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(if (expanded) PhosphorIcons.Regular.CaretUp else PhosphorIcons.Regular.CaretDown, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp).testTag("tool-chevron-${item.key}"))
         }
         if (expanded) {
             item.call?.let { call ->
@@ -218,12 +223,15 @@ private fun ToolGroup(item: TranscriptItem.Tools) {
             Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(RoundedCornerShape(10.dp)).background(colors.panelAlt).border(1.dp, colors.line, RoundedCornerShape(10.dp))
                 .clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 12.dp).testTag("tools-${item.key}"),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Icon(PhosphorIcons.Regular.ListBullets, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
-            Text(pluralStringResource(Res.plurals.transcript_actions, item.tools.size, item.tools.size), fontSize = 13.sp, color = colors.muted, modifier = Modifier.weight(1f))
-            Text(summary, style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Icon(if (expanded) PhosphorIcons.Regular.CaretDown else PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(PhosphorIcons.Regular.ListBullets, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+                Text(pluralStringResource(Res.plurals.transcript_actions, item.tools.size, item.tools.size), fontSize = 13.sp, color = colors.muted)
+                Text(summary, style = MetaStyle.copy(fontSize = 11.sp), color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(if (expanded) PhosphorIcons.Regular.CaretDown else PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp).testTag("tools-chevron-${item.key}"))
         }
         if (expanded) item.tools.forEach { ToolCard(it) }
     }

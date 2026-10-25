@@ -28,4 +28,26 @@ class TranscriptItemViewTest {
         // Six paragraphs are well over 100 dp; an empty placeholder is 0 dp tall and grows a frame later.
         assertTrue(height > 100.dp, "The message was $height tall on its first frame")
     }
+
+    private fun tool(seq: Long, name: String, summary: String?) = TranscriptItem.Tool(
+        TranscriptEvent.ToolCall(seq, 0, "t$seq", name, "{}", summary, null),
+        TranscriptEvent.ToolResult(seq + 1, 0, "t$seq", "ok", false, 0, null),
+    )
+
+    private fun assertChevronAtRightEdge(item: TranscriptItem, row: String, chevron: String) = runComposeUiTest {
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(item, memberId = null) } } }
+        val rowBounds = onNodeWithTag(row).getBoundsInRoot()
+        val chevronBounds = onNodeWithTag(chevron, useUnmergedTree = true).getBoundsInRoot()
+        // The row pads 12 dp on its sides: the chevron ends there, not right after the label.
+        assertTrue(rowBounds.right - chevronBounds.right <= 13.dp, "The chevron ends ${rowBounds.right - chevronBounds.right} before the row's right edge")
+    }
+
+    @Test fun theActionsHeaderPutsItsChevronAtTheRightEdge() =
+        assertChevronAtRightEdge(TranscriptItem.Tools(listOf(tool(1, "Bash", "ls"), tool(3, "Read", "a.kt"))), "tools-1", "tools-chevron-1")
+
+    @Test fun aToolRowWithoutSummaryPutsItsChevronAtTheRightEdge() =
+        assertChevronAtRightEdge(tool(1, "Bash", null), "tool-1", "tool-chevron-1")
+
+    @Test fun aToolRowWithASummaryPutsItsChevronAtTheRightEdge() =
+        assertChevronAtRightEdge(tool(1, "Bash", "ls -la"), "tool-1", "tool-chevron-1")
 }
