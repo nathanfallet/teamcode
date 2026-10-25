@@ -8,7 +8,8 @@ import okio.Path.Companion.toPath
 /**
  * The `gh` configuration directory of the agent's container (`GH_CONFIG_DIR`), on a memory-backed volume that only
  * this runner writes and the agent's container mounts read-only. It holds one file, `hosts.yml`, with the execution
- * owner's token for `github.com`, or nothing when the owner has no usable link, so every `gh` the agent runs (by
+ * owner's token for `github.com`, or, when the owner has no usable link, a short notice ([NOTICE_FILE]) that tells an
+ * agent wondering why `gh` is signed out what the owner does, and never a token. So every `gh` the agent runs (by
  * name or by path, from any shell, script or tool) reads the current token itself, and `gh auth git-credential`
  * answers with the same token as the runner's git helper.
  *
@@ -18,22 +19,45 @@ import okio.Path.Companion.toPath
 internal class GitHubCliConfig(directory: String, private val fileSystem: FileSystem = FileSystem.SYSTEM) {
     private val directory = directory.toPath()
     val hosts = this.directory / HOSTS_FILE
+    val notice = this.directory / NOTICE_FILE
 
     /**
-     * Replaces `hosts.yml` atomically with [token], or removes it when [token] is null. Returns false when the token
-     * is not safe to write (the file is then removed too, so `gh` is unauthenticated rather than stale).
+     * Replaces `hosts.yml` atomically with [token], or removes it when [token] is null and leaves the notice in its
+     * place. Returns false when the token is not safe to write (the file is then removed too, so `gh` is
+     * unauthenticated rather than stale).
      */
     fun write(token: GitHubToken?): Boolean {
         val content = token?.let(::hostsYaml)
-        if (content == null) { fileSystem.delete(hosts, mustExist = false); return token == null }
+        if (content == null) {
+            fileSystem.delete(hosts, mustExist = false)
+            if (token == null) fileSystem.write(notice) { writeUtf8(NOTICE) }
+            return token == null
+        }
         val temporary = directory / "$HOSTS_FILE.tmp"
         fileSystem.write(temporary) { writeUtf8(content) }
         fileSystem.atomicMove(temporary, hosts)
+        fileSystem.delete(notice, mustExist = false)
         return true
+    }
+
+    /** Removes everything this runner wrote; called on its way out. */
+    fun clear() {
+        fileSystem.delete(hosts, mustExist = false)
+        fileSystem.delete(notice, mustExist = false)
     }
 
     companion object {
         const val HOSTS_FILE = "hosts.yml"
+        /** Read by no tool: `gh` only reads `hosts.yml` and `config.yml` here. */
+        const val NOTICE_FILE = "TEAMCODE-GITHUB-NOT-LINKED.txt"
+        internal val NOTICE = """
+            gh is not signed in in this TeamCode cloud session.
+            The session owner's GitHub access is not linked, must be renewed, or could not be fetched right now.
+            The owner links GitHub again with `teamcode github link`, or Link GitHub in the companion app or on the
+            dashboard's GitHub page. This session picks it up within 5 minutes, without a restart.
+            Until then gh is unauthenticated and git reaches public repositories only.
+
+        """.trimIndent()
         private val tokenPattern = Regex("[A-Za-z0-9_]{1,1024}")
         /** GitHub logins, including Enterprise Managed Users' `_shortcode` suffix; always written quoted. */
         private val loginPattern = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,99}")
@@ -85,6 +109,7 @@ internal class GitHubCliRenewal(
     private var refused = false
     private var writtenExpiresAt: Long? = null
     private var written = false
+    private var unlinked = false
 
     /** One pass: asks the source, writes or removes the file, and returns how long to wait before the next pass. */
     suspend fun refresh(): Long = try {
@@ -93,6 +118,9 @@ internal class GitHubCliRenewal(
         if (!accepted && !refused) log("The GitHub token was not written to the gh configuration: unexpected format.")
         refused = !accepted
         failures = 0
+        // Once per streak, so an empty gh configuration is never silent in the pod's log either.
+        if (token == null && !unlinked) log("The session owner has no usable GitHub link: gh and git run unauthenticated until they link GitHub again (teamcode github link).")
+        unlinked = token == null
         if (token == null || !accepted) idleMillis else (source.renewsAt() - now()).coerceAtLeast(retryMillis)
     } catch (error: CancellationException) { throw error }
     catch (_: Exception) {
@@ -113,7 +141,9 @@ internal class GitHubCliRenewal(
     }
 
     /** Removes the file; the runner calls it on its way out. */
-    suspend fun clear() { try { write(null) } catch (_: Exception) { } }
+    suspend fun clear() {
+        try { withContext(io) { config.clear() }; written = false; writtenExpiresAt = null } catch (_: Exception) { }
+    }
 
     private suspend fun write(token: GitHubToken?): Boolean = withContext(io) {
         config.write(token).also { accepted ->

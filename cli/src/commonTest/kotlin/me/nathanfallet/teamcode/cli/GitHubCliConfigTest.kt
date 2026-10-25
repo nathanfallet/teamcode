@@ -21,6 +21,7 @@ class GitHubCliConfigTest {
     private fun hosts(): String? = FileSystem.SYSTEM.metadataOrNull(config.hosts)?.let { FileSystem.SYSTEM.read(config.hosts) { readUtf8() } }
     /** Every file left in the directory, so a test can prove no other copy of a token survives. */
     private fun everything(): String = FileSystem.SYSTEM.list(directory).joinToString("\n") { FileSystem.SYSTEM.read(it) { readUtf8() } }
+    private fun notice(): String? = FileSystem.SYSTEM.metadataOrNull(config.notice)?.let { FileSystem.SYSTEM.read(config.notice) { readUtf8() } }
 
     @Test fun writesGhMultiAccountHostsForGitHubOverHttps() {
         config.write(GitHubToken("ghu_owner_token", "octo-cat"))
@@ -87,19 +88,24 @@ class GitHubCliConfigTest {
         assertTrue("user: \"member-b\"" in hosts()!!); assertTrue("ghu_owner_b" in hosts()!!)
         assertFalse("ghu_owner_a" in everything() || "member-a" in everything(), "Nothing of the former owner is left")
 
-        // B unlinks: gh becomes unauthenticated, it never falls back to an earlier token.
+        // B unlinks: gh becomes unauthenticated, it never falls back to an earlier token, and the directory says why.
         h.answer = { RunnerGitHubView("not_linked") }
         h.next(); runCurrent()
-        assertNull(hosts()); assertEquals("", everything())
+        assertNull(hosts()); assertFalse("ghu_" in everything())
+        assertTrue("teamcode github link" in notice()!!, "An agent looking at the empty gh configuration learns why and what the owner does")
+        assertEquals(listOf("The session owner has no usable GitHub link: gh and git run unauthenticated until they link GitHub again (teamcode github link)."), h.logs)
+        h.logs.clear()
         assertEquals(GitHubCliRenewal.IDLE_MILLIS, h.waits.last(), "Without a link the server is asked again every few minutes, not every 30 s")
 
         // Linking during the session is picked up at the next check.
         h.answer = { RunnerGitHubView("linked", "ghu_owner_b_new", null, "member-b") }
         h.next(); runCurrent()
         assertTrue("ghu_owner_b_new" in hosts()!!)
+        assertNull(notice(), "The notice goes once the owner is linked again")
         assertEquals(5, h.calls)
         h.job.cancel(); runCurrent()
         assertNull(hosts(), "The runner removes the file when it stops")
+        assertEquals(emptyList(), FileSystem.SYSTEM.list(directory), "Nothing is left when the runner stops")
         assertTrue(h.logs.isEmpty())
     }
 
@@ -123,7 +129,7 @@ class GitHubCliConfigTest {
         config.write(GitHubToken("ghu_member_a", "member-a"))
         val unlinked = Harness(this, config) { RunnerGitHubView("not_linked") }
         runCurrent()
-        assertNull(hosts()); assertEquals("", everything())
+        assertNull(hosts()); assertFalse("ghu_" in everything() || "member-a" in everything())
         unlinked.job.cancel(); runCurrent()
     }
 
