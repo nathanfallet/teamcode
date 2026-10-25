@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
@@ -180,10 +182,10 @@ class SessionScreenTest {
     }
 
     /** A history of [count] agent messages (sequence 1..count) served 50 at a time, newest page first, like the server. */
-    private fun pagedHistory(count: Int, tools: Boolean = false) = object : TranscriptRepository {
+    private fun pagedHistory(count: Int, tools: Boolean = false, text: (Int) -> String = { "Message $it" }) = object : TranscriptRepository {
         private val all: List<TranscriptEvent> = (1..count).map { seq ->
             if (tools && seq % 5 != 0) TranscriptEvent.ToolCall(seq.toLong(), 0, "t$seq", "Bash", "{}", "step $seq", null)
-            else TranscriptEvent.AgentMessage(seq.toLong(), 0, "Message $seq", null)
+            else TranscriptEvent.AgentMessage(seq.toLong(), 0, text(seq), null)
         }
         override suspend fun page(accountId: String, sessionId: String, before: Long?): TranscriptPage {
             val older = all.filter { before == null || it.seq < before }
@@ -213,5 +215,34 @@ class SessionScreenTest {
         // Same message, nearly the same place: it moves up under the edge the button was at, not fifty messages away.
         val after = onNodeWithText("Message 101", useUnmergedTree = true).getBoundsInRoot().top
         assertTrue(after.value in listTop.value..before.value + 1f, "Message 101 moved from $before to $after (list top $listTop)")
+    }
+
+    @Test fun scrollingUpMovesTheTranscriptWithTheFingerAsEarlierRowsComeIn() = runComposeUiTest {
+        val sessions = FakeSessionRepository().apply { byId["s1"] = cloudSession("s1", SessionState.PAUSED) }
+        // Messages of several paragraphs: the rows that come in at the top have never been composed.
+        val model = viewModel(sessions, pagedHistory(50) { seq -> "Message $seq\n\n" + (1..4).joinToString("\n\n") { "Paragraph $it of message $seq." } })
+        setContent { TeamCodeTheme { Box(Modifier.size(600.dp, 700.dp)) { SessionScreen(model, memberId = "m1", onBack = {}) } } }
+        waitUntil { model.uiState.value.loaded }
+        waitForIdle()
+        // Where the message being read is, in pixels like the finger; null once it left the screen.
+        fun reading() = onAllNodesWithText("Message 48", useUnmergedTree = true).fetchSemanticsNodes().firstOrNull()?.positionInRoot?.y
+        // A slow drag: past the touch slop first, then steps that each bring earlier rows in at the top.
+        onNodeWithTag("transcript").performTouchInput { down(Offset(centerX, top + 100f)); moveBy(Offset(0f, 60f)) }
+        settle()
+        var last = assertNotNull(reading(), "Message 48 is not on screen")
+        repeat(4) { step ->
+            onNodeWithTag("transcript").performTouchInput { moveBy(Offset(0f, 60f)) }
+            settle()
+            val now = reading()
+            // The message follows the finger, 60 px each time, whatever height the rows coming in above it turn out to have.
+            assertTrue(now != null && kotlin.math.abs(now - last - 60f) <= 1f, "Step ${step + 1}: the finger moved 60 px and the message went from $last to $now")
+            last = now
+        }
+        onNodeWithTag("transcript").performTouchInput { up() }
+    }
+
+    /** Lets anything started off the main thread come back and be laid out. */
+    private fun androidx.compose.ui.test.ComposeUiTest.settle() {
+        repeat(3) { Thread.sleep(50); waitForIdle() }
     }
 }

@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -43,6 +44,7 @@ import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.CaretUp
 import com.adamglin.phosphoricons.regular.ListBullets
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.model.parseMarkdown
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
@@ -83,13 +85,26 @@ fun TranscriptItemView(item: TranscriptItem, memberId: String?) {
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).then(indent)) {
         when (item) {
             is TranscriptItem.User -> UserBubble(item.event, memberId)
-            is TranscriptItem.Agent -> SelectionContainer { Markdown(item.event.text, modifier = Modifier.fillMaxWidth().testTag("agent-${item.key}")) }
+            is TranscriptItem.Agent -> AgentText(item)
             is TranscriptItem.Tool -> ToolCard(item)
             is TranscriptItem.Tools -> ToolGroup(item)
             is TranscriptItem.TurnEnd -> TurnSeparator(item.event)
             is TranscriptItem.System -> SystemLine(item.event)
         }
     }
+}
+
+/**
+ * The agent's text as Markdown, parsed while the row is composed. The renderer parses off the main thread by default and
+ * draws an empty box until it is done: the row would be measured 0 dp tall, then grow a frame later. The list keeps its
+ * position on the top edge of the first visible row, so rows growing as they enter at the top while the member scrolls
+ * up push the one being read down, several rows at once. Parsed here, the first measure is the final one.
+ */
+@Composable
+private fun AgentText(item: TranscriptItem.Agent) {
+    val text = item.event.text
+    val parsed = remember(text) { parseMarkdown(text) }
+    SelectionContainer { Markdown(parsed, modifier = Modifier.fillMaxWidth().testTag("agent-${item.key}")) }
 }
 
 @Composable

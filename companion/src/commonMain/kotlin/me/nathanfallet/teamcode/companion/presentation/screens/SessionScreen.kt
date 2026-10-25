@@ -375,7 +375,7 @@ private fun Transcript(state: SessionUiState, memberId: String?, viewModel: Sess
     val listState = rememberLazyListState()
     // The transcript opens on its last message and follows the newest one while the member stays at the bottom; scrolled
     // up to read older ones, the position is left alone until they come back down. Decided by the member's own scrolling,
-    // not by the last layout: items that grow after their first measure (rendered Markdown, a tool's result, a folded run)
+    // not by the last layout: items that grow after their first measure (a tool's result, a folded run unfolded)
     // would otherwise leave the list above the bottom, at its top when the session opens.
     var follow by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
