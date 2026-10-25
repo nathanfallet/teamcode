@@ -70,7 +70,7 @@ fun main(args: Array<String>) {
     val mac = System.getProperty("os.name").orEmpty().startsWith("Mac")
     val macBar = WindowTitleBar.forMac(System.getProperty("os.version"))
     /** Cmd on macOS, Ctrl elsewhere. */
-    fun shortcut(key: Key) = if (mac) KeyShortcut(key, meta = true) else KeyShortcut(key, ctrl = true)
+    fun shortcut(key: Key, shift: Boolean = false) = if (mac) KeyShortcut(key, meta = true, shift = shift) else KeyShortcut(key, ctrl = true, shift = shift)
     val tray = try { SystemTray.isSupported() } catch (_: Throwable) { false }
     // The window opens where it was left, at the size it had: checked against the screens connected now.
     val placement = WindowPlacementStore(koin.get<Settings>())
@@ -137,6 +137,9 @@ fun main(args: Array<String>) {
                     Item(desktopLabel(DesktopLabel.MENU_SESSIONS), shortcut = shortcut(Key.One), onClick = { AppCommands.send(AppCommand.SHOW_SESSIONS) })
                     Item(desktopLabel(DesktopLabel.MENU_ARTIFACTS), shortcut = shortcut(Key.Two), onClick = { AppCommands.send(AppCommand.SHOW_ARTIFACTS) })
                     Item(desktopLabel(DesktopLabel.MENU_COMMAND_PALETTE), shortcut = shortcut(Key.K), onClick = { AppCommands.send(AppCommand.COMMAND_PALETTE) })
+                    Separator()
+                    Item(desktopLabel(DesktopLabel.MENU_PREVIOUS_SESSION), shortcut = shortcut(Key.LeftBracket, shift = true), onClick = { AppCommands.send(AppCommand.PREVIOUS_SESSION) })
+                    Item(desktopLabel(DesktopLabel.MENU_NEXT_SESSION), shortcut = shortcut(Key.RightBracket, shift = true), onClick = { AppCommands.send(AppCommand.NEXT_SESSION) })
                     Separator()
                     Item(desktopLabel(DesktopLabel.MENU_SETTINGS), shortcut = shortcut(Key.Comma), onClick = { AppCommands.send(AppCommand.SHOW_ACCOUNT) })
                 }

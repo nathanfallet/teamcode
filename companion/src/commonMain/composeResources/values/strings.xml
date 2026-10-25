@@ -525,6 +525,8 @@
     <string name="menu_artifacts">Artifacts</string>
     <string name="menu_command_palette">Command Palette…</string>
     <string name="menu_settings">Settings…</string>
+    <string name="menu_previous_session">Previous Session</string>
+    <string name="menu_next_session">Next Session</string>
     <string name="tray_open">Open TeamCode</string>
     <string name="tray_quit">Quit TeamCode (sessions on this device keep running)</string>
     <!-- Failures: the sentence shown for each kind of error -->

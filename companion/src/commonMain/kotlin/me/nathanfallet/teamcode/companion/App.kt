@@ -12,6 +12,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -47,10 +48,19 @@ fun App(menuShortcuts: Boolean = false) {
     }
 }
 
-/** Cmd (or Ctrl) with N, 1, 2, comma or K: the same shortcuts as the desktop's menu bar. */
-internal fun shortcut(event: KeyEvent): AppCommand? {
-    if (event.type != KeyEventType.KeyDown || !(event.isMetaPressed || event.isCtrlPressed)) return null
-    return when (event.key) {
+/** Cmd (or Ctrl) with N, 1, 2, comma or K, and with Shift [ or ]: the same shortcuts as the desktop's menu bar. */
+internal fun shortcut(event: KeyEvent): AppCommand? =
+    if (event.type != KeyEventType.KeyDown) null else shortcut(event.key, event.isMetaPressed || event.isCtrlPressed, event.isShiftPressed)
+
+/** [shortcut] on a key pressed with Cmd or Ctrl ([command]) and, or not, Shift. */
+internal fun shortcut(key: Key, command: Boolean, shift: Boolean): AppCommand? {
+    if (!command) return null
+    if (shift) return when (key) {
+        Key.LeftBracket -> AppCommand.PREVIOUS_SESSION
+        Key.RightBracket -> AppCommand.NEXT_SESSION
+        else -> null
+    }
+    return when (key) {
         Key.N -> AppCommand.NEW_SESSION
         Key.One -> AppCommand.SHOW_SESSIONS
         Key.Two -> AppCommand.SHOW_ARTIFACTS

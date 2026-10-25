@@ -211,6 +211,8 @@ fun MainScreen(
                 AppCommand.SHOW_ARTIFACTS -> tab = MainTab.ARTIFACTS
                 AppCommand.SHOW_ACCOUNT -> tab = MainTab.ACCOUNT
                 AppCommand.COMMAND_PALETTE -> palette = !palette
+                // The phone layout has no list of sessions beside the open one: only the wide layout steps through them.
+                AppCommand.PREVIOUS_SESSION, AppCommand.NEXT_SESSION -> Unit
             }
         }
     }

@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DesktopComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -191,6 +192,45 @@ class DesktopShellTest {
             onNodeWithTag("palette").assertDoesNotExist()
             onNodeWithTag("sidebar-all-artifacts").assertIsSelected()
         }
+    }
+
+    @Test fun theBracketShortcutsStepThroughTheSessionsFromTheOneOpen() {
+        app {
+            // Nothing open: next opens the first one (what the menu bar's item and the keys send).
+            runOnUiThread { AppCommands.send(AppCommand.NEXT_SESSION) }
+            settle()
+            onNodeWithTag("sidebar-session-s0").assertIsSelected()
+            runOnUiThread { AppCommands.send(AppCommand.NEXT_SESSION) }
+            settle()
+            onNodeWithTag("sidebar-session-s1").assertIsSelected()
+            runOnUiThread { AppCommands.send(AppCommand.PREVIOUS_SESSION) }
+            settle()
+            onNodeWithTag("sidebar-session-s0").assertIsSelected()
+            // The first one has no previous: it stays open, not wrapped to the last.
+            runOnUiThread { AppCommands.send(AppCommand.PREVIOUS_SESSION) }
+            settle()
+            onNodeWithTag("sidebar-session-s0").assertIsSelected()
+            // Another screen open: previous opens the last session of the list, which may lie beyond the sidebar's rows.
+            onNodeWithTag("sidebar-all-artifacts").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            runOnUiThread { AppCommands.send(AppCommand.PREVIOUS_SESSION) }
+            settle()
+            onNodeWithTag("sidebar-all-artifacts").assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+            onNodeWithTag("session-menu").assertExists()
+        }
+    }
+
+    @Test fun cmdOrCtrlShiftBracketsAreTheSessionShortcutsAndShiftKeepsTheOthersApart() {
+        fun press(key: Key, command: Boolean = true, shift: Boolean = false) = shortcut(key, command, shift)
+        val open = Key.RightBracket
+        val close = Key.LeftBracket
+        assertEquals(AppCommand.NEXT_SESSION, press(open, shift = true))
+        assertEquals(AppCommand.PREVIOUS_SESSION, press(close, shift = true))
+        // Without Shift the brackets are not ours, nor without Cmd or Ctrl; Shift does not turn the other shortcuts on.
+        assertNull(press(open))
+        assertNull(press(open, command = false, shift = true))
+        assertNull(press(Key.K, shift = true))
+        assertEquals(AppCommand.COMMAND_PALETTE, press(Key.K))
     }
 
     @Test fun theArrowsMoveThroughTheSidebarAndThePanelsCards() {

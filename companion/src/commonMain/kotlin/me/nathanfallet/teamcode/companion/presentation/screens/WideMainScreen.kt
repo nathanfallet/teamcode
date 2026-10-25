@@ -27,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -148,19 +149,6 @@ fun WideMainScreen(
         if (account?.id != shownAccount && shownAccount != null) show(SessionsListRoute)
         shownAccount = account?.id
     }
-    LaunchedEffect(Unit) {
-        AppCommands.commands.collect { command ->
-            val active = home.uiState.value.account
-            when (command) {
-                AppCommand.NEW_SESSION -> active?.takeIf { it.signedIn }?.let { sheets.newSession(it.id) }
-                AppCommand.SHOW_SESSIONS -> show(SessionsListRoute)
-                AppCommand.SHOW_ARTIFACTS -> active?.let { show(ArtifactsRoute(it.id)) }
-                AppCommand.SHOW_ACCOUNT -> show(AccountRoute)
-                AppCommand.COMMAND_PALETTE -> palette = !palette
-            }
-        }
-    }
-
     // One list of sessions and one of artifacts for the sidebar and the content panel's full lists: one load and one
     // live feed each, the read marks and the filters shared. The same view models as the phone layout's tabs (the same
     // keys in the same store), so a window crossing the breakpoint keeps them too. The sidebar keeps them current while
@@ -192,6 +180,27 @@ fun WideMainScreen(
 
     val current by detail.currentBackStackEntryAsState()
     val selection = current.selection()
+    val selectionNow = rememberUpdatedState(selection)
+    val sessionsNow = rememberUpdatedState(sessionsState.list?.sessions.orEmpty())
+    LaunchedEffect(Unit) {
+        AppCommands.commands.collect { command ->
+            val active = home.uiState.value.account
+            when (command) {
+                AppCommand.NEW_SESSION -> active?.takeIf { it.signedIn }?.let { sheets.newSession(it.id) }
+                AppCommand.SHOW_SESSIONS -> show(SessionsListRoute)
+                AppCommand.SHOW_ARTIFACTS -> active?.let { show(ArtifactsRoute(it.id)) }
+                AppCommand.SHOW_ACCOUNT -> show(AccountRoute)
+                AppCommand.COMMAND_PALETTE -> palette = !palette
+                AppCommand.PREVIOUS_SESSION, AppCommand.NEXT_SESSION -> {
+                    val open = (selectionNow.value as? SidebarSelection.Session)?.id
+                    val step = if (command == AppCommand.NEXT_SESSION) 1 else -1
+                    val target = neighbourSession(sessionsNow.value.map { it.id }, open, step)
+                    if (active != null && target != null) { show(SessionRoute(active.id, target)); sidebarSessions.opened(target) }
+                }
+            }
+        }
+    }
+
     // However a session was opened (the panel's list, a link, a new session), the sidebar's row is read.
     LaunchedEffect(selection) { (selection as? SidebarSelection.Session)?.let { sidebarSessions.opened(it.id) } }
     val now = rememberNow()
@@ -404,4 +413,15 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<AccountRoute>() || destination.hasRoute<SubscriptionAccountsRoute>() || destination.hasRoute<GitHubLinkRoute>() -> SidebarSelection.Settings
         else -> SidebarSelection.None
     }
+}
+
+/**
+ * The session [step] rows (1 next, -1 previous) from [open] in [ids], the full list the sidebar draws from, not its
+ * first rows. It stops at either end rather than wrapping. With no session open, or one the filter hides, next takes
+ * the first and previous the last. Null when there is nowhere to go.
+ */
+fun neighbourSession(ids: List<String>, open: String?, step: Int): String? {
+    val at = ids.indexOf(open)
+    if (at < 0) return if (step > 0) ids.firstOrNull() else ids.lastOrNull()
+    return ids.getOrNull(at + step)
 }

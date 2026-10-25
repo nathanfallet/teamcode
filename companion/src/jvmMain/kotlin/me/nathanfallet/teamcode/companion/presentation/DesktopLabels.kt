@@ -7,7 +7,7 @@ import org.jetbrains.compose.resources.stringResource
 /** The texts of the desktop shell (menu bar, tray), which lives in `:companion-desktop` while the resources stay here. */
 enum class DesktopLabel {
     TRAY_OPEN, TRAY_QUIT, MENU_FILE, MENU_NEW_SESSION, MENU_CLOSE_WINDOW, MENU_VIEW, MENU_SESSIONS, MENU_ARTIFACTS,
-    MENU_COMMAND_PALETTE, MENU_SETTINGS,
+    MENU_COMMAND_PALETTE, MENU_SETTINGS, MENU_PREVIOUS_SESSION, MENU_NEXT_SESSION,
 }
 
 /** The text of [label] in the language of the system. */
@@ -24,5 +24,7 @@ fun desktopLabel(label: DesktopLabel): String = stringResource(
         DesktopLabel.MENU_ARTIFACTS -> Res.string.menu_artifacts
         DesktopLabel.MENU_COMMAND_PALETTE -> Res.string.menu_command_palette
         DesktopLabel.MENU_SETTINGS -> Res.string.menu_settings
+        DesktopLabel.MENU_PREVIOUS_SESSION -> Res.string.menu_previous_session
+        DesktopLabel.MENU_NEXT_SESSION -> Res.string.menu_next_session
     },
 )
