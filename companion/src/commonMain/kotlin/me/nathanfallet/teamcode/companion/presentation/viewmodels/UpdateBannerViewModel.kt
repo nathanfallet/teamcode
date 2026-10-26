@@ -14,6 +14,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.UpdatePreferences
 import me.nathanfallet.teamcode.companion.domain.services.AppUpdateException
 import me.nathanfallet.teamcode.companion.domain.services.AppUpdater
 import me.nathanfallet.teamcode.companion.domain.services.Clock
+import me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome
 import me.nathanfallet.teamcode.companion.domain.usecases.updates.UpdatePolicy
 
 /** What the update banner shows. */
@@ -21,10 +22,10 @@ sealed interface UpdateBannerState {
     data object Hidden : UpdateBannerState
     /** [version] is available for the CLI and the app. */
     data class Available(val version: String) : UpdateBannerState
-    /** The update runs; [output] holds the CLI's last lines. */
-    data class Updating(val version: String, val output: List<String> = emptyList()) : UpdateBannerState
-    /** The update is installed: the app quits and the new version opens. */
-    data class Restarting(val version: String) : UpdateBannerState
+    /** The update runs; [output] holds the CLI's last lines, [progress] the share of the app's download once it started. */
+    data class Updating(val version: String, val output: List<String> = emptyList(), val progress: Float? = null) : UpdateBannerState
+    /** The new app is ready: this one quits now and the new one opens ([installsAfterQuit]: once Windows' installer has put it in place). */
+    data class Restarting(val version: String, val installsAfterQuit: Boolean = false) : UpdateBannerState
     /** The update failed; [version] is offered again by "Try again" (null after a failure reported at startup). */
     /** [message] is the updater's own explanation; null when the failure was not one it explained (the banner words it). */
     data class Failed(val version: String?, val message: String?, val output: List<String> = emptyList()) : UpdateBannerState
@@ -83,7 +84,7 @@ class UpdateBannerViewModel(
         return next
     }
 
-    /** Updates the CLI and the app, then quits so that the new version opens. */
+    /** Updates the CLI and gets the new app ready, then quits so that it opens; stays open when only the CLI was behind. */
     fun update() {
         val version = when (val current = state.value) {
             is UpdateBannerState.Available -> current.version
@@ -93,11 +94,13 @@ class UpdateBannerViewModel(
         state.value = UpdateBannerState.Updating(version)
         viewModelScope.launch {
             try {
-                updater.update { line ->
-                    state.update { if (it is UpdateBannerState.Updating) it.copy(output = (it.output + line).takeLast(MAX_OUTPUT_LINES)) else it }
-                }
-                state.value = UpdateBannerState.Restarting(version)
-                // A moment to read that it worked, then the app quits and the new version opens.
+                val outcome = updater.update(
+                    output = { line -> state.update { if (it is UpdateBannerState.Updating) it.copy(output = (it.output + line).takeLast(MAX_OUTPUT_LINES)) else it } },
+                    progress = { share -> state.update { if (it is UpdateBannerState.Updating) it.copy(progress = share.coerceIn(0f, 1f)) else it } },
+                )
+                if (outcome == UpdateOutcome.CURRENT) { state.value = UpdateBannerState.Hidden; return@launch }
+                state.value = UpdateBannerState.Restarting(version, updater.installsAfterQuit)
+                // Just long enough to read that it worked: the new app is ready and opens as soon as this one quits.
                 delay(RESTART_DELAY_MILLIS)
                 updater.quit()
             } catch (error: CancellationException) {
@@ -122,6 +125,6 @@ class UpdateBannerViewModel(
 
     private companion object {
         const val MAX_OUTPUT_LINES = 6
-        const val RESTART_DELAY_MILLIS = 1_500L
+        const val RESTART_DELAY_MILLIS = 600L
     }
 }

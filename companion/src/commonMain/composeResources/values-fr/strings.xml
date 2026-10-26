@@ -500,8 +500,9 @@
     <string name="update_available_title">Mise à jour disponible : TeamCode %1$s</string>
     <string name="update_available_detail">Met à jour la CLI et cette app, puis rouvre TeamCode. Les sessions d'agent continuent de tourner.</string>
     <string name="update_updating_title">Mise à jour de TeamCode vers %1$s…</string>
-    <string name="update_restarting_title">La CLI est en TeamCode %1$s</string>
-    <string name="update_restarting_detail">TeamCode se ferme, installe la nouvelle app et se rouvre tout seul d'ici une minute ou deux.</string>
+    <string name="update_restarting_title">TeamCode %1$s est prêt</string>
+    <string name="update_restarting_detail">Redémarrage de TeamCode sur la nouvelle version…</string>
+    <string name="update_restarting_detail_installer">TeamCode se ferme, l'installeur Windows met la nouvelle version en place, puis TeamCode se rouvre.</string>
     <string name="update_failed_title_version">La mise à jour vers TeamCode %1$s a échoué</string>
     <string name="update_failed_title">La mise à jour a échoué</string>
     <string name="update_failed_unexpected">La mise à jour a échoué de façon inattendue. Exécute teamcode update dans un terminal pour en voir la cause.</string>

@@ -109,7 +109,7 @@ class DesktopShellTest {
             override val appVersion = "1.2.0"
             override suspend fun cliVersion() = "1.2.0"
             override suspend fun latestVersion() = "1.3.0"
-            override suspend fun update(output: (String) -> Unit) = Unit
+            override suspend fun update(output: (String) -> Unit, progress: (Float) -> Unit) = me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome.CURRENT
             override fun quit() = Unit
         }
         val extra = org.koin.dsl.module {

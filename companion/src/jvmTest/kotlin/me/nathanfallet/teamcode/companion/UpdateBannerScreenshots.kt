@@ -23,10 +23,11 @@ class UpdateBannerScreenshots {
         override val appVersion = "1.2.0"
         override suspend fun cliVersion() = "1.2.0"
         override suspend fun latestVersion() = "1.3.0"
-        override suspend fun update(output: (String) -> Unit) {
+        override suspend fun update(output: (String) -> Unit, progress: (Float) -> Unit): me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome {
             output("Updating the TeamCode CLI 1.2.0…")
             output("Selected TeamCode 1.3.0. Launcher: ~/Library/Application Support/TeamCode/bin/teamcode")
             output("2 running agent sessions keep running on 1.2.0.")
+            if (!fails) { output("Downloading TeamCode Desktop 1.3.0 (about 120 MB)…"); progress(0.4f) }
             if (fails) throw AppUpdateException("Cannot reach GitHub's release servers (release_connection_failure). Check your network, VPN or proxy, then try again.")
             awaitCancellation()
         }
