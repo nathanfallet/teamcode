@@ -16,7 +16,7 @@ It is the Gradle module `:mcp` and the image `nathanfallet/teamcode-mcp`, publis
 | Variant model `transport: stdio` (launcher, package, arguments, secret variables) | Done ([variants](variants.md#hosted-mcp-commands)) |
 | Helm chart component `mcp` (Deployment, Service, NetworkPolicy, generated token Secret), on by default | Done ([deployment](#deployment-helm)) |
 | Gateway → host wiring (`HostMcpUpstream`, warm-up from `/api/v1/mcp/servers`, `retain` sweep), capability `mcp.gateway.stdio.v1` | Done ([gateway](mcp-gateway.md#hosted-stdio-servers)) |
-| State in the dashboard, team events `mcp.stdio.*`, companion and CLI views | Planned |
+| State of each process (`mcp_stdio_states`), team events `mcp.stdio.failed`, `mcp.stdio.recovered` and `mcp.unreachable` (feed and webhooks), the dashboard's hosted commands with stderr and "Restart", `state` and `transport` in `GET /api/v1/mcp/servers`, `teamcode mcp list`, the companion's MCP servers screen | Done ([operating](#operating-and-troubleshooting)) |
 
 The server calls the host when it has its address and token (`TEAMCODE_MCP_URL`, `TEAMCODE_MCP_TOKEN`, set by the chart): administrators can then declare hosted commands, and agents list and call them through the gateway like any MCP server. [The gateway page](mcp-gateway.md#hosted-stdio-servers) describes the server side: process keys, deadlines, warm-up, the retain sweep and how host errors reach the agent.
 
@@ -182,10 +182,30 @@ The image job of `.github/workflows/build.yml` checks it before the server image
 
 ## Operating and troubleshooting
 
-- `GET /v1/status` (token required; the server reads its launchers when an administrator declares a hosted command; the dashboard will show the rest) gives each key's state, last failure, exit code, cold start time, memory and scrubbed stderr.
+TeamCode has no metrics endpoint; hosted servers are watched through what it already has: the call journal, the team's event feed and webhooks, the dashboard, and the member-facing views.
+
+**State sweep.** The scheduled work `mcp/retain` (one replica a minute) sends `/v1/retain`, then reads `/v1/status` and records the state of each assignment's process in `mcp_stdio_states`: one row per variant and member, with an empty member for a `SHARED` variant's team process, holding the process key it was observed under, the state (`idle`, `starting`, `ready`, `failed`, `backoff`; a state the host does not document is stored as `unknown`), the last failure not yet followed by a successful start, and when it changed. A row is written only when something changes, by compare-and-set on the row the sweep read, and a process that is idle and never failed has none. A state recorded for an earlier process key (a rotation, a reassignment) reads as `idle`. Rows of assignments that no longer exist are deleted by the next sweep (it reads the rows of every team that has a hosted assignment or a stored row), and a deleted variant's rows go with it (foreign key); a leftover row is never shown anyway, since every view starts from current assignments.
+
+**Events.** Each transition is published in the same transaction to the team's [event feed](cloud-conversations.md#event-feed), so [webhooks](webhooks.md) can carry it to an alerting tool:
+
+| Event | When | `data` |
+| --- | --- | --- |
+| `mcp.stdio.failed` | A process starts failing (`failed` or `backoff`). Once per streak: retries, `failed` becoming `backoff` and an expired backoff stay in the streak until a start succeeds | `server`, `variantId`, `memberId` (a `PER_MEMBER` process), `state`, `failure` |
+| `mcp.stdio.recovered` | The process is `ready` again after a failure | the same, `failure` naming what it recovered from |
+| `mcp.unreachable` | The sweep could not reach the host (or the host refused it) while the team has hosted servers; at most one every ten minutes (`mcp/unreachable`, a database lease shared by the replicas) | `reason`: `unreachable` (no answer) or `refused` (another token or protocol version) |
+
+Their subject is `mcp`. A `PER_MEMBER` process's events belong to its member; a `SHARED` process's and `mcp.unreachable` belong to nobody, so only whoever reads the team's runs sees them (an interactive administrator or a `team:read` key; webhooks receive all of them). They carry no secret, argument or output. The sweep runs once a minute, so an event follows its transition by up to about a minute; a failure that recovers between two sweeps is not seen.
+
+**Dashboard** (`/dashboard/mcp`, administrators): **Hosted commands** lists every hosted process of the team (a `SHARED` variant once, a `PER_MEMBER` variant once per member) with the command line, its state and last failure, starts, failures, cold start time, memory, last exit code and the last 4 KiB of scrubbed stderr (the host keeps 64 KiB), all read live from `/v1/status` when the page loads (the states fall back to the recorded ones when the host does not answer, and the page says so). **Restart** stops the process and lifts a backoff (`/v1/stop`); the next operation starts it again. It is journaled before the stop as `mcp.stdio.restarted` (subject `variantId`, or `variantId/memberId` for a member's process). The page costs four or five indexed reads plus one request to the host.
+
+**Members** see the state of their hosted servers without stderr: `GET /api/v1/mcp/servers` adds `transport` (`http` or `stdio`) and, for a hosted command, `state` and `failure` as recorded by the sweep (one primary-key read for the member's servers; a state that cannot be read leaves them out and never hides a server from an agent). `teamcode mcp list` prints them, and the companion shows them in **Account → MCP servers**, read-only.
+
+**Troubleshooting.**
+
 - `start_failed` with `npm error notarget No matching version found … with a date before` in stderr: the pinned version was published after the variant was declared. Declare a new variant.
-- `backoff`: read the stderr in the status, fix the cause, then restart the key (`/v1/stop`).
+- `backoff`: read the stderr on the dashboard, fix the cause, then **Restart**.
 - `capacity`: raise `maxProcesses` (and the pod's memory limit) or lower `idleMinutes`.
+- `mcp.unreachable`: the host pod is down, not ready, or holds another token or protocol version than the server; `kubectl get pods -l app.kubernetes.io/name=teamcode-mcp` and the server's log line `the MCP host did not answer` (`reason: unreachable`) or `the MCP host refused the request` (`reason: refused`: deploy the server and its host at the same version, with the same token).
 - A host restart (rollout, OOM) loses the processes; the next operation starts them again, and an operation running at that moment fails.
 
 ## Measurements

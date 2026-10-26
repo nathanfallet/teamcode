@@ -7,7 +7,7 @@ This page describes the authenticated MCP gateway for the V2 roadmap item [MCP g
 | Capability | State |
 | --- | --- |
 | One Streamable HTTP endpoint per assigned server, `/mcp/<server>`, stateless (no `Mcp-Session-Id`), protocol revisions 2025-11-25, 2025-06-18, 2025-03-26 | Done |
-| `GET /api/v1/mcp/servers`: the caller's assigned servers and their endpoint paths | Done |
+| `GET /api/v1/mcp/servers`: the caller's assigned servers and their endpoint paths, with each one's transport and a hosted command's state | Done |
 | Discovery (`tools/list`) limited to that server's tools allowed by the member's variant policy | Done |
 | Per-call authorization rechecked in MySQL under the team lock; immediate revocation | Done |
 | Per-variant tool allowlists (API and dashboard) | Done |
@@ -23,7 +23,7 @@ This page describes the authenticated MCP gateway for the V2 roadmap item [MCP g
 
 ## Endpoint and protocol
 
-Agents connect to `POST <teamcode>/mcp/<server>`, where `<server>` is the MCP variant slot (the server name), with `Authorization: Bearer <credential>`. `GET /api/v1/mcp/servers` lists the caller's assigned servers with their paths (names only: no upstream address or credential). The credential is an interactive session token or a service key with the new `mcp` scope; it identifies the member, and nothing in the request can choose another identity. A service key without the `mcp` scope is refused (403).
+Agents connect to `POST <teamcode>/mcp/<server>`, where `<server>` is the MCP variant slot (the server name), with `Authorization: Bearer <credential>`. `GET /api/v1/mcp/servers` lists the caller's assigned servers with their paths (names only: no upstream address or credential), each with `transport` (`http` or `stdio`) and, for a [hosted command](#hosted-stdio-servers), the `state` and `failure` of its process as last recorded (see [operating](mcp.md#operating-and-troubleshooting)); clients that do not know these fields ignore them. The credential is an interactive session token or a service key with the new `mcp` scope; it identifies the member, and nothing in the request can choose another identity. A service key without the `mcp` scope is refused (403).
 
 The gateway implements the Streamable HTTP transport in its stateless form: each POST carries exactly one JSON-RPC message and receives one `application/json` response. It never returns `Mcp-Session-Id`, so any replica can answer any message and nothing is kept between requests. `GET` and `DELETE` return 405 (no server-initiated stream, no session to end). Notifications and client responses return 202. Batches (JSON arrays) are refused. An `Origin` header other than `TEAMCODE_PUBLIC_URL` is refused (403), as the specification requires to prevent DNS rebinding from a browser. An unsupported `MCP-Protocol-Version` header is refused (400); `initialize` negotiates the client's revision when supported, otherwise the newest.
 
@@ -143,6 +143,8 @@ Tables `mcp_tool_policies` (one row per restricted variant, cascade on variant d
 - Claude Code: `--mcp-config` with one `http` server per assignment, named `teamcode-<server>`, URL `http://127.0.0.1:<port>/mcp/<server>`, header `Authorization: Bearer ${TEAMCODE_MCP_TOKEN}` expanded from the agent's environment. The option is placed after the caller's own options and before a literal `--`, because it is variadic.
 - Codex: one `-c mcp_servers.teamcode-<server>={url=..., bearer_token_env_var="TEAMCODE_LOCAL_TOKEN"}` override per assignment, next to the existing model-provider overrides.
 - `.` in a server name becomes `_` in the agent-side name; two servers that would get the same name are both left out.
+
+`teamcode mcp list` prints the same list as the agent sees it: `teamcode-<server>`, the transport, and a hosted command's state (`--json` for the answer as is).
 
 The URL is the local proxy (the launch's own proxy, or the user service when it is running), which accepts only its random local token, from loopback, without an `Origin` header, and relays each message to `/mcp/<server>` on the TeamCode server with the member's TeamCode credential. The agent therefore holds no TeamCode credential and no upstream credential: only that local token, which is valid on loopback only and is not a TeamCode credential. No configuration file is written and personal MCP servers are untouched. The list of servers is read at launch; a server assigned later appears at the next launch, and a revoked server is refused at the next message even in a running session.
 
