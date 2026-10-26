@@ -308,8 +308,19 @@ try:
             });
             assert.deepStrictEqual(JSON.parse(guidance), {});
             args = args.slice(2);
+            // The owner sentence TeamCode appends to the instructions (the fixture's /me is "synthetic"), last of
+            // the options before the caller's literal delimiter.
+            stage = 'claude-identity';
+            let end = args.indexOf('--'); if (end < 0) end = args.length;
+            assert.deepStrictEqual(args.slice(end-2, end), ['--append-system-prompt', 'I am synthetic.']);
+            args = args.slice(0, end-2).concat(args.slice(end));
           } else {
             let end = args.indexOf('--'); if (end < 0) end = args.length;
+            // The owner sentence as Codex developer instructions, the last override.
+            stage = 'codex-identity';
+            assert.deepStrictEqual(args.slice(end-2, end), ['-c', 'developer_instructions="I am synthetic."']);
+            args = args.slice(0, end-2).concat(args.slice(end)); end -= 2;
+            stage = 'codex-provider';
             assert.deepStrictEqual(args.slice(end-4, end-2), ['-c', 'model_provider="teamcode"']);
             url = /base_url="([^"]+)"/.exec(args[end-1])[1] + '/responses';
             token = process.env.TEAMCODE_LOCAL_TOKEN;
@@ -371,6 +382,11 @@ try:
         env['PATH'] = os.pathsep.join([str(root), str(node.parent), str(Path(os.environ['SystemRoot']) / 'System32')])
         env['ANTHROPIC_API_KEY'] = 'inherited-must-be-removed'
         env['CLAUDE_CODE_OAUTH_TOKEN'] = 'inherited-must-be-removed'
+        # An empty Codex configuration instead of the host's own: one setting developer_instructions would keep the
+        # owner sentence out.
+        env['CODEX_HOME'] = str(root / 'codex-home')
+        (root / 'codex-home').mkdir()
+        (root / 'codex-home' / 'config.toml').write_text('', encoding='utf-8')
         arguments = ['--dangerously-skip-permissions', '', 'équipe', 'two words', 'a"b',
                      'C:\\trailing\\', '& | < > %PATH% !value!', 'line\nbreak', '--', 'literal']
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)

@@ -52,8 +52,10 @@ class DesktopInstallTest {
             val bytes = fixture.packages.getValue(target).copyOf()
             if (tamper) bytes[bytes.size / 2] = (bytes[bytes.size / 2].toInt() xor 1).toByte()
             File(destination.toString()).writeBytes(bytes)
-            // In quarters, as a network download reports its chunks.
-            for (quarter in 1..4) progress(bytes.size.toLong() * quarter / 4)
+            // In quarters, as a network download reports its chunks, each rounded up: rounded down, half of an odd
+            // length is just under 50 % and reports 40. A tar archive's length follows its files' times, so its
+            // parity changes from one run to the next.
+            for (quarter in 1..4) progress(Math.ceilDiv(bytes.size.toLong() * quarter, 4L))
         }
     }
 
@@ -145,6 +147,15 @@ class DesktopInstallTest {
         next.discard(found)
         assertEquals("1.3.0", Files.readSymbolicLink(File(root, "current").toPath()).toString())
         assertEquals(listOf("1.2.3", "1.3.0", "current"), root.list()!!.sorted(), "The stage is removed; the previous version stays for an app still running from it")
+    }
+
+    @Test fun theProgressStepsDoNotDependOnThePackageLength() = runBlocking {
+        for (size in 1000..1003) {
+            val installer = installer("windows", "windows-x64", FixtureSource(fixture("1.2.3", mapOf("windows-x64" to ByteArray(size) { it.toByte() }))))
+            val progress = mutableListOf<Int>()
+            installer.discard(installer.stage(installer.release("1.2.3")) { progress += it })
+            assertEquals(listOf(20, 50, 70, 100), progress, "$size bytes")
+        }
     }
 
     @Test fun onlyAStageOfThisInstallerAndVersionIsTakenBack() = runBlocking {
