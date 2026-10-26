@@ -5,11 +5,15 @@ import com.github.ajalt.clikt.command.SuspendingNoOpCliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.options.default
+import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.multiple
 import com.github.ajalt.clikt.parameters.options.option
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.header
+import kotlinx.serialization.builtins.ListSerializer
+import me.nathanfallet.teamcode.api.Serialization
+import me.nathanfallet.teamcode.api.models.McpServerView
 import me.nathanfallet.teamcode.api.models.RunIdentifiers
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.artifacts.ArtifactSources
@@ -27,8 +31,34 @@ import okio.Path.Companion.toPath
 private val TOKEN_VARIABLES = listOf("TEAMCODE_ARTIFACTS_TOKEN", "TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN")
 
 class Mcp : SuspendingNoOpCliktCommand(name = "mcp") {
-    override fun help(context: Context) = "MCP servers TeamCode runs beside an agent, over stdio."
-    init { subcommands(ArtifactsMcpCommand()) }
+    override fun help(context: Context) = "MCP servers: the team's servers assigned to you, and the ones TeamCode runs beside an agent, over stdio."
+    init { subcommands(McpList(), ArtifactsMcpCommand()) }
+}
+
+/** One line of `teamcode mcp list`: the name agents see, the transport, and a hosted command's state. */
+internal fun mcpServerLine(server: McpServerView): String {
+    val transport = when (server.transport) { "stdio" -> "hosted command"; "http" -> "remote (HTTPS)"; null -> "-"; else -> server.transport!! }
+    val state = when {
+        server.transport != "stdio" -> "-"
+        server.state == "failed" || server.state == "backoff" -> "unavailable (${server.failure ?: server.state})"
+        else -> server.state ?: "unknown"
+    }
+    return "${me.nathanfallet.teamcode.cli.launch.mcpLabel(server.name)}\t$transport\t$state"
+}
+
+private class McpList : SuspendingCliktCommand(name = "list") {
+    private val json by option("--json", help = "Print the JSON answer.").flag()
+    override fun help(context: Context) = "List the team's MCP servers assigned to you, as agents see them, with their transport and, for a hosted command, " +
+        "the state of its process (refreshed about once a minute). Administrators declare servers in the dashboard."
+    override suspend fun run() {
+        sdk(loadConfig()).use { client ->
+            if ("mcp.gateway.v1" !in client.capabilities().features) throw CliUserException("This TeamCode server has no MCP gateway.")
+            val servers = client.mcpServers()
+            if (json) return echo(Serialization.json.encodeToString(ListSerializer(McpServerView.serializer()), servers))
+            if (servers.isEmpty()) return echo("No MCP server is assigned to you.")
+            servers.forEach { echo(mcpServerLine(it)) }
+        }
+    }
 }
 
 private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
