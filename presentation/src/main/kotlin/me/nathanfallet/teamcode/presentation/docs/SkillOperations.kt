@@ -380,7 +380,9 @@ internal fun ApiCatalog.variantOperations() {
         operationId = "listMcpServers"; tag(ApiTags.MCP)
         summary = "The caller's MCP servers"
         description = "The MCP servers assigned to the caller and the gateway path of each (`/mcp/<server>`). No " +
-            "upstream address or credential."
+            "upstream address or credential. `transport` is `http` or `stdio` (a hosted command); for a hosted command, " +
+            "`state` (`idle`, `starting`, `ready`, `failed`, `backoff`) and `failure` are those its process last had, " +
+            "recorded about once a minute. Reading the list warms up the caller's hosted processes."
         responses { ok<List<McpServerView>>("The servers.") }
     }
     post("/mcp/{server}") {

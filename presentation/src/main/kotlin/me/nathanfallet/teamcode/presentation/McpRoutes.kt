@@ -56,7 +56,9 @@ private suspend fun ApplicationCall.respondJson(value: JsonElement, status: Http
 internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
     val origin = publicOrigin.trimEnd('/')
     get(MCP_SERVERS_PATH) {
-        call.respond(gateway.servers(call.principal).map { McpServerView(it, "$MCP_PATH/$it") })
+        call.respond(gateway.assigned(call.principal).map {
+            McpServerView(it.name, "$MCP_PATH/${it.name}", if (it.hosted) "stdio" else "http", it.state, it.failure)
+        })
     }
     route("$MCP_PATH/{server}") {
         install(io.ktor.server.http.HttpRequestLifecycle) { cancelCallOnClose = true }
@@ -122,8 +124,31 @@ internal fun Route.mcpGatewayRoutes(gateway: McpGateway, publicOrigin: String) {
     }
 }
 
+/** The dashboard's "Hosted commands": each hosted process's state on the MCP host, its scrubbed stderr and "Restart". */
+private fun hostedSection(processes: HostedMcpProcesses, actor: Principal): String {
+    val rows = processes.processes.joinToString("") { process ->
+        val status = process.status
+        val who = process.username?.let { "member <strong>${escape(it)}</strong>" } ?: "shared by the team"
+        val chip = when { HostedProcessStates.failing(process.state) -> "danger"; process.state == HostedProcessStates.READY -> "ok"; else -> "warn" }
+        val state = "<span class='chip $chip'>${escape(process.state)}</span>" + (process.failure?.let { " <small>${escape(it)}</small>" } ?: "")
+        val figures = if (status == null) "—" else buildString {
+            append("${status.starts} start(s), ${status.failures} failure(s)")
+            status.coldStartMillis?.let { append("<br><small>cold start ${it} ms</small>") }
+            status.rssBytes?.let { append("<br><small>memory ${formatUnits(it)}B</small>") }
+            status.lastExitCode?.let { append("<br><small>last exit $it</small>") }
+        }
+        // The tail only: up to 64 KiB per process would make a page of many processes heavy.
+        val stderr = status?.stderr?.takeIf { it.isNotBlank() }?.let { "<details><summary>stderr (last lines)</summary><pre>${escape(it.takeLast(STDERR_SHOWN_CHARS))}</pre></details>" } ?: ""
+        val memberField = process.assignment.processMemberId.takeIf { it.isNotEmpty() }?.let { """<input type="hidden" name="memberId" value="${escape(it)}">""" } ?: ""
+        """<tr><td><code>${escape(process.assignment.target)}</code> · ${escape(process.variantName)}<br><small>$who</small></td><td><code>${escape(process.launcher)} ${escape(process.pkg)}</code></td><td>$state</td><td>$figures$stderr</td><td><form method="post" action="/dashboard/mcp/hosted/restart">${csrf(actor)}<input type="hidden" name="variantId" value="${escape(process.assignment.variantId)}">$memberField<button>Restart</button></form></td></tr>"""
+    }
+    val host = if (processes.hostReachable) "<p>MCP host ${escape(processes.hostVersion.orEmpty())} reachable. States refresh about once a minute; figures are live.</p>"
+        else "<div class='notice warn'><strong>The MCP host did not answer.</strong> States below are the last ones recorded; live figures and stderr are unavailable.</div>"
+    return """<h2 id="hosted">Hosted commands</h2>$host<table><thead><tr><th>Server</th><th>Command</th><th>State</th><th>Process</th><th></th></tr></thead><tbody>$rows</tbody></table>${if (processes.processes.isEmpty()) "<div class='empty'><strong>No hosted command is assigned yet.</strong></div>" else ""}"""
+}
+
 /** Administrator tool policies, usage and the call journal. */
-internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantService?, publicOrigin: String) {
+internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantService?, publicOrigin: String, hosted: HostedMcpAdministration? = null) {
     val origin = publicOrigin.trimEnd('/')
     fun ApplicationCall.days() = request.queryParameters["days"]?.let { it.toIntOrNull() ?: 0 } ?: 7
     fun ApplicationCall.before(): Long? {
@@ -141,9 +166,21 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
         call.respond(McpCallPageView(page.calls.map { it.view() }, page.nextBeforeId))
     }
 
+    post("/dashboard/mcp/hosted/restart") {
+        val service = hosted ?: throw TeamFailure("mcp_disabled", 409, "No MCP host is configured on this server (Helm: mcp.enabled).")
+        val input = call.form(origin)
+        service.restart(call.principal, input["variantId"].orEmpty(), input["memberId"]?.takeIf { it.isNotEmpty() })
+        call.respondRedirect("/dashboard/mcp#hosted")
+    }
+
     get("/dashboard/mcp") {
         val actor = call.principal
         actor.requireAdmin()
+        // The rest of the page stays usable when the hosted processes cannot be listed (more than the page shows).
+        val hostedSection = hosted?.let {
+            try { hostedSection(it.processes(actor), actor) }
+            catch (failure: TeamFailure) { if (failure.status == 403 || failure.status == 401) throw failure else """<h2 id="hosted">Hosted commands</h2><div class='notice warn'>${escape(failure.message.orEmpty())}</div>""" }
+        }.orEmpty()
         val usage = access.usage(actor, call.days())
         val page = access.calls(actor, call.before())
         val servers = variants?.list(actor).orEmpty().filter { it.kind == VariantKind.MCP }
@@ -160,6 +197,7 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
         }
         val older = page.nextBeforeId?.let { """<a href="/dashboard/mcp?before=$it">Older calls</a>""" } ?: ""
         call.respondText(call.page("MCP gateway", """<details class='help'><summary>How this works</summary><p>Agents reach each assigned MCP server on its own endpoint, <code>$MCP_PATH/&lt;server&gt;</code>. Discovery and every call are checked against current assignments and tool policies; credentials stay on the server. The journal keeps metadata only: never arguments or results.</p></details>
+$hostedSection
 <h2>Tool policies</h2><table><thead><tr><th>MCP variant</th><th>Exposed tools</th><th>Change</th></tr></thead><tbody>$policyRows</tbody></table>${if (servers.isEmpty()) "<div class='empty'><strong>No MCP variants yet. Create them on the variants page.</strong></div>" else ""}
 <h2>Usage, last ${call.days()} days</h2><table><thead><tr><th>Member</th><th>Server</th><th>Calls</th><th>Lists</th><th>Errors</th><th>Denied</th><th>Bytes</th><th>Average</th></tr></thead><tbody>$usageRows</tbody></table>${if (usage.isEmpty()) "<div class='empty'><strong>No MCP traffic in this period.</strong></div>" else ""}
 <h2>Recent operations</h2><p><a href="/dashboard/mcp">Latest</a> $older</p><table><thead><tr><th>Call / UTC</th><th>Member ID</th><th>Server</th><th>Operation</th><th>Outcome</th><th>ms</th></tr></thead><tbody>$callRows</tbody></table>${if (page.calls.isEmpty()) "<div class='empty'><strong>No MCP operation recorded yet.</strong></div>" else ""}"""), ContentType.Text.Html)
@@ -171,3 +209,6 @@ internal fun Route.mcpAdminRoutes(access: McpAccessStore, variants: VariantServi
         call.respondRedirect("/dashboard/mcp")
     }
 }
+
+/** The stderr shown per hosted process on the dashboard: its last 4 KiB. */
+private const val STDERR_SHOWN_CHARS = 4_096

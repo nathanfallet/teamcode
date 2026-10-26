@@ -112,14 +112,15 @@ class HostedMcpAcceptanceTest {
                 testApplication {
                     fun gateway(database: Database, host: HostMcpUpstream) = McpGateway(
                         ResolveEffectiveVariantsUseCase(SqlVariantService(database, cipher), hostedCommands = true), SqlMcpAccessStore(database),
-                        TransportMcpUpstream(HttpMcpUpstream(createClient { followRedirects = false }), host), McpLimits())
+                        TransportMcpUpstream(HttpMcpUpstream(createClient { followRedirects = false }), host), McpLimits(), hostedStates = SqlHostedProcessStateStore(database))
                     val gatewayA = gateway(a, upstreamA)
                     val gatewayB = gateway(b, upstreamB)
                     val inference = object : GatewayService {
                         override suspend fun status() = GatewaySnapshot("test", 0, 0)
                         override suspend fun forward(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit) = error("unused")
                     }
-                    application { configureGateway(inference, team = team, publicOrigin = "http://localhost", variants = SqlVariantService(a, cipher), mcp = gatewayA, mcpAccess = SqlMcpAccessStore(a)) }
+                    application { configureGateway(inference, team = team, publicOrigin = "http://localhost", variants = SqlVariantService(a, cipher), mcp = gatewayA, mcpAccess = SqlMcpAccessStore(a),
+                        hostedMcp = HostedMcpAdministration(SqlVariantService(a, cipher), SqlHostedProcessStateStore(a), upstreamA, SqlVariantService(a, cipher))) }
                     val bodies = mutableListOf<String>()
                     var nextId = 1
                     suspend fun rpc(token: String, server: String, method: String, params: JsonObject? = null): Pair<HttpStatusCode, JsonObject?> {
@@ -188,7 +189,7 @@ class HostedMcpAcceptanceTest {
                     adminVariants.unassign(admin, bob.principal.member.id, VariantTarget(VariantKind.MCP, "personal"))
                     assertTrue(invoke(bob.token, "personal", "echo").denied())
                     val retain = RetainHostedMcpProcessesUseCase(SqlVariantService(b, cipher), upstreamB)
-                    assertEquals(1, retain())
+                    assertEquals(1, (retain() as HostedMcpSweep.Done).stopped)
                     eventually("the retain sweep stopped bob's process") { host.supervisor.status().processes.none { it.key == bobKey } }
                     assertEquals(2, host.supervisor.status().processes.size, "alice's two processes stay")
 
@@ -196,8 +197,8 @@ class HostedMcpAcceptanceTest {
                     val rotated = adminVariants.update(admin, shared.id, VariantUpdate(shared.version, "team", shared.config, StdioEnvironment.encode(mapOf("FIXTURE_SECRET" to rotatedSecret))))
                     val afterRotation = invoke(alice.token, "everything", "stats").stats()
                     assertNotEquals(aliceShared["pid"], afterRotation["pid"])
-                    assertEquals(1, retain())
-                    assertEquals(0, retain())
+                    assertEquals(1, (retain() as HostedMcpSweep.Done).stopped)
+                    assertEquals(0, (retain() as HostedMcpSweep.Done).stopped)
                     assertEquals(2, rotated.version)
 
                     // The host goes away: calls fail as tool errors, lists are empty; once it is back, the next list starts the process again.
@@ -209,6 +210,37 @@ class HostedMcpAcceptanceTest {
                     host = RunningHost(root, host.port)
                     assertEquals(listOf("echo", "env", "secret", "stats"), tools(alice.token, "everything"))
                     assertNotEquals(afterRotation["pid"], invoke(alice.token, "everything", "stats").stats()["pid"])
+
+                    // State: a command that cannot start is recorded as failed by the sweep, with one mcp.stdio.failed event.
+                    val broken = adminVariants.create(admin, NewVariant(VariantKind.MCP, "broken", "team", VariantBinding.SHARED, null,
+                        mapOf("FIXTURE_MODE" to "exit-at-start"), StdioEnvironment.encode(mapOf("FIXTURE_SECRET" to sharedSecret)), McpTransport.STDIO,
+                        StdioCommand(StdioLauncher.NPM, "fixture@1.0.0", listOf("--token", "\${FIXTURE_SECRET}"))))
+                    adminVariants.assign(admin, alice.principal.member.id, broken.id)
+                    assertEquals(emptyList(), tools(alice.token, "broken"), "A command that does not start lists no tool")
+                    val sweep = RetainHostedMcpProcessesUseCase(SqlVariantService(b, cipher), upstreamB, SqlHostedProcessStateStore(b))
+                    assertTrue((sweep() as HostedMcpSweep.Done).changed >= 2)
+                    val listed = Json.parseToJsonElement(client.get("/api/v1/mcp/servers") { bearerAuth(alice.token) }.bodyAsText().also { bodies += it }).jsonArray
+                        .associate { it.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject }
+                    assertEquals(listOf("stdio", "failed", "start_failed"), listOf("transport", "state", "failure").map { listed.getValue("broken")[it]!!.jsonPrimitive.content })
+                    assertEquals("ready", listed.getValue("everything")["state"]!!.jsonPrimitive.content)
+                    val events = SqlTeamEventStore(a).read("default", TeamEventAudience(admin.member.id, true, true, true, true), 0, setOf(TeamEventType.MCP_STDIO_FAILED), 100).events
+                    assertEquals(listOf(broken.id), events.map { it.subjectId })
+                    assertTrue(events.single().data.contains("\"server\":\"broken\"") && events.single().data.contains("start_failed"), events.single().data)
+                    // Reading the list warmed processes meanwhile; once they settle, a sweep writes nothing and the failure is not reported twice.
+                    eventually("the states settled") { (sweep() as HostedMcpSweep.Done).changed == 0 }
+                    assertEquals(1, SqlTeamEventStore(a).read("default", TeamEventAudience(admin.member.id, true, true, true, true), 0, setOf(TeamEventType.MCP_STDIO_FAILED), 100).events.size)
+                    // The dashboard shows each hosted process, its state and stderr, and restarts one.
+                    val page = client.get("/dashboard/mcp") { header(HttpHeaders.Cookie, "teamcode_session=${adminSession.token}") }.bodyAsText().also { bodies += it }
+                    assertTrue(page.contains("Hosted commands") && page.contains("start_failed") && page.contains("Restart") && page.contains("shared by the team"), page)
+                    assertTrue(page.contains("member <strong>alice</strong>"), "A PER_MEMBER process names its member")
+                    assertEquals(HttpStatusCode.Forbidden, client.get("/dashboard/mcp") { header(HttpHeaders.Cookie, "teamcode_session=${alice.token}") }.status)
+                    val restart = client.post("/dashboard/mcp/hosted/restart") {
+                        header(HttpHeaders.Cookie, "teamcode_session=${adminSession.token}"); header(HttpHeaders.Origin, "http://localhost")
+                        contentType(ContentType.Application.FormUrlEncoded); setBody("csrf=${admin.tokenId}&variantId=${broken.id}")
+                    }
+                    assertEquals(HttpStatusCode.Found, restart.status)
+                    assertEquals("idle", host.supervisor.status().processes.single { it.key == StdioProcessKey.of("default", broken.id, broken.version, VariantBinding.SHARED, "", 0) }.state,
+                        "The restart lifted the failed start")
 
                     // No secret in any answer; the journal records the outcomes, metadata only.
                     for (body in bodies) for (secret in listOf(sharedSecret, aliceSecret, bobSecret, rotatedSecret, hostToken)) assertFalse(body.contains(secret), body)

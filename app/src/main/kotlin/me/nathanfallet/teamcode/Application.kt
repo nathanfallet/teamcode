@@ -187,23 +187,36 @@ fun main() {
         engine { dnsResolver = PinnedDns.resolver(me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService::publicAddress) }
         install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = maxOf(mcpLimits.callTimeoutMillis, mcpLimits.listTimeoutMillis) + 5_000 }
     }
+    // The states the sweep records for hosted processes, read by GET /api/v1/mcp/servers and the dashboard.
+    val hostedStates = if (mcpHost != null) database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlHostedProcessStateStore(it) } else null
+    val hostedMcp = if (variants != null && mcpHost != null && hostedStates != null) me.nathanfallet.teamcode.domain.mcp.HostedMcpAdministration(variants, hostedStates, mcpHost, variants) else null
     val mcp = mcpAccess?.let {
         me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!, hostedCommands = mcpHost != null), it,
             me.nathanfallet.teamcode.infrastructure.mcp.TransportMcpUpstream(
                 me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpHost),
-            mcpLimits)
+            mcpLimits, hostedStates = hostedStates)
     }
     if (variants != null && mcpHost != null) {
         // The retain sweep: one replica a minute tells the host which processes are still assigned (docs/mcp.md).
         val work = SqlScheduledWork(database!!)
-        val retain = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase(variants, mcpHost)
+        val retain = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase(variants, mcpHost, hostedStates)
         workers.launch {
             while (isActive) {
-                try { work.runDue("mcp/retain", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.INTERVAL_MILLIS, timeoutMillis = 30_000) {
-                    when (val stopped = retain()) {
-                        null -> System.err.println("TeamCode MCP host retain sweep skipped: more than ${me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.MAX_ASSIGNMENTS} hosted assignments, no process is stopped.")
-                        0 -> Unit
-                        else -> println("TeamCode MCP host retain sweep stopped $stopped unassigned process(es).")
+                try { work.runDue("mcp/retain", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.INTERVAL_MILLIS, timeoutMillis = 60_000) {
+                    when (val sweep = retain()) {
+                        me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.TooMany -> System.err.println("TeamCode MCP host retain sweep skipped: more than ${me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.MAX_ASSIGNMENTS} hosted assignments, no process is stopped.")
+                        is me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.HostUnavailable -> {
+                            System.err.println(if (sweep.reason == me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.REFUSED) "TeamCode MCP host retain sweep: the MCP host refused the request; deploy the server and its MCP host at the same version, with the same token."
+                                else "TeamCode MCP host retain sweep: the MCP host did not answer.")
+                            // mcp.unreachable at most once every ten minutes, whichever replica sees it.
+                            if (hostedStates != null && sweep.teamIds.isNotEmpty()) work.runDue("mcp/unreachable", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.UNREACHABLE_INTERVAL_MILLIS, timeoutMillis = 15_000) {
+                                hostedStates.publishUnreachable(sweep.teamIds, sweep.reason)
+                            }
+                        }
+                        is me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.Done -> {
+                            if (sweep.stopped > 0) println("TeamCode MCP host retain sweep stopped ${sweep.stopped} unassigned process(es).")
+                            if (sweep.changed > 0) println("TeamCode MCP host state sweep recorded ${sweep.changed} state change(s).")
+                        }
                     }
                 } }
                 catch (_: TimeoutCancellationException) { System.err.println("TeamCode MCP host retain sweep deadline exceeded.") }
@@ -254,7 +267,7 @@ fun main() {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess, hostedMcp = hostedMcp,
             cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
             apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons, trustedProxies = trustedProxies) }.start(wait = true)
     } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); mcpHost?.close(); mcpHostHttp?.close(); webhookSender?.close(); artifactHttp.close(); database?.close() }
