@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +88,11 @@ import me.nathanfallet.teamcode.companion.resources.subscriptions_row_hint
 import me.nathanfallet.teamcode.companion.resources.subscriptions_section
 import me.nathanfallet.teamcode.companion.resources.subscriptions_title
 import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
+import me.nathanfallet.teamcode.companion.domain.usecases.mcp.McpServersAvailabilityUseCase
+import me.nathanfallet.teamcode.companion.resources.mcp_row_hint
+import me.nathanfallet.teamcode.companion.resources.mcp_title
 
 /** The Account tab: the active account, the others, this device's name, the theme, versions. */
 @Composable
@@ -97,6 +102,7 @@ fun AccountScreen(
     onSwitchAccount: () -> Unit,
     onOpenSubscriptions: (Account) -> Unit = {},
     onOpenGitHub: (Account) -> Unit = {},
+    onOpenMcp: (Account) -> Unit = {},
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -171,6 +177,8 @@ fun AccountScreen(
                 }
             }
 
+            active?.takeIf { it.signedIn }?.let { account -> McpServersEntry(account, onOpenMcp) }
+
             Section(stringResource(Res.string.account_other)) {
                 Group {
                     val others = state.accounts.filter { it.id != state.activeAccountId }
@@ -226,6 +234,26 @@ fun AccountScreen(
                     GroupDivider()
                     GroupRow { Text(stringResource(Res.string.settings_license), color = colors.muted, fontSize = 12.5.sp) }
                 }
+            }
+        }
+    }
+}
+
+/** The way to the MCP servers screen, only on a server that announces `mcp.gateway.v1`. */
+@Composable
+private fun McpServersEntry(account: Account, onOpen: (Account) -> Unit) {
+    val availability: McpServersAvailabilityUseCase = koinInject()
+    val offered by produceState(false, account.id, account.signedIn) { value = availability.available(account.id) }
+    if (!offered) return
+    val colors = TeamCode.colors
+    Section(stringResource(Res.string.mcp_title)) {
+        Group {
+            GroupRow(Modifier.testTag("mcp-servers"), onClick = { onOpen(account) }) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(Res.string.mcp_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text(stringResource(Res.string.mcp_row_hint), color = colors.muted, fontSize = 12.5.sp)
+                }
+                Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
             }
         }
     }

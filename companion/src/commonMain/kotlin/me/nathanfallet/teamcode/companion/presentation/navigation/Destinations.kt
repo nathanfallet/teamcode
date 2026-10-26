@@ -46,6 +46,10 @@ data class SubscriptionAccountsRoute(val accountId: String)
 @Serializable
 data class GitHubLinkRoute(val accountId: String)
 
+/** The MCP servers assigned to the member on an account's server, with their state (read-only). */
+@Serializable
+data class McpServersRoute(val accountId: String)
+
 /** The content panel of the wide layout: the active account's full session list, with its filters. */
 @Serializable
 object SessionsListRoute

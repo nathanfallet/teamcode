@@ -637,4 +637,22 @@
     <string name="subagents_duration_seconds">%1$d s</string>
     <string name="subagents_duration_minutes">%1$d min %2$d s</string>
     <string name="subagents_duration_hours">%1$d h %2$d min</string>
+    <string name="mcp_title">Serveurs MCP</string>
+    <string name="mcp_row_hint">Les serveurs MCP qui te sont attribués et leur état.</string>
+    <string name="mcp_refresh">Actualiser</string>
+    <string name="mcp_empty_title">Aucun serveur MCP</string>
+    <string name="mcp_empty_body">Aucun serveur MCP ne t'est attribué.</string>
+    <string name="mcp_type_stdio">Commande hébergée</string>
+    <string name="mcp_type_http">Distant (HTTPS)</string>
+    <string name="mcp_state_ready">Prêt</string>
+    <string name="mcp_state_starting">Démarrage</string>
+    <string name="mcp_state_idle">En veille, démarre au premier usage</string>
+    <string name="mcp_unavailable">Indisponible : %1$s</string>
+    <string name="mcp_reason_start_failed">ne démarre pas</string>
+    <string name="mcp_reason_stopped">arrêt inattendu</string>
+    <string name="mcp_reason_memory">limite de mémoire atteinte</string>
+    <string name="mcp_reason_backoff">redémarrages trop fréquents</string>
+    <string name="mcp_reason_capacity">hôte saturé</string>
+    <string name="mcp_reason_invalid_spec">définition invalide</string>
+    <string name="mcp_admin_note">Les administrateurs déclarent les serveurs MCP et voient leurs journaux dans le tableau de bord web.</string>
 </resources>

@@ -30,4 +30,6 @@ object Features {
     const val FILES = "cloud.files.v1"
     /** The member's GitHub link (`/github/link`), offered with cloud sessions and kept when they are off. */
     const val GITHUB_LINK = "github.link.v1"
+    /** The member's MCP servers (`GET /mcp/servers`), served through the server's MCP gateway. */
+    const val MCP_GATEWAY = "mcp.gateway.v1"
 }
