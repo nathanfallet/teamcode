@@ -72,11 +72,23 @@ class SqlVariantService(
      * assignments (`variant_assignment_variant`), and the disabled members of their teams (`member_recipients`), left
      * out so their processes stop. Not one join: MySQL would drive it from `members` and read every assignment.
      */
-    override suspend fun hostedMcpAssignments(limit: Int): List<HostedMcpAssignment>? = database.query {
-        val variants = Variants.select(Variants.id, Variants.teamId, Variants.version, Variants.binding)
-            .where { Variants.transport eq McpTransport.STDIO.wire }.limit(limit + 1).toList()
-        if (variants.size > limit) return@query null
-        if (variants.isEmpty()) return@query emptyList()
+    override suspend fun hostedMcpAssignments(limit: Int): List<HostedMcpAssignment>? = database.query { hostedAssignments(null, limit)?.map { it.first } }
+
+    override suspend fun teamHostedMcpAssignments(teamId: String, limit: Int): List<Pair<HostedMcpAssignment, String>> = database.query {
+        hostedAssignments(teamId, limit, usernames = true)
+            ?: throw TeamFailure("mcp_hosted_too_many", 409, "This team has more than $limit hosted MCP assignments; they cannot be listed at once.")
+    }
+
+    /**
+     * The hosted assignments resolution would serve, of every team or of [teamId], in three or four bounded, indexed reads;
+     * null when there are more than [limit]. With [usernames], each comes with its member's username (one more read).
+     */
+    private fun JdbcTransaction.hostedAssignments(teamId: String?, limit: Int, usernames: Boolean = false): List<Pair<HostedMcpAssignment, String>>? {
+        val variants = Variants.select(Variants.id, Variants.teamId, Variants.version, Variants.binding, Variants.target)
+            .where { if (teamId == null) Variants.transport eq McpTransport.STDIO.wire else (Variants.transport eq McpTransport.STDIO.wire) and (Variants.teamId eq teamId) }
+            .limit(limit + 1).toList()
+        if (variants.size > limit) return null
+        if (variants.isEmpty()) return emptyList()
         // The same eligibility as resolution: a PER_MEMBER assignment without the member's value is withheld, and so is
         // everything of a disabled member or one with a temporary password (written as two ranges of member_recipients).
         val shared = variants.filter { it[Variants.binding] == VariantBinding.SHARED.name }.map { it[Variants.id] }
@@ -85,16 +97,18 @@ class SqlVariantService(
                 (VariantAssignments.variantId inList variants.map { it[Variants.id] }) and
                     (if (shared.isEmpty()) VariantAssignments.memberSecret.isNotNull() else VariantAssignments.memberSecret.isNotNull() or (VariantAssignments.variantId inList shared))
             }.limit(limit + 1).toList()
-        if (rows.size > limit) return@query null
+        if (rows.size > limit) return null
         val disabled = Members.select(Members.id)
             .where { (Members.teamId inList variants.map { it[Variants.teamId] }.distinct()) and ((Members.disabled eq true) or ((Members.disabled eq false) and (Members.mustChangePassword eq true))) }
             .mapTo(HashSet()) { it[Members.id] }
+        val names = if (!usernames || rows.isEmpty()) emptyMap() else Members.select(Members.id, Members.username)
+            .where { Members.id inList rows.map { it[VariantAssignments.memberId] }.distinct() }.associate { it[Members.id] to it[Members.username] }
         val byId = variants.associateBy { it[Variants.id] }
-        rows.mapNotNull { row ->
+        return rows.mapNotNull { row ->
             val variant = byId.getValue(row[VariantAssignments.variantId])
             val binding = VariantBinding.entries.find { it.name == variant[Variants.binding] } ?: return@mapNotNull null
             row[VariantAssignments.memberId].takeIf { it !in disabled }?.let { member ->
-                HostedMcpAssignment(variant[Variants.teamId], variant[Variants.id], variant[Variants.version], binding, member, row[VariantAssignments.assignedAt])
+                HostedMcpAssignment(variant[Variants.teamId], variant[Variants.id], variant[Variants.version], binding, member, row[VariantAssignments.assignedAt], variant[Variants.target]) to names[member].orEmpty()
             }
         }
     }

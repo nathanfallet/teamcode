@@ -220,6 +220,13 @@ class VariantPersistenceTest {
                 assertEquals(setOf(shared.id, perMember.id), assignmentsOfHosted.map { it.variantId }.toSet())
                 assertEquals(hostedServers.values.mapNotNull { (it.transport as? McpServerTransport.Stdio)?.key }.toSet(), assignmentsOfHosted.map { it.key }.toSet())
                 assertNull(first.hostedMcpAssignments(1), "More than the limit: no list, so nothing is stopped")
+                assertEquals(setOf("tracker", "fetch"), assignmentsOfHosted.map { it.target }.toSet())
+                // The dashboard reads one team's, with usernames, in the same bounded reads.
+                val ofTeam = second.teamHostedMcpAssignments("default", 100)
+                assertEquals(assignmentsOfHosted.toSet(), ofTeam.map { it.first }.toSet())
+                assertEquals(setOf("alice"), ofTeam.map { it.second }.toSet())
+                assertEquals(emptyList(), second.teamHostedMcpAssignments("other-team", 100))
+                failure("mcp_hosted_too_many") { second.teamHostedMcpAssignments("default", 1) }
                 team.updateMember(admin, alice, Role.MEMBER, disabled = true)
                 assertEquals(emptyList(), first.hostedMcpAssignments(100), "A disabled member's processes stop at the next sweep")
                 team.updateMember(admin, alice, Role.MEMBER, disabled = false)

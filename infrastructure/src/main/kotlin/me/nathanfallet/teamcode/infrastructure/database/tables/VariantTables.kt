@@ -25,8 +25,9 @@ object Variants : Table("variants") {
     override val primaryKey = PrimaryKey(id)
     init {
         uniqueIndex("variant_team_slot_name", teamId, kind, target, name)
-        // The MCP host's retain sweep reads every hosted command (transport stdio) of the installation once a minute.
-        index("variant_transport", false, transport)
+        // The MCP host's retain sweep reads every hosted command (transport stdio) of the installation once a minute, and
+        // the dashboard one team's.
+        index("variant_transport_team", false, transport, teamId)
     }
 }
 

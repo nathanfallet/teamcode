@@ -110,7 +110,7 @@ class HostMcpUpstream(
         launcherCache?.let { (at, launchers) -> if (monotonicMillis() - at < LAUNCHERS_CACHE_MILLIS) return launchers }
         val status = try {
             withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) { get(HOST_STATUS, MAX_STATUS_BYTES) } ?: throw HostUnreachable()
-        } catch (error: CancellationException) { throw error } catch (refused: HostRefused) {
+        } catch (error: CancellationException) { throw error } catch (refused: McpHostRefused) {
             throw TeamFailure("mcp_host_unreachable", 503, "The MCP host refused this server's request (${refused.code}): deploy the TeamCode server and its MCP host at the same version, with the same token.")
         } catch (_: Exception) {
             throw TeamFailure("mcp_host_unreachable", 503, "The MCP host of this server could not be reached, so a hosted command cannot be declared right now. Retry shortly.")
@@ -126,8 +126,38 @@ class HostMcpUpstream(
         val answer = withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) {
             request(HOST_RETAIN, buildJsonObject { putJsonArray("keys") { keys.forEach { add(it) } } }, MAX_CONTROL_BYTES)
         } ?: throw HostUnreachable()
-        answer.error?.let { throw IllegalStateException("The MCP host refused the retain sweep (${it.first}).") }
+        answer.error?.let { throw McpHostRefused(it.first) }
         return (answer.body["stopped"] as? JsonPrimitive)?.intOrNull ?: 0
+    }
+
+    override suspend fun status(): HostStatusSnapshot {
+        val status = withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) { get(HOST_STATUS, MAX_STATUS_BYTES) } ?: throw HostUnreachable()
+        fun JsonObject.text(name: String) = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        fun JsonObject.long(name: String) = (this[name] as? JsonPrimitive)?.longOrNull
+        fun JsonObject.int(name: String) = (this[name] as? JsonPrimitive)?.intOrNull
+        val processes = (status["processes"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val process = element as? JsonObject ?: return@mapNotNull null
+            val key = process.text("key")?.takeIf { KEY.matches(it) } ?: return@mapNotNull null
+            HostedProcessStatus(
+                key = key, state = process.text("state")?.takeIf { CODE.matches(it) } ?: "unknown",
+                launcher = process.text("launcher").orEmpty().take(16), pkg = process.text("package").orEmpty().take(256),
+                pid = process.long("pid"), startedAt = process.long("startedAt"), lastUsedAt = process.long("lastUsedAt"),
+                inFlight = process.int("inFlight") ?: 0, starts = process.int("starts") ?: 0, failures = process.int("failures") ?: 0,
+                lastExitCode = process.int("lastExitCode"), lastFailure = process.text("lastFailure")?.takeIf { CODE.matches(it) },
+                coldStartMillis = process.long("coldStartMillis"), rssBytes = process.long("rssBytes"), backoffUntil = process.long("backoffUntil"),
+                stderr = process.text("stderr").orEmpty().takeLast(MAX_STDERR_CHARS),
+            )
+        }
+        return HostStatusSnapshot(status.text("version").orEmpty().take(64), processes)
+    }
+
+    override suspend fun stop(key: String): Boolean {
+        val answer = try {
+            withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) { request(HOST_STOP, buildJsonObject { put("key", key) }, MAX_CONTROL_BYTES) }
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+            ?: throw TeamFailure("mcp_host_unreachable", 503, "The MCP host of this server could not be reached. Retry shortly.")
+        answer.error?.let { throw TeamFailure("mcp_host_unreachable", 503, "The MCP host refused the restart (${it.first}).") }
+        return (answer.body["stopped"] as? JsonPrimitive)?.booleanOrNull ?: false
     }
 
     override fun close() { background.cancel() }
@@ -200,7 +230,7 @@ class HostMcpUpstream(
 
     private suspend fun get(path: String, maxBytes: Long): JsonObject {
         val answer = http.prepareGet(base + path) { headers() }.answer(maxBytes)
-        answer.error?.let { throw HostRefused(it.first) }
+        answer.error?.let { throw McpHostRefused(it.first) }
         return answer.body
     }
 
@@ -227,7 +257,6 @@ class HostMcpUpstream(
 
     private class TooLarge : Exception()
     private class HostUnreachable : Exception()
-    private class HostRefused(val code: String) : Exception(code)
     /** A refusal without the host's JSON error, from a proxy or load balancer in between. */
     private class NotFromHost(val status: Int) : Exception()
     /** A failure after which a `tools/list` is worth one more attempt; a call reports [failure] as is. */
@@ -256,6 +285,10 @@ class HostMcpUpstream(
         private const val HOST_WARM = "/v1/warm"
         private const val HOST_RETAIN = "/v1/retain"
         private const val HOST_STATUS = "/v1/status"
+        private const val HOST_STOP = "/v1/stop"
+        /** The host keeps 64 KiB of stderr per process. */
+        private const val MAX_STDERR_CHARS = 64 * 1024
+        private val KEY = Regex("[0-9a-f]{64}")
         private const val HOST_MARGIN_MILLIS = 5_000L
         private const val MIN_RETRY_MILLIS = 2_000L
         private const val CONTROL_TIMEOUT_MILLIS = 15_000L

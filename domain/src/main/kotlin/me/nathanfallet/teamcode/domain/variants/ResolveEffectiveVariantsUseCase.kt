@@ -9,9 +9,10 @@ sealed interface McpServerTransport {
     data class Http(val endpoint: String) : McpServerTransport
     /**
      * A hosted command, run by the server's MCP host. [key] names its process there ([StdioProcessKey]); [declaredAt] is
-     * the variant's creation time, the date its dependencies are resolved at.
+     * the variant's creation time, the date its dependencies are resolved at. [processMemberId] is the member whose
+     * process it is: empty for a SHARED variant, whose process the team shares.
      */
-    data class Stdio(val command: StdioCommand, val declaredAt: Long, val key: String) : McpServerTransport
+    data class Stdio(val command: StdioCommand, val declaredAt: Long, val key: String, val processMemberId: String = "") : McpServerTransport
 }
 
 /**
@@ -116,7 +117,8 @@ class ResolveEffectiveVariantsUseCase(
                     val command = variant.command
                     if (!hostedCommands || command == null || (value != null && StdioEnvironment.decodeOrNull(value) == null)) unavailable += candidate.target
                     else servers += EffectiveMcpServer(candidate.target.name, variant.id, variant.name, variant.version, candidate.assignedAt,
-                        McpServerTransport.Stdio(command, variant.createdAt, StdioProcessKey.of(teamId, variant.id, variant.version, variant.binding, memberId, candidate.assignedAt)),
+                        McpServerTransport.Stdio(command, variant.createdAt, StdioProcessKey.of(teamId, variant.id, variant.version, variant.binding, memberId, candidate.assignedAt),
+                            if (variant.binding == VariantBinding.SHARED) "" else memberId),
                         variant.config, value)
                 }
             }

@@ -3,8 +3,11 @@ package me.nathanfallet.teamcode.domain.team
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 
-/** What an event is about; decides which of the caller's rights applies to it. */
-enum class TeamEventSubject(val wire: String) { SESSION("session"), RUN("run") }
+/**
+ * What an event is about; decides which of the caller's rights applies to it. [MCP] events (hosted MCP servers) follow
+ * the rules of runs: the member's own process, or the whole team for whoever reads the team's runs.
+ */
+enum class TeamEventSubject(val wire: String) { SESSION("session"), RUN("run"), MCP("mcp") }
 
 /**
  * The types of the caller-wide feed. A new kind of event is one entry here and
@@ -37,7 +40,16 @@ enum class TeamEventType(val wire: String, val subject: TeamEventSubject) {
     RUN_STARTED("run.started", TeamEventSubject.RUN),
     /** No heartbeat for [AgentRunService.HEARTBEAT_TTL_MILLIS]; a later heartbeat and another silence emit it again. */
     RUN_STALE("run.stale", TeamEventSubject.RUN),
-    RUN_ENDED("run.ended", TeamEventSubject.RUN);
+    RUN_ENDED("run.ended", TeamEventSubject.RUN),
+    /**
+     * A hosted MCP server (transport stdio) started failing: `{server, variantId, memberId?, state, failure}`. Owned by the
+     * member for a PER_MEMBER process, by nobody (team readers only) for a SHARED one. Once per failure streak.
+     */
+    MCP_STDIO_FAILED("mcp.stdio.failed", TeamEventSubject.MCP),
+    /** The hosted MCP server is ready again after a failure: `{server, variantId, memberId?, state, failure}` (the failure it recovered from). */
+    MCP_STDIO_RECOVERED("mcp.stdio.recovered", TeamEventSubject.MCP),
+    /** The MCP host could not be reached while the team has hosted servers: `{}`. At most one every ten minutes. */
+    MCP_UNREACHABLE("mcp.unreachable", TeamEventSubject.MCP);
 
     companion object {
         fun parse(wire: String) = entries.singleOrNull { it.wire == wire }

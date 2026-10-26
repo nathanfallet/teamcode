@@ -208,8 +208,41 @@ class HostMcpUpstreamTest {
         val starting = upstream(Host { _, _ -> asked++; json("""{"version":"1","protocol":"1","launchers":[],"maxProcesses":16,"draining":false,"processes":[]}""") })
         assertEquals(emptySet(), starting.launchers()); assertEquals(emptySet(), starting.launchers())
         assertEquals(2, asked, "An empty launcher list is not cached")
-        assertFailsWith<IllegalStateException> { refusing.retain(listOf(key)) }
+        assertEquals("unauthorized", assertFailsWith<McpHostRefused> { refusing.retain(listOf(key)) }.code, "The sweep tells a refusal from an outage")
+        assertEquals("unauthorized", assertFailsWith<McpHostRefused> { refusing.status() }.code)
         Unit
+    }
+
+    @Test fun theStatusIsReadDefensivelyAndARestartStopsOneKey() = runBlocking {
+        val other = "b".repeat(64)
+        val host = Host { path, body ->
+            when (path) {
+                "/v1/status" -> json("""{"version":"1.2.3","protocol":"1","launchers":["npm"],"maxProcesses":16,"draining":false,"processes":[
+                    {"key":"$key","state":"backoff","launcher":"npm","package":"fixture@1.0.0","starts":4,"failures":4,"lastFailure":"crashed","lastExitCode":1,"coldStartMillis":812,"rssBytes":1048576,"backoffUntil":99,"stderr":"line\n"},
+                    {"key":"$other","state":"Not A State!","launcher":"pypi","package":"x==1","lastFailure":"<script>"},
+                    {"key":"not-a-key","state":"ready"},
+                    "not an object"]}""")
+                "/v1/stop" -> if (body!!["key"]!!.jsonPrimitive.content == key) json("""{"stopped":true}""") else json("""{"stopped":false}""")
+                else -> error(path)
+            }
+        }
+        val upstream = upstream(host)
+        val status = upstream.status()
+        assertEquals("1.2.3", status.version)
+        assertEquals(listOf(key, other), status.processes.map { it.key }, "A key that is not a process key is dropped")
+        val first = status.byKey.getValue(key)
+        assertEquals(listOf("backoff", "crashed", "line\n"), listOf(first.state, first.lastFailure, first.stderr))
+        assertEquals(listOf(4L, 4L, 1L, 812L, 1_048_576L, 99L), listOf(first.starts.toLong(), first.failures.toLong(), first.lastExitCode!!.toLong(), first.coldStartMillis!!, first.rssBytes!!, first.backoffUntil!!))
+        assertEquals("unknown" to null, status.byKey.getValue(other).let { it.state to it.lastFailure }, "Labels outside the code alphabet are not passed on")
+        assertTrue(upstream.stop(key))
+        assertFalse(upstream.stop(other))
+        assertEquals(buildJsonObject { put("key", key) }, host.requests.first { it.first == "/v1/stop" }.second)
+
+        val down = upstream(Host { _, _ -> throw IOException("refused") })
+        assertFails { down.status() }
+        assertEquals("mcp_host_unreachable", assertFailsWith<TeamFailure> { down.stop(key) }.code)
+        val refusing = upstream(Host { _, _ -> json("""{"error":{"code":"unauthorized","message":"no"}}""", HttpStatusCode.Unauthorized) })
+        assertEquals(503, assertFailsWith<TeamFailure> { refusing.stop(key) }.status)
     }
 
     @Test fun theTransportRouterSendsEachServerToItsOwnUpstream() = runBlocking {
