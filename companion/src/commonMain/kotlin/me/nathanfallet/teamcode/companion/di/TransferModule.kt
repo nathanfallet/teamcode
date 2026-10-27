@@ -15,7 +15,7 @@ import org.koin.dsl.module
 
 /** Session transfers (`cloud.transfer.v1`): the repository, its use cases and the two view models. */
 val transferModule = module {
-    single<TransferRepository> { RemoteTransferRepository(get()) }
+    single { RemoteTransferRepository(get()) }
     single { TransferAvailabilityUseCase(get(), get()) }
     single { LoadRecipientsUseCase(get(), get(), get(), get()) }
     single { TransferSessionUseCase(get(), get(), get(), get()) }

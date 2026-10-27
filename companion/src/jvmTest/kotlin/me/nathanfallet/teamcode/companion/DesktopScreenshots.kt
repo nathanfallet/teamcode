@@ -112,7 +112,7 @@ class DesktopScreenshots {
                     scene(size.first, size.second, theme) {
                         onAllNodesWithTag("sidebar-all-artifacts").onFirst().performSemanticsAction(SemanticsActions.OnClick)
                         mainClock.advanceTimeBy(1_000); waitForIdle()
-                        onAllNodesWithTag("artifact-r1").onFirst().performMouseInput { rightClick(Offset(260f, 40f)) }
+                        onAllNodesWithTag("artifact-${me.nathanfallet.teamcode.companion.demo.DemoContent.artifactId(1)}").onFirst().performMouseInput { rightClick(Offset(260f, 40f)) }
                         mainClock.advanceTimeBy(1_000); waitForIdle()
                         shot(output, "$name-5-card-menu")
                     }

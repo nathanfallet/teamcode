@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.companion.presentation.viewmodels
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import me.nathanfallet.teamcode.companion.demo.StartDemoUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,19 +23,29 @@ data class AddServerUiState(
     /** True when no account (signed in or not) uses this origin yet: the screen says it is a new server. */
     val newServer: Boolean = true,
     val error: Failure? = null,
+    /** "Try the demo" is offered: there is no account on this device yet. */
+    val demoOffered: Boolean = false,
 )
 
 class AddServerViewModel(
     private val inspect: InspectServerUseCase,
     private val accounts: AccountRepository,
+    private val startDemo: StartDemoUseCase,
 ) : ViewModel() {
-    private val state = MutableStateFlow(AddServerUiState())
+    private val state = MutableStateFlow(AddServerUiState(demoOffered = startDemo.offered))
     val uiState: StateFlow<AddServerUiState> = state.asStateFlow()
     private var check: Job? = null
 
     fun onOriginChange(value: String) {
         check?.cancel()
-        state.value = AddServerUiState(origin = value)
+        state.value = AddServerUiState(origin = value, demoOffered = state.value.demoOffered)
+    }
+
+    /** Opens the built-in demo: its account appears, and the app leaves the sign-in screens for it. */
+    fun tryDemo() {
+        if (!startDemo.offered) return
+        check?.cancel()
+        startDemo()
     }
 
     fun check() {

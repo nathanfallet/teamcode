@@ -656,4 +656,12 @@
     <string name="mcp_reason_capacity">hôte saturé</string>
     <string name="mcp_reason_invalid_spec">définition invalide</string>
     <string name="mcp_admin_note">Les administrateurs déclarent les serveurs MCP et voient leurs journaux dans le tableau de bord web.</string>
+    <string name="demo_try">Essayer la démo</string>
+    <string name="demo_try_hint">Pas encore de serveur ? Explore l'app avec des sessions d'exemple, hors ligne.</string>
+    <string name="demo_banner_title">Tu essaies la démo</string>
+    <string name="demo_banner_detail">Données d'exemple, sans serveur ni IA. Mets une étoile à TeamCode sur GitHub et déploie ton propre serveur.</string>
+    <string name="demo_github">GitHub</string>
+    <string name="demo_settings_section">Démo</string>
+    <string name="demo_settings_title">TeamCode sur GitHub</string>
+    <string name="demo_settings_hint">Mets une étoile au projet et déploie ton propre serveur.</string>
 </resources>

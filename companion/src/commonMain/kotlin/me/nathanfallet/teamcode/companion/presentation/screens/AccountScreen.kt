@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,7 +34,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.ArrowSquareOut
 import com.adamglin.phosphoricons.regular.CaretRight
+import com.adamglin.phosphoricons.regular.GithubLogo
 import com.adamglin.phosphoricons.regular.Plus
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.ThemePreference
@@ -58,7 +61,12 @@ import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.MonospaceStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
+import me.nathanfallet.teamcode.companion.demo.isDemo
+import me.nathanfallet.teamcode.companion.presentation.components.openRepository
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.demo_settings_hint
+import me.nathanfallet.teamcode.companion.resources.demo_settings_section
+import me.nathanfallet.teamcode.companion.resources.demo_settings_title
 import me.nathanfallet.teamcode.companion.resources.account_other
 import me.nathanfallet.teamcode.companion.resources.account_signed_in
 import me.nathanfallet.teamcode.companion.resources.account_title
@@ -117,6 +125,23 @@ fun AccountScreen(
             state.message?.let { Banner(it.words(), Tone.NEUTRAL, Modifier.testTag("message"), icon = null) }
             if (!state.persistentCredentials) Banner(stringResource(Res.string.settings_no_keyring), Tone.WARN)
             BusyRow(state.working)
+
+            // The demo's way out to the real thing: the project on GitHub, to star it and deploy a server.
+            active?.takeIf { it.isDemo }?.let {
+                val browser = LocalUriHandler.current
+                Section(stringResource(Res.string.demo_settings_section)) {
+                    Group {
+                        GroupRow(Modifier.testTag("demo-repository"), onClick = { openRepository(browser) }) {
+                            Icon(PhosphorIcons.Regular.GithubLogo, contentDescription = null, tint = colors.accentText, modifier = Modifier.size(20.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(stringResource(Res.string.demo_settings_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(stringResource(Res.string.demo_settings_hint), color = colors.muted, fontSize = 12.5.sp)
+                            }
+                            Icon(PhosphorIcons.Regular.ArrowSquareOut, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
 
             active?.let { account ->
                 Section(stringResource(Res.string.account_signed_in)) {
