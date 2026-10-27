@@ -12,7 +12,7 @@ import org.koin.dsl.module
 
 /** Subscription accounts: the pool of an account's server and adding one (`teamcode accounts add` in the app). */
 val subscriptionModule = module {
-    single<SubscriptionAccountRepository> { RemoteSubscriptionAccountRepository(get(), get(), get(), get()) }
+    single { RemoteSubscriptionAccountRepository(get(), get(), get(), get()) }
     single { LoadSubscriptionAccountsUseCase(get(), get(), get()) }
     single { StartSubscriptionSignInUseCase(get(), get()) }
     single { CompleteSubscriptionSignInUseCase(get()) }

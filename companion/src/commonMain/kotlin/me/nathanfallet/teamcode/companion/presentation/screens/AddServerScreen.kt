@@ -34,6 +34,7 @@ import com.adamglin.phosphoricons.regular.Check
 import me.nathanfallet.teamcode.companion.presentation.components.BackLink
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BrandGlyph
+import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.FormPage
 import me.nathanfallet.teamcode.companion.presentation.components.IconTile
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
@@ -53,6 +54,8 @@ import me.nathanfallet.teamcode.companion.resources.add_server_new_warning
 import me.nathanfallet.teamcode.companion.resources.add_server_origin
 import me.nathanfallet.teamcode.companion.resources.add_server_title
 import me.nathanfallet.teamcode.companion.resources.app_name
+import me.nathanfallet.teamcode.companion.resources.demo_try
+import me.nathanfallet.teamcode.companion.resources.demo_try_hint
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -70,6 +73,11 @@ fun AddServerScreen(
             TcButton(stringResource(Res.string.add_server_check), onClick = viewModel::check, enabled = state.origin.isNotBlank(), busy = state.checking, modifier = Modifier.testTag("check"))
         } else {
             TcButton(stringResource(Res.string.action_continue), onClick = { onContinue(server.origin) }, modifier = Modifier.testTag("continue"))
+        }
+        // Only before any account: the demo runs alone, never beside a real account.
+        if (state.demoOffered) {
+            Text(stringResource(Res.string.demo_try_hint), color = TeamCode.colors.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+            TcButton(stringResource(Res.string.demo_try), onClick = viewModel::tryDemo, kind = ButtonKind.SECONDARY, modifier = Modifier.testTag("try-demo"))
         }
     }) {
         if (canGoBack) BackLink(stringResource(Res.string.action_back), onBack, Modifier.padding(start = 0.dp))

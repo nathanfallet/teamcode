@@ -13,7 +13,7 @@ import org.koin.dsl.module
 
 /** The member's GitHub link: which account is linked and linking one (`teamcode github link` in the app). */
 val githubModule = module {
-    single<GitHubLinkRepository> { RemoteGitHubLinkRepository(get(), get()) }
+    single { RemoteGitHubLinkRepository(get(), get()) }
     single { LoadGitHubLinkUseCase(get(), get(), get()) }
     single { StartGitHubLinkUseCase(get(), get()) }
     single { PollGitHubLinkUseCase(get(), get()) }

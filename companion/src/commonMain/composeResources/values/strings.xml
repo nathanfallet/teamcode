@@ -656,4 +656,12 @@
     <string name="mcp_reason_capacity">host at capacity</string>
     <string name="mcp_reason_invalid_spec">invalid definition</string>
     <string name="mcp_admin_note">Administrators declare MCP servers and see their logs in the web dashboard.</string>
+    <string name="demo_try">Try the demo</string>
+    <string name="demo_try_hint">No server yet? Explore the app with sample sessions, offline.</string>
+    <string name="demo_banner_title">You're trying the demo</string>
+    <string name="demo_banner_detail">Sample data, no server and no AI. Star TeamCode on GitHub and deploy your own server.</string>
+    <string name="demo_github">GitHub</string>
+    <string name="demo_settings_section">Demo</string>
+    <string name="demo_settings_title">TeamCode on GitHub</string>
+    <string name="demo_settings_hint">Star the project and deploy your own server.</string>
 </resources>

@@ -62,6 +62,7 @@ import androidx.navigation.toRoute
 import androidx.window.core.layout.WindowSizeClass
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
+import me.nathanfallet.teamcode.companion.presentation.components.DemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.navigation.AccountRoute
@@ -273,6 +274,7 @@ fun WideMainScreen(
             // Under macOS's title bar the panel starts below it (the bar stays the window's to drag and zoom); the update banner heads it.
             AnimatedPane { Column(Modifier.fillMaxSize().windowTitleBarPadding()) {
                 UpdateBanner()
+                DemoBanner(account)
                 NavHost(
                     detail, startDestination = SessionsListRoute, modifier = Modifier.weight(1f).fillMaxWidth().testTag("content-panel"),
                     enterTransition = { fadeIn(tween(120)) }, exitTransition = { fadeOut(tween(90)) },

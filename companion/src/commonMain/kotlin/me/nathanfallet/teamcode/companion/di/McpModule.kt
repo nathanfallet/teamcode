@@ -11,7 +11,7 @@ import org.koin.dsl.module
 
 /** The MCP servers assigned to the member (`mcp.gateway.v1`), read-only. */
 val mcpModule = module {
-    single<McpServerRepository> { RemoteMcpServerRepository(get()) }
+    single { RemoteMcpServerRepository(get()) }
     single { McpServersAvailabilityUseCase(get(), get()) }
     single { LoadMcpServersUseCase(get(), get(), get()) }
     viewModel { (route: McpServersRoute) -> McpServersViewModel(route, get()) }
