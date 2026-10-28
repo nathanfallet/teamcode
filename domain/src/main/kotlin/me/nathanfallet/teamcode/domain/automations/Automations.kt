@@ -147,13 +147,15 @@ interface AutomationStore {
     suspend fun running(runId: String)
     /** Ends a run; cron and webhook runs update the automation's consecutive failures. */
     suspend fun finish(runId: String, status: RunStatus, reason: String?)
-    /** Pauses the automation for a system reason (`owner_unavailable`), audited with actor `system`. */
+    /** Pauses the automation for a system reason (`owner_unavailable`, `invalid_schedule`) and clears its next slot, audited with actor `system`. */
     suspend fun disableBySystem(automationId: String, reason: String)
     /** Runs starting or working, with their session. */
     suspend fun active(limit: Int): List<ActiveRun>
     suspend fun progress(sessionIds: List<String>): Map<String, SessionProgress>
-    /** Sessions of the automation's ended runs beyond its [keep] latest, not yet released; marks them released. */
+    /** Sessions of the automation's ended runs beyond its [keep] latest, not yet released. */
     suspend fun releasable(automationId: String, keep: Int): List<String>
+    /** Marks [sessionIds], now deleted, released: their runs may then be purged. */
+    suspend fun released(automationId: String, sessionIds: List<String>)
     /** Deletes ended runs older than [AutomationRules.RETENTION_MILLIS]; returns how many. */
     suspend fun purge(limit: Int): Int
 }

@@ -124,6 +124,7 @@ class AutomationService(
 
     private suspend fun manageable(actor: Principal, id: String): Automation {
         actor.requireInteractive(); actor.requireReady()
+        store.revalidate(actor)
         val automation = visible(actor, store.find(actor.teamId, id))
         if (automation.ownerId != actor.member.id && !actor.isCloudAdministrator) throw ownerOnly()
         return automation

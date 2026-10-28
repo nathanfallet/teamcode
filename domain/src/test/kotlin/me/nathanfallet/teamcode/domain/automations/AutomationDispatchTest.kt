@@ -187,4 +187,21 @@ class AutomationDispatchTest {
         world.dispatcher.run()
         assertEquals(RunStatus.STARTING, world.store.runs.getValue(second.id).status)
     }
+
+    @Test fun aSessionThatCouldNotBeDeletedIsReleasedWhenTheNextRunEnds() = runBlocking {
+        val world = Fixtures.World()
+        fun end(index: Int) = runBlocking {
+            val (_, run) = queued(world, key = "r$index")
+            world.dispatcher.run()
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            world.dispatcher.run()
+        }
+        repeat(AutomationRules.KEEP_SESSIONS) { end(it) }
+        world.sessions.stopError = java.io.IOException("connection reset")
+        end(AutomationRules.KEEP_SESSIONS)
+        assertTrue(world.sessions.deleted.isEmpty())
+        world.sessions.stopError = null
+        end(AutomationRules.KEEP_SESSIONS + 1)
+        assertEquals(world.store.runs.values.take(2).map { it.sessionId }.toSet(), world.sessions.deleted.toSet(), "the one that failed, and the next")
+    }
 }
