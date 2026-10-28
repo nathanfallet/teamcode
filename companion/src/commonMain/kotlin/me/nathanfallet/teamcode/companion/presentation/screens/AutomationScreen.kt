@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
@@ -84,6 +85,13 @@ fun AutomationScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRotate by remember { mutableStateOf(false) }
     LaunchedEffect(state.deleted) { if (state.deleted) onDeleted() }
+    // Back on the page (from the form, the test, a session): what was saved or run meanwhile shows.
+    var started by remember { mutableStateOf(false) }
+    LifecycleStartEffect(viewModel) {
+        if (started) viewModel.reload()
+        started = true
+        onStopOrDispose { }
+    }
     val automation = state.automation
     Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
         NavBar(backLabel, onBack, automation?.name ?: stringResource(Res.string.automation_title)) {

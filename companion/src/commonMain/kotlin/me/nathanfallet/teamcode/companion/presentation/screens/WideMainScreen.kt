@@ -219,6 +219,9 @@ fun WideMainScreen(
         }
     }
 
+    // The sidebar's automations follow what the panel did: a page, a form or a test was open, something may have changed.
+    LaunchedEffect(selection) { if (selection is SidebarSelection.Automation || selection == SidebarSelection.AllAutomations) sidebarAutomations?.reload() }
+
     // However a session was opened (the panel's list, a link, a new session), the sidebar's row is read.
     LaunchedEffect(selection) { (selection as? SidebarSelection.Session)?.let { sidebarSessions.opened(it.id) } }
     val now = rememberNow()
@@ -361,8 +364,8 @@ fun WideMainScreen(
                         val route = entry.toRoute<AutomationEditRoute>()
                         val viewModel: AutomationEditViewModel = koinViewModel { parametersOf(route) }
                         AutomationEditScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onSaved = { id ->
-                            // The form gives way to the automation's page (a new one shows its secret there).
-                            detail.navigate(AutomationRoute(route.accountId, id)) { popUpTo<AutomationEditRoute> { inclusive = true } }
+                            // A new automation's form gives way to its page (which shows its secret); a changed one goes back to the page it came from.
+                            if (route.automationId == null) detail.navigate(AutomationRoute(route.accountId, id)) { popUpTo<AutomationEditRoute> { inclusive = true } } else detail.popBackStack()
                         })
                     }
                     composable<AutomationTestRoute> { entry ->

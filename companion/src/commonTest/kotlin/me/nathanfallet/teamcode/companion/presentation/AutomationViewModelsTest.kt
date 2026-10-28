@@ -245,4 +245,32 @@ class AutomationViewModelsTest {
         model.refreshRun(); settle()
         assertEquals("succeeded", model.uiState.value.run?.status)
     }
+
+    @Test fun anEditKeepsTheCatchupGraceTheFormDoesNotShow() = runTest(dispatcher) {
+        repository.current = automation(definition = cronDefinition())
+        val model = form("au1"); settle()
+        model.save(); settle()
+        assertEquals(360, repository.saved.single().trigger.catchupGraceMinutes)
+    }
+
+    @Test fun aTriggerKindFromANewerServerIsNotEditable() = runTest(dispatcher) {
+        repository.current = automation(definition = cronDefinition().copy(trigger = AutomationTrigger(TriggerKind.UNKNOWN, rawKind = "mqtt")))
+        val model = form("au1"); settle()
+        assertNotNull(model.uiState.value.loadError)
+        model.save(); settle()
+        assertTrue(repository.calls.none { it.startsWith("update") })
+    }
+
+    @Test fun anotherPayloadIsAnotherRequestWithItsOwnKey() = runTest(dispatcher) {
+        repository.current = automation(definition = webhookDefinition())
+        val model = test(); settle()
+        repository.failure = CompanionException.Unreachable(); model.run(); settle()
+        repository.failure = null
+        model.run(); settle()
+        model.setPayload("""{"ticket":{"number":2}}""")
+        model.run(); settle()
+        val keys = repository.tested.map { it.third }
+        assertEquals(2, keys.size)
+        assertNotEquals(keys[0], keys[1])
+    }
 }

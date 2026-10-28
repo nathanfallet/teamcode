@@ -71,7 +71,11 @@ class AutomationTestViewModel(
         }
     }
 
-    fun setPayload(payload: String) = state.update { it.copy(payload = payload, preview = null, previewError = null) }
+    fun setPayload(payload: String) {
+        // Another payload is another request: a retry of the former one must not replay its run.
+        if (payload != state.value.payload) key = ids.newId()
+        state.update { it.copy(payload = payload, preview = null, previewError = null) }
+    }
 
     /** Renders the prompt with the payload: no run, no session, no quota. */
     fun preview() {

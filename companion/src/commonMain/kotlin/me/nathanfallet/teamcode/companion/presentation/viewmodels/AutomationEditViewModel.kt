@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.nathanfallet.teamcode.companion.domain.models.ActionKind
 import me.nathanfallet.teamcode.companion.domain.models.Automation
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.AutomationAction
 import me.nathanfallet.teamcode.companion.domain.models.AutomationDefinition
 import me.nathanfallet.teamcode.companion.domain.models.AutomationPreview
@@ -31,6 +32,8 @@ data class AutomationFormState(
     val timezone: String = "UTC",
     /** `once` runs the latest missed slot after an outage, `skip` runs nothing. */
     val catchup: String = "once",
+    /** Kept as the server has it (no field edits it), so a change of the form does not reset it. */
+    val catchupGraceMinutes: Int? = null,
     val profileId: String? = null,
     val model: String = "",
     val effort: String = "",
@@ -86,6 +89,8 @@ class AutomationEditViewModel(
                 val options = loadProfiles(route.accountId)
                 val existing = route.automationId?.let { get(route.accountId, it) }
                 original = existing
+                // A trigger kind a newer server added cannot be edited here: it would be saved as another kind.
+                if (existing?.trigger?.kind == TriggerKind.UNKNOWN) throw CompanionException.Unsupported("trigger")
                 val owner = existing == null || existing.ownedBy(accounts.accounts.value.firstOrNull { it.id == route.accountId }?.memberId.orEmpty())
                 state.update { current ->
                     current.copy(
@@ -155,6 +160,7 @@ internal fun formOf(definition: AutomationDefinition) = AutomationFormState(
     cron = definition.trigger.cron.orEmpty(),
     timezone = definition.trigger.timezone ?: "UTC",
     catchup = definition.trigger.catchup ?: "once",
+    catchupGraceMinutes = definition.trigger.catchupGraceMinutes,
     profileId = definition.action.profileId,
     model = definition.action.model.orEmpty(),
     effort = definition.action.effort.orEmpty(),
@@ -171,7 +177,7 @@ internal fun definitionOf(form: AutomationFormState): AutomationDefinition {
     val cron = form.kind == TriggerKind.CRON
     return AutomationDefinition(
         name = form.name,
-        trigger = if (cron) AutomationTrigger(TriggerKind.CRON, form.cron, form.timezone, form.catchup) else AutomationTrigger(TriggerKind.WEBHOOK),
+        trigger = if (cron) AutomationTrigger(TriggerKind.CRON, form.cron, form.timezone, form.catchup, form.catchupGraceMinutes) else AutomationTrigger(TriggerKind.WEBHOOK),
         action = AutomationAction(ActionKind.CLOUD, form.profileId, form.model.trim().ifEmpty { null }, form.effort.trim().ifEmpty { null }, form.maxRuntime.trim().toIntOrNull() ?: 0),
         prompt = form.prompt,
         variables = if (cron) emptyList() else form.variables,
