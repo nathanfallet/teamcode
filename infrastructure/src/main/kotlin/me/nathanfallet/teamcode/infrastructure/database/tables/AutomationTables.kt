@@ -95,6 +95,6 @@ object AutomationRuns : Table("automation_runs") {
         index("automation_run_due", false, status, nextAttemptAt)
         // The owner's automation cap.
         index("automation_run_owner", false, ownerId, status)
-        index("automation_run_retention", false, endedAt)
+        index("automation_run_retention", false, sessionReleased, endedAt)
     }
 }

@@ -4,4 +4,4 @@ CREATE INDEX automation_run_history ON automation_runs (automation_id, queued_at
 CREATE INDEX automation_run_active ON automation_runs (automation_id, status);
 CREATE INDEX automation_run_due ON automation_runs (status, next_attempt_at);
 CREATE INDEX automation_run_owner ON automation_runs (owner_id, status);
-CREATE INDEX automation_run_retention ON automation_runs (ended_at);
+CREATE INDEX automation_run_retention ON automation_runs (session_released, ended_at);

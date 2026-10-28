@@ -183,18 +183,20 @@ class CloudServer(
             }
         }
         scope.launch {
-            // One replica at a time per step (runDue); each step is also safe concurrently (fenced slots, leased runs).
+            // One replica at a time per step (runDue, which also leases each step past its deadline), and each step in its
+            // own try: a step that keeps failing never starves the others.
+            suspend fun step(name: String, block: suspend () -> Unit) {
+                try { block() }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode automation step $name exceeded its deadline.") }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { System.err.println("TeamCode automation step $name is temporarily unavailable (${describe(error)}).") }
+            }
             while (isActive) {
                 if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
-                try {
-                    work.runDue("automations/schedule", intervalMillis = 15_000) { scheduleAutomations.run() }
-                    // While cloud sessions are off, runs wait (and expire after 30 minutes) instead of creating sessions that cannot start.
-                    if (runtime.enabled) work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() }
-                    work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) }
-                }
-                catch (_: TimeoutCancellationException) { System.err.println("TeamCode automation work deadline exceeded.") }
-                catch (error: CancellationException) { throw error }
-                catch (error: Exception) { System.err.println("TeamCode automations are temporarily unavailable (${describe(error)}).") }
+                step("schedule") { work.runDue("automations/schedule", intervalMillis = 15_000) { scheduleAutomations.run() } }
+                // While cloud sessions are off, runs wait (and expire after 30 minutes) instead of creating sessions that cannot start.
+                if (runtime.enabled) step("dispatch") { work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() } }
+                step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
                 delay(2_000)
             }
         }

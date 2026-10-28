@@ -52,7 +52,8 @@ class AutomationRoutesTest {
         override suspend fun working(teamId: String, ownerId: String) = 0
         override suspend fun ownerPrincipal(automationId: String): Principal? = null
         override suspend fun retry(runId: String, at: Long) = Unit
-        override suspend fun started(runId: String, sessionId: String, profileVersion: Int) = Unit
+        override suspend fun busy(automationId: String) = false
+        override suspend fun started(runId: String, sessionId: String, profileVersion: Int) = true
         override suspend fun running(runId: String) = Unit
         override suspend fun finish(runId: String, status: RunStatus, reason: String?) = Unit
         override suspend fun disableBySystem(automationId: String, reason: String) = Unit

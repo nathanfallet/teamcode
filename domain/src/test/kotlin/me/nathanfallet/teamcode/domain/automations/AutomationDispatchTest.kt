@@ -198,7 +198,7 @@ class AutomationDispatchTest {
         world.store.clock += 20_000
         world.dispatcher.run()
         assertEquals(RunStatus.QUEUED, world.store.runs.getValue(second.id).status, "the owner has room, but the automation is busy")
-        progress(world, first, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+        progress(world, first, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
         world.dispatcher.run()
         world.store.clock += 20_000
         world.dispatcher.run()

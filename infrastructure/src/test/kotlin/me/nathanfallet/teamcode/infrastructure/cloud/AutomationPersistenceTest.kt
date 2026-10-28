@@ -131,10 +131,15 @@ class AutomationPersistenceTest {
         assertEquals(all.filter { it.status == RunStatus.INVALID_PAYLOAD }.map { it.id },
             w.a.store.runs(w.teamId, hook.id, RunQuery(statuses = setOf(RunStatus.INVALID_PAYLOAD))).runs.map { it.id })
         assertNotNull(hook.lastRun, "The list shows the latest run")
-        // Runs ended more than 14 days ago are purged.
-        w.a.database.query { AutomationRuns.update({ (AutomationRuns.automationId eq hook.id) and AutomationRuns.endedAt.isNotNull() }) { it[endedAt] = 1 } }
+        // Runs ended more than 14 days ago are purged, except one whose session is still kept (it is released later, then purged).
+        val kept = all.first { it.status.final }.id
+        w.a.database.query {
+            AutomationRuns.update({ (AutomationRuns.automationId eq hook.id) and AutomationRuns.endedAt.isNotNull() }) { it[endedAt] = 1 }
+            AutomationRuns.update({ AutomationRuns.id eq kept }) { it[sessionReleased] = false }
+        }
         val ended = all.count { it.status.final }
-        assertEquals(ended, w.a.store.purge(500))
+        assertEquals(ended - 1, w.a.store.purge(500))
+        assertNotNull(w.a.store.run(w.teamId, hook.id, kept), "Its session is not released yet")
         // Deleting an automation deletes its runs and its credential.
         val credential = w.a.database.query { Automations.select(Automations.credentialId).where { Automations.id eq hook.id }.single()[Automations.credentialId]!! }
         w.b.automations.delete(w.admin, hook.id)

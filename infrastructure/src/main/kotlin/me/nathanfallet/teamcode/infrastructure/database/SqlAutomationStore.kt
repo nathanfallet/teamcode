@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.automations.*
 import me.nathanfallet.teamcode.domain.cloud.CloudConversationRules
+import me.nathanfallet.teamcode.domain.cloud.CloudConversationService
 import me.nathanfallet.teamcode.domain.cloud.CloudEventType
 import me.nathanfallet.teamcode.domain.cloud.CloudInputKind
 import me.nathanfallet.teamcode.domain.cloud.CloudInputStatus
@@ -177,7 +178,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
             it[AutomationRuns.reason] = reason; it[prompt] = run.prompt.takeIf { status == RunStatus.QUEUED }; it[variables] = encodeExtracted(run.variables)
             it[variablesDigest] = run.variablesDigest; it[requestDigest] = run.requestDigest; it[sessionId] = null; it[profileVersion] = null
             it[scheduledFor] = run.scheduledFor; it[queuedAt] = now; it[startedAt] = null; it[endedAt] = if (status.final) now else null
-            it[nextAttemptAt] = now; it[cancelRequested] = false; it[sessionReleased] = false; it[initiatorId] = run.initiatorId; it[credentialId] = run.credentialId
+            it[nextAttemptAt] = now; it[cancelRequested] = false; it[sessionReleased] = status.final; it[initiatorId] = run.initiatorId; it[credentialId] = run.credentialId
         }
         Automations.update({ Automations.id eq automationId }) {
             it[lastRunId] = run.id
@@ -271,6 +272,8 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         }.count().toInt()
     }
 
+    override suspend fun busy(automationId: String): Boolean = activeRuns(automationId, RunStatus.WORKING) > 0
+
     override suspend fun ownerPrincipal(automationId: String): Principal? = database.query {
         val now = nowMillis()
         Automations.join(Tokens, JoinType.INNER, Automations.credentialId, Tokens.id).join(Members, JoinType.INNER, Tokens.memberId, Members.id)
@@ -288,14 +291,15 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         Unit
     }
 
-    override suspend fun started(runId: String, sessionId: String, profileVersion: Int) = database.query {
-        val row = AutomationRuns.select(AutomationRuns.automationId, AutomationRuns.teamId, AutomationRuns.ownerId).where { AutomationRuns.id eq runId }.singleOrNull() ?: return@query
+    override suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean = database.query {
+        val row = AutomationRuns.select(AutomationRuns.automationId, AutomationRuns.teamId, AutomationRuns.ownerId).where { AutomationRuns.id eq runId }.singleOrNull() ?: return@query false
         val now = nowMillis()
         val updated = AutomationRuns.update({ (AutomationRuns.id eq runId) and (AutomationRuns.status eq RunStatus.QUEUED.wire) }) {
             it[status] = RunStatus.STARTING.wire; it[AutomationRuns.sessionId] = sessionId; it[AutomationRuns.profileVersion] = profileVersion
             it[startedAt] = now; it[nextAttemptAt] = now; it[prompt] = null
         }
         if (updated == 1) audit(row[AutomationRuns.teamId], "system", "automation.run_started", "${row[AutomationRuns.automationId]}/$runId", row[AutomationRuns.ownerId])
+        updated == 1
     }
 
     override suspend fun running(runId: String) = database.query {
@@ -304,12 +308,14 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
     }
 
     override suspend fun finish(runId: String, status: RunStatus, reason: String?) = database.query {
-        val row = AutomationRuns.select(AutomationRuns.automationId, AutomationRuns.status, AutomationRuns.runSource).where { AutomationRuns.id eq runId }.singleOrNull() ?: return@query
+        val row = AutomationRuns.select(AutomationRuns.automationId, AutomationRuns.status, AutomationRuns.runSource, AutomationRuns.sessionId).where { AutomationRuns.id eq runId }.singleOrNull() ?: return@query
         if (RunStatus.parse(row[AutomationRuns.status])?.final != false) return@query
         // Lock order: the automation, then its run, as recording a run does.
         val automation = Automations.select(Automations.consecutiveFailures).where { Automations.id eq row[AutomationRuns.automationId] }.forUpdate().singleOrNull()
         val updated = AutomationRuns.update({ (AutomationRuns.id eq runId) and (AutomationRuns.status inList RunStatus.ACTIVE.map { it.wire }) }) {
             it[AutomationRuns.status] = status.wire; it[AutomationRuns.reason] = reason; it[endedAt] = nowMillis(); it[prompt] = null
+            // A run without a session has nothing to release: retention may purge it.
+            if (row[AutomationRuns.sessionId] == null) it[sessionReleased] = true
         }
         if (updated == 1 && automation != null && row[AutomationRuns.runSource] != RunSource.TEST.wire)
             Automations.update({ Automations.id eq row[AutomationRuns.automationId] }) { failures(it, automation[Automations.consecutiveFailures], status) }
@@ -332,29 +338,44 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         rows.mapNotNull { row -> runtimes[row[AutomationRuns.automationId]]?.let { ActiveRun(run(row), it) } }
     }
 
+    /**
+     * Three queries for all the [sessionIds]: their sessions, their prompts (the initial message, found by its client key
+     * on the unique index) and the `turn` events after each consumed prompt.
+     */
     override suspend fun progress(sessionIds: List<String>): Map<String, SessionProgress> = database.query {
         if (sessionIds.isEmpty()) return@query emptyMap()
-        val sessions = CloudSessions.select(CloudSessions.id, CloudSessions.state, CloudSessions.desiredState).where { CloudSessions.id inList sessionIds }.toList()
+        val sessions = CloudSessions.select(CloudSessions.id, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState).where { CloudSessions.id inList sessionIds }.toList()
+        if (sessions.isEmpty()) return@query emptyMap()
+        val prompts = CloudSessionInputs.select(CloudSessionInputs.sessionId, CloudSessionInputs.status, CloudSessionInputs.eventSeq)
+            .where { sessions.map { (CloudSessionInputs.sessionId eq it[CloudSessions.id]) and (CloudSessionInputs.authorId eq it[CloudSessions.ownerId]) }.reduce { a, b -> a or b } }
+            .andWhere { CloudSessionInputs.clientKey eq CloudConversationService.INITIAL_MESSAGE_KEY }
+            .associateBy { it[CloudSessionInputs.sessionId] }
+        val consumed = prompts.mapNotNull { (id, row) ->
+            row[CloudSessionInputs.eventSeq]?.takeIf { CloudInputStatus.parse(row[CloudSessionInputs.status]) == CloudInputStatus.CONSUMED }?.let { id to it }
+        }.toMap()
+        val ends = turnEnds(consumed)
         sessions.associate { row ->
             val id = row[CloudSessions.id]
-            // The run's prompt is the session's first message: it was queued in the transaction after the session's.
-            val first = CloudSessionInputs.select(CloudSessionInputs.status, CloudSessionInputs.eventSeq)
-                .where { (CloudSessionInputs.sessionId eq id) and (CloudSessionInputs.kind eq CloudInputKind.MESSAGE.wire) }
-                .orderBy(CloudSessionInputs.createdAt to SortOrder.ASC).limit(1).singleOrNull()
-            val status = first?.let { CloudInputStatus.parse(it[CloudSessionInputs.status]) }
-            val consumedAt = first?.get(CloudSessionInputs.eventSeq)?.takeIf { status == CloudInputStatus.CONSUMED }
-            id to SessionProgress(CloudSessionState.parse(row[CloudSessions.state]), DesiredState.parse(row[CloudSessions.desiredState]), status, consumedAt?.let { turnEndAfter(id, it) })
+            val status = prompts[id]?.let { CloudInputStatus.parse(it[CloudSessionInputs.status]) }
+            id to SessionProgress(CloudSessionState.parse(row[CloudSessions.state]), DesiredState.parse(row[CloudSessions.desiredState]), status, ends[id])
         }
     }
 
-    /** The phase of the first turn that ended after the event at [seq], read on the events' type index. */
-    private fun turnEndAfter(sessionId: String, seq: Long): String? =
-        CloudSessionEvents.select(CloudSessionEvents.data).where {
-            (CloudSessionEvents.sessionId eq sessionId) and (CloudSessionEvents.type eq CloudEventType.TURN.wire) and (CloudSessionEvents.seq greater seq)
-        }.orderBy(CloudSessionEvents.seq to SortOrder.ASC).limit(TURN_EVENTS).firstNotNullOfOrNull { event ->
-            runCatching { Json.parseToJsonElement(event[CloudSessionEvents.data]).jsonObject["phase"]?.jsonPrimitive?.contentOrNull }.getOrNull()
-                ?.takeIf { it in CloudConversationRules.TURN_END_PHASES }
-        }
+    /** The phase of the first turn that ended after each session's consumed prompt (seq), read on the events' type index. */
+    private fun turnEnds(after: Map<String, Long>): Map<String, String> {
+        if (after.isEmpty()) return emptyMap()
+        val condition = after.entries.map { (id, seq) -> (CloudSessionEvents.sessionId eq id) and (CloudSessionEvents.seq greater seq) }.reduce { a, b -> a or b }
+        return CloudSessionEvents.select(CloudSessionEvents.sessionId, CloudSessionEvents.data)
+            .where { (CloudSessionEvents.type eq CloudEventType.TURN.wire) and condition }
+            .orderBy(CloudSessionEvents.seq to SortOrder.ASC).limit(after.size * TURN_EVENTS).toList()
+            .groupBy { it[CloudSessionEvents.sessionId] }
+            .mapNotNull { (id, events) ->
+                events.firstNotNullOfOrNull { event ->
+                    runCatching { Json.parseToJsonElement(event[CloudSessionEvents.data]).jsonObject["phase"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                        ?.takeIf { it in CloudConversationRules.TURN_END_PHASES }
+                }?.let { id to it }
+            }.toMap()
+    }
 
     override suspend fun releasable(automationId: String, keep: Int): List<String> = database.query {
         val ended = AutomationRuns.select(AutomationRuns.id, AutomationRuns.sessionId, AutomationRuns.status, AutomationRuns.sessionReleased)
@@ -369,6 +390,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
 
     override suspend fun purge(limit: Int): Int = database.query {
         val ids = AutomationRuns.select(AutomationRuns.id).where { AutomationRuns.endedAt less nowMillis() - AutomationRules.RETENTION_MILLIS }
+            .andWhere { AutomationRuns.sessionReleased eq true }
             .orderBy(AutomationRuns.endedAt to SortOrder.ASC).limit(limit).map { it[AutomationRuns.id] }
         if (ids.isEmpty()) 0 else AutomationRuns.deleteWhere { AutomationRuns.id inList ids }
     }
