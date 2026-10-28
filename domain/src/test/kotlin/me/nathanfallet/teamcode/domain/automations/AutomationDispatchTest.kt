@@ -221,4 +221,26 @@ class AutomationDispatchTest {
         end(AutomationRules.KEEP_SESSIONS + 1)
         assertEquals(world.store.runs.values.take(2).map { it.sessionId }.toSet(), world.sessions.deleted.toSet(), "the one that failed, and the next")
     }
+
+    @Test fun aSessionAlreadyGoneCountsAsReleased() = runBlocking {
+        val world = Fixtures.World()
+        val ended = mutableListOf<AutomationRun>()
+        repeat(AutomationRules.KEEP_SESSIONS + 1) { index ->
+            val (_, run) = queued(world, key = "r$index")
+            world.dispatcher.run()
+            if (index == 0) world.sessions.gone += "session-${run.id}"
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            world.dispatcher.run()
+            ended += run
+        }
+        assertTrue(world.store.releasable(ended.first().automationId, AutomationRules.KEEP_SESSIONS).isEmpty(), "not tried again")
+    }
+
+    @Test fun theSessionOfARunCancelledDuringItsCreationIsReleasedOnceDeleted() = runBlocking {
+        val (world, run) = queued()
+        world.sessions.duringCreate = { world.service.cancel(principal(ada), run.automationId, run.id) }
+        world.dispatcher.run()
+        assertEquals("session-${run.id}", world.store.runs.getValue(run.id).sessionId, "recorded on the run, to be released")
+        assertTrue("session-${run.id}" in world.store.released)
+    }
 }

@@ -62,8 +62,9 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
         if (item.automation.definition.overlap == OverlapPolicy.QUEUE && store.busy(item.automation.id)) return store.retry(run.id, now + CAPACITY_RETRY_MILLIS)
         try {
             val (sessionId, profileVersion) = sessions.create(owner, item.automation, run, prompt, "automation-run:${run.id}")
-            // Cancelled while the session was being created: the session belongs to no run, so it goes.
-            if (!store.started(run.id, sessionId, profileVersion)) bestEffort { sessions.delete(owner, sessionId) }
+            // Cancelled while the session was being created: the run keeps the session only to release it, now or later.
+            if (!store.started(run.id, sessionId, profileVersion) && gone(bestEffort { sessions.delete(owner, sessionId) }))
+                store.released(run.automationId, listOf(sessionId))
         } catch (error: TeamFailure) {
             when {
                 error.status == 401 || error.code in OWNER_CODES -> ownerUnavailable(run)
@@ -110,6 +111,9 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
         if (preparing) bestEffort { sessions.delete(owner, sessionId) }
     }
 
+    /** Whether a delete that threw [error] (null: none) leaves the session gone: deleted, or already not found. */
+    private fun gone(error: Exception?) = error == null || (error is TeamFailure && error.status == 404)
+
     /** Runs [call] and returns what it threw, so that one broken cloud call never stops following the other runs. */
     private suspend fun bestEffort(call: suspend () -> Unit): Exception? =
         try { call(); null } catch (error: CancellationException) { throw error } catch (error: Exception) { error }
@@ -118,8 +122,8 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
     private suspend fun release(run: AutomationRun) {
         val owner = store.ownerPrincipal(run.automationId) ?: return
         val ids = store.releasable(run.automationId, AutomationRules.KEEP_SESSIONS)
-        // Only the deleted ones are marked: a failed delete is tried again when the next run ends.
-        val deleted = ids.filter { id -> bestEffort { sessions.delete(owner, id) } == null }
+        // Only the deleted ones (or already gone) are marked: a failed delete is tried again when the next run ends.
+        val deleted = ids.filter { id -> gone(bestEffort { sessions.delete(owner, id) }) }
         if (deleted.isNotEmpty()) store.released(run.automationId, deleted)
     }
 
