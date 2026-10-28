@@ -1,6 +1,6 @@
 # End-to-end testing playbook
 
-This is the reproducible method used during V1 development, including real subscription tests. Use it with the [unfinished V1 brief](v2-validation-handoff.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
+This is the reproducible method used during V1 development, including real subscription tests. Use it with the open validations in [progress](progress.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
 
 ## Prerequisites and isolation
 
@@ -122,7 +122,7 @@ For synthetic same-provider quota/auth rejection, use domain/infrastructure test
 
 The existing real-client `--coding-fallback` fixture is specifically an **experimental cross-provider** test. It requires `--coding-route translated`; it cannot currently establish native-only account failover. It disables source-provider availability only in its disposable database at a real tool-result boundary, preserves the original request history/route and restores account settings afterward. Examples and exact assertions are in [routing acceptance](routing.md#mid-conversation-fallback-acceptance).
 
-This establishes an actual conversation/provider switch under controlled availability. It does not establish a real provider quota reset, opaque reasoning portability or all default client settings. Conversion stays default-off, and extending its acceptance is outside the unfinished V1 brief. Native-provider quota/reset boundaries remain a separate pending validation.
+This establishes an actual conversation/provider switch under controlled availability. It does not establish a real provider quota reset, opaque reasoning portability or all default client settings. Conversion stays default-off, and extending its acceptance is outside the scope of this playbook. Native-provider quota/reset boundaries remain a separate pending validation.
 
 ## 5. Guidance, run registry and browser
 
