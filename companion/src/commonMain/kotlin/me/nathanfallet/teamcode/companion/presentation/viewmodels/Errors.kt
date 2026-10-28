@@ -77,7 +77,7 @@ private fun CompanionException.sentence(): Pair<StringResource?, List<Any>> = wh
         "folder_not_configured", "folder_missing", "folder_moved", "folder_refused" -> Res.string.error_device_resume_folder to listOf<Any>(code)
         else -> visibleCode(code)?.let { Res.string.error_device_refused_code to listOf<Any>(it) } ?: (Res.string.error_device_refused to emptyList())
     }
-    is CompanionException.Server -> visibleCode(code)?.let { Res.string.error_server_http_code to listOf<Any>(statusCode, it) } ?: (Res.string.error_server_http to listOf<Any>(statusCode))
+    is CompanionException.Server -> automationCodeSentence(code)?.let { it to emptyList<Any>() } ?: visibleCode(code)?.let { Res.string.error_server_http_code to listOf<Any>(statusCode, it) } ?: (Res.string.error_server_http to listOf<Any>(statusCode))
 }
 
 private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when (problem) {
@@ -96,4 +96,25 @@ private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when
     InvalidInput.Problem.CHOOSE_FOLDER -> Res.string.input_choose_folder to emptyList()
     InvalidInput.Problem.CHOOSE_AGENT -> Res.string.input_choose_agent to emptyList()
     InvalidInput.Problem.CHOOSE_LOCAL_FOLDER -> Res.string.input_choose_local_folder to emptyList()
+    InvalidInput.Problem.AUTOMATION_NAME -> Res.string.input_automation_name to listOf(limit)
+    InvalidInput.Problem.AUTOMATION_PROMPT -> Res.string.input_automation_prompt to listOf(limit)
+    InvalidInput.Problem.AUTOMATION_CRON -> Res.string.input_automation_cron to emptyList()
+    InvalidInput.Problem.AUTOMATION_TIMEZONE -> Res.string.input_automation_timezone to emptyList()
+    InvalidInput.Problem.AUTOMATION_VARIABLE -> Res.string.input_automation_variable to emptyList()
+    InvalidInput.Problem.AUTOMATION_PAYLOAD -> Res.string.input_automation_payload to emptyList()
+    InvalidInput.Problem.AUTOMATION_LIMITS -> Res.string.input_automation_limits to emptyList()
+    InvalidInput.Problem.AUTOMATION_NOT_OWNER -> Res.string.input_automation_not_owner to emptyList()
+}
+
+/** The sentence of a code an automation call answers with (`409 stale_version`, `422 not_available_yet`...), when the app words it. */
+private fun automationCodeSentence(code: String?): StringResource? = when (code) {
+    "stale_version" -> Res.string.error_automation_stale_version
+    "automation_limit" -> Res.string.error_automation_limit
+    "not_available_yet" -> Res.string.error_automation_not_available_yet
+    "profile_unassigned" -> Res.string.error_automation_profile_unassigned
+    "invalid_automation" -> Res.string.error_automation_invalid
+    "payload_required" -> Res.string.error_automation_payload_required
+    "payload_not_accepted" -> Res.string.error_automation_payload_not_accepted
+    "automation_disabled" -> Res.string.error_automation_disabled
+    else -> null
 }

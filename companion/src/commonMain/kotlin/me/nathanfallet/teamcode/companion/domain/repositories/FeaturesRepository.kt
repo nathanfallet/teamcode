@@ -32,4 +32,6 @@ object Features {
     const val GITHUB_LINK = "github.link.v1"
     /** The member's MCP servers (`GET /mcp/servers`), served through the server's MCP gateway. */
     const val MCP_GATEWAY = "mcp.gateway.v1"
+    /** Automations (`/automations`): cron and webhook triggers starting cloud sessions. */
+    const val AUTOMATIONS = "automations.v1"
 }

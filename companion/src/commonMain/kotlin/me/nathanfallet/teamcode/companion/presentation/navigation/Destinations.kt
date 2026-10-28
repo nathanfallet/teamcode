@@ -10,7 +10,7 @@ object AddServerRoute
 @Serializable
 data class LoginRoute(val origin: String, val username: String? = null)
 
-/** The three tabs of a signed-in app: Sessions, Artifacts, Account. */
+/** The tabs of a signed-in app: Sessions, Artifacts, Automations (when the server has them), Account. */
 @Serializable
 object MainRoute
 
@@ -49,6 +49,22 @@ data class GitHubLinkRoute(val accountId: String)
 /** The MCP servers assigned to the member on an account's server, with their state (read-only). */
 @Serializable
 data class McpServersRoute(val accountId: String)
+
+/** An account's automations: the Automations tab of a phone, and a screen of the wide layout's content panel. */
+@Serializable
+data class AutomationsRoute(val accountId: String)
+
+/** One automation: its definition, webhook URL and history. */
+@Serializable
+data class AutomationRoute(val accountId: String, val automationId: String)
+
+/** The automation form: a new one, or [automationId] changed. */
+@Serializable
+data class AutomationEditRoute(val accountId: String, val automationId: String? = null)
+
+/** The test of one automation: payload, preview of the prompt, a real run. */
+@Serializable
+data class AutomationTestRoute(val accountId: String, val automationId: String)
 
 /** The content panel of the wide layout: the active account's full session list, with its filters. */
 @Serializable

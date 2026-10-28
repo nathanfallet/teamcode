@@ -59,6 +59,7 @@ import com.adamglin.phosphoricons.regular.SignIn
 import com.adamglin.phosphoricons.regular.UserSwitch
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
+import me.nathanfallet.teamcode.companion.domain.models.AutomationSummary
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.presentation.components.Avatar
@@ -81,6 +82,8 @@ import me.nathanfallet.teamcode.companion.resources.accounts_title
 import me.nathanfallet.teamcode.companion.resources.artifact_copy_link
 import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
+import me.nathanfallet.teamcode.companion.resources.automations_title
+import me.nathanfallet.teamcode.companion.resources.sidebar_automations_empty
 import me.nathanfallet.teamcode.companion.resources.new_session_title
 import me.nathanfallet.teamcode.companion.resources.sessions_empty_active
 import me.nathanfallet.teamcode.companion.resources.sessions_title
@@ -99,14 +102,19 @@ import org.jetbrains.compose.resources.stringResource
 /** How many sessions and artifacts the sidebar lists before "See more". */
 const val SIDEBAR_ROWS = 5
 
+/** How many automations the sidebar lists before "See more". */
+const val SIDEBAR_AUTOMATIONS = 3
+
 /** Which part of the content panel the sidebar marks as open. */
 sealed interface SidebarSelection {
     data object None : SidebarSelection
     data object AllSessions : SidebarSelection
     data object AllArtifacts : SidebarSelection
+    data object AllAutomations : SidebarSelection
     data object Settings : SidebarSelection
     data class Session(val id: String) : SidebarSelection
     data class Artifact(val id: String) : SidebarSelection
+    data class Automation(val id: String) : SidebarSelection
 }
 
 /** What the sidebar shows; the lists hold at most [SIDEBAR_ROWS] rows each. */
@@ -120,6 +128,8 @@ data class SidebarState(
     val artifactsLoading: Boolean,
     /** Why the artifacts did not load (a server without them, offline), shown in place of the list. */
     val artifactsError: Failure? = null,
+    /** The latest automations; null while the server has not said it offers them (`automations.v1`): the section is hidden. */
+    val automations: List<AutomationSummary>? = null,
     val selection: SidebarSelection,
     val now: Long,
     /** The filter the shared lists are on when it is not their default (Paused, Team...): shown by the section titles. */
@@ -143,6 +153,8 @@ class SidebarActions(
     val onMarkSessionRead: (CloudSession) -> Unit = {},
     /** The link "Copy link" copies: the viewer page on the account's own server; null hides the entry. */
     val artifactLink: (Artifact) -> String? = { null },
+    val onOpenAutomation: (AutomationSummary) -> Unit = {},
+    val onAllAutomations: () -> Unit = {},
     /** Opens the command palette; null: no search row. */
     val onSearch: (() -> Unit)? = null,
     /** The palette's shortcut as the platform writes it (⌘K, Ctrl+K), shown on the search row. */
@@ -201,6 +213,14 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
                 else -> state.artifacts.take(SIDEBAR_ROWS).forEach { artifact -> ArtifactRow(artifact, state, actions) }
             }
             if (account?.signedIn == true) SeeMore(state.selection == SidebarSelection.AllArtifacts, actions.onAllArtifacts, "sidebar-all-artifacts")
+
+            if (account?.signedIn == true && state.automations != null) {
+                Spacer(Modifier.height(14.dp))
+                SidebarHeader(stringResource(Res.string.automations_title))
+                if (state.automations.isEmpty()) SidebarNote(stringResource(Res.string.sidebar_automations_empty))
+                else state.automations.take(SIDEBAR_AUTOMATIONS).forEach { automation -> AutomationRow(automation, state, actions) }
+                SeeMore(state.selection == SidebarSelection.AllAutomations, actions.onAllAutomations, "sidebar-all-automations")
+            }
         }
         // Pinned at the bottom, whatever the lists above hold.
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
@@ -318,6 +338,16 @@ private fun ArtifactRow(artifact: Artifact, state: SidebarState, actions: Sideba
             trailing = { Text(relativeTime(artifact.updatedAt, state.now), style = MetaStyle.copy(fontSize = 11.sp), color = TeamCode.colors.muted, maxLines = 1) },
         )
     }
+}
+
+@Composable
+private fun AutomationRow(automation: AutomationSummary, state: SidebarState, actions: SidebarActions) {
+    val colors = TeamCode.colors
+    SidebarRow(
+        icon = null, label = automation.name, selected = state.selection == SidebarSelection.Automation(automation.id), onClick = { actions.onOpenAutomation(automation) },
+        tag = "sidebar-automation-${automation.id}",
+        leading = { Dot(if (automation.consecutiveFailures > 0) colors.danger else if (automation.enabled) colors.accentText else colors.muted, size = 7.dp) },
+    )
 }
 
 @Composable

@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.companion.presentation.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -28,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,6 +60,13 @@ import me.nathanfallet.teamcode.companion.presentation.components.DemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.underDemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationsRoute
+import me.nathanfallet.teamcode.companion.domain.usecases.automations.AutomationsAvailabilityUseCase
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationsViewModel
+import me.nathanfallet.teamcode.companion.resources.automations_title
+import me.nathanfallet.teamcode.companion.resources.tab_automations
+import me.nathanfallet.teamcode.companion.resources.tab_automations_short
+import com.adamglin.phosphoricons.regular.Clock
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
@@ -80,7 +89,8 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
-enum class MainTab { SESSIONS, ARTIFACTS, ACCOUNT }
+/** The tabs of the phone layout; AUTOMATIONS only on a server that has them (`automations.v1`). */
+enum class MainTab { SESSIONS, ARTIFACTS, AUTOMATIONS, ACCOUNT }
 
 /**
  * The sheets (dialogs on a wide window) the signed-in app opens over its content: a new session (on the desktop, first
@@ -189,6 +199,8 @@ fun MainScreen(
     onOpenSubscriptions: (accountId: String) -> Unit = {},
     onOpenGitHub: (accountId: String) -> Unit = {},
     onOpenMcp: (accountId: String) -> Unit = {},
+    onOpenAutomation: (accountId: String, automationId: String) -> Unit = { _, _ -> },
+    onCreateAutomation: (accountId: String) -> Unit = {},
     /** The tab to open on (the screen a wider window showed); then the member's. */
     initialTab: MainTab = MainTab.SESSIONS,
     onTabChange: (MainTab) -> Unit = {},
@@ -206,6 +218,9 @@ fun MainScreen(
     var palette by remember { mutableStateOf(false) }
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val account = homeState.account
+    val automationsOffered = rememberAutomationsOffered(account)
+    // A tab the active account's server does not offer (another account was chosen) shows the first one.
+    val shownTab = if (tab == MainTab.AUTOMATIONS && !automationsOffered) MainTab.SESSIONS else tab
     LaunchedEffect(Unit) {
         AppCommands.commands.collect { command ->
             when (command) {
@@ -225,7 +240,7 @@ fun MainScreen(
         UpdateBanner()
         DemoBanner(account)
         Box(Modifier.weight(1f).fillMaxWidth().underDemoBanner(account)) {
-            when (tab) {
+            when (shownTab) {
                 MainTab.SESSIONS -> SessionsScreen(
                     onSignInAgain = onSignInAgain,
                     onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
@@ -238,11 +253,15 @@ fun MainScreen(
                     val viewModel: ArtifactsViewModel = koinViewModel(key = artifactsKey(account.id)) { parametersOf(ArtifactsRoute(account.id)) }
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
                 } else SignedOutTab(stringResource(Res.string.artifacts_title), account, onSignInAgain)
+                MainTab.AUTOMATIONS -> if (account != null && account.signedIn) key(account.id) {
+                    val viewModel: AutomationsViewModel = koinViewModel(key = automationsKey(account.id)) { parametersOf(AutomationsRoute(account.id)) }
+                    AutomationsScreen(viewModel, onOpen = { onOpenAutomation(account.id, it.id) }, onCreate = { onCreateAutomation(account.id) })
+                } else SignedOutTab(stringResource(Res.string.automations_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
                     onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, viewModel = settings)
             }
         }
-        TabBar(tab) { tab = it }
+        TabBar(shownTab, automationsOffered) { tab = it }
     }
 
     MainSheetsHost(sheets, settings, onOpenSession, onSignInAgain, onAddAccount, onManageAccounts = { tab = MainTab.ACCOUNT })
@@ -286,18 +305,42 @@ internal fun SignedOutTab(title: String, account: Account?, onSignInAgain: (Acco
     }
 }
 
+/**
+ * Whether the active account's server offers automations (`automations.v1`): read once per account, false while it is
+ * unknown. A Koin without the use case (a test shell) offers none.
+ */
 @Composable
-private fun TabBar(selected: MainTab, onSelect: (MainTab) -> Unit) {
+internal fun rememberAutomationsOffered(account: Account?): Boolean {
+    val koin = getKoin()
+    val availability = remember { koin.getOrNull<AutomationsAvailabilityUseCase>() }
+    val signedIn = account?.takeIf { it.signedIn }
+    val offered by produceState(false, signedIn?.id, availability) {
+        value = false
+        value = signedIn != null && availability?.available(signedIn.id) == true
+    }
+    return offered
+}
+
+/** The key of an account's automation list in the signed-in app's store: the phone's tab and the wide layout's sidebar share it. */
+internal fun automationsKey(accountId: String) = "automations-$accountId"
+
+@Composable
+private fun TabBar(selected: MainTab, automations: Boolean, onSelect: (MainTab) -> Unit) {
     val colors = TeamCode.colors
     Column(Modifier.fillMaxWidth().background(colors.line).padding(top = 1.dp)) {
         Row(
             Modifier.fillMaxWidth().background(colors.panelAlt).navigationBarsPadding().padding(horizontal = 10.dp, vertical = 6.dp).selectableGroup(),
             horizontalArrangement = Arrangement.Center,
         ) {
-            Row(Modifier.widthIn(max = ContentWidth)) {
+            BoxWithConstraints(Modifier.widthIn(max = ContentWidth)) {
+              // Four tabs on a narrow phone: the Automations label is shortened (a French "Automatisations" does not fit under 380 dp).
+              val short = maxWidth < 380.dp
+              Row(Modifier.fillMaxWidth()) {
                 TabItem(MainTab.SESSIONS, PhosphorIcons.Regular.TerminalWindow, stringResource(Res.string.tab_sessions), selected, onSelect)
                 TabItem(MainTab.ARTIFACTS, PhosphorIcons.Regular.FileText, stringResource(Res.string.tab_artifacts), selected, onSelect)
+                if (automations) TabItem(MainTab.AUTOMATIONS, PhosphorIcons.Regular.Clock, stringResource(if (short) Res.string.tab_automations_short else Res.string.tab_automations), selected, onSelect)
                 TabItem(MainTab.ACCOUNT, PhosphorIcons.Regular.UserCircle, stringResource(Res.string.tab_account), selected, onSelect)
+              }
             }
         }
     }
