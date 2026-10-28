@@ -6,7 +6,7 @@ An automation starts a [cloud session](cloud-sessions.md) by itself: on a schedu
 | --- | --- |
 | `GET /api/v1/automations` | The caller's automations; `?owner=all` or `?owner=<member>` for an administrator. Newest first, `?before=<id>&limit=` (1–100, 50) |
 | `POST /api/v1/automations` | Create (`{automation}`); created **disabled**, `201` with the webhook secret once |
-| `GET/PUT/DELETE /api/v1/automations/{id}` | Read; change (`{version, automation}`, `409 stale_version`); delete with its history |
+| `GET/PUT/DELETE /api/v1/automations/{id}` | Read; change (`{version, automation}`, `409 stale_version`); delete with its history (a session already working finishes its turn; the sessions stay, labelled) |
 | `POST /api/v1/automations/{id}/enable`, `/disable` | Arm (owner only), pause (owner or administrator) |
 | `POST /api/v1/automations/{id}/webhook/rotate-secret` | A new secret, shown once; the former one is accepted 10 more minutes |
 | `POST /api/v1/automations/{id}/run` | A test: `{payload?, dryRun?}` (see [Testing](#testing)) |
@@ -42,7 +42,7 @@ The typed client has the same operations (`automations`, `createAutomation`, `ru
 | `prompt` | 1–32,000 characters; every `{{…}}` must name a declared or a run variable (`400 invalid_automation` at save, not at run) |
 | `variables` | At most 32 payload variables (webhook only), see [Variables](#variables) |
 | `samplePayload` | Webhook only: a JSON object (64 KiB) validated against the variables at save; it pre-fills a test and no real run uses it |
-| `overlap` | `skip` (default): a trigger while a run of the automation is waiting or working is recorded `skipped_overlap`; `queue`: one run waits at most, the next ones are skipped; `allow` |
+| `overlap` | `skip` (default): a trigger while a run of the automation is waiting or working is recorded `skipped_overlap`; `queue`: one run waits at most, and starts once the working one has ended (still within the 30 minutes a run may wait), the next ones are skipped; `allow` |
 | `maxRunsPerDay` | 1–1000 (24): cron and webhook runs started over any 24 hours; beyond, `skipped_budget` (and `429` for a webhook). Tests are not counted |
 
 `version` starts at 1 and grows with every saved `PUT` of the definition. Enabling, pausing and rotating the secret do not change it, so a [versioned webhook URL](#versions) survives a pause. A member owns at most `maxAutomationsPerMember` automations (team cloud setting, 20 by default, `409 automation_limit`).

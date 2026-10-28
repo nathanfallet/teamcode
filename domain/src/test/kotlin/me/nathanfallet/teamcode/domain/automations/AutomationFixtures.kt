@@ -103,8 +103,11 @@ class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationSt
         return Principal(owner, "credential-$automationId", automation.teamId, setOf(ServiceScope.CLOUD_WRITE))
     }
     override suspend fun retry(runId: String, at: Long) { attempts[runId] = at }
-    override suspend fun started(runId: String, sessionId: String, profileVersion: Int) {
+    override suspend fun busy(automationId: String) = runs.values.any { it.automationId == automationId && it.status in RunStatus.WORKING }
+    override suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean {
+        if (runs.getValue(runId).status != RunStatus.QUEUED) return false
         runs[runId] = runs.getValue(runId).copy(status = RunStatus.STARTING, sessionId = sessionId, profileVersion = profileVersion, startedAt = clock); prompts -= runId
+        return true
     }
     override suspend fun running(runId: String) { runs[runId] = runs.getValue(runId).copy(status = RunStatus.RUNNING) }
     override suspend fun finish(runId: String, status: RunStatus, reason: String?) {
@@ -140,8 +143,11 @@ class FakeAutomationSessions(private val store: MemoryAutomationStore) : Automat
     var preparing = false
     /** Thrown by every pause and delete, as a cloud call that breaks for another reason than a refusal. */
     var stopError: Exception? = null
+    /** Runs while the session is being created, as a request arriving meanwhile. */
+    var duringCreate: (suspend () -> Unit)? = null
     override suspend fun create(owner: Principal, automation: Automation, run: AutomationRun, prompt: String, idempotencyKey: String): Pair<String, Int> {
         failure?.let { throw it }
+        duringCreate?.invoke()
         created += Triple(owner.tokenId, prompt, idempotencyKey)
         store.progress["session-${run.id}"] = SessionProgress(CloudSessionState.CREATING, DesiredState.RUNNING, CloudInputStatus.QUEUED)
         return "session-${run.id}" to 3

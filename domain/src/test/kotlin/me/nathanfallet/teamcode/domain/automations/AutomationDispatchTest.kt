@@ -163,4 +163,28 @@ class AutomationDispatchTest {
         assertEquals(RunStatus.TIMED_OUT, world.store.runs.getValue(first.id).status)
         assertEquals(RunStatus.TIMED_OUT, world.store.runs.getValue(second.id).status, "the next run is still followed")
     }
+
+    @Test fun aRunCancelledWhileItsSessionIsCreatedDeletesThatSession() = runBlocking {
+        val (world, run) = queued()
+        world.sessions.duringCreate = { world.service.cancel(principal(ada), run.automationId, run.id) }
+        world.dispatcher.run()
+        assertEquals(RunStatus.CANCELLED, world.store.runs.getValue(run.id).status)
+        assertEquals(listOf("session-${run.id}"), world.sessions.deleted)
+    }
+
+    @Test fun aQueueAutomationsNextRunWaitsForTheWorkingOne() = runBlocking {
+        val world = Fixtures.World()
+        val (_, first) = queued(world, overlap = OverlapPolicy.QUEUE, key = "a")
+        world.dispatcher.run()
+        val (_, second) = queued(world, key = "b")
+        assertEquals(RunStatus.QUEUED, second.status)
+        world.store.clock += 20_000
+        world.dispatcher.run()
+        assertEquals(RunStatus.QUEUED, world.store.runs.getValue(second.id).status, "the owner has room, but the automation is busy")
+        progress(world, first, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+        world.dispatcher.run()
+        world.store.clock += 20_000
+        world.dispatcher.run()
+        assertEquals(RunStatus.STARTING, world.store.runs.getValue(second.id).status)
+    }
 }

@@ -137,10 +137,13 @@ interface AutomationStore {
     suspend fun claimQueued(limit: Int, leaseMillis: Long): List<DispatchableRun>
     /** The owner's runs that are starting or working. */
     suspend fun working(teamId: String, ownerId: String): Int
+    /** Whether a run of the automation is starting or working: a `queue` automation's next run waits for it. */
+    suspend fun busy(automationId: String): Boolean
     /** The owner's credential for the automation, or null when it was revoked (or the owner is no longer eligible). */
     suspend fun ownerPrincipal(automationId: String): Principal?
     suspend fun retry(runId: String, at: Long)
-    suspend fun started(runId: String, sessionId: String, profileVersion: Int)
+    /** Links the created session to its queued run; false when the run ended meanwhile (cancelled), so the session is not its. */
+    suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean
     suspend fun running(runId: String)
     /** Ends a run; cron and webhook runs update the automation's consecutive failures. */
     suspend fun finish(runId: String, status: RunStatus, reason: String?)

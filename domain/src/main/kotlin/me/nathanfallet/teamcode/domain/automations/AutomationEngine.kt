@@ -58,9 +58,11 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
         val prompt = item.prompt ?: return store.finish(run.id, RunStatus.FAILED, "prompt_missing")
         if (now - run.queuedAt > AutomationRules.QUEUE_TIMEOUT_MILLIS) return store.finish(run.id, RunStatus.EXPIRED, "capacity_timeout")
         if (store.working(run.teamId, run.ownerId) >= directory.settings(run.teamId).maxRunningAutomationsPerMember) return store.retry(run.id, now + CAPACITY_RETRY_MILLIS)
+        if (item.automation.definition.overlap == OverlapPolicy.QUEUE && store.busy(item.automation.id)) return store.retry(run.id, now + CAPACITY_RETRY_MILLIS)
         try {
             val (sessionId, profileVersion) = sessions.create(owner, item.automation, run, prompt, "automation-run:${run.id}")
-            store.started(run.id, sessionId, profileVersion)
+            // Cancelled while the session was being created: the session belongs to no run, so it goes.
+            if (!store.started(run.id, sessionId, profileVersion)) bestEffort { sessions.delete(owner, sessionId) }
         } catch (error: TeamFailure) {
             when {
                 error.status == 401 || error.code in OWNER_CODES -> ownerUnavailable(run)
@@ -111,9 +113,9 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
 
     /** Deletes the sessions of the automation's runs beyond the latest [AutomationRules.KEEP_SESSIONS]. */
     private suspend fun release(run: AutomationRun) {
-        val ids = store.releasable(run.automationId, AutomationRules.KEEP_SESSIONS)
-        if (ids.isEmpty()) return
+        // The owner first: without them nothing can be deleted, so nothing is marked released.
         val owner = store.ownerPrincipal(run.automationId) ?: return
+        val ids = store.releasable(run.automationId, AutomationRules.KEEP_SESSIONS)
         for (id in ids) bestEffort { sessions.delete(owner, id) }
     }
 
