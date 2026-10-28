@@ -22,9 +22,10 @@ class ScheduleAutomationsUseCase(private val store: AutomationStore) {
             val expected = automation.nextRunAt ?: continue
             val trigger = automation.definition.trigger
             val now = store.now()
-            // Checked when saved; only a timezone that left the time-zone database can fail here: the automation pauses, visibly.
+            // Checked when saved, so this fails only when the server no longer reads the saved schedule (a timezone gone from
+            // the time-zone database): the automation pauses, visibly, in one update that also clears its next slot.
             val schedule = try { CronSchedule.parse(trigger.cron!!, trigger.timezone!!, now, check = false) }
-                catch (_: TeamFailure) { if (store.advance(automation.id, expected, null, null)) store.disableBySystem(automation.id, INVALID_SCHEDULE); continue }
+                catch (_: TeamFailure) { store.disableBySystem(automation.id, INVALID_SCHEDULE); continue }
             val window = if (trigger.catchup == CatchupPolicy.ONCE) maxOf(trigger.catchupGraceMinutes * 60_000L, AutomationRules.ON_TIME_MILLIS) else AutomationRules.ON_TIME_MILLIS
             val slot = schedule.latest(now, notBefore = maxOf(expected, now - window))
             val run = slot?.let { prepareRun(automation, RunSource.CRON, "cron:$it", null, now, scheduledFor = it, actor = null).run }
@@ -115,10 +116,11 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
 
     /** Deletes the sessions of the automation's runs beyond the latest [AutomationRules.KEEP_SESSIONS]. */
     private suspend fun release(run: AutomationRun) {
-        // The owner first: without them nothing can be deleted, so nothing is marked released.
         val owner = store.ownerPrincipal(run.automationId) ?: return
         val ids = store.releasable(run.automationId, AutomationRules.KEEP_SESSIONS)
-        for (id in ids) bestEffort { sessions.delete(owner, id) }
+        // Only the deleted ones are marked: a failed delete is tried again when the next run ends.
+        val deleted = ids.filter { id -> bestEffort { sessions.delete(owner, id) } == null }
+        if (deleted.isNotEmpty()) store.released(run.automationId, deleted)
     }
 
     companion object {

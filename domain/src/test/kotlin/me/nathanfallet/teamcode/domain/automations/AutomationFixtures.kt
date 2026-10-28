@@ -129,8 +129,9 @@ class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationSt
     override suspend fun progress(sessionIds: List<String>) = progress.filterKeys { it in sessionIds }
     override suspend fun releasable(automationId: String, keep: Int): List<String> {
         val ended = runs.values.filter { it.automationId == automationId && it.status.final && it.sessionId != null }.reversed()
-        return ended.drop(keep).mapNotNull { it.sessionId }.filter { released.add(it) }
+        return ended.drop(keep).mapNotNull { it.sessionId }.filter { it !in released }
     }
+    override suspend fun released(automationId: String, sessionIds: List<String>) { released += sessionIds }
     override suspend fun purge(limit: Int) = 0
 }
 
