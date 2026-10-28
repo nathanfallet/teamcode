@@ -229,7 +229,7 @@ class AutomationDispatchTest {
             val (_, run) = queued(world, key = "r$index")
             world.dispatcher.run()
             if (index == 0) world.sessions.gone += "session-${run.id}"
-            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
             world.dispatcher.run()
             ended += run
         }

@@ -226,7 +226,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         when (RunStatus.parse(row[AutomationRuns.status])) {
             RunStatus.QUEUED -> AutomationRuns.update({ AutomationRuns.id eq runId }) {
                 it[status] = RunStatus.CANCELLED.wire; it[reason] = "cancelled"; it[endedAt] = nowMillis(); it[prompt] = null; it[cancelRequested] = true
-                // It has no session (one being created meanwhile is deleted by the dispatcher): nothing to release.
+                // It has no session: nothing to release (one created meanwhile is recorded by started(), unreleased).
                 it[sessionReleased] = true
             }
             RunStatus.STARTING, RunStatus.RUNNING -> AutomationRuns.update({ AutomationRuns.id eq runId }) { it[cancelRequested] = true }
@@ -301,6 +301,8 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
             it[startedAt] = now; it[nextAttemptAt] = now; it[prompt] = null
         }
         if (updated == 1) audit(row[AutomationRuns.teamId], "system", "automation.run_started", "${row[AutomationRuns.automationId]}/$runId", row[AutomationRuns.ownerId])
+        // Ended meanwhile (cancelled): it keeps the session, unreleased, so that a failed delete is retried by a later release.
+        else AutomationRuns.update({ (AutomationRuns.id eq runId) and AutomationRuns.sessionId.isNull() }) { it[AutomationRuns.sessionId] = sessionId; it[sessionReleased] = false }
         updated == 1
     }
 
@@ -367,14 +369,14 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
     private fun turnEnds(after: Map<String, Long>): Map<String, String> {
         if (after.isEmpty()) return emptyMap()
         val condition = after.entries.map { (id, seq) -> (CloudSessionEvents.sessionId eq id) and (CloudSessionEvents.seq greater seq) }.reduce { a, b -> a or b }
-        // In index order (session, type, seq), without a sort: a session cut by the limit is read in full on a later tick,
-        // once the sessions before it have ended (a working run's session has few turn events after its prompt).
+        // In the index's order (session, then seq): a session cut by the limit is read on a later tick, once the sessions
+        // before it have ended (a working run's session has few turn events after its prompt).
         return CloudSessionEvents.select(CloudSessionEvents.sessionId, CloudSessionEvents.seq, CloudSessionEvents.data)
             .where { (CloudSessionEvents.type eq CloudEventType.TURN.wire) and condition }
-            .limit(after.size * TURN_EVENTS).toList()
+            .orderBy(CloudSessionEvents.sessionId to SortOrder.ASC, CloudSessionEvents.seq to SortOrder.ASC).limit(after.size * TURN_EVENTS).toList()
             .groupBy { it[CloudSessionEvents.sessionId] }
             .mapNotNull { (id, events) ->
-                events.sortedBy { it[CloudSessionEvents.seq] }.firstNotNullOfOrNull { event ->
+                events.firstNotNullOfOrNull { event ->
                     runCatching { Json.parseToJsonElement(event[CloudSessionEvents.data]).jsonObject["phase"]?.jsonPrimitive?.contentOrNull }.getOrNull()
                         ?.takeIf { it in CloudConversationRules.TURN_END_PHASES }
                 }?.let { id to it }
