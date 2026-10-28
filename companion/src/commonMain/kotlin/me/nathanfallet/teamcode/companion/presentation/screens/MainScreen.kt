@@ -55,6 +55,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.TransfersButto
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.DemoBanner
+import me.nathanfallet.teamcode.companion.presentation.components.underDemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.hostOf
 import me.nathanfallet.teamcode.companion.presentation.navigation.ArtifactsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
@@ -223,7 +224,7 @@ fun MainScreen(
         // The desktop's narrow window gets the banner too: shown by platform, never by size (nothing binds it on mobile).
         UpdateBanner()
         DemoBanner(account)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().underDemoBanner(account)) {
             when (tab) {
                 MainTab.SESSIONS -> SessionsScreen(
                     onSignInAgain = onSignInAgain,

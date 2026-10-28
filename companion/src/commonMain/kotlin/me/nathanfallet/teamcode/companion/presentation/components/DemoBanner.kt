@@ -4,9 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -34,14 +38,16 @@ import org.jetbrains.compose.resources.stringResource
 
 /**
  * "You are trying the demo" at the top of the main screen, under the update banner, with a link to the project on
- * GitHub (star it, deploy a server). Only for the demo account: an account on a real server never shows it.
+ * GitHub (star it, deploy a server). Only for the demo account: an account on a real server never shows it. It heads
+ * the screen, so it takes the status bar's inset itself (its background runs under the bar); the content below it is
+ * given [underDemoBanner] so it does not pad for the status bar a second time.
  */
 @Composable
 fun DemoBanner(account: Account?) {
     if (account?.isDemo != true) return
     val colors = TeamCode.colors
     val browser = LocalUriHandler.current
-    Column(Modifier.fillMaxWidth().background(colors.panel).testTag("demo-banner")) {
+    Column(Modifier.fillMaxWidth().background(colors.panel).windowInsetsPadding(WindowInsets.statusBars).testTag("demo-banner")) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -58,6 +64,10 @@ fun DemoBanner(account: Account?) {
         HorizontalDivider(color = colors.line)
     }
 }
+
+/** For the content under [DemoBanner]: while the banner shows, it already took the status bar's inset. */
+@Composable
+fun Modifier.underDemoBanner(account: Account?): Modifier = if (account?.isDemo == true) consumeWindowInsets(WindowInsets.statusBars) else this
 
 /** The project's page in the browser; a device without one leaves the app as it is. */
 internal fun openRepository(browser: androidx.compose.ui.platform.UriHandler) {
