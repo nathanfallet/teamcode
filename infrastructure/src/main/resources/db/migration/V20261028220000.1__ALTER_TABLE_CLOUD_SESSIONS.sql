@@ -1,0 +1,1 @@
+ALTER TABLE cloud_sessions ADD automation_id VARCHAR(36) NULL;

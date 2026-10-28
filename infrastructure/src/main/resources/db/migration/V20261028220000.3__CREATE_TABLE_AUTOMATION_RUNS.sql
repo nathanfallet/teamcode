@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS automation_runs (id VARCHAR(36) PRIMARY KEY, automation_id VARCHAR(36) NOT NULL, team_id VARCHAR(36) NOT NULL, owner_id VARCHAR(36) NOT NULL, automation_version INT NOT NULL, `source` VARCHAR(8) NOT NULL, delivery_key VARCHAR(200) NOT NULL, status VARCHAR(16) NOT NULL, reason VARCHAR(64) NULL, prompt MEDIUMTEXT NULL, variables text NOT NULL, variables_digest CHAR(64) NULL, request_digest CHAR(64) NULL, session_id VARCHAR(36) NULL, profile_version INT NULL, scheduled_for BIGINT NULL, queued_at BIGINT NOT NULL, started_at BIGINT NULL, ended_at BIGINT NULL, next_attempt_at BIGINT NOT NULL, cancel_requested BOOLEAN NOT NULL, session_released BOOLEAN NOT NULL, initiator_id VARCHAR(36) NULL, credential_id VARCHAR(36) NULL, CONSTRAINT automation_runs_automation FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE);
+ALTER TABLE automation_runs ADD CONSTRAINT automation_run_delivery UNIQUE (automation_id, delivery_key);
+CREATE INDEX automation_run_history ON automation_runs (automation_id, queued_at, id);
+CREATE INDEX automation_run_active ON automation_runs (automation_id, status);
+CREATE INDEX automation_run_due ON automation_runs (status, next_attempt_at);
+CREATE INDEX automation_run_owner ON automation_runs (owner_id, status);
+CREATE INDEX automation_run_retention ON automation_runs (ended_at);

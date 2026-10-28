@@ -80,8 +80,11 @@ data class DispatchableRun(val run: AutomationRun, val automation: Automation, v
 /** A run whose session exists, with its automation's runtime cap. */
 data class ActiveRun(val run: AutomationRun, val maxRuntimeMinutes: Int)
 
-/** A working run, and where its session is: [initialInput] is the status of the prompt sent at creation. */
-data class SessionProgress(val state: CloudSessionState, val desiredState: DesiredState, val initialInput: CloudInputStatus?)
+/**
+ * A working run, and where its session is: [initialInput] is the status of the prompt sent at creation, and [turnEnd]
+ * the phase (`completed`, `interrupted`, `failed`) of the first turn that ended after the prompt was consumed, if any.
+ */
+data class SessionProgress(val state: CloudSessionState, val desiredState: DesiredState, val initialInput: CloudInputStatus?, val turnEnd: String? = null)
 
 data class RunQuery(val before: String? = null, val limit: Int = 50, val sources: Set<RunSource> = emptySet(), val statuses: Set<RunStatus> = emptySet())
 data class AutomationPage(val automations: List<Automation>, val nextBefore: String?)
