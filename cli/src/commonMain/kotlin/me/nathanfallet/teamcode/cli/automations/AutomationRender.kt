@@ -24,6 +24,15 @@ internal fun AutomationSummaryView.line() = listOf(id, name, state(enabled, disa
 internal fun AutomationRunView.line() = listOf(id, status + (reason?.let { " ($it)" } ?: "") + if (cancelRequested) " (cancel requested)" else "", source,
     "v$automationVersion", "queued ${time(queuedAt)}", "session " + (sessionId ?: "-")).joinToString("\t")
 
+/**
+ * What to tell after a real test run. The server records a run it did not start (`skipped_overlap`, `skipped_budget`,
+ * `invalid_payload`) with a 202 like any other, so following it for a session would wait for nothing.
+ */
+internal fun AutomationRunView.testHint(automationId: String) =
+    if (status.startsWith("skipped") || status == "invalid_payload") "No session was started" + (reason?.let { " ($it)" } ?: "") +
+        ": the run is kept in the history (teamcode automations runs $automationId)."
+    else "Follow it: teamcode automations runs $automationId (the session appears once it starts)."
+
 /** How the webhook URL is shown: `signed` (the sender signs the request) or `secret` (the secret is part of the URL). */
 internal enum class WebhookUrlMode { SIGNED, SECRET }
 

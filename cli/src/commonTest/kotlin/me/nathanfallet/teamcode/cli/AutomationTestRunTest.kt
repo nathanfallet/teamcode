@@ -51,6 +51,14 @@ class AutomationTestRunTest {
         assertEquals("my-key", seen.last().key); assertContains(seen.last().body, "\"dryRun\":false")
     }
 
+    @Test fun `a run the server skipped is not presented as one to follow`() {
+        assertContains(run.testHint("a1"), "Follow it")
+        for (status in listOf("skipped_overlap", "skipped_budget", "invalid_payload")) {
+            val hint = run.copy(status = status, reason = "overlap").testHint("a1")
+            assertContains(hint, "No session was started"); assertFalse("Follow it" in hint)
+        }
+    }
+
     @Test fun `a real run without a key sends a random one`() = runTest {
         val seen = mutableListOf<Seen>()
         client(seen = seen) { HttpStatusCode.Accepted to Serialization.json.encodeToString(run) }.use { testAutomation(it, "a1", null, false, null) }

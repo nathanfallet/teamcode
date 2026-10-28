@@ -263,7 +263,7 @@ private class AutomationsRun : SuspendingCliktCommand(name = "run") {
                 }
                 is TestOutcome.Started -> {
                     echo(if (json) Serialization.json.encodeToString(outcome.run) else outcome.run.line())
-                    if (!json) echo("Follow it: teamcode automations runs $id (the session appears once it starts).", err = true)
+                    if (!json) echo(outcome.run.testHint(id), err = true)
                 }
             }
         }
