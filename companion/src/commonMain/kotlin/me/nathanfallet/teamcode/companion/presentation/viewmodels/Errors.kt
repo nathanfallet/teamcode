@@ -116,5 +116,8 @@ private fun automationCodeSentence(code: String?): StringResource? = when (code)
     "payload_required" -> Res.string.error_automation_payload_required
     "payload_not_accepted" -> Res.string.error_automation_payload_not_accepted
     "automation_disabled" -> Res.string.error_automation_disabled
+    "automation_owner_only" -> Res.string.error_automation_owner_only
+    "automation_budget" -> Res.string.error_automation_budget
+    "invalid_payload" -> Res.string.error_automation_invalid_payload
     else -> null
 }

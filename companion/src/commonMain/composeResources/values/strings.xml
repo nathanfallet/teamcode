@@ -809,6 +809,9 @@
     <string name="error_automation_payload_required">A webhook automation needs a payload to be tested.</string>
     <string name="error_automation_payload_not_accepted">A scheduled automation takes no payload.</string>
     <string name="error_automation_disabled">This automation is paused.</string>
+    <string name="error_automation_owner_only">Only the owner can do this: the automation runs with their rights.</string>
+    <string name="error_automation_budget">This automation reached its runs per day. Try again later.</string>
+    <string name="error_automation_invalid_payload">The payload does not match the variables of this automation.</string>
     <string name="input_automation_name">Give the automation a name of 1 to %1$d characters.</string>
     <string name="input_automation_prompt">Write a prompt of 1 to %1$d characters.</string>
     <string name="input_automation_cron">A schedule has five fields: minute, hour, day of month, month, day of week.</string>
