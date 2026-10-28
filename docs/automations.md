@@ -142,6 +142,30 @@ A run goes `queued`, then `starting` once its session exists, `running` once the
 | A `cloud:write` key | Also really test them (`/run`) and cancel runs. Every other write, and every secret, stays interactive |
 | A webhook sender | Trigger its automation only; it reads nothing |
 
+## CLI
+
+```sh
+teamcode automations list [--owner all|MEMBER_ID] [--json]
+teamcode automations show AUTOMATION [--url-mode signed|secret] [--url-version latest|current|vN] [--json]
+teamcode automations create --name TEXT (--cron "0 21 * * *" --timezone Europe/Paris [--catchup once|skip] [--catchup-grace-minutes N] | --webhook)
+    --profile ID|NAME [--action cloud|remote] [--model M] [--effort E] [--max-runtime-minutes N]
+    (--prompt TEXT|- | --prompt-file FILE) [--var 'NAME=$.path[;type=int][;values=a,b][;max=N][;optional][;sensitive]']... | --variables-file FILE
+    [--sample-payload FILE] [--overlap skip|queue|allow] [--max-runs-per-day N] [--url-mode signed|secret] [--url-version latest|current|vN] [--json]
+teamcode automations edit AUTOMATION [the options of create, only those given change] [--clear-variables] [--clear-model] [--clear-effort] [--clear-sample-payload] [--json]
+teamcode automations enable|disable AUTOMATION [--json]
+teamcode automations delete AUTOMATION --yes
+teamcode automations rotate-secret AUTOMATION [--url-mode signed|secret] [--url-version latest|current|vN] [--json]
+teamcode automations runs AUTOMATION [--source cron|webhook|test]... [--status STATUS]... [--limit N] [--json]
+teamcode automations run AUTOMATION [--payload FILE | --payload-stdin] [--dry-run] [--idempotency-key KEY] [--json]
+```
+
+Every command first checks that the server advertises `automations.v1` and says so when it does not (an older server): nothing is sent to routes it does not have.
+
+- **Create and edit.** `create` needs a trigger (`--cron` with its required `--timezone`, or `--webhook`), a profile (an id, or a name looked up among your profiles, as for `teamcode cloud create`) and a prompt (`--prompt`, `--prompt -` for standard input, or `--prompt-file`). The automation starts paused; the output says to test it, then `enable` it. `--var` declares one payload variable written `{{NAME}}` in the prompt: the JSON path (`$.ticket.number`, `$.items[0].id`) and, after `;`, `type=` (`string`, `int`, `number`, `boolean`), `values=a,b` (an enum), `max=`, `optional`, `sensitive`. `edit` reads the saved definition and changes only the options given (`--var` replaces all the declared variables, `--clear-variables` removes them, `--clear-model`, `--clear-effort` and `--clear-sample-payload` go back to the profile's own or to none; switching a webhook to `--cron` drops its variables and sample), and sends the version it read, so a concurrent change answers `409 stale_version`. `--action remote` is sent as is and refused by the server (`not_available_yet`).
+- **Webhook address.** `create`, `show` and `rotate-secret` print how to call a webhook automation. `--url-mode signed` (the default) prints the plain URL and the headers to sign with; `--url-mode secret` appends the secret (known only right after `create` or `rotate-secret`; `show` writes `<secret>`) and warns that the whole URL is the secret. `--url-version latest` (the default) follows the automation; `current` or `vN` prints the [versioned](#versions) URL that stops answering once the definition changes. The secret is printed once, on standard output, and never again.
+- **Test.** `run` tests the saved definition (the same checks as the editor). A webhook automation takes the body a sender would post: `--payload FILE` or `--payload-stdin` (a JSON object of at most 64 KiB, checked locally; an error never repeats its content). `--dry-run` validates it and prints the variables (sensitive ones masked) and the rendered prompt, and exits 1 when a problem is listed; nothing starts and nothing is spent. Without `--dry-run` it is a real run on your quota and accounts: it prints the run, and `--idempotency-key` makes a retry reuse it (a random key is sent otherwise). A run the server records without starting it (`skipped_overlap`, `skipped_budget`) is printed too, with a note on standard error saying that no session was started, and exits 0; a retry whose earlier run has ended says how it ended.
+- **History.** `runs` lists the runs newest first (at most 500; `--source`, `--status` filter on the server): run id, status and reason, trigger (`cron`, `webhook` or `test`), definition version, time and the session it created (`teamcode cloud show SESSION`, or `teamcode cloud list --label automation=ID`).
+
 ## Audit
 
 `automation.created`, `.updated`, `.enabled`, `.disabled`, `.deleted`, `.secret_rotated`, `.test_run`, `.test_previewed`, `.run_cancelled` (actor: the member; credential recorded), and `automation.run_started`, `automation.owner_unavailable` and `automation.invalid_schedule` (actor `system`, subject `<automationId>/<runId>` or the automation). No prompt, payload, variable value or secret is ever in the journal. The run keeps a SHA-256 of its variables (`variables_digest`) and its version.

@@ -72,6 +72,16 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "artifact_public_forbidden" -> return "The team's settings do not let you make this artifact public ($tag). Ask an administrator."
         "artifact_public_interactive" -> return "A publication never makes an artifact public ($tag). Use teamcode artifacts access ARTIFACT public, signed in as its owner."
         "artifact_member_not_found" -> return "No active member matches, or the member is not invited ($tag). Use a member id, username or linked GitHub login."
+        "not_available_yet" -> return "This is not available yet ($tag): automations with a remote action are planned, and this server only runs cloud ones. " +
+            "Use --action cloud with a cloud profile (teamcode cloud profiles)."
+        "stale_version" -> return "What you are changing was modified since this command read it ($tag). Run the command again."
+        "automation_limit" -> return "You own the most automations the team allows ($tag). Delete one first: teamcode automations delete ID --yes."
+        "invalid_automation" -> return "The server rejected this automation definition ($tag). Check the cron expression (five fields, runs at least 5 minutes apart), " +
+            "the IANA timezone, and that every {{name}} in the prompt is a --var or a run variable (run.id, run.date, run.time, run.timezone, run.source, automation.id, automation.name)."
+        "payload_required" -> return "This webhook automation needs a payload to be tested ($tag). Pass --payload FILE or --payload-stdin."
+        "payload_not_accepted" -> return "A cron automation takes no payload ($tag). Run the test without --payload and --payload-stdin."
+        "invalid_payload" -> return "The payload does not validate against the automation's variables ($tag). Run it with --dry-run to see which paths and rules fail."
+        "automation_disabled" -> return "The automation is paused ($tag). Arm it with teamcode automations enable ID."
         "profile_unassigned" -> return "The session owner is not assigned to this cloud profile ($tag). Run `teamcode cloud profiles` to list your usable profiles " +
             "(an administrator adds --member <owner id> for another member's), or ask a team administrator to assign it."
     }
