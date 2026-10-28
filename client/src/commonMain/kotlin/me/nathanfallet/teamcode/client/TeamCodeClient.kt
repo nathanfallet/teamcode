@@ -19,6 +19,7 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
+import kotlinx.serialization.json.JsonObject
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import me.nathanfallet.teamcode.api.Serialization
@@ -756,6 +757,64 @@ class TeamCodeClient(
     }
     suspend fun cloudAccessPolicy(): CloudAccessPolicyView = coded(HttpMethod.Get, "/api/v1/cloud/access", null as Unit?)
     suspend fun saveCloudAccessPolicy(policy: CloudAccessPolicyView): CloudAccessPolicyView = coded(HttpMethod.Put, "/api/v1/cloud/access", policy)
+
+    // Automations (`automations.v1`, docs/automations.md).
+    /** The caller's automations, or [owner]'s (a member id, or `all`: administrators). Newest first, [before] is the page cursor. */
+    suspend fun automations(owner: String? = null, before: String? = null, limit: Int = 50): AutomationPageView {
+        owner?.let { if (it != "all") identifier(it) }; before?.let(::identifier)
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/automations", null as Unit?) {
+            url { owner?.let { parameters.append("owner", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun automation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Get, "/api/v1/automations/$id", null as Unit?) }
+    /** Created disabled. A webhook automation's signing secret is in the result, once. */
+    suspend fun createAutomation(input: AutomationInput): CreatedAutomationView = coded(HttpMethod.Post, "/api/v1/automations", CreateAutomationRequest(input))
+    /** [version] is the one being replaced (`409 stale_version` otherwise). */
+    suspend fun updateAutomation(id: String, version: Int, input: AutomationInput): AutomationView {
+        identifier(id); return coded(HttpMethod.Put, "/api/v1/automations/$id", UpdateAutomationRequest(version, input))
+    }
+    /** Deletes the automation with its run history; the sessions it created stay the owner's. */
+    suspend fun deleteAutomation(id: String) { identifier(id); coded<Unit, Unit>(HttpMethod.Delete, "/api/v1/automations/$id", null) }
+    /** Arms it (owner only); a cron automation's next slot is computed from now. */
+    suspend fun enableAutomation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/enable", null as Unit?) }
+    /** Pauses it (the owner, or an administrator for any automation of the team). */
+    suspend fun disableAutomation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/disable", null as Unit?) }
+    /** A new webhook secret, shown once; the former one is still accepted for ten minutes. */
+    suspend fun rotateAutomationSecret(id: String): CreatedAutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/webhook/rotate-secret", null as Unit?) }
+    /**
+     * A real test run of the saved definition, with the owner's quota, tools and account like a real run (`202`).
+     * [payload] is required for a webhook automation and refused for a cron one. The same [idempotencyKey] replays the run.
+     */
+    suspend fun runAutomation(id: String, payload: JsonObject? = null, idempotencyKey: String = Uuid.random().toString()): AutomationRunView {
+        identifier(id); require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/automations/$id/run", RunAutomationRequest(payload, dryRun = false)) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /** The prompt a test with [payload] would send, its variables and problems, without a run or a session. */
+    suspend fun previewAutomationRun(id: String, payload: JsonObject? = null): AutomationPreviewView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/run", RunAutomationRequest(payload, dryRun = true))
+    }
+    /** Checks and renders an unsaved definition (the editor's preview), with the next cron slots. */
+    suspend fun previewAutomation(input: AutomationInput, payload: JsonObject? = null): AutomationPreviewView =
+        coded(HttpMethod.Post, "/api/v1/automations/preview", PreviewAutomationRequest(input, payload))
+    /** The run history, newest first; [sources] and [statuses] filter it (empty: all). */
+    suspend fun automationRuns(id: String, before: String? = null, limit: Int = 50, sources: List<String> = emptyList(), statuses: List<String> = emptyList()): AutomationRunPageView {
+        identifier(id); before?.let(::identifier)
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/automations/$id/runs", null as Unit?) {
+            url {
+                before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString())
+                sources.forEach { parameters.append("source", it) }; statuses.forEach { parameters.append("status", it) }
+            }
+        }
+    }
+    suspend fun automationRun(id: String, runId: String): AutomationRunView {
+        identifier(id); identifier(runId); return coded(HttpMethod.Get, "/api/v1/automations/$id/runs/$runId", null as Unit?)
+    }
+    /** Withdraws a waiting run, or pauses the session of a working one. */
+    suspend fun cancelAutomationRun(id: String, runId: String): AutomationRunView {
+        identifier(id); identifier(runId); return coded(HttpMethod.Post, "/api/v1/automations/$id/runs/$runId/cancel", null as Unit?)
+    }
 
     // Ownership transfers (`cloud.transfer.v1`).
     /** Retrying with the same [idempotencyKey] replays the first transfer instead of creating another. */
