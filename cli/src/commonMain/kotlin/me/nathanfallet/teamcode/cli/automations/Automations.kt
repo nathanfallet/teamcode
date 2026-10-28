@@ -102,6 +102,7 @@ private class AutomationsShow : SuspendingCliktCommand(name = "show") {
     private val url by WebhookUrlOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         val config = loadConfig()
         sdk(config).use { client ->
             requireAutomations(client)
@@ -144,6 +145,7 @@ private class AutomationsEdit : SuspendingCliktCommand(name = "edit") {
     private val definition by DefinitionOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
             val current = client.automation(requireIdentifier(id))
@@ -161,6 +163,7 @@ private class AutomationsEnable : SuspendingCliktCommand(name = "enable") {
     private val id by argument()
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
             val automation = client.enableAutomation(requireIdentifier(id))
@@ -174,6 +177,7 @@ private class AutomationsDisable : SuspendingCliktCommand(name = "disable") {
     private val id by argument()
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
             val automation = client.disableAutomation(requireIdentifier(id))
@@ -187,6 +191,7 @@ private class AutomationsDelete : SuspendingCliktCommand(name = "delete") {
     private val id by argument()
     private val yes by option("--yes", help = "Confirm the deletion.").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         if (!yes) throw CliktError("Deleting $id also deletes its run history and cannot be undone. Add --yes to confirm.")
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
@@ -202,6 +207,7 @@ private class AutomationsRotateSecret : SuspendingCliktCommand(name = "rotate-se
     private val url by WebhookUrlOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         url.validate()
         val config = loadConfig()
         sdk(config).use { client ->
@@ -224,6 +230,7 @@ private class AutomationsRuns : SuspendingCliktCommand(name = "runs") {
     private val limit by option("--limit", help = "At most this many runs (default 50).").int().default(50)
     private val json by option("--json").flag()
     override suspend fun run() {
+        requireIdentifier(id)
         if (limit !in 1..MAX_LISTED_RUNS) throw UsageError("--limit is between 1 and $MAX_LISTED_RUNS.")
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
@@ -246,8 +253,8 @@ private class AutomationsRun : SuspendingCliktCommand(name = "run") {
     private val idempotencyKey by option("--idempotency-key", help = "Defaults to a random key; real runs only.")
     private val json by option("--json").flag()
     override suspend fun run() {
-        val body = readPayload(payload, payloadStdin)
         requireIdentifier(id); requireIdempotencyKey(idempotencyKey)
+        val body = readPayload(payload, payloadStdin)
         sdk(loadConfig()).use { client ->
             when (val outcome = testAutomation(client, id, body, dryRun, idempotencyKey)) {
                 is TestOutcome.Preview -> {

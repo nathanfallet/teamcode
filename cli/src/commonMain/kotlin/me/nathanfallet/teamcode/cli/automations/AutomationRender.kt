@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.UsageError
 import kotlin.time.Clock
 import kotlin.time.Instant
 import me.nathanfallet.teamcode.api.models.*
+import me.nathanfallet.teamcode.cli.CliUserException
 
 private fun time(millis: Long) = Instant.fromEpochMilliseconds(millis).toString()
 
@@ -37,12 +38,16 @@ internal fun parseUrlVersion(text: String, current: Int): Int? {
     return value.removePrefix("v").toIntOrNull()?.takeIf { it >= 1 } ?: throw UsageError("--url-version is latest, current, or a version such as v3.")
 }
 
+private val VERSION_SEGMENT = Regex("/v/\\d+(?=/|$)")
+
 /**
  * The webhook address: [AutomationWebhookView.path] follows the latest version; [pinned] uses the server's versioned path
  * of the automation's [version], with the number replaced. [secret] is appended in secret mode.
  */
 internal fun webhookUrl(origin: String, webhook: AutomationWebhookView, version: Int, pinned: Int?, mode: WebhookUrlMode, secret: String?): String {
-    val path = if (pinned == null) webhook.path else webhook.versionedPath.replace("/v/$version/", "/v/$pinned/")
+    val path = if (pinned == null) webhook.path else
+        VERSION_SEGMENT.replaceFirst(webhook.versionedPath, "/v/$pinned").takeIf { it != webhook.versionedPath || pinned == version }
+            ?: throw CliUserException("The server's webhook path has no /v/<version> segment, so a pinned URL cannot be written: use --url-version latest.")
     return origin.trimEnd('/') + path + if (mode == WebhookUrlMode.SECRET) "/" + (secret ?: "<secret>") else ""
 }
 
@@ -60,7 +65,7 @@ internal fun webhookInstructions(origin: String, view: AutomationView, pinned: I
         }
         add("              " + if (pinned == null) "Follows the current version of the automation (v${view.version} now)."
             else "Runs only while the automation is at v$pinned" + if (pinned != view.version) " (it is at v${view.version} now: this URL answers 409 automation_version_changed)." else ".")
-        webhook.previousSecretValidUntil?.takeIf { it > now }?.let { add("              The former secret is accepted until ${time(it)}.") }
+        webhook.previousSecretValidUntil?.let { add("              The former secret " + (if (it > now) "is" else "was") + " accepted until ${time(it)}.") }
     }
 }
 

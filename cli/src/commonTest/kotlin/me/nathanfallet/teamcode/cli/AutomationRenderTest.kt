@@ -42,10 +42,16 @@ class AutomationRenderTest {
         assertEquals("https://team.example/hooks/a1/v/9/fire", webhookUrl("https://team.example", odd, 4, 9, WebhookUrlMode.SIGNED, null))
     }
 
-    @Test fun `a former secret is mentioned only while it is still accepted`() {
+    @Test fun `a path without a version segment cannot be pinned`() {
+        val odd = AutomationWebhookView("/hooks/a1", "/hooks/a1/fire", 0)
+        assertFailsWith<CliUserException> { webhookUrl("https://team.example", odd, 4, 9, WebhookUrlMode.SIGNED, null) }
+        assertEquals("https://team.example/hooks/a1/fire", webhookUrl("https://team.example", odd, 4, 4, WebhookUrlMode.SIGNED, null))
+    }
+
+    @Test fun `a former secret is dated whether or not it is still accepted`() {
         val rotated = automation(webhook = hook.copy(previousSecretValidUntil = 5_000))
         assertContains(webhookInstructions("https://team.example", rotated, null, WebhookUrlMode.SIGNED, null, now = 4_000).joinToString("\n"), "former secret is accepted until")
-        assertFalse("former secret" in webhookInstructions("https://team.example", rotated, null, WebhookUrlMode.SIGNED, null, now = 6_000).joinToString("\n"))
+        assertContains(webhookInstructions("https://team.example", rotated, null, WebhookUrlMode.SIGNED, null, now = 6_000).joinToString("\n"), "former secret was accepted until")
     }
 
     @Test fun `an enabled automation is shown as a list row`() {
