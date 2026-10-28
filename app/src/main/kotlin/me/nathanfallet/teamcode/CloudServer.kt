@@ -3,6 +3,11 @@ package me.nathanfallet.teamcode
 import java.util.UUID
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.artifacts.ArtifactObjectStore
+import me.nathanfallet.teamcode.domain.automations.AutomationDirectory
+import me.nathanfallet.teamcode.domain.automations.AutomationService
+import me.nathanfallet.teamcode.domain.automations.CloudAutomationSessions
+import me.nathanfallet.teamcode.domain.automations.DispatchAutomationRunsUseCase
+import me.nathanfallet.teamcode.domain.automations.ScheduleAutomationsUseCase
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
@@ -13,6 +18,7 @@ import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.cloud.SessionNetworkPolicy
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
@@ -79,6 +85,13 @@ class CloudServer(
     private val transferStore = SqlCloudTransferStore(database)
     private val recipients = CloudRecipientPolicy(store, access, listOf(ModelPolicyRecipientCheck(SqlModelPolicyStore(database)), QuotaRecipientCheck(SqlMemberAllowance(database))))
     val transfers = CloudTransferService(store, transferStore, sessions, recipients)
+
+    // Automations start sessions as their owner through the same service, so every creation rule applies to them.
+    private val automationStore = SqlAutomationStore(database)
+    private val automationDirectory = AutomationDirectory.Cloud(store)
+    val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
+    private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
+    private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 
     private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { runtime.enabled }, onError = { session, error ->
         // Class and HTTP status only: messages from the cluster or the driver may echo request content.
@@ -167,6 +180,22 @@ class CloudServer(
                     catch (error: CancellationException) { throw error }
                     catch (error: Exception) { System.err.println("TeamCode cloud reconciler is temporarily unavailable (${describe(error)})."); 0 }
                 if (claimed == 0) delay(1_000)
+            }
+        }
+        scope.launch {
+            // One replica at a time per step (runDue); each step is also safe concurrently (fenced slots, leased runs).
+            while (isActive) {
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                try {
+                    work.runDue("automations/schedule", intervalMillis = 15_000) { scheduleAutomations.run() }
+                    // While cloud sessions are off, runs wait (and expire after 30 minutes) instead of creating sessions that cannot start.
+                    if (runtime.enabled) work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() }
+                    work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) }
+                }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode automation work deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { System.err.println("TeamCode automations are temporarily unavailable (${describe(error)}).") }
+                delay(2_000)
             }
         }
         scope.launch {
