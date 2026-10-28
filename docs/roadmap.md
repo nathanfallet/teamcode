@@ -18,7 +18,7 @@ Tests use synthetic fixtures and local fake providers. Real-provider acceptance 
 
 ## Finalized 0.1.0 scope (owner decision, 2026-10-20)
 
-Finish explicit boot startup, then create tag/release `0.1.0`. Additional native-client, load, forecasting, workstation and operational validation moves to V2 for another agent's PR, as detailed in the [handoff](v2-validation-handoff.md). The original milestones above describe the broader development sequence; their extended exit evidence is not all claimed complete. Built-in release CI and delivery of the native installers/image/deployable chart still gate publication.
+Finish explicit boot startup, then create tag/release `0.1.0`. Additional native-client, load, forecasting, workstation and operational validation was deferred to V2; the open items are listed in [progress](progress.md). The original milestones above describe the broader development sequence; their extended exit evidence is not all claimed complete. Built-in release CI and delivery of the native installers/image/deployable chart still gate publication.
 
 ## Release acceptance
 

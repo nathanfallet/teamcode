@@ -1,6 +1,6 @@
 # V1 review checklist
 
-This walkthrough records product behavior and evidence. On 2026-10-20 the owner moved the remaining extended validation to V2 after boot-startup implementation and release `0.1.0`; see the [handoff](v2-validation-handoff.md). Start with [current progress](progress.md) and the [TeamClaude gap ledger](teamclaude-comparison.md).
+This walkthrough records product behavior and evidence. On 2026-10-20 the owner moved the remaining extended validation to V2 after boot-startup implementation and release `0.1.0`; the remaining scenarios are listed under [Owner-deferred V2 validation and operations](#owner-deferred-v2-validation-and-operations) below. Start with [current progress](progress.md) and the [TeamClaude gap ledger](teamclaude-comparison.md).
 
 ## Walk through the implemented product
 
