@@ -809,8 +809,6 @@
     <string name="error_automation_payload_required">Une automatisation webhook a besoin d'une charge pour être testée.</string>
     <string name="error_automation_payload_not_accepted">Une automatisation planifiée n'accepte pas de charge.</string>
     <string name="error_automation_disabled">Cette automatisation est en pause.</string>
-    <string name="error_automation_owner_only">Seul le propriétaire peut faire ça : l'automatisation s'exécute avec ses droits.</string>
-    <string name="error_automation_budget">Cette automatisation a atteint son nombre d'exécutions par jour. Réessaie plus tard.</string>
     <string name="error_automation_invalid_payload">La charge ne correspond pas aux variables de cette automatisation.</string>
     <string name="input_automation_name">Donne à l'automatisation un nom de 1 à %1$d caractères.</string>
     <string name="input_automation_prompt">Écris un prompt de 1 à %1$d caractères.</string>
