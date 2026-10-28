@@ -104,7 +104,7 @@ Run {{run.id}} on {{run.date}} at {{run.time}} ({{run.timezone}}).
 | Quota, account, MCP, GitHub | the owner's | the owner's: a test is a real run, with real tokens |
 | Session labels | `automation=<id>` | `automation=<id>`, `automation-test=1` |
 
-- **Real test** (`dryRun: false`): `Idempotency-Key` required, as for `POST /cloud/sessions` (the same key replays the same run, `Idempotency-Replayed: true`, for 24 hours). Answers `202` with the run (`source: "test"`). There is no separate test budget.
+- **Real test** (`dryRun: false`): `Idempotency-Key` required, as for `POST /cloud/sessions` (the same key replays the same run, `Idempotency-Replayed: true`, for as long as the run is in the history; the same key with another payload is `422 idempotency_conflict`). Answers `202` with the run (`source: "test"`). There is no separate test budget.
 - **Dry run** (`dryRun: true`): validates the payload, renders the prompt and resolves the profile, then answers `200 {renderedPrompt, variables, problems, profileVersion, wouldSkip, nextRuns}`: no run, no session, no quota. `variables` lists each value with its type, sensitive ones masked; `wouldSkip` is `overlap`, `budget` or `disabled` when a real trigger would not start now. The rendered prompt is returned to the caller only: it is not stored, logged or audited.
 - `POST /api/v1/automations/preview` does the same for an unsaved draft (the editor's preview), without the overlap and budget checks.
 - A signed request on `/trigger` is never a test, whatever it carries.
@@ -115,8 +115,8 @@ A run goes `queued`, then `starting` once its session exists, `running` once the
 
 | Status | Meaning |
 | --- | --- |
-| `succeeded` | The agent consumed the prompt and finished its turn; the transcript in the session says what it did |
-| `failed` | The session could not be created or ended before the turn (`reason`: `owner_unavailable`, `profile_unassigned`, `profile_not_found`, `cloud_session_limit`, `session_failed`, `message_rejected`, …) |
+| `succeeded` | The agent consumed the prompt and the turn that took it ended `completed`; the transcript in the session says what it did |
+| `failed` | The session could not be created or ended before the turn (`reason`: `owner_unavailable`, `profile_unassigned`, `profile_not_found`, `cloud_session_limit`, `session_failed`, `session_deleted`, `message_rejected`, `turn_failed`, `turn_interrupted`, …) |
 | `timed_out` | Still working after `maxRuntimeMinutes`; its session is paused |
 | `cancelled` | Cancelled while waiting, or its session paused on request |
 | `expired` | Waited 30 minutes for capacity (`reason: capacity_timeout`) |
@@ -130,7 +130,7 @@ A run goes `queued`, then `starting` once its session exists, `running` once the
 
 ### History
 
-`GET …/runs` lists runs newest first (cursor `before`, at most 100 a page; filters `source` and `status`, repeatable). Each run has its version, source, status, reason, session, profile version, slot and times; the detail adds the extracted variables (sensitive ones masked). The view's `consecutiveFailures` counts `failed`, `timed_out`, `expired` and `invalid_payload` cron and webhook runs since the last `succeeded` one; tests never change it. Runs are kept **14 days** after they end.
+`GET …/runs` lists runs newest first (cursor `before`, at most 100 a page; filters `source` and `status`, repeatable). Each run has its version, source, status, reason, session, profile version, slot and times; the detail adds the extracted variables (sensitive ones masked). The view's `consecutiveFailures` counts `failed`, `timed_out`, `expired` and `invalid_payload` cron and webhook runs since the last `succeeded` one; tests never change it. Runs are kept **14 days** after they end; the runs of the sessions an automation keeps stay until their session is released.
 
 ## Permissions
 
@@ -138,19 +138,19 @@ A run goes `queued`, then `starting` once its session exists, `running` once the
 | --- | --- |
 | A member | Create, change, enable, pause, test (real or dry run), cancel and delete their own automations; read their history |
 | An administrator | Everything above on their own; on the team's (`?owner=all`): read, history, dry run, pause, cancel a run, delete. Never enable, change or run a real test of another member's automation: it would spend their quota with their GitHub link |
-| A `cloud:read` key | Read the owner's automations and history |
-| A `cloud:write` key | Also test them (`/run`, real or dry run) and cancel runs. Every other write, and every secret, stays interactive |
+| A `cloud:read` key | Read the owner's automations and history, and dry-run them (`/run` with `dryRun: true`, `/preview`) |
+| A `cloud:write` key | Also really test them (`/run`) and cancel runs. Every other write, and every secret, stays interactive |
 | A webhook sender | Trigger its automation only; it reads nothing |
 
 ## Audit
 
-`automation.created`, `.updated`, `.enabled`, `.disabled`, `.deleted`, `.secret_rotated`, `.test_run`, `.test_previewed` (actor: the member; credential recorded), and `automation.run_started`, `automation.owner_unavailable` and `automation.invalid_schedule` (actor `system`, subject `<automationId>/<runId>` or the automation). No prompt, payload, variable value or secret is ever in the journal. The run keeps a SHA-256 of its variables (`variables_digest`) and its version.
+`automation.created`, `.updated`, `.enabled`, `.disabled`, `.deleted`, `.secret_rotated`, `.test_run`, `.test_previewed`, `.run_cancelled` (actor: the member; credential recorded), and `automation.run_started`, `automation.owner_unavailable` and `automation.invalid_schedule` (actor `system`, subject `<automationId>/<runId>` or the automation). No prompt, payload, variable value or secret is ever in the journal. The run keeps a SHA-256 of its variables (`variables_digest`) and its version.
 
 ## Storage
 
-Migrations `V20261028*`: `automations` (one row per automation, its secret sealed in the `automation:<id>` context, its previous secret and grace, the owner credential's id, `next_run_at` and an index `(enabled, trigger_kind, next_run_at)` for the scheduler), `automation_runs` (unique `(automation_id, delivery_key)`; indexes `(automation_id, id)` for the history, `(status, next_attempt_at)` for the dispatcher, `(owner_id, status)` for the running cap, `(automation_id, queued_at)` for the daily budget and `(ended_at)` for retention), and a nullable `cloud_sessions.automation_id`. The rendered prompt of a waiting run is kept in its row until its session is created (it then lives in the session's messages, like any message), and cleared at once on any other end.
+Migrations `V20261028*`: `automations` (one row per automation, its secret sealed in the `automation:<id>` context, its previous secret and grace, the owner credential's id, `next_run_at` and an index `(enabled, trigger_kind, next_run_at)` for the scheduler), `automation_runs` (unique `(automation_id, delivery_key)`; indexes `(automation_id, queued_at, id)` for the history, the minute rate and the daily budget, `(automation_id, status)` for the overlap policy, `(status, next_attempt_at)` for the dispatcher, `(owner_id, status)` for the running cap and `(session_released, ended_at)` for retention), and a nullable `cloud_sessions.automation_id`. The rendered prompt of a waiting run is kept in its row until its session is created (it then lives in the session's messages, like any message), and cleared at once on any other end.
 
-Workers on every replica: the scheduler (every 15 s) claims due automations in id order with a lease and inserts their slot's run in the same transaction as the next `next_run_at`; the dispatcher (every 2 s) claims queued runs under a one-minute lease, creates their sessions outside any transaction and follows active runs; maintenance (every minute) purges old runs. A crashed worker's lease expires in a minute; the unique delivery key and the session's idempotency key make a retried step a no-op.
+Workers, one replica at a time per step through the scheduled-work table: the scheduler (every 15 s) reads due automations by `next_run_at` and, for each, moves `next_run_at` only if it is still the slot it read, inserting the slot's run in the same transaction, so two replicas never record a slot twice; the dispatcher (every 2 s, only while cloud sessions are on: otherwise runs wait and expire after 30 minutes) claims queued runs under a one-minute lease, creates their sessions outside any transaction and follows working runs; maintenance (every minute) purges old runs. A crashed dispatcher's lease expires in a minute; the unique delivery key and the session's idempotency key make a retried step a no-op. A run ends when the first turn that ended after its prompt was consumed is recorded in the session's transcript (`turn` event), so a session that is ready but has not started the turn yet is never taken for a finished one.
 
 ## Decision
 

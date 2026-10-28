@@ -18,8 +18,8 @@ class AutomationDispatchTest {
         val run = (world.service.test(principal(ada), id, null, dryRun = false, idempotencyKey = key) as TestOutcome.Run).outcome.run
         world to run
     }
-    private fun progress(world: Fixtures.World, run: AutomationRun, state: CloudSessionState, input: CloudInputStatus?, desired: DesiredState = DesiredState.RUNNING) {
-        world.store.progress["session-${run.id}"] = SessionProgress(state, desired, input)
+    private fun progress(world: Fixtures.World, run: AutomationRun, state: CloudSessionState, input: CloudInputStatus?, desired: DesiredState = DesiredState.RUNNING, turnEnd: String? = null) {
+        world.store.progress["session-${run.id}"] = SessionProgress(state, desired, input, turnEnd)
     }
 
     @Test fun aQueuedRunCreatesItsSessionAsTheOwnerWithItsIdempotencyKey() = runBlocking {
@@ -78,9 +78,26 @@ class AutomationDispatchTest {
         progress(world, run, CloudSessionState.ACTIVE, CloudInputStatus.CONSUMED)
         world.dispatcher.run()
         assertEquals(RunStatus.RUNNING, world.store.runs.getValue(run.id).status)
-        progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+        progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
         world.dispatcher.run()
         assertEquals(RunStatus.SUCCEEDED, world.store.runs.getValue(run.id).status)
+    }
+
+    @Test fun aConsumedPromptWhoseTurnHasNotEndedIsNotASuccess() = runBlocking {
+        val (world, run) = queued()
+        world.dispatcher.run()
+        progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+        world.dispatcher.run()
+        assertEquals(RunStatus.STARTING, world.store.runs.getValue(run.id).status, "consumed, but the turn it starts has not ended")
+    }
+
+    @Test fun aFailedOrInterruptedTurnFailsTheRun() = runBlocking {
+        val (world, run) = queued()
+        world.dispatcher.run()
+        progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "interrupted")
+        world.dispatcher.run()
+        assertEquals(RunStatus.FAILED, world.store.runs.getValue(run.id).status)
+        assertEquals("turn_interrupted", world.store.runs.getValue(run.id).reason)
     }
 
     @Test fun aReadySessionBeforeThePromptIsConsumedIsNotASuccess() = runBlocking {
@@ -137,7 +154,7 @@ class AutomationDispatchTest {
         repeat(AutomationRules.KEEP_SESSIONS + 2) { index ->
             val (_, run) = queued(world, key = "r$index")
             world.dispatcher.run()
-            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
             world.dispatcher.run()
         }
         assertEquals(2, world.sessions.deleted.size)
@@ -181,7 +198,7 @@ class AutomationDispatchTest {
         world.store.clock += 20_000
         world.dispatcher.run()
         assertEquals(RunStatus.QUEUED, world.store.runs.getValue(second.id).status, "the owner has room, but the automation is busy")
-        progress(world, first, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+        progress(world, first, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
         world.dispatcher.run()
         world.store.clock += 20_000
         world.dispatcher.run()
@@ -193,7 +210,7 @@ class AutomationDispatchTest {
         fun end(index: Int) = runBlocking {
             val (_, run) = queued(world, key = "r$index")
             world.dispatcher.run()
-            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
             world.dispatcher.run()
         }
         repeat(AutomationRules.KEEP_SESSIONS) { end(it) }
@@ -212,7 +229,7 @@ class AutomationDispatchTest {
             val (_, run) = queued(world, key = "r$index")
             world.dispatcher.run()
             if (index == 0) world.sessions.gone += "session-${run.id}"
-            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
             world.dispatcher.run()
             ended += run
         }

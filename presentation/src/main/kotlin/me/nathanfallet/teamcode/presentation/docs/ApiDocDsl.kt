@@ -43,6 +43,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         cloudOperations()
         deviceDaemonOperations()
         webhookOperations()
+        automationOperations()
         artifactOperations()
         artifactTicketOperations()
         artifactMemberOperations()
@@ -79,6 +80,7 @@ internal object ApiTags {
     const val CLOUD_TRANSFERS = "Cloud transfers"
     const val GITHUB = "GitHub"
     const val WEBHOOKS = "Webhooks"
+    const val AUTOMATIONS = "Automations"
     const val ARTIFACTS_ADMIN = "Artifact administration"
     const val ARTIFACTS = "Artifacts"
 
@@ -111,6 +113,7 @@ internal object ApiTags {
         CLOUD_TRANSFERS to "Changes of owner of cloud sessions.",
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
+        AUTOMATIONS to "Cloud sessions started on a schedule or by a signed webhook, as their owner, and their run history.",
         ARTIFACTS_ADMIN to "The S3-compatible bucket artifacts are stored in, and the artifact settings (administrators).",
         ARTIFACTS to "Pages agents publish for people to read: uploads, versions, sharing with members, access and deletion.",
     )
@@ -127,10 +130,13 @@ internal object ApiTags {
 internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
     companion object {
         private const val SAMPLE_ID = "00000000-0000-4000-8000-000000000000"
+        private val automationTriggerTemplate = Regex("/api/v1/automations/\\{id}(/v/\\{version})?/trigger(/\\{token})?")
         private val samples = mapOf("server" to "github", "name" to "example-skill", "version" to "1.0.0")
 
         fun of(method: HttpMethod, path: String, inferencePaths: Set<String>): ApiAccess {
             if (method == HttpMethod.Post && path == "/api/v1/auth/login") return ApiAccess(public = true, keyScopes = null)
+            // An automation's webhook proves itself with its signature or its secret URL.
+            if (method == HttpMethod.Post && automationTriggerTemplate.matches(path)) return ApiAccess(public = true, keyScopes = null)
             val sample = Regex("\\{([^}]+)}").replace(path) { samples[it.groupValues[1]] ?: SAMPLE_ID }
             val scopes = when (credentialAction(method.value, sample, inferencePaths)) {
                 CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT -> emptyList()

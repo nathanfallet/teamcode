@@ -70,6 +70,13 @@ object AutomationRules {
         return CronSchedule.parse(trigger.cron!!, trigger.timezone!!, now).next(now)
     }
 
+    /** The next three slots of an enabled cron automation, from its stored next slot; empty otherwise. */
+    fun upcoming(automation: Automation): List<Long> {
+        val trigger = automation.definition.trigger
+        val next = automation.nextRunAt?.takeIf { automation.enabled && trigger.kind == TriggerKind.CRON } ?: return emptyList()
+        return try { listOf(next) + CronSchedule.parse(trigger.cron!!, trigger.timezone!!, next).upcoming(next, 2) } catch (_: TeamFailure) { listOf(next) }
+    }
+
     /** `v1=` and the hex HMAC-SHA256 of `<timestamp>.<raw body>`, as outgoing webhooks sign. */
     fun signature(secret: String, timestamp: String, body: ByteArray): String {
         val mac = Mac.getInstance("HmacSHA256")

@@ -94,7 +94,9 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
                 state.state == CloudSessionState.FAILED -> RunStatus.FAILED to "session_failed"
                 state.state == CloudSessionState.TERMINATED || state.desiredState == DesiredState.TERMINATED -> RunStatus.FAILED to "session_deleted"
                 state.initialInput == CloudInputStatus.CANCELLED || state.initialInput == CloudInputStatus.REJECTED -> RunStatus.FAILED to "message_rejected"
-                state.initialInput == CloudInputStatus.CONSUMED && state.state in DONE -> RunStatus.SUCCEEDED to null
+                // The turn that took the prompt (or a later one) ended: the run is over, as that turn ended.
+                state.initialInput == CloudInputStatus.CONSUMED && state.turnEnd != null ->
+                    if (state.turnEnd == COMPLETED) RunStatus.SUCCEEDED to null else RunStatus.FAILED to "turn_${state.turnEnd}"
                 (run.startedAt ?: run.queuedAt) + maxRuntimeMinutes * 60_000L < now -> { stop(run, sessionId); RunStatus.TIMED_OUT to "max_runtime" }
                 else -> { if (run.status == RunStatus.STARTING && state.state == CloudSessionState.ACTIVE) store.running(run.id); null }
             }
@@ -133,8 +135,7 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
         const val ERROR_RETRY_MILLIS = 30_000L
         /** The owner can no longer act: the automation pauses until they enable it again. */
         val OWNER_CODES = setOf("authentication_required", "invalid_effective_member", "owner_unavailable", "password_change_required", "forbidden", "credential_scope")
-        /** The agent finished its turn: nothing works on the prompt any more. */
-        val DONE = setOf(CloudSessionState.READY, CloudSessionState.PAUSING, CloudSessionState.PAUSED)
+        const val COMPLETED = "completed"
     }
 }
 
