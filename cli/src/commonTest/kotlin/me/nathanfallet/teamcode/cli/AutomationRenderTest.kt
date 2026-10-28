@@ -28,13 +28,28 @@ class AutomationRenderTest {
     }
 
     @Test fun `the signed address follows the latest version by default`() {
-        assertEquals("https://team.example/api/v1/automations/a1/trigger", webhookUrl("https://team.example/", hook, null, WebhookUrlMode.SIGNED, null))
+        assertEquals("https://team.example/api/v1/automations/a1/trigger", webhookUrl("https://team.example/", hook, 4, null, WebhookUrlMode.SIGNED, null))
     }
 
     @Test fun `a pinned address names the version and the secret form appends the secret`() {
-        assertEquals("https://team.example/api/v1/automations/a1/v/4/trigger", webhookUrl("https://team.example", hook, 4, WebhookUrlMode.SIGNED, null))
-        assertEquals("https://team.example/api/v1/automations/a1/v/2/trigger/whsec_abc", webhookUrl("https://team.example", hook, 2, WebhookUrlMode.SECRET, "whsec_abc"))
-        assertEquals("https://team.example/api/v1/automations/a1/trigger/<secret>", webhookUrl("https://team.example", hook, null, WebhookUrlMode.SECRET, null))
+        assertEquals("https://team.example/api/v1/automations/a1/v/4/trigger", webhookUrl("https://team.example", hook, 4, 4, WebhookUrlMode.SIGNED, null))
+        assertEquals("https://team.example/api/v1/automations/a1/v/2/trigger/whsec_abc", webhookUrl("https://team.example", hook, 4, 2, WebhookUrlMode.SECRET, "whsec_abc"))
+        assertEquals("https://team.example/api/v1/automations/a1/trigger/<secret>", webhookUrl("https://team.example", hook, 4, null, WebhookUrlMode.SECRET, null))
+    }
+
+    @Test fun `a pinned address comes from the server's versioned path`() {
+        val odd = AutomationWebhookView("/hooks/a1/", "/hooks/a1/v/4/fire", 0)
+        assertEquals("https://team.example/hooks/a1/v/9/fire", webhookUrl("https://team.example", odd, 4, 9, WebhookUrlMode.SIGNED, null))
+    }
+
+    @Test fun `a former secret is mentioned only while it is still accepted`() {
+        val rotated = automation(webhook = hook.copy(previousSecretValidUntil = 5_000))
+        assertContains(webhookInstructions("https://team.example", rotated, null, WebhookUrlMode.SIGNED, null, now = 4_000).joinToString("\n"), "former secret is accepted until")
+        assertFalse("former secret" in webhookInstructions("https://team.example", rotated, null, WebhookUrlMode.SIGNED, null, now = 6_000).joinToString("\n"))
+    }
+
+    @Test fun `an enabled automation is shown as a list row`() {
+        assertEquals("a1\tFix tickets\tenabled\twebhook\tv4\tnext -\tlast -", automation().toSummary().line())
     }
 
     @Test fun `the url version is latest current or vN`() {
@@ -65,6 +80,12 @@ class AutomationRenderTest {
         val text = preview.text()
         listOf("{{ticket}} (int) = 12", "{{token}} (string) = (masked)", "(missing, renders empty)", "version 5", "would be skipped now: overlap", "Rendered prompt:\n  Fix 12")
             .forEach { assertContains(text, it) }
+    }
+
+    @Test fun `a preview warns that the prompt holds sensitive values`() {
+        val text = AutomationPreviewView("Use secret-value", listOf(AutomationVariableValueView("token", "string", null, sensitive = true))).text()
+        assertContains(text, "holds the values of the sensitive variables")
+        assertFalse("holds the values" in AutomationPreviewView("Fix 12", listOf(AutomationVariableValueView("ticket", "int", "12"))).text())
     }
 
     @Test fun `a preview with problems lists paths and rules and no prompt`() {

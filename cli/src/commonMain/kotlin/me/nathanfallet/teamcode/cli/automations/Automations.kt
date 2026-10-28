@@ -33,6 +33,9 @@ private class WebhookUrlOptions : OptionGroup("Webhook address") {
     val version by option("--url-version", help = "latest (the default: follows the automation), current, or vN: a URL that answers only while the automation is at that version.")
         .default("latest")
     fun mode() = if (mode == "secret") WebhookUrlMode.SECRET else WebhookUrlMode.SIGNED
+    /** Checked before anything is sent: a bad value must not come after a secret was issued and not shown. */
+    fun validate() { parseUrlVersion(version, 1) }
+    fun pinned(current: Int) = parseUrlVersion(version, current)
 }
 
 /** The definition's fields, for `create` (name, trigger, profile and prompt are required) and `edit` (only what is given changes). */
@@ -57,8 +60,12 @@ private class DefinitionOptions : OptionGroup("Definition") {
     val samplePayload by option("--sample-payload", help = "Webhook: a JSON object file that validates against the variables; it pre-fills tests and no real run uses it.")
     val overlap by option("--overlap", help = "When it fires while a run is waiting or working: skip (the default), queue (one waits) or allow.").choice("skip", "queue", "allow")
     val maxRunsPerDay by option("--max-runs-per-day", help = "Cron and webhook runs over any 24 hours: 1 to 1000 (24). Tests are not counted.").int()
+    val clearModel by option("--clear-model", help = "Edit: go back to the profile's model.").flag()
+    val clearEffort by option("--clear-effort", help = "Edit: go back to the profile's effort.").flag()
+    val clearSamplePayload by option("--clear-sample-payload", help = "Edit: drop the sample payload.").flag()
 
     suspend fun changes(resolveProfile: suspend (String) -> String, readStdin: () -> String = ::readStandardInput): AutomationChanges {
+        if ((model != null && clearModel) || (effort != null && clearEffort) || (samplePayload != null && clearSamplePayload)) throw UsageError("Use a value or its --clear-… option, not both.")
         if (prompt != null && promptFile != null) throw UsageError("Use --prompt or --prompt-file, not both.")
         if ((variables.isNotEmpty() || variablesFile != null) && clearVariables) throw UsageError("Use --var or --clear-variables, not both.")
         if (variables.isNotEmpty() && variablesFile != null) throw UsageError("Use --var or --variables-file, not both.")
@@ -70,7 +77,7 @@ private class DefinitionOptions : OptionGroup("Definition") {
             else -> null
         }
         return AutomationChanges(name, cron, webhook, timezone, catchup, catchupGrace, action, profile?.let { resolveProfile(it) }, model, effort, maxRuntime,
-            text, declared, samplePayload?.let { parsePayload(readTextFile(it)) }, overlap, maxRunsPerDay)
+            text, declared, samplePayload?.let { parsePayload(readTextFile(it)) }, overlap, maxRunsPerDay, clearModel, clearEffort, clearSamplePayload)
     }
 }
 
@@ -81,7 +88,7 @@ private class AutomationsList : SuspendingCliktCommand(name = "list") {
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            val (automations, more) = listAutomations(client, owner)
+            val (automations, more) = listAutomations(client, owner?.also { if (it != "all") requireIdentifier(it, "member id") })
             if (json) echo(Serialization.json.encodeToString(automations)) else automations.forEach { echo(it.line()) }
             if (automations.isEmpty() && !json) echo("No automation yet: create one with teamcode automations create.", err = true)
             if (more) echo("Showing the newest $MAX_LISTED_AUTOMATIONS automations.", err = true)
@@ -98,9 +105,9 @@ private class AutomationsShow : SuspendingCliktCommand(name = "show") {
         val config = loadConfig()
         sdk(config).use { client ->
             requireAutomations(client)
-            val automation = client.automation(id)
+            val automation = client.automation(requireIdentifier(id))
             if (json) echo(Serialization.json.encodeToString(automation))
-            else echo(automation.details(config.serverUrl, parseUrlVersion(url.version, automation.version), url.mode()))
+            else echo(automation.details(config.serverUrl, url.pinned(automation.version), url.mode()))
         }
     }
 }
@@ -114,6 +121,7 @@ private class AutomationsCreate : SuspendingCliktCommand(name = "create") {
     private val url by WebhookUrlOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
+        url.validate()
         val config = loadConfig()
         sdk(config).use { client ->
             requireAutomations(client)
@@ -121,7 +129,7 @@ private class AutomationsCreate : SuspendingCliktCommand(name = "create") {
             val created = client.createAutomation(input)
             if (json) { echo(Serialization.json.encodeToString(created)); return }
             val automation = created.automation
-            echo(automation.details(config.serverUrl, parseUrlVersion(url.version, automation.version), url.mode(), created.secret))
+            echo(automation.details(config.serverUrl, url.pinned(automation.version), url.mode(), created.secret))
             created.secret?.let { secretNotice(it).forEach(::echo) }
             echo("It is paused. Test it: teamcode automations run ${automation.id} --dry-run" + (if (automation.trigger.kind == "webhook") " --payload FILE" else "") +
                 "; arm it: teamcode automations enable ${automation.id}.", err = true)
@@ -130,14 +138,15 @@ private class AutomationsCreate : SuspendingCliktCommand(name = "create") {
 }
 
 private class AutomationsEdit : SuspendingCliktCommand(name = "edit") {
-    override fun help(context: Context) = "Change an automation: only the options you give change. Saving bumps its version, so a webhook URL pinned to the old version stops answering."
+    override fun help(context: Context) = "Change an automation: only the options you give change. Saving bumps its version, so a webhook URL pinned to the old version stops answering. " +
+        "Switching a webhook to --cron drops its variables and sample payload."
     private val id by argument()
     private val definition by DefinitionOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            val current = client.automation(id)
+            val current = client.automation(requireIdentifier(id))
             val input = applyChanges(current.toInput(), definition.changes({ resolveProfileId(client, it) }))
             val saved = client.updateAutomation(id, current.version, input)
             echo(if (json) Serialization.json.encodeToString(saved) else "Saved $id as version ${saved.version}.")
@@ -154,9 +163,8 @@ private class AutomationsEnable : SuspendingCliktCommand(name = "enable") {
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            val automation = client.enableAutomation(id)
-            echo(if (json) Serialization.json.encodeToString(automation) else AutomationSummaryView(automation.id, automation.ownerId, automation.ownerName, automation.name, automation.enabled,
-                automation.disabledReason, automation.version, automation.trigger, automation.action.kind, automation.nextRunAt, automation.lastRun, automation.consecutiveFailures, automation.updatedAt).line())
+            val automation = client.enableAutomation(requireIdentifier(id))
+            echo(if (json) Serialization.json.encodeToString(automation) else automation.toSummary().line())
         }
     }
 }
@@ -168,7 +176,7 @@ private class AutomationsDisable : SuspendingCliktCommand(name = "disable") {
     override suspend fun run() {
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            val automation = client.disableAutomation(id)
+            val automation = client.disableAutomation(requireIdentifier(id))
             echo(if (json) Serialization.json.encodeToString(automation) else "Paused ${automation.id} (${automation.name}).")
         }
     }
@@ -182,7 +190,7 @@ private class AutomationsDelete : SuspendingCliktCommand(name = "delete") {
         if (!yes) throw CliktError("Deleting $id also deletes its run history and cannot be undone. Add --yes to confirm.")
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            client.deleteAutomation(id)
+            client.deleteAutomation(requireIdentifier(id))
             echo("Automation $id is deleted.")
         }
     }
@@ -194,13 +202,14 @@ private class AutomationsRotateSecret : SuspendingCliktCommand(name = "rotate-se
     private val url by WebhookUrlOptions()
     private val json by option("--json").flag()
     override suspend fun run() {
+        url.validate()
         val config = loadConfig()
         sdk(config).use { client ->
             requireAutomations(client)
-            val rotated = client.rotateAutomationSecret(id)
+            val rotated = client.rotateAutomationSecret(requireIdentifier(id))
             if (json) { echo(Serialization.json.encodeToString(rotated)); return }
             val automation = rotated.automation
-            webhookInstructions(config.serverUrl, automation, parseUrlVersion(url.version, automation.version), url.mode(), rotated.secret).forEach(::echo)
+            webhookInstructions(config.serverUrl, automation, url.pinned(automation.version), url.mode(), rotated.secret).forEach(::echo)
             rotated.secret?.let { secretNotice(it).forEach(::echo) }
         }
     }
@@ -218,7 +227,7 @@ private class AutomationsRuns : SuspendingCliktCommand(name = "runs") {
         if (limit !in 1..MAX_LISTED_RUNS) throw UsageError("--limit is between 1 and $MAX_LISTED_RUNS.")
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
-            val (runs, more) = listRuns(client, id, sources, statuses, limit)
+            val (runs, more) = listRuns(client, requireIdentifier(id), sources, statuses, limit)
             if (json) echo(Serialization.json.encodeToString(runs)) else runs.forEach { echo(it.line()) }
             if (runs.isEmpty() && !json) echo("No run yet.", err = true)
             if (more) echo("Showing the newest $limit runs; raise --limit or filter with --status and --source.", err = true)
@@ -238,6 +247,7 @@ private class AutomationsRun : SuspendingCliktCommand(name = "run") {
     private val json by option("--json").flag()
     override suspend fun run() {
         val body = readPayload(payload, payloadStdin)
+        requireIdentifier(id); requireIdempotencyKey(idempotencyKey)
         sdk(loadConfig()).use { client ->
             when (val outcome = testAutomation(client, id, body, dryRun, idempotencyKey)) {
                 is TestOutcome.Preview -> {

@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.cli.automations
 
 import com.github.ajalt.clikt.core.UsageError
+import kotlin.time.Clock
 import kotlin.time.Instant
 import me.nathanfallet.teamcode.api.models.*
 
@@ -36,16 +37,19 @@ internal fun parseUrlVersion(text: String, current: Int): Int? {
     return value.removePrefix("v").toIntOrNull()?.takeIf { it >= 1 } ?: throw UsageError("--url-version is latest, current, or a version such as v3.")
 }
 
-/** The webhook address: [path] follows the latest version; [pinned] adds `/v/<n>`. [secret] is appended in secret mode. */
-internal fun webhookUrl(origin: String, webhook: AutomationWebhookView, pinned: Int?, mode: WebhookUrlMode, secret: String?): String {
-    val path = if (pinned == null) webhook.path else webhook.path.removeSuffix("/trigger") + "/v/$pinned/trigger"
+/**
+ * The webhook address: [AutomationWebhookView.path] follows the latest version; [pinned] uses the server's versioned path
+ * of the automation's [version], with the number replaced. [secret] is appended in secret mode.
+ */
+internal fun webhookUrl(origin: String, webhook: AutomationWebhookView, version: Int, pinned: Int?, mode: WebhookUrlMode, secret: String?): String {
+    val path = if (pinned == null) webhook.path else webhook.versionedPath.replace("/v/$version/", "/v/$pinned/")
     return origin.trimEnd('/') + path + if (mode == WebhookUrlMode.SECRET) "/" + (secret ?: "<secret>") else ""
 }
 
 /** The lines that tell a person how to call the webhook, for `show`, `create` and `rotate-secret`. */
-internal fun webhookInstructions(origin: String, view: AutomationView, pinned: Int?, mode: WebhookUrlMode, secret: String?): List<String> {
+internal fun webhookInstructions(origin: String, view: AutomationView, pinned: Int?, mode: WebhookUrlMode, secret: String?, now: Long = Clock.System.now().toEpochMilliseconds()): List<String> {
     val webhook = view.webhook ?: return emptyList()
-    val url = webhookUrl(origin, webhook, pinned, mode, secret)
+    val url = webhookUrl(origin, webhook, view.version, pinned, mode, secret)
     return buildList {
         add("Webhook:      POST $url")
         if (mode == WebhookUrlMode.SIGNED) {
@@ -56,9 +60,12 @@ internal fun webhookInstructions(origin: String, view: AutomationView, pinned: I
         }
         add("              " + if (pinned == null) "Follows the current version of the automation (v${view.version} now)."
             else "Runs only while the automation is at v$pinned" + if (pinned != view.version) " (it is at v${view.version} now: this URL answers 409 automation_version_changed)." else ".")
-        view.webhook?.previousSecretValidUntil?.let { add("              The former secret is accepted until ${time(it)}.") }
+        webhook.previousSecretValidUntil?.takeIf { it > now }?.let { add("              The former secret is accepted until ${time(it)}.") }
     }
 }
+
+/** The row of a list, for an automation read whole. */
+internal fun AutomationView.toSummary() = AutomationSummaryView(id, ownerId, ownerName, name, enabled, disabledReason, version, trigger, action.kind, nextRunAt, lastRun, consecutiveFailures, updatedAt)
 
 internal fun AutomationView.details(origin: String, pinned: Int? = null, mode: WebhookUrlMode = WebhookUrlMode.SIGNED, secret: String? = null) = buildList {
     add("Automation:   $id")
@@ -98,5 +105,6 @@ internal fun AutomationPreviewView.text() = buildList {
     profileVersion?.let { add("Profile:      version $it") }
     wouldSkip?.let { add("A real trigger would be skipped now: $it.") }
     if (nextRuns.isNotEmpty()) add("Next runs:    " + nextRuns.joinToString(", ", transform = ::time))
+    if (renderedPrompt != null && variables.any { it.sensitive }) add("Note:         the prompt below holds the values of the sensitive variables, as the agent would get them.")
     renderedPrompt?.let { add("Rendered prompt:"); it.lines().forEach { line -> add("  $line") } }
 }.joinToString("\n")

@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.cli.automations
 
 import com.github.ajalt.clikt.core.CliktError
+import com.github.ajalt.clikt.core.UsageError
 import kotlinx.serialization.json.JsonObject
 import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.CliUserException
@@ -83,10 +84,35 @@ internal fun readTextFile(path: String, fileSystem: FileSystem = FileSystem.SYST
     } catch (_: IOException) { throw CliUserException("Cannot read $path.") }
 }
 
-internal fun readStandardInput(): String = generateSequence(::readlnOrNull).joinToString("\n")
+/** Standard input, read line by line and refused past [limit] bytes instead of buffered whole. */
+internal fun readStandardInput(limit: Int = MAX_TEXT_FILE_BYTES.toInt(), readLine: () -> String? = ::readlnOrNull): String {
+    val text = StringBuilder()
+    var first = true
+    while (true) {
+        val line = readLine() ?: break
+        if (!first) text.append('\n')
+        first = false
+        text.append(line)
+        if (text.length > limit) throw CliUserException("Standard input is larger than ${limit / 1024} KiB.")
+    }
+    return text.toString()
+}
+
+private val AUTOMATION_ID = Regex("[a-zA-Z0-9-]{1,36}")
+
+/** The identifier arguments the client would reject with an exception: a usage message instead. */
+internal fun requireIdentifier(value: String, what: String = "automation id"): String {
+    if (!AUTOMATION_ID.matches(value)) throw UsageError("\"$value\" is not a valid $what: use the id that teamcode automations list prints.")
+    return value
+}
+
+internal fun requireIdempotencyKey(value: String?): String? {
+    if (value != null && !CloudHeaders.idempotencyKey.matches(value)) throw UsageError("--idempotency-key is 1 to 128 characters of letters, digits and . _ : -")
+    return value
+}
 
 /** Exactly one of `--payload FILE` and `--payload-stdin`, or none. */
-internal fun readPayload(file: String?, stdin: Boolean, read: () -> String = ::readStandardInput): JsonObject? {
+internal fun readPayload(file: String?, stdin: Boolean, read: () -> String = { readStandardInput(MAX_PAYLOAD_BYTES + 1) }): JsonObject? {
     if (file != null && stdin) throw CliktError("Use --payload FILE or --payload-stdin, not both.")
     return when {
         file != null -> parsePayload(readTextFile(file))

@@ -25,6 +25,10 @@ internal class AutomationChanges(
     val samplePayload: JsonObject? = null,
     val overlap: String? = null,
     val maxRunsPerDay: Int? = null,
+    /** Edit: go back to the profile's own model, effort, or no sample payload. */
+    val clearModel: Boolean = false,
+    val clearEffort: Boolean = false,
+    val clearSamplePayload: Boolean = false,
 )
 
 /**
@@ -55,20 +59,25 @@ internal fun applyChanges(base: AutomationInput?, changes: AutomationChanges): A
     val profile = changes.profileId ?: previousAction?.profileId
     // `remote` is sent as is: the server refuses it (`not_available_yet`) and the CLI says what that means.
     if (actionKind == "cloud" && profile == null) throw UsageError("Use --profile ID|NAME (see teamcode cloud profiles).")
-    val action = AutomationActionView(actionKind, if (actionKind == "cloud") profile else null, changes.model ?: previousAction?.model,
-        changes.effort ?: previousAction?.effort, changes.maxRuntimeMinutes ?: previousAction?.maxRuntimeMinutes ?: 60)
+    // The contract's own defaults (runtime, overlap, daily budget) apply to what is not given: no literal is repeated here.
+    val action = AutomationActionView(actionKind, if (actionKind == "cloud") profile else null).let { fresh ->
+        fresh.copy(
+            model = if (changes.clearModel) null else changes.model ?: previousAction?.model,
+            effort = if (changes.clearEffort) null else changes.effort ?: previousAction?.effort,
+            maxRuntimeMinutes = changes.maxRuntimeMinutes ?: previousAction?.maxRuntimeMinutes ?: fresh.maxRuntimeMinutes,
+        )
+    }
     val prompt = changes.prompt ?: base?.prompt ?: throw UsageError("Use --prompt TEXT, --prompt-file FILE or --prompt - (standard input).")
     if (prompt.isBlank()) throw CliUserException("The prompt is empty.")
     val variables = changes.variables ?: base?.variables.orEmpty()
     if (kind == "cron" && (changes.variables?.isNotEmpty() == true)) throw UsageError("Payload variables (--var, --variables-file) belong to a webhook automation.")
     if (kind == "cron" && changes.samplePayload != null) throw UsageError("--sample-payload belongs to a webhook automation.")
-    return AutomationInput(
-        name = changes.name ?: base?.name ?: throw UsageError("Use --name TEXT."),
-        trigger = trigger, action = action, prompt = prompt,
+    val fresh = AutomationInput(changes.name ?: base?.name ?: throw UsageError("Use --name TEXT."), trigger, action, prompt)
+    return fresh.copy(
         variables = if (kind == "webhook") variables else emptyList(),
-        samplePayload = if (kind == "webhook") changes.samplePayload ?: base?.samplePayload else null,
-        overlap = changes.overlap ?: base?.overlap ?: "skip",
-        maxRunsPerDay = changes.maxRunsPerDay ?: base?.maxRunsPerDay ?: 24,
+        samplePayload = if (kind != "webhook" || changes.clearSamplePayload) null else changes.samplePayload ?: base?.samplePayload,
+        overlap = changes.overlap ?: base?.overlap ?: fresh.overlap,
+        maxRunsPerDay = changes.maxRunsPerDay ?: base?.maxRunsPerDay ?: fresh.maxRunsPerDay,
     )
 }
 
@@ -88,7 +97,7 @@ internal fun parseVariable(text: String): AutomationVariableView {
     if (!path.startsWith("$")) throw UsageError("The path of variable $name must start with \$ (for example \$.ticket.number).")
     var type: String? = null
     var values = emptyList<String>()
-    var max = 256
+    var max = DEFAULT_VARIABLE.maxLength
     var required = true
     var sensitive = false
     for (option in parts.drop(1)) {
@@ -106,22 +115,29 @@ internal fun parseVariable(text: String): AutomationVariableView {
     }
     if (values.isNotEmpty() && type != null && type != "enum") throw UsageError("Variable $name: values= goes with type=enum.")
     if (values.isEmpty() && type == "enum") throw UsageError("Variable $name: an enum needs values=a,b.")
-    return AutomationVariableView(name, path, type ?: if (values.isNotEmpty()) "enum" else "string", values, max, required, sensitive)
+    return AutomationVariableView(name, path, type ?: if (values.isNotEmpty()) "enum" else DEFAULT_VARIABLE.type, values, max, required, sensitive)
 }
 
+private val DEFAULT_VARIABLE = AutomationVariableView("name", "\$")
+
+/**
+ * The path, then the options. Only the path can hold a `;`: inside the `[...]` of a segment, where a quoted key
+ * (`['a;b]']`) may also hold `]`. The options are split plainly, and an unclosed bracket or quote is an error.
+ */
 private fun splitOutsideBrackets(text: String): List<String> {
-    val parts = mutableListOf<String>()
-    val current = StringBuilder()
     var depth = 0
-    for (char in text) {
+    var quote: Char? = null
+    for ((index, char) in text.withIndex()) {
         when {
-            char == '[' -> { depth++; current.append(char) }
-            char == ']' -> { depth = maxOf(0, depth - 1); current.append(char) }
-            char == ';' && depth == 0 -> { parts += current.toString(); current.clear() }
-            else -> current.append(char)
+            quote != null -> if (char == quote) quote = null
+            depth > 0 && (char == '\'' || char == '"') -> quote = char
+            char == '[' -> depth++
+            char == ']' && depth > 0 -> depth--
+            char == ';' && depth == 0 -> return listOf(text.substring(0, index)) + text.substring(index + 1).split(';')
         }
     }
-    return parts + current.toString()
+    if (depth > 0 || quote != null) throw UsageError("The variable path has an unclosed [ or quote: $text".substringBefore(';'))
+    return listOf(text)
 }
 
 /** The most the server accepts for a payload; larger files are refused here instead of after the upload. */

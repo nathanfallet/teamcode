@@ -74,7 +74,7 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "artifact_member_not_found" -> return "No active member matches, or the member is not invited ($tag). Use a member id, username or linked GitHub login."
         "not_available_yet" -> return "This is not available yet ($tag): automations with a remote action are planned, and this server only runs cloud ones. " +
             "Use --action cloud with a cloud profile (teamcode cloud profiles)."
-        "stale_version" -> return "The automation changed since this command read it ($tag). Run the command again."
+        "stale_version" -> return "It was changed by someone else since this command read it ($tag). Run the command again."
         "automation_limit" -> return "You own the most automations the team allows ($tag). Delete one first: teamcode automations delete ID --yes."
         "invalid_automation" -> return "The server rejected this automation definition ($tag). Check the cron expression (five fields, runs at least 5 minutes apart), " +
             "the IANA timezone, and that every {{name}} in the prompt is a --var or a run variable (run.id, run.date, run.time, run.timezone, run.source, automation.id, automation.name)."

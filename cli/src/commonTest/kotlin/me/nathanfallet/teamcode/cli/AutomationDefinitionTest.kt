@@ -61,6 +61,21 @@ class AutomationDefinitionTest {
         assertEquals("sonnet", edited.action.model); assertEquals("queue", edited.overlap)
     }
 
+    @Test fun `an edit can go back to the profile's model effort and no sample`() {
+        val sample = JsonObject(mapOf("a" to JsonPrimitive(1)))
+        val base = applyChanges(null, AutomationChanges(name = "n", webhook = true, profileId = profile, prompt = "p", model = "opus", effort = "high", samplePayload = sample))
+        val edited = applyChanges(base, AutomationChanges(clearModel = true, clearEffort = true, clearSamplePayload = true))
+        assertNull(edited.action.model); assertNull(edited.action.effort); assertNull(edited.samplePayload)
+        assertEquals(base.copy(action = base.action.copy(model = null, effort = null), samplePayload = null), edited)
+    }
+
+    @Test fun `what is not given takes the contract's own defaults`() {
+        val input = applyChanges(null, AutomationChanges(name = "n", webhook = true, profileId = profile, prompt = "p"))
+        val contract = AutomationInput("n", AutomationTriggerView("webhook"), AutomationActionView("cloud", profile), "p")
+        assertEquals(contract, input)
+        assertEquals(AutomationVariableView("a", "\$.a"), parseVariable("a=\$.a"))
+    }
+
     @Test fun `an edit can switch to a webhook and clear the variables`() {
         val base = applyChanges(null, AutomationChanges(name = "n", webhook = true, profileId = profile, prompt = "{{a}}", variables = listOf(AutomationVariableView("a", "\$.a"))))
         assertTrue(applyChanges(base, AutomationChanges(variables = emptyList())).variables.isEmpty())
@@ -77,6 +92,13 @@ class AutomationDefinitionTest {
 
     @Test fun `a semicolon inside a quoted path segment is part of the path`() {
         assertEquals("\$['a;b'].c", parseVariable("v=\$['a;b'].c;optional").path)
+    }
+
+    @Test fun `brackets and quotes only matter inside the path`() {
+        assertEquals("\$['a]b;c'].d", parseVariable("v=\$['a]b;c'].d;optional").path)
+        assertEquals(listOf("x", "y"), parseVariable("v=\$.a;values=x,y;optional").values)
+        assertFailsWith<UsageError> { parseVariable("v=\$['a;optional") }
+        assertFailsWith<UsageError> { parseVariable("v=\$.a[0;optional") }
     }
 
     @Test fun `a malformed variable says what to write`() {

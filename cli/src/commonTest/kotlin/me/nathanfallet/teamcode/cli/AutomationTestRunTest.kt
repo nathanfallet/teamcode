@@ -79,6 +79,20 @@ class AutomationTestRunTest {
         assertContains(assertFailsWith<CliUserException> { parsePayload("{\"a\":\"" + "x".repeat(MAX_PAYLOAD_BYTES) + "\"}") }.message.orEmpty(), "64 KiB")
     }
 
+    @Test fun `standard input is read up to a bound`() {
+        val lines = ArrayDeque(listOf("""{"a":""", "1}"))
+        assertEquals("{\"a\":\n1}", readStandardInput(100) { lines.removeFirstOrNull() })
+        val endless = generateSequence { "x".repeat(1000) }.iterator()
+        assertContains(assertFailsWith<CliUserException> { readStandardInput(4096) { endless.next() } }.message.orEmpty(), "larger than")
+    }
+
+    @Test fun `identifiers and keys the client would reject get a usage message`() {
+        assertEquals("a1-b2", requireIdentifier("a1-b2"))
+        listOf("my automation!", "a@b", "", "x".repeat(37)).forEach { assertFailsWith<com.github.ajalt.clikt.core.UsageError>(it) { requireIdentifier(it) } }
+        assertNull(requireIdempotencyKey(null)); assertEquals("k:1_2.3-4", requireIdempotencyKey("k:1_2.3-4"))
+        assertFailsWith<com.github.ajalt.clikt.core.UsageError> { requireIdempotencyKey("my key!") }
+    }
+
     @Test fun `the payload comes from a file or standard input but not both`() {
         assertEquals(payload, readPayload(null, true) { """{"ticket":12}""" })
         assertNull(readPayload(null, false))
