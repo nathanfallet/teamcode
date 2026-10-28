@@ -210,7 +210,7 @@ class AutomationDispatchTest {
         fun end(index: Int) = runBlocking {
             val (_, run) = queued(world, key = "r$index")
             world.dispatcher.run()
-            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED)
+            progress(world, run, CloudSessionState.READY, CloudInputStatus.CONSUMED, turnEnd = "completed")
             world.dispatcher.run()
         }
         repeat(AutomationRules.KEEP_SESSIONS) { end(it) }

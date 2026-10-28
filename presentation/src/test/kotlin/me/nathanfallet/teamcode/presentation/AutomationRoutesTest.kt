@@ -60,6 +60,7 @@ class AutomationRoutesTest {
         override suspend fun active(limit: Int) = emptyList<ActiveRun>()
         override suspend fun progress(sessionIds: List<String>) = emptyMap<String, SessionProgress>()
         override suspend fun releasable(automationId: String, keep: Int) = emptyList<String>()
+        override suspend fun released(automationId: String, sessionIds: List<String>) = Unit
         override suspend fun purge(limit: Int) = 0
     }
     private val directory = object : AutomationDirectory {

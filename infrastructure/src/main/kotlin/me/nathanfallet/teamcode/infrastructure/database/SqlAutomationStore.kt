@@ -226,6 +226,8 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         when (RunStatus.parse(row[AutomationRuns.status])) {
             RunStatus.QUEUED -> AutomationRuns.update({ AutomationRuns.id eq runId }) {
                 it[status] = RunStatus.CANCELLED.wire; it[reason] = "cancelled"; it[endedAt] = nowMillis(); it[prompt] = null; it[cancelRequested] = true
+                // It has no session (one being created meanwhile is deleted by the dispatcher): nothing to release.
+                it[sessionReleased] = true
             }
             RunStatus.STARTING, RunStatus.RUNNING -> AutomationRuns.update({ AutomationRuns.id eq runId }) { it[cancelRequested] = true }
             else -> return@query run(row)
@@ -365,12 +367,14 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
     private fun turnEnds(after: Map<String, Long>): Map<String, String> {
         if (after.isEmpty()) return emptyMap()
         val condition = after.entries.map { (id, seq) -> (CloudSessionEvents.sessionId eq id) and (CloudSessionEvents.seq greater seq) }.reduce { a, b -> a or b }
-        return CloudSessionEvents.select(CloudSessionEvents.sessionId, CloudSessionEvents.data)
+        // In index order (session, type, seq), without a sort: a session cut by the limit is read in full on a later tick,
+        // once the sessions before it have ended (a working run's session has few turn events after its prompt).
+        return CloudSessionEvents.select(CloudSessionEvents.sessionId, CloudSessionEvents.seq, CloudSessionEvents.data)
             .where { (CloudSessionEvents.type eq CloudEventType.TURN.wire) and condition }
-            .orderBy(CloudSessionEvents.seq to SortOrder.ASC).limit(after.size * TURN_EVENTS).toList()
+            .limit(after.size * TURN_EVENTS).toList()
             .groupBy { it[CloudSessionEvents.sessionId] }
             .mapNotNull { (id, events) ->
-                events.firstNotNullOfOrNull { event ->
+                events.sortedBy { it[CloudSessionEvents.seq] }.firstNotNullOfOrNull { event ->
                     runCatching { Json.parseToJsonElement(event[CloudSessionEvents.data]).jsonObject["phase"]?.jsonPrimitive?.contentOrNull }.getOrNull()
                         ?.takeIf { it in CloudConversationRules.TURN_END_PHASES }
                 }?.let { id to it }
@@ -383,9 +387,12 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
             .orderBy(AutomationRuns.queuedAt to SortOrder.DESC, AutomationRuns.id to SortOrder.DESC).limit(keep + RELEASE_WINDOW).toList()
             .filter { RunStatus.parse(it[AutomationRuns.status])?.final == true }
         val release = ended.drop(keep).filter { !it[AutomationRuns.sessionReleased] }
-        if (release.isEmpty()) return@query emptyList()
-        AutomationRuns.update({ (AutomationRuns.id inList release.map { it[AutomationRuns.id] }) and (AutomationRuns.sessionReleased eq false) }) { it[sessionReleased] = true }
         release.mapNotNull { it[AutomationRuns.sessionId] }
+    }
+
+    override suspend fun released(automationId: String, sessionIds: List<String>) = database.query {
+        AutomationRuns.update({ (AutomationRuns.automationId eq automationId) and (AutomationRuns.sessionId inList sessionIds) }) { it[sessionReleased] = true }
+        Unit
     }
 
     override suspend fun purge(limit: Int): Int = database.query {
