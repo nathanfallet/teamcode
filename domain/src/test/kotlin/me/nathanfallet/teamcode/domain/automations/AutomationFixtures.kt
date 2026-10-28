@@ -105,7 +105,7 @@ class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationSt
     override suspend fun retry(runId: String, at: Long) { attempts[runId] = at }
     override suspend fun busy(automationId: String) = runs.values.any { it.automationId == automationId && it.status in RunStatus.WORKING }
     override suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean {
-        if (runs.getValue(runId).status != RunStatus.QUEUED) return false
+        if (runs.getValue(runId).status != RunStatus.QUEUED) { runs[runId] = runs.getValue(runId).copy(sessionId = sessionId); return false }
         runs[runId] = runs.getValue(runId).copy(status = RunStatus.STARTING, sessionId = sessionId, profileVersion = profileVersion, startedAt = clock); prompts -= runId
         return true
     }
@@ -154,7 +154,13 @@ class FakeAutomationSessions(private val store: MemoryAutomationStore) : Automat
         return "session-${run.id}" to 3
     }
     override suspend fun pause(owner: Principal, sessionId: String) { stopError?.let { throw it }; if (preparing) throw TeamFailure("session_preparing", 409, "Preparing."); paused += sessionId }
-    override suspend fun delete(owner: Principal, sessionId: String) { stopError?.let { throw it }; deleted += sessionId }
+    override suspend fun delete(owner: Principal, sessionId: String) {
+        stopError?.let { throw it }
+        if (sessionId in gone) throw TeamFailure("not_found", 404, "Session not found.")
+        deleted += sessionId
+    }
+    /** Sessions deleted by hand: their delete answers not found. */
+    val gone = mutableSetOf<String>()
 }
 
 class FakeDirectory(var settings: CloudSettings = CloudSettings()) : AutomationDirectory {

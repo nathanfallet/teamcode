@@ -142,7 +142,10 @@ interface AutomationStore {
     /** The owner's credential for the automation, or null when it was revoked (or the owner is no longer eligible). */
     suspend fun ownerPrincipal(automationId: String): Principal?
     suspend fun retry(runId: String, at: Long)
-    /** Links the created session to its queued run; false when the run ended meanwhile (cancelled), so the session is not its. */
+    /**
+     * Links the created session to its queued run. False when the run ended meanwhile (cancelled): the run then only
+     * records the session, unreleased, so that it is deleted now or by a later release.
+     */
     suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean
     suspend fun running(runId: String)
     /** Ends a run; cron and webhook runs update the automation's consecutive failures. */
