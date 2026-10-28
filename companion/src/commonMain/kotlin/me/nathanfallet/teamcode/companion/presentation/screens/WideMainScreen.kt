@@ -63,6 +63,7 @@ import androidx.window.core.layout.WindowSizeClass
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.DemoBanner
+import me.nathanfallet.teamcode.companion.presentation.components.underDemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.navigation.AccountRoute
@@ -276,7 +277,7 @@ fun WideMainScreen(
                 UpdateBanner()
                 DemoBanner(account)
                 NavHost(
-                    detail, startDestination = SessionsListRoute, modifier = Modifier.weight(1f).fillMaxWidth().testTag("content-panel"),
+                    detail, startDestination = SessionsListRoute, modifier = Modifier.weight(1f).fillMaxWidth().underDemoBanner(account).testTag("content-panel"),
                     enterTransition = { fadeIn(tween(120)) }, exitTransition = { fadeOut(tween(90)) },
                     popEnterTransition = { fadeIn(tween(120)) }, popExitTransition = { fadeOut(tween(90)) },
                 ) {
