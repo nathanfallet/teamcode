@@ -24,6 +24,10 @@ private val artifactWritePost = Regex("/api/v1/artifacts/(uploads|$ARTIFACT_ID/(
 private val artifactChunk = Regex("/api/v1/artifacts/uploads/$ARTIFACT_ID/blobs/[0-9a-f]{64}/[0-9]{1,6}")
 // Never `.` or `..`: a segment a proxy could collapse into the artifact itself, which no key deletes.
 private val artifactUnshare = Regex("/api/v1/artifacts/$ARTIFACT_ID/members/(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}")
+/** Automation reads, dry runs and draft previews; a real test needs `cloud:write`, which the service checks. Writes of definitions stay interactive. */
+private val automationRead = Regex("/api/v1/automations(/$CLOUD_ID(/runs(/$CLOUD_ID)?)?)?")
+private val automationReadPost = Regex("/api/v1/automations/(preview|$CLOUD_ID/run)")
+private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
@@ -59,6 +63,9 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     // Webhooks are team-wide: the service accepts an administrator's login or `admin:cloud` key and refuses the rest.
     method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
+    method == "GET" && automationRead.matches(path) -> CredentialAction.CLOUD_READ
+    method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ
+    method == "POST" && automationCancel.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && artifactRead.matches(path) -> CredentialAction.ARTIFACTS_READ
