@@ -138,14 +138,16 @@ class FakeAutomationSessions(private val store: MemoryAutomationStore) : Automat
     val deleted = mutableListOf<String>()
     var failure: TeamFailure? = null
     var preparing = false
+    /** Thrown by every pause and delete, as a cloud call that breaks for another reason than a refusal. */
+    var stopError: Exception? = null
     override suspend fun create(owner: Principal, automation: Automation, run: AutomationRun, prompt: String, idempotencyKey: String): Pair<String, Int> {
         failure?.let { throw it }
         created += Triple(owner.tokenId, prompt, idempotencyKey)
         store.progress["session-${run.id}"] = SessionProgress(CloudSessionState.CREATING, DesiredState.RUNNING, CloudInputStatus.QUEUED)
         return "session-${run.id}" to 3
     }
-    override suspend fun pause(owner: Principal, sessionId: String) { if (preparing) throw TeamFailure("session_preparing", 409, "Preparing."); paused += sessionId }
-    override suspend fun delete(owner: Principal, sessionId: String) { deleted += sessionId }
+    override suspend fun pause(owner: Principal, sessionId: String) { stopError?.let { throw it }; if (preparing) throw TeamFailure("session_preparing", 409, "Preparing."); paused += sessionId }
+    override suspend fun delete(owner: Principal, sessionId: String) { stopError?.let { throw it }; deleted += sessionId }
 }
 
 class FakeDirectory(var settings: CloudSettings = CloudSettings()) : AutomationDirectory {

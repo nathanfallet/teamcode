@@ -168,4 +168,16 @@ class AutomationDispatchTest {
         assertEquals(RunStatus.INVALID_PAYLOAD, world.store.runs.values.single().status)
         assertEquals(0, world.store.automations.getValue(id).consecutiveFailures)
     }
+
+    @Test fun aBrokenStopNeitherBlocksTheRunNorTheOthers() = runBlocking {
+        val world = Fixtures.World()
+        val (_, first) = queued(world, key = "a")
+        val (_, second) = queued(world, key = "b")
+        world.dispatcher.run()
+        world.sessions.stopError = java.io.IOException("connection reset")
+        world.store.clock += 24 * 3_600_000L
+        world.dispatcher.run()
+        assertEquals(RunStatus.TIMED_OUT, world.store.runs.getValue(first.id).status)
+        assertEquals(RunStatus.TIMED_OUT, world.store.runs.getValue(second.id).status, "the next run is still followed")
+    }
 }
