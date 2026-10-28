@@ -64,6 +64,7 @@ class AutomationService(
     private suspend fun read(actor: Principal, id: String): Automation { actor.requireCloudRead(); store.revalidate(actor); return visible(actor, store.find(actor.teamId, id)) }
     private suspend fun owned(actor: Principal, id: String): Automation {
         actor.requireInteractive(); actor.requireReady()
+        store.revalidate(actor)
         val automation = visible(actor, store.find(actor.teamId, id))
         if (automation.ownerId != actor.member.id) throw ownerOnly()
         return automation
@@ -106,8 +107,10 @@ class AutomationService(
     /** Arms it: the owner only, interactively; the owner's GitHub link is lent to its sessions from now on. */
     suspend fun enable(actor: Principal, id: String): Automation {
         val current = owned(actor, id)
-        requireProfile(actor.teamId, actor.member, current.definition)
         val now = store.now()
+        // The rules may have changed since it was saved (a timezone gone, a stricter limit): arming checks them again.
+        AutomationRules.validate(current.definition, now)
+        requireProfile(actor.teamId, actor.member, current.definition)
         return store.setEnabled(actor, id, true, AutomationRules.nextRun(current.definition, now))
     }
 

@@ -58,6 +58,15 @@ class CronScheduleTest {
         assertEquals(at("2026-10-28T15:00", utc), schedule.latest(at("2026-10-28T15:00", utc), notBefore = at("2026-10-28T15:00", utc)), "both ends included")
     }
 
+    @Test fun theLatestSlotOfADayLongWindowCrossesMidnightAndTheClockChange() {
+        val frequent = CronSchedule.parse("*/5 * * * *", "Europe/Paris", at("2026-10-24T00:00"))
+        assertEquals("2026-10-25T09:10", local(frequent.latest(at("2026-10-25T09:12"), notBefore = at("2026-10-24T09:12"))!!))
+        val night = CronSchedule.parse("30 2 * * *", "Europe/Paris", at("2026-10-24T00:00"))
+        // 2026-10-25: 02:30 happens twice in Paris; only the first one (the default offset of `at`) is a slot.
+        assertEquals(at("2026-10-25T02:30"), night.latest(at("2026-10-25T05:00"), notBefore = at("2026-10-24T05:00")))
+        assertEquals("2026-10-26T02:30", local(night.latest(at("2026-10-26T23:00"), notBefore = at("2026-10-25T23:00"))!!))
+    }
+
     @Test fun invalidExpressionsAreRefused() {
         for (expression in listOf("", "* * * *", "* * * * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 8", "*/0 * * * *", "5-1 * * * *", "a * * * *", "0 21 * * *" + " ".repeat(200)))
             assertEquals("invalid_automation", assertFailsWith<TeamFailure>(expression) { CronSchedule.parse(expression, "UTC") }.code, expression)

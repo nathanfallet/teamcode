@@ -30,11 +30,13 @@ class CronSchedule private constructor(
 
     fun upcoming(after: Long, count: Int): List<Long> = generateSequence(next(after)) { next(it) }.take(count).toList()
 
-    /** The latest slot in `[notBefore, at]`, or null. */
+    /** The latest slot in `[notBefore, at]`, or null: the days of the window only, plus one on each side for clock changes. */
     fun latest(at: Long, notBefore: Long): Long? {
-        var slot = next(notBefore - 1) ?: return null
-        if (slot > at) return null
-        while (true) { val following = next(slot) ?: return slot; if (following > at) return slot; slot = following }
+        if (notBefore > at) return null
+        val first = java.time.Instant.ofEpochMilli(notBefore).atZone(zone).toLocalDate().minusDays(1)
+        val last = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalDate().plusDays(1)
+        return generateSequence(last) { it.minusDays(1) }.takeWhile { !it.isBefore(first) }
+            .firstNotNullOfOrNull { date -> slotsOf(date).filter { it in notBefore..at }.maxOrNull() }
     }
 
     private fun slotsOf(date: LocalDate): List<Long> {
@@ -68,8 +70,11 @@ class CronSchedule private constructor(
 
         fun invalid(message: String) = TeamFailure("invalid_automation", 400, message)
 
-        /** Parses and checks [expression] in [timezone]: it must have a slot and two slots at least five minutes apart. */
-        fun parse(expression: String, timezone: String, now: Long = System.currentTimeMillis()): CronSchedule {
+        /**
+         * Parses [expression] in [timezone] and, when [check] (on save), checks that it has a slot and that two slots are
+         * at least five minutes apart; the scheduler, which reads saved definitions, skips that check.
+         */
+        fun parse(expression: String, timezone: String, now: Long = System.currentTimeMillis(), check: Boolean = true): CronSchedule {
             val zone = zone(timezone)
             if (expression.length > MAX_LENGTH || expression.any { it.isISOControl() }) throw invalid("Use a cron expression of at most $MAX_LENGTH characters.")
             val fields = expression.trim().split(Regex("\\s+"))
@@ -77,6 +82,7 @@ class CronSchedule private constructor(
             val weekdays = field(fields[4], 0, 7, WEEKDAYS, "day of week").also { if (it[7]) { it.set(0); it.clear(7) } }
             val schedule = CronSchedule(field(fields[0], 0, 59, null, "minute"), field(fields[1], 0, 23, null, "hour"), field(fields[2], 1, 31, null, "day of month"),
                 field(fields[3], 1, 12, MONTHS, "month"), weekdays, !fields[2].startsWith("*"), !fields[4].startsWith("*"), zone)
+            if (!check) return schedule
             val upcoming = schedule.upcoming(now, 64)
             if (upcoming.isEmpty()) throw invalid("This cron expression never matches a date.")
             if (upcoming.zipWithNext().any { (a, b) -> b - a < MIN_INTERVAL_MILLIS }) throw invalid("Leave at least five minutes between two runs.")

@@ -22,8 +22,9 @@ class ScheduleAutomationsUseCase(private val store: AutomationStore) {
             val expected = automation.nextRunAt ?: continue
             val trigger = automation.definition.trigger
             val now = store.now()
-            val schedule = try { CronSchedule.parse(trigger.cron!!, trigger.timezone!!, now) }
-                catch (_: TeamFailure) { store.advance(automation.id, expected, null, null); continue }
+            // Checked when saved; only a timezone that left the time-zone database can fail here: the automation pauses, visibly.
+            val schedule = try { CronSchedule.parse(trigger.cron!!, trigger.timezone!!, now, check = false) }
+                catch (_: TeamFailure) { if (store.advance(automation.id, expected, null, null)) store.disableBySystem(automation.id, INVALID_SCHEDULE); continue }
             val window = if (trigger.catchup == CatchupPolicy.ONCE) maxOf(trigger.catchupGraceMinutes * 60_000L, AutomationRules.ON_TIME_MILLIS) else AutomationRules.ON_TIME_MILLIS
             val slot = schedule.latest(now, notBefore = maxOf(expected, now - window))
             val run = slot?.let { prepareRun(automation, RunSource.CRON, "cron:$it", null, now, scheduledFor = it, actor = null).run }
@@ -31,7 +32,10 @@ class ScheduleAutomationsUseCase(private val store: AutomationStore) {
         }
         return recorded
     }
-    companion object { const val BATCH = 100 }
+    companion object {
+        const val BATCH = 100
+        const val INVALID_SCHEDULE = "invalid_schedule"
+    }
 }
 
 /**
@@ -97,18 +101,20 @@ class DispatchAutomationRunsUseCase(private val store: AutomationStore, private 
     /** Pauses the session; one still being prepared cannot pause, so it is deleted. Best effort: the run ends either way. */
     private suspend fun stop(run: AutomationRun, sessionId: String) {
         val owner = store.ownerPrincipal(run.automationId) ?: return
-        try { sessions.pause(owner, sessionId) }
-        catch (error: TeamFailure) {
-            if (error.code == "session_preparing") try { sessions.delete(owner, sessionId) } catch (_: TeamFailure) { }
-        }
+        val preparing = bestEffort { sessions.pause(owner, sessionId) }?.let { it is TeamFailure && it.code == "session_preparing" } ?: false
+        if (preparing) bestEffort { sessions.delete(owner, sessionId) }
     }
+
+    /** Runs [call] and returns what it threw, so that one broken cloud call never stops following the other runs. */
+    private suspend fun bestEffort(call: suspend () -> Unit): Exception? =
+        try { call(); null } catch (error: CancellationException) { throw error } catch (error: Exception) { error }
 
     /** Deletes the sessions of the automation's runs beyond the latest [AutomationRules.KEEP_SESSIONS]. */
     private suspend fun release(run: AutomationRun) {
         val ids = store.releasable(run.automationId, AutomationRules.KEEP_SESSIONS)
         if (ids.isEmpty()) return
         val owner = store.ownerPrincipal(run.automationId) ?: return
-        for (id in ids) try { sessions.delete(owner, id) } catch (_: TeamFailure) { }
+        for (id in ids) bestEffort { sessions.delete(owner, id) }
     }
 
     companion object {

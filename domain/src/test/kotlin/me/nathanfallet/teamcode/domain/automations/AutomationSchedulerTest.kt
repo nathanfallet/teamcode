@@ -81,4 +81,15 @@ class AutomationSchedulerTest {
         assertTrue(world.store.advance(id, expected, at("2026-10-29T21:00"), null))
         assertFalse(world.store.advance(id, expected, at("2026-10-29T21:00"), null), "the second replica read a slot that moved")
     }
+
+    @Test fun aScheduleThatNoLongerParsesPausesTheAutomation() = runBlocking {
+        val (world, id) = armed()
+        val automation = world.store.automations.getValue(id)
+        world.store.automations[id] = automation.copy(definition = automation.definition.copy(trigger = automation.definition.trigger.copy(timezone = "Mars/Olympus")))
+        world.store.clock = at("2026-10-28T21:00:10")
+        assertEquals(0, world.scheduler.run())
+        val paused = world.store.automations.getValue(id)
+        assertFalse(paused.enabled); assertEquals("invalid_schedule", paused.disabledReason)
+        assertTrue("automation.invalid_schedule" in world.store.audit)
+    }
 }
