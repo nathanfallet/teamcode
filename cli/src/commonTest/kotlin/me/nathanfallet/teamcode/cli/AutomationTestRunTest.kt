@@ -51,11 +51,15 @@ class AutomationTestRunTest {
         assertEquals("my-key", seen.last().key); assertContains(seen.last().body, "\"dryRun\":false")
     }
 
-    @Test fun `a run the server skipped is not presented as one to follow`() {
-        assertContains(run.testHint("a1"), "Follow it")
-        for (status in listOf("skipped_overlap", "skipped_budget", "invalid_payload")) {
+    @Test fun `a run the server skipped or an earlier one replayed is not presented as one to follow`() {
+        for (status in listOf("queued", "starting", "running")) assertContains(run.copy(status = status).testHint("a1"), "Follow it")
+        for (status in listOf("skipped_overlap", "skipped_budget")) {
             val hint = run.copy(status = status, reason = "overlap").testHint("a1")
             assertContains(hint, "No session was started"); assertFalse("Follow it" in hint)
+        }
+        for (status in listOf("failed", "cancelled", "timed_out")) {
+            val hint = run.copy(status = status).testHint("a1")
+            assertContains(hint, "already ended as $status"); assertFalse("Follow it" in hint)
         }
     }
 

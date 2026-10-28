@@ -25,13 +25,19 @@ internal fun AutomationRunView.line() = listOf(id, status + (reason?.let { " ($i
     "v$automationVersion", "queued ${time(queuedAt)}", "session " + (sessionId ?: "-")).joinToString("\t")
 
 /**
- * What to tell after a real test run. The server records a run it did not start (`skipped_overlap`, `skipped_budget`,
- * `invalid_payload`) with a 202 like any other, so following it for a session would wait for nothing.
+ * What to tell after a real test run. The server records a run it did not start (`skipped_overlap`, `skipped_budget`)
+ * with a 202 like any other, and a retry with the same idempotency key returns the earlier run, which may have ended:
+ * following either for a new session would wait for nothing.
  */
-internal fun AutomationRunView.testHint(automationId: String) =
-    if (status.startsWith("skipped") || status == "invalid_payload") "No session was started" + (reason?.let { " ($it)" } ?: "") +
-        ": the run is kept in the history (teamcode automations runs $automationId)."
-    else "Follow it: teamcode automations runs $automationId (the session appears once it starts)."
+internal fun AutomationRunView.testHint(automationId: String): String {
+    val history = "teamcode automations runs $automationId --source test"
+    return when {
+        status !in Automations.finalRunStatuses -> "Follow it: $history (the session appears once it starts)."
+        status.startsWith("skipped") -> "No session was started" + (reason?.let { " ($it)" } ?: "") +
+            ": the run is kept in the history ($history); wait for the running one, or raise --max-runs-per-day."
+        else -> "This run already ended as $status: $history."
+    }
+}
 
 /** How the webhook URL is shown: `signed` (the sender signs the request) or `secret` (the secret is part of the URL). */
 internal enum class WebhookUrlMode { SIGNED, SECRET }
