@@ -929,11 +929,7 @@ jobs:
           flags=()
           if [[ "$releaseVersion" == *-* ]]; then flags+=(--prerelease); fi
           notes="$RUNNER_TEMP/release-notes.md"
-          if [[ -f "docs/releases/$releaseVersion.md" ]]; then
-            cp "docs/releases/$releaseVersion.md" "$notes"
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$releaseVersion" --jq .body > "$notes"
-          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$releaseVersion" --jq .body > "$notes"
           # The desktop downloads, read from the signed desktop manifest and the attached files.
           python3 scripts/release-desktop.py notes --directory dist --notes "$notes"
           gh release create "$releaseVersion" dist/* --verify-tag --notes-file "$notes" --title "$releaseVersion" "${flags[@]}" --draft

@@ -234,7 +234,7 @@ class DocumentedOneLinerTest(unittest.TestCase):
         # GitHub serves release assets as application/octet-stream, so Invoke-WebRequest
         # returns Content as byte[]; passing it to ScriptBlock.Create yields "239 187 191 ...".
         root = Path(__file__).resolve().parent.parent
-        files = [root / 'README.md', root / 'docs/bootstrap.md', *sorted((root / 'docs/releases').glob('*.md'))]
+        files = [root / 'README.md', root / 'docs/bootstrap.md']
         found = 0
         for file in files:
             for line in file.read_text(encoding='utf-8').splitlines():

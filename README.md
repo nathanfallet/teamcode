@@ -2,7 +2,7 @@
 
 An open-source, self-hosted model gateway for teams: pooled provider accounts, fair access, predictive capacity management, a web dashboard, and a native Kotlin Multiplatform CLI.
 
-**Latest stable release: [1.2.0](https://github.com/nathanfallet/teamcode/releases/tag/1.2.0).** TeamCode ships the gateway (pooled Claude Max and Codex accounts, quotas, routing, capacity forecasts and the web dashboard), the native CLI with one-command installers and signed updates, TeamCode Desktop and the companion apps, cloud sessions and remote sessions, and the MCP gateway with its stdio host. Cross-provider translation is experimental and disabled by default. Some real-client, load and operational validation is still open: see [progress](docs/progress.md) and the [roadmap](docs/roadmap.md). Release notes are published on the [GitHub releases page](https://github.com/nathanfallet/teamcode/releases); [`docs/releases/`](docs/releases/) keeps the notes of 0.1.0 to 0.2.2.
+**Latest stable release: [1.2.0](https://github.com/nathanfallet/teamcode/releases/tag/1.2.0).** TeamCode ships the gateway (pooled Claude Max and Codex accounts, quotas, routing, capacity forecasts and the web dashboard), the native CLI with one-command installers and signed updates, TeamCode Desktop and the companion apps, cloud sessions and remote sessions, and the MCP gateway with its stdio host. Cross-provider translation is experimental and disabled by default. Some real-client, load and operational validation is still open: see [progress](docs/progress.md) and the [roadmap](docs/roadmap.md). Release notes are published on the [GitHub releases page](https://github.com/nathanfallet/teamcode/releases).
 
 ## Install the native CLI
 
