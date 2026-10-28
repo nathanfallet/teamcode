@@ -53,10 +53,11 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             if (existing != null) CloudIdempotency.deleteWhere { scope }
         }
         // The cap bounds the workspaces a member keeps on clusters: remote sessions keep none, and a device has no cap.
-        if (session.kind == CloudSessionKind.CLOUD) {
+        // Automation sessions are bounded by their automation instead (its latest runs keep theirs), outside this cap.
+        if (session.kind == CloudSessionKind.CLOUD && session.automationId == null) {
             val retained = CloudSessions.select(CloudSessions.id).where {
                 (CloudSessions.teamId eq principal.teamId) and (CloudSessions.ownerId eq actor.effectiveMemberId) and (CloudSessions.kind eq CloudSessionKind.CLOUD.wire) and
-                    (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire))
+                    (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire)) and CloudSessions.automationId.isNull()
             }.count()
             if (retained >= retainedLimit) throw TeamFailure("cloud_session_limit", 409, "The member already retains the maximum number of cloud sessions. Delete one first.")
         }
@@ -70,6 +71,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[environment] = encodeEnvironment(created.environment)
             it[kind] = created.kind.wire; it[hostDeviceId] = created.host?.deviceId; it[hostDirectoryName] = created.host?.directoryName
             it[permissionMode] = created.host?.permissionMode?.wire; it[hostFolderId] = created.host?.folderId; it[hostResumeSessionId] = created.host?.resumeSessionId
+            if (created.automationId != null) it[automationId] = created.automationId
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
@@ -148,19 +150,23 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         val cluster = CloudClusters.selectAll().where { (CloudClusters.id eq expected.clusterId) and (CloudClusters.teamId eq expected.teamId) }.forUpdate().singleOrNull()
             ?: return@query StartOutcome.Conflict
         val now = nowMillis()
+        // The member's cap counts their own sessions only: automation sessions have the automation cap, applied before
+        // their creation, and count toward the cluster's pods like any other.
         fun running(owner: String?): Long = (CloudExecutions innerJoin CloudSessions).select(CloudExecutions.sessionId).where {
             (CloudSessions.clusterId eq expected.clusterId) and (CloudExecutions.epoch eq CloudSessions.currentEpoch) and
-                (CloudExecutions.state neq ExecutionState.ENDED.wire) and (owner?.let { CloudSessions.ownerId eq it } ?: Op.TRUE)
+                (CloudExecutions.state neq ExecutionState.ENDED.wire) and (owner?.let { (CloudSessions.ownerId eq it) and CloudSessions.automationId.isNull() } ?: Op.TRUE)
         }.count()
-        if (running(null) >= cluster[CloudClusters.maxRunningPods] || running(expected.ownerId) >= memberRunningLimit) return@query StartOutcome.WaitingCapacity
-        // FIFO across the cluster: an older waiting session whose owner is under its cap goes first.
+        val automation = expected.automationId != null
+        if (running(null) >= cluster[CloudClusters.maxRunningPods] || (!automation && running(expected.ownerId) >= memberRunningLimit)) return@query StartOutcome.WaitingCapacity
+        // FIFO across the cluster: an older waiting session that could start goes first (an automation session always
+        // could; another one when its owner is under their cap), and so does an older one of the same owner and kind.
         val since = expected.waitingSince ?: now
-        val ahead = CloudSessions.select(CloudSessions.id, CloudSessions.ownerId).where {
+        val ahead = CloudSessions.select(CloudSessions.id, CloudSessions.ownerId, CloudSessions.automationId).where {
             (CloudSessions.clusterId eq expected.clusterId) and CloudSessions.waitingSince.isNotNull() and (CloudSessions.id neq expected.id) and
                 ((CloudSessions.waitingSince less since) or ((CloudSessions.waitingSince eq since) and (CloudSessions.id less expected.id))) and
                 (CloudSessions.desiredState eq DesiredState.RUNNING.wire) and (CloudSessions.state inList listOf(CloudSessionState.CREATING.wire, CloudSessionState.RESUMING.wire))
-        }.orderBy(CloudSessions.waitingSince to SortOrder.ASC).limit(50).map { it[CloudSessions.ownerId] }.distinct()
-        if (ahead.any { owner -> owner == expected.ownerId || running(owner) < memberRunningLimit }) return@query StartOutcome.WaitingCapacity
+        }.orderBy(CloudSessions.waitingSince to SortOrder.ASC).limit(50).map { it[CloudSessions.ownerId] to (it[CloudSessions.automationId] != null) }.distinct()
+        if (ahead.any { (owner, byAutomation) -> byAutomation || (owner == expected.ownerId && !automation) || running(owner) < memberRunningLimit }) return@query StartOutcome.WaitingCapacity
         val updated = CloudSessions.update({ sessionGuard(expected, leaseOwner, now) }) { writeSessionMutable(it, next.copy(generation = expected.generation + 1)) }
         if (updated != 1) return@query StartOutcome.Conflict
         CloudExecutions.insert {
@@ -319,6 +325,7 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     host = readHost(row),
     // An unknown value (a newer server's) is the strictest mode that keeps the session usable by its owner.
     githubAccess = CloudGitHubAccess.parse(row[CloudSessions.githubAccess]) ?: CloudGitHubAccess.OWNER,
+    automationId = row.getOrNull(CloudSessions.automationId),
 )
 /**
  * The host of a remote session; the device's name and system, and the liveness of the current execution, only when

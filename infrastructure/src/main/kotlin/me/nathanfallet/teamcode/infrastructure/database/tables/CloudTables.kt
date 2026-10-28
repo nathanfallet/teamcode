@@ -69,6 +69,9 @@ object CloudSettingsTable : Table("cloud_settings") {
     val messageFileMebibytes = integer("message_file_mebibytes").default(25)
     /** Minutes background work keeps an idle session running, from the start of its unbroken stretch; 0 never. */
     val backgroundWorkMaxMinutes = integer("background_work_max_minutes").default(240)
+    /** Automations a member may own, and their runs working at once (outside the member's running sessions). */
+    val maxAutomationsPerMember = integer("max_automations_per_member").default(20)
+    val maxRunningAutomationsPerMember = integer("max_running_automations_per_member").default(2)
     override val primaryKey = PrimaryKey(teamId)
 }
 /** Whether cloud sessions run and how their pods are built; no row until an administrator or the initial seed saves it. */
@@ -169,6 +172,8 @@ object CloudSessions : Table("cloud_sessions") {
     val hostFolderId = varchar("host_folder_id", 64).nullable()
     /** The device's conversation a session started there continues (`cloud.sessions.remote.resume.v1`). */
     val hostResumeSessionId = varchar("host_resume_session_id", 36).nullable()
+    /** The automation whose run created the session; such sessions are outside the member's running and retained caps. */
+    val automationId = varchar("automation_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)

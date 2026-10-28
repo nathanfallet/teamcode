@@ -175,6 +175,11 @@ data class CloudSession(
     val host: CloudSessionHost? = null,
     /** Whose instructions an agent holding the owner's GitHub token follows ([CloudGitHubAccess]); not used by remote sessions. */
     val githubAccess: CloudGitHubAccess = CloudGitHubAccess.OWNER,
+    /**
+     * The automation that created the session: it counts toward the owner's automation cap instead of their running and
+     * retained session caps (docs/automations.md).
+     */
+    val automationId: String? = null,
 ) {
     /** Whether a permission answer can reach the agent now: `ready` or `active`, desired running. */
     val takesAnswers: Boolean get() = desiredState == DesiredState.RUNNING && (state == CloudSessionState.READY || state == CloudSessionState.ACTIVE)
@@ -310,6 +315,10 @@ data class CloudSettings(
      * work never keeps a session running. See [CloudIdleRules.backgroundActivity].
      */
     val backgroundWorkMaxMinutes: Int = CloudIdleRules.DEFAULT_BACKGROUND_WORK_MINUTES,
+    /** Automations a member may own (0 to 200); 0 turns automations off for the team's members. */
+    val maxAutomationsPerMember: Int = 20,
+    /** One member's automation runs that may be starting or working at once (1 to 100), apart from [maxRunningSessionsPerMember]. */
+    val maxRunningAutomationsPerMember: Int = 2,
 )
 enum class MemberTransfers(val wire: String) {
     DISABLED("disabled"), OFFER("offer");
@@ -358,6 +367,8 @@ data class CloudSessionDraft(
     val environment: CloudEnvironmentOverride? = null,
     /** The first message for the agent, queued with the session and delivered once it is ready. */
     val initialMessage: String? = null,
+    /** The automation that creates the session (docs/automations.md); set by the server only, never from a request. */
+    val automationId: String? = null,
 )
 
 /** A session on the caller's own device: no profile, the agent and the directory's name come from the request. */
