@@ -82,6 +82,7 @@ class CloudSessionService(
             environment = CloudEnvironmentRules.merge(spec.environment, draft.environment).also(CloudEnvironmentRules::validate),
             // Created on someone's behalf, the session runs the creator's instructions: no GitHub token until its owner allows it (audit M2).
             githubAccess = if (onBehalf) CloudGitHubAccess.NONE else CloudGitHubAccess.OWNER,
+            automationId = draft.automationId,
         )
         if (onBehalf && session.environment.requireGitHub) throw TeamFailure("github_owner_consent", 422,
             "This profile requires GitHub, and a session created on someone's behalf has no GitHub access until its owner allows it. Ask the owner to create the session.")
