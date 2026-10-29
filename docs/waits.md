@@ -26,7 +26,7 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 
 | Field | Rules |
 | --- | --- |
-| `kind` | `permission` and `question` are a cloud session's own requests (`cloud.permissions.v1`) seen as waits; they are answered through the session, never by `POST /waits/{id}/answer` (`409 answer_through_session`). `human_request` is asked by a member or an agent; `turn_failed` by the server. |
+| `kind` | `permission` and `question` are a cloud session's own requests (`cloud.permissions.v1`) seen as waits; they are answered through the session, never by `POST /waits/{id}/answer` (`409 answer_through_session`). `human_request` is asked by a member or an agent; `turn_failed` and `workflow` (a human node of a [workflow](workflows.md#runs) run) by the server. A `workflow` wait never wakes the session: the run moves on. |
 | `source` | `wait`: a stored row. `session`: a session's open permission request, which has no row of its own and is listed on the first page only. |
 | `status` | `open`, `resolved`, `cancelled`. Final states never change. |
 | `title`, `body` | 1–200 characters without control characters; body at most 32,000. |

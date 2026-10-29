@@ -12,9 +12,10 @@ object Waits {
     /**
      * `permission` and `question` are the cloud sessions' own requests (`cloud.permissions.v1`) seen as waits: they are
      * answered through `POST /cloud/sessions/{id}/permissions`, never here. `human_request` is made by an agent or a
-     * member, `turn_failed` by the server when a turn ended where it should not have.
+     * member, `turn_failed` by the server when a turn ended where it should not have, `workflow` by a workflow run at a human
+     * node (its answer moves the run on and does not wake the session).
      */
-    val kinds = listOf("permission", "question", "human_request", "turn_failed")
+    val kinds = listOf("permission", "question", "human_request", "turn_failed", "workflow")
     /** Who or what resolves a wait. `time` and `event` are part of the contract but refused (`422 not_available_yet`). */
     val resolvers = listOf("human", "time", "event")
     val statuses = listOf("open", "resolved", "cancelled")
