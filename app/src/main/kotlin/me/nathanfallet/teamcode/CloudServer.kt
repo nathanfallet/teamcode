@@ -20,6 +20,8 @@ import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowStore
+import me.nathanfallet.teamcode.domain.workflows.WorkflowService
 import me.nathanfallet.teamcode.domain.waits.WaitService
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.waits.WaitSessions
@@ -99,6 +101,8 @@ class CloudServer(
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
     })
+    /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
+    val workflows = WorkflowService(SqlWorkflowStore(database))
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 
