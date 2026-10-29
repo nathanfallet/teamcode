@@ -796,6 +796,25 @@ class TeamCodeClient(
     }
     suspend fun cancelWait(id: String): WaitView { identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/cancel", null as Unit?) }
 
+    // Workflows (`workflows.v1`, docs/workflows.md).
+    suspend fun workflows(after: String? = null, limit: Int = 50): WorkflowPageView {
+        after?.let(::identifier)
+        require(limit in 1..100) { "Use a limit of 1 to 100." }
+        return coded(HttpMethod.Get, "/api/v1/workflows", null as Unit?) {
+            url { after?.let { parameters.append("after", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun workflow(id: String): WorkflowView { identifier(id); return coded(HttpMethod.Get, "/api/v1/workflows/$id", null as Unit?) }
+    suspend fun createWorkflow(draft: WorkflowDraft): WorkflowView = coded(HttpMethod.Post, "/api/v1/workflows", SaveWorkflowRequest(draft))
+    /** Saves a new version; `409 workflow_conflict` when [expectedVersion] is no longer the current one. */
+    suspend fun updateWorkflow(id: String, draft: WorkflowDraft, expectedVersion: Int? = null): WorkflowView {
+        identifier(id); return coded(HttpMethod.Put, "/api/v1/workflows/$id", SaveWorkflowRequest(draft, expectedVersion))
+    }
+    /** Deletes a definition and returns it; runs already started keep the version they run. */
+    suspend fun deleteWorkflow(id: String): WorkflowView { identifier(id); return coded(HttpMethod.Delete, "/api/v1/workflows/$id", null as Unit?) }
+    suspend fun workflowSettings(): WorkflowSettingsView = coded(HttpMethod.Get, "/api/v1/workflows/settings", null as Unit?)
+    suspend fun updateWorkflowEditors(editors: WorkflowEditorsView): WorkflowSettingsView = coded(HttpMethod.Put, "/api/v1/workflows/settings", editors)
+
     // Automations (`automations.v1`, docs/automations.md).
     /** The caller's automations, or [owner]'s (a member id, or `all`: administrators). Newest first, [before] is the page cursor. */
     suspend fun automations(owner: String? = null, before: String? = null, limit: Int = 50): AutomationPageView {
