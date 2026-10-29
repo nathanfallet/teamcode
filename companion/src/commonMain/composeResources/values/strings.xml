@@ -37,6 +37,8 @@
     <string name="sessions_reconnecting">Reconnecting…</string>
     <string name="sessions_load_more">Load more</string>
     <string name="sessions_turn_finished">New reply</string>
+    <string name="sessions_waiting_permission">Needs approval</string>
+    <string name="sessions_waiting_question">Has a question</string>
     <string name="time_just_now">just now</string>
     <string name="time_minutes">%1$d min ago</string>
     <string name="time_hours">%1$d h ago</string>

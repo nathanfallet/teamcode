@@ -82,7 +82,7 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         calls.withAccount(accountId, resource = true) { it.deleteCloudSession(sessionId) }
     }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>): Flow<LiveUpdate<SessionChange>> = flow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean): Flow<LiveUpdate<SessionChange>> = flow {
         // One cursor per collection, shared by its attempts: a reconnection resumes after the last event seen, any subject.
         var cursor: Long? = null
         emitAll(reconnecting(policy, resource = false) { send, progress ->
@@ -90,7 +90,7 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
             val resumed = cursor != null
             client.followTeamEvents(
                 after = cursor,
-                types = SESSION_EVENT_TYPES,
+                types = if (waiting) SESSION_EVENT_TYPES + WAITING_EVENT_TYPES else SESSION_EVENT_TYPES,
                 kinds = kinds.map { it.wire }.toSet(),
                 onGap = { send(LiveUpdate.Gap) },
                 onOpen = { progress.opened(); send(LiveUpdate.Opened(resumed)) },
@@ -108,5 +108,8 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
  * be refused, and runs (`run.*`) are not shown.
  */
 private val SESSION_EVENT_TYPES = setOf("cloud.session.created", "cloud.session.paused", "cloud.session.woken", "cloud.session.resumed", "cloud.session.ended", "cloud.turn")
+
+/** The agent waiting for a person and the end of that wait, from a server with `cloud.sessions.waiting.v1`. */
+private val WAITING_EVENT_TYPES = setOf(SessionChange.WAITING, SessionChange.ANSWERED)
 
 private fun CloudInputView.receipt() = InputReceipt(id, status, woke, reason)

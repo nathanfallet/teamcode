@@ -58,6 +58,7 @@ import com.adamglin.phosphoricons.regular.Warning
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
@@ -78,6 +79,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
+import me.nathanfallet.teamcode.companion.presentation.components.Chip
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
@@ -116,6 +118,8 @@ import me.nathanfallet.teamcode.companion.resources.sessions_switch_account
 import me.nathanfallet.teamcode.companion.resources.sessions_team
 import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.sessions_turn_finished
+import me.nathanfallet.teamcode.companion.resources.sessions_waiting_permission
+import me.nathanfallet.teamcode.companion.resources.sessions_waiting_question
 import me.nathanfallet.teamcode.companion.resources.time_days
 import me.nathanfallet.teamcode.companion.resources.time_hours
 import me.nathanfallet.teamcode.companion.resources.time_just_now
@@ -333,6 +337,7 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (finished) Dot(colors.accentText, Modifier.testTag("finished-${session.id}"))
             Text(session.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            session.waiting?.let { WaitingChip(it) }
             StateChip(session.state)
         }
         val details = listOfNotNull(session.agentKind, session.model, session.effort, phaseLabel(session)).joinToString(" · ")
@@ -357,6 +362,13 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
             Text(relativeTime(session.lastActivityAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)
         }
     }
+}
+
+/** The agent waits for a person: a tool use to approve or a question to answer. */
+@Composable
+private fun WaitingChip(waiting: SessionWaiting) {
+    val text = if (waiting.reason == SessionWaiting.QUESTION) Res.string.sessions_waiting_question else Res.string.sessions_waiting_permission
+    Chip(stringResource(text), Modifier.testTag("waiting"), tone = Tone.WARN)
 }
 
 @Composable

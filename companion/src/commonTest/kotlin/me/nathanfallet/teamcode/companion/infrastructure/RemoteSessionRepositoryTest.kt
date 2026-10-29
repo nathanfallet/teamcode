@@ -124,6 +124,23 @@ class RemoteSessionRepositoryTest {
         assertEquals(listOf("cloud", "remote"), requests.first().url.parameters.getAll("kind"))
     }
 
+    @Test fun theWaitingEventsAreAskedWhenWantedAndASessionSaysWhatItWaitsFor() = runTest {
+        sse(teamEvent(1, "cloud.session.waiting", data = """{"reason":"question","requestId":"r1","eventSeq":4}""") +
+            teamEvent(2, "cloud.session.answered", data = """{"requestId":"r1","behavior":"allow","reason":"answered"}""") + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", waiting = true).collect { seen += it } }
+        assertEquals("cloud.session.answered,cloud.session.created,cloud.session.ended,cloud.session.paused,cloud.session.resumed,cloud.session.waiting,cloud.session.woken,cloud.turn",
+            requests.single().url.parameters["types"])
+        val (asked, answered) = seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().map { it.value }
+        assertEquals("question", asked.waitingReason); assertEquals("r1", asked.requestId); assertNull(asked.turnPhase)
+        assertNull(answered.waitingReason); assertEquals("r1", answered.requestId)
+
+        json("""{"sessions":[${sessionJson.replace(""""future":{"x":1}}""", """"waiting":{"reason":"permission","requestId":"r2","since":7,"eventSeq":3}}""")},$sessionJson]}""")
+        val (waiting, idle) = sessions.sessions("a1", SessionScope.MINE, SessionFilter.OPEN, before = null).sessions
+        assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionWaiting("permission", "r2", 7), waiting.waiting)
+        assertNull(idle.waiting)
+    }
+
     @Test fun aMissingSessionIsNotFound() = runTest {
         json("""{"error":{"type":"session_not_found","message":"No."}}""", HttpStatusCode.NotFound)
         assertFailsWith<CompanionException.NotFound> { sessions.session("a1", "s1") }

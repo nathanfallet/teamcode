@@ -27,9 +27,12 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
+import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
+import kotlinx.coroutines.cancel
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
@@ -42,12 +45,53 @@ class SessionsViewModelTest {
     private val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED)
     private val accounts = InMemoryAccountRepository(listOf(account("a1")))
 
-    @BeforeTest fun setUp() { Dispatchers.setMain(dispatcher); sessions.changes = feed.receiveAsFlow() }
-    @AfterTest fun tearDown() = Dispatchers.resetMain()
+    /** The app scope of the shared feed. */
+    private val feedScope = kotlinx.coroutines.CoroutineScope(dispatcher + kotlinx.coroutines.SupervisorJob())
 
-    private fun viewModel(features: FakeFeatures = FakeFeatures()): SessionsViewModel {
+    @BeforeTest fun setUp() { Dispatchers.setMain(dispatcher); sessions.changes = feed.receiveAsFlow() }
+    @AfterTest fun tearDown() { feedScope.cancel(); Dispatchers.resetMain() }
+
+    private fun viewModel(features: FakeFeatures = FakeFeatures(), shared: SessionFeed = SessionFeed(sessions, features, feedScope)): SessionsViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        return SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        return SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard))
+    }
+
+    @Test fun twoScreensFollowingTheSameAccountShareOneConnectionAndBothStayCurrent() = runTest(dispatcher) {
+        sessions.pages = { _, _ -> SessionPage(listOf(cloudSession("a")), null) }
+        val features = FakeFeatures()
+        val shared = SessionFeed(sessions, features, feedScope)
+        val list = viewModel(features, shared)
+        val other = viewModel(features, shared)
+        list.start()
+        settle()
+        feed.send(LiveUpdate.Opened(false))
+        settle()
+        // The second screen comes once the feed is open: it loads at once, on the same connection.
+        other.start()
+        settle()
+        feed.send(LiveUpdate.Item(SessionChange(1, "cloud.turn", "a", "m1", 9, null, "started")))
+        settle()
+        assertEquals(1, sessions.calls.count { it.startsWith("feed") })
+        assertEquals(2, sessions.calls.count { it.startsWith("list ") })
+        assertEquals(SessionState.ACTIVE, list.uiState.value.list!!.sessions.single().state)
+        assertEquals(SessionState.ACTIVE, other.uiState.value.list!!.sessions.single().state)
+        list.stop(); other.stop()
+    }
+
+    @Test fun aSessionWaitingForAPersonIsMarkedUntilItIsAnswered() = runTest(dispatcher) {
+        sessions.pages = { _, _ -> SessionPage(listOf(cloudSession("a", SessionState.ACTIVE)), null) }
+        val model = viewModel(FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.waiting.v1")))
+        model.start()
+        settle()
+        assertEquals(listOf("feed waiting"), sessions.calls)
+        feed.send(LiveUpdate.Opened(false))
+        feed.send(LiveUpdate.Item(SessionChange(1, "cloud.session.waiting", "a", "m1", 9, null, null, waitingReason = "question", requestId = "r1")))
+        settle()
+        assertEquals(SessionWaiting("question", "r1", 9), model.uiState.value.list!!.sessions.single().waiting)
+        feed.send(LiveUpdate.Item(SessionChange(2, "cloud.session.answered", "a", "m1", 12, null, null, requestId = "r1")))
+        settle()
+        assertNull(model.uiState.value.list!!.sessions.single().waiting)
+        model.stop()
     }
 
     @Test fun nothingIsLoadedBeforeTheFeedOpensAndAChangeDuringTheLoadIsAppliedAfterIt() = runTest(dispatcher) {

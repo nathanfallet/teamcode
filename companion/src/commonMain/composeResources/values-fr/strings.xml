@@ -37,6 +37,8 @@
     <string name="sessions_reconnecting">Reconnexion…</string>
     <string name="sessions_load_more">Charger plus</string>
     <string name="sessions_turn_finished">Nouvelle réponse</string>
+    <string name="sessions_waiting_permission">Attend une validation</string>
+    <string name="sessions_waiting_question">A une question</string>
     <string name="time_just_now">à l'instant</string>
     <string name="time_minutes">il y a %1$d min</string>
     <string name="time_hours">il y a %1$d h</string>

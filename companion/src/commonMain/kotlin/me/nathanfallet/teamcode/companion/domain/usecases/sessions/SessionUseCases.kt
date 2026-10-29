@@ -48,12 +48,13 @@ sealed interface SessionListSignal {
 }
 
 /**
- * Keeps the list current: the caller-wide feed when the server has it (`cloud.events.v1`), a reload every
+ * Keeps the list current: the caller-wide feed when the server has it (`cloud.events.v1`, the app's one connection
+ * held by [SessionFeed]), a reload every
  * [pollMillis] otherwise. The first [SessionListSignal.Reload] comes once the feed is open (or at once when polling),
  * so nothing changed between loading the list and following the feed is missed; a gap reloads too.
  */
 class FollowSessionListUseCase(
-    private val sessions: SessionRepository,
+    private val feed: SessionFeed,
     private val features: FeaturesRepository,
     private val guard: AccountGuard,
     private val pollMillis: Long = 15_000,
@@ -63,8 +64,8 @@ class FollowSessionListUseCase(
         val remote = Features.REMOTE_SESSIONS in announced
         emit(SessionListSignal.RemoteSessions(remote))
         if (Features.EVENTS in announced) {
-            // Every kind: the list filters the events itself, so changing its filter never reopens the feed.
-            sessions.sessionChanges(accountId, if (remote) SessionKind.entries.toSet() else emptySet()).collect { update ->
+            // The app's one connection, every kind: the list filters the events itself, so changing its filter never reopens it.
+            feed.follow(accountId).collect { update ->
                 when (update) {
                     is LiveUpdate.Opened -> {
                         emit(SessionListSignal.Connection(reconnecting = false))
