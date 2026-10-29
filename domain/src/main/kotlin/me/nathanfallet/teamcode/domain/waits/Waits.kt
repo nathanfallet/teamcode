@@ -56,7 +56,8 @@ data class WaitSession(val id: String, val teamId: String, val ownerId: String, 
 data class WaitPage(val waits: List<Wait>, val nextBefore: String?)
 
 /** One of the page's reads: [assignee] null for the whole team, [status] null for any. */
-data class WaitQuery(val assignee: String?, val status: WaitStatus?, val before: String?, val limit: Int)
+/** [sessionId]: only the waits of that session, whoever they are asked of (then no session request is added). */
+data class WaitQuery(val assignee: String?, val status: WaitStatus?, val before: String?, val limit: Int, val sessionId: String? = null)
 
 /** Result of the store's atomic create, answer or cancel: the wait as it is after, and whether this call changed it. */
 data class WaitChange(val wait: Wait, val changed: Boolean)
@@ -65,6 +66,8 @@ interface WaitStore {
     suspend fun now(): Long
     suspend fun revalidate(actor: Principal)
     suspend fun member(teamId: String, memberId: String): Member?
+    /** The cloud session an execution credential (`tcex_`) was issued for, or null for any other credential. */
+    suspend fun executionSession(tokenId: String): String?
     suspend fun session(teamId: String, sessionId: String): WaitSession?
     /**
      * Stores [wait] under the session's lock. The same [idempotencyKey] from the same member returns the first wait

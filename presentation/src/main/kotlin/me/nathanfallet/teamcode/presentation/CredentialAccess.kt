@@ -67,8 +67,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && automationRead.matches(path) -> CredentialAction.CLOUD_READ
-    method == "GET" && waitRead.matches(path) -> CredentialAction.CLOUD_READ
-    method == "POST" && waitWrite.matches(path) -> CredentialAction.CLOUD_WRITE
+    method == "GET" && waitRead.matches(path) -> CredentialAction.WAITS_READ
+    method == "POST" && waitWrite.matches(path) -> CredentialAction.WAITS_WRITE
     method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ
     method == "POST" && automationCancel.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE

@@ -20,6 +20,9 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq teamId) }.singleOrNull()
             ?.let { Member(it[Members.id], it[Members.username], readMemberRole(it), it[Members.disabled], it[Members.mustChangePassword]) }
     }
+    override suspend fun executionSession(tokenId: String): String? = database.query {
+        CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId).where { CloudInferenceCredentials.tokenId eq tokenId }.singleOrNull()?.get(CloudInferenceCredentials.sessionId)
+    }
     override suspend fun session(teamId: String, sessionId: String): WaitSession? = database.query {
         CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.name)
             .where { (CloudSessions.id eq sessionId) and (CloudSessions.teamId eq teamId) }.singleOrNull()
@@ -59,13 +62,14 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         }
         var condition: Op<Boolean> = Waits.teamId eq teamId
         query.assignee?.let { condition = condition and (Waits.assigneeId eq it) }
+        query.sessionId?.let { condition = condition and (Waits.sessionId eq it) }
         query.status?.let { condition = condition and (Waits.status eq it.wire) }
         if (cursor != null) condition = condition and ((Waits.createdAt less cursor) or ((Waits.createdAt eq cursor) and (Waits.id less query.before!!)))
         val rows = Waits.selectAll().where { condition }.orderBy(Waits.createdAt to SortOrder.DESC, Waits.id to SortOrder.DESC).limit(query.limit + 1).toList()
         val names = names(rows.take(query.limit).map { it[Waits.assigneeId] }.toSet(), rows.take(query.limit).map { it[Waits.sessionId] }.toSet())
         val page = rows.take(query.limit).map { wait(it, names) }
         // Permission requests are only ever open, and listed once, ahead of the stored waits.
-        val sessions = if (query.before == null && (query.status == null || query.status == WaitStatus.OPEN)) sessionWaits(teamId, query.assignee) else emptyList()
+        val sessions = if (query.sessionId == null && query.before == null && (query.status == null || query.status == WaitStatus.OPEN)) sessionWaits(teamId, query.assignee) else emptyList()
         WaitPage(sessions + page, if (rows.size > query.limit) page.last().id else null)
     }
 

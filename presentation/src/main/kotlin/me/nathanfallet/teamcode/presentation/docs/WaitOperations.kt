@@ -19,6 +19,7 @@ internal fun ApiCatalog.waitOperations() {
             "administrator or a `team:read` key. $WAIT_TEXT"
         parameters {
             queryText("assignee", "`all`, or a member's id; the caller by default.")
+            queryText("session", "Only the waits of this cloud session, asked of anyone: its owner, an administrator, or the execution of that session. No session request is added.")
             queryText("status", "`open` (default), `resolved`, `cancelled` or `all`.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "1 to 100 (50 by default).")

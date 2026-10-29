@@ -17,6 +17,8 @@ class WaitRoutesTest {
         val waits = linkedMapOf<String, Wait>()
         val keys = mutableMapOf<String, String>()
         override suspend fun now() = 1_800_000_000_000L
+        /** Token `exec-token` stands for a session execution bound to s1. */
+        override suspend fun executionSession(tokenId: String) = "s1".takeIf { tokenId == "exec-token" }
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun member(teamId: String, memberId: String) = Member(memberId, memberId, Role.MEMBER, false, false)
         override suspend fun session(teamId: String, sessionId: String) = WaitSession(sessionId, teamId, "admin-id", "Fix the login").takeIf { sessionId == "s1" }
@@ -48,6 +50,10 @@ class WaitRoutesTest {
             override suspend fun authenticate(token: String): Principal? = when (token) {
                 "reader" -> interactive.authenticate("admin")!!.copy(member = Member("admin-id", "admin", Role.MEMBER, false, false), tokenId = "reader", serviceScopes = setOf(ServiceScope.CLOUD_READ))
                 "writer" -> interactive.authenticate("admin")!!.copy(member = Member("admin-id", "admin", Role.MEMBER, false, false), tokenId = "writer", serviceScopes = setOf(ServiceScope.CLOUD_WRITE))
+                // An execution credential as the runner holds one (`tcex_`): inference and waits:session, bound to s1 by the store.
+                "exec-token" -> interactive.authenticate("admin")!!.copy(member = Member("admin-id", "admin", Role.MEMBER, false, false), tokenId = "exec-token", serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.WAITS_SESSION))
+                "exec-unbound" -> interactive.authenticate("admin")!!.copy(member = Member("admin-id", "admin", Role.MEMBER, false, false), tokenId = "exec-unbound", serviceScopes = setOf(ServiceScope.WAITS_SESSION))
+                "exec-old" -> interactive.authenticate("admin")!!.copy(member = Member("admin-id", "admin", Role.MEMBER, false, false), tokenId = "exec-old", serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.ARTIFACTS_WRITE))
                 else -> interactive.authenticate(token)
             }
         }
@@ -107,5 +113,26 @@ class WaitRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/waits/$id/answer", "reader", """{"action":"approve"}""").status)
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/waits/$id/cancel", "reader").status)
         assertEquals(HttpStatusCode.OK, call(HttpMethod.Post, "/api/v1/waits/$id/cancel", "writer").status)
+    }
+
+    @Test fun anExecutionCredentialAsksAboutItsOwnSessionAndNeverAnswers() = testApplication {
+        application { configureGateway(gateway, team = team(), waits = WaitService(Store())) }
+        suspend fun call(method: HttpMethod, path: String, token: String, json: String? = null) = client.request(path) {
+            this.method = method; bearerAuth(token)
+            if (json != null) { contentType(ContentType.Application.Json); setBody(json) }
+        }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        val created = call(HttpMethod.Post, "/api/v1/waits", "exec-token", review)
+        assertEquals(HttpStatusCode.Created, created.status)
+        val id = Serialization.json.decodeFromString<WaitView>(created.bodyAsText()).id
+        assertEquals(listOf(id), Serialization.json.decodeFromString<WaitPageView>(call(HttpMethod.Get, "/api/v1/waits?session=s1", "exec-token").bodyAsText()).waits.map { it.id })
+        assertEquals(HttpStatusCode.OK, call(HttpMethod.Get, "/api/v1/waits/$id", "exec-token").status)
+        assertEquals("credential_scope", code(call(HttpMethod.Post, "/api/v1/waits/$id/answer", "exec-token", """{"action":"approve"}""")))
+        assertEquals("not_found", code(call(HttpMethod.Post, "/api/v1/waits", "exec-token", review.replace("\"s1\"", "\"s2\""))))
+        assertEquals(HttpStatusCode.OK, call(HttpMethod.Post, "/api/v1/waits/$id/cancel", "exec-token").status)
+        // The scope without a session, and the scopes executions had before: nothing.
+        assertEquals("credential_scope", code(call(HttpMethod.Get, "/api/v1/waits", "exec-unbound")))
+        assertEquals("credential_scope", code(call(HttpMethod.Get, "/api/v1/waits", "exec-old")))
+        assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/waits?session=not%20an%20id", "admin").status)
     }
 }

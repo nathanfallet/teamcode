@@ -44,7 +44,7 @@ internal fun Route.waitRoutes(waits: WaitService) {
     route("/api/v1/waits") {
         get {
             val query = call.request.queryParameters
-            val page = waits.list(call.principal, query["assignee"], query["status"] ?: "open", query["before"], query["limit"]?.toIntOrNull() ?: 50)
+            val page = waits.list(call.principal, query["assignee"], query["status"] ?: "open", query["before"], query["limit"]?.toIntOrNull() ?: 50, query["session"]?.also { if (!waitId.matches(it)) throw invalid("Use a session identifier.") })
             call.respond(WaitPageView(page.waits.map { it.view() }, page.nextBefore))
         }
         post {
