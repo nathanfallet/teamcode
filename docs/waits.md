@@ -11,6 +11,7 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | API contract, typed client (`waits`, `wait`, `createWait`, `answerWait`, `cancelWait`) (`api/…/models/Waits.kt`) | Implemented |
 | Domain: validation of definitions and answers, access rules, first-answer-wins (`domain/…/waits`) | Implemented |
 | MySQL store (`waits` table, reviewed migration), routes `GET/POST /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST …/answer`, `POST …/cancel`, the `waits.v1` capability, OpenAPI reference | Implemented |
+| `teamcode waits list`, `show`, `answer`, `cancel`, `ask` ([CLI](#cli)); the "waits" part of the next row is the companion apps only | Implemented |
 | Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
 | "Waiting for you" in the companion apps, `teamcode waits` | Planned (next change) |
 | The `teamcode-waits` MCP server (`ask_human`) and waking the session | Planned |
@@ -66,6 +67,21 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 | List | One's own waits; `assignee=<member>` or `all` for administrators. Open ones by default, newest first, keyset pagination. |
 | Answer | The assignee, or an interactive administrator. The first answer wins; the next gets `409 wait_closed`. An administrator answering for someone else is audited (`wait.answered`). |
 | Cancel | The one who asked, the assignee, or an interactive administrator (`wait.cancelled`). |
+
+## CLI
+
+```sh
+teamcode waits list [--all | --status open|resolved|cancelled|all] [--assignee MEMBER|all] [--before ID] [--limit N] [--json]
+teamcode waits show ID [--json]
+teamcode waits answer ID [--action ACTION] [--set FIELD=VALUE]... [--set-json FIELD=JSON]... [--json]
+teamcode waits cancel ID [--json]
+teamcode waits ask --session ID --title TEXT [--body TEXT] [--assignee MEMBER] [--ref artifact:ID|session:ID|url:https://…]... [--field ID:TYPE:LABEL[:required]]... [--option FIELD=VALUE]... [--action ID:LABEL]... [--json]
+```
+
+- The commands need the `waits.v1` capability and say so when the server does not advertise it. `--all` is `--status all`; `--assignee` is for administrators.
+- `list` prints id, status, kind, title, session, age and source. A row with source `session` is a cloud session's own permission request or question: answer it in the session, not with `waits answer` (which refuses it).
+- `answer` reads the wait first and converts `--set` by each field's declared type: `text`, `file` and `date` (`YYYY-MM-DD`) stay strings, `number` becomes a number, `confirm` takes `true`/`false` (or `yes`/`no`), `choice` takes one of the option values (any text when `allowOther`), and a multiple choice repeats `--set tags=a --set tags=b`. `--set-json` gives a JSON value as is. An unknown field, an unconvertible value or an unknown action is refused before anything is sent. `--action` may be omitted when the wait has exactly one action (`done` when it declares none). A wait already answered or cancelled (`409 wait_closed`) is reported as such.
+- `ask` creates a `human_request` with a fresh idempotency key; `secret` fields are refused, and a `choice` field takes its options from `--option`.
 
 ## What is planned
 
