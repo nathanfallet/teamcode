@@ -122,7 +122,7 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
 
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>): Flow<LiveUpdate<SessionChange>> = channelFlow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
         val store = demo.store()
         // Listening before saying the feed is open: a change made right after it is never missed.
         launch(start = CoroutineStart.UNDISPATCHED) { store.feed.collect { send(LiveUpdate.Item(it)) } }

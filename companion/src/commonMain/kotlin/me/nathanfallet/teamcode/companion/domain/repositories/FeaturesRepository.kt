@@ -15,6 +15,8 @@ object Features {
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
+    /** Sessions say what their agent waits for (`waiting`), and the feed takes `cloud.session.waiting` and `.answered`. */
+    const val WAITING = "cloud.sessions.waiting.v1"
     /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
     const val PERMISSIONS = "cloud.permissions.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"

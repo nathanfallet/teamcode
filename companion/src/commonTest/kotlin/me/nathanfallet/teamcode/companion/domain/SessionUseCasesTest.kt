@@ -21,11 +21,13 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
+import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptPage
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionList
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionListSignal
@@ -34,6 +36,10 @@ import me.nathanfallet.teamcode.companion.unauthorized
 import kotlin.test.*
 
 class SessionUseCasesTest {
+    /** The list's feed through the app's shared holder, as in the app. */
+    private fun kotlinx.coroutines.test.TestScope.followList(sessions: FakeSessionRepository, features: me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository) =
+        FollowSessionListUseCase(SessionFeed(sessions, features, backgroundScope), features, guard())
+
     private fun change(seq: Long, session: String, type: String = "cloud.turn", member: String = "m1", state: SessionState? = null, phase: String? = "completed", at: Long = 5_000) =
         SessionChange(seq, type, session, member, at, state, if (type == "cloud.turn") phase else null)
 
@@ -46,6 +52,24 @@ class SessionUseCasesTest {
         val more = list.appended(SessionPage(listOf(cloudSession("a", createdAt = 1), cloudSession("z", createdAt = 0)), null))
         assertEquals(listOf("b", "a", "z"), more.sessions.map { it.id })
         assertNull(more.nextBefore)
+    }
+
+    @Test fun aWaitEndsWithItsAnswerWithTheTurnOrWhenTheSessionStopsRunning() {
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a", SessionState.ACTIVE)), null))
+        fun waiting(seq: Long, request: String) = SessionChange(seq, SessionChange.WAITING, "a", "m1", seq * 1_000, null, null, waitingReason = "permission", requestId = request)
+        fun answered(seq: Long, request: String?) = SessionChange(seq, SessionChange.ANSWERED, "a", "m1", seq * 1_000, null, null, requestId = request)
+        val (asked, fetch) = list.applied(waiting(1, "r1"))
+        assertNull(fetch)
+        assertEquals(SessionWaiting("permission", "r1", 1_000), asked.sessions.single().waiting)
+        assertEquals(1_000, asked.sessions.single().lastActivityAt)
+        // A newer request, then the answer to the older one: the newer one still waits.
+        val (newer, _) = asked.applied(waiting(2, "r2"))
+        assertEquals("r2", newer.applied(answered(3, "r1")).first.sessions.single().waiting?.requestId)
+        assertNull(newer.applied(answered(3, "r2")).first.sessions.single().waiting)
+        assertNull(newer.applied(change(4, "a", phase = "completed")).first.sessions.single().waiting)
+        assertNull(newer.applied(change(5, "a", type = "cloud.session.paused", state = SessionState.PAUSED)).first.sessions.single().waiting)
+        // A turn starting does not end a wait.
+        assertEquals("r2", newer.applied(change(6, "a", phase = "started")).first.sessions.single().waiting?.requestId)
     }
 
     @Test fun aTurnUpdatesTheRowAndMarksItUntilOpened() {
@@ -132,7 +156,7 @@ class SessionUseCasesTest {
             }
         }
         val start = testScheduler.currentTime
-        val signals = FollowSessionListUseCase(sessions, features, guard())("a1").toList()
+        val signals = followList(sessions, features)("a1").toList()
         assertEquals(listOf(SessionListSignal.Connection(true), SessionListSignal.Connection(true), NO_REMOTE, SessionListSignal.Connection(false), SessionListSignal.Reload), signals)
         assertEquals(6_000, testScheduler.currentTime - start)
     }
@@ -141,7 +165,7 @@ class SessionUseCasesTest {
         val sessions = FakeSessionRepository()
         val c = change(1, "a")
         sessions.changes = flowOf(LiveUpdate.Opened(false), LiveUpdate.Item(c), LiveUpdate.Reconnecting(2_000), LiveUpdate.Opened(true), LiveUpdate.Gap)
-        val signals = FollowSessionListUseCase(sessions, FakeFeatures(), guard())("a1").toList()
+        val signals = followList(sessions, FakeFeatures())("a1").toList()
         assertEquals(
             listOf(NO_REMOTE, SessionListSignal.Connection(false), SessionListSignal.Reload, SessionListSignal.Changed(c), SessionListSignal.Connection(true), SessionListSignal.Connection(false), SessionListSignal.Reload),
             signals,
@@ -160,7 +184,7 @@ class SessionUseCasesTest {
     @Test fun withoutTheFeedTheListIsReloadedEveryFifteenSeconds() = runTest {
         val sessions = FakeSessionRepository()
         val start = testScheduler.currentTime
-        val signals = FollowSessionListUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1")), guard())("a1").take(5).toList()
+        val signals = followList(sessions, FakeFeatures(setOf("cloud.sessions.v1")))("a1").take(5).toList()
         // "Reconnecting" ends first, in case the start needed retries.
         assertEquals(listOf(NO_REMOTE, SessionListSignal.Connection(reconnecting = false)) + List(3) { SessionListSignal.Reload }, signals)
         assertEquals(30_000, testScheduler.currentTime - start)
@@ -224,8 +248,8 @@ class SessionUseCasesTest {
 
         sessions.calls.clear()
         sessions.changes = flowOf(LiveUpdate.Opened(false))
-        assertEquals(SessionListSignal.RemoteSessions(true), FollowSessionListUseCase(sessions, remote, guard())("a1").toList().first())
-        FollowSessionListUseCase(sessions, older, guard())("a1").toList()
+        assertEquals(SessionListSignal.RemoteSessions(true), followList(sessions, remote)("a1").toList().first())
+        followList(sessions, older)("a1").toList()
         // The feed carries every kind from a server that has them, and is asked as before otherwise.
         assertEquals(listOf("feed cloud,remote", "feed"), sessions.calls)
     }

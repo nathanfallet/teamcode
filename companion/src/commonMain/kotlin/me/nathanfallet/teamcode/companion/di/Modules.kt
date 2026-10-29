@@ -31,6 +31,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessio
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.StartLocalSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
@@ -96,6 +97,7 @@ val domainModule = module {
     single { AccountGuard(get()) }
     single { LoadSessionsUseCase(get(), get(), get()) }
     single { GetSessionUseCase(get(), get()) }
+    single { SessionFeed(get(), get(), get()) }
     single { FollowSessionListUseCase(get(), get(), get()) }
     single { LoadTranscriptUseCase(get(), get(), get()) }
     single { FollowTranscriptUseCase(get(), get()) }

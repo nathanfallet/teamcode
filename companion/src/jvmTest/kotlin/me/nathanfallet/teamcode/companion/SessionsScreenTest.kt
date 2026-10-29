@@ -38,7 +38,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
         var opened: String? = null
         setContent {
             TeamCodeTheme {
@@ -83,7 +83,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
         var newSession = false
         setContent {
             TeamCodeTheme {
@@ -118,7 +118,7 @@ class SessionsScreenTest {
         val features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1"))
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
         setContent {
             TeamCodeTheme {
                 SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
@@ -142,7 +142,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(FakeAuthRepository(), accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(sessions, features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
         setContent {
             TeamCodeTheme {
                 SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())

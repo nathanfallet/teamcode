@@ -97,6 +97,8 @@ data class CloudSession(
      * (`folder_missing`, `agent_unsupported`, ...), null when it did not give a readable one.
      */
     val refusalReason: String? = null,
+    /** What the agent waits for from a person (`cloud.sessions.waiting.v1`); null when nothing waits. */
+    val waiting: SessionWaiting? = null,
 ) {
     val remote: Boolean get() = kind == SessionKind.REMOTE
 
@@ -123,6 +125,17 @@ data class SessionPage(val sessions: List<CloudSession>, val nextBefore: String?
 
 data class Profile(val id: String, val name: String, val agentKind: String)
 
+/**
+ * The agent waits for a person: [reason] is `permission` (a tool use to approve) or `question`; [requestId] the request
+ * to answer, [since] server time in milliseconds.
+ */
+data class SessionWaiting(val reason: String, val requestId: String?, val since: Long) {
+    companion object {
+        const val PERMISSION = "permission"
+        const val QUESTION = "question"
+    }
+}
+
 /** One change from the caller-wide feed about a session; [state] is set when the event carries it. */
 data class SessionChange(
     val seq: Long,
@@ -135,4 +148,14 @@ data class SessionChange(
     val turnPhase: String?,
     /** Null when the event does not say (a server without remote sessions). */
     val kind: SessionKind? = null,
-)
+    /** For `cloud.session.waiting`: `permission` or `question`. */
+    val waitingReason: String? = null,
+    /** For `cloud.session.waiting` and `cloud.session.answered`: the request concerned, when the event names it. */
+    val requestId: String? = null,
+) {
+    companion object {
+        const val WAITING = "cloud.session.waiting"
+        const val ANSWERED = "cloud.session.answered"
+        const val TURN = "cloud.turn"
+    }
+}
