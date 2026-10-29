@@ -27,6 +27,9 @@ private val artifactUnshare = Regex("/api/v1/artifacts/$ARTIFACT_ID/members/(?!\
 /** Automation reads, dry runs and draft previews; a real test needs `cloud:write`, which the service checks. Writes of definitions stay interactive. */
 private val automationRead = Regex("/api/v1/automations(/$CLOUD_ID(/runs(/$CLOUD_ID)?)?)?")
 private val automationReadPost = Regex("/api/v1/automations/(preview|$CLOUD_ID/run)")
+/** Waits: reads, and the answer / cancel / creation writes, whose rules the service enforces. */
+private val waitRead = Regex("/api/v1/waits(/$CLOUD_ID)?")
+private val waitWrite = Regex("/api/v1/waits(/$CLOUD_ID/(answer|cancel))?")
 private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
@@ -64,6 +67,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && automationRead.matches(path) -> CredentialAction.CLOUD_READ
+    method == "GET" && waitRead.matches(path) -> CredentialAction.CLOUD_READ
+    method == "POST" && waitWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ
     method == "POST" && automationCancel.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE

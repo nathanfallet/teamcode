@@ -19,6 +19,8 @@ import me.nathanfallet.teamcode.infrastructure.cloud.SessionNetworkPolicy
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
+import me.nathanfallet.teamcode.domain.waits.WaitService
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
@@ -90,6 +92,7 @@ class CloudServer(
     private val automationStore = SqlAutomationStore(database)
     private val automationDirectory = AutomationDirectory.Cloud(store)
     val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
+    val waits = WaitService(SqlWaitStore(database))
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 

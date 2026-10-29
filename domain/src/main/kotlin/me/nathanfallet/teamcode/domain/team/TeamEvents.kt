@@ -37,6 +37,15 @@ enum class TeamEventType(val wire: String, val subject: TeamEventSubject) {
      * at the team's deadline; `behavior` is `deny` and `eventSeq` the `permission.expired` event).
      */
     SESSION_ANSWERED("cloud.session.answered", TeamEventSubject.SESSION),
+    /**
+     * A wait was asked of a person: `{waitId, sessionId, waitKind, assigneeId, kind}`, where `kind` is the session's. The
+     * event belongs to the assignee, who is not always the session's owner. Subject: the wait.
+     */
+    WAIT_CREATED("cloud.wait.created", TeamEventSubject.SESSION),
+    /** A wait was answered: `{waitId, sessionId, waitKind, assigneeId, kind, action}`. */
+    WAIT_RESOLVED("cloud.wait.resolved", TeamEventSubject.SESSION),
+    /** A wait was withdrawn: `{waitId, sessionId, waitKind, assigneeId, kind}`. */
+    WAIT_CANCELLED("cloud.wait.cancelled", TeamEventSubject.SESSION),
     RUN_STARTED("run.started", TeamEventSubject.RUN),
     /** No heartbeat for [AgentRunService.HEARTBEAT_TTL_MILLIS]; a later heartbeat and another silence emit it again. */
     RUN_STALE("run.stale", TeamEventSubject.RUN),

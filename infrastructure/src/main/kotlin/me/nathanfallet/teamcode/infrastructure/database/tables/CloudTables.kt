@@ -178,6 +178,9 @@ object CloudSessions : Table("cloud_sessions") {
     init {
         index("cloud_session_owner", false, teamId, ownerId, createdAt)
         index("cloud_session_team", false, teamId, createdAt)
+        // The unified waits list: the sessions whose agent waits for a person, of one owner or of the team.
+        index("cloud_session_awaiting_owner", false, teamId, ownerId, awaitingSince)
+        index("cloud_session_awaiting_team", false, teamId, awaitingSince)
         // A list of one kind reads these instead of filtering the rows of the other kind after the lookup.
         index("cloud_session_owner_kind", false, teamId, ownerId, kind, createdAt)
         index("cloud_session_team_kind", false, teamId, kind, createdAt)
