@@ -12,7 +12,7 @@ import me.nathanfallet.teamcode.domain.team.*
  * Notifications on creation are a separate piece of work: the place to hook them is [create], after the store
  * returned a changed wait.
  */
-class WaitService(private val store: WaitStore) {
+class WaitService(private val store: WaitStore, private val sessions: WaitSessions? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Wait not found.")
     private fun closed() = TeamFailure("wait_closed", 409, "This wait was already answered or cancelled.")
 
@@ -64,17 +64,35 @@ class WaitService(private val store: WaitStore) {
     /**
      * Answers a stored wait. A session's permission request is answered through the session (`cloud.permissions.v1`),
      * not here. The first answer wins: the store closes it atomically and a later one gets `409 wait_closed`.
+     *
+     * The answer wakes the session: it is queued there as a message ([WaitMessages]) once it is stored. That second
+     * step is idempotent, so the same member sending the same answer again (after a failure of that step, which the
+     * caller sees as an error) gets the wait back and the message queued, never a `wait_closed`.
      */
     suspend fun answer(actor: Principal, id: String, action: String, values: Map<String, kotlinx.serialization.json.JsonElement>): Wait {
         actor.requireCloudWrite(); store.revalidate(actor)
         val wait = store.find(actor.teamId, id)?.takeIf { involved(actor, it) } ?: throw missing()
         if (wait.source != WaitSource.WAIT) throw TeamFailure("answer_through_session", 409, "Answer a permission request on its session.")
         if (wait.assigneeId != actor.member.id && !actor.administrator()) throw TeamFailure("wait_assignee_only", 403, "Only the person asked, or an administrator, answers.")
-        if (wait.status != WaitStatus.OPEN) throw closed()
+        if (wait.status != WaitStatus.OPEN) return repeated(actor, wait, action, values)
         WaitRules.checkAnswer(wait.fields, wait.actions, action, values)
+        wait.sessionId?.let { sessions?.authorize(actor, it) }
         val change = store.answer(actor, id, WaitAnswer(action, values, actor.member.id, store.now()))
-        if (!change.changed) throw closed()
-        return change.wait
+        if (!change.changed) return repeated(actor, change.wait, action, values)
+        return wake(actor, change.wait)
+    }
+
+    /** The same member sending the same answer again: the message is queued again (idempotently); anything else is a lost race. */
+    private suspend fun repeated(actor: Principal, wait: Wait, action: String, values: Map<String, kotlinx.serialization.json.JsonElement>): Wait {
+        val given = wait.answer
+        if (wait.status != WaitStatus.RESOLVED || given == null || given.authorId != actor.member.id || given.action != action || given.values != values) throw closed()
+        return wake(actor, wait)
+    }
+
+    private suspend fun wake(actor: Principal, wait: Wait): Wait {
+        val sessionId = wait.sessionId
+        if (sessions != null && sessionId != null) sessions.deliver(actor, sessionId, WaitMessages.answered(wait, actor.member.username), WaitMessages.clientKey(wait.id))
+        return wait
     }
 
     suspend fun cancel(actor: Principal, id: String): Wait {

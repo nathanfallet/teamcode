@@ -15,7 +15,8 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
 | "Waiting for you" in the companion apps ([companion](companion.md)): a section above the sessions list, updated live from the feed, answered in place (typed fields; `file` and `secret` fields are filled in the session; no cancel button) | Implemented |
 | `teamcode waits` (CLI) | Planned (separate change) |
-| The `teamcode-waits` MCP server (`ask_human`) and waking the session | Planned |
+| Waking the session: an answer is queued on the wait's session as a message, which resumes a paused session | Implemented (see below) |
+| The `teamcode-waits` MCP server (`ask_human`) | Planned |
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
 | Stop hook that requires an agent to deliver or ask; `turn_failed` | Planned |
@@ -66,7 +67,7 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 | Create | The session's owner (an agent acts with its owner's credential); the assignee must be an active member (`400 invalid_assignee`). An interactive login or a `cloud:write` key. At most 20 open waits per session (`409 wait_limit`). `Idempotency-Key` returns the first wait. |
 | Read | The assignee, the one who asked, and an administrator (`team:read` for a key). Anyone else gets `404`. |
 | List | One's own waits; `assignee=<member>` or `all` for administrators. Open ones by default, newest first, keyset pagination. |
-| Answer | The assignee, or an interactive administrator. The first answer wins; the next gets `409 wait_closed`. An administrator answering for someone else is audited (`wait.answered`). |
+| Answer | The assignee, or an interactive administrator. The first answer wins; the next gets `409 wait_closed`, except the same member sending the same action and values again, which gets the wait back (and the message below queued, once). An administrator answering for someone else is audited (`wait.answered`). |
 | Cancel | The one who asked, the assignee, or an interactive administrator (`wait.cancelled`). |
 
 ## CLI
@@ -83,6 +84,22 @@ teamcode waits ask --session ID --title TEXT [--body TEXT] [--assignee MEMBER] [
 - `list` prints id, status, kind, title, session, age and source. A row with source `session` is a cloud session's own permission request or question: answer it in the session, not with `waits answer` (which refuses it).
 - `answer` reads the wait first and converts `--set` by each field's declared type: `text`, `file` and `date` (`YYYY-MM-DD`) stay strings, `number` becomes a number, `confirm` takes `true`/`false` (or `yes`/`no`), `choice` takes one of the option values (any text when `allowOther`), and a multiple choice repeats `--set tags=a --set tags=b`. `--set-json` gives a JSON value as is. An unknown field, an unconvertible value or an unknown action is refused before anything is sent. `--action` may be omitted when the wait has exactly one action (`done` when it declares none). A wait already answered or cancelled (`409 wait_closed`) is reported as such.
 - `ask` creates a `human_request` with a fresh idempotency key; `secret` fields are refused, and a `choice` field takes its options from `--option`.
+
+## Waking the session
+
+An answer wakes the session it was asked on. Once the answer is stored, the server queues a message on that session, written by whoever answered, and wakes the session like any message does (a paused session resumes, a running one reads it after its turn). The message has this shape, which the agent's instructions describe:
+
+```
+[TeamCode wait answered] <title>
+wait: <wait id>
+action: <action label> (<action id>)
+answered by: <username>
+<field label>: <value>        one line per filled field, a choice also with its label, a list joined by ", "; a multi-line value is indented by two spaces
+```
+
+It is cut at 32,000 characters, the most a message holds. The message is queued with the key `wait-answer-<wait id>`, scoped to the session and the author by the conversation store, so sending it twice queues one. That is what makes a failure safe: the answer is stored first and the message queued second, in two transactions; if the second fails the caller gets an error (`5xx`), and sending the same answer again (the companion app does, on a retry) queues the message without a `wait_closed`. A session that has ended takes nothing, and the answer stays recorded.
+
+A session whose agent holds its owner's GitHub token takes instructions from its owner only (`github_owner_only`, [cloud sessions](cloud-sessions.md)): an assignee who is not the owner gets that `403` **before** the answer is stored, so a wait never ends up answered but undeliverable. A wait cancelled by someone else does not wake the session.
 
 ## What is planned
 
