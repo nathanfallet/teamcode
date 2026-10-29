@@ -134,7 +134,7 @@ class DemoAwareSessionRepository(private val real: SessionRepository, private va
     override suspend fun pause(accountId: String, sessionId: String) = of(accountId).pause(accountId, sessionId)
     override suspend fun resume(accountId: String, sessionId: String) = of(accountId).resume(accountId, sessionId)
     override suspend fun end(accountId: String, sessionId: String) = of(accountId).end(accountId, sessionId)
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting)
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits)
 }
 
 class DemoAwareTranscriptRepository(private val real: TranscriptRepository, private val demo: TranscriptRepository) : TranscriptRepository {

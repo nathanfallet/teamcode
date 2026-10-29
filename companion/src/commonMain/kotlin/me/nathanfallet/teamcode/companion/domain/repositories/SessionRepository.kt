@@ -51,8 +51,9 @@ interface SessionRepository {
      * The caller-wide feed (`cloud.events.v1`), session events only, reconnecting by itself. The first connection
      * starts from now and reports `Opened(resumed = false)`: load the list then, not before. [kinds] as for [sessions].
      * [waiting]: also `cloud.session.waiting` and `cloud.session.answered`, only to a server that announces
-     * `cloud.sessions.waiting.v1` (an older one refuses a type it does not know). Screens follow it through
+     * `cloud.sessions.waiting.v1` (an older one refuses a type it does not know). [waits]: also `cloud.wait.*`, only to a
+     * server that announces `waits.v1`. Screens follow it through
      * [me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed], which shares one connection.
      */
-    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false): Flow<LiveUpdate<SessionChange>>
+    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false, waits: Boolean = false): Flow<LiveUpdate<SessionChange>>
 }

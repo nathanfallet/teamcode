@@ -66,17 +66,20 @@ internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)
 /** A feed event about a session; null for the other subjects (local runs). */
 internal fun TeamEventView.sessionChange(): SessionChange? {
     if (subject != "session") return null
+    // A wait event's subject is the wait: its session and its assignee (who it concerns) are in the data.
+    val wait = type in SessionChange.WAIT_TYPES
     return SessionChange(
         seq = seq,
         type = type,
-        sessionId = subjectId,
-        memberId = memberId,
+        sessionId = if (wait) data.text("sessionId") ?: return null else subjectId,
+        memberId = if (wait) data.text("assigneeId") ?: memberId else memberId,
         at = at,
         state = data.text("state")?.let(SessionState::of),
         turnPhase = if (type == "cloud.turn") data.text("phase") ?: "unknown" else null,
         kind = data.text("kind")?.let(SessionKind::of),
         waitingReason = if (type == SessionChange.WAITING) data.text("reason") ?: SessionWaiting.PERMISSION else null,
         requestId = data.text("requestId"),
+        waitId = if (type in SessionChange.WAIT_TYPES) subjectId else null,
     )
 }
 

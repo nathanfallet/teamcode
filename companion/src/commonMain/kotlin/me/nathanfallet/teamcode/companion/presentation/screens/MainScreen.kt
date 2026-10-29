@@ -248,6 +248,8 @@ fun MainScreen(
                     onSwitchAccount = { sheets.switcher = true },
                     titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
                     viewModel = home,
+                    waitsViewModel = koinViewModel(),
+                    onOpenSessionById = { a, id -> onOpenSession(a.id, id) },
                 )
                 MainTab.ARTIFACTS -> if (account != null && account.signedIn) key(account.id) {
                     val viewModel: ArtifactsViewModel = koinViewModel(key = artifactsKey(account.id)) { parametersOf(ArtifactsRoute(account.id)) }

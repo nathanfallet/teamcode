@@ -36,4 +36,6 @@ object Features {
     const val MCP_GATEWAY = "mcp.gateway.v1"
     /** Automations (`/automations`): cron and webhook triggers starting cloud sessions. */
     const val AUTOMATIONS = "automations.v1"
+    /** Waits (`/waits`): what sessions need from people, with `cloud.wait.*` events on the feed. */
+    const val WAITS = "waits.v1"
 }

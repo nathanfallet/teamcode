@@ -161,6 +161,14 @@ class SessionUseCasesTest {
         assertEquals(6_000, testScheduler.currentTime - start)
     }
 
+    @Test fun aWaitEventSaysNothingAboutItsSession() {
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a", SessionState.ACTIVE)), null))
+        listOf(SessionChange.WAIT_CREATED, SessionChange.WAIT_RESOLVED, SessionChange.WAIT_CANCELLED).forEach { type ->
+            val (same, fetch) = list.applied(SessionChange(9, type, "a", "m1", 9_000, null, null, waitId = "w1"))
+            assertEquals(list, same); assertNull(fetch)
+        }
+    }
+
     @Test fun theListReloadsWhenTheFeedOpensFromNowAndOnAGapButNotOnAResume() = runTest {
         val sessions = FakeSessionRepository()
         val c = change(1, "a")

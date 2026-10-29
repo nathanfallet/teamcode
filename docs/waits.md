@@ -12,7 +12,8 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | Domain: validation of definitions and answers, access rules, first-answer-wins (`domain/…/waits`) | Implemented |
 | MySQL store (`waits` table, reviewed migration), routes `GET/POST /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST …/answer`, `POST …/cancel`, the `waits.v1` capability, OpenAPI reference | Implemented |
 | Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
-| "Waiting for you" in the companion apps, `teamcode waits` | Planned (next change) |
+| "Waiting for you" in the companion apps ([companion](companion.md)): a section above the sessions list, updated live from the feed, answered in place (typed fields; `file` and `secret` fields are filled in the session; no cancel button) | Implemented |
+| `teamcode waits` (CLI) | Planned (separate change) |
 | The `teamcode-waits` MCP server (`ask_human`) and waking the session | Planned |
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
