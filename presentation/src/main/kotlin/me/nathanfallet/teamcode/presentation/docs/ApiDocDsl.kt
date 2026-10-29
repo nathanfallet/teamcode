@@ -44,6 +44,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         deviceDaemonOperations()
         webhookOperations()
         automationOperations()
+        waitOperations()
         artifactOperations()
         artifactTicketOperations()
         artifactMemberOperations()
@@ -81,6 +82,7 @@ internal object ApiTags {
     const val GITHUB = "GitHub"
     const val WEBHOOKS = "Webhooks"
     const val AUTOMATIONS = "Automations"
+    const val WAITS = "Waits"
     const val ARTIFACTS_ADMIN = "Artifact administration"
     const val ARTIFACTS = "Artifacts"
 
@@ -114,6 +116,7 @@ internal object ApiTags {
         GITHUB to "The team's GitHub App and members' GitHub links.",
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
         AUTOMATIONS to "Cloud sessions started on a schedule or by a signed webhook, as their owner, and their run history.",
+        WAITS to "What sessions need from people before they can go on: questions, reviews, access, decisions, with fields to fill and actions that end them.",
         ARTIFACTS_ADMIN to "The S3-compatible bucket artifacts are stored in, and the artifact settings (administrators).",
         ARTIFACTS to "Pages agents publish for people to read: uploads, versions, sharing with members, access and deletion.",
     )

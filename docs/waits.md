@@ -10,8 +10,9 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | --- | --- |
 | API contract, typed client (`waits`, `wait`, `createWait`, `answerWait`, `cancelWait`) (`api/…/models/Waits.kt`) | Implemented |
 | Domain: validation of definitions and answers, access rules, first-answer-wins (`domain/…/waits`) | Implemented |
-| MySQL store, routes, `waits.v1` capability, API reference | Planned (next change) |
-| "Waiting for you" in the companion apps, `teamcode waits` | Planned |
+| MySQL store (`waits` table, reviewed migration), routes `GET/POST /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST …/answer`, `POST …/cancel`, the `waits.v1` capability, OpenAPI reference | Implemented |
+| Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
+| "Waiting for you" in the companion apps, `teamcode waits` | Planned (next change) |
 | The `teamcode-waits` MCP server (`ask_human`) and waking the session | Planned |
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
@@ -43,6 +44,18 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | `secret` | Not available yet |
 
 An answer is refused with `400 invalid_answer` when it names an unknown action or field, gives a value of the wrong type, or leaves a `required` field or one required by its action empty. Nothing is stored for a refused answer.
+
+## Routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/waits` | What waits for the caller; `?assignee=all` or `?assignee=<member>` for an administrator. `?status=` `open` (default), `resolved`, `cancelled` or `all`; `?before=&limit=` (1–100, 50), newest first. The first page also carries the open permission requests and questions of the assignee's cloud sessions (`source: session`, at most 100), ahead of the stored waits |
+| `POST /api/v1/waits` | Ask (`{wait}`), `201`; `Idempotency-Key` returns the first wait (`200`, `Idempotency-Replayed: true`) |
+| `GET /api/v1/waits/{id}` | Read; a session's permission request is read by the session's identifier |
+| `POST /api/v1/waits/{id}/answer` | `{action, values}` |
+| `POST /api/v1/waits/{id}/cancel` | Withdraw |
+
+Reads need an interactive login or a key with `cloud:read` (or a wider cloud scope); writes need `cloud:write`. Errors: `invalid_wait`, `invalid_assignee`, `invalid_answer`, `invalid_cursor`, `wait_limit` (409), `wait_closed` (409), `answer_through_session` (409), `wait_session_owner_only` (403), `wait_assignee_only` (403), `not_available_yet` (422).
 
 ## Who can do what
 

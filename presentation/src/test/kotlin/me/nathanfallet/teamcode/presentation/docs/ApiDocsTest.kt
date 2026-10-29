@@ -69,6 +69,7 @@ class ApiDocsTest {
             cloudTransfers = CloudTransferService(sessionStore, stub(), sessions, CloudRecipientPolicy(sessionStore)),
             webhooks = me.nathanfallet.teamcode.domain.webhooks.WebhookService(stub(), stub()),
             automations = me.nathanfallet.teamcode.domain.automations.AutomationService(stub(), stub(), stub()),
+            waits = me.nathanfallet.teamcode.domain.waits.WaitService(stub()),
             apiPrices = stub(), poolSizing = stub(),
             artifactAdmin = me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(stub(), stub()),
             artifacts = me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),
