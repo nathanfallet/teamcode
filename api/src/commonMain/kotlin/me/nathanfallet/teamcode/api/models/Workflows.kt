@@ -104,3 +104,58 @@ data class WorkflowEditorsView(val mode: String = "admins", val memberIds: List<
 
 @Serializable
 data class WorkflowSettingsView(val editors: WorkflowEditorsView, val canEdit: Boolean = false)
+
+/**
+ * One pass through a node of a run. [status] `active`, `done`, `failed` or `cancelled`; [outcome] is what the node ended
+ * with (`delivered`, or the human action id); [output] is what it delivered or what the person answered. [sessionId],
+ * [waitId] and [childRunId] point at the session an agent works in, the wait a person answers, and the run of a sub-workflow.
+ */
+@Serializable
+data class WorkflowVisitView(
+    val seq: Int,
+    val nodeId: String,
+    val kind: String,
+    val status: String,
+    val outcome: String? = null,
+    val output: String? = null,
+    val sessionId: String? = null,
+    val waitId: String? = null,
+    val childRunId: String? = null,
+    val startedAt: Long,
+    val finishedAt: Long? = null,
+)
+
+/**
+ * A run of a workflow, on the version it started with. [status] is one of [Workflows.runStatuses]; [failure] is a short
+ * code when it failed. [output] is what the last node delivered. [visits] is filled on a single read, not in lists.
+ */
+@Serializable
+data class WorkflowRunView(
+    val id: String,
+    val workflowId: String,
+    val workflowName: String,
+    val workflowVersion: Int,
+    val status: String,
+    val startedById: String,
+    val inputs: Map<String, String> = emptyMap(),
+    val sessionId: String? = null,
+    val currentNodeId: String? = null,
+    val parentRunId: String? = null,
+    val failure: String? = null,
+    val output: String? = null,
+    val visits: List<WorkflowVisitView> = emptyList(),
+    val createdAt: Long,
+    val updatedAt: Long,
+    val finishedAt: Long? = null,
+)
+
+/** [inputs] by input id; [profileId] is the cloud profile of agent nodes that name none. */
+@Serializable
+data class StartWorkflowRunRequest(val inputs: Map<String, String> = emptyMap(), val profileId: String? = null)
+
+/** What an agent node delivers: a string for `artifact`, `url` and `text`, a JSON value for `json`. */
+@Serializable
+data class DeliverRequest(val output: JsonElement)
+
+@Serializable
+data class WorkflowRunPageView(val runs: List<WorkflowRunView>, val nextBefore: String? = null)
