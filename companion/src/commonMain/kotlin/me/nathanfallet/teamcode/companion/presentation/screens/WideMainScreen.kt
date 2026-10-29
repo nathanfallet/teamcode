@@ -311,6 +311,8 @@ fun WideMainScreen(
                             onOpenSessionArtifacts = { a, session -> detail.navigate(ArtifactsRoute(a.id, session.id)) },
                             viewModel = home,
                             sessionsViewModel = sidebarSessions,
+                            waitsViewModel = koinViewModel(),
+                            onOpenSessionById = { a, id -> detail.navigate(SessionRoute(a.id, id)) },
                             follow = false,
                         )
                     }

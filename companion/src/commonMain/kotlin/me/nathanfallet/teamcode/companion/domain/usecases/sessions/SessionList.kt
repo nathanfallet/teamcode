@@ -54,6 +54,8 @@ data class SessionList(
      * might, its id to read with `GET /cloud/sessions/{id}` (then [upserted]).
      */
     fun applied(change: SessionChange): Pair<SessionList, String?> {
+        // A wait asked, answered or withdrawn says nothing about its session's state: the waits section follows it.
+        if (change.type in SessionChange.WAIT_TYPES) return this to null
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
         // Only a known end: a phase this app does not know (a newer server) is not taken for one.

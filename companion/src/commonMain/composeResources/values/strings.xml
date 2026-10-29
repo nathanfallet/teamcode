@@ -820,4 +820,20 @@
     <string name="input_automation_payload">The payload must be a JSON object.</string>
     <string name="input_automation_not_owner">Only the owner changes, arms or tests an automation: it runs with the owner's quota and GitHub link.</string>
     <string name="input_automation_limits">A run lasts 1 to 1440 minutes and an automation runs 1 to 1000 times a day.</string>
+    <string name="waits_title">Waiting for you</string>
+    <string name="waits_open_session">Open the session</string>
+    <string name="waits_asks_you">Asks you</string>
+    <string name="waits_turn_failed">Turn failed</string>
+    <string name="waits_from_session">in %1$s</string>
+    <string name="waits_closed_elsewhere">Someone already answered this.</string>
+    <string name="waits_notice_refused">The server refused this answer. Check the values.</string>
+    <string name="waits_notice_retry">Could not send. Try again.</string>
+    <string name="waits_notice_failed">This answer could not be sent.</string>
+    <string name="waits_problem_missing">%1$s is required.</string>
+    <string name="waits_problem_number">%1$s must be a number.</string>
+    <string name="waits_problem_date">%1$s must be a date (YYYY-MM-DD).</string>
+    <string name="waits_problem_too_long">%1$s is too long.</string>
+    <string name="waits_problem_unsupported">%1$s is filled in the session. Open it.</string>
+    <string name="waits_field_in_session">This is filled in the session.</string>
+    <string name="waits_reconnecting">Reconnecting…</string>
 </resources>

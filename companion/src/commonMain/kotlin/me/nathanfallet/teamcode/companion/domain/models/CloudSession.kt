@@ -152,10 +152,16 @@ data class SessionChange(
     val waitingReason: String? = null,
     /** For `cloud.session.waiting` and `cloud.session.answered`: the request concerned, when the event names it. */
     val requestId: String? = null,
+    /** For `cloud.wait.*`: the wait concerned (then [sessionId] is its session and [memberId] its assignee). */
+    val waitId: String? = null,
 ) {
     companion object {
         const val WAITING = "cloud.session.waiting"
         const val ANSWERED = "cloud.session.answered"
+        const val WAIT_CREATED = "cloud.wait.created"
+        const val WAIT_RESOLVED = "cloud.wait.resolved"
+        const val WAIT_CANCELLED = "cloud.wait.cancelled"
+        val WAIT_TYPES = setOf(WAIT_CREATED, WAIT_RESOLVED, WAIT_CANCELLED)
         const val TURN = "cloud.turn"
     }
 }

@@ -124,7 +124,7 @@ class SessionFeed(
             // Read by the follower just before (refreshed), so from the cache here.
             val announced = features.features(accountId)
             val kinds = if (Features.REMOTE_SESSIONS in announced) SessionKind.entries.toSet() else emptySet()
-            sessions.sessionChanges(accountId, kinds, waiting = Features.WAITING in announced).collect { update ->
+            sessions.sessionChanges(accountId, kinds, waiting = Features.WAITING in announced, waits = Features.WAITS in announced).collect { update ->
                 when (update) {
                     is LiveUpdate.Opened -> connection.open = true
                     is LiveUpdate.Reconnecting -> connection.open = false

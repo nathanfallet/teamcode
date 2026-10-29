@@ -124,6 +124,26 @@ class RemoteSessionRepositoryTest {
         assertEquals(listOf("cloud", "remote"), requests.first().url.parameters.getAll("kind"))
     }
 
+    @Test fun theWaitEventsAreAskedForOnlyWhenTheServerHasWaitsAndBelongToTheirAssigneeAndSession() = runTest {
+        val data = """{"waitId":"w1","sessionId":"s9","waitKind":"human_request","assigneeId":"m2","kind":"cloud"}"""
+        sse(teamEvent(1, "cloud.wait.created", data = data) + teamEvent(2, "cloud.wait.resolved", data = data.dropLast(1) + ""","action":"approve"}""") +
+            teamEvent(3, "cloud.wait.cancelled", data = "{}") + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", waits = true).collect { seen += it } }
+        assertEquals("cloud.session.created,cloud.session.ended,cloud.session.paused,cloud.session.resumed,cloud.session.woken,cloud.turn,cloud.wait.cancelled,cloud.wait.created,cloud.wait.resolved",
+            requests.single().url.parameters["types"].orEmpty().split(",").sorted().joinToString(","))
+        val items = seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().map { it.value }
+        // The event's subject is the wait; its session and its assignee are in the data. One without a session is not a session's change.
+        assertEquals(2, items.size)
+        val (created, resolved) = items
+        assertEquals("s9", created.sessionId); assertEquals("s1", created.waitId, "the subject of the event"); assertEquals("m2", created.memberId); assertEquals(SessionKind.CLOUD, created.kind)
+        assertEquals("cloud.wait.resolved", resolved.type)
+        requests.clear()
+        sse("event: denied\ndata: {}\n\n")
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { } }
+        assertFalse("cloud.wait" in requests.single().url.parameters["types"].orEmpty(), "an older server refuses a type it does not know")
+    }
+
     @Test fun theWaitingEventsAreAskedWhenWantedAndASessionSaysWhatItWaitsFor() = runTest {
         sse(teamEvent(1, "cloud.session.waiting", data = """{"reason":"question","requestId":"r1","eventSeq":4}""") +
             teamEvent(2, "cloud.session.answered", data = """{"requestId":"r1","behavior":"allow","reason":"answered"}""") + "event: denied\ndata: {}\n\n")

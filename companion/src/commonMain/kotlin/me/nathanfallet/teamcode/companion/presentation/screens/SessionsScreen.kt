@@ -90,6 +90,9 @@ import me.nathanfallet.teamcode.companion.presentation.theme.Radii
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsUiState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
@@ -147,11 +150,21 @@ fun SessionsScreen(
     onOpenSessionArtifacts: ((Account, CloudSession) -> Unit)? = null,
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
+    /** "Waiting for you" above the sessions; null: no such section (tests of the list alone). */
+    waitsViewModel: WaitsViewModel? = null,
+    /** A wait's session, from its card: opened by identifier. */
+    onOpenSessionById: (Account, String) -> Unit = { _, _ -> },
     follow: Boolean = true,
     clock: Clock = koinInject(),
 ) {
     val home by viewModel.uiState.collectAsStateWithLifecycle()
     val state by sessionsViewModel.uiState.collectAsStateWithLifecycle()
+    val waits by (waitsViewModel?.uiState ?: remember { MutableStateFlow(WaitsUiState()) }).collectAsStateWithLifecycle()
+    // Its own lifecycle: the wide layout shares the sessions list with its sidebar, but not the waits.
+    if (waitsViewModel != null) LifecycleStartEffect(waitsViewModel) {
+        waitsViewModel.start()
+        onStopOrDispose { waitsViewModel.stop() }
+    }
     // Streams are open only while the screen is visible: closed in the background, resumed on return.
     if (follow) LifecycleStartEffect(sessionsViewModel) {
         sessionsViewModel.start()
@@ -230,6 +243,7 @@ fun SessionsScreen(
                 } else null)
             }
             if (state.reconnecting) item(key = "reconnecting") { Banner(stringResource(Res.string.sessions_reconnecting), Tone.WARN) }
+            if (waitsViewModel != null) waitsSection(waits, onInput = waitsViewModel::input, onAnswer = waitsViewModel::answer, onOpenSession = { id -> account?.let { onOpenSessionById(it, id) } })
             val sessions = list?.sessions.orEmpty()
             if (state.loading && sessions.isEmpty()) {
                 items(3, key = { "skeleton-$it" }) { index -> SkeletonCard(index) }

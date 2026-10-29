@@ -820,4 +820,20 @@
     <string name="input_automation_payload">La charge doit être un objet JSON.</string>
     <string name="input_automation_not_owner">Seul le propriétaire modifie, active ou teste une automatisation : elle tourne avec son quota et son lien GitHub.</string>
     <string name="input_automation_limits">Un run dure de 1 à 1440 minutes et une automatisation se déclenche de 1 à 1000 fois par jour.</string>
+    <string name="waits_title">En attente de toi</string>
+    <string name="waits_open_session">Ouvrir la session</string>
+    <string name="waits_asks_you">Te demande</string>
+    <string name="waits_turn_failed">Tour en échec</string>
+    <string name="waits_from_session">dans %1$s</string>
+    <string name="waits_closed_elsewhere">Quelqu’un a déjà répondu.</string>
+    <string name="waits_notice_refused">Le serveur a refusé cette réponse. Vérifie les valeurs.</string>
+    <string name="waits_notice_retry">Envoi impossible. Réessaie.</string>
+    <string name="waits_notice_failed">Cette réponse n’a pas pu être envoyée.</string>
+    <string name="waits_problem_missing">%1$s est obligatoire.</string>
+    <string name="waits_problem_number">%1$s doit être un nombre.</string>
+    <string name="waits_problem_date">%1$s doit être une date (AAAA-MM-JJ).</string>
+    <string name="waits_problem_too_long">%1$s est trop long.</string>
+    <string name="waits_problem_unsupported">%1$s se remplit dans la session. Ouvre-la.</string>
+    <string name="waits_field_in_session">Se remplit dans la session.</string>
+    <string name="waits_reconnecting">Reconnexion…</string>
 </resources>
