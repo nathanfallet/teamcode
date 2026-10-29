@@ -30,6 +30,8 @@ private val automationReadPost = Regex("/api/v1/automations/(preview|$CLOUD_ID/r
 /** Waits: reads, and the answer / cancel / creation writes, whose rules the service enforces. */
 private val waitRead = Regex("/api/v1/waits(/$CLOUD_ID)?")
 private val waitWrite = Regex("/api/v1/waits(/$CLOUD_ID/(answer|cancel))?")
+/** Workflow reads only; saving and deleting definitions stay interactive. */
+private val workflowRead = Regex("/api/v1/workflows(/(settings|$CLOUD_ID))?")
 private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
@@ -67,6 +69,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && automationRead.matches(path) -> CredentialAction.CLOUD_READ
+    method == "GET" && workflowRead.matches(path) -> CredentialAction.CLOUD_READ
     method == "GET" && waitRead.matches(path) -> CredentialAction.WAITS_READ
     method == "POST" && waitWrite.matches(path) -> CredentialAction.WAITS_WRITE
     method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ

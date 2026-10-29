@@ -222,8 +222,12 @@ class WaitPersistenceTest {
     /** A running session whose runner reports turns: a failure opens a `turn_failed` wait, the next turn cancels it, retrying wakes the session. */
     private suspend fun aFailedTurnOpensAWaitForTheOwner(w: AutomationWorld) {
         val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Flaky", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
-        w.pass(); w.pass()
+        // The member's earlier sessions would compete for the running place (which one wins depends on random ids): only this one remains.
+        w.a.database.query { CloudSessions.deleteWhere { CloudSessions.id neq session.id } }
         val pod = CloudSessionService.podName(session.id, 1)
+        // Reconciler passes until the cluster holds the session's pod (the claim and the pod take a pass each); bounded, so a stuck session fails the assertion.
+        repeat(10) { if (w.a.cluster.pods.keys.none { it.endsWith("/$pod") }) w.pass() }
+        assertTrue(w.a.cluster.pods.keys.any { it.endsWith("/$pod") }, "the session's pod was created")
         w.a.cluster.start(pod); w.pass()
         w.a.runner.register(w.teamId, session.id, 1, pod)
         w.b.runner.heartbeat(w.teamId, session.id, 1, ready = true)

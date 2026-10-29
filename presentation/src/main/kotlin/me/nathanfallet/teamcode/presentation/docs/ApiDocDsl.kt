@@ -45,6 +45,7 @@ internal val apiOperations: List<ApiOperation> by lazy {
         webhookOperations()
         automationOperations()
         waitOperations()
+        workflowOperations()
         artifactOperations()
         artifactTicketOperations()
         artifactMemberOperations()
@@ -83,6 +84,7 @@ internal object ApiTags {
     const val WEBHOOKS = "Webhooks"
     const val AUTOMATIONS = "Automations"
     const val WAITS = "Waits"
+    const val WORKFLOWS = "Workflows"
     const val ARTIFACTS_ADMIN = "Artifact administration"
     const val ARTIFACTS = "Artifacts"
 
@@ -117,6 +119,7 @@ internal object ApiTags {
         WEBHOOKS to "Signed, retried HTTP deliveries of the team's event feed to your own services.",
         AUTOMATIONS to "Cloud sessions started on a schedule or by a signed webhook, as their owner, and their run history.",
         WAITS to "What sessions need from people before they can go on: questions, reviews, access, decisions, with fields to fill and actions that end them.",
+        WORKFLOWS to "Saved sequences of agent, human and sub-workflow steps with typed deliverables: definitions, versions and who may edit them.",
         ARTIFACTS_ADMIN to "The S3-compatible bucket artifacts are stored in, and the artifact settings (administrators).",
         ARTIFACTS to "Pages agents publish for people to read: uploads, versions, sharing with members, access and deletion.",
     )
