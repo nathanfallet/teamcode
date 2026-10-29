@@ -13,6 +13,7 @@ import me.nathanfallet.teamcode.cli.hooks.teamHookSync
 import me.nathanfallet.teamcode.cli.hooks.teamHooksSupported
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
+import me.nathanfallet.teamcode.cli.launch.WaitsMcp
 import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
 import me.nathanfallet.teamcode.cli.launch.trackedRun
@@ -40,7 +41,7 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
  * ([AgentHost]: the agent in stream-json or app-server mode, transcript upload, input long-poll), called with the member's
  * own login instead of a pod's token. The agent's inference goes through a loopback proxy in this process, exactly as
  * under `teamcode run`, for a registered run labelled with the session; it gets the team's MCP servers, the member's
- * approved team hooks (Claude Code), the artifact tools and the member's environment variables. Nothing is written in
+ * approved team hooks (Claude Code), the artifact tools, the wait tools and the member's environment variables. Nothing is written in
  * the session's directory by TeamCode itself; the conversation id stays beside `config.json`, and the files members
  * attach to messages go to `<user temp>/teamcode-<uid>/<sessionId>/` ([SessionUploads]), kept across pauses and
  * removed when the session ends (a week at most).
@@ -105,7 +106,7 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         // Again after the proxy, whose engine installs its own handlers.
         installServiceSignalHandlers()
         val port = proxy.engine.resolvedConnectors().single().port
-        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report)
+        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report, sessionId = session)
         val variables = if (ENVIRONMENT_CAPABILITY in features) AgentVariables { _ -> memberVariables(client, report) } else null
         val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
@@ -194,14 +195,28 @@ private suspend fun approvedHooks(client: TeamCodeClient, features: List<String>
     } catch (error: CancellationException) { throw error }
     catch (_: Exception) { report("Team hooks could not be read; continuing without them."); emptyList() }
 
-/** The team's tools on the member's own device: MCP servers through the local proxy, the artifact tools rooted at the directory. */
-private class HostAgentTools(
+/**
+ * The team's tools on the member's own device: MCP servers through the local proxy, the artifact tools rooted at the
+ * directory, and the wait tools for [sessionId] when the server serves waits. [executable] is this TeamCode binary.
+ */
+internal class HostAgentTools(
     private val client: TeamCodeClient,
     private val directory: String,
     private val features: List<String>,
     private val plugin: String?,
     private val report: (String) -> Unit,
+    private val sessionId: String? = null,
+    private val executable: () -> String = { servicePlatform().executable },
 ) : AgentTools {
+    /** The member's own login runs the host, so the capability is enough: there is no execution credential to check. */
+    override suspend fun waits(): WaitsMcp? {
+        val session = sessionId ?: return null
+        if (Waits.CAPABILITY !in features) return null
+        return try { WaitsMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            report("The wait tools could not be prepared; the agent starts without them."); null
+        }
+    }
+
     override suspend fun prepare(agent: String): List<String> = if ("mcp.gateway.v1" !in features) emptyList() else try {
         withTimeout(20_000) { client.mcpServers() }.map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }.distinct()
     } catch (error: TimeoutCancellationException) { report("Team MCP servers could not be listed; the agent starts without them."); emptyList() }
@@ -214,7 +229,7 @@ private class HostAgentTools(
             catch (_: TimeoutCancellationException) { false }
             catch (error: CancellationException) { throw error }
             catch (_: Exception) { false }
-        return if (allowed) ArtifactsMcp(servicePlatform().executable, directory, configDir = configPath().toPath().parent?.toString()) else null
+        return if (allowed) ArtifactsMcp(executable(), directory, configDir = configPath().toPath().parent?.toString()) else null
     }
 
     override suspend fun claudePlugin() = plugin

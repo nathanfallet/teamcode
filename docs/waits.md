@@ -14,9 +14,8 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | `teamcode waits list`, `show`, `answer`, `cancel`, `ask` ([CLI](#cli)); the "waits" part of the next row is the companion apps only | Implemented |
 | Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
 | "Waiting for you" in the companion apps ([companion](companion.md)): a section above the sessions list, updated live from the feed, answered in place (typed fields; `file` and `secret` fields are filled in the session; no cancel button) | Implemented |
-| `teamcode waits` (CLI) | Planned (separate change) |
 | Waking the session: an answer is queued on the wait's session as a message, which resumes a paused session | Implemented (see below) |
-| The `teamcode-waits` MCP server (`ask_human`) | Planned |
+| The `teamcode-waits` MCP server (`ask_human`, `list_waits`, `get_wait`, `cancel_wait`), connected beside the agent of a remote session and of a cloud session ([agents](#agents)); never an answer tool, and the loopback relay never relays `…/answer` | Implemented. A local `teamcode run` has no session, so it gets no wait tools. A Kubernetes cloud session gets them only once its execution credential may read waits: today that credential carries no cloud scope, so the runner leaves them out (see [agents](#agents)) |
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
 | Stop hook that requires an agent to deliver or ask; `turn_failed` | Planned |
@@ -101,6 +100,24 @@ It is cut at 32,000 characters, the most a message holds. The message is queued 
 
 A session whose agent holds its owner's GitHub token takes instructions from its owner only (`github_owner_only`, [cloud sessions](cloud-sessions.md)): an assignee who is not the owner gets that `403` **before** the answer is stored, so a wait never ends up answered but undeliverable. A wait cancelled by someone else does not wake the session.
 
+## Agents
+
+A session's agent asks with the stdio MCP server `teamcode mcp waits --session <id> [--run <id>]`, connected under the name `teamcode_waits` exactly as [`teamcode_artifacts`](artifacts.md#agents) is: Claude Code gets a stdio entry in `--mcp-config`, Codex `-c mcp_servers.teamcode_waits={command=…,args=[…],env={TEAMCODE_WAITS_URL=…,TEAMCODE_WAITS_TOKEN_VAR="TEAMCODE_LOCAL_TOKEN"},env_vars=["TEAMCODE_LOCAL_TOKEN"]}`. The server talks to the loopback relay of the proxy that launched the agent (`TEAMCODE_WAITS_URL`, `http://127.0.0.1:<port>` only) with the local token, passed by variable name, never on a command line. It acts with the proxy's credential, which is the session owner's.
+
+| Tool | What it does |
+| --- | --- |
+| `ask_human` | `title` (required), `body` (Markdown), `assignee` (a member **id**: the server takes no username or GitHub login; omitted, the session's owner), `fields[]` (`id`, `type`, `label`, `help`, `required`, `default`, `options[{value,label,description}]`, `multiple`, `allowOther`, `maxLength`; types `text`, `choice`, `confirm`, `number`, `date`, `file`, `info`, `secret` being refused for now), `actions[]` (`id`, `label`, `requires[]`, `style`), `refs[]` (`artifact`/`session` by `id`, or an `https` `url`). Creates the wait for this session only, with a fresh `Idempotency-Key` per call. Returns the id and the status, and tells the agent to end its turn: the answer arrives as a message starting with `[TeamCode wait answered]` |
+| `list_waits` | This session's waits asked of its owner (`status`, open by default), read from `GET /waits` (at most five pages of 100). A wait asked of another member is not listed there: the agent keeps its id |
+| `get_wait` | One of this session's waits, its fields, actions and answer |
+| `cancel_wait` | Withdraws one of this session's open waits |
+
+- Arguments are checked before anything is sent (unknown properties, types, ids, counts, `https` urls), and the server's refusals (`invalid_wait`, `invalid_assignee`, `wait_limit`, `wait_closed`, `not_available_yet`, `wait_session_owner_only`, `credential_scope`) come back with what to do. A wait of another session, or a session's own permission request, is refused by `get_wait` and `cancel_wait`.
+- **No answer.** The session's owner is the default assignee and the relay holds the owner's credential, so the relay is the guard: it relays only `GET /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST /api/v1/waits` and `POST /api/v1/waits/{id}/cancel`, with the same checks as the artifact relay (the token compared in constant time, loopback, no `Origin`, a bounded body, `no-store`, a refused sign-in as `502 relay_sign_in_refused`). Everything else, `POST …/answer` included, is a `404` that never reaches the server. The user service announces it as `wait-relay-v1`.
+- The agent is told, beside the artifact instruction (Claude Code `--append-system-prompt`, Codex `developer_instructions`, with the same exceptions): when it needs an answer, a decision, an approval or a setup only a person can give, call `ask_human` with typed fields instead of guessing, then end its turn.
+- **Where.** A [remote session](cloud-sessions.md) on a member's device gets the tools when the server advertises `waits.v1` (the host runs with the member's own login). A Kubernetes cloud session gets them when the server advertises `waits.v1` and one `GET /waits?limit=1` with the execution credential succeeds; the execution credential (`tcex_`) has no cloud scope today, so this read is refused with `403 credential_scope`, the runner logs it and starts the agent without the tools. A local `teamcode run` never gets them: it has no session.
+
+The answer comes back as a message of the session, described in [Waking the session](#waking-the-session); the CLI only names its first line (`WAIT_ANSWERED_PREFIX`).
+
 ## What is planned
 
-The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server and the waking of sessions, then the Stop hook and `turn_failed`, then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page.
+The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server (done) and the waking of sessions, then the Stop hook and `turn_failed`, then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page. Also planned: letting a Kubernetes execution credential read, ask and withdraw the waits of its own session (and nothing else), so cloud sessions get the wait tools; until then only remote sessions have them.

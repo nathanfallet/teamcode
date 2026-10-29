@@ -6,10 +6,14 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.VERSION
 import me.nathanfallet.teamcode.cli.artifacts.*
-import me.nathanfallet.teamcode.cli.proxy.RELAY_SIGN_IN_REFUSED
+import me.nathanfallet.teamcode.cli.mcp.McpTools.boolean
+import me.nathanfallet.teamcode.cli.mcp.McpTools.int
+import me.nathanfallet.teamcode.cli.mcp.McpTools.number
+import me.nathanfallet.teamcode.cli.mcp.McpTools.schema
+import me.nathanfallet.teamcode.cli.mcp.McpTools.string
+import me.nathanfallet.teamcode.cli.mcp.McpTools.text
 import me.nathanfallet.teamcode.client.ArtifactConflictException
 import me.nathanfallet.teamcode.client.TeamCodeClient
-import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.ByteString.Companion.toByteString
 import okio.FileSystem
 import okio.Path
@@ -72,30 +76,16 @@ class ArtifactsMcpServer(
                 "read" -> read(arguments)
                 else -> throw CliUserException("Unknown tool $name.")
             }
-            buildJsonObject { putJsonArray("content") { addJsonObject { put("type", "text"); put("text", text) } } }
+            McpTools.text(text)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            buildJsonObject {
-                putJsonArray("content") { addJsonObject { put("type", "text"); put("text", describe(error)) } }
-                put("isError", true)
-            }
+            McpTools.text(describe(error), isError = true)
         }
     }
 
     /** Never an exception chain: only our own messages and the server's error code and text. */
-    private fun describe(error: Exception): String = when (error) {
-        is CliUserException -> error.message
-        is TeamCodeException -> if (error.code == RELAY_SIGN_IN_REFUSED)
-            "TeamCode refused the sign-in ($RELAY_SIGN_IN_REFUSED): run `teamcode login` on this computer; in a cloud session, the execution has ended. Retrying does not help."
-        else "TeamCode refused the call (${error.code ?: "http_${error.statusCode}"}): ${error.message}" +
-            (if (error.statusCode == 502 || error.statusCode == 503 || error.statusCode == 429) " Retry in a moment." else "")
-        is kotlinx.serialization.SerializationException -> "unexpected_answer: TeamCode answered something this version cannot read. Update teamcode."
-        is LocalFileFailure -> error.message!!
-        // The typed client's own argument checks ("Invalid member."): the call never left, fix the argument.
-        is IllegalArgumentException -> "invalid_argument: ${error.message ?: "an argument is not valid"} Fix the argument; retrying does not help."
-        else -> "server_unreachable: the TeamCode server could not be reached. Retry in a moment."
-    }
+    private fun describe(error: Exception): String = if (error is LocalFileFailure) error.message!! else McpTools.describe(error)
 
     /** A failure writing or reading the scratch directory: local, never a reason to retry the server. */
     private class LocalFileFailure(message: String) : Exception(message)
@@ -230,32 +220,8 @@ class ArtifactsMcpServer(
         return directory
     }
 
-    private fun result(id: JsonElement, value: JsonObject) = buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("result", value) }
-    private fun error(id: JsonElement, code: Int, message: String) = buildJsonObject {
-        put("jsonrpc", "2.0"); put("id", id); putJsonObject("error") { put("code", code); put("message", message) }
-    }
-
-    /** A string argument, absent when missing, null or blank; any other type is refused rather than read as absent. */
-    private fun JsonObject.string(name: String): String? = when (val value = this[name]) {
-        null, JsonNull -> null
-        is JsonPrimitive -> if (value.isString) value.content.takeIf { it.isNotBlank() } else throw CliUserException("$name must be a string.")
-        else -> throw CliUserException("$name must be a string.")
-    }
-    /** Absent or null is null; a whole number, also written as a string or as `3.0`, is that number; anything else is refused. */
-    private fun JsonObject.int(name: String): Int? {
-        val value = this[name] ?: return null
-        if (value is JsonNull) return null
-        val primitive = value as? JsonPrimitive
-        return primitive?.content?.trim()?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.takeIf { d -> d % 1.0 == 0.0 && d in -1e9..1e9 }?.toInt() }
-            ?: throw CliUserException("$name must be a whole number.")
-    }
-    /** Absent or null is null; `true`/`false`, also written as strings, are themselves; anything else is refused. */
-    private fun JsonObject.boolean(name: String): Boolean? {
-        val value = this[name] ?: return null
-        if (value is JsonNull) return null
-        return when ((value as? JsonPrimitive)?.content?.trim()?.lowercase()) { "true" -> true; "false" -> false; else -> throw CliUserException("$name must be true or false.") }
-    }
-    private fun JsonObject?.orEmpty() = this ?: JsonObject(emptyMap())
+    private fun result(id: JsonElement, value: JsonObject) = McpTools.result(id, value)
+    private fun error(id: JsonElement, code: Int, message: String) = McpTools.error(id, code, message)
 
     companion object {
         private const val MAX_COPIES = 20
@@ -278,14 +244,6 @@ class ArtifactsMcpServer(
             "Keep repeated elements consistent, use cards sparingly, draw charts to a true scale. Give the page a <title> of two to four words."
         private const val INSTRUCTIONS = "Publish pages (HTML or Markdown, with their images, CSS, JS and data files) for your team to read behind the TeamCode login. " +
             "publish returns the URL to share; republish with the same artifact to add a version. $PAGE_CONTRACT $PAGE_DESIGN"
-
-        private fun schema(required: List<String>, properties: JsonObjectBuilder.() -> Unit) = buildJsonObject {
-            put("type", "object"); putJsonObject("properties", properties)
-            putJsonArray("required") { required.forEach { add(it) } }
-            put("additionalProperties", false)
-        }
-        private fun JsonObjectBuilder.text(name: String, description: String) = putJsonObject(name) { put("type", "string"); put("description", description) }
-        private fun JsonObjectBuilder.number(name: String, description: String) = putJsonObject(name) { put("type", "integer"); put("description", description) }
 
         private val TOOLS = buildJsonArray {
             addJsonObject {

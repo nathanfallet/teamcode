@@ -58,12 +58,13 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                     if (challenge != null) put("proof", serviceProof(localToken, challenge, serviceId, serverUrl))
                     else { put("id", serviceId); put("serverUrl", serverUrl) }
                     put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")); add(JsonPrimitive("wait-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
         mcpRelay(client, localToken, maximumBodyBytes)
         artifactRelay(client, localToken, maximumBodyBytes)
+        waitRelay(client, localToken, maximumBodyBytes)
         for (path in listOf("/v1/messages", "/v1/responses")) {
             for (mode in listOf("interactive", "background", "run")) {
                 val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
@@ -276,14 +277,48 @@ internal val ARTIFACT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
     Regex("/api/v1/artifacts/$ARTIFACT_ID/members/(?!\\.{1,2}$)[A-Za-z0-9._@-]{1,64}")),
 )
 
+private const val WAIT_ID = "[a-zA-Z0-9-]{1,36}"
+
 /**
- * Relays the artifact calls of `teamcode mcp artifacts` with this proxy's TeamCode credential (the member's device
+ * The wait API calls `teamcode mcp waits` makes, and nothing else: listing, reading, asking and withdrawing. Answering
+ * (`POST /api/v1/waits/{id}/answer`) is absent on purpose: the relay holds the session owner's credential, and the owner
+ * is the default assignee, so an agent could otherwise answer its own question.
+ */
+internal val WAIT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
+    HttpMethod.Get to listOf(Regex("/api/v1/waits"), Regex("/api/v1/waits/$WAIT_ID")),
+    HttpMethod.Post to listOf(Regex("/api/v1/waits"), Regex("/api/v1/waits/$WAIT_ID/cancel")),
+)
+
+/** Relays the artifact calls of `teamcode mcp artifacts`, as [apiRelay] does. */
+private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =
+    apiRelay("/api/v1/artifacts", ARTIFACT_RELAY_ROUTES, localToken, maximumBodyBytes) { request ->
+        client.forwardArtifact(request.method, request.path, request.query, request.body, request.contentType, request.runId)
+    }
+
+private val IDEMPOTENCY_KEY = Regex("[A-Za-z0-9._:-]{1,128}")
+
+/** Relays the wait calls of `teamcode mcp waits`, as [apiRelay] does, with the caller's `Idempotency-Key` (at most one). */
+private fun Routing.waitRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =
+    apiRelay("/api/v1/waits", WAIT_RELAY_ROUTES, localToken, maximumBodyBytes, accepts = { headers ->
+        headers.getAll(me.nathanfallet.teamcode.api.models.CloudHeaders.IDEMPOTENCY_KEY).orEmpty().let { keys -> keys.size <= 1 && keys.all { IDEMPOTENCY_KEY.matches(it) } }
+    }) { request ->
+        client.forwardWait(request.method, request.path, request.query, request.body, request.contentType, request.runId,
+            request.headers[me.nathanfallet.teamcode.api.models.CloudHeaders.IDEMPOTENCY_KEY])
+    }
+
+/** One call an [apiRelay] accepted. */
+private class RelayedCall(val method: HttpMethod, val path: String, val query: String, val body: ByteArray, val contentType: ContentType?, val runId: String?, val headers: Headers)
+
+/**
+ * Relays the API calls below [prefix] that [routes] lists, with this proxy's TeamCode credential (the member's device
  * login locally, the execution credential in a cloud session). The caller holds only the local token; the relay reads
  * no file and keeps no state. Same guards as the MCP relay: the token compared in constant time, loopback only, no
- * browser `Origin`, a bounded body, `no-store`, and a sign-in refusal turned into an explicit `502`.
+ * browser `Origin`, a bounded body, `no-store`, and a sign-in refusal turned into an explicit `502`. Anything off
+ * [routes] is a `404` that never reaches the server; request headers [accepts] refuses are a `400`.
  */
-private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) {
-    for (pattern in listOf("/api/v1/artifacts", "/api/v1/artifacts/{rest...}")) route(pattern) {
+private fun Routing.apiRelay(prefix: String, routes: Map<HttpMethod, List<Regex>>, localToken: String, maximumBodyBytes: Int,
+    accepts: (Headers) -> Boolean = { true }, forward: suspend (RelayedCall) -> me.nathanfallet.teamcode.client.ArtifactRelayResponse) {
+    for (pattern in listOf(prefix, "$prefix/{rest...}")) route(pattern) {
         install(io.ktor.server.http.HttpRequestLifecycle) { cancelCallOnClose = true }
         handle {
             if (!equalToken(call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer "), localToken)) {
@@ -296,7 +331,7 @@ private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, ma
             }
             val method = call.request.httpMethod
             val path = call.request.path()
-            if (ARTIFACT_RELAY_ROUTES[method].orEmpty().none { it.matches(path) }) {
+            if (routes[method].orEmpty().none { it.matches(path) }) {
                 call.respond(HttpStatusCode.NotFound)
                 return@handle
             }
@@ -305,13 +340,17 @@ private fun Routing.artifactRelay(client: TeamCodeClient, localToken: String, ma
                 call.respondText("Invalid launch identifier.", status = HttpStatusCode.BadRequest)
                 return@handle
             }
+            if (!accepts(call.request.headers)) {
+                call.respondText("Invalid request header.", status = HttpStatusCode.BadRequest)
+                return@handle
+            }
             val body = call.receiveChannel().readRemaining(maximumBodyBytes + 1L).readByteArray()
             if (body.size > maximumBodyBytes) {
                 call.respondText("Request is too large.", status = HttpStatusCode.PayloadTooLarge)
                 return@handle
             }
             val relayed = try {
-                client.forwardArtifact(method, path, call.request.queryString(), body, call.request.contentType().takeIf { it != ContentType.Any }, runs.singleOrNull())
+                forward(RelayedCall(method, path, call.request.queryString(), body, call.request.contentType().takeIf { it != ContentType.Any }, runs.singleOrNull(), call.request.headers))
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (_: Exception) {

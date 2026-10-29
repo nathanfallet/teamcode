@@ -413,18 +413,35 @@ class TeamCodeClient(
      */
     suspend fun forwardArtifact(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
         require(path == "/api/v1/artifacts" || path.startsWith("/api/v1/artifacts/")) { "Only artifact routes are relayed." }
+        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), ARTIFACT_RELAY_LIMIT, ARTIFACT_RELAYED_HEADERS)
+    }
+
+    /**
+     * Relays one wait API call received by the local proxy (`teamcode mcp waits`), with this client's credential: only
+     * `/api/v1/waits` paths (the proxy narrows them further), the caller's [idempotencyKey], and a bounded answer.
+     */
+    suspend fun forwardWait(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?, idempotencyKey: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/waits" || path.startsWith("/api/v1/waits/")) { "Only wait routes are relayed." }
+        require(idempotencyKey == null || IDEMPOTENCY_KEY_PATTERN.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return forwardApi(method, path, query, body, contentType, runId, listOfNotNull(idempotencyKey?.let { CloudHeaders.IDEMPOTENCY_KEY to it }).toMap(),
+            WAIT_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
+
+    private suspend fun forwardApi(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?,
+        headers: Map<String, String>, limit: Int, relayed: List<String>): ArtifactRelayResponse {
         require(runId == null || RunIdentifiers.isValid(runId)) { "Invalid run." }
         return http.prepareRequest("$origin$path" + if (query.isEmpty()) "" else "?$query") {
             this.method = method; authenticate()
             runId?.let { header("x-teamcode-run-id", it) }
+            headers.forEach { (name, value) -> header(name, value) }
             if (method != HttpMethod.Get && method != HttpMethod.Delete) setBody(io.ktor.http.content.ByteArrayContent(body, contentType ?: ContentType.Application.OctetStream))
             timeout { requestTimeoutMillis = 120_000 }
         }.execute { response ->
-            // Streamed and bounded: a file answer is at most 16 MiB, the largest the API sends.
-            val bytes = response.bodyAsChannel().readRemaining(ARTIFACT_RELAY_LIMIT + 1L).readByteArray()
-            if (bytes.size > ARTIFACT_RELAY_LIMIT) throw TeamCodeException(502, "The artifact answer exceeds the relay limit.")
+            // Streamed and bounded: an artifact file answer is at most 16 MiB, the largest the API sends.
+            val bytes = response.bodyAsChannel().readRemaining(limit + 1L).readByteArray()
+            if (bytes.size > limit) throw TeamCodeException(502, "The answer exceeds the relay limit.")
             ArtifactRelayResponse(response.status.value, response.contentType(),
-                ARTIFACT_RELAYED_HEADERS.mapNotNull { name -> response.headers[name]?.let { name to it } }.toMap(), bytes)
+                relayed.mapNotNull { name -> response.headers[name]?.let { name to it } }.toMap(), bytes)
         }
     }
 
@@ -1124,6 +1141,11 @@ class TeamCodeClient(
         private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
         private const val ARTIFACT_RELAY_LIMIT = 16 * 1024 * 1024 + 64 * 1024
         private val ARTIFACT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, HttpHeaders.ContentDisposition, "X-TeamCode-Sha256", "x-teamcode-error", "x-teamcode-request-id")
+        /** A page of waits: up to 100 stored waits of at most 256 KiB each, plus the sessions' permission requests. */
+        private const val WAIT_RELAY_LIMIT = 32 * 1024 * 1024
+        private val WAIT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, CloudHeaders.IDEMPOTENCY_REPLAYED, "x-teamcode-error", "x-teamcode-request-id")
+        /** As the server accepts it (`WaitService`): 1 to 128 letters, digits or `. _ : -`. */
+        private val IDEMPOTENCY_KEY_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */

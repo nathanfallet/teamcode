@@ -8,6 +8,7 @@ import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.multiple
 import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.options.required
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.header
@@ -28,11 +29,12 @@ import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
 
-private val TOKEN_VARIABLES = listOf("TEAMCODE_ARTIFACTS_TOKEN", "TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN")
+/** Where a launcher may put the local token, after the server's own `<prefix>_TOKEN`. */
+private val TOKEN_VARIABLES = listOf("TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN")
 
 class Mcp : SuspendingNoOpCliktCommand(name = "mcp") {
     override fun help(context: Context) = "MCP servers: the team's servers assigned to you, and the ones TeamCode runs beside an agent, over stdio."
-    init { subcommands(McpList(), ArtifactsMcpCommand()) }
+    init { subcommands(McpList(), ArtifactsMcpCommand(), WaitsMcpCommand()) }
 }
 
 /** One line of `teamcode mcp list`: the name agents see, the transport, and a hosted command's state. */
@@ -104,29 +106,53 @@ private class ArtifactsMcpCommand : SuspendingCliktCommand(name = "artifacts") {
         }
     }
 
-    /**
-     * Inside `teamcode run`, the launcher's loopback relay with the local token only; otherwise the stored CLI login.
-     * The relay address must be loopback, so the local token never leaves the computer.
-     */
-    private fun client(): TeamCodeClient {
-        val url = environment("TEAMCODE_ARTIFACTS_URL") ?: return sdk(loadConfig())
-        if (!Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}").matches(url)) throw CliUserException("TEAMCODE_ARTIFACTS_URL must be the local relay, http://127.0.0.1:<port>.")
-        // The launcher names the variable that holds this launch's token, so a token inherited from an outer launch is
-        // never picked first. Without it, the known variables in turn; an unexpanded ${…} placeholder is not a token.
-        val names = environment("TEAMCODE_ARTIFACTS_TOKEN_VAR")?.takeIf { it in TOKEN_VARIABLES }?.let(::listOf) ?: TOKEN_VARIABLES
-        val token = names.firstNotNullOfOrNull { name ->
-            environment(name)?.takeIf { it.length >= 32 && "\${" !in it }
-        } ?: throw CliUserException("No local TeamCode token: start the agent with teamcode run.")
-        val runId = run
-        return TeamCodeClient(url, { token }) { configure ->
-            HttpClient {
-                configure(this)
-                if (runId != null) defaultRequest { header("x-teamcode-run-id", runId) }
-            }
-        }
-    }
+    private fun client(): TeamCodeClient = relayClient("TEAMCODE_ARTIFACTS", run)
 
     private fun privateDirectory(directory: Path) {
         if (!ensurePrivateDirectory(directory.toString())) throw CliUserException("$directory must be a directory of yours readable by you only (mode 0700), or not exist yet.")
+    }
+}
+
+private class WaitsMcpCommand : SuspendingCliktCommand(name = "waits") {
+    override val hiddenFromHelp = true
+    private val session by option("--session", help = "The session the waits belong to.").required()
+    private val run by option("--run", help = "The agent run this server belongs to.")
+    override fun help(context: Context) = "The stdio MCP server a cloud or remote session's agent asks people with (ask_human). " +
+        "The session runner adds it to Claude Code and Codex; it never answers a wait."
+    override suspend fun run() {
+        if (!Regex("[a-zA-Z0-9-]{1,36}").matches(session)) throw CliUserException("--session must be a session id.")
+        run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
+        relayClient("TEAMCODE_WAITS", run).use {
+            val server = WaitsMcpServer(it, session)
+            while (true) {
+                val line = readlnOrNull() ?: break
+                if (line.isBlank()) continue
+                val answer = server.handle(line) ?: continue
+                print(answer + "\n")
+                flushStandardOutput()
+            }
+        }
+    }
+}
+
+/**
+ * Beside an agent, the launcher's loopback relay (`<prefix>_URL`) with the local token only; otherwise the stored CLI
+ * login. The relay address must be loopback, so the local token never leaves the computer.
+ */
+private fun relayClient(prefix: String, runId: String?): TeamCodeClient {
+    val url = environment("${prefix}_URL") ?: return sdk(loadConfig())
+    if (!Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}").matches(url)) throw CliUserException("${prefix}_URL must be the local relay, http://127.0.0.1:<port>.")
+    // The launcher names the variable that holds this launch's token, so a token inherited from an outer launch is
+    // never picked first. Without it, the known variables in turn; an unexpanded ${…} placeholder is not a token.
+    val known = listOf("${prefix}_TOKEN") + TOKEN_VARIABLES
+    val names = environment("${prefix}_TOKEN_VAR")?.takeIf { it in known }?.let(::listOf) ?: known
+    val token = names.firstNotNullOfOrNull { name ->
+        environment(name)?.takeIf { it.length >= 32 && "\${" !in it }
+    } ?: throw CliUserException("No local TeamCode token: start the agent with teamcode run, or in a TeamCode session.")
+    return TeamCodeClient(url, { token }) { configure ->
+        HttpClient {
+            configure(this)
+            if (runId != null) defaultRequest { header("x-teamcode-run-id", runId) }
+        }
     }
 }
