@@ -82,6 +82,14 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "payload_not_accepted" -> return "A cron automation takes no payload ($tag). Run the test without --payload and --payload-stdin."
         "invalid_payload" -> return "The payload does not validate against the automation's variables ($tag). Run it with --dry-run to see which paths and rules fail."
         "automation_disabled" -> return "The automation is paused ($tag). Arm it with teamcode automations enable ID."
+        "wait_closed" -> return "This wait was already answered or cancelled ($tag). Run teamcode waits show ID to see how."
+        "answer_through_session" -> return "This is a request of a cloud session ($tag): answer it in the session, not with teamcode waits answer."
+        "invalid_answer" -> return "The server rejected the answer ($tag): an unknown action or field, a value of the wrong type, or a required field left empty. Run teamcode waits show ID."
+        "invalid_wait" -> return "The server rejected this wait ($tag). Check the title, fields, actions and references (teamcode waits ask --help)."
+        "invalid_assignee" -> return "The member asked is not an active member ($tag). Use a member id."
+        "wait_limit" -> return "This session already has the most open waits the team allows ($tag). Answer or cancel one first."
+        "wait_assignee_only" -> return "Only the person asked, or an administrator, answers this wait ($tag)."
+        "wait_session_owner_only" -> return "Only the session's owner asks for something in this session ($tag)."
         "profile_unassigned" -> return "The session owner is not assigned to this cloud profile ($tag). Run `teamcode cloud profiles` to list your usable profiles " +
             "(an administrator adds --member <owner id> for another member's), or ask a team administrator to assign it."
     }
