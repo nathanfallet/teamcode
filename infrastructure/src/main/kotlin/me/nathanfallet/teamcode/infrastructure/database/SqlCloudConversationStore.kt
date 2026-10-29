@@ -58,12 +58,19 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         // Last, so the team's cursor lock is taken after every other write of this transaction.
         val owner = session[CloudSessions.ownerId]
         // One batch, however many turns and requests the upload carried.
-        publishTeamEvents(teamId, feed.mapNotNull { (seq, type, data) ->
-            when (type) {
+        publishTeamEvents(teamId, feed.flatMap { (seq, type, data) ->
+            val event = when (type) {
                 CloudEventType.TURN -> turnEvent(sessionId, owner, seq, data, now)
                 CloudEventType.PERMISSION_EXPIRED -> expiredEvent(sessionId, owner, seq, data, now)
                 else -> waitingEvent(sessionId, owner, seq, data, now)
-            }?.ofKind(session)
+            }
+            // A failed turn opens a `turn_failed` wait for the owner; the next turn to start cancels it. In transcript order, after the turn\'s own event.
+            val turnWaits = if (type != CloudEventType.TURN) emptyList() else when (event?.data?.get("phase")?.jsonPrimitive?.contentOrNull) {
+                "failed" -> with(TurnFailedWaits) { opened(teamId, sessionId, owner, now) }
+                "started" -> with(TurnFailedWaits) { cancelled(teamId, sessionId, owner, now) }
+                else -> emptyList()
+            }
+            (listOfNotNull(event) + turnWaits).map { it.ofKind(session) }
         })
         RunnerEventsAck(through, last)
     }

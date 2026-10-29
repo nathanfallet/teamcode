@@ -27,6 +27,14 @@ class WaitWakeTest {
         assertEquals(listOf("po:s1"), sessions.authorized, "checked before anything is stored")
     }
 
+    @Test fun onlyRetryingAFailedTurnWakesTheSession() {
+        val failed = WaitFixtures.review.let {
+            Wait("w", "team", WaitSource.WAIT, WaitKind.TURN_FAILED, WaitResolver.HUMAN, WaitStatus.RESOLVED, "s1", null, null, "ada", null, null, TurnFailedWait.TITLE, null, emptyList(), TurnFailedWait.fields, TurnFailedWait.actions, null, 1, 5)
+        }
+        assertTrue(TurnFailedWait.wakes(failed, TurnFailedWait.RETRY)); assertFalse(TurnFailedWait.wakes(failed, TurnFailedWait.DISMISS))
+        assertTrue(TurnFailedWait.wakes(failed.copy(kind = WaitKind.HUMAN_REQUEST), TurnFailedWait.DISMISS), "any other wait wakes on every action")
+    }
+
     @Test fun anUnfilledFieldIsLeftOutAndAChoiceReadsWithItsLabel() {
         val wait = WaitFixtures.run {
             Wait("w", "team", WaitSource.WAIT, WaitKind.HUMAN_REQUEST, WaitResolver.HUMAN, WaitStatus.RESOLVED, "s1", null, null, "ada", null, "ada", "Pick\u0007 one", null, emptyList(),
