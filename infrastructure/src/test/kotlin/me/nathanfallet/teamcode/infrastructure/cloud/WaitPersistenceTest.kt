@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.infrastructure.cloud
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.JsonPrimitive
 import me.nathanfallet.teamcode.domain.cloud.CloudCreateOutcome
+import me.nathanfallet.teamcode.domain.cloud.CloudInputKind
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionDraft
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.team.TeamFailure
@@ -21,6 +22,12 @@ import kotlin.test.*
 /** Waits on real MySQL, with two pools standing for two replicas (the automations' world supplies the team and the cloud). */
 class WaitPersistenceTest {
     private class Replica(val service: WaitService)
+
+    /** The conversation service of the replica, as the composition root wires it into the wait service. */
+    private fun waker(r: AutomationReplica) = object : WaitSessions {
+        override suspend fun authorize(actor: Principal, sessionId: String) = r.conversation.authorizeWaitAnswer(actor, sessionId)
+        override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = r.conversation.queueWaitAnswer(actor, sessionId, text, clientKey)
+    }
 
     @Test @Timeout(240)
     fun waitsHoldAcrossReplicas() = runBlocking {
@@ -43,6 +50,7 @@ class WaitPersistenceTest {
             sessionPermissionRequestsAreListedOnTheFirstPageOnly(a, w, session.id)
             pagingAndFilters(a, w, review)
             waitsEndWithTheirSession(a, w, review)
+            theAnswerWakesTheSession(w)
         }
     }
 
@@ -148,5 +156,19 @@ class WaitPersistenceTest {
         w.a.database.query { CloudSessions.deleteWhere { CloudSessions.id eq review.sessionId } }
         refusedWith("not_found") { a.service.get(w.admin, id) }
         assertEquals(0L, w.a.database.query { Waits.selectAll().count() })
+    }
+
+    /** The answer is a message of the session written by the one who answered; the same answer sent to the other replica queues nothing more. */
+    private suspend fun theAnswerWakesTheSession(w: AutomationWorld) {
+        val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Wake me", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val a = Replica(WaitService(SqlWaitStore(w.a.database), waker(w.a))); val b = Replica(WaitService(SqlWaitStore(w.b.database), waker(w.b)))
+        val id = a.service.create(w.member, WaitDefinition(session.id, "Account access", assigneeId = w.admin.member.id), null).wait.id
+        a.service.answer(w.admin, id, "done", emptyMap())
+        b.service.answer(w.admin, id, "done", emptyMap())
+        val inputs = w.a.conversation.inputs(w.member, session.id, null, 10).inputs
+        val message = inputs.single { it.kind == CloudInputKind.MESSAGE }
+        assertEquals(w.admin.member.id, message.authorId); assertTrue(message.wake)
+        assertTrue(message.text!!.startsWith("[TeamCode wait answered] Account access\nwait: $id\naction: Done (done)\nanswered by: ${w.admin.member.username}"), message.text)
+        refusedWith("wait_closed") { b.service.answer(w.admin, id, "other", emptyMap()) }
     }
 }

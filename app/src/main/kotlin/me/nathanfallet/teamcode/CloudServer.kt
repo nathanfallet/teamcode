@@ -21,6 +21,8 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
 import me.nathanfallet.teamcode.domain.waits.WaitService
+import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.waits.WaitSessions
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
@@ -92,7 +94,11 @@ class CloudServer(
     private val automationStore = SqlAutomationStore(database)
     private val automationDirectory = AutomationDirectory.Cloud(store)
     val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
-    val waits = WaitService(SqlWaitStore(database))
+    /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
+    val waits = WaitService(SqlWaitStore(database), object : WaitSessions {
+        override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
+        override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
+    })
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 

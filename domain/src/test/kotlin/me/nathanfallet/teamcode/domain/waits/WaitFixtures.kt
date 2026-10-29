@@ -58,3 +58,18 @@ object WaitFixtures {
         actions = listOf(WaitAction("approve", "Approve", style = "primary"), WaitAction("request_changes", "Request changes", requires = listOf("feedback"))),
     )
 }
+
+/** Remembers what was queued on sessions and can be made to fail. */
+class FakeSessions : WaitSessions {
+    val delivered = mutableListOf<Triple<String, String, String>>()
+    val seenKeys = mutableSetOf<Pair<String, String>>()
+    val authorized = mutableListOf<String>()
+    var refuse: TeamFailure? = null
+    var failDelivery: Exception? = null
+    override suspend fun authorize(actor: Principal, sessionId: String) { refuse?.let { throw it }; authorized += "${actor.member.id}:$sessionId" }
+    override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) {
+        failDelivery?.let { throw it }
+        // Idempotent per session, author and key, like the conversation store.
+        if (seenKeys.add(Triple(sessionId, actor.member.id, clientKey).let { it.first + "/" + it.second to it.third })) delivered += Triple(sessionId, actor.member.id, text)
+    }
+}
