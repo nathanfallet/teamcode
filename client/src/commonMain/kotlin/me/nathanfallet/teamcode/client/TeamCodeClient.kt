@@ -19,6 +19,7 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
@@ -757,6 +758,26 @@ class TeamCodeClient(
     }
     suspend fun cloudAccessPolicy(): CloudAccessPolicyView = coded(HttpMethod.Get, "/api/v1/cloud/access", null as Unit?)
     suspend fun saveCloudAccessPolicy(policy: CloudAccessPolicyView): CloudAccessPolicyView = coded(HttpMethod.Put, "/api/v1/cloud/access", policy)
+
+    // Waits (`waits.v1`, docs/waits.md).
+    /** What waits for the caller (or for [assignee], a member id: administrators), open ones by default. Newest first, [before] is the page cursor. */
+    suspend fun waits(assignee: String? = null, status: String = "open", before: String? = null, limit: Int = 50): WaitPageView {
+        assignee?.let(::identifier); before?.let(::identifier)
+        require(status in Waits.statuses || status == "all") { "Use open, resolved, cancelled or all." }
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/waits", null as Unit?) {
+            url { assignee?.let { parameters.append("assignee", it) }; parameters.append("status", status); before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun wait(id: String): WaitView { identifier(id); return coded(HttpMethod.Get, "/api/v1/waits/$id", null as Unit?) }
+    /** Asks a person for something; the same [idempotencyKey] returns the wait it created. */
+    suspend fun createWait(input: WaitInput, idempotencyKey: String = Uuid.random().toString()): WaitView =
+        coded(HttpMethod.Post, "/api/v1/waits", CreateWaitRequest(input)) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    /** Answers a stored wait; `409 wait_closed` when someone answered or cancelled it first. */
+    suspend fun answerWait(id: String, action: String, values: Map<String, JsonElement> = emptyMap()): WaitView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/answer", AnswerWaitRequest(action, values))
+    }
+    suspend fun cancelWait(id: String): WaitView { identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/cancel", null as Unit?) }
 
     // Automations (`automations.v1`, docs/automations.md).
     /** The caller's automations, or [owner]'s (a member id, or `all`: administrators). Newest first, [before] is the page cursor. */
