@@ -82,3 +82,14 @@ interface WaitStore {
     /** Same for a cancellation. Audited `wait.cancelled`. */
     suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange
 }
+
+/**
+ * The cloud sessions waits talk back to: an answer is queued as a message of the session, which wakes it. Implemented
+ * on the conversation service in the composition root; the domain of waits does not know how a session is reached.
+ */
+interface WaitSessions {
+    /** Refuses before anything is stored when [actor] may not instruct the session (the owner-only rule of a session holding its owner's GitHub token). */
+    suspend fun authorize(actor: Principal, sessionId: String)
+    /** Queues [text] on the session as a message written by [actor] and wakes it; idempotent per [clientKey]. A session that has ended takes nothing. */
+    suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String)
+}
