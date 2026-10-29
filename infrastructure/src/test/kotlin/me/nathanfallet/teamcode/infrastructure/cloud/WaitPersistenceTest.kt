@@ -3,6 +3,10 @@ package me.nathanfallet.teamcode.infrastructure.cloud
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.JsonPrimitive
 import me.nathanfallet.teamcode.domain.cloud.CloudCreateOutcome
+import me.nathanfallet.teamcode.domain.cloud.TurnMarker
+import me.nathanfallet.teamcode.domain.cloud.RunnerEvent
+import me.nathanfallet.teamcode.domain.cloud.CloudSessionService
+import me.nathanfallet.teamcode.domain.cloud.CloudEventType
 import me.nathanfallet.teamcode.domain.cloud.CloudInputKind
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionDraft
 import me.nathanfallet.teamcode.domain.team.Principal
@@ -53,6 +57,7 @@ class WaitPersistenceTest {
             waitsEndWithTheirSession(a, w, review)
             theAnswerWakesTheSession(w)
             anExecutionCredentialIsConfinedToItsSession(a, b, w)
+            aFailedTurnOpensAWaitForTheOwner(w)
         }
     }
 
@@ -212,5 +217,50 @@ class WaitPersistenceTest {
         refusedWith("credential_scope") { a.service.list(agent.copy(tokenId = keyId), null, "open", null, 50) }
         w.a.database.query { CloudSessions.update({ CloudSessions.id eq other.id }) { it[awaitingReason] = null; it[awaitingRequestId] = null; it[awaitingSince] = null; it[awaitingEventSeq] = null; it[awaitingEpoch] = null } }
         a.service.cancel(w.member, elsewhere.id)
+    }
+
+    /** A running session whose runner reports turns: a failure opens a `turn_failed` wait, the next turn cancels it, retrying wakes the session. */
+    private suspend fun aFailedTurnOpensAWaitForTheOwner(w: AutomationWorld) {
+        val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Flaky", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        w.pass(); w.pass()
+        val pod = CloudSessionService.podName(session.id, 1)
+        w.a.cluster.start(pod); w.pass()
+        w.a.runner.register(w.teamId, session.id, 1, pod)
+        w.b.runner.heartbeat(w.teamId, session.id, 1, ready = true)
+        val a = Replica(WaitService(SqlWaitStore(w.a.database), waker(w.a))); val b = Replica(WaitService(SqlWaitStore(w.b.database), waker(w.b)))
+        var next = 0L
+        suspend fun turn(phase: String, marker: TurnMarker, replica: AutomationReplica = w.a) {
+            replica.agent.events(w.teamId, session.id, 1, listOf(RunnerEvent(++next, CloudEventType.TURN, """{"phase":"$phase"}""", marker)))
+        }
+        suspend fun open() = a.service.list(w.member, null, "open", null, 50).waits.filter { it.sessionId == session.id }
+        val feed = SqlTeamEventStore(w.a.database); val head = feed.head(w.teamId)
+
+        turn("started", TurnMarker.STARTED); assertEquals(emptyList(), open(), "a turn that starts opens nothing")
+        turn("failed", TurnMarker.ENDED, w.b)
+        val failed = open().single()
+        assertEquals(WaitKind.TURN_FAILED, failed.kind); assertEquals(w.member.member.id, failed.assigneeId); assertNull(failed.createdById)
+        assertEquals(listOf("retry", "dismiss"), failed.actions.map { it.id }); assertEquals(listOf(WaitRef("session", id = session.id)), failed.refs)
+        val audience = TeamEventAudience(w.member.member.id, sessions = true, runs = false, teamSessions = false, teamRuns = false)
+        val types = setOf(TeamEventType.WAIT_CREATED, TeamEventType.WAIT_CANCELLED, TeamEventType.WAIT_RESOLVED)
+        assertEquals(listOf(TeamEventType.WAIT_CREATED), feed.read(w.teamId, audience, head, types, 100).events.map { it.type }, "the owner is told live")
+
+        // A second failure replaces the first; the next turn to start cancels it.
+        turn("started", TurnMarker.STARTED); assertEquals(emptyList(), open())
+        assertEquals(WaitStatus.CANCELLED, a.service.get(w.member, failed.id).status)
+        turn("failed", TurnMarker.ENDED); val second = open().single()
+        turn("failed", TurnMarker.ENDED); val third = open().single()
+        assertEquals(WaitStatus.CANCELLED, a.service.get(w.member, second.id).status, "one open at a time")
+
+        // Dismissing tells the agent nothing; trying again wakes the session with the note.
+        b.service.answer(w.member, third.id, "dismiss", emptyMap())
+        assertEquals(emptyList(), w.a.conversation.inputs(w.member, session.id, null, 10).inputs.filter { it.kind == CloudInputKind.MESSAGE })
+        turn("failed", TurnMarker.ENDED); val fourth = open().single()
+        a.service.answer(w.member, fourth.id, "retry", mapOf("note" to JsonPrimitive("Use the staging key")))
+        val message = w.a.conversation.inputs(w.member, session.id, null, 10).inputs.single { it.kind == CloudInputKind.MESSAGE }
+        assertTrue(message.text!!.startsWith("[TeamCode wait answered] The agent's turn failed\nwait: ${fourth.id}\naction: Try again (retry)"), message.text)
+        assertTrue("Anything to change before trying again?: Use the staging key" in message.text!!, message.text)
+        refusedWith("wait_closed") { a.service.answer(w.member, fourth.id, "dismiss", emptyMap()) }
+        // The session's other owner-side reads see it as a normal wait.
+        assertEquals(WaitStatus.RESOLVED, b.service.get(w.admin, fourth.id).status)
     }
 }

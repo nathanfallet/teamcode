@@ -116,7 +116,7 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
 
     private suspend fun wake(actor: Principal, wait: Wait): Wait {
         val sessionId = wait.sessionId
-        if (sessions != null && sessionId != null) sessions.deliver(actor, sessionId, WaitMessages.answered(wait, actor.member.username), WaitMessages.clientKey(wait.id))
+        if (sessions != null && sessionId != null && TurnFailedWait.wakes(wait, wait.answer?.action.orEmpty())) sessions.deliver(actor, sessionId, WaitMessages.answered(wait, actor.member.username), WaitMessages.clientKey(wait.id))
         return wait
     }
 

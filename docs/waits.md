@@ -18,7 +18,8 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | The `teamcode-waits` MCP server (`ask_human`, `list_waits`, `get_wait`, `cancel_wait`), connected beside the agent of a remote session and of a cloud session ([agents](#agents)); never an answer tool, and the loopback relay never relays `…/answer` | Implemented. A local `teamcode run` has no session, so it gets no wait tools. A Kubernetes cloud session gets them from its execution credential's `waits:session` scope ([execution credentials](#execution-credentials)); a session whose execution started before that scope existed keeps running without them until its next start |
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
-| Stop hook that requires an agent to deliver or ask; `turn_failed` | Planned |
+| `turn_failed`: when a session's turn ends in an error, the server asks its owner to try again or dismiss ([below](#failed-turns)) | Implemented |
+| Stop hook that requires an agent to deliver or ask | Planned |
 | Notifications when a wait is created | Out of scope; the hook point is `WaitService.create` |
 
 ## Model
@@ -115,6 +116,14 @@ It is cut at 32,000 characters, the most a message holds. The message is queued 
 
 A session whose agent holds its owner's GitHub token takes instructions from its owner only (`github_owner_only`, [cloud sessions](cloud-sessions.md)): an assignee who is not the owner gets that `403` **before** the answer is stored, so a wait never ends up answered but undeliverable. A wait cancelled by someone else does not wake the session.
 
+## Failed turns
+
+When a runner reports a turn that ended with an error (`phase: failed`), the server opens a `turn_failed` wait for the session's owner, in the same transaction as the runner events, so the owner sees it in "Waiting for you" without the agent having to ask. It has a `note` text field and two actions: `retry` and `dismiss`.
+
+- One is open at a time: a new failure replaces the previous one (cancelled), and the next turn that starts cancels it, since the session went on without anyone answering.
+- `retry` wakes the session with the usual [answer message](#waking-the-session), carrying the note; `dismiss` records the answer and queues nothing.
+- It is created by the server (`createdById` is empty), counts toward the 20 open waits of a session (none is created beyond that) and is announced on the feed like any other wait.
+
 ## Agents
 
 A session's agent asks with the stdio MCP server `teamcode mcp waits --session <id> [--run <id>]`, connected under the name `teamcode_waits` exactly as [`teamcode_artifacts`](artifacts.md#agents) is: Claude Code gets a stdio entry in `--mcp-config`, Codex `-c mcp_servers.teamcode_waits={command=…,args=[…],env={TEAMCODE_WAITS_URL=…,TEAMCODE_WAITS_TOKEN_VAR="TEAMCODE_LOCAL_TOKEN"},env_vars=["TEAMCODE_LOCAL_TOKEN"]}`. The server talks to the loopback relay of the proxy that launched the agent (`TEAMCODE_WAITS_URL`, `http://127.0.0.1:<port>` only) with the local token, passed by variable name, never on a command line. It acts with the proxy's credential, which is the session owner's.
@@ -135,4 +144,4 @@ The answer comes back as a message of the session, described in [Waking the sess
 
 ## What is planned
 
-The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server (done) and the waking of sessions, then the Stop hook and `turn_failed`, then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page.
+The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server (done) and the waking of sessions, then the Stop hook (`turn_failed` is done), then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page.
