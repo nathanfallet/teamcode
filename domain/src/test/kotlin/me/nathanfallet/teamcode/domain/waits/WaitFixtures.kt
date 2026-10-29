@@ -22,6 +22,9 @@ object WaitFixtures {
         override suspend fun revalidate(actor: Principal) {}
         override suspend fun member(teamId: String, memberId: String) = members[memberId]
         override suspend fun session(teamId: String, sessionId: String) = sessions[sessionId]
+        /** Token id → session, for execution credentials. */
+        val executions = mutableMapOf<String, String>()
+        override suspend fun executionSession(tokenId: String) = executions[tokenId]
         override suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange {
             idempotencyKey?.let { key -> keys[actor.member.id to key]?.let { return WaitChange(waits.getValue(it), false) } }
             if (waits.values.count { it.sessionId == wait.sessionId && it.status == WaitStatus.OPEN } >= limit) throw TeamFailure("wait_limit", 409, "Too many open waits.")
@@ -31,7 +34,7 @@ object WaitFixtures {
         }
         override suspend fun find(teamId: String, id: String) = waits[id]
         override suspend fun list(teamId: String, query: WaitQuery): WaitPage {
-            val all = waits.values.filter { (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) }.sortedByDescending { it.createdAt }
+            val all = waits.values.filter { (query.sessionId == null || it.sessionId == query.sessionId) && (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) }.sortedByDescending { it.createdAt }
             val start = query.before?.let { id -> all.indexOfFirst { it.id == id } + 1 } ?: 0
             val page = all.drop(start).take(query.limit)
             return WaitPage(page, page.lastOrNull()?.id?.takeIf { start + page.size < all.size })

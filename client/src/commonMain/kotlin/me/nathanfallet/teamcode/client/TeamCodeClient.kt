@@ -778,12 +778,12 @@ class TeamCodeClient(
 
     // Waits (`waits.v1`, docs/waits.md).
     /** What waits for the caller (or for [assignee], a member id: administrators), open ones by default. Newest first, [before] is the page cursor. */
-    suspend fun waits(assignee: String? = null, status: String = "open", before: String? = null, limit: Int = 50): WaitPageView {
-        assignee?.let(::identifier); before?.let(::identifier)
+    suspend fun waits(assignee: String? = null, status: String = "open", before: String? = null, limit: Int = 50, session: String? = null): WaitPageView {
+        assignee?.let(::identifier); before?.let(::identifier); session?.let(::identifier)
         require(status in Waits.statuses || status == "all") { "Use open, resolved, cancelled or all." }
         require(limit in 1..100) { "Use a page size between 1 and 100." }
         return coded(HttpMethod.Get, "/api/v1/waits", null as Unit?) {
-            url { assignee?.let { parameters.append("assignee", it) }; parameters.append("status", status); before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+            url { assignee?.let { parameters.append("assignee", it) }; parameters.append("status", status); session?.let { parameters.append("session", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
         }
     }
     suspend fun wait(id: String): WaitView { identifier(id); return coded(HttpMethod.Get, "/api/v1/waits/$id", null as Unit?) }

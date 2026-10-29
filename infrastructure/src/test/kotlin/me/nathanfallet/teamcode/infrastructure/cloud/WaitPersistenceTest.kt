@@ -6,6 +6,7 @@ import me.nathanfallet.teamcode.domain.cloud.CloudCreateOutcome
 import me.nathanfallet.teamcode.domain.cloud.CloudInputKind
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionDraft
 import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.team.ServiceScope
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.domain.team.TeamEventAudience
@@ -51,6 +52,7 @@ class WaitPersistenceTest {
             pagingAndFilters(a, w, review)
             waitsEndWithTheirSession(a, w, review)
             theAnswerWakesTheSession(w)
+            anExecutionCredentialIsConfinedToItsSession(a, b, w)
         }
     }
 
@@ -170,5 +172,45 @@ class WaitPersistenceTest {
         assertEquals(w.admin.member.id, message.authorId); assertTrue(message.wake)
         assertTrue(message.text!!.startsWith("[TeamCode wait answered] Account access\nwait: $id\naction: Done (done)\nanswered by: ${w.admin.member.username}"), message.text)
         refusedWith("wait_closed") { b.service.answer(w.admin, id, "other", emptyMap()) }
+    }
+
+    /** A `tcex_` credential as the runner gets one: a token row with `waits:session`, linked to the session of its execution. */
+    private suspend fun anExecutionCredentialIsConfinedToItsSession(a: Replica, b: Replica, w: AutomationWorld) {
+        suspend fun draft(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val own = draft("Own"); val other = draft("Other")
+        val tokenId = java.util.UUID.randomUUID().toString()
+        w.a.database.query {
+            val now = System.currentTimeMillis()
+            Tokens.insert {
+                it[id] = tokenId; it[memberId] = w.member.member.id; it[tokenHash] = "execution-hash-$tokenId"; it[device] = "cloud session"; it[deviceId] = null
+                it[createdAt] = now; it[expiresAt] = now + 3_600_000; it[serviceScopes] = "[\"inference\",\"waits:session\"]"
+            }
+            CloudInferenceCredentials.insert { it[CloudInferenceCredentials.tokenId] = tokenId; it[sessionId] = own.id; it[epoch] = 1; it[teamId] = w.teamId; it[createdAt] = now; it[expiresAt] = now + 3_600_000 }
+        }
+        val agent = w.member.copy(tokenId = tokenId, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.WAITS_SESSION))
+        val ask = WaitDefinition(own.id, "Account access", assigneeId = w.admin.member.id)
+        val mine = a.service.create(agent, ask, "agent-key").wait
+        assertEquals(mine.id, b.service.create(agent, ask, "agent-key").wait.id, "idempotent across replicas")
+        val elsewhere = a.service.create(w.member, ask.copy(sessionId = other.id), null).wait
+        refusedWith("not_found") { a.service.create(agent, ask.copy(sessionId = other.id), null) }
+        refusedWith("not_found") { b.service.get(agent, elsewhere.id) }
+        refusedWith("credential_scope") { b.service.answer(agent, mine.id, "done", emptyMap()) }
+        // Asked of the administrator, listed for the agent by session, with no permission request of other sessions added.
+        w.a.database.query { CloudSessions.update({ CloudSessions.id eq other.id }) { it[awaitingReason] = "permission"; it[awaitingRequestId] = "r"; it[awaitingSince] = 5_000_000_000_000L; it[awaitingEventSeq] = 1; it[awaitingEpoch] = 1 } }
+        assertEquals(listOf(mine.id), b.service.list(agent, "all", "open", null, 50).waits.map { it.id })
+        assertEquals(listOf(elsewhere.id), a.service.list(w.member, null, "open", null, 50, session = other.id).waits.map { it.id }, "the owner lists a session's waits by session, asked of anyone")
+        assertEquals(WaitStatus.CANCELLED, b.service.cancel(agent, mine.id).status)
+        // The same scope on a token bound to no session (a key) gets nothing.
+        val keyId = java.util.UUID.randomUUID().toString()
+        w.a.database.query {
+            val now = System.currentTimeMillis()
+            Tokens.insert {
+                it[id] = keyId; it[memberId] = w.member.member.id; it[tokenHash] = "key-hash-$keyId"; it[device] = "service key"; it[deviceId] = null
+                it[createdAt] = now; it[expiresAt] = now + 3_600_000; it[serviceScopes] = "[\"inference\",\"waits:session\"]"
+            }
+        }
+        refusedWith("credential_scope") { a.service.list(agent.copy(tokenId = keyId), null, "open", null, 50) }
+        w.a.database.query { CloudSessions.update({ CloudSessions.id eq other.id }) { it[awaitingReason] = null; it[awaitingRequestId] = null; it[awaitingSince] = null; it[awaitingEventSeq] = null; it[awaitingEpoch] = null } }
+        a.service.cancel(w.member, elsewhere.id)
     }
 }

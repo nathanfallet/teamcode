@@ -48,8 +48,14 @@ enum class ServiceScope(val wire: String) {
     ARTIFACTS_READ("artifacts:read"),
     /** Everything in `artifacts:read`, plus publishing versions and inviting members; never making public or deleting. */
     ARTIFACTS_WRITE("artifacts:write"),
+    /**
+     * Ask, read and withdraw the waits of the one cloud session an execution credential was issued for (never answer
+     * them). Held by `tcex_` credentials only: the scope means nothing without the session the credential is bound to,
+     * so a service key that carries it is refused wherever it is used (docs/waits.md). Not offered when creating a key.
+     */
+    WAITS_SESSION("waits:session"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -83,6 +89,20 @@ fun Principal.requireCloudRead() {
     if (serviceScopes != null && serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ })
         throw TeamFailure("credential_scope", 403, "This service key does not grant cloud:read access.")
 }
+/** Wait reads: what reads the cloud ([requireCloudRead]), or an execution credential's `waits:session`, which the wait service binds to its session. */
+fun Principal.requireWaitRead() {
+    requireReady()
+    if (serviceScopes != null && ServiceScope.WAITS_SESSION !in serviceScopes) requireCloudRead()
+}
+/** Wait creation and cancellation: what writes the cloud ([requireCloudWrite]), or `waits:session`. Answering is never open to `waits:session`. */
+fun Principal.requireWaitWrite() {
+    requireReady()
+    if (serviceScopes != null && ServiceScope.WAITS_SESSION !in serviceScopes) requireCloudWrite()
+}
+/** An execution credential acting only on its own session's waits: it holds `waits:session` and no cloud scope of its own. */
+val Principal.waitsSessionOnly: Boolean
+    get() = serviceScopes != null && ServiceScope.WAITS_SESSION in serviceScopes &&
+        serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ }
 /** Artifact reads: an interactive login, or a key with `artifacts:read`, `artifacts:write` or `team:read`. */
 fun Principal.requireArtifactRead() {
     requireReady()
@@ -129,6 +149,8 @@ class AuthorizeCredentialUseCase {
             CredentialAction.MCP -> actor.requireScope(ServiceScope.MCP)
             CredentialAction.CLOUD_READ -> actor.requireCloudRead()
             CredentialAction.CLOUD_WRITE -> actor.requireCloudWrite()
+            CredentialAction.WAITS_READ -> actor.requireWaitRead()
+            CredentialAction.WAITS_WRITE -> actor.requireWaitWrite()
             CredentialAction.ARTIFACTS_READ -> actor.requireArtifactRead()
             CredentialAction.ARTIFACTS_WRITE -> actor.requireArtifactWrite()
             CredentialAction.INTERACTIVE -> actor.requireInteractive()

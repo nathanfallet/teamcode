@@ -21,18 +21,40 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
     private fun involved(actor: Principal, wait: Wait) =
         wait.assigneeId == actor.member.id || wait.createdById == actor.member.id || actor.canReadTeam
 
+    /**
+     * The session an execution credential is limited to, or null for any other caller. The credential holds
+     * `waits:session` and is bound to the one session it was issued for; a key that carries the scope without being
+     * bound to a session gets nothing.
+     */
+    private suspend fun confined(actor: Principal): String? {
+        if (!actor.waitsSessionOnly) return null
+        return store.executionSession(actor.tokenId) ?: throw TeamFailure("credential_scope", 403, "This credential is not bound to a cloud session.")
+    }
+
     suspend fun get(actor: Principal, id: String): Wait {
-        actor.requireCloudRead(); store.revalidate(actor)
+        actor.requireWaitRead(); store.revalidate(actor)
+        val only = confined(actor)
         val wait = store.find(actor.teamId, id)
-        if (wait == null || !involved(actor, wait)) throw missing()
+        if (wait == null || !involved(actor, wait) || (only != null && wait.sessionId != only)) throw missing()
         return wait
     }
 
-    /** [assignee] null: the caller's; a member id or [ALL] for another member's or the team's (administrators). */
-    suspend fun list(actor: Principal, assignee: String?, status: String, before: String?, limit: Int): WaitPage {
-        actor.requireCloudRead(); store.revalidate(actor)
+    /**
+     * [assignee] null: the caller's; a member id or [ALL] for another member's or the team's (administrators).
+     * [session]: only that session's waits, asked of anyone, to whoever may read the session's waits (its owner, who asked,
+     * an administrator); an execution credential always gets its own session's, whatever it names.
+     */
+    suspend fun list(actor: Principal, assignee: String?, status: String, before: String?, limit: Int, session: String? = null): WaitPage {
+        actor.requireWaitRead(); store.revalidate(actor)
+        val only = confined(actor)
         if (limit !in 1..MAX_PAGE) throw TeamFailure("invalid_request", 400, "Use a page size between 1 and $MAX_PAGE.")
         val parsed = if (status == "all") null else WaitStatus.parse(status) ?: throw TeamFailure("invalid_request", 400, "Use open, resolved, cancelled or all.")
+        if (only != null) return store.list(actor.teamId, WaitQuery(null, parsed, before, limit, only))
+        if (session != null) {
+            val owner = store.session(actor.teamId, session)?.ownerId
+            if (owner == null || (owner != actor.member.id && !actor.canReadTeam)) throw TeamFailure("not_found", 404, "Session not found.")
+            return store.list(actor.teamId, WaitQuery(null, parsed, before, limit, session))
+        }
         val target = when {
             assignee == null || assignee == actor.member.id -> actor.member.id
             actor.canReadTeam -> assignee.takeUnless { it == ALL }
@@ -43,8 +65,9 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
 
     /** The session's owner asks (an agent acts with its owner's credential). */
     suspend fun create(actor: Principal, definition: WaitDefinition, idempotencyKey: String?): WaitChange {
-        actor.requireCloudWrite(); store.revalidate(actor)
+        actor.requireWaitWrite(); store.revalidate(actor)
         val valid = WaitRules.validate(definition)
+        confined(actor)?.let { if (valid.sessionId != it) throw TeamFailure("not_found", 404, "Session not found.") }
         val session = store.session(actor.teamId, valid.sessionId)?.takeIf { it.ownerId == actor.member.id || actor.canReadTeam }
             ?: throw TeamFailure("not_found", 404, "Session not found.")
         if (session.ownerId != actor.member.id) throw TeamFailure("wait_session_owner_only", 403, "Only the session's owner asks for something on it.")
@@ -70,6 +93,8 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
      * caller sees as an error) gets the wait back and the message queued, never a `wait_closed`.
      */
     suspend fun answer(actor: Principal, id: String, action: String, values: Map<String, kotlinx.serialization.json.JsonElement>): Wait {
+        // An agent never answers its own wait: its owner is the default assignee, so the credential's scope is the guard.
+        if (actor.waitsSessionOnly) throw TeamFailure("credential_scope", 403, "An execution credential does not answer waits.")
         actor.requireCloudWrite(); store.revalidate(actor)
         val wait = store.find(actor.teamId, id)?.takeIf { involved(actor, it) } ?: throw missing()
         if (wait.source != WaitSource.WAIT) throw TeamFailure("answer_through_session", 409, "Answer a permission request on its session.")
@@ -96,8 +121,9 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
     }
 
     suspend fun cancel(actor: Principal, id: String): Wait {
-        actor.requireCloudWrite(); store.revalidate(actor)
-        val wait = store.find(actor.teamId, id)?.takeIf { involved(actor, it) } ?: throw missing()
+        actor.requireWaitWrite(); store.revalidate(actor)
+        val only = confined(actor)
+        val wait = store.find(actor.teamId, id)?.takeIf { involved(actor, it) && (only == null || it.sessionId == only) } ?: throw missing()
         if (wait.source != WaitSource.WAIT) throw TeamFailure("cancel_through_session", 409, "Interrupt the session to withdraw a permission request.")
         if (wait.createdById != actor.member.id && wait.assigneeId != actor.member.id && !actor.administrator())
             throw TeamFailure("forbidden", 403, "Only who asked, the person asked or an administrator cancels a wait.")
