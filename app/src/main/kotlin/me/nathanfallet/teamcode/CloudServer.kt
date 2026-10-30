@@ -21,6 +21,14 @@ import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowRunStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowProgress
+import me.nathanfallet.teamcode.domain.workflows.*
+import me.nathanfallet.teamcode.domain.waits.WaitMessages
+import me.nathanfallet.teamcode.domain.waits.WaitDefinition
+import me.nathanfallet.teamcode.domain.waits.WaitKind
+import me.nathanfallet.teamcode.domain.waits.WaitField
+import me.nathanfallet.teamcode.domain.waits.WaitAction
 import me.nathanfallet.teamcode.domain.workflows.WorkflowService
 import me.nathanfallet.teamcode.domain.waits.WaitService
 import me.nathanfallet.teamcode.domain.team.Principal
@@ -103,6 +111,28 @@ class CloudServer(
     })
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
     val workflows = WorkflowService(SqlWorkflowStore(database))
+    private val workflowRunStore = SqlWorkflowRunStore(database)
+    /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
+    val workflowRuns = WorkflowRunService(workflowRunStore)
+    private val workflowProgress = SqlWorkflowProgress(database)
+    private val waitReads = SqlWaitStore(database)
+    private val workflowEngine = WorkflowEngine(workflowRunStore, object : WorkflowSessions {
+        override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+            val draft = CloudSessionDraft(name, profileId, null, model, null, emptyMap(), null, null, prompt)
+            return when (val outcome = sessions.create(starter, null, draft, IdempotencyRequest("workflow-run", key, digest))) {
+                is CloudCreateOutcome.Created -> outcome.session.id
+                is CloudCreateOutcome.Replayed -> outcome.session.id
+            }
+        }
+        override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) = conversationService.queueWaitAnswer(starter, sessionId, text, key)
+        override suspend fun progress(sessionIds: Set<String>) = workflowProgress.progress(sessionIds)
+    }, object : WorkflowWaits {
+        override suspend fun ask(starter: Principal, sessionId: String, assigneeId: String?, title: String, body: String?, fields: List<WaitField>, actions: List<WaitAction>, key: String): String =
+            waits.create(starter, WaitDefinition(sessionId, title, body, assigneeId, emptyList(), fields, actions, kind = WaitKind.WORKFLOW), key).wait.id
+        override suspend fun states(ids: Set<String>) = waitReads.findMany(ids).associate { it.id to WaitState(it.status, it.answer?.action, WaitMessages.answerLines(it)) }
+        override suspend fun cancel(starter: Principal, id: String) { waits.cancel(starter, id) }
+    })
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 
@@ -209,6 +239,8 @@ class CloudServer(
                 step("schedule") { work.runDue("automations/schedule", intervalMillis = 15_000) { scheduleAutomations.run() } }
                 // While cloud sessions are off, runs wait (and expire after 30 minutes) instead of creating sessions that cannot start.
                 if (runtime.enabled) step("dispatch") { work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() } }
+                // Like automations: while cloud sessions are off, a run waits instead of creating sessions that cannot start.
+                if (runtime.enabled) step("workflows") { work.runDue("workflows/run", intervalMillis = 2_000, timeoutMillis = 60_000) { workflowEngine.run() } }
                 step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
                 delay(2_000)
             }

@@ -50,7 +50,7 @@ class WorkflowRunService(private val store: WorkflowRunStore) {
     }
 
     /** The caller's runs; [all] (administrators) the team's. */
-    suspend fun list(actor: Principal, all: Boolean, workflowId: String?, status: String?, before: String?, limit: Int): RunPage {
+    suspend fun list(actor: Principal, all: Boolean, workflowId: String?, status: String?, before: String?, limit: Int): WorkflowRunPage {
         actor.requireCloudRead(); store.revalidate(actor)
         if (limit !in 1..WorkflowService.MAX_PAGE) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and ${WorkflowService.MAX_PAGE}.")
         val parsed = status?.let { RunStatus.parse(it) ?: throw TeamFailure("invalid_request", 400, "Use ${RunStatus.entries.joinToString(", ") { s -> s.wire }}.") }
