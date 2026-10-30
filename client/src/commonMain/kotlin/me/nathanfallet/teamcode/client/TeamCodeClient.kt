@@ -823,6 +823,25 @@ class TeamCodeClient(
     }
     /** Deletes a definition and returns it; runs already started keep the version they run. */
     suspend fun deleteWorkflow(id: String): WorkflowView { identifier(id); return coded(HttpMethod.Delete, "/api/v1/workflows/$id", null as Unit?) }
+    /** Starts a run; the same [idempotencyKey] returns the run it created. */
+    suspend fun startWorkflowRun(id: String, request: StartWorkflowRunRequest = StartWorkflowRunRequest(), idempotencyKey: String = Uuid.random().toString()): WorkflowRunView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/$id/runs", request) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /** Runs, newest first; [workflow] and [status] (one of [Workflows.runStatuses]) filter, [before] is the page cursor. */
+    suspend fun workflowRuns(workflow: String? = null, status: String? = null, before: String? = null, limit: Int = 50): WorkflowRunPageView {
+        workflow?.let(::identifier); before?.let(::identifier)
+        require(status == null || status in Workflows.runStatuses) { "Use ${Workflows.runStatuses.joinToString(", ")}." }
+        require(limit in 1..100) { "Use a limit of 1 to 100." }
+        return coded(HttpMethod.Get, "/api/v1/workflows/runs", null as Unit?) {
+            url { workflow?.let { parameters.append("workflow", it) }; status?.let { parameters.append("status", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun workflowRun(id: String): WorkflowRunView { identifier(id); return coded(HttpMethod.Get, "/api/v1/workflows/runs/$id", null as Unit?) }
+    suspend fun cancelWorkflowRun(id: String): WorkflowRunView { identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/runs/$id/cancel", null as Unit?) }
+    /** Hands in what the run's current agent node was asked for; refused (`400 invalid_deliverable`) when it does not match the node's deliverable. */
+    suspend fun deliverWorkflowRun(id: String, output: JsonElement): WorkflowRunView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/runs/$id/deliver", DeliverRequest(output))
+    }
     suspend fun workflowSettings(): WorkflowSettingsView = coded(HttpMethod.Get, "/api/v1/workflows/settings", null as Unit?)
     suspend fun updateWorkflowEditors(editors: WorkflowEditorsView): WorkflowSettingsView = coded(HttpMethod.Put, "/api/v1/workflows/settings", editors)
 

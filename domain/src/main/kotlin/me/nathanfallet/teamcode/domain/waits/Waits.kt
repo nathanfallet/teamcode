@@ -5,7 +5,9 @@ import me.nathanfallet.teamcode.domain.team.Member
 import me.nathanfallet.teamcode.domain.team.Principal
 
 enum class WaitKind(val wire: String) {
-    PERMISSION("permission"), QUESTION("question"), HUMAN_REQUEST("human_request"), TURN_FAILED("turn_failed");
+    PERMISSION("permission"), QUESTION("question"), HUMAN_REQUEST("human_request"), TURN_FAILED("turn_failed"),
+    /** A question a workflow run asks at a human node: its answer moves the run on, it does not wake the session. */
+    WORKFLOW("workflow");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 enum class WaitResolver(val wire: String) {
@@ -37,6 +39,8 @@ data class WaitDefinition(
     val sessionId: String, val title: String, val body: String? = null, val assigneeId: String? = null,
     val refs: List<WaitRef> = emptyList(), val fields: List<WaitField> = emptyList(), val actions: List<WaitAction> = emptyList(),
     val resolver: WaitResolver = WaitResolver.HUMAN,
+    /** Set by the server for its own waits; a request always makes a `human_request`. */
+    val kind: WaitKind = WaitKind.HUMAN_REQUEST,
 )
 
 /**

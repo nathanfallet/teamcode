@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.api.models.EnvironmentVariablesView
 import me.nathanfallet.teamcode.cli.cloud.agent.EnvironmentBroker
+import me.nathanfallet.teamcode.cli.cloud.agent.WakeupBroker
 import me.nathanfallet.teamcode.cli.cloud.agent.RunnerVariables
 import me.nathanfallet.teamcode.cli.cloud.agent.requestEnvironment
 import me.nathanfallet.teamcode.cli.cloud.agent.reportWakeups
@@ -118,6 +119,21 @@ class AgentEnvironmentShellTest {
                 assertEquals(setOf(2, 0), synchronized(reported) { reported.toSet() })
                 assertEquals(2, synchronized(reported) { reported.size })
                 assertFalse(withContext(Dispatchers.IO) { reportWakeups(directory.resolve("missing.sock").toString(), 1) }, "No runner: nothing, no failure")
+            } finally { listener.close(); server.cancel() }
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test fun aRemoteHostTakesTheStopHooksCountOnItsOwnSocket() = runBlocking {
+        val directory = Files.createTempDirectory("tc-wake")
+        try {
+            val socket = directory.resolve("a.wake.sock").toString()
+            val reported = mutableListOf<Int>()
+            val listener = listenUnix(socket)
+            val server = launch(Dispatchers.IO) { WakeupBroker(listener, { synchronized(reported) { reported += it } }).serve() }
+            try {
+                assertTrue(withContext(Dispatchers.IO) { reportWakeups(socket, 3) })
+                repeat(100) { if (synchronized(reported) { reported.isEmpty() }) Thread.sleep(20) }
+                assertEquals(listOf(3), synchronized(reported) { reported.toList() })
             } finally { listener.close(); server.cancel() }
         } finally { directory.toFile().deleteRecursively() }
     }

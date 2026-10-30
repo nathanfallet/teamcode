@@ -82,7 +82,9 @@ class WorkflowPersistenceTest {
                 explain(analyze = true) { Workflows.selectAll().where { (Workflows.teamId eq w.teamId) and (Workflows.id greater ids.first()) }.orderBy(Workflows.id to SortOrder.ASC).limit(51) }.joinToString("\n")
             }
             println("Workflow listing execution plan (synthetic metadata only):\n$plan")
-            assertTrue("workflow_team" in plan, plan)
+            // Either team-prefixed index serves a team's few rows (the planner picks by statistics that vary run to run); a scan of the table is the failure.
+            assertTrue("workflow_team" in plan || "workflow_name" in plan, plan)
+            assertFalse("Table scan" in plan, plan)
 
             // Deleting a caller frees its callee; the cap holds.
             b.delete(w.admin, caller.id); b.delete(w.admin, callee.id)

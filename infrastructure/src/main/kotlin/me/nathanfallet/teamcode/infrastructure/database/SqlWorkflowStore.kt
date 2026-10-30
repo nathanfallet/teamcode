@@ -134,6 +134,9 @@ class SqlWorkflowStore(private val database: Database) : WorkflowStore {
 internal object WorkflowJson {
     private val json = Json { ignoreUnknownKeys = true }
 
+    fun strings(value: Map<String, String>) = buildJsonObject { value.forEach { (k, v) -> put(k, v) } }.toString()
+    fun strings(text: String): Map<String, String> = (json.parseToJsonElement(text) as? JsonObject)?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }?.toMap().orEmpty()
+
     fun ids(value: Set<String>) = buildJsonArray { value.sorted().forEach(::add) }.toString()
     fun ids(text: String): Set<String> = (json.parseToJsonElement(text) as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet().orEmpty()
 

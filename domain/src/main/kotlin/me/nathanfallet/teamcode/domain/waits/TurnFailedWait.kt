@@ -17,5 +17,6 @@ object TurnFailedWait {
     fun refs(sessionId: String) = listOf(WaitRef("session", id = sessionId))
 
     /** Whether this answer is a message for the agent: dismissing a failed turn tells it nothing. */
-    fun wakes(wait: Wait, action: String) = wait.kind != WaitKind.TURN_FAILED || action == RETRY
+    /** Whether an answer queues a message on the session: not a dismissed failure, and never a workflow question (the run moves on by itself). */
+    fun wakes(wait: Wait, action: String) = when (wait.kind) { WaitKind.TURN_FAILED -> action == RETRY; WaitKind.WORKFLOW -> false; else -> true }
 }

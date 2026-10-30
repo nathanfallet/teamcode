@@ -10,12 +10,14 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | --- | --- |
 | API contract and typed client (`workflows`, `workflow`, `createWorkflow`, `updateWorkflow`, `deleteWorkflow`, `workflowSettings`, `updateWorkflowEditors`) (`api/…/models/Workflows.kt`) | Implemented |
 | Domain: validation of a definition at save, sub-workflow checks (`domain/…/workflows`) | Implemented |
-| MySQL store (`workflows`, `workflow_settings`; reviewed migration), routes `GET/POST/PUT/DELETE /api/v1/workflows`, `GET/PUT /api/v1/workflows/settings`, the `workflows.v1` capability, editing rights, OpenAPI reference | Implemented. Definitions only: nothing runs them yet |
-| Runs: node visits persisted, agent nodes on sessions, human nodes as waits, `teamcode-workflow` MCP (`deliver`) | Planned |
+| MySQL store (`workflows`, `workflow_settings`; reviewed migration), routes `GET/POST/PUT/DELETE /api/v1/workflows`, `GET/PUT /api/v1/workflows/settings`, the `workflows.v1` capability, editing rights, OpenAPI reference | Implemented |
+| Run engine and run service (`domain/…/workflows`): the engine moves runs on one visit at a time; the service starts, reads, cancels and takes deliveries; run and delivery contract in the API and the typed client (`startWorkflowRun`, `workflowRuns`, `workflowRun`, `cancelWorkflowRun`, `deliverWorkflowRun`) | Implemented |
+| Persisted runs (`workflow_runs`, `workflow_visits`; reviewed migration), the run routes (below), the worker loop in the server (every 2 seconds, on the replicas that run the cloud), the cloud-session and wait adapters | Implemented. The starter's agent has no way to deliver yet: see the next row |
+| `teamcode-workflow` MCP server (`deliver`) | Planned |
 | Stop hook that makes an agent deliver or ask | Planned |
 | Companion editor and run view, `teamcode workflows`, automations that start a workflow | Planned |
 
-Definitions can be saved, versioned and read; no run, no MCP tool and no screen exists yet, so a saved workflow does nothing.
+Definitions can be saved, versioned and read, and started over the API; until the `teamcode-workflow` MCP server and the Stop hook exist, an agent node can only end by a delivery sent with the starter's own credential (`POST …/deliver`), and a turn that ends without one fails the run with `ended_without_delivery`. No screen exists yet.
 
 ## Definition
 
@@ -52,6 +54,26 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 
 **Concurrency.** A save or a delete first locks the team's `workflow_settings` row, so two replicas saving at once cannot both create a call loop, take the same name or pass the cap; the call-loop check runs on the definitions read under that lock. A replacement with `expectedVersion` is one conditional update on the version, so of two replicas saving the same version exactly one succeeds. Saves, deletions and changes of the rule are audited (`workflow.created`, `workflow.updated`, `workflow.deleted`, `workflow.editors.changed`).
 
+## Runs
+
+A **run** is one execution of a workflow, on the **version it started with**: the definition is copied into the run, so editing or deleting the workflow never changes a run in flight. It is started signed in, as its **starter** (their sessions, quota and GitHub link), with the inputs and, for agent nodes that name no profile, a cloud `profileId` (`400 profile_required` when one is missing, `400 invalid_inputs` for an unknown, missing or too long input). A member has at most 20 unfinished runs (`409 run_limit`); the same `Idempotency-Key` returns the first run.
+
+The start node is an agent or sub-workflow node, never a human one: a person is asked about a session ([waits](waits.md)), so an agent works first.
+
+Every pass through a node is a **visit**, stored with its outcome and output. The engine keeps nothing in memory: each pass claims the unfinished runs nobody holds, reads in a few batched reads what they wait for (sessions, waits, child runs) and records one step, so a restart or another replica continues from the stored visits. A step that fails for a reason that may pass (a busy cloud) is tried again on the next pass; one that cannot succeed ends the run `failed` with a short code.
+
+| Node | What a step does | Ends with |
+| --- | --- | --- |
+| `agent` | Renders the instruction. In `same` mode the first node starts a session and the next ones are **messages of that session**; in `handoff` mode every node starts a session whose first message carries what the earlier nodes delivered. Then waits for `deliver` | `delivered` |
+| `human` | Creates a wait of kind `workflow` for the node's assignee (the starter by default) about the run's session, and waits for its answer | the action id; the output is the answer as `label: value` lines |
+| `workflow` | Starts a child run (depth + 1, same session when the child is in `same` mode, arguments rendered from the parent) and waits for it | `delivered`, with the child's output |
+
+A wait of kind `workflow` is answered like any wait, but its answer **moves the run on instead of waking the session**. After an outcome the engine follows its transition; the target's `maxVisits` and the run's `limits.maxVisits` stop loops (`max_visits:<node>`, `max_total_visits`). The run's output is what the last node delivered.
+
+**Delivery.** `POST /workflows/runs/{id}/deliver` (the starter, `cloud:write`) hands in what the current agent node was asked for once its instruction reached the session: `artifact` (an id), `url` (https, on the node's `domain` if any), `text`, or `json` checked against the node's `schema` (a subset: `type`, an object's `properties` and `required`, an array's `items`, a string's `enum`). A wrong delivery is `400 invalid_deliverable` and stores nothing; a run that waits for none is `409 nothing_to_deliver`. Whether the artifact exists is not checked yet.
+
+**Failure codes.** `session_failed`, `session_deleted`, `session_missing`, `ended_without_delivery` (the turn that took the instruction ended and nothing was delivered; a turn that began before the instruction does not count), `profile_missing`, `starter_unavailable`, `wait_cancelled`, `wait_missing`, `max_visits:<node>`, `max_total_visits`, `max_depth`, `workflow_missing`, `invalid_arguments`, `sub_workflow_failed|cancelled`, `expired` (two weeks), `no_transition`, plus the code of a refusal that cannot be retried. Cancelling (the starter or an administrator, signed in) withdraws the open wait, cancels the child run and ends the run `cancelled`; the session is left as it is.
+
 ## Editing rights
 
 `mode` is `all` (every member), `admins`, or `members` with a list. The default is `admins`. Reading is open to every member. Administrators can always edit. The rule is changed by an administrator, signed in, through `PUT /api/v1/workflows/settings` (a dashboard screen comes with the editor); a member list names active members of the team.
@@ -67,6 +89,18 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 | `DELETE /api/v1/workflows/{id}` | Delete (returns the definition); `409 workflow_in_use` while another workflow calls it |
 | `GET`/`PUT /api/v1/workflows/settings` | Who may edit |
 
+### Run routes
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/v1/workflows/{id}/runs` | Start (`{inputs, profileId}`), `201`; `Idempotency-Key` returns the first run (`200`, `Idempotency-Replayed: true`). Signed in |
+| `GET /api/v1/workflows/runs` | One's own runs, newest first; `?all=true` (administrators), `?workflow=`, `?status=`, `?before=&limit=` (1–100, 50). A list never carries the definition snapshot |
+| `GET /api/v1/workflows/runs/{id}` | A run with its visits (the starter, or an administrator) |
+| `POST /api/v1/workflows/runs/{id}/cancel` | Cancel (the starter or an administrator, signed in) |
+| `POST /api/v1/workflows/runs/{id}/deliver` | `{output}`; a key needs `cloud:write` |
+
+A run starts a cloud session as its starter through a server-held credential minted for the run (scope `cloud:write`, stored hashed, deleted when the root run ends; child runs share it). Several replicas may run the worker: a pass claims a run with a 30-second lease, and a start, a step or a completion is a conditional update, so a step happens once. Page cost, whatever the team size: a list is two transactions (the caller check, one read of the page), a run three (the caller check, the run, its visits).
+
 ## What is planned
 
-The order of work: the server (store, routes, capability, editing rights), then runs (persisted node visits that resume after a restart, agent nodes on sessions, human nodes as waits, the `teamcode-workflow` MCP server with `deliver`), then the Stop hook, then the companion editor, the CLI and automations that start a workflow. Each step updates this page.
+The order of work: the `teamcode-workflow` MCP server with `deliver` (and an execution credential that may deliver into its own run), then the Stop hook, then the companion editor and run view, the CLI and automations that start a workflow. Each step updates this page.

@@ -135,7 +135,7 @@ internal class EnvironmentBroker(
     private suspend fun handle(connection: UnixConnection) {
         try {
             val request = withTimeoutOrNull(timeoutMillis) { connection.readLine(MAX_REQUEST_LINE) }
-            if (request != null && request.startsWith(WAKEUPS)) { request.removePrefix(WAKEUPS).toIntOrNull()?.takeIf { it in 0..MAX_WAKEUPS }?.let(wakeups); return }
+            if (request != null && request.startsWith(WAKEUPS)) { wakeupCount(request)?.let(wakeups); return }
             if (request != REQUEST) return
             val answer = try { variables.forCommand() } catch (error: CancellationException) { throw error } catch (_: Exception) {
                 log("The environment variables could not be served."); EnvironmentAnswer()
@@ -152,11 +152,38 @@ internal class EnvironmentBroker(
         const val MAX_WAKEUPS = 1_000
         const val MAX_CONCURRENT = 8
         const val MAX_REQUEST_LINE = 1024
+        /** The count in a `wakeups <n>` line, or null when it is not one. */
+        fun wakeupCount(request: String): Int? = request.removePrefix(WAKEUPS).toIntOrNull()?.takeIf { it in 0..MAX_WAKEUPS }
         /** The socket next to the credential socket, on the same memory volume. */
         fun socketFor(credentialSocket: String) = credentialSocket.substringBeforeLast('/', ".") + "/environment.sock"
         /** The script Claude Code runs before each command (`CLAUDE_ENV_FILE`), next to the sockets; it holds no value. */
         fun scriptFor(credentialSocket: String) = credentialSocket.substringBeforeLast('/', ".") + "/agent-env.sh"
         internal val codec = Json { ignoreUnknownKeys = true }
+    }
+}
+
+/**
+ * A remote session's host has no environment to serve, only the agent's `Stop` hook report ([CloudAgentState]) to take:
+ * the same `wakeups <n>` line as [EnvironmentBroker], on a socket of its own, handed to [wakeups]. Anything else is ignored
+ * and nothing is answered. As there, the count only says whether the session has background work.
+ */
+internal class WakeupBroker(private val listener: UnixListener, private val wakeups: (Int) -> Unit, private val timeoutMillis: Long = 10_000) {
+    private val permits = Semaphore(EnvironmentBroker.MAX_CONCURRENT)
+
+    suspend fun serve() = coroutineScope {
+        try {
+            while (true) {
+                val connection = listener.accept() ?: break
+                launch {
+                    permits.withPermit {
+                        try {
+                            withTimeoutOrNull(timeoutMillis) { connection.readLine(EnvironmentBroker.MAX_REQUEST_LINE) }
+                                ?.takeIf { it.startsWith(EnvironmentBroker.WAKEUPS) }?.let(EnvironmentBroker::wakeupCount)?.let(wakeups)
+                        } finally { connection.close() }
+                    }
+                }
+            }
+        } finally { listener.close() }
     }
 }
 

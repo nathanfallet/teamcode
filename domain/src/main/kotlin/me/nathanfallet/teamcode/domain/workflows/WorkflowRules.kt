@@ -43,6 +43,8 @@ object WorkflowRules {
             if (inputs.map { it.id }.toSet().size != inputs.size) throw invalid("Input ids must be unique.")
             if (nodes.map { it.id }.toSet().size != nodes.size) throw invalid("Node ids must be unique.")
             if (start !in nodes.map { it.id }) throw invalid("The start node $start does not exist.")
+            // A person is asked about a session (docs/waits.md): there must be one before the first question.
+            if (nodes.first { it.id == start }.kind == NodeKind.HUMAN) throw invalid("The start node cannot ask a person: an agent works first, in the session the question is about.")
             val ids = nodes.map { it.id }.toSet(); val inputIds = inputs.map { it.id }.toSet()
             nodes.forEach { node(it, ids, inputIds) }
             val reachable = reachable(start, nodes)

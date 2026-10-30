@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.presentation
 
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -64,8 +65,9 @@ private fun WorkflowSettings.view() = WorkflowSettingsView(WorkflowEditorsView(e
 private const val WORKFLOW_BYTES = 512 * 1024
 
 /** Everyone reads; who writes is the team's rule, which the service enforces (docs/workflows.md). */
-internal fun Route.workflowRoutes(workflows: WorkflowService) {
+internal fun Route.workflowRoutes(workflows: WorkflowService, runs: WorkflowRunService? = null) {
     route("/api/v1/workflows") {
+        if (runs != null) workflowRunRoutes(runs)
         get {
             val query = call.request.queryParameters
             val page = workflows.list(call.principal, query["after"]?.also { if (!workflowId.matches(it)) throw TeamFailure("invalid_cursor", 400, "Unknown workflow cursor.") }, query["limit"]?.toIntOrNull() ?: 50)
@@ -84,5 +86,39 @@ internal fun Route.workflowRoutes(workflows: WorkflowService) {
             call.respond(workflows.update(call.principal, call.workflowId(), input.workflow.domain(), input.expectedVersion).view())
         }
         delete("/{id}") { call.respond(workflows.delete(call.principal, call.workflowId()).view()) }
+    }
+}
+
+internal fun WorkflowRun.view(visits: List<NodeVisit> = emptyList()) = WorkflowRunView(
+    id, workflowId, workflowName, workflowVersion, status.wire, starterId, inputs, sessionId, visits.lastOrNull { it.status == VisitStatus.ACTIVE }?.nodeId, parentRunId,
+    failure, output, visits.map { it.view() }, createdAt, updatedAt, finishedAt,
+)
+
+private fun NodeVisit.view() = WorkflowVisitView(seq, nodeId, kind.wire, status.wire, outcome, output, sessionId, waitId, childRunId, startedAt, finishedAt)
+
+private const val RUN_BYTES = 128 * 1024
+
+/** Runs of workflows: started and cancelled signed in, delivered into by their starter (docs/workflows.md). */
+private fun Route.workflowRunRoutes(runs: WorkflowRunService) {
+    get("/runs") {
+        val query = call.request.queryParameters
+        val page = runs.list(call.principal, query["all"] == "true", query["workflow"]?.also { if (!workflowId.matches(it)) throw TeamFailure("not_found", 404, "Workflow not found.") },
+            query["status"], query["before"]?.also { if (!workflowId.matches(it)) throw TeamFailure("invalid_cursor", 400, "Unknown run cursor.") }, query["limit"]?.toIntOrNull() ?: 50)
+        call.respond(WorkflowRunPageView(page.runs.map { it.view() }, page.nextBefore))
+    }
+    get("/runs/{id}") {
+        val (run, visits) = runs.get(call.principal, call.workflowId())
+        call.respond(run.view(visits))
+    }
+    post("/runs/{id}/cancel") { call.respond(runs.cancel(call.principal, call.workflowId()).view()) }
+    post("/runs/{id}/deliver") {
+        val input = call.jsonBody<DeliverRequest>(RUN_BYTES)
+        call.respond(runs.deliver(call.principal, call.workflowId(), input.output).view())
+    }
+    post("/{id}/runs") {
+        val input = call.jsonBody<StartWorkflowRunRequest>(RUN_BYTES)
+        val change = runs.start(call.principal, call.workflowId(), input.inputs, input.profileId, call.idempotencyKey(required = false))
+        if (!change.created) call.response.header(CloudHeaders.IDEMPOTENCY_REPLAYED, "true")
+        call.respond(if (change.created) io.ktor.http.HttpStatusCode.Created else io.ktor.http.HttpStatusCode.OK, change.run.view())
     }
 }

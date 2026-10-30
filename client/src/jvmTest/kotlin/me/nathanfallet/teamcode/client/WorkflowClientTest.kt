@@ -55,4 +55,26 @@ class WorkflowClientTest {
             assertEquals("members", body(requests.last())["mode"]!!.jsonPrimitive.content)
         }
     }
+
+    private val run = """{"id":"r1","workflowId":"wf1","workflowName":"Fix a ticket","workflowVersion":2,"status":"waiting","startedById":"m1","inputs":{"ticket":"T-1"},
+        "currentNodeId":"review","visits":[{"seq":1,"nodeId":"analyze","kind":"agent","status":"done","outcome":"delivered","output":"plan-1","startedAt":1,"someFutureField":1}],"createdAt":1,"updatedAt":2}"""
+
+    @Test fun runsAreStartedListedCancelledAndDelivered() = runBlocking {
+        client { respond(run, HttpStatusCode.OK, json) }.use { client ->
+            val started = client.startWorkflowRun("wf1", StartWorkflowRunRequest(mapOf("ticket" to "T-1"), "p1"), idempotencyKey = "k1")
+            assertEquals("r1", started.id); assertEquals("review", started.currentNodeId); assertEquals("plan-1", started.visits.single().output)
+            assertEquals("k1", requests.last().headers[CloudHeaders.IDEMPOTENCY_KEY]); assertEquals("/api/v1/workflows/wf1/runs", requests.last().url.encodedPath)
+            assertEquals("p1", body(requests.last())["profileId"]!!.jsonPrimitive.content)
+            client.cancelWorkflowRun("r1"); assertEquals("/api/v1/workflows/runs/r1/cancel", requests.last().url.encodedPath)
+            client.deliverWorkflowRun("r1", JsonPrimitive("plan-2"))
+            assertEquals("/api/v1/workflows/runs/r1/deliver", requests.last().url.encodedPath); assertEquals("plan-2", body(requests.last())["output"]!!.jsonPrimitive.content)
+            client.workflowRun("r1"); assertEquals(HttpMethod.Get, requests.last().method)
+        }
+        client { respond("""{"runs":[$run],"nextBefore":"r1"}""", HttpStatusCode.OK, json) }.use { client ->
+            val page = client.workflowRuns(workflow = "wf1", status = "waiting", limit = 10)
+            assertEquals("r1", page.nextBefore)
+            assertEquals("waiting", requests.last().url.parameters["status"]); assertEquals("wf1", requests.last().url.parameters["workflow"])
+            assertFailsWith<IllegalArgumentException> { client.workflowRuns(status = "paused") }
+        }
+    }
 }

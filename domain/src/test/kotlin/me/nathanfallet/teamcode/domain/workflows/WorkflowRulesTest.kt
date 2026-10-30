@@ -24,6 +24,7 @@ class WorkflowRulesTest {
 
     @Test fun theGraphMustHoldTogether() {
         assertTrue("start node" in code(ticket.copy(start = "nowhere")))
+        assertTrue("cannot ask a person" in code(ticket.copy(start = "review")), "a person is asked about a session, so an agent works first")
         assertTrue("does not exist" in code(ticket.copy(nodes = listOf(analyze.copy(transitions = listOf(Transition("delivered", "ghost"))), review, implement))))
         assertTrue("cannot be reached" in code(ticket.copy(nodes = ticket.nodes + implement.copy(id = "orphan"))))
         assertTrue("ends the workflow" in code(ticket.copy(nodes = listOf(analyze.copy(transitions = listOf(Transition("delivered", "analyze")))))))

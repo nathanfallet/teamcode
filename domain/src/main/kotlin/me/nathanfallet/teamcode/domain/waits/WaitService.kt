@@ -76,7 +76,7 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         } ?: store.member(actor.teamId, session.ownerId) ?: throw TeamFailure("invalid_assignee", 400, "The session's owner is not an active member.")
         val now = store.now()
         val wait = Wait(
-            id = UUID.randomUUID().toString(), teamId = actor.teamId, source = WaitSource.WAIT, kind = WaitKind.HUMAN_REQUEST,
+            id = UUID.randomUUID().toString(), teamId = actor.teamId, source = WaitSource.WAIT, kind = valid.kind,
             resolver = WaitResolver.HUMAN, status = WaitStatus.OPEN, sessionId = session.id, sessionName = session.name, requestId = null,
             assigneeId = assignee.id, assigneeName = assignee.username, createdById = actor.member.id, title = valid.title, body = valid.body,
             refs = valid.refs, fields = valid.fields, actions = valid.actions, answer = null, createdAt = now, resolvedAt = null,
