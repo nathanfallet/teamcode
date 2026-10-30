@@ -17,6 +17,7 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
+import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
@@ -142,6 +143,21 @@ class RemoteSessionRepositoryTest {
         sse("event: denied\ndata: {}\n\n")
         assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { } }
         assertFalse("cloud.wait" in requests.single().url.parameters["types"].orEmpty(), "an older server refuses a type it does not know")
+    }
+
+    @Test fun theWorkflowRunEventIsAskedForOnlyWhenWantedAndNamesTheRunItsStarterAndItsParent() = runTest {
+        val data = """{"runId":"r1","workflowId":"wf1","status":"waiting","ownerId":"m2","parentRunId":"r0"}"""
+        sse(teamEvent(1, "cloud.workflow.run.updated", data = data) + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", workflows = true).collect { seen += it } }
+        assertTrue("cloud.workflow.run.updated" in requests.single().url.parameters["types"].orEmpty().split(","))
+        val change = seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().single().value
+        assertEquals("r1", change.runId); assertEquals(RunStatus.WAITING, change.runStatus); assertEquals("m2", change.memberId)
+        assertEquals("wf1", change.runWorkflowId); assertEquals("r0", change.runParentId); assertEquals("", change.sessionId, "a run belongs to no session")
+        requests.clear()
+        sse("event: denied\ndata: {}\n\n")
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { } }
+        assertFalse("workflow" in requests.single().url.parameters["types"].orEmpty(), "an older server refuses a type it does not know")
     }
 
     @Test fun theWaitingEventsAreAskedWhenWantedAndASessionSaysWhatItWaitsFor() = runTest {

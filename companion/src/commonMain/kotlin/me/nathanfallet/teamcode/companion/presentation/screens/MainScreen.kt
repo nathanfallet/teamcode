@@ -69,6 +69,13 @@ import me.nathanfallet.teamcode.companion.resources.automations_title
 import me.nathanfallet.teamcode.companion.resources.tab_automations
 import me.nathanfallet.teamcode.companion.resources.tab_automations_short
 import com.adamglin.phosphoricons.regular.Clock
+import com.adamglin.phosphoricons.regular.FlowArrow
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowsAvailabilityUseCase
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowsRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowsViewModel
+import me.nathanfallet.teamcode.companion.resources.tab_workflows
+import me.nathanfallet.teamcode.companion.resources.workflows_title
 import me.nathanfallet.teamcode.companion.presentation.navigation.NewSessionRoute
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
@@ -95,8 +102,8 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
-/** The tabs of the phone layout; WAITS only on a server that has waits (`waits.v1`), AUTOMATIONS only on one that has automations (`automations.v1`). */
-enum class MainTab { SESSIONS, WAITS, ARTIFACTS, AUTOMATIONS, ACCOUNT }
+/** The tabs of the phone layout; WAITS only on a server that has waits (`waits.v1`), AUTOMATIONS only on one that has automations (`automations.v1`), WORKFLOWS only on one that has workflows (`workflows.v1`). */
+enum class MainTab { SESSIONS, WAITS, ARTIFACTS, AUTOMATIONS, WORKFLOWS, ACCOUNT }
 
 /**
  * The sheets (dialogs on a wide window) the signed-in app opens over its content: a new session (on the desktop, first
@@ -207,6 +214,9 @@ fun MainScreen(
     onOpenMcp: (accountId: String) -> Unit = {},
     onOpenAutomation: (accountId: String, automationId: String) -> Unit = { _, _ -> },
     onCreateAutomation: (accountId: String) -> Unit = {},
+    onOpenWorkflowRun: (accountId: String, runId: String) -> Unit = { _, _ -> },
+    onOpenWorkflow: (accountId: String, workflowId: String) -> Unit = { _, _ -> },
+    onStartWorkflow: (accountId: String, workflowId: String) -> Unit = { _, _ -> },
     /** The tab to open on (the screen a wider window showed); then the member's. */
     initialTab: MainTab = MainTab.SESSIONS,
     onTabChange: (MainTab) -> Unit = {},
@@ -226,6 +236,7 @@ fun MainScreen(
     val homeState by home.uiState.collectAsStateWithLifecycle()
     val account = homeState.account
     val automationsOffered = rememberAutomationsOffered(account)
+    val workflowsOffered = rememberWorkflowsOffered(account)
     // A tab the active account's server does not offer (another account was chosen) shows the first one.
     // The waits follow the app's one feed while the signed-in app is open, whatever tab shows: the badge stays live.
     LifecycleStartEffect(waits) {
@@ -233,7 +244,7 @@ fun MainScreen(
         onStopOrDispose { waits.stop() }
     }
     val waitsState by waits.uiState.collectAsStateWithLifecycle()
-    val shownTab = if ((tab == MainTab.AUTOMATIONS && !automationsOffered) || (tab == MainTab.WAITS && !waitsState.available)) MainTab.SESSIONS else tab
+    val shownTab = if ((tab == MainTab.AUTOMATIONS && !automationsOffered) || (tab == MainTab.WORKFLOWS && !workflowsOffered) || (tab == MainTab.WAITS && !waitsState.available)) MainTab.SESSIONS else tab
     LaunchedEffect(Unit) {
         AppCommands.commands.collect { command ->
             when (command) {
@@ -275,11 +286,17 @@ fun MainScreen(
                     val viewModel: AutomationsViewModel = koinViewModel(key = automationsKey(account.id)) { parametersOf(AutomationsRoute(account.id)) }
                     AutomationsScreen(viewModel, onOpen = { onOpenAutomation(account.id, it.id) }, onCreate = { onCreateAutomation(account.id) })
                 } else SignedOutTab(stringResource(Res.string.automations_title), account, onSignInAgain)
+                MainTab.WORKFLOWS -> if (account != null && account.signedIn) key(account.id) {
+                    val runs: WorkflowRunsViewModel = koinViewModel(key = workflowRunsKey(account.id)) { parametersOf(WorkflowsRoute(account.id)) }
+                    val definitions: WorkflowsViewModel = koinViewModel(key = workflowsKey(account.id)) { parametersOf(WorkflowsRoute(account.id)) }
+                    WorkflowsScreen(runs, definitions, onOpenRun = { onOpenWorkflowRun(account.id, it.id) }, onOpenWorkflow = { onOpenWorkflow(account.id, it.id) },
+                        onStartWorkflow = { onStartWorkflow(account.id, it.id) }, onOpenWaits = { tab = MainTab.WAITS })
+                } else SignedOutTab(stringResource(Res.string.workflows_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
                     onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, viewModel = settings)
             }
         }
-        TabBar(shownTab, automationsOffered, waitsState.takeIf { it.available }) { tab = it }
+        TabBar(shownTab, automationsOffered, workflowsOffered, waitsState.takeIf { it.available }) { tab = it }
     }
 
     MainSheetsHost(sheets, settings, onOpenSession, onSignInAgain, onAddAccount, onManageAccounts = { tab = MainTab.ACCOUNT })
@@ -339,11 +356,31 @@ internal fun rememberAutomationsOffered(account: Account?): Boolean {
     return offered
 }
 
+/**
+ * Whether the active account's server offers workflows (`workflows.v1`): read once per account, false while it is
+ * unknown. A Koin without the use case (a test shell) offers none.
+ */
+@Composable
+internal fun rememberWorkflowsOffered(account: Account?): Boolean {
+    val koin = getKoin()
+    val availability = remember { koin.getOrNull<WorkflowsAvailabilityUseCase>() }
+    val signedIn = account?.takeIf { it.signedIn }
+    val offered by produceState(false, signedIn?.id, availability) {
+        value = false
+        value = signedIn != null && availability?.available(signedIn.id) == true
+    }
+    return offered
+}
+
+/** The keys of an account's runs and saved workflows in the signed-in app's store: the phone's tab and the wide layout share them. */
+internal fun workflowRunsKey(accountId: String) = "workflow-runs-$accountId"
+internal fun workflowsKey(accountId: String) = "workflows-$accountId"
+
 /** The key of an account's automation list in the signed-in app's store: the phone's tab and the wide layout's sidebar share it. */
 internal fun automationsKey(accountId: String) = "automations-$accountId"
 
 @Composable
-private fun TabBar(selected: MainTab, automations: Boolean, waits: WaitsUiState?, onSelect: (MainTab) -> Unit) {
+private fun TabBar(selected: MainTab, automations: Boolean, workflows: Boolean, waits: WaitsUiState?, onSelect: (MainTab) -> Unit) {
     val colors = TeamCode.colors
     Column(Modifier.fillMaxWidth().background(colors.line).padding(top = 1.dp)) {
         Row(
@@ -357,6 +394,7 @@ private fun TabBar(selected: MainTab, automations: Boolean, waits: WaitsUiState?
                 TabItem(MainTab.SESSIONS, PhosphorIcons.Regular.TerminalWindow, stringResource(Res.string.tab_sessions), selected, onSelect)
                 if (waits != null) TabItem(MainTab.WAITS, PhosphorIcons.Regular.Bell, stringResource(Res.string.tab_waits), selected, onSelect, badge = waits)
                 TabItem(MainTab.ARTIFACTS, PhosphorIcons.Regular.FileText, stringResource(Res.string.tab_artifacts), selected, onSelect)
+                if (workflows) TabItem(MainTab.WORKFLOWS, PhosphorIcons.Regular.FlowArrow, stringResource(Res.string.tab_workflows), selected, onSelect)
                 if (automations) TabItem(MainTab.AUTOMATIONS, PhosphorIcons.Regular.Clock, stringResource(if (short) Res.string.tab_automations_short else Res.string.tab_automations), selected, onSelect)
                 TabItem(MainTab.ACCOUNT, PhosphorIcons.Regular.UserCircle, stringResource(Res.string.tab_account), selected, onSelect)
               }

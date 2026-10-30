@@ -56,7 +56,9 @@ import com.adamglin.phosphoricons.regular.Files
 import com.adamglin.phosphoricons.regular.GearSix
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.Plus
+import com.adamglin.phosphoricons.regular.FlowArrow
 import com.adamglin.phosphoricons.regular.SignIn
+import me.nathanfallet.teamcode.companion.resources.workflows_title
 import com.adamglin.phosphoricons.regular.UserSwitch
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
@@ -114,6 +116,7 @@ sealed interface SidebarSelection {
     data object AllArtifacts : SidebarSelection
     data object AllAutomations : SidebarSelection
     data object AllWaits : SidebarSelection
+    data object AllWorkflows : SidebarSelection
     data object Settings : SidebarSelection
     data class Session(val id: String) : SidebarSelection
     data class Artifact(val id: String) : SidebarSelection
@@ -137,6 +140,8 @@ data class SidebarState(
     val waitsOpen: Int? = null,
     /** More open waits than were read: the badge says "N+". */
     val waitsMore: Boolean = false,
+    /** The server offers workflows (`workflows.v1`): the row is shown. */
+    val workflowsOffered: Boolean = false,
     val selection: SidebarSelection,
     val now: Long,
     /** The filter the shared lists are on when it is not their default (Paused, Team...): shown by the section titles. */
@@ -163,6 +168,7 @@ class SidebarActions(
     val onOpenAutomation: (AutomationSummary) -> Unit = {},
     val onAllAutomations: () -> Unit = {},
     val onOpenWaits: () -> Unit = {},
+    val onOpenWorkflows: () -> Unit = {},
     /** Opens the command palette; null: no search row. */
     val onSearch: (() -> Unit)? = null,
     /** The palette's shortcut as the platform writes it (⌘K, Ctrl+K), shown on the search row. */
@@ -205,6 +211,9 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
             if (account?.signedIn == true && state.waitsOpen != null) {
                 SidebarRow(PhosphorIcons.Regular.Bell, stringResource(Res.string.waits_title), selected = state.selection == SidebarSelection.AllWaits, onClick = actions.onOpenWaits,
                     tag = "sidebar-waits", bold = state.waitsOpen > 0, trailing = { if (state.waitsOpen > 0) WaitsBadge(state.waitsOpen, state.waitsMore, Modifier.testTag("sidebar-waits-badge")) })
+            }
+            if (account?.signedIn == true && state.workflowsOffered) {
+                SidebarRow(PhosphorIcons.Regular.FlowArrow, stringResource(Res.string.workflows_title), selected = state.selection == SidebarSelection.AllWorkflows, onClick = actions.onOpenWorkflows, tag = "sidebar-workflows")
             }
             SidebarHeader(stringResource(Res.string.sessions_title), state.sessionsFilter)
             when {

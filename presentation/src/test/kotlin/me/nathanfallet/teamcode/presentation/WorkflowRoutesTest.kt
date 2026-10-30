@@ -61,7 +61,8 @@ class WorkflowRoutesTest {
         }
         suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
         suspend fun view(response: HttpResponse): WorkflowView { val text = response.bodyAsText(); assertTrue(response.status.isSuccess(), text); return Serialization.json.decodeFromString(text) }
-        assertTrue(Workflows.CAPABILITY in Serialization.json.decodeFromString<Capabilities>(call(HttpMethod.Get, "/api/v1/capabilities", "admin").bodyAsText()).features)
+        val features = Serialization.json.decodeFromString<Capabilities>(call(HttpMethod.Get, "/api/v1/capabilities", "admin").bodyAsText()).features
+        assertTrue(Workflows.CAPABILITY in features); assertTrue(Workflows.LIVE_CAPABILITY in features)
         assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/workflows", null).status)
 
         val created = call(HttpMethod.Post, "/api/v1/workflows", "admin", body)

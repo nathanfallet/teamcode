@@ -56,6 +56,8 @@ data class SessionList(
     fun applied(change: SessionChange): Pair<SessionList, String?> {
         // A wait asked, answered or withdrawn says nothing about its session's state: the waits section follows it.
         if (change.type in SessionChange.WAIT_TYPES) return this to null
+        // A workflow run changed: it is no session's state, the workflows screens follow it.
+        if (change.type == SessionChange.WORKFLOW_RUN) return this to null
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
         // A rename changes the name and nothing else: the row keeps its place (the list is ordered by creation).

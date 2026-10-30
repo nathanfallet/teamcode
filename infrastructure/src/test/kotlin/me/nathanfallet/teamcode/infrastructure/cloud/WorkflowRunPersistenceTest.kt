@@ -1,7 +1,9 @@
 package me.nathanfallet.teamcode.infrastructure.cloud
 
 import kotlinx.coroutines.*
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.domain.team.TeamEventAudience
+import me.nathanfallet.teamcode.domain.team.TeamEventType
 import me.nathanfallet.teamcode.domain.cloud.CloudCreateOutcome
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionDraft
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
@@ -67,6 +69,8 @@ class WorkflowRunPersistenceTest {
             assertEquals(1L, w.a.database.query { Tokens.selectAll().where { Tokens.device like "workflow %" }.count() })
             assertEquals(emptyList(), serviceB.list(w.admin, false, null, null, null, 10).runs, "an administrator's own list holds only their runs")
             assertEquals(listOf(run.id), serviceB.list(w.admin, true, null, "running", null, 10).runs.map { it.id })
+            // A listed run names the step in progress, read for the whole page at once.
+            assertEquals("work", serviceB.list(w.admin, true, null, "running", null, 10).current[run.id]?.nodeId)
 
             // Two replicas claiming together: one gets the run, the other nothing, until it is released.
             val claims = coroutineScope { listOf(storeA, storeB).map { async(Dispatchers.IO) { it.claim(10, 60_000).map { work -> work.run.id } } }.awaitAll() }
@@ -150,6 +154,39 @@ class WorkflowRunPersistenceTest {
             assertTrue("wfrun_starter_status" in plans.getValue("own, one status"), plans.getValue("own, one status"))
             plans.filterKeys { it != "engine claim" }.forEach { (name, plan) -> assertFalse("Sort" in plan, "$name sorts: $plan") }
             assertTrue("wfrun_claim" in plans.getValue("engine claim"), plans.getValue("engine claim"))
+        }
+    }
+
+    @Test @Timeout(300)
+    fun runChangesArePublishedToTheFeedInTheirTransaction() = runBlocking {
+        AutomationWorld.run(93) { w ->
+            val inner = WorkflowService(SqlWorkflowStore(w.a.database)).create(w.admin, definition("Events"))
+            val store = SqlWorkflowRunStore(w.a.database); val service = WorkflowRunService(store)
+            val sessions = Sessions(); val waits = Waits(); val engine = WorkflowEngine(store, sessions, waits)
+            val feed = SqlTeamEventStore(w.a.database); val head = feed.head(w.teamId)
+            val types = setOf(TeamEventType.WORKFLOW_RUN_UPDATED)
+            fun audience(who: Principal, team: Boolean = false) = TeamEventAudience(who.member.id, sessions = true, runs = false, teamSessions = team, teamRuns = false)
+
+            val run = service.start(w.member, inner.id, emptyMap(), "p1", null).run
+            engine.run()
+            service.deliver(w.member, run.id, JsonPrimitive("done")); engine.run(); engine.run()
+            assertEquals(RunStatus.WAITING, service.get(w.member, run.id).first.status)
+            waits.states["w-1"] = WaitState(WaitStatus.RESOLVED, "approve", ""); engine.run(); engine.run()
+            assertEquals(RunStatus.SUCCEEDED, service.get(w.member, run.id).first.status)
+
+            val mine = feed.read(w.teamId, audience(w.member), head, types, 100).events
+            val statuses = mine.map { Json.parseToJsonElement(it.data).jsonObject.getValue("status").jsonPrimitive.content }
+            assertEquals("running", statuses.first(), "the start is published"); assertTrue("waiting" in statuses, statuses.toString()); assertEquals("succeeded", statuses.last(), "the end is published")
+            assertTrue(mine.all { it.subjectId == run.id && it.ownerId == w.member.member.id && it.type == TeamEventType.WORKFLOW_RUN_UPDATED })
+            assertEquals(mine.map { it.seq }, mine.map { it.seq }.sorted())
+            val data = Json.parseToJsonElement(mine.first().data).jsonObject
+            assertEquals(run.id, data.getValue("runId").jsonPrimitive.content); assertEquals(inner.id, data.getValue("workflowId").jsonPrimitive.content)
+            assertEquals(emptyList(), feed.read(w.teamId, audience(w.admin), head, types, 100).events, "another member does not see the run")
+            assertEquals(mine.map { it.seq }, feed.read(w.teamId, audience(w.admin, team = true), head, types, 100).events.map { it.seq }, "an administrator who reads the team's sessions does")
+            // A change that does nothing publishes nothing: the finished run cannot be finished again.
+            val before = feed.head(w.teamId)
+            assertFalse(store.finish(run.id, RunStatus.FAILED, "x", null, 99))
+            assertEquals(before, feed.head(w.teamId))
         }
     }
 

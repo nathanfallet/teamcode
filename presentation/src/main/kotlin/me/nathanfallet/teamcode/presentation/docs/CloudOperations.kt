@@ -389,7 +389,8 @@ private fun ApiCatalog.cloudConversation() {
         description = "A server-sent event stream (`text/event-stream`) of what happens to the caller's cloud sessions " +
             "and agent runs: `cloud.session.created`, `.paused`, `.woken`, `.resumed`, `.ended`, `cloud.turn` " +
             "(`phase`: `started`, `completed`, `interrupted`, `failed`), `cloud.session.waiting` and `.answered` " +
-            "(a permission request, and its answer or its denial at the team's deadline), `run.started`, `run.stale` and `run.ended`. " +
+            "(a permission request, and its answer or its denial at the team's deadline), `cloud.wait.created`, `.resolved` and `.cancelled`, " +
+            "`cloud.workflow.run.updated` (a workflow run changed: `runId`, `workflowId`, `status`, `ownerId`; `workflows.live.v1`), `run.started`, `run.stale` and `run.ended`. " +
             "Each event has `id` = `seq` (the team's own gap-free sequence), `event` = its type and `data` = a " +
             "`TeamEventView`. Without `Last-Event-ID` or `after` the stream starts at the newest event; `after=0` " +
             "starts at the oldest retained one (7 days). A reconnecting `EventSource` resumes after the last `id`; if " +

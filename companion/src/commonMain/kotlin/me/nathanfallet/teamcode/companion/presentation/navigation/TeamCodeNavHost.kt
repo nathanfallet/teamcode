@@ -32,6 +32,12 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationEditScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowRunScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowStartScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowStartViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowViewModel
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationTestScreen
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationEditViewModel
@@ -193,6 +199,9 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenMcp = { accountId -> navController.navigate(McpServersRoute(accountId)) },
                 onOpenAutomation = { accountId, automationId -> navController.navigate(AutomationRoute(accountId, automationId)) },
                 onCreateAutomation = { accountId -> navController.navigate(AutomationEditRoute(accountId)) },
+                onOpenWorkflowRun = { accountId, runId -> navController.navigate(WorkflowRunRoute(accountId, runId)) },
+                onOpenWorkflow = { accountId, workflowId -> navController.navigate(WorkflowRoute(accountId, workflowId)) },
+                onStartWorkflow = { accountId, workflowId -> navController.navigate(WorkflowStartRoute(accountId, workflowId)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -231,6 +240,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             TransfersScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) })
         }
         automationDestinations(navController)
+        // Waiting for you is a tab of the phone: back to the tabs, on it.
+        workflowDestinations(navController, onOpenWaits = { tab = MainTab.WAITS; navController.popBackStack(MainRoute, inclusive = false) })
     }
 
     newServer?.let { origin ->
@@ -289,6 +300,28 @@ internal fun SessionDestination(route: SessionRoute, onBack: (() -> Unit)?, onOp
     }
 }
 
+/** The workflow screens pushed over the phone's tabs: a run, a saved workflow, the form that starts one; starting lands on the new run. */
+private fun NavGraphBuilder.workflowDestinations(navController: NavHostController, onOpenWaits: () -> Unit) {
+    composable<WorkflowRunRoute> { entry ->
+        val route = entry.toRoute<WorkflowRunRoute>()
+        val viewModel: WorkflowRunViewModel = koinViewModel { parametersOf(route) }
+        WorkflowRunScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) },
+            onOpenRun = { navController.navigate(WorkflowRunRoute(route.accountId, it)) }, onOpenWaits = onOpenWaits)
+    }
+    composable<WorkflowRoute> { entry ->
+        val route = entry.toRoute<WorkflowRoute>()
+        val viewModel: WorkflowViewModel = koinViewModel { parametersOf(route) }
+        WorkflowScreen(viewModel, onBack = { navController.popBackStack() }, onStart = { navController.navigate(WorkflowStartRoute(route.accountId, it.id)) })
+    }
+    composable<WorkflowStartRoute> { entry ->
+        val route = entry.toRoute<WorkflowStartRoute>()
+        val viewModel: WorkflowStartViewModel = koinViewModel { parametersOf(route) }
+        WorkflowStartScreen(viewModel, onBack = { navController.popBackStack() }, onStarted = { run ->
+            navController.navigate(WorkflowRunRoute(route.accountId, run.id)) { popUpTo<WorkflowStartRoute> { inclusive = true } }
+        })
+    }
+}
+
 /** The automation screens pushed over the phone's tabs: the page, the form, the test; each leaves for the page or the list when done. */
 private fun NavGraphBuilder.automationDestinations(navController: NavHostController) {
     composable<AutomationRoute> { entry ->
@@ -322,6 +355,7 @@ internal fun panelTab(entry: NavBackStackEntry): MainTab? = when {
     entry.destination.hasRoute<ArtifactsRoute>() && entry.toRoute<ArtifactsRoute>().sessionId == null -> MainTab.ARTIFACTS
     entry.destination.hasRoute<AutomationsRoute>() -> MainTab.AUTOMATIONS
     entry.destination.hasRoute<WaitsRoute>() -> MainTab.WAITS
+    entry.destination.hasRoute<WorkflowsRoute>() -> MainTab.WORKFLOWS
     else -> null
 }
 
@@ -332,6 +366,7 @@ internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
     MainTab.ARTIFACTS -> accountId?.let { ArtifactsRoute(it) }
     MainTab.AUTOMATIONS -> accountId?.let { AutomationsRoute(it) }
     MainTab.WAITS -> accountId?.let { WaitsRoute(it) }
+    MainTab.WORKFLOWS -> accountId?.let { WorkflowsRoute(it) }
 }
 
 /** The route of a screen both layouts show (pushed over the tabs, or in the content panel); null for the others. */
@@ -344,6 +379,9 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<GitHubLinkRoute>() -> toRoute<GitHubLinkRoute>()
     destination.hasRoute<McpServersRoute>() -> toRoute<McpServersRoute>()
     destination.hasRoute<AutomationRoute>() -> toRoute<AutomationRoute>()
+    destination.hasRoute<WorkflowRunRoute>() -> toRoute<WorkflowRunRoute>()
+    destination.hasRoute<WorkflowRoute>() -> toRoute<WorkflowRoute>()
+    destination.hasRoute<WorkflowStartRoute>() -> toRoute<WorkflowStartRoute>()
     destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>()
     destination.hasRoute<AutomationTestRoute>() -> toRoute<AutomationTestRoute>()
     else -> null

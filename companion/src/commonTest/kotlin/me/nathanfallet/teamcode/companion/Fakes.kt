@@ -190,8 +190,8 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
         return (byId[sessionId] ?: cloudSession(sessionId)).copy(name = name)
     }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
-    override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean) =
-        changes.also { calls += "feed" + (if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")) + (if (waiting) " waiting" else "") + (if (waits) " waits" else "") + if (renames) " renames" else "" }
+    override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean) =
+        changes.also { calls += "feed" + (if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")) + (if (waiting) " waiting" else "") + (if (waits) " waits" else "") + (if (renames) " renames" else "") + if (workflows) " workflows" else "" }
 }
 
 fun artifact(id: String, title: String = "Report $id", version: Int = 1, updatedAt: Long = 1_000) = me.nathanfallet.teamcode.companion.domain.models.Artifact(

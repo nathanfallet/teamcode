@@ -16,9 +16,11 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | Delivery by session (`POST /workflows/session/deliver`), the execution credential scope `workflow:session`, `deliverWorkflowSession` in the typed client | Implemented |
 | `teamcode-workflow` MCP server (`teamcode mcp workflow`, tool `deliver`), its loopback relay (`workflow-relay-v1`), connected beside the agent of remote sessions and of Kubernetes cloud sessions | Implemented. Tested on the JVM (server, relay, launch arguments); not exercised with a native binary or a real Claude Code or Codex session |
 | Stop hook that sends the agent of a workflow step back to work once (`GET /workflows/session/pending`, `pendingWorkflowSession` in the typed client, `teamcode cloud workflow-stop`) | Implemented for Claude Code in remote and Kubernetes cloud sessions. Tested on the JVM (server, relay, hook logic, settings); not exercised with a native binary or a real Claude Code session. Codex is not covered ([below](#stop-hook)) |
-| Companion editor and run view, `teamcode workflows`, automations that start a workflow | Planned |
+| Companion screens to use workflows (`companion`, shown when `workflows.v1` is announced): the runs list (filters, keyset pages, administrators' `?all=true`), the run detail (visits, session, blocking wait, cancel), the read-only definitions list and detail, and a start form (inputs, profile) | Implemented. Tested on the JVM (use cases, view models, repository mapping, UI, demo mode); `companion-android` and `companion-ios` were not compiled |
+| Live run updates: the feed event `cloud.workflow.run.updated` (published in the transaction of each run change, to the starter), announced by the capability `workflows.live.v1`; the list now carries `currentNodeId` and `currentNodeKind` and a read titles each visit (`nodeTitle`) | Implemented |
+| Companion definition editor (editing definitions is still API-only), `teamcode workflows`, automations that start a workflow | Planned |
 
-Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. No screen exists yet.
+Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. The companion has screens to start, follow and cancel runs and to read definitions; editing a definition is still done over the API.
 
 ## Definition
 
@@ -102,7 +104,7 @@ A session that does not exist, or belongs to another member, or whose run belong
 | Route | Purpose |
 | --- | --- |
 | `POST /api/v1/workflows/{id}/runs` | Start (`{inputs, profileId}`), `201`; `Idempotency-Key` returns the first run (`200`, `Idempotency-Replayed: true`). Signed in |
-| `GET /api/v1/workflows/runs` | One's own runs, newest first; `?all=true` (administrators), `?workflow=`, `?status=`, `?before=&limit=` (1–100, 50). A list never carries the definition snapshot |
+| `GET /api/v1/workflows/runs` | One's own runs, newest first; `?all=true` (administrators), `?workflow=`, `?status=`, `?before=&limit=` (1–100, 50). A list never carries the definition snapshot, but names the step in progress (`currentNodeId`, `currentNodeKind`); a read titles each visit (`nodeTitle`) |
 | `GET /api/v1/workflows/runs/{id}` | A run with its visits (the starter, or an administrator) |
 | `POST /api/v1/workflows/runs/{id}/cancel` | Cancel (the starter or an administrator, signed in) |
 | `POST /api/v1/workflows/runs/{id}/deliver` | `{output}`; a key needs `cloud:write` |
@@ -131,4 +133,4 @@ An agent can end its turn without calling `deliver` and without asking a person.
 
 ## What is planned
 
-The order of work: the companion editor and run view, the CLI and automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.
+The order of work: the companion definition editor, the CLI and automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.

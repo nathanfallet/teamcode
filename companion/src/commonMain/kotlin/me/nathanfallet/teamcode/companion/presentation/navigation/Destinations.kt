@@ -10,7 +10,7 @@ object AddServerRoute
 @Serializable
 data class LoginRoute(val origin: String, val username: String? = null)
 
-/** The tabs of a signed-in app: Sessions, Waits and Automations (when the server has them), Artifacts, Account. */
+/** The tabs of a signed-in app: Sessions, Waits, Automations and Workflows (when the server has them), Artifacts, Account. */
 @Serializable
 object MainRoute
 
@@ -69,6 +69,22 @@ data class AutomationEditRoute(val accountId: String, val automationId: String? 
 /** The test of one automation: payload, preview of the prompt, a real run. */
 @Serializable
 data class AutomationTestRoute(val accountId: String, val automationId: String)
+
+/** An account's workflows: the Workflows tab of a phone (the runs, then the saved workflows), and a screen of the wide layout's content panel. */
+@Serializable
+data class WorkflowsRoute(val accountId: String)
+
+/** One saved workflow, read-only: its inputs, and its steps with their transitions. */
+@Serializable
+data class WorkflowRoute(val accountId: String, val workflowId: String)
+
+/** The form that starts a run of [workflowId]: its inputs and, when needed, a profile. */
+@Serializable
+data class WorkflowStartRoute(val accountId: String, val workflowId: String)
+
+/** One run: its timeline of visits, the session and the wait it is blocked on, and its failure. */
+@Serializable
+data class WorkflowRunRoute(val accountId: String, val runId: String)
 
 /** The content panel of the wide layout: the active account's full session list, with its filters. */
 @Serializable

@@ -48,6 +48,12 @@ enum class TeamEventType(val wire: String, val subject: TeamEventSubject) {
     WAIT_RESOLVED("cloud.wait.resolved", TeamEventSubject.SESSION),
     /** A wait was withdrawn: `{waitId, sessionId, waitKind, assigneeId, kind}`. */
     WAIT_CANCELLED("cloud.wait.cancelled", TeamEventSubject.SESSION),
+    /**
+     * A workflow run changed in a way a screen shows (started, a step bound to a session or a wait, a step done or begun,
+     * ended): `{runId, workflowId, status, ownerId, parentRunId?}`. It belongs to the run's starter (and administrators who
+     * read the team's sessions); the subject is the run. It carries no `kind`: it passes whatever session kinds a stream asks for.
+     */
+    WORKFLOW_RUN_UPDATED("cloud.workflow.run.updated", TeamEventSubject.SESSION),
     RUN_STARTED("run.started", TeamEventSubject.RUN),
     /** No heartbeat for [AgentRunService.HEARTBEAT_TTL_MILLIS]; a later heartbeat and another silence emit it again. */
     RUN_STALE("run.stale", TeamEventSubject.RUN),

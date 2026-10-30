@@ -20,6 +20,7 @@ import me.nathanfallet.teamcode.companion.domain.models.BackgroundTask
 import me.nathanfallet.teamcode.companion.domain.models.AgentQuestionOption
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
+import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
@@ -66,6 +67,12 @@ internal fun CloudProfileView.domain() = Profile(id, name, spec.agentKind)
 /** A feed event about a session; null for the other subjects (local runs). */
 internal fun TeamEventView.sessionChange(): SessionChange? {
     if (subject != "session") return null
+    // A run's subject is the run itself: it belongs to no session, and its starter is in the data.
+    if (type == SessionChange.WORKFLOW_RUN) return SessionChange(
+        seq = seq, type = type, sessionId = "", memberId = data.text("ownerId") ?: memberId, at = at, state = null, turnPhase = null,
+        runId = data.text("runId") ?: subjectId, runStatus = data.text("status")?.let(RunStatus::of),
+        runWorkflowId = data.text("workflowId"), runParentId = data.text("parentRunId"),
+    )
     // A wait event's subject is the wait: its session and its assignee (who it concerns) are in the data.
     val wait = type in SessionChange.WAIT_TYPES
     return SessionChange(

@@ -4,6 +4,17 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.Profile
+import me.nathanfallet.teamcode.companion.domain.models.RunStatus
+import me.nathanfallet.teamcode.companion.domain.models.RunVisit
+import me.nathanfallet.teamcode.companion.domain.models.StepAction
+import me.nathanfallet.teamcode.companion.domain.models.StepDeliverable
+import me.nathanfallet.teamcode.companion.domain.models.StepKind
+import me.nathanfallet.teamcode.companion.domain.models.StepTransition
+import me.nathanfallet.teamcode.companion.domain.models.VisitStatus
+import me.nathanfallet.teamcode.companion.domain.models.Workflow
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowInput
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowStep
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
@@ -39,9 +50,10 @@ object DemoContent {
     const val USERNAME = "ada"
     const val SERVER_VERSION = "demo"
 
-    /** What the demo server announces: waits, but no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
+    /** What the demo server announces: waits and workflows, but no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
     val features = setOf(
         Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME, Features.WAITS,
+        Features.WORKFLOWS, Features.WORKFLOWS_LIVE,
     )
 
     /**
@@ -167,6 +179,60 @@ object DemoContent {
                 answer = WaitAnswer("approve", mapOf("feedback" to JsonPrimitive("Yes, keep it short.")), MEMBER_ID, now - 150 * MINUTE)),
             wait("w6", "s7", "Prototype the search page", WaitKind.HUMAN_REQUEST, "Pick the filter layout", null, 240, actions = listOf(WaitAction("done", "Done")))
                 .copy(open = false, cancelled = true, resolvedAt = now - 230 * MINUTE),
+        )
+    }
+
+    /** The demo's saved workflows: a ticket that an agent works on and a person reviews, and a release that ends with a check. */
+    fun workflows(now: Long): List<Workflow> {
+        fun step(id: String, kind: StepKind, title: String, vararg transitions: StepTransition, instruction: String? = null, actions: List<StepAction> = emptyList(), deliverable: StepDeliverable? = null) =
+            WorkflowStep(id, kind, kind.wire, title, instruction, deliverable, null, if (kind == StepKind.HUMAN) "owner" else null, null, actions, transitions.toList(), 3)
+        return listOf(
+            Workflow(
+                "wf-ticket", "Fix a ticket", "An agent fixes the ticket and opens a pull request, you review it, and it loops back until you approve.", 2, "work", "same",
+                listOf(WorkflowInput("ticket", "Ticket", true, null, 64), WorkflowInput("notes", "Notes for the agent", false, "Keep the change small.", 500)),
+                listOf(
+                    step("work", StepKind.AGENT, "Work on the ticket", StepTransition("delivered", "review"), instruction = "Fix {{inputs.ticket}}. {{inputs.notes}}", deliverable = StepDeliverable("url", "github.com")),
+                    step("review", StepKind.HUMAN, "Review the pull request", StepTransition("approve", null), StepTransition("request_changes", "work"),
+                        instruction = "Look at {{nodes.work.output}}", actions = listOf(StepAction("approve", "Approve"), StepAction("request_changes", "Request changes"))),
+                ), 100, now - 3 * 24 * 60 * MINUTE,
+            ),
+            Workflow(
+                "wf-release", "Ship a release", "Writes the release notes, then checks them with a second workflow.", 1, "notes", "handoff",
+                listOf(WorkflowInput("version", "Version", true, null, 32)),
+                listOf(
+                    step("notes", StepKind.AGENT, "Write the release notes", StepTransition("delivered", "check"), instruction = "Write the notes of {{inputs.version}}.", deliverable = StepDeliverable("text", null)),
+                    WorkflowStep("check", StepKind.WORKFLOW, "workflow", "Check the notes", null, null, null, null, "wf-ticket", emptyList(), listOf(StepTransition("delivered", null)), 3),
+                ), 100, now - 9 * 24 * 60 * MINUTE,
+            ),
+        )
+    }
+
+    /** The demo's runs, one in each state; the waiting one is blocked on the first open wait, which is the member's. */
+    fun workflowRuns(now: Long): List<WorkflowRun> {
+        fun visit(seq: Int, node: String, title: String, kind: StepKind, status: VisitStatus, startedAgo: Int, endedAgo: Int? = null, outcome: String? = null, output: String? = null, session: String? = null, wait: String? = null) =
+            RunVisit(seq, node, title, kind, status, outcome, output, session, wait, null, now - startedAgo * MINUTE, endedAgo?.let { now - it * MINUTE })
+        fun run(id: String, workflow: Workflow, status: RunStatus, agoMinutes: Int, visits: List<RunVisit>, session: String?, failure: String? = null, output: String? = null, endedAgo: Int? = null, ticket: String = "ACME-210") = WorkflowRun(
+            id, workflow.id, workflow.name, workflow.version, status, status.wire, MEMBER_ID, mapOf("ticket" to ticket), session,
+            visits.lastOrNull { it.status == VisitStatus.ACTIVE }?.nodeId, visits.lastOrNull { it.status == VisitStatus.ACTIVE }?.kind, null, failure, output, visits, now - agoMinutes * MINUTE,
+            now - (endedAgo ?: (agoMinutes - 1)) * MINUTE, endedAgo?.let { now - it * MINUTE },
+        )
+        val (ticket, release) = workflows(now)
+        return listOf(
+            run("run1", ticket, RunStatus.RUNNING, 6, listOf(visit(1, "work", "Work on the ticket", StepKind.AGENT, VisitStatus.ACTIVE, 6, session = "s0")), "s0", ticket = "ACME-231"),
+            run("run2", ticket, RunStatus.WAITING, 25, listOf(
+                visit(1, "work", "Work on the ticket", StepKind.AGENT, VisitStatus.DONE, 25, 5, "delivered", "https://github.com/acme/web/pull/412", "s1"),
+                visit(2, "review", "Review the pull request", StepKind.HUMAN, VisitStatus.ACTIVE, 5, session = "s1", wait = "w1"),
+            ), "s1", ticket = "ACME-228"),
+            run("run3", release, RunStatus.SUCCEEDED, 130, listOf(
+                visit(1, "notes", "Write the release notes", StepKind.AGENT, VisitStatus.DONE, 130, 95, "delivered", "Release 4.2: faster sync, fewer crashes.", "s2"),
+                visit(2, "check", "Check the notes", StepKind.WORKFLOW, VisitStatus.DONE, 95, 80, "delivered", "approve: ok"),
+            ), "s2", output = "approve: ok", endedAgo = 80, ticket = "4.2"),
+            run("run4", ticket, RunStatus.FAILED, 300, listOf(
+                visit(1, "work", "Work on the ticket", StepKind.AGENT, VisitStatus.FAILED, 300, 280, session = "s5"),
+            ), "s5", failure = "session_failed", endedAgo = 280, ticket = "ACME-199"),
+            run("run5", ticket, RunStatus.CANCELLED, 500, listOf(
+                visit(1, "work", "Work on the ticket", StepKind.AGENT, VisitStatus.CANCELLED, 500, 490, session = "s4"),
+            ), "s4", endedAgo = 490, ticket = "ACME-150"),
         )
     }
 

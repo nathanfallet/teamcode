@@ -278,7 +278,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && webhooks != null) listOf("team.webhooks.v1") else emptyList()) +
                     (if (team != null && automations != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Automations.CAPABILITY) else emptyList()) +
                     (if (team != null && waits != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Waits.CAPABILITY) else emptyList()) +
-                    (if (team != null && workflows != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Workflows.CAPABILITY) else emptyList()) +
+                    (if (team != null && workflows != null && cloudOn()) listOf(me.nathanfallet.teamcode.api.models.Workflows.CAPABILITY, me.nathanfallet.teamcode.api.models.Workflows.LIVE_CAPABILITY) else emptyList()) +
                     (if (team != null && mcp != null) listOf("mcp.gateway.v1") else emptyList()) +
                     // Hosted commands (transport stdio) are served: the server has an MCP host. Only displays read it.
                     (if (team != null && mcp?.hostsCommands == true) listOf("mcp.gateway.stdio.v1") else emptyList()) +
