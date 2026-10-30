@@ -42,6 +42,20 @@ internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: Stri
         val list = accounts.list(actor)
         call.respondText(call.page("Subscription accounts", accountsContent(actor, list, accounts.enrollmentAccess(actor).policy)), ContentType.Text.Html)
     }
+    // An OpenRouter key is pasted, not signed in: same enrollment as `teamcode accounts add --provider openrouter`, verified
+    // against OpenRouter first. The key is read from the form body only and never echoed back, stored in a page or logged.
+    post("/dashboard/accounts/openrouter") {
+        val input = call.form(publicOrigin.trimEnd('/'))
+        val key = input["key"].orEmpty().trim()
+        if (key.isEmpty() || key.length > 512) throw TeamFailure("invalid_credentials", 400, "Paste an OpenRouter API key.")
+        val credentials = ProviderCredentials(key, OPENROUTER_REFRESH_MARKER, OPENROUTER_NEVER_EXPIRES)
+        val operationId = java.util.UUID.randomUUID().toString()
+        when (val result = accounts.enroll(call.principal, credentials, operationId, "openrouter", EnrollmentOrigin.SIGN_IN)) {
+            is EnrollmentResult.Created -> call.respondRedirect("/dashboard/accounts#account-${result.account.id.encodeURLPathPart()}")
+            is EnrollmentResult.Updated -> call.respondRedirect("/dashboard/accounts#account-${result.account.id.encodeURLPathPart()}")
+            EnrollmentResult.Conflict -> throw TeamFailure("enrollment_conflict", 409, "Credentials changed during enrollment. Try again.")
+        }
+    }
     post("/dashboard/accounts/enrollment-policy") {
         val input = call.form(publicOrigin.trimEnd('/'))
         accounts.setEnrollmentPolicy(call.principal, AccountEnrollmentPolicy.parse(input["policy"].orEmpty()))
@@ -62,14 +76,25 @@ internal fun Route.accountRoutes(accounts: AccountManagement, publicOrigin: Stri
     }
 }
 
+/** An API key has nothing to refresh: a fixed marker as refresh token and the end of the century as expiry. */
+private const val OPENROUTER_REFRESH_MARKER = "api-key"
+private const val OPENROUTER_NEVER_EXPIRES = 4_102_444_800_000L
+
 private fun AccountEnrollmentAccess.view() = AccountEnrollmentPolicyView(policy.wire, allowed)
 
 /** The subscription accounts page body; the route supplies the administrator-only list. */
 internal fun accountsContent(actor: Principal, list: List<AccountRecord>, enrollment: AccountEnrollmentPolicy = AccountEnrollmentPolicy.ADMINISTRATORS): String {
     val rows = list.joinToString("") { a -> """<tr id="account-${escape(a.id)}"><td>${accountCell(a.displayName, a.email, strong = true, afterName = " " + stateChip(a.state) + if (a.disabled) " <span class=\"chip danger\">disabled</span>" else "")}<br><small>${escape(a.identity.provider)} · credential version ${a.credentialVersion}</small>${if (a.state == AccountState.PENDING_HANDOVER) handoverControl(actor, a) else ""}</td><td><form action="/dashboard/accounts/${escape(a.id)}/update" method="post">${csrf(actor)}<label>Name <input name="name" value="${escape(a.displayName)}" maxlength="120" required></label><label>Priority <input type="number" name="priority" value="${a.priority}" min="-100" max="100"></label><label>Pool (empty = shared) <input name="pool" value="${escape(a.poolId.orEmpty())}" maxlength="36"></label><label><input type="checkbox" name="disabled" ${if (a.disabled) "checked" else ""}> Disabled</label><button>Save account</button></form></td></tr>""" }
     val table = if (list.isEmpty()) empty("No subscription account yet", "<p>Add one from your computer with <code>teamcode accounts add</code>.</p>") else """<table><thead><tr><th>Account</th><th>Settings</th></tr></thead><tbody>$rows</tbody></table>"""
-    return handoverBanner(list, onAccountsPage = true) + """<p>Add or reconnect accounts on your computer with <code>teamcode accounts add</code>, or import with <code>teamcode accounts import --from teamclaude</code>.</p><p>An account added with <code>teamcode accounts add</code> serves requests at once. Imported accounts wait for an explicit refresh-ownership handover: use the Handover button below, or <code>teamcode accounts handover &lt;id&gt; --confirm</code>. No provider credential is displayed here.</p>$table${enrollmentControl(actor, enrollment)}"""
+    return handoverBanner(list, onAccountsPage = true) + """<p>Add or reconnect accounts on your computer with <code>teamcode accounts add</code>, or import with <code>teamcode accounts import --from teamclaude</code>.</p><p>An account added with <code>teamcode accounts add</code> serves requests at once. Imported accounts wait for an explicit refresh-ownership handover: use the Handover button below, or <code>teamcode accounts handover &lt;id&gt; --confirm</code>. No provider credential is displayed here.</p>$table${openRouterControl(actor)}${enrollmentControl(actor, enrollment)}"""
 }
+
+/**
+ * Pay-as-you-go models through OpenRouter, with a team API key. The browser sends it once; it is verified, stored encrypted
+ * and never shown again. A credit limit set on the key at openrouter.ai is the hard spending cap.
+ */
+private fun openRouterControl(actor: Principal): String =
+    """<h2 id="openrouter">Add an OpenRouter API key</h2><p>Reach hundreds of models with one key. Create it at <a href="https://openrouter.ai/keys" rel="noopener noreferrer">openrouter.ai/keys</a> with a <strong>credit limit</strong>: that limit is the hard cap on what it can spend. Then send a model to it with a <a href="/dashboard/routes">model route</a> whose provider is <code>openrouter</code>, and allow the model in the model policy.</p><form action="/dashboard/accounts/openrouter" method="post" autocomplete="off">${csrf(actor)}<label>API key <input type="password" name="key" maxlength="512" autocomplete="off" required></label><button>Verify and add</button></form>"""
 
 /** Same setting as `PUT /api/v1/policy/account-enrollment`. */
 private fun enrollmentControl(actor: Principal, policy: AccountEnrollmentPolicy): String {

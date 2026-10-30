@@ -122,6 +122,8 @@ The [Helm chart](helm/teamcode/README.md) follows the `pkg` chart conventions, w
 
 ## Model routes
 
+Administrators can also add an OpenRouter API key and route any model it serves with `openrouter` as a route provider: see [OpenRouter models](docs/openrouter.md).
+
 Administrators can configure ordered model replacements and fallbacks in **Dashboard → Routes**, such as `claude-opus-*` to `anthropic` then `codex:gpt-6-astra`. Requests without a matching rule retain their native provider. Cross-provider translation is **experimental and disabled by default**; administrators can enable it in **Dashboard → Models** using `experimentalCrossProviderTranslation`. While disabled, targets requiring conversion are skipped; native account/model fallback remains available. Both requested and resolved models must pass the team's policy. See [routing and compatibility](docs/routing.md) for the supported translation profile, bounded retries and limitations; a cross-provider route does not imply every agent tool or reasoning format is portable.
 
 ## Local service

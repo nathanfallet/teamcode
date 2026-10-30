@@ -14,6 +14,8 @@ object InferenceErrors {
         WireProtocol.MESSAGES -> when (status) {
             400, 409, 422 -> "invalid_request_error"
             401 -> "authentication_error"
+            // A pay-as-you-go account (OpenRouter) out of credit: not retryable, and the message tells whom to ask.
+            402 -> "billing_error"
             403 -> "permission_error"
             404 -> "not_found_error"
             413 -> "request_too_large"

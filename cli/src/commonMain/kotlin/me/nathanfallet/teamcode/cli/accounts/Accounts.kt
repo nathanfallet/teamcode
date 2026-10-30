@@ -39,6 +39,7 @@ private class AddAccount : SuspendingCliktCommand(name = "add") {
         sdk(config).use { client ->
             // Check before opening the provider sign-in, with a call every member may make.
             requireEnrollmentAllowed(client.capabilities().features, client::accountEnrollmentPolicy) { client.me().role }
+            if (type == AccountType.OPENROUTER_API) return addOpenRouterKey(client, ::echo)
             val signIn = OAuthSignIn.start(type.enrollment!!, ::secureRandomBytes)
             val provider = signIn.provider
             val url = signIn.authorizationUrl
@@ -58,6 +59,23 @@ private class AddAccount : SuspendingCliktCommand(name = "add") {
         }
     }
 }
+/**
+ * An OpenRouter account is a pay-as-you-go API key, not a sign-in: the key is read without echo, verified by the server
+ * against OpenRouter, and stored encrypted like any other credential. There is nothing to refresh, so the refresh token is
+ * a fixed marker and the expiry the end of the century.
+ */
+internal suspend fun addOpenRouterKey(client: TeamCodeClient, echo: (String) -> Unit) {
+    echo("Paste your OpenRouter API key (input is hidden). Create one at https://openrouter.ai/keys, with a credit limit if you want a hard cap.")
+    val key = Terminal().readLineOrNull(hideInput = true)?.trim().orEmpty()
+    if (key.isEmpty()) throw CliUserException("No API key was entered.")
+    val input = EnrollAccountRequest(key, OPENROUTER_REFRESH_MARKER, OPENROUTER_NEVER_EXPIRES, randomCode(), "openrouter", freshSignIn = true)
+    val result = try { client.enrollAccount(input) } catch (error: TeamCodeException) { throw enrollmentRefusal(error) ?: error }
+    echo("${if (result.created) "Added" else "Updated"} ${result.account.label}, id ${result.account.id}.")
+    echo("The account serves requests now. Route models to it in Dashboard > Accounts and models > Model routes, with the provider openrouter.")
+}
+internal const val OPENROUTER_REFRESH_MARKER = "api-key"
+/** 2100-01-01T00:00:00Z in epoch milliseconds. */
+internal const val OPENROUTER_NEVER_EXPIRES = 4_102_444_800_000L
 internal const val ENROLLMENT_POLICY_FEATURE = ACCOUNT_ENROLLMENT_POLICY_FEATURE
 /** TeamCode's own words for the refusals of `accounts add`, safe to print; keyed by the server's error code. */
 internal object EnrollmentMessages {

@@ -11,13 +11,15 @@ import me.nathanfallet.teamcode.api.models.AccountEnrollmentPolicyView
 enum class AccountType(val flag: String, val label: String, val provider: String?, val supported: Boolean = true) {
     ANTHROPIC_SUBSCRIPTION("anthropic-subscription", "Anthropic subscription (Claude Pro, Max, Team, Enterprise)", "anthropic"),
     CODEX_SUBSCRIPTION("codex-subscription", "Codex subscription (ChatGPT Plus, Pro, Team)", "codex"),
-    ANTHROPIC_API("anthropic-api", "Anthropic API key (Claude Console, console.anthropic.com)", null, supported = false);
+    ANTHROPIC_API("anthropic-api", "Anthropic API key (Claude Console, console.anthropic.com)", null, supported = false),
+    /** A pay-as-you-go OpenRouter API key, pasted rather than signed in: the server verifies it and nothing refreshes it. */
+    OPENROUTER_API("openrouter-api", "OpenRouter API key (openrouter.ai/keys)", "openrouter");
 
     /** The provider sign-in of a supported kind; null for a kind the server cannot hold. */
     val enrollment: OAuthEnrollmentProvider? get() = when (this) {
         ANTHROPIC_SUBSCRIPTION -> ClaudeOAuthEnrollment
         CODEX_SUBSCRIPTION -> CodexOAuthEnrollment
-        ANTHROPIC_API -> null
+        ANTHROPIC_API, OPENROUTER_API -> null
     }
 
     companion object {

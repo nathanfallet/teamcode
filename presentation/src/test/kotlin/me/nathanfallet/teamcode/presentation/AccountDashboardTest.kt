@@ -111,6 +111,34 @@ class AccountDashboardTest {
         assertEquals(EnrollmentOrigin.IMPORT, store.lastOrigin)
     }
 
+    @Test fun anOpenRouterKeyPastedInTheDashboardIsVerifiedEnrolledActiveAndNeverShownAgain() = testApplication {
+        val store = MemoryAccounts()
+        var verified: ProviderCredentials? = null
+        val openRouter = object : AccountVerifier {
+            override suspend fun verify(teamId: String, credentials: ProviderCredentials): VerifiedProviderAccount {
+                verified = credentials
+                return VerifiedProviderAccount(AccountIdentity(teamId, "openrouter", "digest", "openrouter"), "OpenRouter (sk-or-v1-abc...xyz)")
+            }
+        }
+        application { configureGateway(NoInference(), team = FakeTeam(), publicOrigin = "http://localhost", accounts = AccountManagement(store, verifier, mapOf("openrouter" to openRouter))) }
+        val page = get("/dashboard/accounts").bodyAsText()
+        assertTrue(page.contains("""action="/dashboard/accounts/openrouter""""), "Administrators see the form")
+        assertTrue(page.contains("""type="password" name="key""""), "The key is typed hidden")
+        suspend fun paste(body: String, origin: String = "http://localhost") = client.post("/dashboard/accounts/openrouter") {
+            header(HttpHeaders.Cookie, "teamcode_session=admin"); header(HttpHeaders.Origin, origin)
+            contentType(ContentType.Application.FormUrlEncoded); setBody(body)
+        }
+        assertEquals(HttpStatusCode.Forbidden, paste("csrf=session&key=sk-or-v1-secret", origin = "https://attacker.test").status)
+        assertEquals(HttpStatusCode.Forbidden, paste("csrf=wrong&key=sk-or-v1-secret").status)
+        assertEquals(HttpStatusCode.BadRequest, paste("csrf=session&key=").status)
+        assertNull(verified, "Nothing reaches OpenRouter before the form is accepted")
+        val done = paste("csrf=session&key=sk-or-v1-secret")
+        assertTrue(done.status.value in 300..399, "Redirected back to the accounts page")
+        assertEquals("sk-or-v1-secret", verified!!.accessToken)
+        assertEquals(EnrollmentOrigin.SIGN_IN, store.lastOrigin, "A key has no other refresher: the account serves at once")
+        assertFalse(done.bodyAsText().contains("secret"))
+        assertFalse(get("/dashboard/accounts").bodyAsText().contains("sk-or-v1-secret"))
+    }
     @Test fun whoCanAddAccountsIsReadableByMembersAndChangedByAdministrators() = testApplication {
         val store = MemoryAccounts()
         application { configureGateway(NoInference(), team = FakeTeam(), publicOrigin = "http://localhost", accounts = AccountManagement(store, verifier)) }

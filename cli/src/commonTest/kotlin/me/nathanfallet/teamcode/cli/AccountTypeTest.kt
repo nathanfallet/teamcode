@@ -9,12 +9,13 @@ class AccountTypeTest {
     private fun choose(type: String? = null, provider: String? = null, input: String? = null, out: MutableList<String> = mutableListOf()) =
         chooseAccountType(type, provider, { out += it }) { input }
 
-    @Test fun theSelectorListsThreeNumberedTypes() {
+    @Test fun theSelectorListsFourNumberedTypes() {
         val out = mutableListOf<String>()
         choose(input = "2", out = out)
         assertTrue(out.any { it.startsWith("  1. Anthropic subscription") })
         assertTrue(out.any { it.startsWith("  2. Codex subscription") })
         assertTrue(out.any { it.startsWith("  3. Anthropic API key (Claude Console") })
+        assertTrue(out.any { it.startsWith("  4. OpenRouter API key") })
     }
 
     @Test fun numbersAndDefaultPickTheType() {
@@ -41,6 +42,12 @@ class AccountTypeTest {
         assertEquals(AccountType.CODEX_SUBSCRIPTION, chooseAccountType(null, "codex", {}) { error("no prompt") })
         assertFailsWith<CliUserException> { choose(type = "codex-subscription", provider = "claude") }
         assertEquals(AccountType.CODEX_SUBSCRIPTION, choose(type = "codex-subscription", provider = "codex"))
+    }
+
+    @Test fun openRouterIsASupportedKeyType() {
+        assertEquals(AccountType.OPENROUTER_API, choose(type = "openrouter-api"))
+        assertEquals(AccountType.OPENROUTER_API, choose(input = "4"))
+        assertNull(AccountType.OPENROUTER_API.enrollment, "A key is pasted, not signed in")
     }
 
     @Test fun apiKeyIsExplainedNotSilentlyAnotherType() {

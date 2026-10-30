@@ -12,11 +12,15 @@ interface RoutingStore {
     suspend fun delete(actor: Principal, id: String, version: Long)
 }
 class ResolveRouteUseCase {
+    companion object {
+        /** Subscription providers and the pay-as-you-go OpenRouter gateway; a route can name no other. */
+        val PROVIDERS = setOf("anthropic", "codex", "openrouter")
+    }
     fun validate(rule: RouteRule) {
         if (!Regex("[a-zA-Z0-9_-]{1,36}").matches(rule.id) ||
-            !Regex("[a-zA-Z0-9*._-]{1,120}").matches(rule.pattern) || rule.targets.size !in 1..4 ||
-            rule.targets.any { it.provider !in setOf("anthropic", "codex") || it.model?.let { model -> !Regex("[a-zA-Z0-9_.-]{1,120}").matches(model) } == true } ||
-            rule.priority !in -100..100 || rule.version < 0) throw TeamFailure("invalid_route", 400, "Provide a model pattern and one to four explicit subscription targets.")
+            !Regex("[a-zA-Z0-9*._:/-]{1,120}").matches(rule.pattern) || rule.targets.size !in 1..4 ||
+            rule.targets.any { it.provider !in PROVIDERS || it.model?.let { model -> !Regex("[a-zA-Z0-9_.:/-]{1,120}").matches(model) } == true } ||
+            rule.priority !in -100..100 || rule.version < 0) throw TeamFailure("invalid_route", 400, "Provide a model pattern and one to four explicit provider targets.")
     }
     fun resolve(rules: List<RouteRule>, model: String, protocol: WireProtocol): List<RouteTarget> {
         val rule = rules.filter { it.enabled }.sortedWith(compareByDescending<RouteRule> { it.priority }.thenBy { it.id }).firstOrNull {

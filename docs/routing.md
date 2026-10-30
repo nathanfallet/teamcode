@@ -4,6 +4,8 @@ Routes are administrator-owned team configuration, stored in MySQL and shared by
 
 The first enabled rule, sorted by descending priority and then ID, wins. Targets are explicit and are not recursively resolved through other rules. With no matching rule, Messages uses Anthropic and Responses uses Codex. No fallback is installed automatically.
 
+`openrouter` is a third provider, for pay-as-you-go models behind a team API key: see [OpenRouter models](openrouter.md).
+
 Examples (verify exact model availability for your accounts):
 
 | Requested model pattern | Ordered targets |

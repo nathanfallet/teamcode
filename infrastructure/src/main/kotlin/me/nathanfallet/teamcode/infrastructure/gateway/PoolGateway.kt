@@ -48,7 +48,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         }
         val body = try { Json.parseToJsonElement(request.body.decodeToString()).jsonObject } catch (_: IllegalArgumentException) { throw TeamFailure("invalid_request", 400, "Invalid Messages request.") }
         val model = (body["model"] as? JsonPrimitive)?.contentOrNull ?: throw TeamFailure("invalid_model", 400, "A model is required.")
-        if (!Regex("[a-zA-Z0-9_.-]{1,120}").matches(model)) throw TeamFailure("unsupported_model", 400, "Use an explicit model identifier or configured alias.")
+        if (!Regex("[a-zA-Z0-9_.:/-]{1,120}").matches(model)) throw TeamFailure("unsupported_model", 400, "Use an explicit model identifier or configured alias.")
         val outputConfig = body[if (request.protocol == WireProtocol.MESSAGES) "output_config" else "reasoning"] as? JsonObject
         val effortValue = outputConfig?.get("effort")
         val effort = (effortValue as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -205,8 +205,12 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                             val exhausted = status == 429 && (spent.isNotEmpty() || admission.isQuotaExhausted(reservation.account.id, model))
                             if ((status == 429 && !exhausted) || status >= 500 || status == 401 || status == 403) admission.coolDown(reservation.account.id, now + retry * 1000, reconnect = status == 401)
                             if (status in setOf(401, 403, 429)) throw SafeRetry(TeamFailure("pool_unavailable", 429, "Configured subscriptions are unavailable or rate-limited. Retry shortly."))
-                            val publicStatus = if (status in setOf(400, 413, 429)) status else 502
-                            val publicError = if (status == 429) "The selected subscription is rate-limited. Retry after the indicated delay." else "The provider rejected this request. Check the model and account status."
+                            val publicStatus = if (status in setOf(400, 402, 413, 429)) status else 502
+                            val publicError = when (status) {
+                                429 -> "The selected subscription is rate-limited. Retry after the indicated delay."
+                                402 -> "The provider account has no credit left. Ask an administrator to add credit to it or to raise its limit."
+                                else -> "The provider rejected this request. Check the model and account status."
+                            }
                             val type = InferenceErrors.type(request.protocol, publicStatus, "upstream_error")
                             val error = (if (request.protocol == WireProtocol.MESSAGES) buildJsonObject { put("type", "error"); putJsonObject("error") { put("type", type); put("message", publicError) } }
                                 else buildJsonObject { putJsonObject("error") { put("type", type); put("code", "upstream_error"); put("message", publicError); put("param", JsonNull) } }).toString().toByteArray()

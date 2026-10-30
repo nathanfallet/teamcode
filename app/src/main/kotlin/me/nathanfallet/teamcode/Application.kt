@@ -19,6 +19,8 @@ import me.nathanfallet.teamcode.infrastructure.gateway.PoolGateway
 import me.nathanfallet.teamcode.infrastructure.gateway.QuotaMonitor
 import me.nathanfallet.teamcode.infrastructure.providers.ClaudeTransport
 import me.nathanfallet.teamcode.infrastructure.providers.CodexTransport
+import me.nathanfallet.teamcode.infrastructure.providers.OpenRouterAccountVerifier
+import me.nathanfallet.teamcode.infrastructure.providers.OpenRouterTransport
 import me.nathanfallet.teamcode.infrastructure.providers.CodexAccountVerifier
 import me.nathanfallet.teamcode.infrastructure.database.SqlAccountStore
 import me.nathanfallet.teamcode.infrastructure.providers.ClaudeAccountVerifier
@@ -55,15 +57,15 @@ fun main() {
     val encryptionKey = database?.let { Base64.getDecoder().decode(requireNotNull(System.getenv("TEAMCODE_ENCRYPTION_KEY")) { "Set TEAMCODE_ENCRYPTION_KEY to a base64-encoded 32-byte key." }) }
     val cipher = encryptionKey?.let { CredentialCipher(it) }
     val accountStore = database?.let { SqlAccountStore(it, cipher!!) }
-    val accounts = accountStore?.let { AccountManagement(it, ClaudeAccountVerifier(providerHttp), mapOf("codex" to CodexAccountVerifier(providerHttp))) }
+    val accounts = accountStore?.let { AccountManagement(it, ClaudeAccountVerifier(providerHttp), mapOf("codex" to CodexAccountVerifier(providerHttp), "openrouter" to OpenRouterAccountVerifier(providerHttp))) }
     val admission = database?.let { SqlAdmissionStore(it) }
     val modelPolicies = database?.let { SqlModelPolicyStore(it) }
     val routes = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlRoutingStore(it) }
     val directives = database?.let { SqlDirectiveService(it) }
     val pacingSettings = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlPacingSettingsStore(it) }
     val forecasts = database?.let { me.nathanfallet.teamcode.infrastructure.database.ForecastServiceImpl(it) }
-    val transports = listOf(ClaudeTransport(providerHttp), CodexTransport(providerHttp))
-    val emailBackfill = accountStore?.let { AccountEmailBackfill(transports, mapOf("anthropic" to ClaudeAccountVerifier(providerHttp), "codex" to CodexAccountVerifier(providerHttp)), it) }
+    val transports = listOf(ClaudeTransport(providerHttp), CodexTransport(providerHttp), OpenRouterTransport(providerHttp))
+    val emailBackfill = accountStore?.let { AccountEmailBackfill(transports, mapOf("anthropic" to ClaudeAccountVerifier(providerHttp), "codex" to CodexAccountVerifier(providerHttp), "openrouter" to OpenRouterAccountVerifier(providerHttp)), it) }
     val credentialSource = database?.let { SqlCredentialSource(it, cipher!!) { account, token -> emailBackfill?.renew(account, token) ?: transports.single { it.provider == account.identity.provider }.refresh(token) } }
     val cancellationStore = database?.let { SqlRequestCancellationStore(it) }
     val cancellation = cancellationStore?.let { RequestCancellationService(it) }

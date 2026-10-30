@@ -16,6 +16,7 @@ import me.nathanfallet.teamcode.infrastructure.fixtures.FixtureGatewayService
 import me.nathanfallet.teamcode.infrastructure.gateway.*
 import me.nathanfallet.teamcode.infrastructure.providers.ClaudeTransport
 import me.nathanfallet.teamcode.infrastructure.providers.CodexTransport
+import me.nathanfallet.teamcode.infrastructure.providers.OpenRouterTransport
 import kotlin.test.*
 import me.nathanfallet.teamcode.domain.routing.*
 import kotlinx.serialization.json.*
@@ -298,6 +299,51 @@ class PoolGatewayTest {
             assertEquals(events, output.toString())
             assertEquals(20, store.settled)
             assertEquals("codex", store.selectedProvider)
+        }
+    }
+    private val openPolicy = object : ModelPolicyStore {
+        override suspend fun get(teamId: String) = ModelPolicy(allowedModels = listOf("*"), deniedModels = emptyList())
+        override suspend fun save(actor: Principal, policy: ModelPolicy) = policy
+    }
+    @Test fun aMessagesRequestRoutedToOpenRouterKeepsItsSlashedModelAndLeavesNoClientMetadata() = runBlocking {
+        val store = FakeAdmission(account)
+        var seen: JsonObject? = null
+        var path = ""; var host = ""; var authorization: String? = null
+        val http = HttpClient(MockEngine { req ->
+            host = req.url.host; path = req.url.encodedPath; authorization = req.headers[HttpHeaders.Authorization]
+            seen = Json.parseToJsonElement((req.body as TextContent).text).jsonObject
+            respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }
+        http.use {
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(it), OpenRouterTransport(it)), openPolicy, routes(RouteTarget("openrouter")))
+            val body = """{"model":"google/gemini-3-pro:free","stream":true,"max_tokens":100,"metadata":{"user_id":"device-and-session"},"messages":[{"role":"user","content":"Hello"}]}"""
+            gateway.forward(request().copy(body = body.toByteArray())) { head, chunks ->
+                assertEquals("openrouter", head.headers["x-teamcode-provider"])
+                assertEquals("google/gemini-3-pro:free", head.headers["x-teamcode-model"])
+                chunks.collect { }
+            }
+        }
+        assertEquals("openrouter", store.selectedProvider)
+        assertEquals("openrouter.ai", host); assertEquals("/api/v1/messages", path)
+        assertEquals("Bearer provider-secret", authorization)
+        assertEquals("google/gemini-3-pro:free", seen!!["model"]!!.jsonPrimitive.content)
+        assertFalse(seen!!.containsKey("metadata"), "Claude Code's device and session identity is not forwarded to a third party")
+        assertEquals("openrouter", store.usages.single()!!.provider, "Tokens enter the ledger under openrouter, where an administrator can price them")
+    }
+    @Test fun anOpenRouterOutOfCreditAnswerReachesTheCallerAsABillingErrorAndNothingElseIsTried() = runBlocking {
+        val store = FakeAdmission(account)
+        val hosts = mutableListOf<String>()
+        val http = HttpClient(MockEngine { req -> hosts += req.url.host; respond("""{"error":{"message":"Insufficient credits sk-or-v1-secret"}}""", HttpStatusCode.PaymentRequired) }) { install(HttpTimeout) }
+        http.use {
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(it), OpenRouterTransport(it)), openPolicy, routes(RouteTarget("openrouter")))
+            val body = """{"model":"deepseek/deepseek-chat","stream":true,"max_tokens":100,"messages":[{"role":"user","content":"Hello"}]}"""
+            var status = 0; val output = StringBuilder()
+            gateway.forward(request().copy(body = body.toByteArray())) { head, chunks -> status = head.status; chunks.collect { c -> output.append(c.decodeToString()) } }
+            assertEquals(402, status)
+            assertTrue(output.contains("billing_error") && output.contains("no credit left"))
+            assertFalse(output.contains("secret"), "The provider's own text is never relayed")
+            assertEquals(listOf("openrouter.ai"), hosts)
+            assertTrue(store.charges.all { it == 0L }, "A refused request costs the member nothing")
         }
     }
     private fun routes(vararg targets: RouteTarget) = object : RoutingStore {
