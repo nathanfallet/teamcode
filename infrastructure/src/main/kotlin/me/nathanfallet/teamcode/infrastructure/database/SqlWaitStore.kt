@@ -55,6 +55,14 @@ class SqlWaitStore(private val database: Database) : WaitStore {
 
     override suspend fun find(teamId: String, id: String): Wait? = database.query { read(teamId, id) ?: sessionWait(teamId, id) }
 
+    /** Several waits in one read (a workflow pass follows the waits of all its runs). Unknown ids are left out. */
+    suspend fun findMany(ids: Set<String>): List<Wait> = database.query {
+        if (ids.isEmpty()) return@query emptyList()
+        val rows = Waits.selectAll().where { Waits.id inList ids }.toList()
+        val names = names(rows.map { it[Waits.assigneeId] }.toSet(), rows.map { it[Waits.sessionId] }.toSet())
+        rows.map { wait(it, names) }
+    }
+
     override suspend fun list(teamId: String, query: WaitQuery): WaitPage = database.query {
         val cursor = query.before?.let { id ->
             Waits.select(Waits.createdAt).where { (Waits.id eq id) and (Waits.teamId eq teamId) }.singleOrNull()?.get(Waits.createdAt)

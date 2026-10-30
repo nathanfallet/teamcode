@@ -30,6 +30,8 @@ data class WorkflowRun(
     val starterId: String, val status: RunStatus, val inputs: Map<String, String>, val profileId: String?, val sessionId: String?, val depth: Int,
     val parentRunId: String?, val parentVisitId: String?, val cancelRequested: Boolean, val failure: String?, val output: String?,
     val createdAt: Long, val updatedAt: Long, val finishedAt: Long?,
+    /** The server-held token the run acts with; set by the store, never shown. */
+    val credentialId: String? = null,
 )
 
 /** A run with its visits in order: what one step of the engine reads. */
@@ -37,7 +39,7 @@ data class RunWork(val run: WorkflowRun, val visits: List<NodeVisit>) {
     val active get() = visits.lastOrNull { it.status == VisitStatus.ACTIVE }
 }
 
-data class RunPage(val runs: List<WorkflowRun>, val nextBefore: String?)
+data class WorkflowRunPage(val runs: List<WorkflowRun>, val nextBefore: String?)
 data class RunChange(val run: WorkflowRun, val created: Boolean)
 
 /** What the engine needs of a child run. */
@@ -56,13 +58,15 @@ interface WorkflowRunStore {
     suspend fun find(teamId: String, id: String): WorkflowRun?
     suspend fun visits(runId: String): List<NodeVisit>
     /** By keyset, newest first. [starterId] null: the whole team. */
-    suspend fun list(teamId: String, starterId: String?, workflowId: String?, status: RunStatus?, before: String?, limit: Int): RunPage
+    suspend fun list(teamId: String, starterId: String?, workflowId: String?, status: RunStatus?, before: String?, limit: Int): WorkflowRunPage
     suspend fun requestCancel(teamId: String, id: String): Boolean
 
     /** The principal a run acts as (its starter), or null when they can no longer act. */
     suspend fun starter(run: WorkflowRun): Principal?
     /** Unfinished runs nobody holds, with their visits; each is held for [leaseMillis]. */
     suspend fun claim(limit: Int, leaseMillis: Long): List<RunWork>
+    /** Lets go of claimed runs so the next pass sees them at once (otherwise their lease would have to run out). */
+    suspend fun release(ids: Collection<String>)
     suspend fun children(ids: Set<String>): Map<String, ChildState>
 
     /** Records that the agent node's instruction reached [sessionId]; [bindRun] also makes it the run's session. */

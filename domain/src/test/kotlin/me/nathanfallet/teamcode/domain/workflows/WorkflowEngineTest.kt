@@ -34,10 +34,12 @@ class WorkflowEngineTest {
         override suspend fun find(teamId: String, id: String) = runs[id]
         override suspend fun visits(runId: String) = visits.values.filter { it.runId == runId }.sortedBy { it.seq }
         override suspend fun list(teamId: String, starterId: String?, workflowId: String?, status: RunStatus?, before: String?, limit: Int) =
-            RunPage(runs.values.filter { (starterId == null || it.starterId == starterId) && (status == null || it.status == status) }.take(limit), null)
+            WorkflowRunPage(runs.values.filter { (starterId == null || it.starterId == starterId) && (status == null || it.status == status) }.take(limit), null)
         override suspend fun requestCancel(teamId: String, id: String): Boolean { val r = runs[id] ?: return false; runs[id] = r.copy(cancelRequested = true); return true }
         override suspend fun starter(run: WorkflowRun) = if (starterGone) null else Principal(Member(run.starterId, run.starterId, Role.MEMBER, false, false), "t", run.teamId)
         override suspend fun claim(limit: Int, leaseMillis: Long) = runs.values.filter { !it.status.terminal }.take(limit).map { RunWork(it, visits(it.id)) }
+        val released = mutableListOf<String>()
+        override suspend fun release(ids: Collection<String>) { released += ids }
         override suspend fun children(ids: Set<String>) = ids.mapNotNull { id -> runs[id]?.let { id to ChildState(it.status, it.output) } }.toMap()
         private fun update(id: String, f: (WorkflowRun) -> WorkflowRun) { runs[id] = f(runs.getValue(id)) }
         override suspend fun dispatched(visitId: String, sessionId: String, bindRun: Boolean, at: Long): Boolean {
@@ -159,6 +161,11 @@ class WorkflowEngineTest {
         assertEquals(RunStatus.SUCCEEDED, run(child.id).status); pass(2)
         assertEquals(RunStatus.SUCCEEDED, run(run.id).status); assertEquals("deployed", run(run.id).output)
         assertNotNull(run(run.id).finishedAt)
+    }
+
+    @Test fun everyClaimedRunIsReleasedAfterThePass() = runBlocking {
+        val run = start("ticket" to "T"); pass()
+        assertEquals(listOf(run.id), store.released)
     }
 
     @Test fun startingChecksInputsProfilesAndTheCap() = runBlocking {
