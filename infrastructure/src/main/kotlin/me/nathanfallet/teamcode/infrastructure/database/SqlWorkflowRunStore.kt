@@ -5,6 +5,7 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 import me.nathanfallet.teamcode.domain.cloud.DesiredState
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.waits.WaitStatus
 import me.nathanfallet.teamcode.domain.workflows.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import me.nathanfallet.teamcode.infrastructure.secrets.Passwords
@@ -81,6 +82,11 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
             (WorkflowVisits.sessionId eq sessionId) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) and (WorkflowVisits.kind eq NodeKind.AGENT.wire) and
                 (WorkflowRuns.teamId eq teamId) and (WorkflowRuns.status inList ACTIVE)
         }.orderBy(WorkflowVisits.seq to SortOrder.DESC).limit(1).singleOrNull()?.let { run(it) to visit(it) }
+    }
+
+    override suspend fun sessionHasOpenWait(sessionId: String): Boolean = database.query {
+        // `wait_session (session_id, status)`: one index entry decides.
+        Waits.select(Waits.id).where { (Waits.sessionId eq sessionId) and (Waits.status eq WaitStatus.OPEN.wire) }.limit(1).any()
     }
 
     override suspend fun sessionOwner(teamId: String, sessionId: String): String? = database.query {

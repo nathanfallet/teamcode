@@ -99,6 +99,28 @@ class WorkflowRunService(private val store: WorkflowRunStore) {
         return finishDelivery(actor, run, visit, output)
     }
 
+    /**
+     * Whether the agent of the step running in a session has to deliver or ask before it stops (the Stop hook of
+     * docs/workflows.md): the session runs an unfinished agent step and holds no open wait. Same credentials and same
+     * resolution as [deliverBySession]; the caller's own session that runs no step answers `needsAction = false`, any
+     * other session is a 404. Two reads on a step, one more for the open wait, one more on none.
+     */
+    suspend fun pendingBySession(actor: Principal, sessionId: String?): PendingDelivery {
+        actor.requireWorkflowDeliver(); store.revalidate(actor)
+        val session = if (actor.workflowSessionOnly)
+            store.executionSession(actor.tokenId) ?: throw TeamFailure("credential_scope", 403, "This credential is not bound to a cloud session.")
+        else sessionId ?: throw TeamFailure("invalid_request", 400, "Name the session.")
+        val found = store.runOfSession(actor.teamId, session)
+        if (found == null || found.first.starterId != actor.member.id) {
+            if (found == null && store.sessionOwner(actor.teamId, session) == actor.member.id) return PendingDelivery(false)
+            throw TeamFailure("not_found", 404, "Session not found.")
+        }
+        val (run, visit) = found
+        if (run.status.terminal || visit.kind != NodeKind.AGENT || visit.sessionId == null || store.sessionHasOpenWait(session)) return PendingDelivery(false)
+        val node = run.definition.nodes.first { it.id == visit.nodeId }
+        return PendingDelivery(true, run.id, node.title, node.deliverable)
+    }
+
     private suspend fun finishDelivery(actor: Principal, run: WorkflowRun, visit: NodeVisit, output: JsonElement): WorkflowRun {
         if (run.status.terminal || visit.kind != NodeKind.AGENT || visit.sessionId == null)
             throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")

@@ -73,6 +73,8 @@ class WorkflowRunRoutesTest {
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun executionSession(tokenId: String) = mapOf("exec-token" to "s1", "exec-9" to "s9")[tokenId]
         override suspend fun runOfSession(teamId: String, sessionId: String) = (run to visit).takeIf { sessionId == "s1" && visit.status == VisitStatus.ACTIVE }
+        var openWait = false
+        override suspend fun sessionHasOpenWait(sessionId: String) = openWait && sessionId == "s1"
         override suspend fun sessionOwner(teamId: String, sessionId: String) = mapOf("s1" to "admin-id", "s9" to "admin-id", "s8" to "someone-else")[sessionId]
         override suspend fun complete(visitId: String, status: VisitStatus, outcome: String?, output: String?, at: Long): Boolean {
             if (visit.status != VisitStatus.ACTIVE) return false
@@ -122,6 +124,44 @@ class WorkflowRunRoutesTest {
         assertEquals("r1", Serialization.json.decodeFromString<WorkflowRunView>(delivered.bodyAsText()).id)
         assertEquals("all done", store.visit.output)
         assertEquals("nothing_to_deliver", code(call(path, "writer", """{"sessionId":"s1","output":"again"}""")), "a second delivery finds the step done")
+    }
+
+    @Test fun theStopHookAsksWhetherTheAgentHasToDeliverOrAsk() = testApplication {
+        val store = Delivering()
+        val team = FakeTeam().let { interactive ->
+            object : TeamService by interactive {
+                override suspend fun authenticate(token: String): Principal? = when (token) {
+                    "exec-token", "exec-9" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION))
+                    "exec-old" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.ARTIFACTS_WRITE))
+                    "writer" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.CLOUD_WRITE))
+                    "reader" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.CLOUD_READ))
+                    else -> interactive.authenticate(token)
+                }
+            }
+        }
+        application { configureGateway(gateway, team = team, workflows = WorkflowService(object : WorkflowStore by unsupported() {}), workflowRuns = WorkflowRunService(store)) }
+        suspend fun get(path: String, token: String) = client.get(path) { bearerAuth(token) }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        val path = "/api/v1/workflows/session/pending"
+        // The execution credential of s1 asks without naming the session, then naming another: still its own.
+        val pending = Serialization.json.decodeFromString<WorkflowSessionPendingView>(get(path, "exec-token").bodyAsText())
+        assertEquals(WorkflowSessionPendingView(true, "r1", "Ship", WorkflowPendingDeliverableView("text")), pending)
+        assertTrue(Serialization.json.decodeFromString<WorkflowSessionPendingView>(get("$path?sessionId=s9", "exec-token").bodyAsText()).needsAction)
+        assertTrue(Serialization.json.decodeFromString<WorkflowSessionPendingView>(get("$path?sessionId=s1", "writer").bodyAsText()).needsAction)
+        // An open wait: not pending. A session of hers without a step: not pending. Another member's, unknown or malformed: 404.
+        store.openWait = true
+        assertEquals(WorkflowSessionPendingView(false), Serialization.json.decodeFromString<WorkflowSessionPendingView>(get(path, "exec-token").bodyAsText()))
+        store.openWait = false
+        assertEquals(WorkflowSessionPendingView(false), Serialization.json.decodeFromString<WorkflowSessionPendingView>(get("$path?sessionId=s9", "writer").bodyAsText()))
+        assertEquals("not_found", code(get("$path?sessionId=s8", "writer")))
+        assertEquals("not_found", code(get("$path?sessionId=../x", "writer")))
+        assertEquals("invalid_request", code(get(path, "writer")))
+        // Same credentials as the delivery.
+        assertEquals("credential_scope", code(get("$path?sessionId=s1", "reader")))
+        assertEquals("credential_scope", code(get(path, "exec-old")))
+        assertEquals(HttpStatusCode.Unauthorized, client.get(path).status)
+        // Read-only: nothing was delivered.
+        assertEquals(VisitStatus.ACTIVE, store.visit.status)
     }
 
     private fun unsupportedRuns(): WorkflowRunStore = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(WorkflowRunStore::class.java)) { _, method, _ ->

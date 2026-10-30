@@ -427,10 +427,13 @@ internal class AgentHost(
         val endpoint = inference?.invoke() ?: return base to owner + AGENT_ENVIRONMENT
         val servers = tools?.prepare(kind).orEmpty()
         // Team hooks run in Claude Code sessions only; their settings go first, away from the variadic --mcp-config.
-        val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" })?.let { listOf("--settings", it) }.orEmpty()
+        val workflow = tools?.workflow()
+        // A workflow step's agent is sent back to work once if it stops having neither delivered nor asked (Claude Code only: see [WorkflowStop]).
+        val workflowStop = workflow?.takeIf { kind == "claude" }?.let { WorkflowStop.hookCommand(it.command, endpoint.port, it.sessionId, endpoint.runId) }
+        val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" }, workflowStop = workflowStop)?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
-            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = tools?.workflow(), identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
+            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
         return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 

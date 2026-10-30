@@ -38,6 +38,8 @@ class WorkflowEngineTest {
             val visit = visits.values.filter { it.sessionId == sessionId && it.status == VisitStatus.ACTIVE && it.kind == NodeKind.AGENT }.maxByOrNull { it.seq } ?: return null
             return runs.getValue(visit.runId).takeIf { !it.status.terminal }?.let { it to visit }
         }
+        val openWaits = mutableSetOf<String>()
+        override suspend fun sessionHasOpenWait(sessionId: String) = sessionId in openWaits
         /** Sessions of the fixture: s1 and s9 are ada's, s8 is bob's. */
         override suspend fun sessionOwner(teamId: String, sessionId: String) = mapOf("s1" to "ada", "s9" to "ada", "s8" to "bob")[sessionId]
         override suspend fun visits(runId: String) = visits.values.filter { it.runId == runId }.sortedBy { it.seq }
@@ -318,6 +320,32 @@ class WorkflowEngineTest {
         service.deliverBySession(execution, "s8", JsonPrimitive("plan-1"))
         assertEquals(VisitStatus.DONE, visits(run).single().status); assertEquals("plan-1", visits(run).single().output)
         assertEquals("nothing_to_deliver", code { service.deliverBySession(execution, null, JsonPrimitive("plan-1")) })
+    }
+
+    @Test fun theStopHookAsksWhetherTheAgentStillHasToDeliverOrAsk() = runBlocking {
+        val execution = who(ada, setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION)).copy(tokenId = "tcex-1")
+        store.executions["tcex-1"] = "s1"
+        val run = start("ticket" to "T-42"); pass()
+        val pending = service.pendingBySession(execution, "s8")
+        assertTrue(pending.needsAction); assertEquals(run.id, pending.runId); assertEquals("Analyze", pending.nodeTitle); assertEquals(DeliverableType.ARTIFACT, pending.deliverable?.type)
+        assertTrue(service.pendingBySession(who(ada), "s1").needsAction, "the starter names the session")
+        // An open wait of any kind (the agent asked a person) is not pending, whatever the credential.
+        store.openWaits += "s1"
+        assertFalse(service.pendingBySession(execution, null).needsAction)
+        assertEquals(PendingDelivery(false), service.pendingBySession(who(ada), "s1"))
+        store.openWaits -= "s1"
+        // Another member's session, an unknown one and another member's key look the same; her own session without a step has nothing pending.
+        assertEquals("not_found", code { service.pendingBySession(who(bob), "s1") })
+        assertEquals("not_found", code { service.pendingBySession(who(ada), "s8") })
+        assertEquals("not_found", code { service.pendingBySession(who(ada), "nope") })
+        assertEquals("invalid_request", code { service.pendingBySession(who(ada), null) })
+        assertEquals(PendingDelivery(false), service.pendingBySession(who(ada), "s9"))
+        // Same credentials as the delivery: a reader and a scope without a session are refused.
+        assertEquals("credential_scope", code { service.pendingBySession(who(ada, setOf(ServiceScope.CLOUD_READ)), "s1") })
+        assertEquals("credential_scope", code { service.pendingBySession(who(ada, setOf(ServiceScope.WORKFLOW_SESSION)).copy(tokenId = "ci-key"), "s1") })
+        // Delivered: nothing is pending any more.
+        service.deliverBySession(execution, null, JsonPrimitive("plan-1"))
+        assertFalse(service.pendingBySession(execution, null).needsAction)
     }
 
     @Test fun anExecutionCredentialDeliversOnlyForItsSessionAndDoesNothingElse() = runBlocking {

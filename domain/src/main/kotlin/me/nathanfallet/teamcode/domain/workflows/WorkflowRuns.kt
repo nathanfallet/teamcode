@@ -45,6 +45,9 @@ data class RunChange(val run: WorkflowRun, val created: Boolean)
 /** What the engine needs of a child run. */
 data class ChildState(val status: RunStatus, val output: String?)
 
+/** What [WorkflowRunService.pendingBySession] answers: [needsAction] is true when the session's agent step still has to be delivered or asked about. */
+data class PendingDelivery(val needsAction: Boolean, val runId: String? = null, val nodeTitle: String? = null, val deliverable: Deliverable? = null)
+
 interface WorkflowRunStore {
     suspend fun now(): Long
     suspend fun revalidate(actor: Principal)
@@ -63,6 +66,8 @@ interface WorkflowRunStore {
      * when none. One indexed read on the visit's session.
      */
     suspend fun runOfSession(teamId: String, sessionId: String): Pair<WorkflowRun, NodeVisit>?
+    /** Whether the session holds an open stored wait, of any kind: one `exists` on `waits (session_id, status)`. A session's own permission request is not a stored wait. */
+    suspend fun sessionHasOpenWait(sessionId: String): Boolean
     /** The member who owns the cloud session, or null when it does not exist in the team. */
     suspend fun sessionOwner(teamId: String, sessionId: String): String?
     suspend fun visits(runId: String): List<NodeVisit>

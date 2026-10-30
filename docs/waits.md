@@ -19,7 +19,7 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | Waits for a time or an event (`resolver` `time` / `event`) | Contract only: refused with `422 not_available_yet` |
 | Secret fields | Contract only: refused with `422 not_available_yet` |
 | `turn_failed`: when a session's turn ends in an error, the server asks its owner to try again or dismiss ([below](#failed-turns)) | Implemented |
-| Stop hook that requires an agent to deliver or ask | Planned |
+| Stop hook that requires an agent to deliver or ask | Implemented for the agent of a **workflow step** only, Claude Code in remote and Kubernetes cloud sessions: the first stop with neither a delivery nor an open wait is sent back with an instruction to call `deliver` or `ask_human` ([workflows](workflows.md#stop-hook)). Not for an ordinary session: a plain session that has waits is never forced to ask. Not for Codex |
 | Notifications when a wait is created | Out of scope; the hook point is `WaitService.create` |
 
 ## Model
@@ -144,4 +144,4 @@ The answer comes back as a message of the session, described in [Waking the sess
 
 ## What is planned
 
-The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server (done) and the waking of sessions, then the Stop hook (`turn_failed` is done), then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page.
+The order of work: the server (store, routes, capability), then the apps (companion section, CLI), then the MCP server (done) and the waking of sessions, then the Stop hook (`turn_failed` is done; the workflow-step hook is done, an ordinary session's is not planned), then waits that resolve on their own (a time, a CI), then workflows built on the same engine. Each step updates this page.

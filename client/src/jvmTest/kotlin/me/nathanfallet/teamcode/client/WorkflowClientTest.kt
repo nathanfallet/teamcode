@@ -75,6 +75,17 @@ class WorkflowClientTest {
             client.deliverWorkflowSession(null, JsonPrimitive("x")); assertNull(body(requests.last())["sessionId"])
             assertFailsWith<IllegalArgumentException> { client.deliverWorkflowSession("not an id", JsonPrimitive("x")) }
         }
+        client { respond("""{"needsAction":true,"runId":"r1","nodeTitle":"Analyze","deliverable":{"type":"url","domain":"github.com"}}""", HttpStatusCode.OK, json) }.use { client ->
+            val pending = client.pendingWorkflowSession("s1")
+            assertEquals(HttpMethod.Get, requests.last().method); assertEquals("/api/v1/workflows/session/pending", requests.last().url.encodedPath)
+            assertEquals("s1", requests.last().url.parameters["sessionId"])
+            assertTrue(pending.needsAction); assertEquals("r1", pending.runId); assertEquals("Analyze", pending.nodeTitle); assertEquals("github.com", pending.deliverable?.domain)
+            client.pendingWorkflowSession(null); assertNull(requests.last().url.parameters["sessionId"])
+            assertFailsWith<IllegalArgumentException> { client.pendingWorkflowSession("not an id") }
+        }
+        client { respond("""{"needsAction":false}""", HttpStatusCode.OK, json) }.use { client ->
+            assertEquals(WorkflowSessionPendingView(false), client.pendingWorkflowSession("s1"))
+        }
         client { respond("""{"runs":[$run],"nextBefore":"r1"}""", HttpStatusCode.OK, json) }.use { client ->
             val page = client.workflowRuns(workflow = "wf1", status = "waiting", limit = 10)
             assertEquals("r1", page.nextBefore)

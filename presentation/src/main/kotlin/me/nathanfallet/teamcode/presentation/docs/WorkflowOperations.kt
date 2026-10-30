@@ -139,6 +139,20 @@ internal fun ApiCatalog.workflowOperations() {
             conflict("The run waits for no delivery (`nothing_to_deliver`).")
         }
     }
+    get("/api/v1/workflows/session/pending") {
+        operationId = "pendingWorkflowSession"; tag(ApiTags.WORKFLOWS)
+        summary = "Whether the step running in a session still has to deliver or ask"
+        description = "What the Stop hook of a workflow step asks (`teamcode cloud workflow-stop`). `needsAction` is true when the session has an unfinished run whose latest active step is an agent step " +
+            "bound to it and the session holds no open wait; then `runId`, `nodeTitle` and `deliverable` (`type`, and `domain` for a `url`) name what is expected. Same credentials and session " +
+            "resolution as `deliverWorkflowSession`: the run's starter names `sessionId`, an execution credential carrying `workflow:session` is confined to its own session. " +
+            "A session of the caller that runs no step answers `needsAction: false`; an unknown session or another member's is `not_found`."
+        parameters { queryText("sessionId", "The session (the run's starter names it; an execution credential's own session is used whatever it says).") }
+        responses {
+            ok<WorkflowSessionPendingView>("Whether the agent has to deliver or ask.")
+            badRequest("The session is not named (`invalid_request`).")
+            notFound("No such session of the caller (`not_found`).")
+        }
+    }
     post("/api/v1/workflows/session/deliver") {
         operationId = "deliverWorkflowSession"; tag(ApiTags.WORKFLOWS)
         summary = "Deliver what the step running in a session was asked for"

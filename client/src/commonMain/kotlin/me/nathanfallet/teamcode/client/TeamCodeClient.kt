@@ -440,10 +440,10 @@ class TeamCodeClient(
 
     /**
      * Relays one delivery received by the local proxy (`teamcode mcp workflow`), with this client's credential: only
-     * `/api/v1/workflows/session/deliver` (the proxy narrows it to a POST), and a small bounded answer.
+     * `/api/v1/workflows/session/deliver` (the proxy narrows each to its method: the delivery, and the Stop hook's question), and a small bounded answer.
      */
     suspend fun forwardWorkflow(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
-        require(path == "/api/v1/workflows/session/deliver") { "Only the workflow delivery is relayed." }
+        require(path == "/api/v1/workflows/session/deliver" || path == "/api/v1/workflows/session/pending") { "Only the workflow delivery is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), WORKFLOW_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
 
@@ -857,6 +857,14 @@ class TeamCodeClient(
      */
     suspend fun deliverWorkflowSession(sessionId: String?, output: JsonElement): WorkflowRunView {
         sessionId?.let(::identifier); return coded(HttpMethod.Post, "/api/v1/workflows/session/deliver", DeliverSessionRequest(sessionId, output))
+    }
+    /**
+     * Whether the agent of the step running in [sessionId] still has to deliver or ask a person (the Stop hook of a workflow
+     * step). The run's starter names the session; an execution credential is confined to its own.
+     */
+    suspend fun pendingWorkflowSession(sessionId: String?): WorkflowSessionPendingView {
+        sessionId?.let(::identifier)
+        return coded(HttpMethod.Get, "/api/v1/workflows/session/pending", null as Unit?) { url { sessionId?.let { parameters.append("sessionId", it) } } }
     }
     /**
      * Whether this credential may deliver by session, asked without delivering: an empty body is refused as `400 invalid_body`
