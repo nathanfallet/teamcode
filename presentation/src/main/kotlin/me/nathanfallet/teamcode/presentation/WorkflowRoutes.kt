@@ -115,6 +115,11 @@ private fun Route.workflowRunRoutes(runs: WorkflowRunService) {
         val input = call.jsonBody<DeliverRequest>(RUN_BYTES)
         call.respond(runs.deliver(call.principal, call.workflowId(), input.output).view())
     }
+    get("/session/pending") {
+        val sessionId = call.request.queryParameters["sessionId"]?.also { if (!workflowId.matches(it)) throw TeamFailure("not_found", 404, "Session not found.") }
+        val pending = runs.pendingBySession(call.principal, sessionId)
+        call.respond(WorkflowSessionPendingView(pending.needsAction, pending.runId, pending.nodeTitle, pending.deliverable?.let { WorkflowPendingDeliverableView(it.type.wire, it.domain) }))
+    }
     post("/session/deliver") {
         val input = call.jsonBody<DeliverSessionRequest>(RUN_BYTES)
         call.respond(runs.deliverBySession(call.principal, input.sessionId?.also { if (!workflowId.matches(it)) throw TeamFailure("not_found", 404, "Session not found.") }, input.output).let { it.view() })

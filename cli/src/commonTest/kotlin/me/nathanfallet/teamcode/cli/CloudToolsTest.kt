@@ -204,6 +204,31 @@ class CloudToolsTest {
         assertTrue("--settings" !in codex.arguments)
     }
 
+    @Test fun aWorkflowStepsClaudeAgentGetsTheDeliverOrAskStopHookBesideTheOthersAndCodexGetsNone() = runTest {
+        val local = "l".repeat(64)
+        val run = "11111111-2222-4333-8444-555555555555"
+        val hook = CloudHook("stop-guard", HookDefinitionView(listOf("Stop"), command = "bin/guard.sh", timeoutSeconds = 30))
+        fun tools(withWorkflow: Boolean) = object : AgentTools {
+            override suspend fun prepare(agent: String) = emptyList<String>()
+            override suspend fun hooks(agent: String) = if (agent == "claude") listOf(hook) else emptyList()
+            override suspend fun workflow() = if (withWorkflow) me.nathanfallet.teamcode.cli.launch.WorkflowMcp("/opt/teamcode/teamcode", "s-1") else null
+        }
+        fun stops(command: AgentCommand) = Json.parseToJsonElement(command.arguments[1]).jsonObject["hooks"]!!.jsonObject["Stop"]!!.jsonArray
+            .map { it.jsonObject["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content }
+        val (claude, environment) = assertNotNull(started("claude", AgentInferenceEndpoint(41234, local, run), tools(true)))
+        assertEquals("--settings", claude.arguments[0])
+        assertEquals(listOf("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'", "'/opt/teamcode/teamcode' cloud workflow-stop --relay http://127.0.0.1:41234 --session s-1 --run $run"), stops(claude),
+            "the team's hook stays and the workflow hook is one more entry")
+        assertFalse(claude.arguments.joinToString().contains(local), "The token is on no command line: the hook reads it from the agent's environment")
+        assertEquals(local, environment["TEAMCODE_MCP_TOKEN"])
+        // Without the tool (an older server, no probe): the Stop list is the team's alone.
+        assertEquals(listOf("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'"), stops(assertNotNull(started("claude", AgentInferenceEndpoint(41234, local, run), tools(false))).first))
+        // Codex has no such hook here: it gets the tool, no --settings and no Stop entry.
+        val (codex, _) = assertNotNull(started("codex", AgentInferenceEndpoint(41234, local, run), tools(true)))
+        assertTrue("--settings" !in codex.arguments); assertFalse(codex.arguments.any { "workflow-stop" in it })
+        assertTrue(codex.arguments.any { it.startsWith("mcp_servers.teamcode_workflow=") })
+    }
+
     @Test fun teamMcpServersAreConnectedThroughTheProxyForBothAgents() = runTest {
         val local = "l".repeat(64)
         val calls = mutableListOf<String>()

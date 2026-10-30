@@ -97,7 +97,7 @@ class WorkflowMcpServerTest {
         val seen = mutableListOf<String>()
         val sdk = TeamCodeClient("https://team.example", { "owner-credential" }) { config -> HttpClient(MockEngine { request ->
             assertEquals("Bearer owner-credential", request.headers[HttpHeaders.Authorization], "The local token is replaced by the proxy's credential")
-            seen += "${request.method.value} ${request.url.encodedPath}"
+            seen += "${request.method.value} ${request.url.encodedPath}" + (request.url.encodedQuery.takeIf { it.isNotEmpty() }?.let { "?$it" } ?: "")
             respond(run, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
         }) { config(this) } }
         application { localProxy(sdk, localToken) }
@@ -117,6 +117,10 @@ class WorkflowMcpServerTest {
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "/api/v1/workflows/wf1/runs").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/workflows/runs").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/workflows/session/deliver").status)
+            assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "/api/v1/workflows/session/pending").status, "the question is a read, never a write")
+            assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/workflows/session/pending/extra").status)
+            assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/workflows/session/pending/../../runs").status)
+            assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/workflows/session").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Put, "/api/v1/workflows/session/deliver").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "/api/v1/workflows/session/deliver/../../runs/r1/cancel").status)
             assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "/api/v1/workflows/session/other").status)
@@ -125,7 +129,14 @@ class WorkflowMcpServerTest {
             assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/workflows/session/deliver", origin = "https://evil.example").status)
             assertEquals(HttpStatusCode.PayloadTooLarge, call(HttpMethod.Post, "/api/v1/workflows/session/deliver", body = "{\"output\":\"" + "x".repeat(2 * 1024 * 1024) + "\"}").status)
             assertEquals(1, seen.size, "Refused calls never reach the server")
-            assertEquals(1, WORKFLOW_RELAY_ROUTES.values.flatten().size)
+            // The Stop hook's question is relayed, with its query, and is the only other call.
+            val pending = call(HttpMethod.Get, "/api/v1/workflows/session/pending?sessionId=$session")
+            assertEquals(HttpStatusCode.OK, pending.status); assertEquals("no-store", pending.headers[HttpHeaders.CacheControl])
+            assertEquals(listOf("POST /api/v1/workflows/session/deliver", "GET /api/v1/workflows/session/pending?sessionId=$session"), seen)
+            assertEquals(HttpStatusCode.Unauthorized, call(HttpMethod.Get, "/api/v1/workflows/session/pending", token = null).status)
+            assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/workflows/session/pending", origin = "https://evil.example").status)
+            assertEquals(2, seen.size)
+            assertEquals(mapOf(HttpMethod.Get to 1, HttpMethod.Post to 1), WORKFLOW_RELAY_ROUTES.mapValues { it.value.size })
         } finally { sdk.close() }
     }
 

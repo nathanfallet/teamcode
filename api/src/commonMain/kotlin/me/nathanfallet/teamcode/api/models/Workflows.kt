@@ -161,5 +161,13 @@ data class DeliverRequest(val output: JsonElement)
 @Serializable
 data class DeliverSessionRequest(val sessionId: String? = null, val output: JsonElement)
 
+/** What `GET /workflows/session/pending` answers: [needsAction] is true while the session's agent step has been neither delivered nor asked about. The rest names the step for the Stop hook's reminder. */
+@Serializable
+data class WorkflowSessionPendingView(val needsAction: Boolean, val runId: String? = null, val nodeTitle: String? = null, val deliverable: WorkflowPendingDeliverableView? = null)
+
+/** The kind of deliverable the step expects, without the schema. */
+@Serializable
+data class WorkflowPendingDeliverableView(val type: String, val domain: String? = null)
+
 @Serializable
 data class WorkflowRunPageView(val runs: List<WorkflowRunView>, val nextBefore: String? = null)

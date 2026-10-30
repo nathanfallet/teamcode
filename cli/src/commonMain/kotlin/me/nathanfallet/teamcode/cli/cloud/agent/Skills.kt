@@ -364,6 +364,9 @@ internal interface AgentTools {
 /** The runner's `Stop` hook only hands a count over a local socket. */
 private const val RUNNER_STOP_TIMEOUT_SECONDS = 10
 
+/** The workflow `Stop` hook gives up after 2 seconds itself ([WorkflowStop.TIMEOUT_MILLIS]); this is the agent's own bound on it. */
+private const val WORKFLOW_STOP_TIMEOUT_SECONDS = 5
+
 /** Where cloud sessions install team hooks, relative to the agent's home. */
 internal const val CLOUD_HOOKS_DIR = ".teamcode/hooks"
 
@@ -376,10 +379,11 @@ internal data class CloudHook(val name: String, val definition: HookDefinitionVi
 /**
  * Claude Code settings for the installed team hooks, passed with `--settings`: each hook runs its executable from the
  * agent's home through the shell (`"$HOME"/'<dir>/<name>/<command>'`), merged by Claude Code with the agent's own hooks.
- * [runnerStop], the runner's own `Stop` command ([CloudAgentState]), comes after the team's `Stop` hooks.
+ * [runnerStop], the runner's own `Stop` command ([CloudAgentState]), comes after the team's `Stop` hooks, then [workflowStop]
+ * ([CloudWorkflowStop], only when the `teamcode_workflow` tool is connected): each is one more entry of the `Stop` list, none replaces another.
  */
-internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null): String? {
-    val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull(runnerStop?.let { "Stop" })).distinct().sorted()
+internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null, workflowStop: String? = null): String? {
+    val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull((runnerStop ?: workflowStop)?.let { "Stop" })).distinct().sorted()
     if (events.isEmpty()) return null
     return buildJsonObject { putJsonObject("hooks") {
         for (event in events) putJsonArray(event) {
@@ -393,6 +397,9 @@ internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = nul
             })
             if (event == "Stop" && runnerStop != null) add(buildJsonObject {
                 putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", runnerStop); put("timeout", RUNNER_STOP_TIMEOUT_SECONDS) }) }
+            })
+            if (event == "Stop" && workflowStop != null) add(buildJsonObject {
+                putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", workflowStop); put("timeout", WORKFLOW_STOP_TIMEOUT_SECONDS) }) }
             })
         }
     } }.toString()

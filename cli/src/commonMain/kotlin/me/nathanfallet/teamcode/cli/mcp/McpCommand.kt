@@ -158,11 +158,11 @@ private class WorkflowMcpCommand : SuspendingCliktCommand(name = "workflow") {
 }
 
 /**
- * Beside an agent, the launcher's loopback relay (`<prefix>_URL`) with the local token only; otherwise the stored CLI
+ * Beside an agent, the launcher's loopback relay ([relay], or `<prefix>_URL`) with the local token only; otherwise the stored CLI
  * login. The relay address must be loopback, so the local token never leaves the computer.
  */
-private fun relayClient(prefix: String, runId: String?): TeamCodeClient {
-    val url = environment("${prefix}_URL") ?: return sdk(loadConfig())
+internal fun relayClient(prefix: String, runId: String?, relay: String? = null): TeamCodeClient {
+    val url = relay ?: environment("${prefix}_URL") ?: return sdk(loadConfig())
     if (!Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}").matches(url)) throw CliUserException("${prefix}_URL must be the local relay, http://127.0.0.1:<port>.")
     // The launcher names the variable that holds this launch's token, so a token inherited from an outer launch is
     // never picked first. Without it, the known variables in turn; an unexpanded ${…} placeholder is not a token.

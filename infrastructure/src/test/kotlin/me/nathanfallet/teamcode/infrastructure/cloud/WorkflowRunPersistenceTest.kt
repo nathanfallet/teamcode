@@ -13,6 +13,7 @@ import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.domain.workflows.*
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
+import me.nathanfallet.teamcode.infrastructure.database.tables.Waits as WaitsTable
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
@@ -241,6 +242,69 @@ class WorkflowRunPersistenceTest {
             }
             println("Workflow delivery by session plan (seeded: 2000 runs, 200000 visits, synthetic metadata only):\n$plan")
             assertTrue("wfvisit_session" in plan, plan)
+        }
+    }
+
+    @Test @Timeout(300)
+    fun theStopHookQuestionSeesStepsAndOpenWaitsAcrossReplicas() = runBlocking {
+        AutomationWorld.run(93) { w ->
+            val definitions = WorkflowService(SqlWorkflowStore(w.a.database))
+            val solo = definitions.create(w.admin, definition("Solo"))
+            val storeA = SqlWorkflowRunStore(w.a.database); val storeB = SqlWorkflowRunStore(w.b.database)
+            val serviceA = WorkflowRunService(storeA); val serviceB = WorkflowRunService(storeB)
+            suspend fun session(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+            val own = session("Own"); val idle = session("Idle")
+            val sessions = object : WorkflowSessions {
+                override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String) = own.id
+                override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) = Unit
+                override suspend fun progress(sessionIds: Set<String>) = sessionIds.associateWith { SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, null, null) }
+            }
+            val run = serviceA.start(w.member, solo.id, mapOf("ticket" to "T-1"), "p1", null).run
+            WorkflowEngine(storeA, sessions, Waits()).run()
+
+            // The step runs and nothing was asked: pending, on either replica, naming the step and what it expects.
+            for (service in listOf(serviceA, serviceB)) {
+                val pending = service.pendingBySession(w.member, own.id)
+                assertTrue(pending.needsAction); assertEquals(run.id, pending.runId); assertEquals("Work", pending.nodeTitle); assertEquals(DeliverableType.TEXT, pending.deliverable?.type)
+            }
+            // Another member's session, an unknown one and a session without a step.
+            refusedWith("not_found") { serviceB.pendingBySession(w.admin, own.id) }
+            refusedWith("not_found") { serviceB.pendingBySession(w.member, "no-such-session") }
+            assertFalse(serviceB.pendingBySession(w.member, idle.id).needsAction)
+
+            // An open wait of the session, whatever its kind, is the agent having asked; a resolved one is not.
+            suspend fun wait(status: String, kind: String) = w.a.database.query {
+                WaitsTable.insert {
+                    it[id] = java.util.UUID.randomUUID().toString(); it[teamId] = w.teamId; it[sessionId] = own.id; it[WaitsTable.kind] = kind; it[resolver] = "human"; it[WaitsTable.status] = status
+                    it[assigneeId] = w.member.member.id; it[title] = "Question"; it[refs] = "[]"; it[fieldDefs] = "[]"; it[actions] = "[]"; it[createdAt] = 1L
+                }
+            }
+            wait("resolved", "human_request"); wait("cancelled", "question")
+            assertTrue(serviceB.pendingBySession(w.member, own.id).needsAction, "closed waits do not count")
+            wait("open", "human_request")
+            for (service in listOf(serviceA, serviceB)) assertFalse(service.pendingBySession(w.member, own.id).needsAction, "the agent asked a person")
+            // Delivered: nothing pending either.
+            w.a.database.query { WaitsTable.deleteWhere { WaitsTable.sessionId eq own.id } }
+            serviceA.deliverBySession(w.member, own.id, JsonPrimitive("done"))
+            assertFalse(serviceB.pendingBySession(w.member, own.id).needsAction)
+
+            // The plan of the wait lookup, on a waits table seeded at a larger scale (200,000 rows over the two sessions a member may keep here, a few open in one of them).
+            val seeded = listOf(own.id, idle.id)
+            w.a.database.query {
+                (0 until 200_000).chunked(5_000).forEach { chunk -> WaitsTable.batchInsert(chunk, shouldReturnGeneratedValues = false) { n ->
+                    this[WaitsTable.id] = java.util.UUID.randomUUID().toString(); this[WaitsTable.teamId] = w.teamId; this[WaitsTable.sessionId] = seeded[n % 2]; this[WaitsTable.kind] = "human_request"
+                    this[WaitsTable.resolver] = "human"; this[WaitsTable.status] = if (n % 50_000 == 2) "open" else "resolved"; this[WaitsTable.assigneeId] = w.member.member.id
+                    this[WaitsTable.title] = "Seed"; this[WaitsTable.refs] = "[]"; this[WaitsTable.fieldDefs] = "[]"; this[WaitsTable.actions] = "[]"; this[WaitsTable.createdAt] = n.toLong()
+                } }
+            }
+            for ((label, session) in listOf("a session with an open wait" to seeded[0], "a session without one" to seeded[1])) {
+                assertEquals(label.endsWith("open wait"), storeB.sessionHasOpenWait(session))
+                val plan = w.a.database.query {
+                    explain(analyze = true) { WaitsTable.select(WaitsTable.id).where { (WaitsTable.sessionId eq session) and (WaitsTable.status eq WaitStatus.OPEN.wire) }.limit(1) }.joinToString("\n")
+                }
+                println("Open wait of a session ($label; seeded: 200000 waits over 2 sessions, synthetic metadata only):\n$plan")
+                assertTrue("wait_session" in plan, plan)
+            }
         }
     }
 }

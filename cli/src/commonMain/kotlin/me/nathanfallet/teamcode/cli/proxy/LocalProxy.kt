@@ -291,10 +291,12 @@ internal val WAIT_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
 )
 
 /**
- * The one workflow API call `teamcode mcp workflow` makes: the delivery of the step running in the session. Reading runs,
- * delivering by run id and starting or cancelling a run are absent: the tool delivers for its own session and nothing else.
+ * The two workflow API calls the agent's side makes: the delivery of the step running in the session (`teamcode mcp workflow`)
+ * and the question of the Stop hook (`teamcode cloud workflow-stop`) whether that step still has to deliver or ask. Reading
+ * runs, delivering by run id and starting or cancelling a run are absent: both act for their own session and nothing else.
  */
 internal val WORKFLOW_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
+    HttpMethod.Get to listOf(Regex("/api/v1/workflows/session/pending")),
     HttpMethod.Post to listOf(Regex("/api/v1/workflows/session/deliver")),
 )
 

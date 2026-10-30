@@ -282,5 +282,16 @@ class TeamHooksTest {
         assertEquals(listOf("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'", "'/opt/teamcode/teamcode' cloud agent-state --socket '/run/env.sock'"),
             withRunner["Stop"]!!.jsonArray.map { it.jsonObject["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content })
         assertEquals(setOf("Stop"), Json.parseToJsonElement(assertNotNull(cloudHookSettings(emptyList(), runnerStop = "x"))).jsonObject["hooks"]!!.jsonObject.keys)
+        // The workflow step's Stop hook is one more entry after the others; none of them is replaced, and it is alone when nothing else is installed.
+        val stop = "'/opt/teamcode/teamcode' cloud workflow-stop --relay http://127.0.0.1:4242 --session s1"
+        val all = Json.parseToJsonElement(assertNotNull(cloudHookSettings(installed, runnerStop = "wake", workflowStop = stop))).jsonObject["hooks"]!!.jsonObject
+        assertEquals(listOf("\"\$HOME\"/'.teamcode/hooks/stop-guard/bin/guard.sh'", "wake", stop),
+            all["Stop"]!!.jsonArray.map { it.jsonObject["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content })
+        assertEquals(setOf("Stop", "SubagentStop", "Notification"), all.keys)
+        assertEquals(5, all["Stop"]!!.jsonArray.last().jsonObject["hooks"]!!.jsonArray.single().jsonObject["timeout"]!!.jsonPrimitive.int)
+        val alone = Json.parseToJsonElement(assertNotNull(cloudHookSettings(emptyList(), workflowStop = stop))).jsonObject["hooks"]!!.jsonObject
+        assertEquals(listOf(stop), alone["Stop"]!!.jsonArray.map { it.jsonObject["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content })
+        assertEquals(alone.keys, setOf("Stop"))
+        assertEquals(Json.parseToJsonElement(assertNotNull(cloudHookSettings(installed))), Json.parseToJsonElement(assertNotNull(cloudHookSettings(installed, workflowStop = null))), "without the tool nothing is added")
     }
 }
