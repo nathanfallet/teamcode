@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -48,6 +49,9 @@ import me.nathanfallet.teamcode.companion.domain.usecases.links.ResolveLinkUseCa
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.screens.AddServerScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactOverlay
+import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactOverlayTarget
+import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactOverlayViewModels
 import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
@@ -272,15 +276,31 @@ internal fun destinationAfterAccountsChange(had: Boolean, has: Boolean): Any? = 
     else -> null
 }
 
-/** A session with its "…" menu and the transfer sheet; [onOpenArtifacts] opens the session's artifacts. */
+/**
+ * A session with its "…" menu and the transfer sheet; [onOpenArtifacts] opens the session's artifacts. A link in the
+ * transcript to an artifact of the session's own server opens it over the conversation ([ArtifactOverlay]), through
+ * the account's API by its parsed id; any other link goes to the browser after its URL is shown.
+ */
 @Composable
 internal fun SessionDestination(route: SessionRoute, onBack: (() -> Unit)?, onOpenArtifacts: (ArtifactsRoute) -> Unit, backLabel: String = stringResource(Res.string.sessions_title)) {
     val viewModel: SessionViewModel = koinViewModel { parametersOf(route) }
     val accounts: AccountRepository = koinInject()
+    val resolveLink: ResolveLinkUseCase = koinInject()
     var transferring by remember { mutableStateOf<TransferRoute?>(null) }
+    var artifact by rememberSaveable(stateSaver = ArtifactOverlayTarget.Saver) { mutableStateOf<ArtifactOverlayTarget?>(null) }
+    val overlayViewModels: ArtifactOverlayViewModels = viewModel(key = "artifact-overlay") { ArtifactOverlayViewModels() }
+    // Closed: its view models go with it (a rotation keeps both the overlay and them).
+    LaunchedEffect(artifact) { if (artifact == null) overlayViewModels.clear() }
     SessionScreen(viewModel, memberId = accounts.accounts.value.firstOrNull { it.id == route.accountId }?.memberId, onBack = onBack,
         onOpenArtifacts = { onOpenArtifacts(ArtifactsRoute(route.accountId, route.sessionId)) }, backLabel = backLabel,
-        menuItems = { session, close -> TransferMenuItem(route.accountId, session) { close(); transferring = TransferRoute(route.accountId, session.id, session.ownerId) } })
+        menuItems = { session, close -> TransferMenuItem(route.accountId, session) { close(); transferring = TransferRoute(route.accountId, session.id, session.ownerId) } },
+        onLinkInApp = { link ->
+            val target = resolveLink.inConversation(link, route.accountId)
+            val url = target?.let(resolveLink::viewerUrl)
+            if (target != null && url != null) artifact = ArtifactOverlayTarget(ArtifactRoute(target.accountId, target.artifactId, target.version), url)
+            url != null
+        })
+    artifact?.let { target -> ArtifactOverlay(target, overlayViewModels, onDismiss = { artifact = null }) }
     transferring?.let { transfer ->
         SheetViewModels {
             val sheet: TransferViewModel = koinViewModel { parametersOf(transfer) }

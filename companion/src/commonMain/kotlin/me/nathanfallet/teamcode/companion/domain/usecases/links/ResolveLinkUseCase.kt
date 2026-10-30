@@ -1,9 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.usecases.links
 
-import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
-import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.ARTIFACT_ID
-import me.nathanfallet.teamcode.companion.domain.usecases.auth.normalizeOrigin
+import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.artifactViewerUrl
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.trimTyped
 
 /** Where a link leads. */
@@ -18,7 +16,7 @@ sealed interface LinkTarget {
 
 /**
  * Resolves an artifact link: `teamcode://open?url=<encoded viewer URL>` (the viewer page's "Open in app") or the
- * viewer URL itself, `<server>/artifact/<id>` with an optional `?v=<version>`. The link's origin must match an
+ * viewer URL itself, `<server>/artifact/<id>` with an optional `?v=<version>` ([ArtifactLink]). The link's origin must match an
  * account's exactly; the active account wins when several share it. A link never carries a secret, so the worst a
  * crafted one does is offer a sign-in to another server, whose origin is shown. Null for anything else.
  */
@@ -30,14 +28,7 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
             val encoded = query.split('&').firstOrNull { it.startsWith("url=") }?.removePrefix("url=") ?: return null
             decode(encoded) ?: return null
         } else trimmed
-        val match = VIEWER.matchEntire(url.substringBefore('#')) ?: return null
-        val origin = try { normalizeOrigin(match.groupValues[1]) } catch (_: CompanionException.InvalidOrigin) { return null }
-        val artifactId = match.groupValues[2]
-        if (!ARTIFACT_ID.matches(artifactId)) return null
-        // Other query parameters (a tracker added by a chat app) are ignored; `v` must be a version when present.
-        val versions = match.groupValues[3].split('&').filter { it.startsWith("v=") }.map { it.removePrefix("v=") }
-        if (versions.size > 1) return null
-        val version = versions.singleOrNull()?.let { v -> v.takeIf { it.length <= 9 }?.toIntOrNull()?.takeIf { it >= 1 } ?: return null }
+        val (origin, artifactId, version) = ArtifactLink.parse(url) ?: return null
         val candidates = accounts.accounts.value.filter { it.origin == origin }
         if (candidates.isEmpty()) return LinkTarget.UnknownServer(origin)
         val signedIn = candidates.filter { it.signedIn }
@@ -46,9 +37,26 @@ class ResolveLinkUseCase(private val accounts: AccountRepository) {
         return LinkTarget.Artifact(account.id, artifactId, version)
     }
 
+    /**
+     * A link clicked in a conversation of [accountId]: the artifact when it is a viewer URL ([ArtifactLink]) on that
+     * account's own server, the account being signed in; null for anything else, which opens outside as any link.
+     * Never another server, even one the member has an account on, and none of the typed-link conveniences
+     * (`teamcode://`, trimming): the URL must be exactly the one the member saw.
+     */
+    fun inConversation(link: String, accountId: String): LinkTarget.Artifact? {
+        val parsed = ArtifactLink.parse(link) ?: return null
+        val account = accounts.accounts.value.firstOrNull { it.id == accountId }?.takeIf { it.signedIn && it.origin == parsed.origin } ?: return null
+        return LinkTarget.Artifact(account.id, parsed.artifactId, parsed.version)
+    }
+
+    /** The viewer page of [target] on its account's server, built from the account's origin and the parsed id, never from the link. */
+    fun viewerUrl(target: LinkTarget.Artifact): String? {
+        val origin = accounts.accounts.value.firstOrNull { it.id == target.accountId }?.origin ?: return null
+        return artifactViewerUrl(origin, target.artifactId) + (target.version?.let { "?v=$it" } ?: "")
+    }
+
     private companion object {
         const val SCHEME = "teamcode://open?"
-        val VIEWER = Regex("""(https?://[^/?#@\s]+)/artifact/([0-9a-f-]{36})/?(?:\?([^#\s]*))?""", RegexOption.IGNORE_CASE)
 
         /** Percent-decoding of one query value; null for a malformed escape or bytes that are not UTF-8. */
         fun decode(value: String): String? {

@@ -267,6 +267,8 @@
     <string name="artifact_copied">Link copied.</string>
     <string name="artifact_open_browser">Open in the browser</string>
     <string name="artifact_desktop">Artifacts open in your browser, on the viewer page of your server.</string>
+    <string name="artifact_unavailable_title">This artifact did not open</string>
+    <string name="artifact_unavailable_body">Open it in the browser: your server's page for it says more.</string>
     <string name="link_new_server_title">A new server</string>
     <string name="link_new_server">This link is for %1$s, a server this app is not signed in to. Sign in to it only if you trust it.</string>
     <string name="link_new_server_confirm">Sign in to it</string>
