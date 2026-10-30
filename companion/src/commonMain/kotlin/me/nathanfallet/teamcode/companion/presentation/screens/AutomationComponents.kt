@@ -32,25 +32,6 @@ import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.resources.*
 import org.jetbrains.compose.resources.stringResource
 
-/** `2026-10-28 21:00 UTC` for an instant in epoch milliseconds (the app has no zone database: the zone is said). */
-fun formatUtc(millis: Long): String {
-    val minutes = millis.floorDiv(60_000L)
-    val days = minutes.floorDiv(1440L)
-    val inDay = minutes.mod(1440L)
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    val z = days + 719_468
-    val era = z.floorDiv(146_097L)
-    val dayOfEra = z - era * 146_097
-    val yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36_524 - dayOfEra / 146_096) / 365
-    val dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
-    val mp = (5 * dayOfYear + 2) / 153
-    val day = dayOfYear - (153 * mp + 2) / 5 + 1
-    val month = if (mp < 10) mp + 3 else mp - 9
-    val year = yearOfEra + era * 400 + if (month <= 2) 1 else 0
-    fun two(n: Long) = n.toString().padStart(2, '0')
-    return "$year-${two(month)}-${two(day)} ${two(inDay / 60)}:${two(inDay % 60)} UTC"
-}
-
 /** "in 5 min", "in 3 h", "in 2 d" for a time ahead of [now]; "any moment" for one already due. */
 @Composable
 fun untilTime(at: Long, now: Long): String {

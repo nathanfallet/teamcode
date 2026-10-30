@@ -6,12 +6,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCodeTheme
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItem
 import me.nathanfallet.teamcode.companion.presentation.transcript.TranscriptItemView
+import androidx.compose.ui.test.assertTextContains
+import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.presentation.screens.utcEpochDay
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -50,4 +54,40 @@ class TranscriptItemViewTest {
 
     @Test fun aToolRowWithASummaryPutsItsChevronAtTheRightEdge() =
         assertChevronAtRightEdge(tool(1, "Bash", "ls -la"), "tool-1", "tool-chevron-1")
+
+    private val at = 1_793_221_200_000L // 2026-10-28 21:00 UTC
+
+    @Test fun aTurnEndKeepsItsDurationAndShowsTheTimeOfDayOnTheSameDay() = runComposeUiTest {
+        val turn = TranscriptItem.TurnEnd(TranscriptEvent.Turn(5, at, TurnPhase.COMPLETED, 61_000, 6))
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = utcEpochDay(at)) } } }
+        onNodeWithText("Turn completed \u00b7 61 s \u00b7 6 steps \u00b7 21:00 UTC").assertExists()
+    }
+
+    @Test fun aTurnEndOfAnotherDayShowsTheDateToo() = runComposeUiTest {
+        val turn = TranscriptItem.TurnEnd(TranscriptEvent.Turn(5, at, TurnPhase.FAILED, 2_000, null))
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(turn, memberId = null, today = utcEpochDay(at) + 1) } } }
+        onNodeWithText("Turn failed \u00b7 2 s \u00b7 2026-10-28 21:00 UTC").assertExists()
+    }
+
+    @Test fun everySystemLineShowsItsTime() = runComposeUiTest {
+        val events = listOf(
+            TranscriptEvent.Status(1, at, "claude", null, null),
+            TranscriptEvent.Status(2, at, "claude", null, 1),
+            TranscriptEvent.Error(3, at, "boom", "Broke"),
+            TranscriptEvent.InputChanged(4, at, "i", "rejected", "busy"),
+            TranscriptEvent.InputChanged(5, at, "i", "cancelled", "gone"),
+            TranscriptEvent.PermissionRequest(6, at, "r", "Bash", false),
+            TranscriptEvent.PermissionRequest(7, at, "q", "AskUserQuestion", true),
+            TranscriptEvent.PermissionExpired(8, at, "r"),
+            TranscriptEvent.Transferred(9, at, "a", "b"),
+            TranscriptEvent.Truncated(10, at, "tool.result", 70_000),
+        )
+        setContent { TeamCodeTheme { androidx.compose.foundation.layout.Column(Modifier.width(400.dp)) { events.forEach { TranscriptItemView(TranscriptItem.System(it), memberId = null, today = utcEpochDay(at)) } } } }
+        events.forEach { onNodeWithTag("system-time-${it.seq}").assertTextContains("21:00 UTC") }
+    }
+
+    @Test fun withoutAKnownDayTheDateIsAlwaysShown() = runComposeUiTest {
+        setContent { TeamCodeTheme { Box(Modifier.width(400.dp)) { TranscriptItemView(TranscriptItem.System(TranscriptEvent.PermissionExpired(1, at, "r")), memberId = null) } } }
+        onNodeWithTag("system-time-1").assertTextContains("2026-10-28 21:00 UTC")
+    }
 }
