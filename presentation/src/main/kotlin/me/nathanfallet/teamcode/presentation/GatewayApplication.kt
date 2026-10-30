@@ -257,7 +257,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                     (if (team != null && environment != null) listOf("team.environment.v1") else emptyList()) +
                     (if (team != null && cloudOn()) listOfNotNull<List<String>>(
                         if (cloudSessions?.acceptsInitialMessage == true) listOf("cloud.sessions.initial-message.v1") else null,
-                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1", "cloud.profiles.member.v1", "cloud.sessions.github-access.v1") else null,
+                        if (cloudSessions != null && cloudAdmin != null) listOf("cloud.sessions.v1", "cloud.profiles.member.v1", "cloud.sessions.github-access.v1", "cloud.sessions.rename.v1") else null,
                         if (cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.environment.v1") else null,
                         // Runners' heartbeats report background work, and the idle pause counts it up to the team's cap.
                         if (cloudSessions != null && cloudAdmin != null && cloudRunner != null) listOf("cloud.sessions.background-work.v1") else null,

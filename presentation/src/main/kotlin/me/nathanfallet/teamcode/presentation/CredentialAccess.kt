@@ -33,6 +33,7 @@ private val waitWrite = Regex("/api/v1/waits(/$CLOUD_ID/(answer|cancel))?")
 /** Workflow reads only; saving and deleting definitions stay interactive. */
 private val workflowRead = Regex("/api/v1/workflows(/(settings|$CLOUD_ID))?")
 private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
+private val cloudSessionPath = Regex("/api/v1/cloud/sessions/$CLOUD_ID")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
 /** Classify transport operations; unrecognized/new endpoints require an interactive login. */
@@ -76,6 +77,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && automationCancel.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "POST" && cloudWritePost.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "DELETE" && cloudWriteDelete.matches(path) -> CredentialAction.CLOUD_WRITE
+    method == "PATCH" && cloudSessionPath.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && artifactRead.matches(path) -> CredentialAction.ARTIFACTS_READ
     method == "POST" && artifactWritePost.matches(path) -> CredentialAction.ARTIFACTS_WRITE
     method == "PUT" && artifactChunk.matches(path) -> CredentialAction.ARTIFACTS_WRITE

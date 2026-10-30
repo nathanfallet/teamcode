@@ -103,7 +103,7 @@ fun List<PendingMessage>.reconciled(events: List<TranscriptEvent>): List<Pending
 }
 
 /** Interrupt, pause, resume and end. An interrupt with nothing running is not a failure. */
-class ControlSessionUseCase(private val sessions: SessionRepository, private val guard: AccountGuard, private val ids: IdGenerator) {
+class ControlSessionUseCase(private val sessions: SessionRepository, private val guard: AccountGuard, private val ids: IdGenerator, private val features: FeaturesRepository) {
     /** A key for one interruption: the caller keeps it until the server answered, so a retry never interrupts a later turn. */
     fun interruptKey(): String = ids.newId()
 
@@ -134,6 +134,23 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
     suspend fun resume(accountId: String, sessionId: String): CloudSession = guard(accountId) { sessions.resume(accountId, sessionId) }
     suspend fun end(accountId: String, sessionId: String) = guard(accountId) { sessions.end(accountId, sessionId) }
 
+    /** Whether the server renames sessions (`cloud.sessions.rename.v1`); the menus offer the action only then. */
+    suspend fun supportsRename(accountId: String): Boolean = try {
+        Features.RENAME in features.features(accountId)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Renames the session; the name is checked here as the server checks it, so a refusal never costs a request. */
+    suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession = guard(accountId) {
+        val sent = name.trim()
+        requireInput(validName(sent), InvalidInput.Problem.SESSION_NAME, MAX_NAME, "Name the session (up to $MAX_NAME characters).")
+        if (Features.RENAME !in features.features(accountId)) throw CompanionException.Unsupported(Features.RENAME)
+        sessions.rename(accountId, sessionId, sent)
+    }
+
     companion object {
         /** Pause and resume are offered to the owner and to administrators. */
         fun canControl(account: Account, session: CloudSession): Boolean = account.isAdministrator || session.ownerId == account.memberId
@@ -145,6 +162,11 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         fun canResume(session: CloudSession): Boolean = !session.remote && (session.state == SessionState.PAUSED || session.state == SessionState.PAUSING)
         /** A session is ended once; the server deletes its workspace with it. A failed one can be ended too. */
         fun canEnd(session: CloudSession): Boolean = session.state != SessionState.TERMINATED
+        /** The server refuses to rename a session that ended (terminated or failed). */
+        fun canRename(session: CloudSession): Boolean = session.state.group != SessionGroup.ENDED
+        const val MAX_NAME = 120
+        /** The server's name rules (as at creation): 1 to [MAX_NAME] characters, no control character. */
+        fun validName(name: String): Boolean = name.isNotEmpty() && name.length <= MAX_NAME && name.none(Char::isISOControl)
         /** A remote session is never transferred (`409 remote_not_transferable`): its files stay on its device. */
         fun canTransfer(session: CloudSession): Boolean = !session.remote
         fun canMessage(session: CloudSession): Boolean = session.state.group != SessionGroup.ENDED && session.state != SessionState.TRANSFERRING

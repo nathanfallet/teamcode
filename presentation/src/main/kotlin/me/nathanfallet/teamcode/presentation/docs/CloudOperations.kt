@@ -281,6 +281,24 @@ private fun ApiCatalog.cloudSessions() {
             conflict("The session cannot pause now (`invalid_transition`, `session_preparing`, `session_transferring`, `session_busy`).")
         }
     }
+    patch("/api/v1/cloud/sessions/{id}") {
+        operationId = "renameCloudSession"; tag(ApiTags.CLOUD_SESSIONS)
+        summary = "Rename a session"
+        description = "Changes the session's name (1-120 characters, no control characters, as at creation). The owner or a cloud " +
+            "administrator, or a `cloud:write` key; audited as `cloud.session.renamed` and published on the event feed as " +
+            "`cloud.session.renamed` with the new `name` (`cloud.sessions.rename.v1`). Renaming to the current name changes nothing."
+        parameters {
+            sessionId()
+            onBehalfOf()
+        }
+        body<RenameCloudSessionRequest>("`name`: the new name.")
+        responses {
+            ok<CloudSessionView>("The session with its new `name`.")
+            badRequest("An invalid name (`invalid_session`).")
+            notFound("No such session (`not_found`).")
+            conflict("The session is terminated or being deleted (`session_not_running`), or changed concurrently (`session_busy`).")
+        }
+    }
     put("/api/v1/cloud/sessions/{id}/github") {
         operationId = "setCloudSessionGitHubAccess"; tag(ApiTags.CLOUD_SESSIONS)
         summary = "Choose who instructs an agent that holds your GitHub token"

@@ -18,6 +18,8 @@ enum class TeamEventType(val wire: String, val subject: TeamEventSubject) {
     SESSION_CREATED("cloud.session.created", TeamEventSubject.SESSION),
     /** The session reached `paused`: no pod, workspace kept. */
     SESSION_PAUSED("cloud.session.paused", TeamEventSubject.SESSION),
+    /** The session was renamed: the data carries the new `name`. */
+    SESSION_RENAMED("cloud.session.renamed", TeamEventSubject.SESSION),
     /** A message asked a paused session to wake up. */
     SESSION_WOKEN("cloud.session.woken", TeamEventSubject.SESSION),
     /** A resuming session is `ready` again. */
@@ -177,11 +179,12 @@ fun TeamEventAudience.sees(type: TeamEventType, owner: String) = allows(type) &&
 object TeamEventRules {
     /**
      * The events of a session moving from [before] to [after], with the audit [action] of the write (for example
-     * `cloud.session.woken`). A same-state write produces an event only for a wake.
+     * `cloud.session.woken`). A same-state write produces an event only for a wake or a rename.
      */
     fun session(before: CloudSessionState, after: CloudSessionState, action: String?): List<TeamEventType> {
         return buildList {
             if (action == "cloud.session.woken") add(TeamEventType.SESSION_WOKEN)
+            if (action == "cloud.session.renamed") add(TeamEventType.SESSION_RENAMED)
             if (before == after) return@buildList
             when {
                 after == CloudSessionState.PAUSED && before != CloudSessionState.TRANSFERRING -> add(TeamEventType.SESSION_PAUSED)

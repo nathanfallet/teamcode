@@ -41,7 +41,7 @@ class GetSessionUseCase(private val sessions: SessionRepository, private val gua
  * [RemoteSessions] comes first, once the server's capabilities are read: whether it has remote sessions.
  */
 sealed interface SessionListSignal {
-    data class RemoteSessions(val supported: Boolean) : SessionListSignal
+    data class RemoteSessions(val supported: Boolean, val renames: Boolean = false) : SessionListSignal
     data object Reload : SessionListSignal
     data class Changed(val change: SessionChange) : SessionListSignal
     data class Connection(val reconnecting: Boolean) : SessionListSignal
@@ -62,7 +62,7 @@ class FollowSessionListUseCase(
     operator fun invoke(accountId: String): Flow<SessionListSignal> = guard.flow(accountId, flow {
         val announced = featuresWhenReachable(accountId)
         val remote = Features.REMOTE_SESSIONS in announced
-        emit(SessionListSignal.RemoteSessions(remote))
+        emit(SessionListSignal.RemoteSessions(remote, renames = Features.RENAME in announced))
         if (Features.EVENTS in announced) {
             // The app's one connection, every kind: the list filters the events itself, so changing its filter never reopens it.
             feed.follow(accountId).collect { update ->

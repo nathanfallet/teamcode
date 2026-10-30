@@ -359,6 +359,7 @@ internal fun sessionGuard(expected: CloudSession, leaseOwner: String?, now: Long
 }
 
 internal fun writeSessionMutable(it: UpdateBuilder<*>, s: CloudSession) {
+    it[CloudSessions.name] = s.name
     it[CloudSessions.imageReference] = s.imageReference.takeIf { s.kind == CloudSessionKind.CLOUD }; it[CloudSessions.imageDigest] = s.imageDigest
     it[CloudSessions.agentKind] = s.agentKind; it[CloudSessions.agentVersion] = s.agentVersion; it[CloudSessions.agentModel] = s.agentModel; it[CloudSessions.agentEffort] = s.agentEffort
     it[CloudSessions.state] = s.state.wire; it[CloudSessions.phase] = s.phase?.take(64); it[CloudSessions.desiredState] = s.desiredState.wire

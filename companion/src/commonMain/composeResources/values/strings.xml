@@ -348,6 +348,9 @@
     <string name="session_menu_pause">Pause the session</string>
     <string name="session_menu_resume">Resume the session</string>
     <string name="session_menu_end">End session</string>
+    <string name="session_menu_rename">Rename</string>
+    <string name="session_rename_title">Rename session</string>
+    <string name="session_rename_save">Save</string>
     <string name="session_end_title">End this session?</string>
     <string name="session_end_body">The agent stops and the session's workspace is deleted. This cannot be undone.</string>
     <string name="new_session_overrides">Overrides · optional</string>

@@ -105,6 +105,8 @@ data class SessionUiState(
     /** The member may pause and resume (owner or administrator). */
     val canControl: Boolean = false,
     val acting: Boolean = false,
+    /** The server renames sessions (`cloud.sessions.rename.v1`): the menu offers "Rename". */
+    val renames: Boolean = false,
     /** A short result of an action (woken, nothing to interrupt) or its failure. */
     val notice: SessionNotice? = null,
     /** Answers being written or sent, by request id. */
@@ -182,6 +184,7 @@ class SessionViewModel(
 
     fun start() {
         started = true
+        if (!state.value.renames) viewModelScope.launch { if (control.supportsRename(route.accountId)) state.update { it.copy(renames = true) } }
         files?.load()
         // The transcript does not carry pauses, resumes or a failed pod: the header is read again while visible.
         if (header?.isActive != true) header = viewModelScope.launch {
@@ -379,6 +382,9 @@ class SessionViewModel(
 
     fun pause() = act { val session = control.pause(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
     fun resume() = act { val session = control.resume(route.accountId, route.sessionId); actions++; state.update { it.copy(session = session) } }
+
+    /** Renames the session; a refused name (the rules are the server's) is told in a notice. */
+    fun rename(name: String) = act { val session = control.rename(route.accountId, route.sessionId, name); actions++; state.update { it.copy(session = session) } }
 
     /** Ends the session (its workspace is deleted): the header then reads the server's answer, "Ended" once it is done. */
     fun end() = act { control.end(route.accountId, route.sessionId); actions++; refreshSession() }

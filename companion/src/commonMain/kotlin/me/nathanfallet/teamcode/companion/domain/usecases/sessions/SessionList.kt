@@ -58,6 +58,11 @@ data class SessionList(
         if (change.type in SessionChange.WAIT_TYPES) return this to null
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
+        // A rename changes the name and nothing else: the row keeps its place (the list is ordered by creation).
+        if (change.type == SessionChange.RENAMED) {
+            val name = change.name ?: return this to null
+            return (if (current == null) this else upserted(current.copy(name = name, updatedAt = maxOf(current.updatedAt, change.at)))) to null
+        }
         // Only a known end: a phase this app does not know (a newer server) is not taken for one.
         val finished = change.turnPhase in FINISHED_PHASES
         val marks = if (finished) finishedTurns + change.sessionId else finishedTurns

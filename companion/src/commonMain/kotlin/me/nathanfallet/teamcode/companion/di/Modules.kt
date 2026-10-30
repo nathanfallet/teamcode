@@ -102,7 +102,7 @@ val domainModule = module {
     single { LoadTranscriptUseCase(get(), get(), get()) }
     single { FollowTranscriptUseCase(get(), get()) }
     single { SendMessageUseCase(get(), get(), get(), get()) }
-    single { ControlSessionUseCase(get(), get(), get()) }
+    single { ControlSessionUseCase(get(), get(), get(), get()) }
     single { AnswerPermissionUseCase(get(), get(), get(), get()) }
     single { LoadProfilesUseCase(get(), get(), get()) }
     single { CreateSessionUseCase(get(), get(), get()) }

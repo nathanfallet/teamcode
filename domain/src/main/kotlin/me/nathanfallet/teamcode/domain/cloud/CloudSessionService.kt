@@ -280,6 +280,27 @@ class CloudSessionService(
     }
 
     /**
+     * Renames a session (`cloud.sessions.rename.v1`): the owner, or a cloud administrator, under the creation's name rules.
+     * It changes no lifecycle state, so it works in every state a session can still be managed in. The change is audited
+     * and published to the team feed (`cloud.session.renamed`) with the session row's write.
+     */
+    suspend fun rename(principal: Principal, onBehalfOf: String?, id: String, name: String): CloudSession {
+        val actor = actor(principal, onBehalfOf)
+        visible(principal, store.find(principal.teamId, id))
+        validateName(name)
+        return transition(principal.teamId, id) { current ->
+            when {
+                current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.name == name -> null
+                else -> CloudTransition(
+                    current.copy(name = name, updatedAt = store.now()),
+                    CloudWrite(actor = actor, auditAction = "cloud.session.renamed", reconcileAt = null),
+                )
+            }
+        } ?: throw missing()
+    }
+
+    /**
      * The owner chooses whose instructions an agent holding their GitHub token follows ([CloudGitHubAccess]). Only the
      * owner, signed in or through their own key, never on their behalf: the choice consents to the use of their token.
      * Turning the token off waits for a pause, because a running agent keeps a token it already received until it
@@ -390,9 +411,12 @@ class CloudSessionService(
             "A remote session runs on the device of an interactive login. Sign in with teamcode login on this device; service keys cannot host one.")
         fun claimName(sessionId: String) = "tc-ws-$sessionId"
         fun podName(sessionId: String, epoch: Int) = "tc-$sessionId-e$epoch"
-        fun validate(draft: CloudSessionDraft) {
-            if (draft.name.isBlank() || draft.name.length > 120 || draft.name.any(Char::isISOControl))
+        fun validateName(name: String) {
+            if (name.isBlank() || name.length > 120 || name.any(Char::isISOControl))
                 throw TeamFailure("invalid_session", 400, "Use a session name of 1–120 characters without control characters.")
+        }
+        fun validate(draft: CloudSessionDraft) {
+            validateName(draft.name)
             LabelRules.validate(draft.labels)
             if (draft.image != null && (draft.image.length !in 1..512 || draft.image.any { it.isWhitespace() || it.isISOControl() }))
                 throw TeamFailure("invalid_image", 400, "Use a valid image reference.")

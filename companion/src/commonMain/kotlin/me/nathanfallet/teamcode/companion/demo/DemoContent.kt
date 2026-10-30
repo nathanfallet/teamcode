@@ -32,7 +32,7 @@ object DemoContent {
 
     /** What the demo server announces: no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
     val features = setOf(
-        Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS,
+        Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME,
     )
 
     /**

@@ -50,6 +50,7 @@ class CloudSessionPersistenceTest {
                 val connected = administration(ra, rb, admin, colleague, cipher)
                 val profile = ra.admin.profiles(admin).single()
                 delegatedCreationAndIdempotency(ra, rb, admin, colleague, profile)
+                renaming(ra, rb, admin, colleague, profile)
                 cloudKeys(ra, rb, admin, colleague, profile)
                 val session = lifecycle(ra, rb, admin, colleague, profile)
                 concurrentResumeHasOneEpoch(ra, rb, admin, colleague, session)
@@ -110,6 +111,30 @@ class CloudSessionPersistenceTest {
         failure("invalid_cloud_settings") { ra.admin.saveSettings(admin, CloudSettings(pausedRetentionDays = 0)) }
         assertEquals(CloudSettings(), rb.admin.settings(admin))
         return updated
+    }
+
+    private suspend fun renaming(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile) {
+        val created = (ra.sessions.create(colleague, null, CloudSessionDraft("Before", profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val sibling = (ra.sessions.create(colleague, null, CloudSessionDraft("Sibling", profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        failure("invalid_session") { ra.sessions.rename(colleague, null, created.id, " ") }
+        val renamed = rb.sessions.rename(colleague, null, created.id, "After")
+        assertEquals("After", renamed.name)
+        // The other replica reads it, the write bumped the generation, and the sibling and the lifecycle are untouched.
+        val read = ra.sessions.get(colleague, created.id)
+        assertEquals("After", read.name); assertEquals(created.generation + 1, read.generation)
+        assertEquals(created.state, read.state); assertEquals(created.desiredState, read.desiredState)
+        assertEquals("Sibling", ra.sessions.get(colleague, sibling.id).name)
+        assertEquals("By the admin", ra.sessions.rename(admin, null, created.id, "By the admin").name)
+        // The same name writes nothing: no new generation, no second event.
+        val generation = ra.sessions.get(colleague, created.id).generation
+        rb.sessions.rename(admin, null, created.id, "By the admin")
+        assertEquals(generation, ra.sessions.get(colleague, created.id).generation)
+        val audited = ra.database.query { AuditEvents.selectAll().where { (AuditEvents.action eq "cloud.session.renamed") and (AuditEvents.subjectId eq created.id) }.orderBy(AuditEvents.id to SortOrder.ASC).toList() }
+        assertEquals(listOf(colleague.member.id, admin.member.id), audited.map { it[AuditEvents.actorId] })
+        val events = ra.database.query { TeamEvents.selectAll().where { (TeamEvents.subjectId eq created.id) and (TeamEvents.type eq "cloud.session.renamed") }.orderBy(TeamEvents.seq to SortOrder.ASC).toList() }
+        assertEquals(listOf("After", "By the admin"), events.map { kotlinx.serialization.json.Json.parseToJsonElement(it[TeamEvents.data]).let { data -> (data as kotlinx.serialization.json.JsonObject)["name"]!!.toString().trim('"') } })
+        assertEquals(colleague.member.id, events.first()[TeamEvents.ownerId], "The feed event belongs to the session's owner")
+        ra.sessions.delete(colleague, null, created.id); ra.sessions.delete(colleague, null, sibling.id)
     }
 
     private suspend fun delegatedCreationAndIdempotency(ra: Replica, rb: Replica, admin: Principal, colleague: Principal, profile: CloudProfile) {
@@ -327,8 +352,8 @@ class CloudSessionPersistenceTest {
         val page = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 2))
         val next = ra.sessions.list(admin, CloudSessionQuery(owner = "*", limit = 50, beforeId = page.nextBeforeId))
         assertTrue(next.sessions.none { it.id in page.sessions.map(CloudSession::id) })
-        // Includes the deleted session created by the `cloud:*` keys step.
-        assertEquals(9, page.sessions.size + next.sessions.size)
+        // Includes the deleted session created by the `cloud:*` keys step and the two of the renaming step.
+        assertEquals(11, page.sessions.size + next.sessions.size)
     }
 
     private suspend fun failureModesAndEarlyCheckpoint(ra: Replica, rb: Replica, admin: Principal, profile: CloudProfile) {

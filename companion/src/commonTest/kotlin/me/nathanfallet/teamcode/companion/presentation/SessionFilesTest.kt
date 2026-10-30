@@ -64,7 +64,7 @@ class SessionFilesTest {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
         return SessionViewModel(
             SessionRoute("a1", "s1"), GetSessionUseCase(sessions, guard), LoadTranscriptUseCase(transcripts, features, guard), FollowTranscriptUseCase(transcripts, guard),
-            SendMessageUseCase(sessions, features, guard, SequenceIds()), ControlSessionUseCase(sessions, guard, SequenceIds()), accounts,
+            SendMessageUseCase(sessions, features, guard, SequenceIds()), ControlSessionUseCase(sessions, guard, SequenceIds(), features), accounts,
             AnswerPermissionUseCase(sessions, features, guard, SequenceIds()), if (withFiles) SessionFilesUseCase(files, features, guard, SequenceIds()) else null,
         )
     }
