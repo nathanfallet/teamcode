@@ -16,9 +16,10 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | Delivery by session (`POST /workflows/session/deliver`), the execution credential scope `workflow:session`, `deliverWorkflowSession` in the typed client | Implemented |
 | `teamcode-workflow` MCP server (`teamcode mcp workflow`, tool `deliver`), its loopback relay (`workflow-relay-v1`), connected beside the agent of remote sessions and of Kubernetes cloud sessions | Implemented. Tested on the JVM (server, relay, launch arguments); not exercised with a native binary or a real Claude Code or Codex session |
 | Stop hook that sends the agent of a workflow step back to work once (`GET /workflows/session/pending`, `pendingWorkflowSession` in the typed client, `teamcode cloud workflow-stop`) | Implemented for Claude Code in remote and Kubernetes cloud sessions. Tested on the JVM (server, relay, hook logic, settings); not exercised with a native binary or a real Claude Code session. Codex is not covered ([below](#stop-hook)) |
-| Companion editor and run view, `teamcode workflows`, automations that start a workflow | Planned |
+| `teamcode workflows list`, `show`, `create`, `update`, `delete`, `settings`, `run`, `runs`, `run-show`, `cancel` ([CLI](#cli)) | Implemented. Tested on the JVM against a fake server; not exercised with a native binary or a real server |
+| Companion editor and run view, automations that start a workflow | Planned |
 
-Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. No screen exists yet.
+Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. No screen exists yet; the [CLI](#cli) reads, saves and runs workflows.
 
 ## Definition
 
@@ -129,6 +130,28 @@ An agent can end its turn without calling `deliver` and without asking a person.
 - **Codex is not covered.** Codex has a `Stop` hook in this repository only for a local `teamcode run`'s activity report; cloud and remote Codex sessions run no hooks at all (Codex runs only hooks a person trusted), so a Codex agent that ends its turn without delivering still fails the run with `ended_without_delivery`, with no reminder.
 - **Waiting state.** The reminder keeps the turn going inside Claude Code: cloud and remote sessions learn their agent's turns from the runner (`ready`/`active`), not from `Stop` hooks, and the launch activity report of `teamcode run` (`waiting_for_human`) is not installed there, so a refused `Stop` leaves no wrong state. This was reasoned from the code, not observed on a real session.
 
+## CLI
+
+```sh
+teamcode workflows list [--json]
+teamcode workflows show ID [--json]
+teamcode workflows create --file FILE.json|- [--json]
+teamcode workflows update ID --file FILE.json|- [--expected-version N] [--json]
+teamcode workflows delete ID [--json]
+teamcode workflows settings [--mode all|admins|members [--member ID]...] [--json]
+teamcode workflows run ID [--input KEY=VALUE]... [--profile ID] [--wait [--interval SECONDS] [--timeout MINUTES]] [--json]
+teamcode workflows runs [--all] [--workflow ID] [--status running|waiting|done|failed|cancelled] [--before ID] [--limit N] [--json]
+teamcode workflows run-show RUNID [--json]
+teamcode workflows cancel RUNID [--json]
+```
+
+- The commands need the `workflows.v1` capability and say so when the server does not advertise it. Errors carry the server's code and what to do (`workflow_conflict`, `workflow_in_use`, `workflow_editors_only`, `profile_required`, `run_limit`, ...).
+- `create` and `update` take the JSON the API takes (`name`, `start`, `nodes`, and optionally `description`, `sessionMode`, `inputs`, `limits`); `-` reads standard input, at most 1 MiB. The output of `show --json` is accepted as is (its id, version and timestamps are ignored), so `show ID --json > w.json`, edit, `update ID --file w.json --expected-version N` works. Before sending, the CLI lists the obvious mistakes with the node they concern (a missing start or target, an outcome without a transition, an unreachable node, a template naming an unknown input or node, an agent step without instruction or deliverable, no node that ends the workflow) and sends nothing. The client deliberately drops server error messages (they may carry secrets), so a server-side `invalid_workflow` is printed with its code and the rules to check, not with the server's sentence naming the node.
+- `settings` without `--mode` shows who may edit; with `--mode` (administrators, signed in) it changes it. `--member` goes only with `--mode members`.
+- `run` reads the definition first, like `waits answer` does: an unknown, repeated or too long `--input`, or a required input without default that is missing, is refused naming it, before anything is sent. A fresh `Idempotency-Key` is sent on every call. Without `--wait` it prints the run id and exits. With `--wait` it reads the run every `--interval` seconds (3 by default, 2 at least) and prints each step that starts, ends or begins to wait for a person (with the `teamcode waits show` command to answer it), until the run ends or `--timeout` minutes pass (60 by default, 1 to 1440). Exit code: 0 succeeded, 1 failed, 2 cancelled, 3 still unfinished at the timeout. A read that fails for a passing reason (network, 5xx) is tried again up to three times in a row; a refusal is not. Ctrl-C stops following and says the run keeps running; it never cancels it (`cancel` does). With `--json` the steps go to standard error and the final run to standard output.
+- `runs` lists the caller's runs (the whole team's with `--all`, administrators), newest first, with the current step and the failure in words; `--status done` is `succeeded`. `run-show` prints the current step, the wait or sub-run it is blocked on, the failure in words, the output and the timeline of visits.
+- Not verified: the commands have only been run on the JVM against a fake server. The native binary, the Ctrl-C message on each platform and a real server are not covered.
+
 ## What is planned
 
-The order of work: the companion editor and run view, the CLI and automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.
+The order of work: the companion editor and run view, and automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.
