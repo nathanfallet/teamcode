@@ -839,4 +839,26 @@
     <string name="waits_problem_unsupported">%1$s se remplit dans la session. Ouvre-la.</string>
     <string name="waits_field_in_session">Se remplit dans la session.</string>
     <string name="waits_reconnecting">Reconnexion…</string>
+    <string name="tab_waits">En attente</string>
+    <string name="waits_badge_description">%1$s en attente de toi</string>
+    <string name="waits_banner_count">%1$s en attente de toi</string>
+    <string name="waits_filter_open">Ouvertes</string>
+    <string name="waits_filter_answered">Répondues</string>
+    <string name="waits_filter_cancelled">Annulées</string>
+    <string name="waits_empty_title">Rien n’attend ta réponse</string>
+    <string name="waits_empty_body">Quand un agent a besoin d’une réponse, d’une décision ou d’une validation, elle apparaît ici aussitôt.</string>
+    <string name="waits_empty_answered_title">Aucune demande répondue</string>
+    <string name="waits_empty_answered_body">Ce que tu as répondu apparaît ici, avec ce que tu as donné.</string>
+    <string name="waits_empty_cancelled_title">Aucune demande retirée</string>
+    <string name="waits_empty_cancelled_body">Les demandes retirées par un agent ou un collègue apparaissent ici.</string>
+    <string name="waits_error_title">Impossible de charger tes attentes</string>
+    <string name="waits_error_body">Vérifie la connexion et réessaie.</string>
+    <string name="waits_load_failed">Impossible d’actualiser tes attentes.</string>
+    <string name="waits_status_answered">Répondu</string>
+    <string name="waits_status_cancelled">Annulé</string>
+    <string name="waits_answered_at">Répondu %1$s</string>
+    <string name="waits_cancelled_at">Annulé %1$s</string>
+    <string name="waits_answer_action">Réponse : %1$s</string>
+    <string name="waits_yes">Oui</string>
+    <string name="waits_no">Non</string>
 </resources>

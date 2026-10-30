@@ -9,9 +9,11 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
-/** Waits (`waits.v1`): what sessions need from the member, shown above the sessions list. */
+/** Waits (`waits.v1`): what sessions need from the member, on the Waiting for you screen and counted by its badge and the sessions banner. */
 val waitsModule = module {
-    single<WaitRepository> { RemoteWaitRepository(get()) }
+    // Bound by its class: the demo module binds the interface to a router that keeps the demo account's calls in memory.
+    single { RemoteWaitRepository(get()) }
+    single<WaitRepository> { get<RemoteWaitRepository>() }
     single { LoadWaitsUseCase(get(), get(), get()) }
     single { AnswerWaitUseCase(get(), get()) }
     single { FollowWaitsUseCase(get(), get(), get()) }

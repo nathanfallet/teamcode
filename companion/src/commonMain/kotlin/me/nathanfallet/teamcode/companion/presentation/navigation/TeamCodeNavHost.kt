@@ -321,6 +321,7 @@ internal fun panelTab(entry: NavBackStackEntry): MainTab? = when {
     entry.destination.hasRoute<AccountRoute>() -> MainTab.ACCOUNT
     entry.destination.hasRoute<ArtifactsRoute>() && entry.toRoute<ArtifactsRoute>().sessionId == null -> MainTab.ARTIFACTS
     entry.destination.hasRoute<AutomationsRoute>() -> MainTab.AUTOMATIONS
+    entry.destination.hasRoute<WaitsRoute>() -> MainTab.WAITS
     else -> null
 }
 
@@ -330,6 +331,7 @@ internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
     MainTab.ACCOUNT -> AccountRoute
     MainTab.ARTIFACTS -> accountId?.let { ArtifactsRoute(it) }
     MainTab.AUTOMATIONS -> accountId?.let { AutomationsRoute(it) }
+    MainTab.WAITS -> accountId?.let { WaitsRoute(it) }
 }
 
 /** The route of a screen both layouts show (pushed over the tabs, or in the content panel); null for the others. */

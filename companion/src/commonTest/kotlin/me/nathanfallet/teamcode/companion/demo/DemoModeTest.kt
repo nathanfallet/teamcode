@@ -6,6 +6,7 @@ import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -19,7 +20,10 @@ import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
+import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
+import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
@@ -165,6 +169,30 @@ class DemoModeTest {
         assertTrue(events.none { it is TranscriptEvent.UserMessage })
         // The session list hears about it.
         assertIs<LiveUpdate.Opened>(feed.first())
+    }
+
+    @Test fun theDemoHasWaitsToAnswerAndTheFeedAnnouncesAnAnswer() = runTest {
+        val account = startDemo()
+        val waits = koin.get<me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository>()
+        val open = waits.list(account.id, WaitStatus.OPEN).waits
+        // A session's own request comes first, like the server's first page; the others are answered in place.
+        assertEquals(listOf("w2", "w1", "w3", "w4"), open.map { it.id })
+        assertEquals(WaitSource.SESSION, open.first().source)
+        assertEquals(listOf("w5"), waits.list(account.id, WaitStatus.RESOLVED).waits.map { it.id })
+        assertTrue(waits.list(account.id, WaitStatus.CANCELLED).waits.single().cancelled)
+        val feed = koin.get<SessionRepository>().sessionChanges(account.id)
+        // Listening first: the feed has no replay.
+        val announced = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { feed.filterIsInstance<LiveUpdate.Item<SessionChange>>().first().value }
+        kotlinx.coroutines.yield()
+        val answered = waits.answer(account.id, "w1", "approve", emptyMap())
+        assertEquals(WaitStatus.RESOLVED, answered.status)
+        assertEquals(3, waits.list(account.id, WaitStatus.OPEN).waits.size)
+        assertEquals(SessionChange.WAIT_RESOLVED, announced.await().type)
+        // A session's request is answered in the session, a closed wait does not change, an unknown action is refused.
+        assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w2", "allow", emptyMap()) }.statusCode)
+        assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w1", "approve", emptyMap()) }.statusCode)
+        assertEquals(400, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w3", "nope", emptyMap()) }.statusCode)
+        assertEquals(0, engine.clients)
     }
 
     @Test fun signingOutEndsTheDemoAndDropsEverythingItHeld() = runTest {

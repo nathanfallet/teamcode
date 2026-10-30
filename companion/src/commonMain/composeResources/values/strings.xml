@@ -839,4 +839,26 @@
     <string name="waits_problem_unsupported">%1$s is filled in the session. Open it.</string>
     <string name="waits_field_in_session">This is filled in the session.</string>
     <string name="waits_reconnecting">Reconnecting…</string>
+    <string name="tab_waits">Waiting</string>
+    <string name="waits_badge_description">%1$s waiting for you</string>
+    <string name="waits_banner_count">%1$s waiting for you</string>
+    <string name="waits_filter_open">Open</string>
+    <string name="waits_filter_answered">Answered</string>
+    <string name="waits_filter_cancelled">Cancelled</string>
+    <string name="waits_empty_title">Nothing waits for you</string>
+    <string name="waits_empty_body">When an agent needs an answer, a decision or an approval, it shows up here at once.</string>
+    <string name="waits_empty_answered_title">No answered requests</string>
+    <string name="waits_empty_answered_body">What you answered shows here, with what you gave.</string>
+    <string name="waits_empty_cancelled_title">No withdrawn requests</string>
+    <string name="waits_empty_cancelled_body">Requests an agent or a teammate withdrew show here.</string>
+    <string name="waits_error_title">Could not load your waits</string>
+    <string name="waits_error_body">Check the connection and try again.</string>
+    <string name="waits_load_failed">Could not refresh your waits.</string>
+    <string name="waits_status_answered">Answered</string>
+    <string name="waits_status_cancelled">Cancelled</string>
+    <string name="waits_answered_at">Answered %1$s</string>
+    <string name="waits_cancelled_at">Cancelled %1$s</string>
+    <string name="waits_answer_action">Answer: %1$s</string>
+    <string name="waits_yes">Yes</string>
+    <string name="waits_no">No</string>
 </resources>

@@ -9,6 +9,15 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.domain.models.FieldType
+import me.nathanfallet.teamcode.companion.domain.models.Wait
+import me.nathanfallet.teamcode.companion.domain.models.WaitAction
+import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
+import me.nathanfallet.teamcode.companion.domain.models.WaitField
+import me.nathanfallet.teamcode.companion.domain.models.WaitKind
+import me.nathanfallet.teamcode.companion.domain.models.WaitOption
+import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import kotlinx.serialization.json.JsonPrimitive
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 
 /**
@@ -30,9 +39,9 @@ object DemoContent {
     const val USERNAME = "ada"
     const val SERVER_VERSION = "demo"
 
-    /** What the demo server announces: no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
+    /** What the demo server announces: waits, but no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
     val features = setOf(
-        Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME,
+        Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME, Features.WAITS,
     )
 
     /**
@@ -130,6 +139,36 @@ object DemoContent {
 
     /** The artifact ids of the gallery, as the server draws them (UUIDs). */
     fun artifactId(index: Int) = "00000000-0000-4000-8000-${(0xa00 + index).toString(16).padStart(12, '0')}"
+
+    /**
+     * What waits for the member, for the waiting screen: four open (a plan to review, a tool use to approve in a session,
+     * a failed turn, a choice), one answered and one withdrawn. The permission request is a session's own and is
+     * answered in the session; the others are answered in place.
+     */
+    fun waits(now: Long): List<Wait> {
+        fun wait(id: String, sessionId: String, sessionName: String, kind: WaitKind, title: String, body: String?, minutesAgo: Int, fields: List<WaitField> = emptyList(), actions: List<WaitAction> = emptyList(),
+            source: WaitSource = WaitSource.WAIT) = Wait(
+            id, source, kind, true, sessionId, sessionName, if (source == WaitSource.SESSION) "req-$id" else null, MEMBER_ID, title, body, emptyList(), fields, actions, now - minutesAgo * MINUTE,
+        )
+        val review = listOf(WaitAction("approve", "Approve", style = "primary"), WaitAction("request_changes", "Request changes", requires = listOf("feedback")))
+        val feedback = WaitField("feedback", FieldType.TEXT, "Feedback")
+        return listOf(
+            wait("w1", "s1", "Migrate billing to the new API", WaitKind.HUMAN_REQUEST, "Review the migration plan",
+                "Three steps: add `/v2/invoices`, map `/v1` onto it, then remove `/v1` after the clients update. Does the order suit you?", 4, listOf(feedback), review),
+            wait("w2", "s3", "Speed up the CI cache", WaitKind.PERMISSION, "Run `rm -rf ~/.gradle/caches`?", "The agent wants to clear the Gradle cache before measuring the restore time again.", 9, source = WaitSource.SESSION),
+            wait("w3", "s6", "Audit the payment webhooks", WaitKind.TURN_FAILED, "The last turn failed",
+                "The agent stopped after the provider rejected the request. You can ask it to try again.", 21,
+                listOf(WaitField("note", FieldType.TEXT, "Note for the agent")), listOf(WaitAction("retry", "Try again", style = "primary"), WaitAction("dismiss", "Dismiss"))),
+            wait("w4", "s2", "Review the release checklist", WaitKind.HUMAN_REQUEST, "Which store do we ship first?", null, 35,
+                listOf(WaitField("store", FieldType.CHOICE, "Store", required = true, options = listOf(WaitOption("ios", "App Store"), WaitOption("android", "Google Play")))),
+                listOf(WaitAction("done", "Send"))),
+            wait("w5", "s4", "Write the onboarding guide", WaitKind.HUMAN_REQUEST, "Is the tone right for new developers?", "I drafted the first page in a friendly, direct voice.", 180,
+                listOf(feedback), review).copy(open = false, resolvedAt = now - 150 * MINUTE,
+                answer = WaitAnswer("approve", mapOf("feedback" to JsonPrimitive("Yes, keep it short.")), MEMBER_ID, now - 150 * MINUTE)),
+            wait("w6", "s7", "Prototype the search page", WaitKind.HUMAN_REQUEST, "Pick the filter layout", null, 240, actions = listOf(WaitAction("done", "Done")))
+                .copy(open = false, cancelled = true, resolvedAt = now - 230 * MINUTE),
+        )
+    }
 
     fun artifacts(now: Long): List<Artifact> = artifactTitles.mapIndexed { index, title ->
         val id = artifactId(index)

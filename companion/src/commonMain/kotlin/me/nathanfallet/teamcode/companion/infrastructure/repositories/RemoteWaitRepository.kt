@@ -14,12 +14,14 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitOption
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
 import me.nathanfallet.teamcode.companion.domain.models.WaitRef
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
+import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
 
 /** The waits over the typed client (`/api/v1/waits`), one request per call. */
 class RemoteWaitRepository(private val calls: AccountCalls) : WaitRepository {
-    override suspend fun open(accountId: String, before: String?): WaitPage = calls.withAccount(accountId) { client ->
-        val page = client.waits(status = "open", before = before, limit = PAGE)
+    override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage = calls.withAccount(accountId) { client ->
+        val page = client.waits(status = status.wire, before = before, limit = PAGE)
         WaitPage(page.waits.map { it.domain() }, page.nextBefore)
     }
 
@@ -44,6 +46,9 @@ internal fun WaitView.domain() = Wait(
     fields = fields.map { it.domain() },
     actions = actions.map { it.domain() },
     createdAt = createdAt,
+    cancelled = status == "cancelled",
+    resolvedAt = resolvedAt,
+    answer = answer?.let { WaitAnswer(it.action, it.values, it.authorId, it.answeredAt) },
 )
 
 private fun WaitRefView.domain() = WaitRef(kind, id, url, title)

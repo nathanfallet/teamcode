@@ -54,6 +54,12 @@ import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferPage
 import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
 import me.nathanfallet.teamcode.companion.domain.models.UploadedFile
+import me.nathanfallet.teamcode.companion.domain.models.Wait
+import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
+import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
+import kotlinx.serialization.json.JsonElement
 import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.DeviceRepository
@@ -180,6 +186,18 @@ class DemoArtifactRepository(private val demo: DemoMode) : ArtifactRepository {
 /** What the demo server announces. */
 class DemoFeaturesRepository(private val demo: DemoMode) : FeaturesRepository {
     override suspend fun features(accountId: String, refresh: Boolean): Set<String> = DemoContent.features.also { demo.store() }
+}
+
+/** The demo's waits: the open ones are answered at once (no agent wakes), and the feed announces it like a server would. */
+class DemoWaitRepository(private val demo: DemoMode) : WaitRepository {
+    override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage {
+        val all = demo.store().waits.value.filter { it.status == status }
+        // Like the server: newest first, a session's own requests ahead of the stored waits on the first page of the open ones.
+        val sorted = all.sortedWith(compareByDescending<Wait> { status == WaitStatus.OPEN && it.source == WaitSource.SESSION }.thenByDescending { it.createdAt }.thenByDescending { it.id })
+        return WaitPage(if (before == null) sorted else emptyList(), null)
+    }
+
+    override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait = demo.store().answerWait(waitId, action, values)
 }
 
 /**

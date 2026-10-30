@@ -89,6 +89,9 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.GitHubLinkRout
 import me.nathanfallet.teamcode.companion.presentation.navigation.McpServersRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WaitsRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
+import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewModel
@@ -129,6 +132,7 @@ fun WideMainScreen(
     onPendingShown: () -> Unit = {},
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
+    waits: WaitsViewModel = koinViewModel(),
 ) {
     val sheets = rememberMainSheets()
     var palette by remember { mutableStateOf(false) }
@@ -173,6 +177,12 @@ fun WideMainScreen(
         sidebarSessions.start()
         onStopOrDispose { sidebarSessions.stop() }
     }
+    // The waits follow the app's one feed while the window shows the sidebar, whatever the panel shows: the sidebar's count stays live.
+    LifecycleStartEffect(waits) {
+        waits.start()
+        onStopOrDispose { waits.stop() }
+    }
+    val waitsState by waits.uiState.collectAsStateWithLifecycle()
     val signedIn = account?.takeIf { it.signedIn }
     val sidebarArtifacts: ArtifactsViewModel? = signedIn?.let { key(it.id) { koinViewModel(key = artifactsKey(it.id)) { parametersOf(ArtifactsRoute(it.id)) } } }
     val artifactsState = sidebarArtifacts?.uiState?.collectAsStateWithLifecycle()?.value
@@ -255,6 +265,7 @@ fun WideMainScreen(
             onAllArtifacts = { home.uiState.value.account?.let { show(ArtifactsRoute(it.id)) } },
             onOpenAutomation = { automation -> home.uiState.value.account?.let { show(AutomationRoute(it.id, automation.id)) } },
             onAllAutomations = { home.uiState.value.account?.let { show(AutomationsRoute(it.id)) } },
+            onOpenWaits = { home.uiState.value.account?.let { show(WaitsRoute(it.id)) } },
             onSwitchAccount = { settings.switchTo(it) },
             onSignInAgain = onSignInAgain,
             onAddAccount = onAddAccount,
@@ -281,6 +292,7 @@ fun WideMainScreen(
                             artifacts = artifactsState?.artifacts.orEmpty().take(SIDEBAR_ROWS), artifactsLoading = artifactsState?.loading ?: false,
                             artifactsError = artifactsState?.error,
                             automations = automationsState?.automations,
+                            waitsOpen = waitsState.takeIf { it.available }?.openCount, waitsMore = waitsState.moreOpen,
                             selection = selection, now = now,
                             sessionsFilter = sessionsFilterLabel(sessionsState), artifactsFilter = artifactsFilterLabel(artifactsState),
                         ),
@@ -311,8 +323,8 @@ fun WideMainScreen(
                             onOpenSessionArtifacts = { a, session -> detail.navigate(ArtifactsRoute(a.id, session.id)) },
                             viewModel = home,
                             sessionsViewModel = sidebarSessions,
-                            waitsViewModel = koinViewModel(),
-                            onOpenSessionById = { a, id -> detail.navigate(SessionRoute(a.id, id)) },
+                            waitsViewModel = waits,
+                            onOpenWaits = { a -> show(WaitsRoute(a.id)) },
                             follow = false,
                         )
                     }
@@ -352,6 +364,9 @@ fun WideMainScreen(
                         val route = entry.toRoute<AutomationsRoute>()
                         val viewModel: AutomationsViewModel = sidebarAutomations?.takeIf { route.accountId == signedIn?.id } ?: koinViewModel { parametersOf(route) }
                         AutomationsScreen(viewModel, onOpen = { detail.navigate(AutomationRoute(route.accountId, it.id)) }, onCreate = { detail.navigate(AutomationEditRoute(route.accountId)) })
+                    }
+                    composable<WaitsRoute> {
+                        WaitsScreen(waits, onOpenSession = { accountId, sessionId -> detail.navigate(SessionRoute(accountId, sessionId)) })
                     }
                     composable<AutomationRoute> { entry ->
                         val route = entry.toRoute<AutomationRoute>()
@@ -443,6 +458,7 @@ private fun NavBackStackEntry.detailRouteOrRoot(): Any? = when {
     destination.hasRoute<SessionsListRoute>() -> SessionsListRoute
     destination.hasRoute<AccountRoute>() -> AccountRoute
     destination.hasRoute<AutomationsRoute>() -> toRoute<AutomationsRoute>()
+    destination.hasRoute<WaitsRoute>() -> toRoute<WaitsRoute>()
     else -> detailRoute()
 }
 
@@ -459,6 +475,7 @@ private fun NavHostController.backLabel(entry: NavBackStackEntry): String {
         previous.hasRoute<TransfersRoute>() -> Res.string.transfers_title
         previous.hasRoute<AccountRoute>() -> Res.string.account_title
         previous.hasRoute<AutomationsRoute>() -> Res.string.automations_title
+        previous.hasRoute<WaitsRoute>() -> Res.string.waits_title
         previous.hasRoute<AutomationRoute>() -> Res.string.automation_title
         else -> Res.string.action_back
     })
@@ -473,6 +490,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<ArtifactRoute>() -> SidebarSelection.Artifact(toRoute<ArtifactRoute>().artifactId)
         destination.hasRoute<ArtifactsRoute>() -> if (toRoute<ArtifactsRoute>().sessionId == null) SidebarSelection.AllArtifacts else SidebarSelection.None
         destination.hasRoute<AutomationsRoute>() -> SidebarSelection.AllAutomations
+        destination.hasRoute<WaitsRoute>() -> SidebarSelection.AllWaits
         destination.hasRoute<AutomationRoute>() -> SidebarSelection.Automation(toRoute<AutomationRoute>().automationId)
         destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>().automationId?.let { SidebarSelection.Automation(it) } ?: SidebarSelection.AllAutomations
         destination.hasRoute<AutomationTestRoute>() -> SidebarSelection.Automation(toRoute<AutomationTestRoute>().automationId)

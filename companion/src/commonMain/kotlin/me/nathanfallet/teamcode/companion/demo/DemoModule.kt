@@ -13,6 +13,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SubscriptionAccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TranscriptRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TransferRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.CachedFeaturesRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteArtifactRepository
@@ -25,6 +26,7 @@ import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSess
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSubscriptionAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTranscriptRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTransferRepository
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteWaitRepository
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import org.koin.dsl.module
 
@@ -50,6 +52,7 @@ val demoModule = module {
         get<RemoteSubscriptionAccountRepository>().let { DemoAwareSubscriptionAccountRepository(it, DemoSubscriptionAccountRepository(it.types)) }
     }
     single<GitHubLinkRepository> { DemoAwareGitHubLinkRepository(get<RemoteGitHubLinkRepository>(), DemoGitHubLinkRepository) }
+    single<WaitRepository> { DemoAwareWaitRepository(get<RemoteWaitRepository>(), DemoWaitRepository(get())) }
     single<McpServerRepository> { DemoAwareMcpServerRepository(get<RemoteMcpServerRepository>(), DemoMcpServerRepository) }
 }
 
