@@ -10,7 +10,7 @@ object AddServerRoute
 @Serializable
 data class LoginRoute(val origin: String, val username: String? = null)
 
-/** The tabs of a signed-in app: Sessions, Artifacts, Automations (when the server has them), Account. */
+/** The tabs of a signed-in app: Sessions, Waits and Automations (when the server has them), Artifacts, Account. */
 @Serializable
 object MainRoute
 
@@ -53,6 +53,10 @@ data class McpServersRoute(val accountId: String)
 /** An account's automations: the Automations tab of a phone, and a screen of the wide layout's content panel. */
 @Serializable
 data class AutomationsRoute(val accountId: String)
+
+/** An account's waits ("Waiting for you"): the Waits tab of a phone, and a screen of the wide layout's content panel. */
+@Serializable
+data class WaitsRoute(val accountId: String)
 
 /** One automation: its definition, webhook URL and history. */
 @Serializable

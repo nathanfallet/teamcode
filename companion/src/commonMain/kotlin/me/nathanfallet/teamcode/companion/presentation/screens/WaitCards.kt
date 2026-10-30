@@ -4,9 +4,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -16,8 +16,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import me.nathanfallet.teamcode.companion.domain.models.AnswerValue
 import me.nathanfallet.teamcode.companion.domain.models.FieldInput
 import me.nathanfallet.teamcode.companion.domain.models.FieldType
 import me.nathanfallet.teamcode.companion.domain.models.Wait
@@ -28,7 +30,6 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.Chip
-import me.nathanfallet.teamcode.companion.presentation.components.SectionTitle
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcTextField
@@ -37,12 +38,13 @@ import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitDraft
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitNotice
-import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsUiState
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.sessions_waiting_permission
 import me.nathanfallet.teamcode.companion.resources.sessions_waiting_question
 import me.nathanfallet.teamcode.companion.resources.waits_asks_you
-import me.nathanfallet.teamcode.companion.resources.waits_closed_elsewhere
+import me.nathanfallet.teamcode.companion.resources.waits_answer_action
+import me.nathanfallet.teamcode.companion.resources.waits_answered_at
+import me.nathanfallet.teamcode.companion.resources.waits_cancelled_at
 import me.nathanfallet.teamcode.companion.resources.waits_field_in_session
 import me.nathanfallet.teamcode.companion.resources.waits_from_session
 import me.nathanfallet.teamcode.companion.resources.waits_notice_failed
@@ -54,34 +56,32 @@ import me.nathanfallet.teamcode.companion.resources.waits_problem_missing
 import me.nathanfallet.teamcode.companion.resources.waits_problem_number
 import me.nathanfallet.teamcode.companion.resources.waits_problem_too_long
 import me.nathanfallet.teamcode.companion.resources.waits_problem_unsupported
-import me.nathanfallet.teamcode.companion.resources.waits_title
+import me.nathanfallet.teamcode.companion.resources.waits_status_answered
+import me.nathanfallet.teamcode.companion.resources.waits_status_cancelled
+import me.nathanfallet.teamcode.companion.resources.waits_yes
+import me.nathanfallet.teamcode.companion.resources.waits_no
 import me.nathanfallet.teamcode.companion.resources.waits_turn_failed
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * "Waiting for you": the top of the sessions list while something waits for the member. A session's own permission
- * request or question is answered in the session (a button opens it); a request from an agent is answered here, field
- * by field. Nothing is shown when the server has no waits or none is open.
+ * One wait as a card, the same everywhere a wait is shown: the kind, the session it belongs to, the title and body, and
+ * then, for an open request from an agent, its fields and actions to answer in place; for a session's own permission
+ * request or question, a button to open the session (they are answered there). A wait that ended shows what was given
+ * instead: answered with the action and values, or cancelled. [today] is the UTC day of [now] for the times shown.
  */
-fun LazyListScope.waitsSection(
-    state: WaitsUiState,
+@Composable
+internal fun WaitCard(
+    wait: Wait,
+    draft: WaitDraft,
+    now: Long,
     onInput: (waitId: String, fieldId: String, FieldInput) -> Unit,
     onAnswer: (Wait, actionId: String) -> Unit,
     onOpenSession: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    if (!state.available || (state.waits.isEmpty() && !state.closedElsewhere)) return
-    item(key = "waits-title") { SectionTitle(stringResource(Res.string.waits_title), Modifier.testTag("waits-title")) }
-    if (state.closedElsewhere) item(key = "waits-closed") { Banner(stringResource(Res.string.waits_closed_elsewhere), Tone.NEUTRAL, Modifier.testTag("waits-closed")) }
-    items(state.waits.size, key = { "wait-${state.waits[it].id}" }) { index ->
-        val wait = state.waits[index]
-        WaitCard(wait, state.drafts[wait.id] ?: WaitDraft(), onInput, onAnswer, onOpenSession)
-    }
-}
-
-@Composable
-private fun WaitCard(wait: Wait, draft: WaitDraft, onInput: (String, String, FieldInput) -> Unit, onAnswer: (Wait, String) -> Unit, onOpenSession: (String) -> Unit) {
     val colors = TeamCode.colors
-    TcCard(Modifier.testTag("wait-${wait.id}"), borderColor = colors.accentDim) {
+    val today = utcEpochDay(now)
+    TcCard(modifier.testTag("wait-${wait.id}"), borderColor = if (wait.open) colors.accentDim else colors.line) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Chip(
                 stringResource(when (wait.kind) {
@@ -90,13 +90,22 @@ private fun WaitCard(wait: Wait, draft: WaitDraft, onInput: (String, String, Fie
                     WaitKind.TURN_FAILED -> Res.string.waits_turn_failed
                     WaitKind.HUMAN_REQUEST -> Res.string.waits_asks_you
                 }),
-                tone = if (wait.kind == WaitKind.TURN_FAILED) Tone.DANGER else Tone.ACCENT, dot = true,
+                tone = when {
+                    !wait.open -> Tone.MUTED
+                    wait.kind == WaitKind.TURN_FAILED -> Tone.DANGER
+                    else -> Tone.ACCENT
+                },
+                dot = wait.open, modifier = Modifier.testTag("wait-kind-${wait.id}"),
             )
-            wait.sessionName?.let { Text(stringResource(Res.string.waits_from_session, it), style = MetaStyle, color = colors.muted, maxLines = 1) }
+            if (!wait.open) Chip(stringResource(if (wait.cancelled) Res.string.waits_status_cancelled else Res.string.waits_status_answered), tone = if (wait.cancelled) Tone.MUTED else Tone.NEUTRAL,
+                modifier = Modifier.testTag("wait-status-${wait.id}"))
+            Spacer(Modifier.weight(1f))
+            Text(relativeTime(wait.createdAt, now), style = MetaStyle, color = colors.muted, maxLines = 1, modifier = Modifier.testTag("wait-age-${wait.id}"))
         }
+        wait.sessionName?.let { Text(stringResource(Res.string.waits_from_session, it), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("wait-session-${wait.id}")) }
         Text(wait.title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-        wait.body?.takeIf { it.isNotBlank() }?.let { Text(it, color = colors.muted, fontSize = 13.sp, maxLines = 6) }
-        if (wait.source == WaitSource.WAIT) {
+        wait.body?.takeIf { it.isNotBlank() }?.let { Text(it, color = colors.muted, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis) }
+        if (wait.open && wait.source == WaitSource.WAIT) {
             wait.fields.forEach { WaitFieldInput(wait, it, draft.inputs[it.id], onInput) }
             draft.problem?.let { Banner(it.words(), Tone.WARN, Modifier.testTag("wait-problem")) }
             draft.notice?.let { Banner(stringResource(when (it) {
@@ -114,8 +123,29 @@ private fun WaitCard(wait: Wait, draft: WaitDraft, onInput: (String, String, Fie
                 }
             }
         }
+        if (!wait.open) WaitOutcome(wait, today)
         wait.sessionId?.let { sessionId ->
             TcButton(stringResource(Res.string.waits_open_session), onClick = { onOpenSession(sessionId) }, kind = ButtonKind.GHOST, small = true, modifier = Modifier.testTag("wait-open"))
+        }
+    }
+}
+
+/** What became of a wait that ended: when, and for an answered one the action chosen and the values given. */
+@Composable
+private fun WaitOutcome(wait: Wait, today: Long) {
+    val colors = TeamCode.colors
+    val at = wait.answer?.answeredAt ?: wait.resolvedAt
+    Column(Modifier.fillMaxWidth().testTag("wait-outcome-${wait.id}"), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        at?.let {
+            Text(stringResource(if (wait.cancelled) Res.string.waits_cancelled_at else Res.string.waits_answered_at, formatEventTime(it, today)), style = MetaStyle, color = colors.muted)
+        }
+        wait.answerActionLabel?.let { Text(stringResource(Res.string.waits_answer_action, it), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+        wait.answerLines().forEach { line ->
+            val value = when (val v = line.value) {
+                is AnswerValue.Flag -> stringResource(if (v.value) Res.string.waits_yes else Res.string.waits_no)
+                is AnswerValue.Words -> v.text
+            }
+            Text("${line.label}: $value", color = colors.muted, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,6 +45,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.Bell
 import com.adamglin.phosphoricons.regular.FileText
 import com.adamglin.phosphoricons.regular.TerminalWindow
 import com.adamglin.phosphoricons.regular.UserCircle
@@ -77,6 +79,10 @@ import me.nathanfallet.teamcode.companion.domain.services.LocalHost
 import org.koin.compose.getKoin
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SettingsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsUiState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
+import me.nathanfallet.teamcode.companion.resources.tab_waits
+import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
@@ -89,8 +95,8 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
-/** The tabs of the phone layout; AUTOMATIONS only on a server that has them (`automations.v1`). */
-enum class MainTab { SESSIONS, ARTIFACTS, AUTOMATIONS, ACCOUNT }
+/** The tabs of the phone layout; WAITS only on a server that has waits (`waits.v1`), AUTOMATIONS only on one that has automations (`automations.v1`). */
+enum class MainTab { SESSIONS, WAITS, ARTIFACTS, AUTOMATIONS, ACCOUNT }
 
 /**
  * The sheets (dialogs on a wide window) the signed-in app opens over its content: a new session (on the desktop, first
@@ -206,6 +212,7 @@ fun MainScreen(
     onTabChange: (MainTab) -> Unit = {},
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
+    waits: WaitsViewModel = koinViewModel(),
 ) {
     var tab by rememberSaveable { mutableStateOf(initialTab) }
     // The tab last told to the caller: its echo back as initialTab is not a new tab, and must not undo a later choice.
@@ -220,7 +227,13 @@ fun MainScreen(
     val account = homeState.account
     val automationsOffered = rememberAutomationsOffered(account)
     // A tab the active account's server does not offer (another account was chosen) shows the first one.
-    val shownTab = if (tab == MainTab.AUTOMATIONS && !automationsOffered) MainTab.SESSIONS else tab
+    // The waits follow the app's one feed while the signed-in app is open, whatever tab shows: the badge stays live.
+    LifecycleStartEffect(waits) {
+        waits.start()
+        onStopOrDispose { waits.stop() }
+    }
+    val waitsState by waits.uiState.collectAsStateWithLifecycle()
+    val shownTab = if ((tab == MainTab.AUTOMATIONS && !automationsOffered) || (tab == MainTab.WAITS && !waitsState.available)) MainTab.SESSIONS else tab
     LaunchedEffect(Unit) {
         AppCommands.commands.collect { command ->
             when (command) {
@@ -248,9 +261,12 @@ fun MainScreen(
                     onSwitchAccount = { sheets.switcher = true },
                     titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
                     viewModel = home,
-                    waitsViewModel = koinViewModel(),
-                    onOpenSessionById = { a, id -> onOpenSession(a.id, id) },
+                    waitsViewModel = waits,
+                    onOpenWaits = { tab = MainTab.WAITS },
                 )
+                MainTab.WAITS -> if (account != null && account.signedIn) key(account.id) {
+                    WaitsScreen(waits, onOpenSession = onOpenSession)
+                } else SignedOutTab(stringResource(Res.string.waits_title), account, onSignInAgain)
                 MainTab.ARTIFACTS -> if (account != null && account.signedIn) key(account.id) {
                     val viewModel: ArtifactsViewModel = koinViewModel(key = artifactsKey(account.id)) { parametersOf(ArtifactsRoute(account.id)) }
                     ArtifactsScreen(viewModel, forSession = false, onBack = {}, onOpen = { onOpenArtifact(account.id, it.id) }, onOpenLink = onOpenLink)
@@ -263,7 +279,7 @@ fun MainScreen(
                     onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, viewModel = settings)
             }
         }
-        TabBar(shownTab, automationsOffered) { tab = it }
+        TabBar(shownTab, automationsOffered, waitsState.takeIf { it.available }) { tab = it }
     }
 
     MainSheetsHost(sheets, settings, onOpenSession, onSignInAgain, onAddAccount, onManageAccounts = { tab = MainTab.ACCOUNT })
@@ -327,7 +343,7 @@ internal fun rememberAutomationsOffered(account: Account?): Boolean {
 internal fun automationsKey(accountId: String) = "automations-$accountId"
 
 @Composable
-private fun TabBar(selected: MainTab, automations: Boolean, onSelect: (MainTab) -> Unit) {
+private fun TabBar(selected: MainTab, automations: Boolean, waits: WaitsUiState?, onSelect: (MainTab) -> Unit) {
     val colors = TeamCode.colors
     Column(Modifier.fillMaxWidth().background(colors.line).padding(top = 1.dp)) {
         Row(
@@ -335,10 +351,11 @@ private fun TabBar(selected: MainTab, automations: Boolean, onSelect: (MainTab) 
             horizontalArrangement = Arrangement.Center,
         ) {
             BoxWithConstraints(Modifier.widthIn(max = ContentWidth)) {
-              // Four tabs on a narrow phone: the Automations label is shortened (a French "Automatisations" does not fit under 380 dp).
+              // Five tabs on a narrow phone: the Automations label is shortened (a French "Automatisations" does not fit under 380 dp).
               val short = maxWidth < 380.dp
               Row(Modifier.fillMaxWidth()) {
                 TabItem(MainTab.SESSIONS, PhosphorIcons.Regular.TerminalWindow, stringResource(Res.string.tab_sessions), selected, onSelect)
+                if (waits != null) TabItem(MainTab.WAITS, PhosphorIcons.Regular.Bell, stringResource(Res.string.tab_waits), selected, onSelect, badge = waits)
                 TabItem(MainTab.ARTIFACTS, PhosphorIcons.Regular.FileText, stringResource(Res.string.tab_artifacts), selected, onSelect)
                 if (automations) TabItem(MainTab.AUTOMATIONS, PhosphorIcons.Regular.Clock, stringResource(if (short) Res.string.tab_automations_short else Res.string.tab_automations), selected, onSelect)
                 TabItem(MainTab.ACCOUNT, PhosphorIcons.Regular.UserCircle, stringResource(Res.string.tab_account), selected, onSelect)
@@ -349,7 +366,7 @@ private fun TabBar(selected: MainTab, automations: Boolean, onSelect: (MainTab) 
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.TabItem(tab: MainTab, icon: ImageVector, label: String, selected: MainTab, onSelect: (MainTab) -> Unit) {
+private fun androidx.compose.foundation.layout.RowScope.TabItem(tab: MainTab, icon: ImageVector, label: String, selected: MainTab, onSelect: (MainTab) -> Unit, badge: WaitsUiState? = null) {
     val colors = TeamCode.colors
     val on = tab == selected
     val color = if (on) colors.accentText else colors.muted
@@ -358,7 +375,11 @@ private fun androidx.compose.foundation.layout.RowScope.TabItem(tab: MainTab, ic
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
     ) {
-        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
+        Box {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
+            // The open waits, live while another tab shows.
+            if (badge != null && badge.openCount > 0) WaitsBadge(badge.openCount, badge.moreOpen, Modifier.align(Alignment.TopEnd).offset(x = 12.dp, y = (-6).dp).testTag("tab-badge-waits"))
+        }
         Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     }
 }

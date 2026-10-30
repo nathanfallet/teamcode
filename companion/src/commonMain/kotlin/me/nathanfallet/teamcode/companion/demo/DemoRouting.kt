@@ -15,6 +15,9 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SubscriptionAccountType
 import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
+import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
+import kotlinx.serialization.json.JsonElement
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
@@ -198,4 +201,10 @@ class DemoAwareGitHubLinkRepository(private val real: GitHubLinkRepository, priv
 
 class DemoAwareMcpServerRepository(private val real: McpServerRepository, private val demo: McpServerRepository) : McpServerRepository {
     override suspend fun servers(accountId: String) = (if (isDemo(accountId)) demo else real).servers(accountId)
+}
+
+class DemoAwareWaitRepository(private val real: WaitRepository, private val demo: WaitRepository) : WaitRepository {
+    private fun of(accountId: String) = if (isDemo(accountId)) demo else real
+    override suspend fun list(accountId: String, status: WaitStatus, before: String?) = of(accountId).list(accountId, status, before)
+    override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>) = of(accountId).answer(accountId, waitId, action, values)
 }

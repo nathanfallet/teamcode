@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.Bell
 import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.Check
 import com.adamglin.phosphoricons.regular.Copy
@@ -90,6 +91,7 @@ import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.settings_add_account
 import me.nathanfallet.teamcode.companion.resources.settings_title
 import me.nathanfallet.teamcode.companion.resources.sidebar_artifacts_empty
+import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.resources.palette_search
 import me.nathanfallet.teamcode.companion.resources.sidebar_filtered
 import me.nathanfallet.teamcode.companion.resources.sidebar_mark_read
@@ -111,6 +113,7 @@ sealed interface SidebarSelection {
     data object AllSessions : SidebarSelection
     data object AllArtifacts : SidebarSelection
     data object AllAutomations : SidebarSelection
+    data object AllWaits : SidebarSelection
     data object Settings : SidebarSelection
     data class Session(val id: String) : SidebarSelection
     data class Artifact(val id: String) : SidebarSelection
@@ -130,6 +133,10 @@ data class SidebarState(
     val artifactsError: Failure? = null,
     /** The latest automations; null while the server has not said it offers them (`automations.v1`): the section is hidden. */
     val automations: List<AutomationSummary>? = null,
+    /** The number of open waits; null while the server has not said it offers them (`waits.v1`): the entry is hidden. */
+    val waitsOpen: Int? = null,
+    /** More open waits than were read: the badge says "N+". */
+    val waitsMore: Boolean = false,
     val selection: SidebarSelection,
     val now: Long,
     /** The filter the shared lists are on when it is not their default (Paused, Team...): shown by the section titles. */
@@ -155,6 +162,7 @@ class SidebarActions(
     val artifactLink: (Artifact) -> String? = { null },
     val onOpenAutomation: (AutomationSummary) -> Unit = {},
     val onAllAutomations: () -> Unit = {},
+    val onOpenWaits: () -> Unit = {},
     /** Opens the command palette; null: no search row. */
     val onSearch: (() -> Unit)? = null,
     /** The palette's shortcut as the platform writes it (⌘K, Ctrl+K), shown on the search row. */
@@ -193,6 +201,11 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
             }
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            // What waits for the member comes first: one row, with the live count of open waits.
+            if (account?.signedIn == true && state.waitsOpen != null) {
+                SidebarRow(PhosphorIcons.Regular.Bell, stringResource(Res.string.waits_title), selected = state.selection == SidebarSelection.AllWaits, onClick = actions.onOpenWaits,
+                    tag = "sidebar-waits", bold = state.waitsOpen > 0, trailing = { if (state.waitsOpen > 0) WaitsBadge(state.waitsOpen, state.waitsMore, Modifier.testTag("sidebar-waits-badge")) })
+            }
             SidebarHeader(stringResource(Res.string.sessions_title), state.sessionsFilter)
             when {
                 account != null && !account.signedIn -> SidebarRow(PhosphorIcons.Regular.SignIn, stringResource(Res.string.sidebar_signed_out), selected = false, tint = colors.warn,

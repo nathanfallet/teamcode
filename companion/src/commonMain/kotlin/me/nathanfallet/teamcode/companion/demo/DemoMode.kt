@@ -13,6 +13,10 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.domain.models.Wait
+import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
+import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import kotlinx.serialization.json.JsonElement
 import me.nathanfallet.teamcode.companion.domain.services.Clock
 
 /**
@@ -47,6 +51,8 @@ internal class DemoStore(private val clock: Clock, account: Account) {
     private val _transcripts = MutableStateFlow(DemoContent.sessions(startedAt).associate { it.id to DemoContent.transcript(it.id, startedAt) })
     val transcripts: StateFlow<Map<String, List<TranscriptEvent>>> = _transcripts.asStateFlow()
     val artifacts = DemoContent.artifacts(startedAt)
+    private val _waits = MutableStateFlow(DemoContent.waits(startedAt))
+    val waits: StateFlow<List<Wait>> = _waits.asStateFlow()
 
     /** The caller-wide feed: what the session list hears about the demo's sessions. */
     val feed = MutableSharedFlow<SessionChange>(extraBufferCapacity = 64)
@@ -101,6 +107,19 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         _sessions.update { all -> all[sessionId]?.let { all + (sessionId to it.copy(lastActivityAt = at, updatedAt = at)) } ?: all }
         announce(sessionId, null, TurnPhase.COMPLETED.wire)
         return inputId
+    }
+
+    /** Answers an open wait of the member's at once, as the server would, and tells the feed. */
+    fun answerWait(id: String, actionId: String, values: Map<String, JsonElement>): Wait {
+        val wait = waits.value.firstOrNull { it.id == id } ?: throw CompanionException.NotFound()
+        // A session's own request is answered in the session, a closed wait does not change.
+        if (!wait.open || wait.source == WaitSource.SESSION) throw CompanionException.Server(409, if (wait.open) "answer_through_session" else "wait_closed")
+        if (wait.actions.none { it.id == actionId }) throw CompanionException.Server(400, "invalid_answer")
+        val at = now()
+        val resolved = wait.copy(open = false, resolvedAt = at, answer = WaitAnswer(actionId, values, DemoContent.MEMBER_ID, at))
+        _waits.update { all -> all.map { if (it.id == id) resolved else it } }
+        feed.tryEmit(SessionChange(next(), SessionChange.WAIT_RESOLVED, wait.sessionId.orEmpty(), DemoContent.MEMBER_ID, at, null, null, waitId = id))
+        return resolved
     }
 
     fun newId(prefix: String) = "demo-$prefix-${next()}"

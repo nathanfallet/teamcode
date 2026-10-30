@@ -9,6 +9,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.DesktopComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -80,6 +81,48 @@ class DemoModeScreenTest {
             onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             onAllNodesWithText("Fix the flaky login test").onFirst().assertIsDisplayed()
+        }
+    }
+
+    @Test fun theDemoShowsTheWaitingScreenFromTheSidebarAndAnAnswerUpdatesTheBadgeLive() {
+        demoApp(CountingEngine()) {
+            onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            // Four of the demo's waits are open: the sidebar's row counts them, and the screen lists them with their sessions.
+            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("waits-banner").assertExists()
+            onNodeWithTag("sidebar-waits").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("waits-badge").assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("wait-w1").assertExists()
+            onNodeWithTag("wait-w2").assertExists()
+            onNodeWithTag("waits-banner").assertDoesNotExist()
+            onNodeWithTag("wait-field-feedback").performTextInput("Go ahead")
+            onNodeWithTag("wait-action-approve").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("wait-w1").assertDoesNotExist()
+            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("3 waiting for you")
+            // What was answered shows under its filter, with the action and what was given.
+            onNodeWithTag("waits-filter-answered").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("wait-w1").assertExists()
+            onNodeWithText("Feedback: Go ahead").assertExists()
+        }
+    }
+
+    @Test fun onAPhoneTheWaitingTabCountsTheWaitsAndTheSessionsBannerOpensIt() {
+        demoApp(CountingEngine(), width = 390, height = 844) {
+            onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("waits-banner").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("wait-w1").assertExists()
+            onNodeWithTag("waits-badge").assertExists()
+            // The badge stays while another tab shows.
+            onNodeWithTag("tab-sessions").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
         }
     }
 

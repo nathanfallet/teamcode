@@ -156,21 +156,16 @@ fun SessionsScreen(
     onOpenSessionArtifacts: ((Account, CloudSession) -> Unit)? = null,
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
-    /** "Waiting for you" above the sessions; null: no such section (tests of the list alone). */
+    /** The waits the banner above the sessions counts; null: no banner (tests of the list alone). The caller follows them ([WaitsViewModel.start]). */
     waitsViewModel: WaitsViewModel? = null,
-    /** A wait's session, from its card: opened by identifier. */
-    onOpenSessionById: (Account, String) -> Unit = { _, _ -> },
+    /** The banner's tap: the waits screen of the account. */
+    onOpenWaits: (Account) -> Unit = {},
     follow: Boolean = true,
     clock: Clock = koinInject(),
 ) {
     val home by viewModel.uiState.collectAsStateWithLifecycle()
     val state by sessionsViewModel.uiState.collectAsStateWithLifecycle()
     val waits by (waitsViewModel?.uiState ?: remember { MutableStateFlow(WaitsUiState()) }).collectAsStateWithLifecycle()
-    // Its own lifecycle: the wide layout shares the sessions list with its sidebar, but not the waits.
-    if (waitsViewModel != null) LifecycleStartEffect(waitsViewModel) {
-        waitsViewModel.start()
-        onStopOrDispose { waitsViewModel.stop() }
-    }
     // Streams are open only while the screen is visible: closed in the background, resumed on return.
     if (follow) LifecycleStartEffect(sessionsViewModel) {
         sessionsViewModel.start()
@@ -259,7 +254,7 @@ fun SessionsScreen(
                     })
                 }
             }
-            if (waitsViewModel != null) waitsSection(waits, onInput = waitsViewModel::input, onAnswer = waitsViewModel::answer, onOpenSession = { id -> account?.let { onOpenSessionById(it, id) } })
+            if (waitsViewModel != null && account != null) waitsBanner(waits) { onOpenWaits(account) }
             val sessions = list?.sessions.orEmpty()
             if (state.loading && sessions.isEmpty()) {
                 items(3, key = { "skeleton-$it" }) { index -> SkeletonCard(index) }

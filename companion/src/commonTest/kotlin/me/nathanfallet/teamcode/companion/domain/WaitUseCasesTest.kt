@@ -24,6 +24,7 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitInputProblem
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
 import me.nathanfallet.teamcode.companion.domain.models.WaitOption
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
@@ -45,7 +46,7 @@ class WaitUseCasesTest {
         val calls = mutableListOf<String>()
         var page = WaitPage(emptyList(), null)
         var failure: Exception? = null
-        override suspend fun open(accountId: String, before: String?): WaitPage { calls += "open"; return page }
+        override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage { calls += "list ${status.wire} ${before.orEmpty()}".trim(); return page }
         override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait {
             calls += "answer $waitId $action ${values.entries.joinToString(",") { "${it.key}=${it.value}" }}"
             failure?.let { throw it }

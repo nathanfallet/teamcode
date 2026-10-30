@@ -1,6 +1,8 @@
 package me.nathanfallet.teamcode.companion.domain.models
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 /** Where a wait lives: its own row, answered here, or a session's permission request or question, answered in the session. */
 enum class WaitSource { WAIT, SESSION }
@@ -53,7 +55,49 @@ data class Wait(
     val fields: List<WaitField>,
     val actions: List<WaitAction>,
     val createdAt: Long,
-)
+    /** For a wait that ended: `true` when it was withdrawn rather than answered. */
+    val cancelled: Boolean = false,
+    /** When it ended, server time in milliseconds. */
+    val resolvedAt: Long? = null,
+    /** What was answered, for a wait that was. */
+    val answer: WaitAnswer? = null,
+) {
+    val status: WaitStatus get() = if (open) WaitStatus.OPEN else if (cancelled) WaitStatus.CANCELLED else WaitStatus.RESOLVED
+
+    /** The action chosen, in the words of the wait's own action. */
+    val answerActionLabel: String? get() = answer?.let { given -> actions.firstOrNull { it.id == given.action }?.label ?: given.action }
+
+    /** The values given, one line per field in the wait's order (a value of a field the wait no longer shows keeps its id). */
+    fun answerLines(): List<AnswerLine> {
+        val values = answer?.values ?: return emptyList()
+        val known = fields.filter { it.id in values && it.type != FieldType.INFO }.map { field -> AnswerLine(field.label, values.getValue(field.id).shown(field)) }
+        val unknown = values.filterKeys { id -> fields.none { it.id == id } }.map { (id, value) -> AnswerLine(id, value.shown(null)) }
+        return known + unknown
+    }
+}
+
+/** One line of a given answer: the field's label and its value; [flag] is set for a yes or no, which the screen words. */
+data class AnswerLine(val label: String, val value: AnswerValue)
+
+sealed interface AnswerValue {
+    data class Words(val text: String) : AnswerValue
+    data class Flag(val value: Boolean) : AnswerValue
+}
+
+private fun JsonElement.shown(field: WaitField?): AnswerValue {
+    fun label(value: String) = field?.options?.firstOrNull { it.value == value }?.label ?: value
+    return when (this) {
+        is JsonPrimitive -> if (!isString && (content == "true" || content == "false")) AnswerValue.Flag(content == "true") else AnswerValue.Words(label(content))
+        is JsonArray -> AnswerValue.Words(joinToString(", ") { (it as? JsonPrimitive)?.content?.let(::label) ?: it.toString() })
+        else -> AnswerValue.Words(toString())
+    }
+}
+
+/** The answer given to a wait: the action chosen, the values by field id, and when. */
+data class WaitAnswer(val action: String, val values: Map<String, JsonElement> = emptyMap(), val authorId: String? = null, val answeredAt: Long? = null)
+
+/** Which waits a list shows: those still open, those answered, those withdrawn. */
+enum class WaitStatus(val wire: String) { OPEN("open"), RESOLVED("resolved"), CANCELLED("cancelled") }
 
 data class WaitPage(val waits: List<Wait>, val nextBefore: String?)
 

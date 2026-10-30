@@ -16,21 +16,23 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitAction
 import me.nathanfallet.teamcode.companion.domain.models.WaitInputProblem
 import me.nathanfallet.teamcode.companion.domain.models.WaitInputProblem.Reason
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.Features
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 
-/** Whether the account's server has waits: the section stays hidden otherwise. */
+/** Whether the account's server has waits: the screen, its tab and the banner stay hidden otherwise. */
 class WaitsAvailabilityUseCase(private val features: FeaturesRepository) {
     suspend operator fun invoke(accountId: String): Boolean = Features.WAITS in features.features(accountId)
 }
 
+/** One page of the member's waits in [status] (open by default), keyset-paged by [before]. */
 class LoadWaitsUseCase(private val waits: WaitRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
-    suspend operator fun invoke(accountId: String): WaitPage = guard(accountId) {
+    suspend operator fun invoke(accountId: String, status: WaitStatus = WaitStatus.OPEN, before: String? = null): WaitPage = guard(accountId) {
         if (Features.WAITS !in features.features(accountId)) throw CompanionException.Unsupported(Features.WAITS)
-        waits.open(accountId)
+        waits.list(accountId, status, before)
     }
 }
 
@@ -81,16 +83,16 @@ class AnswerWaitUseCase(private val waits: WaitRepository, private val guard: Ac
     }
 }
 
-/** What the section does next: load again, or show the connection's state. */
+/** What the waits screen does next: load again, or show the connection's state. */
 sealed interface WaitsSignal {
     data object Reload : WaitsSignal
     data class Connection(val reconnecting: Boolean) : WaitsSignal
 }
 
 /**
- * Keeps the section current from the app's one feed ([SessionFeed]): a load when the feed opens (so nothing is missed
+ * Keeps the waits current from the app's one feed ([SessionFeed]): a load when the feed opens (so nothing is missed
  * between loading and following), after a gap, and at each event that concerns this member's waits. Without the feed
- * (an older server) nothing is followed: the section loads once and on return to the screen.
+ * (an older server) nothing is followed: the waits load once and on return to the screen.
  */
 class FollowWaitsUseCase(private val feed: SessionFeed, private val features: FeaturesRepository, private val guard: AccountGuard) {
     operator fun invoke(accountId: String, memberId: String): Flow<WaitsSignal> = guard.flow(accountId, flow {

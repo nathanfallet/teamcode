@@ -21,6 +21,8 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.FieldType
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
+import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
+import me.nathanfallet.teamcode.companion.domain.models.AnswerValue
 import me.nathanfallet.teamcode.companion.infrastructure.client.TeamCodeClientProvider
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.AccountCalls
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteWaitRepository
@@ -50,7 +52,7 @@ class RemoteWaitRepositoryTest {
 
     @Test fun theOpenWaitsAreAskedAndMapped() = runTest {
         answers.addLast(HttpStatusCode.OK to """{"waits":[$permission,$review],"nextBefore":"w0"}""")
-        val page = waits.open("a1", before = "w9")
+        val page = waits.list("a1", WaitStatus.OPEN, before = "w9")
         val url = requests.single().url
         assertTrue(url.encodedPath.endsWith("/api/v1/waits")); assertEquals("open", url.parameters["status"]); assertEquals("w9", url.parameters["before"])
         assertEquals("w0", page.nextBefore)
@@ -60,6 +62,20 @@ class RemoteWaitRepositoryTest {
         assertEquals(listOf(FieldType.TEXT, FieldType.UNKNOWN, FieldType.CHOICE), stored.fields.map { it.type }, "a field type from the future is filled as text")
         assertTrue(stored.fields[2].multiple); assertEquals("A", stored.fields[2].options.single().label)
         assertEquals(listOf("feedback"), stored.actions[1].requires); assertEquals("artifact", stored.refs.single().kind)
+    }
+
+    @Test fun theAnsweredAndWithdrawnWaitsAreAskedByStatusAndKeepWhatWasGiven() = runTest {
+        val answered = review.replace(""""status":"open"""", """"status":"resolved"""").replace(""""createdAt":5""",
+            """"createdAt":5,"resolvedAt":8,"answer":{"action":"request_changes","values":{"feedback":"Split step 2","pick":["a"]},"authorId":"m1","answeredAt":8}""")
+        val cancelled = review.replace(""""status":"open"""", """"status":"cancelled"""").replace(""""createdAt":5""", """"createdAt":5,"resolvedAt":7""")
+        answers.addLast(HttpStatusCode.OK to """{"waits":[$answered]}""")
+        answers.addLast(HttpStatusCode.OK to """{"waits":[$cancelled]}""")
+        val done = waits.list("a1", WaitStatus.RESOLVED).waits.single()
+        val withdrawn = waits.list("a1", WaitStatus.CANCELLED).waits.single()
+        assertEquals(listOf("resolved", "cancelled"), requests.map { it.url.parameters["status"] })
+        assertEquals(WaitStatus.RESOLVED, done.status); assertEquals("Request changes", done.answerActionLabel); assertEquals(8L, done.resolvedAt)
+        assertEquals(listOf("Feedback: Split step 2", "Pick: A"), done.answerLines().map { "${it.label}: ${(it.value as AnswerValue.Words).text}" }, "a choice shows its option's label")
+        assertEquals(WaitStatus.CANCELLED, withdrawn.status); assertTrue(withdrawn.cancelled); assertNull(withdrawn.answer)
     }
 
     @Test fun anAnswerPostsItsActionAndValuesAndALostRaceIsAConflict() = runTest {
