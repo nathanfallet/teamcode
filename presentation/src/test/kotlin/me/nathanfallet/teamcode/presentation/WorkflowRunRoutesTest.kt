@@ -63,6 +63,71 @@ class WorkflowRunRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/workflows/runs/r1/cancel", "reader").status)
     }
 
+    private val definition = WorkflowDefinition("Fix", null, "ship", SessionMode.SAME, emptyList(),
+        listOf(WorkflowNode("ship", NodeKind.AGENT, "Ship", "Ship it", deliverable = Deliverable(DeliverableType.TEXT), transitions = listOf(Transition("delivered")))))
+    /** One run of `admin-id` whose agent step runs in session s1; the token `exec-token` is the execution credential of s1, `exec-9` that of another session. */
+    private inner class Delivering : WorkflowRunStore by unsupportedRuns() {
+        var run = WorkflowRun("r1", "team", "wf1", "Fix", 1, definition, "admin-id", RunStatus.RUNNING, emptyMap(), "p1", "s1", 0, null, null, false, null, null, 1, 1, null)
+        var visit = NodeVisit("v1", "r1", 1, "ship", NodeKind.AGENT, VisitStatus.ACTIVE, sessionId = "s1", startedAt = 1)
+        override suspend fun now() = 5L
+        override suspend fun revalidate(actor: Principal) = Unit
+        override suspend fun executionSession(tokenId: String) = mapOf("exec-token" to "s1", "exec-9" to "s9")[tokenId]
+        override suspend fun runOfSession(teamId: String, sessionId: String) = (run to visit).takeIf { sessionId == "s1" && visit.status == VisitStatus.ACTIVE }
+        override suspend fun sessionOwner(teamId: String, sessionId: String) = mapOf("s1" to "admin-id", "s9" to "admin-id", "s8" to "someone-else")[sessionId]
+        override suspend fun complete(visitId: String, status: VisitStatus, outcome: String?, output: String?, at: Long): Boolean {
+            if (visit.status != VisitStatus.ACTIVE) return false
+            visit = visit.copy(status = status, outcome = outcome, output = output, finishedAt = at); return true
+        }
+        override suspend fun find(teamId: String, id: String) = run
+    }
+
+    @Test fun theAgentDeliversBySessionWithItsExecutionCredentialOrTheStartersKey() = testApplication {
+        val store = Delivering()
+        val team = FakeTeam().let { interactive ->
+            object : TeamService by interactive {
+                override suspend fun authenticate(token: String): Principal? = when (token) {
+                    "exec-token", "exec-9" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION))
+                    "exec-unbound" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.WORKFLOW_SESSION))
+                    "exec-old" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.ARTIFACTS_WRITE))
+                    "writer" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.CLOUD_WRITE))
+                    "reader" -> interactive.authenticate("admin")!!.copy(tokenId = token, serviceScopes = setOf(ServiceScope.CLOUD_READ))
+                    else -> interactive.authenticate(token)
+                }
+            }
+        }
+        application { configureGateway(gateway, team = team, workflows = WorkflowService(object : WorkflowStore by unsupported() {}), workflowRuns = WorkflowRunService(store)) }
+        suspend fun call(path: String, token: String, json: String) = client.request(path) {
+            method = HttpMethod.Post; bearerAuth(token); contentType(ContentType.Application.Json); setBody(json)
+        }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        val path = "/api/v1/workflows/session/deliver"
+        // Refused before anything is touched: no session credential, a reader, a scope without a session, an old execution.
+        assertEquals("credential_scope", code(call(path, "reader", """{"sessionId":"s1","output":"done"}""")))
+        assertEquals("credential_scope", code(call(path, "exec-unbound", """{"output":"done"}""")))
+        assertEquals("credential_scope", code(call(path, "exec-old", """{"output":"done"}""")))
+        // The scope grants nothing else: not the run route, not a read.
+        assertEquals("credential_scope", code(call("/api/v1/workflows/runs/r1/deliver", "exec-token", """{"output":"done"}""")))
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/workflows/runs/r1") { bearerAuth("exec-token") }.status)
+        // The starter's own key must name the session; an unknown or another member's session is not found.
+        assertEquals("invalid_request", code(call(path, "writer", """{"output":"done"}""")))
+        assertEquals("not_found", code(call(path, "writer", """{"sessionId":"s8","output":"done"}""")))
+        assertEquals("not_found", code(call(path, "writer", """{"sessionId":"../x","output":"done"}""")))
+        assertEquals("nothing_to_deliver", code(call(path, "writer", """{"sessionId":"s9","output":"done"}""")), "her own session, no step running")
+        // An execution credential is confined to its session, whatever the body names; a bad output is refused and stored nowhere.
+        assertEquals("nothing_to_deliver", code(call(path, "exec-9", """{"sessionId":"s1","output":"done"}""")))
+        assertEquals("invalid_deliverable", code(call(path, "exec-token", """{"output":{"a":1}}""")))
+        assertEquals(VisitStatus.ACTIVE, store.visit.status)
+        val delivered = call(path, "exec-token", """{"sessionId":"s9","output":"all done"}""")
+        assertEquals(HttpStatusCode.OK, delivered.status)
+        assertEquals("r1", Serialization.json.decodeFromString<WorkflowRunView>(delivered.bodyAsText()).id)
+        assertEquals("all done", store.visit.output)
+        assertEquals("nothing_to_deliver", code(call(path, "writer", """{"sessionId":"s1","output":"again"}""")), "a second delivery finds the step done")
+    }
+
+    private fun unsupportedRuns(): WorkflowRunStore = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(WorkflowRunStore::class.java)) { _, method, _ ->
+        throw IllegalStateException("unexpected run store call ${method.name}")
+    } as WorkflowRunStore
+
     private fun unsupported(): WorkflowStore = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(WorkflowStore::class.java)) { _, method, _ ->
         throw IllegalStateException("unexpected workflow store call ${method.name}")
     } as WorkflowStore

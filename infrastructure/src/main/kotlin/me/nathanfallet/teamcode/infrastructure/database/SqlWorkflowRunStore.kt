@@ -71,6 +71,22 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         WorkflowRuns.selectAll().where { (WorkflowRuns.id eq id) and (WorkflowRuns.teamId eq teamId) }.singleOrNull()?.let(::run)
     }
 
+    override suspend fun executionSession(tokenId: String): String? = database.query {
+        CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId).where { CloudInferenceCredentials.tokenId eq tokenId }.singleOrNull()?.get(CloudInferenceCredentials.sessionId)
+    }
+
+    override suspend fun runOfSession(teamId: String, sessionId: String): Pair<WorkflowRun, NodeVisit>? = database.query {
+        // The visit is found on (session, status); the run is one primary-key lookup of the join, whose team and status filter the row.
+        (WorkflowVisits innerJoin WorkflowRuns).selectAll().where {
+            (WorkflowVisits.sessionId eq sessionId) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) and (WorkflowVisits.kind eq NodeKind.AGENT.wire) and
+                (WorkflowRuns.teamId eq teamId) and (WorkflowRuns.status inList ACTIVE)
+        }.orderBy(WorkflowVisits.seq to SortOrder.DESC).limit(1).singleOrNull()?.let { run(it) to visit(it) }
+    }
+
+    override suspend fun sessionOwner(teamId: String, sessionId: String): String? = database.query {
+        CloudSessions.select(CloudSessions.ownerId).where { (CloudSessions.id eq sessionId) and (CloudSessions.teamId eq teamId) }.singleOrNull()?.get(CloudSessions.ownerId)
+    }
+
     override suspend fun visits(runId: String): List<NodeVisit> = database.query {
         WorkflowVisits.selectAll().where { WorkflowVisits.runId eq runId }.orderBy(WorkflowVisits.seq to SortOrder.ASC).limit(MAX_VISITS).map(::visit)
     }

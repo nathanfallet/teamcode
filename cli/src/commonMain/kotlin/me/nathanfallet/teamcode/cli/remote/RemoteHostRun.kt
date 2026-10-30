@@ -14,6 +14,7 @@ import me.nathanfallet.teamcode.cli.hooks.teamHooksSupported
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
 import me.nathanfallet.teamcode.cli.launch.WaitsMcp
+import me.nathanfallet.teamcode.cli.launch.WorkflowMcp
 import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
 import me.nathanfallet.teamcode.cli.launch.trackedRun
@@ -241,6 +242,15 @@ internal class HostAgentTools(
         if (Waits.CAPABILITY !in features) return null
         return try { WaitsMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
             report("The wait tools could not be prepared; the agent starts without them."); null
+        }
+    }
+
+    /** Likewise: the member's own login delivers the workflow step of their session when the server serves workflows. */
+    override suspend fun workflow(): WorkflowMcp? {
+        val session = sessionId ?: return null
+        if (Workflows.CAPABILITY !in features) return null
+        return try { WorkflowMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            report("The workflow tool could not be prepared; the agent starts without it."); null
         }
     }
 

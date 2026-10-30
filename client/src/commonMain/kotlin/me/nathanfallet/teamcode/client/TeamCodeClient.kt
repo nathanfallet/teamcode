@@ -438,6 +438,15 @@ class TeamCodeClient(
             WAIT_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
 
+    /**
+     * Relays one delivery received by the local proxy (`teamcode mcp workflow`), with this client's credential: only
+     * `/api/v1/workflows/session/deliver` (the proxy narrows it to a POST), and a small bounded answer.
+     */
+    suspend fun forwardWorkflow(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/workflows/session/deliver") { "Only the workflow delivery is relayed." }
+        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), WORKFLOW_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
+
     private suspend fun forwardApi(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?,
         headers: Map<String, String>, limit: Int, relayed: List<String>): ArtifactRelayResponse {
         require(runId == null || RunIdentifiers.isValid(runId)) { "Invalid run." }
@@ -842,6 +851,22 @@ class TeamCodeClient(
     suspend fun deliverWorkflowRun(id: String, output: JsonElement): WorkflowRunView {
         identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/runs/$id/deliver", DeliverRequest(output))
     }
+    /**
+     * Hands in what the agent step running in [sessionId] was asked for (the `deliver` tool of `teamcode mcp workflow`). The
+     * run's starter names the session; an execution credential is confined to its own, whatever it names.
+     */
+    suspend fun deliverWorkflowSession(sessionId: String?, output: JsonElement): WorkflowRunView {
+        sessionId?.let(::identifier); return coded(HttpMethod.Post, "/api/v1/workflows/session/deliver", DeliverSessionRequest(sessionId, output))
+    }
+    /**
+     * Whether this credential may deliver by session, asked without delivering: an empty body is refused as `400 invalid_body`
+     * only after the credential is checked, so that answer means yes and `403 credential_scope` means no. Any other answer
+     * (an older server without the route, an unreachable one) is no.
+     */
+    suspend fun mayDeliverWorkflowSession(): Boolean = try {
+        coded<Unit, JsonObject>(HttpMethod.Post, "/api/v1/workflows/session/deliver", JsonObject(emptyMap())); false
+    } catch (error: TeamCodeException) { error.statusCode == 400 && error.code == "invalid_body" }
+
     suspend fun workflowSettings(): WorkflowSettingsView = coded(HttpMethod.Get, "/api/v1/workflows/settings", null as Unit?)
     suspend fun updateWorkflowEditors(editors: WorkflowEditorsView): WorkflowSettingsView = coded(HttpMethod.Put, "/api/v1/workflows/settings", editors)
 
@@ -1192,6 +1217,7 @@ class TeamCodeClient(
         private val ARTIFACT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, HttpHeaders.ContentDisposition, "X-TeamCode-Sha256", "x-teamcode-error", "x-teamcode-request-id")
         /** A page of waits: up to 100 stored waits of at most 256 KiB each, plus the sessions' permission requests. */
         private const val WAIT_RELAY_LIMIT = 32 * 1024 * 1024
+        private const val WORKFLOW_RELAY_LIMIT = 1024 * 1024
         private val WAIT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, CloudHeaders.IDEMPOTENCY_REPLAYED, "x-teamcode-error", "x-teamcode-request-id")
         /** As the server accepts it (`WaitService`): 1 to 128 letters, digits or `. _ : -`. */
         private val IDEMPOTENCY_KEY_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")

@@ -56,6 +56,15 @@ interface WorkflowRunStore {
      */
     suspend fun start(actor: Principal, run: WorkflowRun, first: NodeVisit, idempotencyKey: String?, limit: Int): RunChange
     suspend fun find(teamId: String, id: String): WorkflowRun?
+    /** The cloud session an execution credential (`tcex_`) was issued for, or null for any other credential. */
+    suspend fun executionSession(tokenId: String): String?
+    /**
+     * The unfinished run of [teamId] whose latest active visit is an agent visit bound to [sessionId], with that visit; null
+     * when none. One indexed read on the visit's session.
+     */
+    suspend fun runOfSession(teamId: String, sessionId: String): Pair<WorkflowRun, NodeVisit>?
+    /** The member who owns the cloud session, or null when it does not exist in the team. */
+    suspend fun sessionOwner(teamId: String, sessionId: String): String?
     suspend fun visits(runId: String): List<NodeVisit>
     /** By keyset, newest first. [starterId] null: the whole team. */
     suspend fun list(teamId: String, starterId: String?, workflowId: String?, status: RunStatus?, before: String?, limit: Int): WorkflowRunPage

@@ -34,7 +34,7 @@ private val TOKEN_VARIABLES = listOf("TEAMCODE_MCP_TOKEN", "TEAMCODE_LOCAL_TOKEN
 
 class Mcp : SuspendingNoOpCliktCommand(name = "mcp") {
     override fun help(context: Context) = "MCP servers: the team's servers assigned to you, and the ones TeamCode runs beside an agent, over stdio."
-    init { subcommands(McpList(), ArtifactsMcpCommand(), WaitsMcpCommand()) }
+    init { subcommands(McpList(), ArtifactsMcpCommand(), WaitsMcpCommand(), WorkflowMcpCommand()) }
 }
 
 /** One line of `teamcode mcp list`: the name agents see, the transport, and a hosted command's state. */
@@ -124,6 +124,28 @@ private class WaitsMcpCommand : SuspendingCliktCommand(name = "waits") {
         run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
         relayClient("TEAMCODE_WAITS", run).use {
             val server = WaitsMcpServer(it, session)
+            while (true) {
+                val line = readlnOrNull() ?: break
+                if (line.isBlank()) continue
+                val answer = server.handle(line) ?: continue
+                print(answer + "\n")
+                flushStandardOutput()
+            }
+        }
+    }
+}
+
+private class WorkflowMcpCommand : SuspendingCliktCommand(name = "workflow") {
+    override val hiddenFromHelp = true
+    private val session by option("--session", help = "The session the workflow step runs in.").required()
+    private val run by option("--run", help = "The agent run this server belongs to.")
+    override fun help(context: Context) = "The stdio MCP server the agent of a workflow step delivers with (deliver). " +
+        "The session runner adds it to Claude Code and Codex; it delivers for its own session only."
+    override suspend fun run() {
+        if (!Regex("[a-zA-Z0-9-]{1,36}").matches(session)) throw CliUserException("--session must be a session id.")
+        run?.let { if (!RunIdentifiers.isValid(it)) throw CliUserException("--run must be a run UUID.") }
+        relayClient("TEAMCODE_WORKFLOW", run).use {
+            val server = WorkflowMcpServer(it, session)
             while (true) {
                 val line = readlnOrNull() ?: break
                 if (line.isBlank()) continue

@@ -89,20 +89,40 @@ class WorkflowEngine(
         val starter = store.starter(run) ?: return fail(work, "starter_unavailable", now)
         var prompt = WorkflowTemplate.render(node.instruction.orEmpty(), run.inputs, WorkflowTemplate.outputs(work.visits))
         val key = "workflow-visit-${visit.id}"
+        val closing = delivery(node)
         try {
             val reuse = run.definition.sessionMode == SessionMode.SAME && run.sessionId != null
             if (reuse) {
-                sessions.message(starter, run.sessionId!!, prompt, key)
+                sessions.message(starter, run.sessionId!!, withDelivery(prompt, closing), key)
                 store.dispatched(visit.id, run.sessionId, bindRun = false, at = now)
             } else {
                 val profile = node.profileId ?: run.profileId ?: return fail(work, "profile_missing", now)
                 if (run.definition.sessionMode == SessionMode.HANDOFF) prompt = handoff(prompt, work.visits)
-                val created = sessions.create(starter, "${run.workflowName}: ${node.title}".take(120), profile, node.model, prompt, key)
+                val created = sessions.create(starter, "${run.workflowName}: ${node.title}".take(120), profile, node.model, withDelivery(prompt, closing), key)
                 store.dispatched(visit.id, created, bindRun = true, at = now)
             }
         } catch (error: TeamFailure) {
             if (!error.retryable) fail(work, error.code, now)
         }
+    }
+
+    /** The instruction, then the sentence that tells the agent how the step ends; the instruction gives way when both do not fit a message. */
+    private fun withDelivery(prompt: String, closing: String): String {
+        val room = me.nathanfallet.teamcode.domain.cloud.CloudConversationRules.MAX_MESSAGE_CHARS - closing.length - 2
+        return (if (prompt.length <= room) prompt else prompt.take(room)) + "\n\n" + closing
+    }
+
+    /** What ends an agent step: one call of the `deliver` tool (the `teamcode_workflow` MCP server) with what the node's deliverable asks for. */
+    private fun delivery(node: WorkflowNode): String {
+        val deliverable = node.deliverable!!
+        val what = when (deliverable.type) {
+            DeliverableType.ARTIFACT -> "the id of the artifact that holds it, as a string"
+            DeliverableType.URL -> "an https address${deliverable.domain?.let { " on $it" }.orEmpty()}, as a string"
+            DeliverableType.TEXT -> "the text, as a string"
+            DeliverableType.JSON -> "a JSON value${if (deliverable.schema != null) " that matches the step's schema" else ""}, not a string holding JSON"
+        }
+        val label = deliverable.label?.let { " ($it)" }.orEmpty()
+        return "When this step is done, call the `deliver` tool of the teamcode_workflow MCP server once, with $what$label as its `output`, then end your turn."
     }
 
     /** A new session starts without the conversation: what the earlier nodes delivered goes in its first message. */

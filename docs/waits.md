@@ -96,7 +96,7 @@ A Kubernetes cloud session's agent reaches the server with the `tcex_` credentia
 | `POST /waits` | Only on that session, else `404` |
 | `POST /waits/{id}/answer` | Never: `403 credential_scope`. The session's owner is the default assignee and the credential is the owner's, so the scope is what keeps an agent from answering its own question |
 
-`waits:session` means nothing without the session a credential is bound to: a service key that carries it (it is not offered when creating one) is refused with `credential_scope`, as is an execution credential issued before the scope existed. Everyone else keeps reading and writing waits with `cloud:read`/`cloud:write` as before.
+The same credential also carries `workflow:session`, which delivers the workflow step running in that session and nothing else ([workflows](workflows.md#agent-delivery)). `waits:session` means nothing without the session a credential is bound to: a service key that carries it (it is not offered when creating one) is refused with `credential_scope`, as is an execution credential issued before the scope existed. Everyone else keeps reading and writing waits with `cloud:read`/`cloud:write` as before.
 
 `GET /waits?session=<id>` is open to anyone who may read the session's waits (its owner, an administrator, a `team:read` key): the waits of that session, asked of anyone, newest first. The server filters by session, so a tool no longer reads pages of the caller's waits to find them.
 
