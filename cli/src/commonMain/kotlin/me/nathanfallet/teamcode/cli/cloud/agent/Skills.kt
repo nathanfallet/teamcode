@@ -354,6 +354,9 @@ internal interface AgentTools {
     /** The wait tools (`ask_human`) to start beside the agent for this session, or null. Never throws except on cancellation. */
     suspend fun waits(): me.nathanfallet.teamcode.cli.launch.WaitsMcp? = null
 
+    /** The workflow tool (`deliver`) to start beside the agent for this session, or null. Never throws except on cancellation. */
+    suspend fun workflow(): me.nathanfallet.teamcode.cli.launch.WorkflowMcp? = null
+
     /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
     suspend fun claudePlugin(): String? = null
 }
@@ -468,6 +471,24 @@ internal class RunnerAgentTools(
         }
         catch (_: Exception) { false }
         return if (usable) try { me.nathanfallet.teamcode.cli.launch.WaitsMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
+    }
+
+    /**
+     * `teamcode mcp workflow` in the agent's container, for this session, when the server serves workflows (`workflows.v1`) and
+     * the execution's credential may deliver by session. The check delivers nothing: an execution credential from before the
+     * `workflow:session` scope gets a `403 credential_scope`, and then the agent is not offered a tool that would always be refused.
+     */
+    override suspend fun workflow(): me.nathanfallet.teamcode.cli.launch.WorkflowMcp? {
+        val command = binary ?: return null
+        val session = sessionId ?: return null
+        val usable = try {
+            withTimeout(20_000) {
+                me.nathanfallet.teamcode.api.models.Workflows.CAPABILITY in client.capabilities().features && client.mayDeliverWorkflowSession()
+            }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+        catch (error: CancellationException) { throw error }
+        catch (_: Exception) { false }
+        return if (usable) try { me.nathanfallet.teamcode.cli.launch.WorkflowMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
     }
 
     /**

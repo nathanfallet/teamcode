@@ -69,6 +69,11 @@ class WorkflowClientTest {
             client.deliverWorkflowRun("r1", JsonPrimitive("plan-2"))
             assertEquals("/api/v1/workflows/runs/r1/deliver", requests.last().url.encodedPath); assertEquals("plan-2", body(requests.last())["output"]!!.jsonPrimitive.content)
             client.workflowRun("r1"); assertEquals(HttpMethod.Get, requests.last().method)
+            client.deliverWorkflowSession("s1", buildJsonObject { put("verdict", "ok") })
+            assertEquals(HttpMethod.Post, requests.last().method); assertEquals("/api/v1/workflows/session/deliver", requests.last().url.encodedPath)
+            assertEquals("s1", body(requests.last())["sessionId"]!!.jsonPrimitive.content); assertEquals("ok", body(requests.last())["output"]!!.jsonObject["verdict"]!!.jsonPrimitive.content)
+            client.deliverWorkflowSession(null, JsonPrimitive("x")); assertNull(body(requests.last())["sessionId"])
+            assertFailsWith<IllegalArgumentException> { client.deliverWorkflowSession("not an id", JsonPrimitive("x")) }
         }
         client { respond("""{"runs":[$run],"nextBefore":"r1"}""", HttpStatusCode.OK, json) }.use { client ->
             val page = client.workflowRuns(workflow = "wf1", status = "waiting", limit = 10)

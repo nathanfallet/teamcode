@@ -149,6 +149,8 @@ class ApiDocsTest {
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("cloud:write")), mapOf(SERVICE_KEY_SCHEME to listOf("admin:cloud"))),
             security("POST /api/v1/cloud/sessions"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("mcp"))), security("POST /mcp/{server}"))
+        assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("cloud:write")), mapOf(SERVICE_KEY_SCHEME to listOf("admin:cloud")), mapOf(SERVICE_KEY_SCHEME to listOf("workflow:session"))),
+            security("POST /api/v1/workflows/session/deliver"))
         // An automation's webhook proves itself with its signature or secret URL, under every spelling of its path.
         for (path in listOf("/trigger", "/trigger/{token}", "/v/{version}/trigger", "/v/{version}/trigger/{token}"))
             assertEquals(emptyList(), security("POST /api/v1/automations/{id}$path"), path)

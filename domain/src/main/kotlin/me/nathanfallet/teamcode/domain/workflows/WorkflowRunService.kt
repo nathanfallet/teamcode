@@ -75,10 +75,37 @@ class WorkflowRunService(private val store: WorkflowRunStore) {
         val visit = store.visits(run.id).lastOrNull { it.status == VisitStatus.ACTIVE }
         if (run.status.terminal || visit == null || visit.kind != NodeKind.AGENT || visit.sessionId == null)
             throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")
+        return finishDelivery(actor, run, visit, output)
+    }
+
+    /**
+     * What the agent of the step running in a session delivers, by session. The run's starter names [sessionId] (a remote
+     * session on their device acts with their own login); an execution credential (`workflow:session`) is confined to the
+     * session it was issued for, whatever it names, and does nothing else. An unknown session, one without a running agent
+     * step, or another member's: 404.
+     */
+    suspend fun deliverBySession(actor: Principal, sessionId: String?, output: JsonElement): WorkflowRun {
+        actor.requireWorkflowDeliver(); store.revalidate(actor)
+        val session = if (actor.workflowSessionOnly)
+            store.executionSession(actor.tokenId) ?: throw TeamFailure("credential_scope", 403, "This credential is not bound to a cloud session.")
+        else sessionId ?: throw TeamFailure("invalid_request", 400, "Name the session.")
+        val found = store.runOfSession(actor.teamId, session)
+        if (found == null || found.first.starterId != actor.member.id) {
+            // The caller's own session that runs no workflow step has nothing to deliver; any other session is not theirs to learn about.
+            if (found == null && store.sessionOwner(actor.teamId, session) == actor.member.id) throw TeamFailure("nothing_to_deliver", 409, "This session is not running a workflow step.")
+            throw TeamFailure("not_found", 404, "Session not found.")
+        }
+        val (run, visit) = found
+        return finishDelivery(actor, run, visit, output)
+    }
+
+    private suspend fun finishDelivery(actor: Principal, run: WorkflowRun, visit: NodeVisit, output: JsonElement): WorkflowRun {
+        if (run.status.terminal || visit.kind != NodeKind.AGENT || visit.sessionId == null)
+            throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")
         val node = run.definition.nodes.first { it.id == visit.nodeId }
         val text = Deliverables.validate(node.deliverable!!, output)
         if (!store.complete(visit.id, VisitStatus.DONE, WorkflowRules.DELIVERED, text, store.now())) throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")
-        return store.find(actor.teamId, id) ?: throw missing()
+        return store.find(actor.teamId, run.id) ?: throw missing()
     }
 
     companion object {

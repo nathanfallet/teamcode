@@ -2,9 +2,12 @@ package me.nathanfallet.teamcode.infrastructure.cloud
 
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.JsonPrimitive
+import me.nathanfallet.teamcode.domain.cloud.CloudCreateOutcome
+import me.nathanfallet.teamcode.domain.cloud.CloudSessionDraft
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 import me.nathanfallet.teamcode.domain.cloud.DesiredState
 import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.team.ServiceScope
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.domain.workflows.*
@@ -70,7 +73,7 @@ class WorkflowRunPersistenceTest {
             assertEquals(emptyList(), storeB.claim(10, 60_000)); storeA.release(listOf(run.id)); assertEquals(listOf(run.id), storeB.claim(10, 60_000).map { it.run.id }); storeB.release(listOf(run.id))
 
             // The engine, alternating replicas, takes the run through its nodes; a delivery of the wrong type is refused.
-            engineA.run(); assertEquals(listOf("Fix T-42"), sessions.created)
+            engineA.run(); assertEquals(listOf("Fix T-42\n\nWhen this step is done, call the `deliver` tool of the teamcode_workflow MCP server once, with the text, as a string as its `output`, then end your turn."), sessions.created)
             assertEquals("invalid_deliverable", assertFailsWith<TeamFailure> { serviceB.deliver(w.member, run.id, kotlinx.serialization.json.JsonObject(emptyMap())) }.code)
             serviceB.deliver(w.member, run.id, JsonPrimitive("fixed"))
             assertEquals("nothing_to_deliver", assertFailsWith<TeamFailure> { serviceA.deliver(w.member, run.id, JsonPrimitive("again")) }.code, "only the first delivery counts")
@@ -146,6 +149,98 @@ class WorkflowRunPersistenceTest {
             assertTrue("wfrun_starter_status" in plans.getValue("own, one status"), plans.getValue("own, one status"))
             plans.filterKeys { it != "engine claim" }.forEach { (name, plan) -> assertFalse("Sort" in plan, "$name sorts: $plan") }
             assertTrue("wfrun_claim" in plans.getValue("engine claim"), plans.getValue("engine claim"))
+        }
+    }
+
+    @Test @Timeout(300)
+    fun theAgentDeliversBySessionAcrossReplicas() = runBlocking {
+        AutomationWorld.run(92) { w ->
+            val definitions = WorkflowService(SqlWorkflowStore(w.a.database))
+            val solo = definitions.create(w.admin, definition("Solo"))
+            val storeA = SqlWorkflowRunStore(w.a.database); val storeB = SqlWorkflowRunStore(w.b.database)
+            val serviceA = WorkflowRunService(storeA); val serviceB = WorkflowRunService(storeB)
+            suspend fun session(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+            val own = session("Own"); val other = session("Other"); val idle = session("Idle")
+            val ids = ArrayDeque(listOf(own.id, other.id))
+            val sessions = object : WorkflowSessions {
+                override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String) = ids.removeFirst()
+                override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) = Unit
+                override suspend fun progress(sessionIds: Set<String>) = sessionIds.associateWith { SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, null, null) }
+            }
+            val engine = WorkflowEngine(storeA, sessions, Waits())
+            val first = serviceA.start(w.member, solo.id, mapOf("ticket" to "T-1"), "p1", null).run
+            val second = serviceA.start(w.member, solo.id, mapOf("ticket" to "T-2"), "p1", null).run
+            engine.run()
+            // Whichever run the engine served first got the first session.
+            val (run, elsewhere) = if (serviceA.get(w.member, first.id).first.sessionId == own.id) first to second else second to first
+            assertEquals(own.id, serviceA.get(w.member, run.id).first.sessionId); assertEquals(other.id, serviceA.get(w.member, elsewhere.id).first.sessionId)
+
+            // The credential of the session's execution, and a key carrying the same scope without a session.
+            suspend fun token(id: String, scopes: String) = w.a.database.query {
+                val now = System.currentTimeMillis()
+                Tokens.insert {
+                    it[Tokens.id] = id; it[memberId] = w.member.member.id; it[tokenHash] = "hash-$id"; it[device] = "cloud session"; it[deviceId] = null
+                    it[createdAt] = now; it[expiresAt] = now + 3_600_000; it[serviceScopes] = scopes
+                }
+            }
+            val tokenId = java.util.UUID.randomUUID().toString(); val keyId = java.util.UUID.randomUUID().toString()
+            token(tokenId, "[\"inference\",\"workflow:session\"]"); token(keyId, "[\"inference\",\"workflow:session\"]")
+            w.a.database.query {
+                val now = System.currentTimeMillis()
+                CloudInferenceCredentials.insert { it[CloudInferenceCredentials.tokenId] = tokenId; it[sessionId] = own.id; it[epoch] = 1; it[teamId] = w.teamId; it[createdAt] = now; it[expiresAt] = now + 3_600_000 }
+            }
+            val agent = w.member.copy(tokenId = tokenId, serviceScopes = setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION))
+            assertEquals(own.id, storeB.executionSession(tokenId)); assertNull(storeB.executionSession(keyId))
+            refusedWith("credential_scope") { serviceB.deliverBySession(agent.copy(tokenId = keyId), own.id, JsonPrimitive("x")) }
+            refusedWith("credential_scope") { serviceB.deliverBySession(agent.copy(serviceScopes = setOf(ServiceScope.INFERENCE)), own.id, JsonPrimitive("x")) }
+
+            // Unknown, another member's and not-running sessions; a bad output is refused and stored nowhere.
+            refusedWith("not_found") { serviceB.deliverBySession(w.member, "no-such-session", JsonPrimitive("x")) }
+            refusedWith("not_found") { serviceB.deliverBySession(w.admin, own.id, JsonPrimitive("x")) }
+            refusedWith("nothing_to_deliver") { serviceB.deliverBySession(w.member, idle.id, JsonPrimitive("x")) }
+            refusedWith("invalid_deliverable") { serviceB.deliverBySession(agent, null, kotlinx.serialization.json.JsonObject(emptyMap())) }
+            assertEquals(VisitStatus.ACTIVE, serviceA.get(w.member, run.id).second.single().status)
+
+            // The same delivery from both replicas at once: exactly one wins, the other finds nothing to deliver. The credential is
+            // confined to its session, whatever the body names, so the other run is untouched.
+            val results = coroutineScope {
+                listOf(serviceA to w.member, serviceB to agent).map { (service, who) ->
+                    async(Dispatchers.IO) { runCatching { service.deliverBySession(who, if (who === agent) other.id else own.id, JsonPrimitive("fixed")) } }
+                }.awaitAll()
+            }
+            assertEquals(1, results.count { it.isSuccess }, results.toString())
+            assertEquals("nothing_to_deliver", results.single { it.isFailure }.exceptionOrNull().let { (it as TeamFailure).code })
+            val (delivered, visits) = serviceB.get(w.member, run.id)
+            assertEquals("fixed", visits.single().output); assertEquals(RunStatus.RUNNING, delivered.status)
+            assertEquals(VisitStatus.ACTIVE, serviceB.get(w.member, elsewhere.id).second.single().status, "an execution credential never reaches another session's run")
+            refusedWith("nothing_to_deliver") { serviceA.deliverBySession(agent, null, JsonPrimitive("again")) }
+
+            // The plan of the lookup, on a table seeded at a larger scale.
+            w.a.database.query {
+                val runIds = (1..2_000).map { java.util.UUID.randomUUID().toString() }
+                WorkflowRuns.batchInsert(runIds.withIndex().toList(), shouldReturnGeneratedValues = false) { (n, id) ->
+                    this[WorkflowRuns.id] = id; this[WorkflowRuns.teamId] = "other-${n % 40}"; this[WorkflowRuns.workflowId] = "wf-seed"; this[WorkflowRuns.workflowName] = "Seed"
+                    this[WorkflowRuns.workflowVersion] = 1; this[WorkflowRuns.definition] = "{}"; this[WorkflowRuns.starterId] = w.admin.member.id; this[WorkflowRuns.status] = if (n % 3 == 0) "succeeded" else "running"
+                    this[WorkflowRuns.inputs] = "{}"; this[WorkflowRuns.depth] = 0; this[WorkflowRuns.cancelRequested] = false; this[WorkflowRuns.leaseUntil] = 1L shl 50
+                    this[WorkflowRuns.createdAt] = n.toLong(); this[WorkflowRuns.updatedAt] = n.toLong()
+                }
+                (0 until 2_000 * 100).chunked(5_000).forEach { chunk -> WorkflowVisits.batchInsert(chunk, shouldReturnGeneratedValues = false) { n ->
+                    this[WorkflowVisits.id] = java.util.UUID.randomUUID().toString(); this[WorkflowVisits.runId] = runIds[n / 100]; this[WorkflowVisits.seq] = n % 100 + 1
+                    this[WorkflowVisits.nodeId] = "work"; this[WorkflowVisits.kind] = "agent"; this[WorkflowVisits.status] = if (n % 100 == 99 && n % 3 != 0) "active" else "done"
+                    this[WorkflowVisits.sessionId] = "seed-session-${n / 100}"; this[WorkflowVisits.startedAt] = n.toLong()
+                } }
+            }
+            val team = w.teamId
+            val plan = w.a.database.query {
+                explain(analyze = true) {
+                    (WorkflowVisits innerJoin WorkflowRuns).selectAll().where {
+                        (WorkflowVisits.sessionId eq "seed-session-1999") and (WorkflowVisits.status eq "active") and (WorkflowVisits.kind eq "agent") and
+                            (WorkflowRuns.teamId eq team) and (WorkflowRuns.status inList listOf("running", "waiting"))
+                    }.orderBy(WorkflowVisits.seq to SortOrder.DESC).limit(1)
+                }.joinToString("\n")
+            }
+            println("Workflow delivery by session plan (seeded: 2000 runs, 200000 visits, synthetic metadata only):\n$plan")
+            assertTrue("wfvisit_session" in plan, plan)
         }
     }
 }

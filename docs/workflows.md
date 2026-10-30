@@ -12,12 +12,13 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | Domain: validation of a definition at save, sub-workflow checks (`domain/…/workflows`) | Implemented |
 | MySQL store (`workflows`, `workflow_settings`; reviewed migration), routes `GET/POST/PUT/DELETE /api/v1/workflows`, `GET/PUT /api/v1/workflows/settings`, the `workflows.v1` capability, editing rights, OpenAPI reference | Implemented |
 | Run engine and run service (`domain/…/workflows`): the engine moves runs on one visit at a time; the service starts, reads, cancels and takes deliveries; run and delivery contract in the API and the typed client (`startWorkflowRun`, `workflowRuns`, `workflowRun`, `cancelWorkflowRun`, `deliverWorkflowRun`) | Implemented |
-| Persisted runs (`workflow_runs`, `workflow_visits`; reviewed migration), the run routes (below), the worker loop in the server (every 2 seconds, on the replicas that run the cloud), the cloud-session and wait adapters | Implemented. The starter's agent has no way to deliver yet: see the next row |
-| `teamcode-workflow` MCP server (`deliver`) | Planned |
+| Persisted runs (`workflow_runs`, `workflow_visits`; reviewed migrations), the run routes (below), the worker loop in the server (every 2 seconds, on the replicas that run the cloud), the cloud-session and wait adapters | Implemented |
+| Delivery by session (`POST /workflows/session/deliver`), the execution credential scope `workflow:session`, `deliverWorkflowSession` in the typed client | Implemented |
+| `teamcode-workflow` MCP server (`teamcode mcp workflow`, tool `deliver`), its loopback relay (`workflow-relay-v1`), connected beside the agent of remote sessions and of Kubernetes cloud sessions | Implemented. Tested on the JVM (server, relay, launch arguments); not exercised with a native binary or a real Claude Code or Codex session |
 | Stop hook that makes an agent deliver or ask | Planned |
 | Companion editor and run view, `teamcode workflows`, automations that start a workflow | Planned |
 
-Definitions can be saved, versioned and read, and started over the API; until the `teamcode-workflow` MCP server and the Stop hook exist, an agent node can only end by a delivery sent with the starter's own credential (`POST …/deliver`), and a turn that ends without one fails the run with `ended_without_delivery`. No screen exists yet.
+Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); until the Stop hook exists, a turn that ends without a delivery fails the run with `ended_without_delivery`. No screen exists yet.
 
 ## Definition
 
@@ -72,6 +73,13 @@ A wait of kind `workflow` is answered like any wait, but its answer **moves the 
 
 **Delivery.** `POST /workflows/runs/{id}/deliver` (the starter, `cloud:write`) hands in what the current agent node was asked for once its instruction reached the session: `artifact` (an id), `url` (https, on the node's `domain` if any), `text`, or `json` checked against the node's `schema` (a subset: `type`, an object's `properties` and `required`, an array's `items`, a string's `enum`). A wrong delivery is `400 invalid_deliverable` and stores nothing; a run that waits for none is `409 nothing_to_deliver`. Whether the artifact exists is not checked yet.
 
+**Delivery by session.** `POST /workflows/session/deliver` with `{sessionId?, output}` finds the unfinished run whose latest active visit is an agent visit bound to that session (one read on `workflow_visits (session_id, status)`, then the run by primary key) and then does exactly what `…/runs/{id}/deliver` does: the same validation (`400 invalid_deliverable`), the same conditional completion of the visit (of two calls, one wins; the other is `409 nothing_to_deliver`). Two callers may use it:
+
+- **The run's starter**, with a login or a key carrying `cloud:write`, who must name `sessionId`. A [remote session](cloud-sessions.md) on a member's device acts with the member's own login.
+- **A Kubernetes cloud session's execution credential** (`tcex_`), which carries the scope `workflow:session` and is bound to the one session it was issued for (`cloud_inference_credentials`). It is confined to that session whatever `sessionId` says, and the scope grants nothing else: not `…/runs/{id}/deliver`, not a read of a run, not any cloud route. As for `waits:session`, a service key that carries the scope (it is not offered when creating one) gets `403 credential_scope`, and so does an execution credential issued before the scope existed.
+
+A session that does not exist, or belongs to another member, or whose run belongs to another starter, is `404 not_found`; the caller's own session that runs no workflow step is `409 nothing_to_deliver`. Cost per call: five transactions for an execution credential (the revalidation of the caller, the credential's session, the run with its visit, the conditional completion, the run read back), four for the starter's own login (no credential lookup), and one more read of the session's owner only when no step is found.
+
 **Failure codes.** `session_failed`, `session_deleted`, `session_missing`, `ended_without_delivery` (the turn that took the instruction ended and nothing was delivered; a turn that began before the instruction does not count), `profile_missing`, `starter_unavailable`, `wait_cancelled`, `wait_missing`, `max_visits:<node>`, `max_total_visits`, `max_depth`, `workflow_missing`, `invalid_arguments`, `sub_workflow_failed|cancelled`, `expired` (two weeks), `no_transition`, plus the code of a refusal that cannot be retried. Cancelling (the starter or an administrator, signed in) withdraws the open wait, cancels the child run and ends the run `cancelled`; the session is left as it is.
 
 ## Editing rights
@@ -98,9 +106,18 @@ A wait of kind `workflow` is answered like any wait, but its answer **moves the 
 | `GET /api/v1/workflows/runs/{id}` | A run with its visits (the starter, or an administrator) |
 | `POST /api/v1/workflows/runs/{id}/cancel` | Cancel (the starter or an administrator, signed in) |
 | `POST /api/v1/workflows/runs/{id}/deliver` | `{output}`; a key needs `cloud:write` |
+| `POST /api/v1/workflows/session/deliver` | `{sessionId?, output}`; the starter (naming `sessionId`, a key needs `cloud:write`) or the session's execution credential (`workflow:session`). See "Delivery by session" |
 
 A run starts a cloud session as its starter through a server-held credential minted for the run (scope `cloud:write`, stored hashed, deleted when the root run ends; child runs share it). Several replicas may run the worker: a pass claims a run with a 30-second lease, and a start, a step or a completion is a conditional update, so a step happens once. Page cost, whatever the team size: a list is two transactions (the caller check, one read of the page), a run three (the caller check, the run, its visits).
 
+### Agent delivery
+
+The agent of a step delivers with the stdio MCP server `teamcode mcp workflow --session <id> [--run <id>]`, connected under the name `teamcode_workflow` exactly as [`teamcode_waits`](waits.md#agents) is: Claude Code gets a stdio entry in `--mcp-config`, Codex `-c mcp_servers.teamcode_workflow={command=…,args=[…],env={TEAMCODE_WORKFLOW_URL=…,TEAMCODE_WORKFLOW_TOKEN_VAR="TEAMCODE_LOCAL_TOKEN"},env_vars=["TEAMCODE_LOCAL_TOKEN"]}`. It serves one tool, `deliver`, with one argument `output` (any JSON value: a string for `text`, `url` and `artifact`, an object or array for `json`). The tool tells the agent to call it once, when the task of the current step is done, with exactly what the step asked for, and to end its turn after it; the session id is the server's own, the agent cannot name another. The server's refusals (`invalid_deliverable`, `nothing_to_deliver`, `credential_scope`, `not_found`) come back with what to do.
+
+- **What the agent is told.** The message the engine sends for an agent step ends with a sentence naming the form of its deliverable (the artifact id, an https address on the node's `domain`, the text, a JSON value that matches the schema), telling it to call `deliver` of `teamcode_workflow` once and end its turn. Beside the artifact and wait instructions (Claude Code `--append-system-prompt`, Codex `developer_instructions`, with the same exceptions) the agent is also told that it calls `deliver` only on a workflow step, never for an ordinary session.
+- **Relay.** The tool reaches the proxy that launched the agent through a loopback relay (announced by the user service as `workflow-relay-v1`) that relays `POST /api/v1/workflows/session/deliver` and nothing else, with the same checks as the wait relay (the token compared in constant time, loopback, no `Origin`, a bounded body of at most 2 MiB, `no-store`, a refused sign-in as `502 relay_sign_in_refused`). Everything else, delivering by run id, reading, starting or cancelling a run included, is a `404` that never reaches the server.
+- **Where.** A remote session gets the tool when the server advertises `workflows.v1` (the host runs with the member's own login). A Kubernetes cloud session gets it when the server advertises `workflows.v1` and the execution credential may deliver, which the runner asks without delivering: an empty body to the route is refused as `400 invalid_body` after the credential is checked, so that answer means yes and `403 credential_scope` (an execution that started with an older credential) or `404` (an older server) means no, and the agent starts without the tool. A local `teamcode run` never gets it: it has no session.
+
 ## What is planned
 
-The order of work: the `teamcode-workflow` MCP server with `deliver` (and an execution credential that may deliver into its own run), then the Stop hook, then the companion editor and run view, the CLI and automations that start a workflow. Each step updates this page.
+The order of work: the Stop hook, then the companion editor and run view, the CLI and automations that start a workflow. Each step updates this page.

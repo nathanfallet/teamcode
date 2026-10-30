@@ -139,4 +139,19 @@ internal fun ApiCatalog.workflowOperations() {
             conflict("The run waits for no delivery (`nothing_to_deliver`).")
         }
     }
+    post("/api/v1/workflows/session/deliver") {
+        operationId = "deliverWorkflowSession"; tag(ApiTags.WORKFLOWS)
+        summary = "Deliver what the step running in a session was asked for"
+        description = "What `teamcode-workflow`'s `deliver` tool calls. The unfinished run whose latest active step is an agent step bound to the session takes `output` exactly as " +
+            "`deliverWorkflowRun` does (same validation, same conditional completion: of two calls exactly one wins). The run's starter names `sessionId` (a remote session acts with " +
+            "the member's own login); an execution credential carrying `workflow:session` is confined to the session it was issued for, whatever `sessionId` says, and can do nothing else. " +
+            "A session that is unknown or another member's is `not_found`."
+        body<DeliverSessionRequest>("The delivery.")
+        responses {
+            ok<WorkflowRunView>("Accepted; the engine moves on.")
+            badRequest("It does not match the node's deliverable (`invalid_deliverable`), or the session is not named (`invalid_request`).")
+            notFound("No such session of the caller (`not_found`).")
+            conflict("The session runs no step that waits for a delivery (`nothing_to_deliver`).")
+        }
+    }
 }

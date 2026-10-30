@@ -159,6 +159,7 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
                 CredentialAction.CLOUD_WRITE -> listOf("cloud:write", "admin:cloud")
                 CredentialAction.WAITS_READ -> listOf("cloud:read", "cloud:write", "admin:cloud", "team:read", "waits:session")
                 CredentialAction.WAITS_WRITE -> listOf("cloud:write", "admin:cloud", "waits:session")
+                CredentialAction.WORKFLOW_DELIVER -> listOf("cloud:write", "admin:cloud", "workflow:session")
                 CredentialAction.ARTIFACTS_READ -> listOf("artifacts:read", "artifacts:write", "team:read")
                 CredentialAction.ARTIFACTS_WRITE -> listOf("artifacts:write")
                 CredentialAction.INTERACTIVE -> null

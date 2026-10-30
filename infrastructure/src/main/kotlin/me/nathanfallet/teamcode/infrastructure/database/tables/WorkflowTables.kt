@@ -93,5 +93,9 @@ object WorkflowVisits : Table("workflow_visits") {
     val startedAt = long("started_at")
     val finishedAt = long("finished_at").nullable()
     override val primaryKey = PrimaryKey(id)
-    init { uniqueIndex("wfvisit_run_seq", runId, seq) }
+    init {
+        uniqueIndex("wfvisit_run_seq", runId, seq)
+        // The agent's delivery by session: the active visit bound to a session.
+        index("wfvisit_session", false, sessionId, status)
+    }
 }

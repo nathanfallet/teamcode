@@ -157,5 +157,9 @@ data class StartWorkflowRunRequest(val inputs: Map<String, String> = emptyMap(),
 @Serializable
 data class DeliverRequest(val output: JsonElement)
 
+/** The same, by the cloud session the step runs in: [sessionId] is named by the run's starter and ignored for an execution credential, which is confined to its own session. */
+@Serializable
+data class DeliverSessionRequest(val sessionId: String? = null, val output: JsonElement)
+
 @Serializable
 data class WorkflowRunPageView(val runs: List<WorkflowRunView>, val nextBefore: String? = null)

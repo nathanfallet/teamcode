@@ -32,6 +32,14 @@ class WorkflowEngineTest {
             return RunChange(run, true)
         }
         override suspend fun find(teamId: String, id: String) = runs[id]
+        val executions = mutableMapOf<String, String>()
+        override suspend fun executionSession(tokenId: String) = executions[tokenId]
+        override suspend fun runOfSession(teamId: String, sessionId: String): Pair<WorkflowRun, NodeVisit>? {
+            val visit = visits.values.filter { it.sessionId == sessionId && it.status == VisitStatus.ACTIVE && it.kind == NodeKind.AGENT }.maxByOrNull { it.seq } ?: return null
+            return runs.getValue(visit.runId).takeIf { !it.status.terminal }?.let { it to visit }
+        }
+        /** Sessions of the fixture: s1 and s9 are ada's, s8 is bob's. */
+        override suspend fun sessionOwner(teamId: String, sessionId: String) = mapOf("s1" to "ada", "s9" to "ada", "s8" to "bob")[sessionId]
         override suspend fun visits(runId: String) = visits.values.filter { it.runId == runId }.sortedBy { it.seq }
         override suspend fun list(teamId: String, starterId: String?, workflowId: String?, status: RunStatus?, before: String?, limit: Int) =
             WorkflowRunPage(runs.values.filter { (starterId == null || it.starterId == starterId) && (status == null || it.status == status) }.take(limit), null)
@@ -89,6 +97,14 @@ class WorkflowEngineTest {
         override suspend fun cancel(starter: Principal, id: String) { cancelled += id; states[id] = WaitState(WaitStatus.CANCELLED, null, null) }
     }
 
+    private companion object {
+        const val TELL = "\n\nWhen this step is done, call the `deliver` tool of the teamcode_workflow MCP server once, with "
+        const val END = " as its `output`, then end your turn."
+        const val ARTIFACT_CLOSING = TELL + "the id of the artifact that holds it, as a string" + END
+        const val URL_CLOSING = TELL + "an https address on github.com, as a string" + END
+        const val TEXT_CLOSING = TELL + "the text, as a string" + END
+    }
+
     private val store = Store(); private val sessions = Sessions(); private val waits = Waits()
     private val engine = WorkflowEngine(store, sessions, waits)
     private val service = WorkflowRunService(store)
@@ -125,7 +141,7 @@ class WorkflowEngineTest {
 
         // The first agent node starts a session with its rendered instruction; the run keeps that session.
         pass()
-        assertEquals(listOf("s1", "Fix a ticket: Analyze", "p1", "Plan T-42"), sessions.created.single())
+        assertEquals(listOf("s1", "Fix a ticket: Analyze", "p1", "Plan T-42$ARTIFACT_CLOSING"), sessions.created.single())
         assertEquals("s1", run(run.id).sessionId); assertEquals("s1", visits(run).single().sessionId)
         assertEquals("not_found", code { service.deliver(who(bob), run.id, JsonPrimitive("a1")) }, "only the starter delivers")
 
@@ -142,11 +158,11 @@ class WorkflowEngineTest {
         pass(2)
         assertEquals(listOf("analyze", "review", "analyze"), visits(run).map { it.nodeId }); assertEquals("Feedback: split step 2", visits(run)[1].output)
         pass()
-        assertEquals("Plan T-42", sessions.messages.single().second, "same mode: the next instruction is a message of the same session")
+        assertEquals("Plan T-42$ARTIFACT_CLOSING", sessions.messages.single().second, "same mode: the next instruction is a message of the same session")
         service.deliver(who(ada), run.id, JsonPrimitive("plan-2")); pass(2)
         waits.states["w2"] = WaitState(WaitStatus.RESOLVED, "approve", ""); pass(4)
         assertEquals(listOf("analyze", "review", "analyze", "review", "implement"), visits(run).map { it.nodeId })
-        assertEquals("Implement plan-2", sessions.messages.last().second, "the latest output of a node is the one templates read")
+        assertEquals("Implement plan-2$URL_CLOSING", sessions.messages.last().second, "the latest output of a node is the one templates read")
 
         // The URL must be on the node's domain.
         assertEquals("invalid_deliverable", code { service.deliver(who(ada), run.id, JsonPrimitive("https://evil.example/pr/7")) })
@@ -156,7 +172,7 @@ class WorkflowEngineTest {
         val child = store.runs.values.single { it.parentRunId == run.id }
         assertEquals(1, child.depth); assertEquals("s1", child.sessionId); assertEquals(mapOf("pr" to "https://github.com/acme/app/pull/7"), child.inputs)
         pass()
-        assertEquals("Deploy https://github.com/acme/app/pull/7", sessions.messages.last().second)
+        assertEquals("Deploy https://github.com/acme/app/pull/7$TEXT_CLOSING", sessions.messages.last().second)
         service.deliver(who(ada), child.id, JsonPrimitive("deployed")); pass(2)
         assertEquals(RunStatus.SUCCEEDED, run(child.id).status); pass(2)
         assertEquals(RunStatus.SUCCEEDED, run(run.id).status); assertEquals("deployed", run(run.id).output)
@@ -283,5 +299,47 @@ class WorkflowEngineTest {
     @Test fun theWorkflowWaitNeverWakesTheSession() {
         val wait = Wait("w", "team", WaitSource.WAIT, WaitKind.WORKFLOW, WaitResolver.HUMAN, WaitStatus.RESOLVED, "s1", null, null, "ada", null, null, "t", null, emptyList(), emptyList(), emptyList(), null, 1, 2)
         assertFalse(TurnFailedWait.wakes(wait, "approve")); assertTrue(TurnFailedWait.wakes(wait.copy(kind = WaitKind.HUMAN_REQUEST), "approve"))
+    }
+
+    @Test fun theAgentDeliversBySessionAndOnlyTheStarterOrTheSessionsCredentialMay() = runBlocking {
+        val execution = who(ada, setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION)).copy(tokenId = "tcex-1")
+        store.executions["tcex-1"] = "s1"
+        val run = start("ticket" to "T-42"); pass()
+        assertEquals("s1", run(run.id).sessionId)
+        // Another member, an unknown session and a session of another member all look the same.
+        assertEquals("not_found", code { service.deliverBySession(who(bob), "s1", JsonPrimitive("plan-1")) })
+        assertEquals("not_found", code { service.deliverBySession(who(ada), "s8", JsonPrimitive("plan-1")) })
+        assertEquals("not_found", code { service.deliverBySession(who(ada), "nope", JsonPrimitive("plan-1")) })
+        // The starter must name the session; a session of hers that runs no workflow step has nothing to deliver.
+        assertEquals("invalid_request", code { service.deliverBySession(who(ada), null, JsonPrimitive("plan-1")) })
+        assertEquals("nothing_to_deliver", code { service.deliverBySession(who(ada), "s9", JsonPrimitive("plan-1")) })
+        // Same validation as the run route, then the same conditional completion: a second delivery finds nothing.
+        assertEquals("invalid_deliverable", code { service.deliverBySession(execution, null, JsonPrimitive("not an id!")) })
+        service.deliverBySession(execution, "s8", JsonPrimitive("plan-1"))
+        assertEquals(VisitStatus.DONE, visits(run).single().status); assertEquals("plan-1", visits(run).single().output)
+        assertEquals("nothing_to_deliver", code { service.deliverBySession(execution, null, JsonPrimitive("plan-1")) })
+    }
+
+    @Test fun anExecutionCredentialDeliversOnlyForItsSessionAndDoesNothingElse() = runBlocking {
+        val run = start("ticket" to "T-42"); pass()
+        val unbound = who(ada, setOf(ServiceScope.WORKFLOW_SESSION)).copy(tokenId = "ci-key")
+        assertEquals("credential_scope", code { service.deliverBySession(unbound, "s1", JsonPrimitive("plan-1")) }, "the scope on a key bound to no session")
+        val old = who(ada, setOf(ServiceScope.INFERENCE, ServiceScope.ARTIFACTS_WRITE)).copy(tokenId = "tcex-old")
+        store.executions["tcex-old"] = "s1"
+        assertEquals("credential_scope", code { service.deliverBySession(old, "s1", JsonPrimitive("plan-1")) }, "an execution credential from before the scope")
+        // Bound to s9, which runs no step: whatever it names, it cannot deliver into the run of s1.
+        val other = who(ada, setOf(ServiceScope.INFERENCE, ServiceScope.WORKFLOW_SESSION)).copy(tokenId = "tcex-9")
+        store.executions["tcex-9"] = "s9"
+        assertEquals("nothing_to_deliver", code { service.deliverBySession(other, "s1", JsonPrimitive("plan-1")) })
+        // The scope grants nothing else: not the run route, not the other cloud actions.
+        assertEquals("credential_scope", code { service.deliver(other, run.id, JsonPrimitive("plan-1")) })
+        assertEquals("credential_scope", code { service.get(other, run.id) })
+        val check = AuthorizeCredentialUseCase()
+        check.check(other, CredentialAction.WORKFLOW_DELIVER)
+        for (action in listOf(CredentialAction.CLOUD_READ, CredentialAction.CLOUD_WRITE, CredentialAction.WAITS_READ, CredentialAction.WAITS_WRITE, CredentialAction.INTERACTIVE))
+            assertEquals("credential_scope", code { check.check(other, action) })
+        // A cloud key keeps its usual reach: it names the session.
+        service.deliverBySession(who(ada, setOf(ServiceScope.CLOUD_WRITE)), "s1", JsonPrimitive("plan-1"))
+        assertEquals(VisitStatus.DONE, visits(run).single().status)
     }
 }
