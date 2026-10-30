@@ -3,6 +3,11 @@ package me.nathanfallet.teamcode
 import java.util.UUID
 import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.artifacts.ArtifactObjectStore
+import me.nathanfallet.teamcode.domain.automations.AutomationDirectory
+import me.nathanfallet.teamcode.domain.automations.AutomationService
+import me.nathanfallet.teamcode.domain.automations.CloudAutomationSessions
+import me.nathanfallet.teamcode.domain.automations.DispatchAutomationRunsUseCase
+import me.nathanfallet.teamcode.domain.automations.ScheduleAutomationsUseCase
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
@@ -13,6 +18,21 @@ import me.nathanfallet.teamcode.infrastructure.cloud.KubernetesPodOptions
 import me.nathanfallet.teamcode.infrastructure.cloud.SessionNetworkPolicy
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlAutomationStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowRunStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowProgress
+import me.nathanfallet.teamcode.domain.workflows.*
+import me.nathanfallet.teamcode.domain.waits.WaitMessages
+import me.nathanfallet.teamcode.domain.waits.WaitDefinition
+import me.nathanfallet.teamcode.domain.waits.WaitKind
+import me.nathanfallet.teamcode.domain.waits.WaitField
+import me.nathanfallet.teamcode.domain.waits.WaitAction
+import me.nathanfallet.teamcode.domain.workflows.WorkflowService
+import me.nathanfallet.teamcode.domain.waits.WaitService
+import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.waits.WaitSessions
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudFileStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudAdminStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlCloudConversationStore
@@ -79,6 +99,42 @@ class CloudServer(
     private val transferStore = SqlCloudTransferStore(database)
     private val recipients = CloudRecipientPolicy(store, access, listOf(ModelPolicyRecipientCheck(SqlModelPolicyStore(database)), QuotaRecipientCheck(SqlMemberAllowance(database))))
     val transfers = CloudTransferService(store, transferStore, sessions, recipients)
+
+    // Automations start sessions as their owner through the same service, so every creation rule applies to them.
+    private val automationStore = SqlAutomationStore(database)
+    private val automationDirectory = AutomationDirectory.Cloud(store)
+    val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
+    /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
+    val waits = WaitService(SqlWaitStore(database), object : WaitSessions {
+        override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
+        override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
+    })
+    /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
+    val workflows = WorkflowService(SqlWorkflowStore(database))
+    private val workflowRunStore = SqlWorkflowRunStore(database)
+    /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
+    val workflowRuns = WorkflowRunService(workflowRunStore)
+    private val workflowProgress = SqlWorkflowProgress(database)
+    private val waitReads = SqlWaitStore(database)
+    private val workflowEngine = WorkflowEngine(workflowRunStore, object : WorkflowSessions {
+        override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+            val draft = CloudSessionDraft(name, profileId, null, model, null, emptyMap(), null, null, prompt)
+            return when (val outcome = sessions.create(starter, null, draft, IdempotencyRequest("workflow-run", key, digest))) {
+                is CloudCreateOutcome.Created -> outcome.session.id
+                is CloudCreateOutcome.Replayed -> outcome.session.id
+            }
+        }
+        override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) = conversationService.queueWaitAnswer(starter, sessionId, text, key)
+        override suspend fun progress(sessionIds: Set<String>) = workflowProgress.progress(sessionIds)
+    }, object : WorkflowWaits {
+        override suspend fun ask(starter: Principal, sessionId: String, assigneeId: String?, title: String, body: String?, fields: List<WaitField>, actions: List<WaitAction>, key: String): String =
+            waits.create(starter, WaitDefinition(sessionId, title, body, assigneeId, emptyList(), fields, actions, kind = WaitKind.WORKFLOW), key).wait.id
+        override suspend fun states(ids: Set<String>) = waitReads.findMany(ids).associate { it.id to WaitState(it.status, it.answer?.action, WaitMessages.answerLines(it)) }
+        override suspend fun cancel(starter: Principal, id: String) { waits.cancel(starter, id) }
+    })
+    private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
+    private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
 
     private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { runtime.enabled }, onError = { session, error ->
         // Class and HTTP status only: messages from the cluster or the driver may echo request content.
@@ -167,6 +223,26 @@ class CloudServer(
                     catch (error: CancellationException) { throw error }
                     catch (error: Exception) { System.err.println("TeamCode cloud reconciler is temporarily unavailable (${describe(error)})."); 0 }
                 if (claimed == 0) delay(1_000)
+            }
+        }
+        scope.launch {
+            // One replica at a time per step (runDue, which also leases each step past its deadline), and each step in its
+            // own try: a step that keeps failing never starves the others.
+            suspend fun step(name: String, block: suspend () -> Unit) {
+                try { block() }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode automation step $name exceeded its deadline.") }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) { System.err.println("TeamCode automation step $name is temporarily unavailable (${describe(error)}).") }
+            }
+            while (isActive) {
+                if (!managing()) { delay(RUNTIME_REFRESH_MILLIS); continue }
+                step("schedule") { work.runDue("automations/schedule", intervalMillis = 15_000) { scheduleAutomations.run() } }
+                // While cloud sessions are off, runs wait (and expire after 30 minutes) instead of creating sessions that cannot start.
+                if (runtime.enabled) step("dispatch") { work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() } }
+                // Like automations: while cloud sessions are off, a run waits instead of creating sessions that cannot start.
+                if (runtime.enabled) step("workflows") { work.runDue("workflows/run", intervalMillis = 2_000, timeoutMillis = 60_000) { workflowEngine.run() } }
+                step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
+                delay(2_000)
             }
         }
         scope.launch {

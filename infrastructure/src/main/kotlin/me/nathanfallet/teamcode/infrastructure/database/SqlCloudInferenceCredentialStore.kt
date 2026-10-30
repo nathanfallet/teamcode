@@ -113,4 +113,4 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
  * (the agent's `teamcode mcp artifacts`, through the runner's relay; never making public or deleting, which stay
  * interactive). Nothing else: no usage, no skill or hook publication, no cloud or interactive route.
  */
-val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE)
+val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION)

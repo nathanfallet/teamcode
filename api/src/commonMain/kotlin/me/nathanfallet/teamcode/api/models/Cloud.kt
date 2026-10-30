@@ -325,6 +325,13 @@ data class CloudSettingsView(
      * 240 by default); 0: background work never does. Absent (null) in a `PUT` keeps the stored value.
      */
     val backgroundWorkMaxMinutes: Int? = null,
+    /** Automations a member may own (`automations.v1`; 0 to 200, 20 by default). Absent (null) in a `PUT` keeps the stored value. */
+    val maxAutomationsPerMember: Int? = null,
+    /**
+     * Sessions of one member's automations that may work at once (`automations.v1`; 1 to 100, 2 by default), counted
+     * apart from [maxRunningSessionsPerMember]: a run over it waits. Absent (null) in a `PUT` keeps the stored value.
+     */
+    val maxRunningAutomationsPerMember: Int? = null,
 )
 
 /**

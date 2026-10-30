@@ -13,10 +13,12 @@ import me.nathanfallet.teamcode.cli.hooks.teamHookSync
 import me.nathanfallet.teamcode.cli.hooks.teamHooksSupported
 import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
+import me.nathanfallet.teamcode.cli.launch.WaitsMcp
 import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
 import me.nathanfallet.teamcode.cli.launch.trackedRun
 import me.nathanfallet.teamcode.cli.platform.installServiceSignalHandlers
+import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.serviceStopRequested
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
@@ -25,6 +27,8 @@ import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
+import me.nathanfallet.teamcode.config.configSibling
+import okio.FileSystem
 import okio.Path.Companion.toPath
 import kotlin.time.Clock
 import me.nathanfallet.teamcode.cli.update.BackgroundInstallationLease
@@ -40,7 +44,7 @@ internal const val SESSION_RUN_LABEL = "teamcode.session"
  * ([AgentHost]: the agent in stream-json or app-server mode, transcript upload, input long-poll), called with the member's
  * own login instead of a pod's token. The agent's inference goes through a loopback proxy in this process, exactly as
  * under `teamcode run`, for a registered run labelled with the session; it gets the team's MCP servers, the member's
- * approved team hooks (Claude Code), the artifact tools and the member's environment variables. Nothing is written in
+ * approved team hooks (Claude Code), the artifact tools, the wait tools and the member's environment variables. Nothing is written in
  * the session's directory by TeamCode itself; the conversation id stays beside `config.json`, and the files members
  * attach to messages go to `<user temp>/teamcode-<uid>/<sessionId>/` ([SessionUploads]), kept across pauses and
  * removed when the session ends (a week at most).
@@ -105,11 +109,17 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         // Again after the proxy, whose engine installs its own handlers.
         installServiceSignalHandlers()
         val port = proxy.engine.resolvedConnectors().single().port
-        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report)
+        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report, sessionId = session)
         val variables = if (ENVIRONMENT_CAPABILITY in features) AgentVariables { _ -> memberVariables(client, report) } else null
+        // The agent's `Stop` hook reports its scheduled wake-ups on a private socket of this host, as in a cloud runner.
+        var wakeups: (Int) -> Unit = {}
+        val wakeupSocket = if (record.agent == "claude") wakeupSocket(session, report) { wakeups(it) } else null
         val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
-            inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report))
+            inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report),
+            stateHook = wakeupSocket?.hook)
+        wakeups = agent::scheduledWakeups
+        val wakeupServer = wakeupSocket?.let { launch { it.broker.serve() } }
         val loop = RunnerLoop(calls, log = report, agent = agent)
         // A daemon's host: while the agent's background work runs, an update waits before restarting the service (which pauses this session).
         val backgroundLease = if (!daemonHosted) null else launch {
@@ -132,7 +142,7 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
             currentCoroutineContext().ensureActive()
             if (!aborted) throw error
             RunnerLoop.EXIT_FENCED_OR_DONE
-        } finally { stop.cancel(); backgroundLease?.cancel() }
+        } finally { stop.cancel(); backgroundLease?.cancel(); wakeupServer?.cancel(); wakeupSocket?.remove() }
     } finally {
         withContext(NonCancellable) {
             proxy.stop(500, 5_000)
@@ -185,6 +195,24 @@ private suspend fun memberVariables(client: TeamCodeClient, report: (String) -> 
 } catch (error: CancellationException) { throw error }
 catch (_: Exception) { report("Environment variables could not be read; starting the agent without them."); emptyMap() }
 
+/** The socket the agent's `Stop` hook reports its wake-ups on, its broker, and the hook command that does. */
+internal class WakeupSocket(val path: String, val broker: WakeupBroker, val hook: String) {
+    fun remove() { try { FileSystem.SYSTEM.delete(path.toPath(), mustExist = false) } catch (_: Exception) { } }
+}
+
+/**
+ * Opens the host's wake-up socket beside the remote records (a short, private path: socket paths are limited to about 100
+ * bytes), or null where Unix sockets do not exist (Windows) or the socket cannot be opened: the agent then runs without the
+ * hook, and a session whose agent has only scheduled wake-ups can be paused for inactivity, as before.
+ */
+internal fun wakeupSocket(session: String, report: (String) -> Unit, wakeups: (Int) -> Unit): WakeupSocket? = try {
+    val path = configSibling(configPath(), "remote").toPath() / "${session.take(8)}.wake.sock"
+    val binary = (try { managedInstallation()?.paths?.launcher?.toString() } catch (_: Exception) { null }) ?: servicePlatform().executable
+    val broker = WakeupBroker(listenUnix(path.toString()), wakeups)
+    WakeupSocket(path.toString(), broker, "${AgentEnvironment.quote(binary)} cloud agent-state --socket ${AgentEnvironment.quote(path.toString())}")
+} catch (error: CancellationException) { throw error }
+catch (_: Exception) { null }
+
 /** The team hooks this member approved on this device, as under `teamcode run`; never blocks the host. */
 private suspend fun approvedHooks(client: TeamCodeClient, features: List<String>, report: (String) -> Unit) =
     if ("team.hooks.v1" !in features || !teamHooksSupported()) emptyList() else try {
@@ -194,14 +222,28 @@ private suspend fun approvedHooks(client: TeamCodeClient, features: List<String>
     } catch (error: CancellationException) { throw error }
     catch (_: Exception) { report("Team hooks could not be read; continuing without them."); emptyList() }
 
-/** The team's tools on the member's own device: MCP servers through the local proxy, the artifact tools rooted at the directory. */
-private class HostAgentTools(
+/**
+ * The team's tools on the member's own device: MCP servers through the local proxy, the artifact tools rooted at the
+ * directory, and the wait tools for [sessionId] when the server serves waits. [executable] is this TeamCode binary.
+ */
+internal class HostAgentTools(
     private val client: TeamCodeClient,
     private val directory: String,
     private val features: List<String>,
     private val plugin: String?,
     private val report: (String) -> Unit,
+    private val sessionId: String? = null,
+    private val executable: () -> String = { servicePlatform().executable },
 ) : AgentTools {
+    /** The member's own login runs the host, so the capability is enough: there is no execution credential to check. */
+    override suspend fun waits(): WaitsMcp? {
+        val session = sessionId ?: return null
+        if (Waits.CAPABILITY !in features) return null
+        return try { WaitsMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            report("The wait tools could not be prepared; the agent starts without them."); null
+        }
+    }
+
     override suspend fun prepare(agent: String): List<String> = if ("mcp.gateway.v1" !in features) emptyList() else try {
         withTimeout(20_000) { client.mcpServers() }.map { it.name }.filter { TeamCodeClient.MCP_SERVER_NAME.matches(it) }.distinct()
     } catch (error: TimeoutCancellationException) { report("Team MCP servers could not be listed; the agent starts without them."); emptyList() }
@@ -214,7 +256,7 @@ private class HostAgentTools(
             catch (_: TimeoutCancellationException) { false }
             catch (error: CancellationException) { throw error }
             catch (_: Exception) { false }
-        return if (allowed) ArtifactsMcp(servicePlatform().executable, directory, configDir = configPath().toPath().parent?.toString()) else null
+        return if (allowed) ArtifactsMcp(executable(), directory, configDir = configPath().toPath().parent?.toString()) else null
     }
 
     override suspend fun claudePlugin() = plugin

@@ -33,6 +33,27 @@ class CloudConversationService(
         if (outcome is InputOutcome.Accepted) wake(principal.teamId, session.id, principal)
     }
 
+    /** Refuses an answer to a wait from someone who may not instruct the session (see [requireGitHubInstructor]). A session that is gone is the wait service's to report. */
+    suspend fun authorizeWaitAnswer(principal: Principal, sessionId: String) {
+        val session = sessions.find(principal.teamId, sessionId) ?: return
+        requireGitHubInstructor(principal, session)
+    }
+
+    /**
+     * Queues the answer to a wait as a message of the session, written by whoever answered, and wakes it like any
+     * message. Idempotent per [clientKey]: sent again it queues nothing more. The wait service has checked that the
+     * author may answer; a session that has ended takes nothing.
+     */
+    suspend fun queueWaitAnswer(principal: Principal, sessionId: String, text: String, clientKey: String) {
+        val session = sessions.find(principal.teamId, sessionId) ?: return
+        if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return
+        CloudConversationRules.validateMessage(text)
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("wait\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) }
+        val input = newInput(principal, session, CloudInputKind.MESSAGE, text, InputRequest(text, true, clientKey, digest, null))
+        val outcome = store.insertInput(NewInput(input, null, session.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+        if (outcome is InputOutcome.Accepted) wake(principal.teamId, session.id, principal)
+    }
+
     suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
         CloudConversationRules.validatePage(limit, after, before)
         val session = open(principal, id, CloudPermission.TRANSCRIPT)

@@ -53,13 +53,21 @@ dependencies {
     implementation(libs.koin.core)
     implementation(libs.logback)
     testImplementation(kotlin("test-junit5"))
+    // The MCP stdio host, run in-process by the hosted-server acceptance test (HostedMcpAcceptanceTest).
+    testImplementation(projects.mcp)
     testImplementation(libs.testcontainers.mysql)
     testImplementation(libs.ktor.server.tests)
     testImplementation(libs.exposed.core)
     testImplementation(libs.exposed.jdbc)
     testRuntimeOnly(libs.junit)
 }
-tasks.test { useJUnitPlatform() }
+tasks.test {
+    useJUnitPlatform()
+    // The host's Node.js stdio fixture server, installed as npx and uvx by HostedMcpAcceptanceTest (Node.js on PATH,
+    // or TEAMCODE_MCP_TEST_NODE, as for :mcp:test).
+    systemProperty("teamcode.mcpFixture", rootProject.file("mcp/src/test/resources/stdio-fixture-server.js").absolutePath)
+    environment("TEAMCODE_MCP_TEST_NODE", providers.environmentVariable("TEAMCODE_MCP_TEST_NODE").orElse("").get())
+}
 
 // Explicit local browser acceptance; ordinary CI keeps its existing Linux JVM checks.
 tasks.register<JavaExec>("smokeAgentRuns") {

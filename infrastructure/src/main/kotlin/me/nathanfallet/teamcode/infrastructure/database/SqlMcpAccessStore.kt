@@ -41,7 +41,7 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
                 .singleOrNull()?.let(::policy) ?: McpToolPolicy.ALL
             if (tool == null || !policy.allows(tool)) throw denied()
         }
-        val window = now - maxOf(limits.leaseMillis(McpOperation.CALL), limits.leaseMillis(McpOperation.LIST))
+        val window = now - limits.maxLeaseMillis
         val member = load((McpCalls.memberId eq actor.member.id) and (McpCalls.server eq server.name), window, now)
         if (member.active >= limits.memberConcurrentPerServer) throw TeamFailure("mcp_member_concurrency", 429, "You already have the maximum number of running calls on this MCP server.")
         if (member.recent >= limits.memberCallsPerMinute) throw TeamFailure("mcp_member_rate", 429, "You reached the per-minute call limit for this MCP server. Retry shortly.")
@@ -51,7 +51,7 @@ class SqlMcpAccessStore(private val database: Database) : McpAccessStore {
         val id = McpCalls.insert {
             it[teamId] = actor.teamId; it[memberId] = actor.member.id; it[McpCalls.server] = server.name; it[McpCalls.variantId] = variantId
             it[McpCalls.operation] = operation.name; it[McpCalls.tool] = tool; it[outcome] = McpOutcome.ACTIVE.name
-            it[startedAt] = now; it[leaseExpiresAt] = now + limits.leaseMillis(operation)
+            it[startedAt] = now; it[leaseExpiresAt] = now + limits.leaseMillis(operation, server.hosted)
         }[McpCalls.id]
         McpLease(id, actor.teamId, actor.member.id, server.name)
     }

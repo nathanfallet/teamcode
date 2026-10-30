@@ -36,6 +36,7 @@ The API returns at most 50 events, newest identifier first. Response shape (even
 - Who can add accounts (`accounts.enrollment_policy_changed`, subject `team:previous->new`).
 - Member allowance/concurrency/weight policy, pool budgets, model/effort/experimental settings and routing rule changes.
 - Group creation/policy/archive changes and assignments/removal/pause/resume. Assignment event subjects use `groupId/memberId`; the metadata field supports 100 characters. Group writes and their audit event commit together under the team lock. See [groups](groups.md).
+- Restarts of a hosted MCP process from the dashboard (`mcp.stdio.restarted`, subject `variantId` or `variantId/memberId`); see [the MCP host](mcp.md#operating-and-troubleshooting).
 - Local agent-launch start/end and run policy changes (`run.started`, `run.ended`, `run.policy_updated`); no per-heartbeat journal entry.
 - Controller observation/enforcement changes (`pacing.observation_enabled`, `pacing.enforcement_enabled`) and quota pressure threshold changes (`pacing.quota_pressure_changed`).
 - Automatic shared pool size on/off (`pool_size.automatic_enabled`, `pool_size.manual_enabled`) and API price table changes (`capacity.api_price_changed`, and `capacity.api_prices_defaults_loaded` when an administrator loads Anthropic's list prices; the subject records the previous and new row counts); see [Automatic shared pool size](capacity.md#automatic-shared-pool-size).

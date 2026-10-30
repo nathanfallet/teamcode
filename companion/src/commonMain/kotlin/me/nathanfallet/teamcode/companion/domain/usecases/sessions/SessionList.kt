@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
+import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 
 /**
  * The sessions one list shows (one [scope], one status [filter]), newest first as the server orders them, and the sessions
@@ -53,6 +54,8 @@ data class SessionList(
      * might, its id to read with `GET /cloud/sessions/{id}` (then [upserted]).
      */
     fun applied(change: SessionChange): Pair<SessionList, String?> {
+        // A wait asked, answered or withdrawn says nothing about its session's state: the waits section follows it.
+        if (change.type in SessionChange.WAIT_TYPES) return this to null
         if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
         // Only a known end: a phase this app does not know (a newer server) is not taken for one.
@@ -71,8 +74,17 @@ data class SessionList(
             finished && current.state == SessionState.ACTIVE -> SessionState.READY
             else -> current.state
         }
-        val activity = if (change.turnPhase != null) maxOf(current.lastActivityAt, change.at) else current.lastActivityAt
-        val updated = current.copy(state = state, lastActivityAt = activity, updatedAt = maxOf(current.updatedAt, change.at))
+        val waits = change.type == SessionChange.WAITING
+        val activity = if (change.turnPhase != null || waits) maxOf(current.lastActivityAt, change.at) else current.lastActivityAt
+        val waiting = when {
+            waits -> SessionWaiting(change.waitingReason ?: SessionWaiting.PERMISSION, change.requestId, change.at)
+            // An answer to an older request leaves the newer one waiting; one without an id ends the wait.
+            change.type == SessionChange.ANSWERED -> current.waiting?.takeIf { change.requestId != null && it.requestId != null && it.requestId != change.requestId }
+            // Every request of a turn ends with it, and nothing waits in a session that is not running.
+            finished || state !in WAITABLE -> null
+            else -> current.waiting
+        }
+        val updated = current.copy(state = state, lastActivityAt = activity, updatedAt = maxOf(current.updatedAt, change.at), waiting = waiting)
         return copy(finishedTurns = marks).upserted(updated) to null
     }
 
@@ -103,6 +115,7 @@ data class SessionList(
         val SETTLED = setOf(SessionState.READY, SessionState.ACTIVE, SessionState.PAUSED, SessionState.TERMINATED, SessionState.FAILED)
         /** A state this version does not know is not read again and again: it may never settle into one it knows. */
         val UNSETTLED = SessionState.entries.toSet() - SETTLED - SessionState.UNKNOWN
+        val WAITABLE = setOf(SessionState.READY, SessionState.ACTIVE)
         const val MAX_OUTSIDE = 500
         val FINISHED_PHASES = setOf("completed", "interrupted", "failed")
     }

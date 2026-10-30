@@ -23,6 +23,17 @@ data class McpCallView(
 @Serializable
 data class McpCallPageView(val calls: List<McpCallView>, val nextBeforeId: Long? = null)
 
-/** One MCP server assigned to the caller and the gateway path that serves it. No upstream address or credential. */
+/**
+ * One MCP server assigned to the caller and the gateway path that serves it. No upstream address or credential.
+ *
+ * [transport] is `http` (an HTTPS endpoint) or `stdio` (a hosted command run by the server's MCP host); servers older
+ * than `mcp.gateway.stdio.v1` leave it out. For a hosted command, [state] is the last state the server saw of its
+ * process (`idle`, `starting`, `ready`, `failed` or `backoff`, refreshed about once a minute) and [failure] the code of
+ * its last failure not yet followed by a successful start (for example `start_failed`, `crashed`, `memory`). Both are
+ * open lists: a client shows a code it does not know as is.
+ */
 @Serializable
-data class McpServerView(val name: String, val path: String)
+data class McpServerView(
+    val name: String, val path: String,
+    val transport: String? = null, val state: String? = null, val failure: String? = null,
+)

@@ -49,6 +49,8 @@ data class McpLimits(
     val serverCallsPerMinute: Int = 1_200,
     val maxServers: Int = 32,
     val maxToolsPerServer: Int = 256,
+    /** A hosted command's start, package download included: added to a hosted server's deadlines and leases. */
+    val stdioStartTimeoutMillis: Long = 45_000,
 ) {
     init {
         require(callTimeoutMillis in 1_000..600_000 && listTimeoutMillis in 1_000..120_000)
@@ -56,9 +58,20 @@ data class McpLimits(
         require(memberConcurrentPerServer in 1..256 && serverConcurrent in memberConcurrentPerServer..4_096)
         require(memberCallsPerMinute in 1..100_000 && serverCallsPerMinute in memberCallsPerMinute..1_000_000)
         require(maxServers in 1..256 && maxToolsPerServer in 1..4_096)
+        require(stdioStartTimeoutMillis in 1_000..300_000)
     }
+    /**
+     * How long the gateway waits for one operation. A hosted server's list or call may also wait for its process to
+     * start (the first operation after an idle stop or a host restart, package download included): the host gives the
+     * start its own bound, so a warm process still answers within the usual deadline, and an agent that gives up earlier
+     * cancels the request.
+     */
+    fun deadlineMillis(operation: McpOperation, hosted: Boolean = false) =
+        (if (operation == McpOperation.CALL) callTimeoutMillis else listTimeoutMillis) + (if (hosted) stdioStartTimeoutMillis else 0)
     /** A lease outlives the operation's own deadline, so a crashed replica's slot is reclaimed shortly after. */
-    fun leaseMillis(operation: McpOperation) = (if (operation == McpOperation.CALL) callTimeoutMillis else listTimeoutMillis) + 30_000
+    fun leaseMillis(operation: McpOperation, hosted: Boolean = false) = deadlineMillis(operation, hosted) + 30_000
+    /** The longest lease any operation holds: active rows younger than this still count against the concurrency limits. */
+    val maxLeaseMillis get() = maxOf(leaseMillis(McpOperation.CALL, hosted = true), leaseMillis(McpOperation.LIST, hosted = true))
 }
 
 /** One upstream tool. [definition] is the tool's JSON object exactly as the upstream described it. */
@@ -78,10 +91,17 @@ interface McpUpstream {
     suspend fun listTools(server: EffectiveMcpServer, limits: McpLimits): List<UpstreamTool>
     /** [arguments] is the caller's JSON object text, or null for none. */
     suspend fun callTool(server: EffectiveMcpServer, tool: String, arguments: String?, limits: McpLimits): UpstreamCallResult
+    /** Whether this upstream can reach hosted commands (transport stdio): the server has an MCP host. */
+    val hostsCommands: Boolean get() = false
+    /**
+     * Starts the processes of these hosted servers ahead of the agent's first `tools/list`, without waiting for them and
+     * without failing: a client reads its server list just before it lists each server's tools.
+     */
+    fun warm(servers: List<EffectiveMcpServer>) {}
 }
 
-/** The resolved assignment an operation was prepared from; admission refuses it once any part changed. */
-data class McpServerRef(val name: String, val variantId: String, val version: Int, val assignedAt: Long)
+/** The resolved assignment an operation was prepared from; admission refuses it once any part changed. [hosted] lengthens its lease. */
+data class McpServerRef(val name: String, val variantId: String, val version: Int, val assignedAt: Long, val hosted: Boolean = false)
 
 /** A concurrency slot and journal row for one admitted operation. */
 data class McpLease(val id: Long, val teamId: String, val memberId: String, val server: String)

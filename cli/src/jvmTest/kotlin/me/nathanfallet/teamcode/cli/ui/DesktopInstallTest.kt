@@ -47,11 +47,15 @@ class DesktopInstallTest {
     private class FixtureSource(val fixture: Fixture, val tamper: Boolean = false) : DesktopSource {
         var downloads = 0
         override suspend fun metadata(version: String) = DownloadedReleaseMetadata(fixture.manifest, fixture.signature)
-        override suspend fun download(version: String, target: String, asset: ReleaseAsset, destination: Path) {
+        override suspend fun download(version: String, target: String, asset: ReleaseAsset, destination: Path, progress: (Long) -> Unit) {
             downloads++
             val bytes = fixture.packages.getValue(target).copyOf()
             if (tamper) bytes[bytes.size / 2] = (bytes[bytes.size / 2].toInt() xor 1).toByte()
             File(destination.toString()).writeBytes(bytes)
+            // In quarters, as a network download reports its chunks, each rounded up: rounded down, half of an odd
+            // length is just under 50 % and reports 40. A tar archive's length follows its files' times, so its
+            // parity changes from one run to the next.
+            for (quarter in 1..4) progress(Math.ceilDiv(bytes.size.toLong() * quarter, 4L))
         }
     }
 
@@ -125,6 +129,81 @@ class DesktopInstallTest {
         assertEquals(listOf("1.3.0", "1.4.0", "current"), root.list()!!.sorted())
     }
 
+    @Test fun aStageLeavesTheInstalledAppAloneUntilItIsActivated() = runBlocking {
+        val first = installer("linux", "linux-x64", FixtureSource(fixture("1.2.3", mapOf("linux-x64" to linuxApp("1.2.3")))))
+        first.install(first.release("1.2.3"))
+        val root = File(home, ".local/share/teamcode-desktop")
+        val next = installer("linux", "linux-x64", FixtureSource(fixture("1.3.0", mapOf("linux-x64" to linuxApp("1.3.0")))))
+        val progress = mutableListOf<Int>()
+        val staged = next.stage(next.release("1.3.0")) { progress += it }
+        assertEquals(listOf(20, 50, 70, 100), progress, "By tens of percent, each step once")
+        assertEquals("1.2.3", Files.readSymbolicLink(File(root, "current").toPath()).toString(), "The running app's version stays current")
+        assertEquals(root.path, staged.directory.parent.toString())
+        assertTrue(staged.directory.name.matches(Regex("\\.staging-[0-9a-f]{16}")), staged.directory.name)
+        assertEquals(listOf<String>(), temporary.list()!!.toList(), "The download is gone once unpacked")
+        // The hand-off finds it again from its path alone, then puts it in place.
+        val found = assertNotNull(next.staged(staged.directory, "1.3.0"))
+        assertEquals("1.3.0", next.activate(found).version)
+        next.discard(found)
+        assertEquals("1.3.0", Files.readSymbolicLink(File(root, "current").toPath()).toString())
+        assertEquals(listOf("1.2.3", "1.3.0", "current"), root.list()!!.sorted(), "The stage is removed; the previous version stays for an app still running from it")
+    }
+
+    @Test fun theProgressStepsDoNotDependOnThePackageLength() = runBlocking {
+        for (size in 1000..1003) {
+            val installer = installer("windows", "windows-x64", FixtureSource(fixture("1.2.3", mapOf("windows-x64" to ByteArray(size) { it.toByte() }))))
+            val progress = mutableListOf<Int>()
+            installer.discard(installer.stage(installer.release("1.2.3")) { progress += it })
+            assertEquals(listOf(20, 50, 70, 100), progress, "$size bytes")
+        }
+    }
+
+    @Test fun onlyAStageOfThisInstallerAndVersionIsTakenBack() = runBlocking {
+        val installer = installer("linux", "linux-x64", FixtureSource(fixture("1.3.0", mapOf("linux-x64" to linuxApp("1.3.0")))))
+        val staged = installer.stage(installer.release("1.3.0"))
+        assertNull(installer.staged(staged.directory, "1.3.1"), "Another version")
+        val elsewhere = File(work, staged.directory.name).toOkioPath()
+        File(staged.directory.toString()).copyRecursively(File(elsewhere.toString()))
+        assertNull(installer.staged(elsewhere, "1.3.0"), "Not where stages are made")
+        val renamed = staged.directory.parent!! / ".staging-not-hex"
+        fs.atomicMove(staged.directory, renamed)
+        assertNull(installer.staged(renamed, "1.3.0"), "Not a stage's name")
+        fs.atomicMove(renamed, staged.directory)
+        File(staged.directory.toString()).setReadable(true, false)
+        assertNull(installer.staged(staged.directory, "1.3.0"), "Readable by others")
+        File(staged.directory.toString()).setReadable(false, false); File(staged.directory.toString()).setReadable(true, true)
+        assertNotNull(installer.staged(staged.directory, "1.3.0"))
+        installer.discard(staged)
+        assertNull(installer.staged(staged.directory, "1.3.0"), "Gone")
+    }
+
+    @Test fun windowsStagesTheCheckedPackageAndRunsItOnlyWhenActivated() = runBlocking {
+        val root = File(home, "AppData/Local/TeamCode App")
+        val msiexec: suspend (String, List<String>) -> Int = { command, arguments ->
+            commands += listOf(command) + arguments
+            File(root, "TeamCode.exe").apply { parentFile.mkdirs(); writeText("exe") }
+            File(root, "app/resources/teamcode-desktop-version").apply { parentFile.mkdirs(); writeText("1.2.3\n") }
+            0
+        }
+        val installer = installer("windows", "windows-x64", FixtureSource(fixture("1.2.3", mapOf("windows-x64" to "msi bytes".encodeToByteArray()))), msiexec)
+        val staged = installer.stage(installer.release("1.2.3"))
+        assertTrue(commands.isEmpty(), "Nothing installed while the app runs")
+        assertEquals(temporary.path, staged.directory.parent.toString())
+        assertEquals(listOf("teamcode-desktop-1.2.3-windows-x64.msi"), File(staged.directory.toString()).list()!!.toList())
+        val found = assertNotNull(installer.staged(staged.directory, "1.2.3"))
+        assertEquals("1.2.3", installer.activate(found).version)
+        assertEquals((staged.directory / "teamcode-desktop-1.2.3-windows-x64.msi").toString(), commands.single()[2])
+        installer.discard(found)
+        assertFalse(File(staged.directory.toString()).exists())
+    }
+
+    @Test fun aFileThatAppearsEndsTheWaitAndOneThatDoesNotTimesOut() = runBlocking {
+        val file = File(work, "ready").toOkioPath()
+        assertFalse(waitForFile(file, 150.milliseconds))
+        File(file.toString()).writeText("")
+        assertTrue(waitForFile(file, 150.milliseconds))
+    }
+
     @Test fun aModifiedByteIsRefusedBeforeThePackageIsOpenedAndChangesNothing() {
         val source = FixtureSource(fixture("1.2.3", mapOf("linux-x64" to linuxApp("1.2.3"))), tamper = true)
         val installer = installer("linux", "linux-x64", source)
@@ -163,6 +242,13 @@ class DesktopInstallTest {
         File(home, "Applications/TeamCode.app/Contents/MacOS/TeamCode").apply { parentFile.mkdirs(); writeText("previous") }
         val accepted: suspend (String, List<String>) -> Int = { command, arguments -> if (command == "codesign") 0 else realRun(command, arguments) }
         val installer = installer("macos", "macos-arm64", FixtureSource(fixture("1.2.3", mapOf("macos-arm64" to macApp("1.2.3")))), accepted)
+        // Staged next to the app, on its volume: the app is untouched until the swap.
+        val staged = installer.stage(installer.release("1.2.3"))
+        assertEquals(File(home, "Applications").path, staged.directory.parent.toString())
+        assertEquals("previous", File(home, "Applications/TeamCode.app/Contents/MacOS/TeamCode").readText())
+        assertNotNull(installer.staged(staged.directory, "1.2.3"))
+        installer.discard(staged)
+        assertEquals(listOf("TeamCode.app"), File(home, "Applications").list()!!.toList())
         val installed = installer.install(installer.release("1.2.3"))
         assertEquals("1.2.3", installed.version)
         assertEquals("#!/bin/sh\n", File(home, "Applications/TeamCode.app/Contents/MacOS/TeamCode").readText())

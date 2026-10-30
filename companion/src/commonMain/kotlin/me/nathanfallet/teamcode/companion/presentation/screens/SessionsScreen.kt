@@ -58,6 +58,7 @@ import com.adamglin.phosphoricons.regular.Warning
 import kotlinx.coroutines.delay
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
+import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
@@ -78,6 +79,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.LocalDense
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
 import me.nathanfallet.teamcode.companion.presentation.components.Skeleton
 import me.nathanfallet.teamcode.companion.presentation.components.StateChip
+import me.nathanfallet.teamcode.companion.presentation.components.Chip
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
 import me.nathanfallet.teamcode.companion.presentation.components.TcIconButton
@@ -88,6 +90,9 @@ import me.nathanfallet.teamcode.companion.presentation.theme.Radii
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.HomeViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsUiState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
@@ -116,6 +121,8 @@ import me.nathanfallet.teamcode.companion.resources.sessions_switch_account
 import me.nathanfallet.teamcode.companion.resources.sessions_team
 import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.sessions_turn_finished
+import me.nathanfallet.teamcode.companion.resources.sessions_waiting_permission
+import me.nathanfallet.teamcode.companion.resources.sessions_waiting_question
 import me.nathanfallet.teamcode.companion.resources.time_days
 import me.nathanfallet.teamcode.companion.resources.time_hours
 import me.nathanfallet.teamcode.companion.resources.time_just_now
@@ -143,11 +150,21 @@ fun SessionsScreen(
     onOpenSessionArtifacts: ((Account, CloudSession) -> Unit)? = null,
     viewModel: HomeViewModel = koinViewModel(),
     sessionsViewModel: SessionsViewModel = koinViewModel(),
+    /** "Waiting for you" above the sessions; null: no such section (tests of the list alone). */
+    waitsViewModel: WaitsViewModel? = null,
+    /** A wait's session, from its card: opened by identifier. */
+    onOpenSessionById: (Account, String) -> Unit = { _, _ -> },
     follow: Boolean = true,
     clock: Clock = koinInject(),
 ) {
     val home by viewModel.uiState.collectAsStateWithLifecycle()
     val state by sessionsViewModel.uiState.collectAsStateWithLifecycle()
+    val waits by (waitsViewModel?.uiState ?: remember { MutableStateFlow(WaitsUiState()) }).collectAsStateWithLifecycle()
+    // Its own lifecycle: the wide layout shares the sessions list with its sidebar, but not the waits.
+    if (waitsViewModel != null) LifecycleStartEffect(waitsViewModel) {
+        waitsViewModel.start()
+        onStopOrDispose { waitsViewModel.stop() }
+    }
     // Streams are open only while the screen is visible: closed in the background, resumed on return.
     if (follow) LifecycleStartEffect(sessionsViewModel) {
         sessionsViewModel.start()
@@ -189,6 +206,20 @@ fun SessionsScreen(
         val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
         LaunchedEffect(nearEnd, list?.nextBefore) { if (nearEnd) sessionsViewModel.loadMore() }
         val error = state.error ?: home.error
+        // A row that arrives above the first one shown keeps that one in place: the first page after the empty list's
+        // last row (a screen composed before its account was known, a first sign-in, the demo) scrolled the list down
+        // to its end. A list at the top stays at the top; one scrolled down keeps its place.
+        val firstRow: Any = when {
+            account != null && !account.signedIn -> "signed-out"
+            error != null -> "error"
+            state.reconnecting -> "reconnecting"
+            else -> list?.sessions?.firstOrNull()?.id ?: if (state.loading) "skeleton-0" else "end"
+        }
+        val shownFirstRow = remember { arrayOf(firstRow) }
+        if (shownFirstRow[0] != firstRow) {
+            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) listState.requestScrollToItem(0)
+            shownFirstRow[0] = firstRow
+        }
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("sessions"),
             state = listState,
@@ -212,6 +243,7 @@ fun SessionsScreen(
                 } else null)
             }
             if (state.reconnecting) item(key = "reconnecting") { Banner(stringResource(Res.string.sessions_reconnecting), Tone.WARN) }
+            if (waitsViewModel != null) waitsSection(waits, onInput = waitsViewModel::input, onAnswer = waitsViewModel::answer, onOpenSession = { id -> account?.let { onOpenSessionById(it, id) } })
             val sessions = list?.sessions.orEmpty()
             if (state.loading && sessions.isEmpty()) {
                 items(3, key = { "skeleton-$it" }) { index -> SkeletonCard(index) }
@@ -319,6 +351,7 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (finished) Dot(colors.accentText, Modifier.testTag("finished-${session.id}"))
             Text(session.name, color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            session.waiting?.let { WaitingChip(it) }
             StateChip(session.state)
         }
         val details = listOfNotNull(session.agentKind, session.model, session.effort, phaseLabel(session)).joinToString(" · ")
@@ -343,6 +376,13 @@ private fun SessionCard(session: CloudSession, finished: Boolean, now: Long, dim
             Text(relativeTime(session.lastActivityAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)
         }
     }
+}
+
+/** The agent waits for a person: a tool use to approve or a question to answer. */
+@Composable
+private fun WaitingChip(waiting: SessionWaiting) {
+    val text = if (waiting.reason == SessionWaiting.QUESTION) Res.string.sessions_waiting_question else Res.string.sessions_waiting_permission
+    Chip(stringResource(text), Modifier.testTag("waiting"), tone = Tone.WARN)
 }
 
 @Composable

@@ -1,0 +1,14 @@
+<configuration>
+  <!-- Process events: one JSON object per line on stdout, without arguments, environment, input, output or stderr. -->
+  <appender name="EVENTS" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.out</target>
+    <encoder><pattern>%msg%n</pattern></encoder>
+  </appender>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder><pattern>%d{HH:mm:ss} %-5level %logger{30} - %msg%n</pattern></encoder>
+  </appender>
+  <logger name="teamcode.mcp.events" level="INFO" additivity="false"><appender-ref ref="EVENTS"/></logger>
+  <logger name="io.netty" level="WARN"/>
+  <root level="INFO"><appender-ref ref="STDERR"/></root>
+</configuration>

@@ -57,6 +57,9 @@ sealed interface McpCallOutcome {
     class Failed(val code: String, val message: String) : McpCallOutcome
 }
 
+/** One server assigned to a member; [state] and [failure] are those of a hosted command's process (see [HostedProcessRecord]). */
+data class AssignedMcpServer(val name: String, val hosted: Boolean, val state: String?, val failure: String?)
+
 /** A tool the member cannot call: unknown, not assigned, restricted or revoked. Reported identically for all four. */
 class McpToolDenied : Exception("Unknown tool.")
 
@@ -74,11 +77,38 @@ class McpGateway(
     private val upstream: McpUpstream,
     val limits: McpLimits = McpLimits(),
     private val monotonicMillis: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** The states the sweep recorded for hosted processes; without it, hosted servers are listed without a state. */
+    private val hostedStates: HostedProcessStateStore? = null,
 ) {
-    /** Names of the MCP servers currently assigned to the member, each reachable on its own endpoint. */
-    suspend fun servers(actor: Principal): List<String> {
+    /** Whether hosted commands (transport stdio) are served: the server has an MCP host. */
+    val hostsCommands get() = upstream.hostsCommands
+
+    /**
+     * Names of the MCP servers currently assigned to the member, each reachable on its own endpoint. Clients read this
+     * right before listing each server's tools, so the processes of hosted servers are started now, in the background.
+     */
+    suspend fun servers(actor: Principal): List<String> = assigned(actor).map { it.name }
+
+    /**
+     * The same servers with their transport and, for a hosted command, the state the sweep last recorded for its
+     * process (one indexed read for all of them). Warms the hosted processes like [servers].
+     */
+    suspend fun assigned(actor: Principal): List<AssignedMcpServer> {
         actor.requireScope(ServiceScope.MCP)
-        return servers(actor.teamId, actor.member.id).map { it.name }
+        val servers = servers(actor.teamId, actor.member.id)
+        val hosted = servers.filter { it.hosted }
+        upstream.warm(hosted)
+        // Agents read this list to discover their servers: a state that cannot be read never hides one.
+        val records = if (hosted.isEmpty() || hostedStates == null) emptyMap() else try {
+            hostedStates.records(actor.teamId, hosted.map { it.variantId }.distinct(), actor.member.id).associateBy { it.variantId to it.memberId }
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        return servers.map { server ->
+            val transport = server.transport as? me.nathanfallet.teamcode.domain.variants.McpServerTransport.Stdio
+                ?: return@map AssignedMcpServer(server.name, hosted = false, state = null, failure = null)
+            if (records == null) return@map AssignedMcpServer(server.name, hosted = true, state = null, failure = null)
+            val record = records[server.variantId to transport.processMemberId]
+            AssignedMcpServer(server.name, hosted = true, state = record?.stateFor(transport.key) ?: HostedProcessStates.IDLE, failure = record?.failureFor(transport.key))
+        }
     }
 
     /**
@@ -157,7 +187,7 @@ class McpGateway(
 
     /** Admits, runs and always settles the lease, even when the caller disconnects. */
     private suspend fun <T> run(actor: Principal, server: EffectiveMcpServer, operation: McpOperation, tool: String?, block: suspend () -> Pair<T, Long>): T {
-        val lease = store.admit(actor, McpServerRef(server.name, server.variantId, server.version, server.assignedAt), operation, tool, limits)
+        val lease = store.admit(actor, McpServerRef(server.name, server.variantId, server.version, server.assignedAt, server.hosted), operation, tool, limits)
         val started = monotonicMillis()
         var outcome = McpOutcome.CANCELLED
         var bytes = 0L

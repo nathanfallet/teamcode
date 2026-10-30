@@ -35,7 +35,9 @@ class UpdateBannerTest {
         var updates = 0
         override suspend fun cliVersion() = "1.2.0"
         override suspend fun latestVersion() = "1.3.0"
-        override suspend fun update(output: (String) -> Unit) { updates++; output("Updating the TeamCode CLI 1.2.0…"); kotlinx.coroutines.awaitCancellation() }
+        override suspend fun update(output: (String) -> Unit, progress: (Float) -> Unit): me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome {
+            updates++; output("Updating the TeamCode CLI 1.2.0…"); kotlinx.coroutines.awaitCancellation()
+        }
         override fun quit() = Unit
     }
 

@@ -39,3 +39,19 @@ object McpCalls : Table("mcp_calls") {
         index("mcp_call_started", false, startedAt)
     }
 }
+
+/**
+ * The last state the sweep recorded for the process of each hosted MCP assignment (docs/mcp.md): one row per variant
+ * and member, with an empty [memberId] for a SHARED variant's team process. Written only when the state changes, by
+ * compare-and-set, so each transition publishes its team event once. No secret, no output.
+ */
+object McpStdioStates : Table("mcp_stdio_states") {
+    val variantId = reference("variant_id", Variants.id, onDelete = ReferenceOption.CASCADE)
+    val memberId = varchar("member_id", 36).default("")
+    val teamId = reference("team_id", Teams.id, onDelete = ReferenceOption.CASCADE).index("mcp_stdio_state_team")
+    val processKey = varchar("process_key", 64)
+    val state = varchar("state", 16)
+    val failureCode = varchar("failure_code", 32).nullable()
+    val changedAt = long("changed_at")
+    override val primaryKey = PrimaryKey(variantId, memberId, name = "pk_mcp_stdio_states")
+}

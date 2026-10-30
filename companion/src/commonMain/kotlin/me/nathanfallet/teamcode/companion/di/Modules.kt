@@ -31,6 +31,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessio
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.CreateSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.StartLocalSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SendMessageUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
@@ -57,38 +58,46 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadDeviceFol
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadResumableSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadHostDevicesUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
+import me.nathanfallet.teamcode.companion.demo.DemoCredentialStore
+import me.nathanfallet.teamcode.companion.demo.demoModule
 import org.koin.dsl.module
 
-/** Implementations; the platform module adds Settings, the CredentialStore, the HTTP engine and PlatformInfo. */
+/**
+ * Implementations; the platform module adds Settings, the CredentialStore, the HTTP engine and PlatformInfo. The
+ * repositories are bound by their own class here: [demoModule] binds their interfaces to routers that keep the demo
+ * account's calls in memory.
+ */
 val infrastructureModule = module {
     single { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
     single<Clock> { SystemClock }
     single<IdGenerator> { RandomIdGenerator }
     single { TeamCodeClientProvider(get(), get(), get()) }
-    single<AccountRepository> { SettingsAccountRepository(get()) }
+    single { SettingsAccountRepository(get()) }
     single<PreferencesRepository> { SettingsPreferencesRepository(get()) }
     single<InstallationIdentity> { SettingsInstallationIdentity(get(), get()) }
-    single<AuthRepository> { RemoteAuthRepository(get(), get(), get()) }
+    single { RemoteAuthRepository(get(), get(), get()) }
     single { AccountCalls(get(), get()) }
     single { ReconnectPolicy() }
-    single<FeaturesRepository> { CachedFeaturesRepository(get(), get()) }
-    single<SessionRepository> { RemoteSessionRepository(get(), get()) }
-    single<TranscriptRepository> { RemoteTranscriptRepository(get(), get()) }
-    single<ArtifactRepository> { RemoteArtifactRepository(get()) }
-    single<SessionFileRepository> { RemoteSessionFileRepository(get()) }
-    single<DeviceRepository> { RemoteDeviceRepository(get()) }
+    single { CachedFeaturesRepository(get(), get()) }
+    single { RemoteSessionRepository(get(), get()) }
+    single { RemoteTranscriptRepository(get(), get()) }
+    single { RemoteArtifactRepository(get()) }
+    single { RemoteSessionFileRepository(get()) }
+    single { RemoteDeviceRepository(get()) }
 }
 
+/** The account checks go through [DemoCredentialStore]: the demo account has no token, and none is read or deleted for it. */
 val domainModule = module {
     single { InspectServerUseCase(get()) }
     single { SignInUseCase(get(), get(), get(), get(), get()) }
     single { ChangePasswordUseCase(get(), get()) }
-    single { SignOutUseCase(get(), get(), get()) }
-    single { RefreshAccountUseCase(get(), get(), get(), get()) }
-    single { RenameDeviceUseCase(get(), get(), get()) }
+    single { SignOutUseCase(get(), get(), get<DemoCredentialStore>()) }
+    single { RefreshAccountUseCase(get(), get(), get<DemoCredentialStore>(), get()) }
+    single { RenameDeviceUseCase(get(), get(), get<DemoCredentialStore>()) }
     single { AccountGuard(get()) }
     single { LoadSessionsUseCase(get(), get(), get()) }
     single { GetSessionUseCase(get(), get()) }
+    single { SessionFeed(get(), get(), get()) }
     single { FollowSessionListUseCase(get(), get(), get()) }
     single { LoadTranscriptUseCase(get(), get(), get()) }
     single { FollowTranscriptUseCase(get(), get()) }

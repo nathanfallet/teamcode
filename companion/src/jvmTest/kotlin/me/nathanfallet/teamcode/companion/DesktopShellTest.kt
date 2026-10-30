@@ -1,5 +1,6 @@
 package me.nathanfallet.teamcode.companion
 
+import me.nathanfallet.teamcode.companion.demo.DemoContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -110,7 +111,7 @@ class DesktopShellTest {
             override val appVersion = "1.2.0"
             override suspend fun cliVersion() = "1.2.0"
             override suspend fun latestVersion() = "1.3.0"
-            override suspend fun update(output: (String) -> Unit) = Unit
+            override suspend fun update(output: (String) -> Unit, progress: (Float) -> Unit) = me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome.CURRENT
             override fun quit() = Unit
         }
         val extra = org.koin.dsl.module {
@@ -245,10 +246,10 @@ class DesktopShellTest {
 
             onNodeWithTag("sidebar-all-artifacts").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("artifact-r0").requestFocus()
-            onNodeWithTag("artifact-r0").performKeyInput { pressKey(Key.DirectionDown); pressKey(Key.DirectionDown) }
+            onNodeWithTag("artifact-${DemoContent.artifactId(0)}").requestFocus()
+            onNodeWithTag("artifact-${DemoContent.artifactId(0)}").performKeyInput { pressKey(Key.DirectionDown); pressKey(Key.DirectionDown) }
             settle()
-            onNodeWithTag("artifact-r2").assertIsFocused()
+            onNodeWithTag("artifact-${DemoContent.artifactId(2)}").assertIsFocused()
         }
     }
 
@@ -277,7 +278,7 @@ class DesktopShellTest {
 
             onNodeWithTag("sidebar-all-artifacts").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("artifact-r1").performMouseInput { rightClick(center) }
+            onNodeWithTag("artifact-${DemoContent.artifactId(1)}").performMouseInput { rightClick(center) }
             settle()
             onNodeWithTag("menu-copy-link").assertExists()
             onNodeWithTag("menu-browser").assertExists()
@@ -288,7 +289,7 @@ class DesktopShellTest {
         app {
             onNodeWithTag("sidebar-all-artifacts").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            val card = onNodeWithTag("artifact-r0").getBoundsInRoot()
+            val card = onNodeWithTag("artifact-${DemoContent.artifactId(0)}").getBoundsInRoot()
             assertTrue(card.bottom - card.top < 56.dp, "card ${card.bottom - card.top}")
         }
     }

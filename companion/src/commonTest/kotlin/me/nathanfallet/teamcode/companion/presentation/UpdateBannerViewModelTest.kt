@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.setMain
 import me.nathanfallet.teamcode.companion.domain.services.AppUpdateException
 import me.nathanfallet.teamcode.companion.domain.services.AppUpdater
 import me.nathanfallet.teamcode.companion.domain.services.Clock
+import me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome
 import me.nathanfallet.teamcode.companion.domain.usecases.updates.UpdatePolicy
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsUpdatePreferences
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.UpdateBannerState
@@ -26,7 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
-private class FakeUpdater(var latest: String? = "1.3.0", var cli: String? = "1.2.0") : AppUpdater {
+private class FakeUpdater(var latest: String? = "1.3.0", var cli: String? = "1.2.0", override val installsAfterQuit: Boolean = false) : AppUpdater {
     override val appVersion = "1.2.0"
     var checks = 0
     var failure: Exception? = null
@@ -35,19 +36,28 @@ private class FakeUpdater(var latest: String? = "1.3.0", var cli: String? = "1.2
     var updates = 0
     var quits = 0
     var gate: CompletableDeferred<Unit>? = null
+    /** Holds the update in the middle of the app's download, once it has reported 40 %. */
+    var downloading: CompletableDeferred<Unit>? = null
+    var outcome = UpdateOutcome.RESTART
     override suspend fun cliVersion() = cli
     override suspend fun latestVersion(): String? {
         checks++
         failure?.let { throw it }
         return latest
     }
-    override suspend fun update(output: (String) -> Unit) {
+    override suspend fun update(output: (String) -> Unit, progress: (Float) -> Unit): UpdateOutcome {
         updates++
         output("Updating the TeamCode CLI 1.2.0…")
         gate?.await()
         updateFailure?.let { throw it }
         output("Selected TeamCode 1.3.0.")
         cli = "1.3.0"
+        if (outcome == UpdateOutcome.CURRENT) return outcome
+        output("Downloading TeamCode Desktop 1.3.0 (about 120 MB)…")
+        progress(0.4f)
+        downloading?.await()
+        output("TeamCode Desktop 1.3.0 is ready: it opens as soon as this app quits.")
+        return outcome
     }
     override fun quit() { quits++ }
     override fun takeStartupError() = startupError.also { startupError = null }
@@ -154,6 +164,42 @@ class UpdateBannerViewModelTest {
         advanceTimeBy(2_000); runCurrent()
         assertEquals(1, updater.updates)
         assertEquals(1, updater.quits)
+    }
+
+    @Test fun theDownloadMovesTheBarThenTheAppQuitsAtOnce() = banner {
+        val updater = FakeUpdater().apply { downloading = CompletableDeferred() }
+        val model = viewModel(updater)
+        runCurrent()
+        model.update(); runCurrent()
+        val updating = assertIs<UpdateBannerState.Updating>(model.uiState.value)
+        assertEquals(0.4f, updating.progress)
+        assertEquals("Downloading TeamCode Desktop 1.3.0 (about 120 MB)…", updating.output.last())
+        updater.downloading!!.complete(Unit); runCurrent()
+        // Ready: this app quits within a moment, and the new one opens at once.
+        assertEquals(UpdateBannerState.Restarting("1.3.0", installsAfterQuit = false), model.uiState.value)
+        advanceTimeBy(599); runCurrent()
+        assertEquals(0, updater.quits)
+        advanceTimeBy(1); runCurrent()
+        assertEquals(1, updater.quits)
+    }
+
+    @Test fun onWindowsTheBannerSaysTheInstallerFinishesAfterTheAppQuits() = banner {
+        val updater = FakeUpdater(installsAfterQuit = true)
+        val model = viewModel(updater)
+        runCurrent()
+        model.update(); runCurrent()
+        assertEquals(UpdateBannerState.Restarting("1.3.0", installsAfterQuit = true), model.uiState.value)
+    }
+
+    @Test fun whenOnlyTheCliWasBehindTheAppStaysOpen() = banner {
+        // The app is already 1.3.0's peer: the CLI catches up, nothing to reopen.
+        val updater = FakeUpdater().apply { outcome = UpdateOutcome.CURRENT }
+        val model = viewModel(updater)
+        runCurrent()
+        model.update(); runCurrent()
+        assertEquals(UpdateBannerState.Hidden, model.uiState.value)
+        advanceTimeBy(5_000); runCurrent()
+        assertEquals(0, updater.quits)
     }
 
     @Test fun aFailedUpdateSaysWhyAndCanBeTriedAgain() = banner {

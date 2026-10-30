@@ -15,9 +15,14 @@ spec:
       {{- include "teamcode.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations (include "teamcode.mcp.enabled" .) }}
       annotations:
+        {{- if include "teamcode.mcp.enabled" . }}
+        checksum/mcp-token: {{ include "teamcode.mcp.tokenChecksum" . }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "teamcode.labels" . | nindent 8 }}
@@ -95,6 +100,18 @@ spec:
               value: {{ join "," (.Values.trustedProxies | default (list)) | quote }}
             - name: TEAMCODE_WEBHOOK_PRIVATE_TARGETS
               value: {{ dig "allowPrivateTargets" false (.Values.webhooks | default dict) | toString | quote }}
+            {{- if include "teamcode.mcp.enabled" . }}
+            # The MCP stdio host of this release (templates/mcp.yaml) and its token. Optional, so a server pod still
+            # starts while the Secret is missing (during a rotation, or an operator Secret not created yet).
+            - name: TEAMCODE_MCP_URL
+              value: {{ include "teamcode.mcp.url" . | quote }}
+            - name: TEAMCODE_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "teamcode.mcp.tokenSecretName" . }}
+                  key: {{ include "teamcode.mcp.tokenSecretKey" . }}
+                  optional: true
+            {{- end }}
             - name: JAVA_TOOL_OPTIONS
               value: {{ .Values.javaToolOptions | quote }}
             {{- with .Values.extraEnv }}

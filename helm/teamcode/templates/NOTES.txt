@@ -7,3 +7,8 @@ The initial administrator password appears once in the logs of the creating pod:
 Sign in as admin and replace the temporary password. There is no public registration.
 All replicas must use the same database and encryption-key. Back up both.
 See helm/teamcode/README.md for deployment, TLS, backups and upgrades.
+{{- if include "teamcode.mcp.enabled" . }}
+
+MCP stdio host: deployment/{{ include "teamcode.mcp.fullname" . }}, reached only by the server pods. Its token is in the Secret {{ include "teamcode.mcp.tokenSecretName" . }}{{ if not (include "teamcode.mcp.existingSecret" .) }} (generated once, kept across upgrades and on uninstall){{ end }}.
+  kubectl rollout status -n {{ .Release.Namespace }} deployment/{{ include "teamcode.mcp.fullname" . }}
+{{- end }}

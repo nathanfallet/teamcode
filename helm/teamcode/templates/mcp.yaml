@@ -1,0 +1,264 @@
+{{- /*
+The MCP stdio host (docs/mcp.md): one Deployment that owns every hosted stdio MCP process, reached by the server pods
+through its Service with the host token. It has no database, no encryption key and no Kubernetes token.
+*/}}
+{{- if include "teamcode.mcp.enabled" . }}
+{{- $mcp := .Values.mcp }}
+{{- $networkPolicy := $mcp.networkPolicy | default dict }}
+{{- if le (int $mcp.terminationGracePeriodSeconds) (int $mcp.drainSeconds) }}
+{{- fail "mcp.terminationGracePeriodSeconds must be longer than mcp.drainSeconds, or running MCP calls are killed during a rollout" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "teamcode.mcp.fullname" . }}
+  labels:
+    {{- include "teamcode.mcp.labels" . | nindent 4 }}
+# No Role or RoleBinding anywhere: the host never talks to the Kubernetes API.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "teamcode.mcp.fullname" . }}
+  labels:
+    {{- include "teamcode.mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "teamcode.mcp.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "teamcode.mcp.fullname" . }}
+  labels:
+    {{- include "teamcode.mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $mcp.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "teamcode.mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/mcp-token: {{ include "teamcode.mcp.tokenChecksum" . }}
+        {{- with $mcp.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "teamcode.mcp.labels" . | nindent 8 }}
+        {{- with $mcp.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "teamcode.mcp.fullname" . }}
+      automountServiceAccountToken: false
+      # The processes' environment is built from scratch by the host; no service variables to leak either way.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ $mcp.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        fsGroup: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10002
+            runAsGroup: 10002
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          {{- /* The server's tag by default, so the server and its host always run the same version (host protocol v1). */}}
+          {{- $tag := $mcp.image.tag | default .Values.image.tag | default .Chart.AppVersion }}
+          image: "{{ $mcp.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $mcp.image.pullPolicy | default (ternary "Always" "IfNotPresent" (eq $tag "latest")) }}
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          env:
+            - name: TEAMCODE_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "teamcode.mcp.tokenSecretName" . }}
+                  key: {{ include "teamcode.mcp.tokenSecretKey" . }}
+            - name: TEAMCODE_MCP_HOST
+              value: "0.0.0.0"
+            - name: TEAMCODE_MCP_PORT
+              value: "8090"
+            - name: TEAMCODE_MCP_DATA_DIR
+              value: /var/mcp
+            - name: TEAMCODE_MCP_LAUNCHERS
+              value: {{ join "," $mcp.launchers | quote }}
+            {{- with $mcp.npmRegistry }}
+            - name: TEAMCODE_MCP_NPM_REGISTRY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $mcp.pypiIndex }}
+            - name: TEAMCODE_MCP_PYPI_INDEX
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TEAMCODE_MCP_MAX_PROCESSES
+              value: {{ $mcp.maxProcesses | quote }}
+            - name: TEAMCODE_MCP_MAX_IN_FLIGHT_PER_PROCESS
+              value: {{ $mcp.maxInFlightPerProcess | quote }}
+            - name: TEAMCODE_MCP_PROCESS_MEMORY_MIB
+              value: {{ $mcp.processMemoryMiB | quote }}
+            - name: TEAMCODE_MCP_IDLE_MINUTES
+              value: {{ $mcp.idleMinutes | quote }}
+            - name: TEAMCODE_MCP_DRAIN_SECONDS
+              value: {{ $mcp.drainSeconds | quote }}
+            {{- with $mcp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 2
+            timeoutSeconds: 2
+          resources:
+            {{- toYaml $mcp.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/mcp
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # One directory per process key (home, working directory, npm and uv caches); nothing outlives the pod.
+        - name: data
+          emptyDir:
+            sizeLimit: {{ $mcp.dataSizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ $mcp.tmpSizeLimit | default "512Mi" }}
+      {{- with $mcp.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $mcp.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $mcp.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if not (include "teamcode.mcp.existingSecret" .) }}
+---
+# The host token, generated once: an upgrade reads the existing value back (lookup) and keeps it, and `helm uninstall`
+# leaves the Secret in place. Rotate by deleting it, then `helm upgrade`: both Deployments roll (checksum/mcp-token).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "teamcode.mcp.fullname" . }}
+  labels:
+    {{- include "teamcode.mcp.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  token: {{ include "teamcode.mcp.generatedToken" . }}
+{{- end }}
+{{- if dig "enabled" true $networkPolicy }}
+{{- include "teamcode.mcp.checkExtraEgress" ($networkPolicy.extraEgress | default list) }}
+---
+# Ingress: this release's server pods only, on 8090. Egress: DNS, then the public Internet only (registries and the
+# servers' own APIs), never pod, service, node, private, link-local or metadata addresses. Enforced by CNIs that
+# implement NetworkPolicy. The same ranges as the cloud session policy (docs/cloud-sessions.md#session-network-policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "teamcode.mcp.fullname" . }}
+  labels:
+    {{- include "teamcode.mcp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "teamcode.mcp.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "teamcode.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8090
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if not $networkPolicy.lockdown }}
+    {{- $exceptV4 := list "0.0.0.0/8" "10.0.0.0/8" "100.64.0.0/10" "127.0.0.0/8" "169.254.0.0/16" "172.16.0.0/12" "192.0.0.0/24" "192.168.0.0/16" "198.18.0.0/15" "224.0.0.0/3" "168.63.129.16/32" }}
+    {{- /* Not public IPv6, then NAT64 (64:ff9b::/96) and 6to4 (2002::/16) forms of the IPv4 ranges above, so DNS64 clusters keep public IPv4-only sites. */}}
+    {{- $exceptV6 := list "::/127" "64:ff9b:1::/48" "2001::/32" "fc00::/7" "fe80::/10" "ff00::/8" "64:ff9b::/104" "2002::/24" "64:ff9b::a00:0/104" "2002:a00::/24" "64:ff9b::6440:0/106" "2002:6440::/26" "64:ff9b::7f00:0/104" "2002:7f00::/24" "64:ff9b::a9fe:0/112" "2002:a9fe::/32" "64:ff9b::ac10:0/108" "2002:ac10::/28" "64:ff9b::c000:0/120" "2002:c000::/40" "64:ff9b::c0a8:0/112" "2002:c0a8::/32" "64:ff9b::c612:0/111" "2002:c612::/31" "64:ff9b::e000:0/99" "2002:e000::/19" "64:ff9b::a83f:8110/128" "2002:a83f:8110::/48" }}
+    {{- range ($networkPolicy.blockedCidrs | default list) }}
+    {{- $parts := splitList "/" . }}
+    {{- if eq (include "teamcode.mcp.cidrFamily" .) "6" }}
+    {{- $exceptV6 = append $exceptV6 . }}
+    {{- else }}
+    {{- $octets := splitList "." (index $parts 0) }}
+    {{- $high := add (mul (atoi (index $octets 0)) 256) (atoi (index $octets 1)) }}
+    {{- $low := add (mul (atoi (index $octets 2)) 256) (atoi (index $octets 3)) }}
+    {{- $prefix := atoi (index $parts 1) }}
+    {{- $exceptV4 = append $exceptV4 . }}
+    {{- $exceptV6 = append $exceptV6 (printf "64:ff9b::%x:%x/%d" $high $low (add 96 $prefix)) }}
+    {{- $exceptV6 = append $exceptV6 (printf "2002:%x:%x::/%d" $high $low (add 16 $prefix)) }}
+    {{- end }}
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $exceptV4 | nindent 14 }}
+    - to:
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- toYaml $exceptV6 | nindent 14 }}
+    {{- end }}
+    {{- with $networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

@@ -133,6 +133,80 @@ cloudSessions:
     #   ports: [{protocol: TCP, port: 443}]
     extraEgress: []
 
+# The MCP stdio host (docs/mcp.md): runs the team's hosted MCP servers (pinned npm and PyPI packages) for the MCP
+# gateway, one process per server (per member for a PER_MEMBER variant). A Deployment of its own, image
+# nathanfallet/teamcode-mcp at the server's tag, reached only by the server pods; it has no database, encryption key or
+# Kubernetes token. On by default: a plain `helm upgrade` deploys it and generates its token. false renders nothing
+# (and no hosted stdio server can be declared).
+mcp:
+  enabled: true
+  image:
+    repository: nathanfallet/teamcode-mcp
+    # Empty: image.tag, then the chart's appVersion, so the server and its host always run the same version.
+    tag: ""
+    # Empty: Always for "latest", IfNotPresent for an exact version.
+    pullPolicy: ""
+  # One host owns every process. More replicas would each start their own copy of a server (more memory, and state
+  # kept in a server's memory would differ by pod).
+  replicaCount: 1
+  token:
+    # Empty: the chart generates a Secret <release>-mcp (key `token`, 48 random characters), keeps its value across
+    # upgrades (read back with lookup) and leaves it on uninstall. `helm template` and `--dry-run=client` cannot read
+    # it and show a new value; use existingSecret when the chart is rendered outside the cluster (GitOps).
+    existingSecret: ""
+    # The key of existingSecret holding the token (at least 32 characters).
+    key: token
+  # Allowed launchers: npm (npx) and pypi (uvx).
+  launchers: [npm, pypi]
+  # Mirrors. Empty: registry.npmjs.org and pypi.org.
+  npmRegistry: ""
+  pypiIndex: ""
+  # Processes at once; a new server stops the idle process used the longest ago, never a busy one.
+  maxProcesses: 16
+  maxInFlightPerProcess: 16
+  # Resident memory of one process tree before the host stops it.
+  processMemoryMiB: 512
+  # A process with no call for this long is stopped (started again on demand).
+  idleMinutes: 15
+  # On SIGTERM, running calls get this long to finish (longer than the 60 s call timeout); the termination grace
+  # period must be longer still.
+  drainSeconds: 75
+  terminationGracePeriodSeconds: 90
+  # The per-process directories (npm and uv caches, a Python per PyPI server), an emptyDir.
+  dataSizeLimit: 3Gi
+  # The host's and the processes' temporary files, an emptyDir.
+  tmpSizeLimit: 512Mi
+  # The pod's memory limit is the hard bound for the JVM (at most 384 MiB of heap) and every process tree together;
+  # processMemoryMiB only stops one tree. Measured trees: about 360 MiB for a Node.js server through npx, 200 MiB for
+  # a Python one through uvx (docs/mcp.md#measurements), so 2Gi holds about four busy servers, not maxProcesses of them.
+  # Raise limits.memory (or lower maxProcesses) before declaring more.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+      ephemeral-storage: 1Gi
+    limits:
+      memory: 2Gi
+      ephemeral-storage: 4Gi
+  # Ingress from this release's server pods only, on 8090; egress to DNS and the public Internet only (not pod,
+  # service, node, private, link-local or cloud metadata addresses). The cluster's API server is blocked when its
+  # address is private; list a public endpoint in blockedCidrs (the pod has no service account token either way).
+  networkPolicy:
+    enabled: true
+    # true removes the Internet rule: DNS and extraEgress only (a registry mirror or a proxy must then be listed).
+    lockdown: false
+    # More CIDRs to block (an IPv4 range is also blocked in its NAT64 and 6to4 forms).
+    blockedCidrs: []
+    # NetworkPolicy egress rules appended verbatim, for example an internal npm or PyPI mirror.
+    extraEgress: []
+  # More TEAMCODE_MCP_* variables (docs/mcp.md#configuration).
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Optional single MySQL instance for a self-contained installation, using the tested official 8.4 image.
 # For production HA, disable this and supply an externally managed MySQL 8.4 JDBC URL below.
 # This is the chart's own StatefulSet (templates/mysql.yaml, official mysql image, data in /var/lib/mysql), NOT the

@@ -1,6 +1,6 @@
 # Webhooks
 
-Webhooks send the events of the [event feed](cloud-conversations.md#event-feed) (cloud sessions and local runs) to your own services as signed HTTP requests, retried until the receiver answers. They are for a service that cannot hold a stream open, such as a support app notified when an agent stalls. The server advertises them as `team.webhooks.v1`.
+Webhooks send the events of the [event feed](cloud-conversations.md#event-feed) (cloud sessions, local runs and [hosted MCP servers](mcp.md#operating-and-troubleshooting)) to your own services as signed HTTP requests, retried until the receiver answers. They are for a service that cannot hold a stream open, such as a support app notified when an agent stalls, or an alert when a hosted MCP server fails (`mcp.stdio.failed`, `mcp.unreachable`). The server advertises them as `team.webhooks.v1`.
 
 | Route | Purpose |
 | --- | --- |

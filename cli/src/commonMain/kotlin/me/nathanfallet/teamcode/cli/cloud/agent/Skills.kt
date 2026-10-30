@@ -351,6 +351,9 @@ internal interface AgentTools {
     /** The artifact tools to start beside the agent when the owner may publish now, or null. Never throws except on cancellation. */
     suspend fun artifacts(): me.nathanfallet.teamcode.cli.launch.ArtifactsMcp? = null
 
+    /** The wait tools (`ask_human`) to start beside the agent for this session, or null. Never throws except on cancellation. */
+    suspend fun waits(): me.nathanfallet.teamcode.cli.launch.WaitsMcp? = null
+
     /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
     suspend fun claudePlugin(): String? = null
 }
@@ -441,7 +444,32 @@ internal class RunnerAgentTools(
     private val workspace: String = "/workspace",
     /** The agent's home, with its sign-ins: never published, wherever it is. */
     private val home: String? = null,
+    /** The session this execution runs, which the waits the agent asks belong to; null connects no wait tools. */
+    private val sessionId: String? = null,
 ) : AgentTools {
+    /**
+     * `teamcode mcp waits` in the agent's container, for this session, when the server serves waits (`waits.v1`) and
+     * the execution's credential may read them: an execution credential without the cloud rights waits need gets a
+     * `403 credential_scope` here, and then the agent is not offered tools that would always be refused.
+     */
+    override suspend fun waits(): me.nathanfallet.teamcode.cli.launch.WaitsMcp? {
+        val command = binary ?: return null
+        val session = sessionId ?: return null
+        val usable = try {
+            withTimeout(20_000) {
+                if (me.nathanfallet.teamcode.api.models.Waits.CAPABILITY !in client.capabilities().features) false
+                else { client.waits(limit = 1); true }
+            }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+        catch (error: CancellationException) { throw error }
+        catch (error: me.nathanfallet.teamcode.client.TeamCodeException) {
+            if (error.code == "credential_scope") log("This execution's credential cannot ask people for input; the wait tools are not connected.")
+            false
+        }
+        catch (_: Exception) { false }
+        return if (usable) try { me.nathanfallet.teamcode.cli.launch.WaitsMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
+    }
+
     /**
      * `teamcode mcp artifacts` in the agent's container, under the agent's UID, rooted at the workspace, with its
      * scratch directory in the container's own `/tmp` and the agent's home (`HOME`, by default `<workspace>/.home`) never published.

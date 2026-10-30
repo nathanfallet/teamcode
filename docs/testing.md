@@ -1,6 +1,6 @@
 # End-to-end testing playbook
 
-This is the reproducible method used during V1 development, including real subscription tests. Use it with the [unfinished V1 brief](v2-validation-handoff.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
+This is the reproducible method used during V1 development, including real subscription tests. Use it with the open validations in [progress](progress.md) and [routing acceptance](routing.md). A command below is a procedure, not a claim that it has passed on every operating system.
 
 ## Prerequisites and isolation
 
@@ -55,6 +55,16 @@ python3 scripts/smoke-replicas.py --jar "$teamcode_jar"
 ```
 
 These establish real process/native/network behavior with synthetic provider responses: authentication, TLS/streaming, literal launcher arguments and exit status, cancellation while queued, devices, hook protocol, persistent team management and shared database behavior across server processes. They do not consume subscriptions. `smoke-team.py` checks the initial `admin` username with the `owner` role, password replacement, browser member creation, service keys, restart persistence, revocation and audit. Replica scenarios are controlled correctness tests, not sustained-load benchmarks.
+
+Hosted MCP servers (transport stdio) with the real server and [MCP host](mcp.md) jars, two replicas and one isolated MySQL:
+
+```sh
+./gradlew :app:buildFatJar :mcp:buildFatJar
+python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/build/libs/mcp-all.jar"
+python3 scripts/smoke-mcp-stdio.py --jar "$teamcode_jar" --host-jar "$PWD/mcp/build/libs/mcp-all.jar" --fixture
+```
+
+An administrator declares a `SHARED` npm server (`@modelcontextprotocol/server-everything@2.0.0`) and a `PER_MEMBER` PyPI server (`mcp-server-fetch==2026.10.24`) through the API, a member lists and calls them through the gateway as an agent does, and the host is stopped and started again. Then operations: the state sweep records the processes as `ready` in `GET /api/v1/mcp/servers`; a command that cannot start (a version that does not exist, or the fixture's `exit-at-start`) becomes `failed` or `backoff`, with one `mcp.stdio.failed` in the team feed and in a webhook's delivery log (a loopback target, `TEAMCODE_WEBHOOK_PRIVATE_TARGETS=true`); the dashboard lists it and its **Restart** is accepted. No answer or log may hold a secret. The sweep runs once a minute, so this part takes one to two minutes; `--dashboard page.html` saves the dashboard page before the restart, and after it as `page.restarted.html`; `--cli <native teamcode>` also checks `teamcode mcp list` as the member. The default run downloads the real packages (`npx`, `uvx` and Node.js on `PATH`, network needed); `--fixture` runs the host's Node.js fixture server instead, offline; CI runs the `--fixture` mode after the replica smoke. `scripts/smoke-mcp-image.py` checks the host image itself.
 
 ## 2. Small real Claude/Codex requests
 
@@ -112,7 +122,7 @@ For synthetic same-provider quota/auth rejection, use domain/infrastructure test
 
 The existing real-client `--coding-fallback` fixture is specifically an **experimental cross-provider** test. It requires `--coding-route translated`; it cannot currently establish native-only account failover. It disables source-provider availability only in its disposable database at a real tool-result boundary, preserves the original request history/route and restores account settings afterward. Examples and exact assertions are in [routing acceptance](routing.md#mid-conversation-fallback-acceptance).
 
-This establishes an actual conversation/provider switch under controlled availability. It does not establish a real provider quota reset, opaque reasoning portability or all default client settings. Conversion stays default-off, and extending its acceptance is outside the unfinished V1 brief. Native-provider quota/reset boundaries remain a separate pending validation.
+This establishes an actual conversation/provider switch under controlled availability. It does not establish a real provider quota reset, opaque reasoning portability or all default client settings. Conversion stays default-off, and extending its acceptance is outside the scope of this playbook. Native-provider quota/reset boundaries remain a separate pending validation.
 
 ## 5. Guidance, run registry and browser
 
@@ -154,7 +164,7 @@ python3 scripts/smoke-service.py --binary "$teamcode_binary" --at-boot
 
 Boot testing needs administrator authorization; the POSIX fixture checks `sudo -n` first. It creates and removes a uniquely named registration. Linux needs a working systemd user manager and retains shared lingering during cleanup. Never disable lingering or alter another application's service. These tests do not reboot the machine. Actual logout/reboot/pre-login network access and unavailable encrypted homes remain workstation tests in the brief.
 
-Windows native coverage uses `scripts/smoke-windows.py --binary /path/to/teamcode.exe`. Its `--allow-machine-test-certificate` option is for a disposable authorized test host: it temporarily changes machine trust for its owned TLS fixture. Windows boot/password lifecycle needs a real elevated same-user session and the separate procedure in [services](services.md); do not substitute an interactive task for a boot test.
+Windows native coverage uses `scripts/smoke-windows.py --binary /path/to/teamcode.exe`. Its `--allow-machine-test-certificate` option is for a disposable authorized test host: it temporarily changes machine trust for its owned TLS fixture. Its synthetic `claude` and `codex` take apart the exact arguments `teamcode run` gives them (guidance plugin or hooks, provider overrides, the owner sentence of the fixture's `/me`) before comparing the caller's arguments across the Windows command line; that layout is pinned by `AgentLaunchTest`, and since this smoke runs only in full validation, a change to what `agentLaunch` adds must update the script in the same PR and be proven by a `full_validation` dispatch on its branch. Windows boot/password lifecycle needs a real elevated same-user session and the separate procedure in [services](services.md); do not substitute an interactive task for a boot test.
 
 Signed distribution checks consume the **same publisher-signed release and installation-baseline bundles** produced by the full workflow. Use its `installation-fixture.py`, `smoke-installation.py`, `smoke-bootstrap.py`, `smoke-automatic-updates.py` and `smoke-service-setup.py` steps from [Build](../.github/workflows/build.yml), with their exact bundle/version/target inputs. Never regenerate the publisher key or relabel one executable as two versions. See [distribution](distribution.md), [bootstrap](bootstrap.md) and [automatic updates](automatic-updates.md).
 

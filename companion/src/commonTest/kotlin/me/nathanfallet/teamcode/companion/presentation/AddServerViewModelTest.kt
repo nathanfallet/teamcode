@@ -9,6 +9,8 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import me.nathanfallet.teamcode.companion.FakeAuthRepository
+import me.nathanfallet.teamcode.companion.FakePlatform
+import me.nathanfallet.teamcode.companion.demo.StartDemoUseCase
 import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.InspectServerUseCase
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AddServerViewModel
@@ -22,7 +24,7 @@ class AddServerViewModelTest {
 
     @Test fun theTypedAddressIsTrimmedBeforeItIsCheckedAndKeptTrimmed() = runTest(dispatcher) {
         val auth = FakeAuthRepository()
-        val model = AddServerViewModel(InspectServerUseCase(auth), InMemoryAccountRepository())
+        val model = InMemoryAccountRepository().let { AddServerViewModel(InspectServerUseCase(auth), it, StartDemoUseCase(it, FakePlatform)) }
         // A phone keyboard's autocompletion adds a space, a paste a line break or an invisible character.
         model.onOriginChange(" ​https://team.example \n")
         model.check(); settle()
@@ -34,7 +36,7 @@ class AddServerViewModelTest {
 
     @Test fun anAddressOfSpacesOnlyIsNotChecked() = runTest(dispatcher) {
         val auth = FakeAuthRepository()
-        val model = AddServerViewModel(InspectServerUseCase(auth), InMemoryAccountRepository())
+        val model = InMemoryAccountRepository().let { AddServerViewModel(InspectServerUseCase(auth), it, StartDemoUseCase(it, FakePlatform)) }
         model.onOriginChange(" \n\t")
         model.check(); settle()
         assertFalse(model.uiState.value.checking)

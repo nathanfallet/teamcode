@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.companion.desktop
 import java.io.File
 import kotlinx.coroutines.test.runTest
 import me.nathanfallet.teamcode.companion.domain.services.AppUpdateException
+import me.nathanfallet.teamcode.companion.domain.services.UpdateOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -84,19 +85,47 @@ class DesktopAppUpdaterTest {
         if (!posix) return@runTest
         cli(directory)
         val lines = mutableListOf<String>()
-        updater(directory).update { lines += it }
+        assertEquals(UpdateOutcome.RESTART, updater(directory).update({ lines += it }))
         assertEquals(listOf("update", "ui --yes --restart-app 4242"), calls(directory))
         assertEquals("Updating the TeamCode CLI 1.2.0…", lines.first())
         assertTrue("Selected TeamCode 1.3.0." in lines)
         // The app's installation runs on the CLI's new version.
-        assertTrue("Installing TeamCode Desktop 1.3.0…" in lines)
+        assertTrue("Preparing TeamCode Desktop 1.3.0…" in lines)
         assertTrue(lines.last().startsWith("TeamCode Desktop installs version 1.3.0"))
     } }
+
+    @Test fun theDownloadsPercentagesMoveTheBarAndTheOtherLinesShow() = withTemporaryDirectory { directory -> runTest {
+        if (!posix) return@runTest
+        cli(directory, ui = "echo 'Downloading TeamCode Desktop 1.3.0 (about 120 MB)…'; echo 'Downloading TeamCode Desktop 1.3.0: 50%'; " +
+            "echo 'Downloading TeamCode Desktop 1.3.0: 100%'; echo 'TeamCode Desktop 1.3.0 is ready: it opens as soon as this app quits.'")
+        val lines = mutableListOf<String>()
+        val shares = mutableListOf<Float>()
+        assertEquals(UpdateOutcome.RESTART, updater(directory).update({ lines += it }, { shares += it }))
+        assertEquals(listOf(0.5f, 1f), shares)
+        assertTrue(lines.none { it.endsWith("%") }, lines.toString())
+        assertEquals("TeamCode Desktop 1.3.0 is ready: it opens as soon as this app quits.", lines.last())
+    } }
+
+    @Test fun whenOnlyTheCliWasBehindTheAppIsNotReopened() = withTemporaryDirectory { directory -> runTest {
+        if (!posix) return@runTest
+        // The CLI catches up with this app's version: there is no app to install, nothing to restart.
+        cli(directory, version = "1.1.0", update = "echo 'Selected TeamCode 1.2.0.'; echo '1.2.0' > '${File(directory, "version").path}'")
+        assertEquals(UpdateOutcome.CURRENT, updater(directory).update({ }))
+        assertEquals(listOf("update"), calls(directory))
+    } }
+
+    @Test fun onlyWindowsInstallsAfterTheAppQuits() = withTemporaryDirectory { directory ->
+        for (os in DesktopEnvironment.Os.entries) {
+            val environment = DesktopEnvironment(mapOf("HOME" to directory.path), os = os)
+            val updater = DesktopAppUpdater(CliLocator(environment, CliProcesses(environment)), CliProcesses(environment), environment, "1.2.0")
+            assertEquals(os == DesktopEnvironment.Os.WINDOWS, updater.installsAfterQuit, os.name)
+        }
+    }
 
     @Test fun aFailedCliUpdateStopsBeforeTheApp() = withTemporaryDirectory { directory -> runTest {
         if (!posix) return@runTest
         cli(directory, update = "echo 'Downloading…'; echo 'Error: This TeamCode CLI is not a managed installation (release_not_managed).' >&2; exit 1")
-        val error = assertFailsWith<AppUpdateException> { updater(directory).update { } }
+        val error = assertFailsWith<AppUpdateException> { updater(directory).update({ }) }
         assertEquals("This TeamCode CLI is not a managed installation (release_not_managed).", error.message)
         assertEquals(listOf("update"), calls(directory))
     } }
@@ -104,20 +133,20 @@ class DesktopAppUpdaterTest {
     @Test fun aFailedInstallationIsTheClisSentence() = withTemporaryDirectory { directory -> runTest {
         if (!posix) return@runTest
         cli(directory, ui = "echo 'The downloaded TeamCode Desktop is not signed by TeamCode publisher (desktop_signature_invalid).' >&2; exit 1")
-        val error = assertFailsWith<AppUpdateException> { updater(directory).update { } }
+        val error = assertFailsWith<AppUpdateException> { updater(directory).update({ }) }
         assertEquals("The downloaded TeamCode Desktop is not signed by TeamCode publisher (desktop_signature_invalid).", error.message)
     } }
 
     @Test fun aCliTooOldForTheRestartSaysWhatToRun() = withTemporaryDirectory { directory -> runTest {
         if (!posix) return@runTest
-        cli(directory, update = "echo 'The managed installation is already up to date.'", ui = "echo 'Error: no such option --restart-app' >&2; exit 1")
-        val error = assertFailsWith<AppUpdateException> { updater(directory).update { } }
-        assertEquals("TeamCode CLI 1.2.0 cannot update this app by itself. Quit TeamCode, then run teamcode ui --yes in a terminal.", error.message)
+        cli(directory, version = "1.3.0", update = "echo 'The managed installation is already up to date.'", ui = "echo 'Error: no such option --restart-app' >&2; exit 1")
+        val error = assertFailsWith<AppUpdateException> { updater(directory).update({ }) }
+        assertEquals("TeamCode CLI 1.3.0 cannot update this app by itself. Quit TeamCode, then run teamcode ui --yes in a terminal.", error.message)
     } }
 
     @Test fun withoutACliTheUpdateSaysHowToInstallIt() = withTemporaryDirectory { directory -> runTest {
         if (!posix) return@runTest
-        val error = assertFailsWith<AppUpdateException> { updater(directory).update { } }
+        val error = assertFailsWith<AppUpdateException> { updater(directory).update({ }) }
         assertTrue(error.message.startsWith("The TeamCode CLI is not installed"))
     } }
 

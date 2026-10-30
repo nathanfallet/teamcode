@@ -189,4 +189,25 @@ class AgentLaunchTest {
         assertEquals(listOf("developer_instructions=\"mine\""), instructions(agentLaunch("codex", listOf("exec", "-c", "developer_instructions=\"mine\""), 4242, token, identity = "I am alice.")))
         assertEquals(emptyList(), instructions(agentLaunch("codex", listOf("exec"), 4242, token, identity = "I am alice.", codexInstructions = false)))
     }
+
+    /**
+     * The layout `scripts/smoke-windows.py` takes apart in its synthetic agents to compare the caller's arguments after
+     * the Windows command line, with no artifact tools and no team MCP server (those come after the sentence): it runs
+     * only in full validation, so a change here must change that script too.
+     */
+    @Test fun theOwnerSentenceIsWhereTheWindowsSmokeLooksForIt() {
+        val caller = listOf("--dangerously-skip-permissions", "", "équipe", "--", "literal")
+        val claude = agentLaunch("claude", caller, 4242, token, guidancePlugin = "plugin", identity = "I am synthetic.")
+        assertEquals(listOf("--plugin-dir", "plugin", "--dangerously-skip-permissions", "", "équipe",
+            "--append-system-prompt", "I am synthetic.", "--", "literal"), claude.arguments)
+        val guidance = listOf("-c", "hooks.UserPromptSubmit=[]", "-c", "hooks.PreToolUse=[]")
+        val codex = agentLaunch("codex", caller, 4242, token, codexGuidance = guidance, identity = "I am synthetic.")
+        val end = codex.arguments.indexOf("--")
+        assertEquals(listOf("-c", "developer_instructions=\"I am synthetic.\""), codex.arguments.subList(end - 2, end))
+        assertEquals(listOf("-c", "model_provider=\"teamcode\""), codex.arguments.subList(end - 6, end - 4))
+        assertTrue(codex.arguments[end - 3].startsWith("model_providers.teamcode={"), codex.arguments[end - 3])
+        assertEquals(guidance, codex.arguments.subList(end - 10, end - 6))
+        assertEquals(caller.take(3), codex.arguments.take(3))
+        assertEquals(listOf("--", "literal"), codex.arguments.drop(end))
+    }
 }

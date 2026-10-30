@@ -6,6 +6,13 @@ import tempfile
 import yaml
 
 chart = 'helm/teamcode'
+
+
+def server(documents):
+    """The server Deployment, by name: the MCP host is a Deployment too."""
+    return next(doc for doc in documents if doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'test-teamcode')
+
+
 for external in (False, True):
     flags = ['--set', 'publicUrl=https://teamcode.example.org']
     if external:
@@ -16,7 +23,7 @@ for external in (False, True):
     subprocess.run(['helm', 'lint', chart, '--strict', *flags], check=True)
     rendered = subprocess.run(['helm', 'template', 'test', chart, *flags], check=True, capture_output=True, text=True).stdout
     documents = [doc for doc in yaml.safe_load_all(rendered) if doc]
-    deployment = next(doc for doc in documents if doc['kind'] == 'Deployment')
+    deployment = server(documents)
     pod = deployment['spec']['template']['spec']
     container = pod['containers'][0]
     assert container['image'] == 'nathanfallet/teamcode:latest'
@@ -29,7 +36,8 @@ for external in (False, True):
     assert container['livenessProbe']['httpGet']['path'] == '/health'
     assert pod['terminationGracePeriodSeconds'] >= 650
     assert pod['automountServiceAccountToken'] is False
-    assert not any(doc['kind'] == 'Secret' for doc in documents)
+    # The chart generates one Secret only, the MCP host token; every other secret is the operator's.
+    assert [doc['metadata']['name'] for doc in documents if doc['kind'] == 'Secret'] == ['test-teamcode-mcp']
     assert any(doc['kind'] == 'StatefulSet' for doc in documents) != external
     assert any(doc['kind'] == 'HorizontalPodAutoscaler' for doc in documents) == external
     assert ('replicas' not in deployment['spec']) == external
@@ -44,7 +52,7 @@ for external in (False, True):
     assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN']['value'] == 'false'
     assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS']['value'] == ''
     assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']['value']) == []
-    policies = [doc for doc in documents if doc['kind'] == 'NetworkPolicy']
+    policies = [doc for doc in documents if doc['kind'] == 'NetworkPolicy' and doc['metadata']['name'] != 'test-teamcode-mcp']
     if external:
         assert not policies, 'No MySQL policy without the bundled MySQL'
     else:
@@ -85,32 +93,32 @@ with tempfile.NamedTemporaryFile('w', suffix='.yaml') as handle:
     yaml.safe_dump(values, handle)
     handle.flush()
     documents = [doc for doc in yaml.safe_load_all(subprocess.run(['helm', 'template', 'test', chart, '-f', handle.name], check=True, capture_output=True, text=True).stdout) if doc]
-env = {item['name']: item['value'] for item in next(doc for doc in documents if doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env'] if 'value' in item}
+env = {item['name']: item['value'] for item in server(documents)['spec']['template']['spec']['containers'][0]['env'] if 'value' in item}
 assert env['TEAMCODE_CLOUD_SESSION_EGRESS_LOCKDOWN'] == 'true'
 assert env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == '203.0.113.0/24,2001:db8::/32'
 assert json.loads(env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA']) == values['cloudSessions']['networkPolicy']['extraEgress']
-assert not any(doc['kind'] == 'NetworkPolicy' for doc in documents), 'mysql.networkPolicy.enabled=false renders no policy'
+assert [doc['metadata']['name'] for doc in documents if doc['kind'] == 'NetworkPolicy'] == ['test-teamcode-mcp'], 'mysql.networkPolicy.enabled=false renders no MySQL policy'
 # A null list (an empty `extraEgress:` key) still renders a JSON array, and `enabled: false` reaches the server as written.
 rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'cloudSessions.networkPolicy.extraEgress=null',
                            '--set', 'cloudSessions.networkPolicy.blockedCidrs=null', '--set', 'cloudSessions.networkPolicy.enabled=false'], check=True, capture_output=True, text=True).stdout
-env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
+env = {item['name']: item.get('value') for item in server([doc for doc in yaml.safe_load_all(rendered) if doc])['spec']['template']['spec']['containers'][0]['env']}
 assert env['TEAMCODE_CLOUD_SESSION_EGRESS_EXTRA'] == '[]' and env['TEAMCODE_CLOUD_SESSION_EGRESS_BLOCKED_CIDRS'] == ''
 assert env['TEAMCODE_CLOUD_SESSION_NETWORK_POLICY'] == 'false'
 rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'trustedProxies={10.244.0.0/16,fd00::/8}'], check=True, capture_output=True, text=True).stdout
-env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
+env = {item['name']: item.get('value') for item in server([doc for doc in yaml.safe_load_all(rendered) if doc])['spec']['template']['spec']['containers'][0]['env']}
 assert env['TEAMCODE_TRUSTED_PROXIES'] == '10.244.0.0/16,fd00::/8'
 rendered = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'webhooks.allowPrivateTargets=true'], check=True, capture_output=True, text=True).stdout
-env = {item['name']: item.get('value') for item in next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]['env']}
+env = {item['name']: item.get('value') for item in server([doc for doc in yaml.safe_load_all(rendered) if doc])['spec']['template']['spec']['containers'][0]['env']}
 assert env['TEAMCODE_WEBHOOK_PRIVATE_TARGETS'] == 'true'
 # A released chart deploys its own version (audit L8): helm package sets appVersion, which the image tag defaults to,
 # and an exact version is not pulled again on every start.
 with tempfile.TemporaryDirectory() as packaged:
     subprocess.run(['helm', 'package', chart, '--destination', packaged, '--version', '9.8.7', '--app-version', '9.8.7'], check=True, capture_output=True)
     rendered = subprocess.run(['helm', 'template', 'test', f'{packaged}/teamcode-9.8.7.tgz', '--set', 'publicUrl=https://teamcode.example.org'], check=True, capture_output=True, text=True).stdout
-    container = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]
+    container = server([doc for doc in yaml.safe_load_all(rendered) if doc])['spec']['template']['spec']['containers'][0]
     assert container['image'] == 'nathanfallet/teamcode:9.8.7' and container['imagePullPolicy'] == 'IfNotPresent', container['image']
     rendered = subprocess.run(['helm', 'template', 'test', f'{packaged}/teamcode-9.8.7.tgz', '--set', 'publicUrl=https://teamcode.example.org', '--set', 'image.tag=latest'], check=True, capture_output=True, text=True).stdout
-    container = next(doc for doc in yaml.safe_load_all(rendered) if doc and doc['kind'] == 'Deployment')['spec']['template']['spec']['containers'][0]
+    container = server([doc for doc in yaml.safe_load_all(rendered) if doc])['spec']['template']['spec']['containers'][0]
     assert container['image'] == 'nathanfallet/teamcode:latest' and container['imagePullPolicy'] == 'Always'
 # The bundled MySQL's volume size: 30Gi for a new installation (lookup finds nothing outside a cluster), an explicit
 # value as written, and an existing StatefulSet's size kept, since volumeClaimTemplates is immutable. lookup cannot be
@@ -143,4 +151,239 @@ misplaced = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicU
 assert misplaced.returncode != 0 and 'mysql.resources' in misplaced.stderr, misplaced.stderr
 for flags in ([], ['--set', 'publicUrl=https://teamcode.example.org', '--set', 'mysql.enabled=false']):
     assert subprocess.run(['helm', 'template', 'test', chart, *flags], capture_output=True).returncode != 0
-print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes, draining, the MySQL network policy and the session egress settings.')
+# The MCP stdio host (templates/mcp.yaml, docs/mcp.md): on by default, isolated from the database and the cluster API,
+# reachable from the server pods only, and sharing one generated token with them.
+import base64
+import hashlib
+import ipaddress
+import re
+
+
+def render(*flags, chart_path=chart):
+    result = subprocess.run(['helm', 'template', 'test', chart_path, '--set', 'publicUrl=https://teamcode.example.org', *flags],
+                            check=True, capture_output=True, text=True)
+    return [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+
+
+def mcp_objects(documents):
+    return {doc['kind']: doc for doc in documents if doc['metadata']['name'] == 'test-teamcode-mcp'}
+
+
+def matches(selector, labels):
+    return selector.items() <= labels.items()
+
+
+documents = render()
+objects = mcp_objects(documents)
+assert set(objects) == {'ServiceAccount', 'Service', 'Deployment', 'Secret', 'NetworkPolicy'}, set(objects)
+assert not any(doc['kind'] in ('Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding') for doc in documents)
+host = objects['Deployment']
+host_pod = host['spec']['template']
+host_labels = host_pod['metadata']['labels']
+spec = host_pod['spec']
+(container,) = spec['containers']
+assert host['spec']['replicas'] == 1 and host['spec']['strategy']['rollingUpdate'] == {'maxSurge': 1, 'maxUnavailable': 0}
+assert matches(host['spec']['selector']['matchLabels'], host_labels)
+assert container['image'] == 'nathanfallet/teamcode-mcp:latest' and container['imagePullPolicy'] == 'Always'
+# Restricted pod security, no Kubernetes identity, nothing inherited from service links.
+assert spec['automountServiceAccountToken'] is False and spec['enableServiceLinks'] is False
+assert spec['serviceAccountName'] == 'test-teamcode-mcp' and objects['ServiceAccount']['automountServiceAccountToken'] is False
+assert spec['securityContext']['runAsNonRoot'] is True and spec['securityContext']['runAsUser'] == 10002
+assert spec['securityContext']['seccompProfile'] == {'type': 'RuntimeDefault'}
+security = container['securityContext']
+assert security['readOnlyRootFilesystem'] is True and security['allowPrivilegeEscalation'] is False
+assert security['capabilities'] == {'drop': ['ALL']} and security['runAsUser'] == 10002 and security['seccompProfile'] == {'type': 'RuntimeDefault'}
+mounts = {m['mountPath']: m['name'] for m in container['volumeMounts']}
+assert mounts == {'/var/mcp': 'data', '/tmp': 'tmp'}
+assert all('emptyDir' in v and v['emptyDir']['sizeLimit'] for v in spec['volumes'])
+assert container['resources']['limits']['memory'] == '2Gi' and 'ephemeral-storage' in container['resources']['limits']
+assert container['ports'] == [{'name': 'http', 'containerPort': 8090, 'protocol': 'TCP'}]
+assert container['startupProbe']['httpGet']['path'] == '/health' and container['livenessProbe']['httpGet']['path'] == '/health'
+assert container['readinessProbe']['httpGet']['path'] == '/ready'
+host_env = {item['name']: item for item in container['env']}
+assert int(spec['terminationGracePeriodSeconds']) > int(host_env['TEAMCODE_MCP_DRAIN_SECONDS']['value'])
+assert host_env['TEAMCODE_MCP_PORT']['value'] == '8090' and host_env['TEAMCODE_MCP_DATA_DIR']['value'] == '/var/mcp'
+assert host_env['TEAMCODE_MCP_LAUNCHERS']['value'] == 'npm,pypi'
+assert 'TEAMCODE_MCP_NPM_REGISTRY' not in host_env and 'TEAMCODE_MCP_PYPI_INDEX' not in host_env
+assert host_env['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {'name': 'test-teamcode-mcp', 'key': 'token'}
+# No database, no encryption key: the host reads no key of the operator's Secret.
+assert not any(name.startswith('TEAMCODE_DATABASE') or name == 'TEAMCODE_ENCRYPTION_KEY' for name in host_env)
+assert 'teamcode-secrets' not in yaml.safe_dump(host)
+# Labels are disjoint: the server's Service, PDB and the MySQL policy never select the host, and the host's Service
+# never selects a server pod.
+server_deployment = server(documents)
+server_labels = server_deployment['spec']['template']['metadata']['labels']
+server_service = next(doc for doc in documents if doc['kind'] == 'Service' and doc['metadata']['name'] == 'test-teamcode')
+pdb = next(doc for doc in documents if doc['kind'] == 'PodDisruptionBudget')
+mysql_policy = next(doc for doc in documents if doc['kind'] == 'NetworkPolicy' and doc['metadata']['name'] == 'test-teamcode-mysql')
+assert not matches(server_service['spec']['selector'], host_labels)
+assert not matches(pdb['spec']['selector']['matchLabels'], host_labels)
+assert not matches(mysql_policy['spec']['ingress'][0]['from'][0]['podSelector']['matchLabels'], host_labels)
+assert not matches(server_deployment['spec']['selector']['matchLabels'], host_labels)
+assert matches(objects['Service']['spec']['selector'], host_labels) and not matches(objects['Service']['spec']['selector'], server_labels)
+assert objects['Service']['spec']['ports'] == [{'name': 'http', 'port': 8090, 'targetPort': 'http', 'protocol': 'TCP'}]
+# The server reaches the host through its Service, with the same token.
+server_env = {item['name']: item for item in server_deployment['spec']['template']['spec']['containers'][0]['env']}
+assert server_env['TEAMCODE_MCP_URL']['value'] == 'http://test-teamcode-mcp:8090'
+# Optional on the server side: a server pod still starts while the Secret is missing (rotation, operator Secret late).
+assert server_env['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {'name': 'test-teamcode-mcp', 'key': 'token', 'optional': True}
+# The generated Secret: 48 random alphanumeric characters, kept on uninstall, and one value per render shared by the
+# Secret and both checksum annotations (so a rotation rolls the server and the host together).
+secret = objects['Secret']
+assert secret['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' and set(secret['data']) == {'token'}
+assert re.fullmatch(r'[A-Za-z0-9]{48}', base64.b64decode(secret['data']['token']).decode())
+checksum = hashlib.sha256(secret['data']['token'].encode()).hexdigest()
+assert host_pod['metadata']['annotations']['checksum/mcp-token'] == checksum
+assert server_deployment['spec']['template']['metadata']['annotations']['checksum/mcp-token'] == checksum
+# The host's NetworkPolicy: ingress from this release's server pods on 8090 only; egress to DNS and public addresses,
+# with exactly the private ranges of the cloud session policy (SessionNetworkPolicy.kt) and their NAT64/6to4 forms.
+policy = objects['NetworkPolicy']['spec']
+assert matches(policy['podSelector']['matchLabels'], host_labels) and policy['policyTypes'] == ['Ingress', 'Egress']
+(ingress,) = policy['ingress']
+assert ingress['ports'] == [{'protocol': 'TCP', 'port': 8090}]
+(peer,) = ingress['from']
+assert set(peer) == {'podSelector'} and matches(peer['podSelector']['matchLabels'], server_labels)
+assert not matches(peer['podSelector']['matchLabels'], host_labels)
+dns, internet_v4, internet_v6 = policy['egress']
+assert dns == {'ports': [{'protocol': 'UDP', 'port': 53}, {'protocol': 'TCP', 'port': 53}]}
+source = open('infrastructure/src/main/kotlin/me/nathanfallet/teamcode/infrastructure/cloud/SessionNetworkPolicy.kt').read()
+
+
+def kotlin_list(name):
+    return re.findall(r'"([0-9a-f.:]+/\d+)"', re.search(rf'val {name} = listOf\((.*?)\)\n', source, re.S).group(1))
+
+
+private_v4, private_v6 = kotlin_list('PRIVATE_V4'), kotlin_list('PRIVATE_V6')
+assert len(private_v4) >= 10 and len(private_v6) >= 5
+
+
+def embedded(cidr):
+    network = ipaddress.ip_network(cidr)
+    address = int(network.network_address)
+    return [str(ipaddress.ip_network(((0x64ff9b << 96) | address, 96 + network.prefixlen))),
+            str(ipaddress.ip_network(((0x2002 << 112) | (address << 80), 16 + network.prefixlen)))]
+
+
+def canonical(cidrs):
+    return [str(ipaddress.ip_network(c)) for c in cidrs]
+
+
+(block_v4,) = internet_v4['to']
+(block_v6,) = internet_v6['to']
+assert block_v4['ipBlock']['cidr'] == '0.0.0.0/0' and canonical(block_v4['ipBlock']['except']) == private_v4
+assert block_v6['ipBlock']['cidr'] == '::/0'
+assert canonical(block_v6['ipBlock']['except']) == private_v6 + [c for cidr in private_v4 for c in embedded(cidr)]
+for block in (block_v4, block_v6):
+    outer = ipaddress.ip_network(block['ipBlock']['cidr'])
+    assert all(ipaddress.ip_network(c).subnet_of(outer) and ipaddress.ip_network(c) != outer for c in block['ipBlock']['except'])
+# Operator settings: blocked ranges (IPv4 also in NAT64/6to4 form), lockdown, extra rules, mirrors, launchers.
+values = {'mcp': {'npmRegistry': 'https://npm.example.org', 'pypiIndex': 'https://pypi.example.org/simple', 'launchers': ['npm'],
+                  'networkPolicy': {'blockedCidrs': ['203.0.113.0/24', '2001:db8::/32'], 'extraEgress': [
+                      {'to': [{'ipBlock': {'cidr': '10.20.0.0/16'}}], 'ports': [{'protocol': 'TCP', 'port': 443}]}]}}}
+with tempfile.NamedTemporaryFile('w', suffix='.yaml') as handle:
+    yaml.safe_dump(values, handle)
+    handle.flush()
+    objects = mcp_objects(render('-f', handle.name))
+    egress = objects['NetworkPolicy']['spec']['egress']
+    assert '203.0.113.0/24' in egress[1]['to'][0]['ipBlock']['except']
+    assert set(canonical(['2001:db8::/32'] + embedded('203.0.113.0/24'))) <= set(canonical(egress[2]['to'][0]['ipBlock']['except']))
+    assert egress[3] == values['mcp']['networkPolicy']['extraEgress'][0]
+    host_env = {item['name']: item.get('value') for item in objects['Deployment']['spec']['template']['spec']['containers'][0]['env']}
+    assert host_env['TEAMCODE_MCP_NPM_REGISTRY'] == 'https://npm.example.org' and host_env['TEAMCODE_MCP_PYPI_INDEX'] == 'https://pypi.example.org/simple'
+    assert host_env['TEAMCODE_MCP_LAUNCHERS'] == 'npm'
+    values['mcp']['networkPolicy']['lockdown'] = True
+    handle.seek(0)
+    handle.truncate()
+    yaml.safe_dump(values, handle)
+    handle.flush()
+    egress = mcp_objects(render('-f', handle.name))['NetworkPolicy']['spec']['egress']
+    assert egress == [dns, values['mcp']['networkPolicy']['extraEgress'][0]], egress
+assert 'NetworkPolicy' not in mcp_objects(render('--set', 'mcp.networkPolicy.enabled=false'))
+# The host follows the server's tag: image.tag, then the released chart's appVersion; its own tag wins when set.
+objects = mcp_objects(render('--set', 'image.tag=sha-abc'))
+assert objects['Deployment']['spec']['template']['spec']['containers'][0]['image'] == 'nathanfallet/teamcode-mcp:sha-abc'
+objects = mcp_objects(render('--set', 'image.tag=sha-abc', '--set', 'mcp.image.tag=sha-def'))
+assert objects['Deployment']['spec']['template']['spec']['containers'][0]['image'] == 'nathanfallet/teamcode-mcp:sha-def'
+with tempfile.TemporaryDirectory() as packaged:
+    subprocess.run(['helm', 'package', chart, '--destination', packaged, '--version', '9.8.7', '--app-version', '9.8.7'], check=True, capture_output=True)
+    container = mcp_objects(render(chart_path=f'{packaged}/teamcode-9.8.7.tgz'))['Deployment']['spec']['template']['spec']['containers'][0]
+    assert container['image'] == 'nathanfallet/teamcode-mcp:9.8.7' and container['imagePullPolicy'] == 'IfNotPresent', container['image']
+# An operator's token: no generated Secret, both Deployments read the given key.
+documents = render('--set', 'mcp.token.existingSecret=my-mcp', '--set', 'mcp.token.key=value')
+objects = mcp_objects(documents)
+assert 'Secret' not in objects and not any(doc['kind'] == 'Secret' for doc in documents)
+reference = {'name': 'my-mcp', 'key': 'value'}
+assert {i['name']: i for i in objects['Deployment']['spec']['template']['spec']['containers'][0]['env']}['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == reference
+server_pod = server(documents)['spec']['template']
+assert {i['name']: i for i in server_pod['spec']['containers'][0]['env']}['TEAMCODE_MCP_TOKEN']['valueFrom']['secretKeyRef'] == {**reference, 'optional': True}
+assert server_pod['metadata']['annotations']['checksum/mcp-token'] == objects['Deployment']['spec']['template']['metadata']['annotations']['checksum/mcp-token']
+# Off: nothing of the host is rendered and the server gets no MCP variable or annotation.
+for flags in (['--set', 'mcp.enabled=false'], ['--set', 'mcp.enabled=false', '--set', 'podAnnotations.a=b']):
+    documents = render(*flags)
+    assert not any('-mcp' in doc['metadata']['name'] for doc in documents)
+    server_pod = server(documents)['spec']['template']
+    assert not any(item['name'].startswith('TEAMCODE_MCP_') for item in server_pod['spec']['containers'][0]['env'])
+    assert 'checksum/mcp-token' not in (server_pod['metadata'].get('annotations') or {})
+assert 'annotations' not in server(render('--set', 'mcp.enabled=false'))['spec']['template']['metadata']
+# A release upgraded with --reuse-values from a chart without the `mcp` block has no .Values.mcp: no host, no error.
+with tempfile.TemporaryDirectory() as old_dir:
+    import shutil
+    old_chart = f'{old_dir}/teamcode'
+    shutil.copytree(chart, old_chart)
+    with open(f'{old_chart}/values.yaml') as handle:
+        old_values = yaml.safe_load(handle)
+    del old_values['mcp']
+    with open(f'{old_chart}/values.yaml', 'w') as handle:
+        yaml.safe_dump(old_values, handle)
+    documents = render(chart_path=old_chart)
+    assert not any('-mcp' in doc['metadata']['name'] for doc in documents)
+    # --set mcp.enabled=true on such a release leaves the block with that key alone: a clear refusal, not a host
+    # deployed from empty settings.
+    result = subprocess.run(['helm', 'template', 'test', old_chart, '--set', 'publicUrl=https://teamcode.example.org', '--set', 'mcp.enabled=true'],
+                            capture_output=True, text=True)
+    assert result.returncode != 0 and '--reset-then-reuse-values' in result.stderr, result.stderr
+# Null sub-blocks keep their defaults instead of failing on a nil pointer, as for the session egress lists.
+objects = mcp_objects(render('--set', 'mcp.networkPolicy=null', '--set', 'mcp.token=null', '--set', 'mcp.tmpSizeLimit=1Gi'))
+assert 'NetworkPolicy' in objects and 'Secret' in objects
+assert {v['name']: v for v in objects['Deployment']['spec']['template']['spec']['volumes']}['tmp']['emptyDir']['sizeLimit'] == '1Gi'
+# The generated token is read back from the release's existing Secret (lookup, faked here through a probe template that
+# passes fixtures to the same helper): an existing value is kept as is; an absent Secret, or one without the key, gets
+# a new value (install, or rotation after the Secret was deleted).
+with tempfile.TemporaryDirectory() as probe_dir:
+    import shutil
+    probe_chart = f'{probe_dir}/teamcode'
+    shutil.copytree(chart, probe_chart)
+    kept = base64.b64encode(b'k' * 48).decode()
+    with open(f'{probe_chart}/templates/zz-token-probe.yaml', 'w') as probe:
+        probe.write('apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: token-probe\ndata:\n'
+                    f'  existing: {{{{ include "teamcode.mcp.tokenData" (dict "existing" (dict "data" (dict "token" "{kept}"))) | quote }}}}\n'
+                    '  absent: {{ include "teamcode.mcp.tokenData" (dict "existing" dict) | quote }}\n'
+                    '  nokey: {{ include "teamcode.mcp.tokenData" (dict "existing" (dict "data" (dict "other" "eA=="))) | quote }}\n')
+    rendered = subprocess.run(['helm', 'template', 'test', probe_chart, '--set', 'publicUrl=https://teamcode.example.org',
+                               '--show-only', 'templates/zz-token-probe.yaml'], check=True, capture_output=True, text=True).stdout
+    tokens = yaml.safe_load(rendered)['data']
+    assert tokens['existing'] == kept, tokens
+    for fresh in (tokens['absent'], tokens['nokey']):
+        assert re.fullmatch(r'[A-Za-z0-9]{48}', base64.b64decode(fresh).decode())
+# Misconfigurations fail at render time.
+def extra(rule):
+    return ['--set-json', 'mcp.networkPolicy.extraEgress=' + json.dumps([rule])]
+
+
+# Accepted extra rules: a private mirror, and a broad block that excepts link-local.
+for rule in ({'to': [{'ipBlock': {'cidr': '10.20.0.0/16'}}]}, {'to': [{'ipBlock': {'cidr': '0.0.0.0/0', 'except': ['169.254.0.0/16']}}]},
+             {'to': [{'ipBlock': {'cidr': '2000::/3'}}]}, {'to': [{'ipBlock': {'cidr': '::/0', 'except': ['fe80::/10']}}]},
+             {'to': [{'namespaceSelector': {}}], 'ports': [{'protocol': 'TCP', 'port': 443}]}):
+    assert mcp_objects(render(*extra(rule)))['NetworkPolicy']['spec']['egress'][-1] == rule
+assert {*canonical(['2001:db8::/32', '192.168.1.0/24'])} <= {*canonical(sum((r['to'][0]['ipBlock']['except'] for r in mcp_objects(render(
+    '--set', 'mcp.networkPolicy.blockedCidrs={2001:db8::/32,192.168.1.0/24}'))['NetworkPolicy']['spec']['egress'][1:3]), []))}
+for flags in (['--set', 'mcp.drainSeconds=90'], *(['--set', f'mcp.networkPolicy.blockedCidrs={{{cidr}}}'] for cidr in (
+        '0.0.0.0/0', '10.0.0.1', '192.168.1.5/33', 'abc.def.1.1/24', '10.0.0.256/24', '::/0', 'fe80::/129', 'example.org/24')),
+        # Extra rules that reach link-local (cloud metadata), as the session policy refuses them.
+        *(extra(rule) for rule in ({'ports': [{'protocol': 'TCP', 'port': 80}]}, {'to': [{'ipBlock': {'cidr': '169.254.169.254/32'}}]},
+                                   {'to': [{'ipBlock': {'cidr': '0.0.0.0/0'}}]}, {'to': [{'ipBlock': {'cidr': '128.0.0.0/2'}}]},
+                                   {'to': [{'ipBlock': {'cidr': 'fe80::1/128'}}]}, {'to': [{'ipBlock': {'cidr': '::/0'}}]},
+                                   {'to': [{'ipBlock': {'cidr': 'fe00::/8'}}]}))):
+    result = subprocess.run(['helm', 'template', 'test', chart, '--set', 'publicUrl=https://teamcode.example.org', *flags], capture_output=True, text=True)
+    assert result.returncode != 0 and 'mcp.' in result.stderr, (flags, result.stderr)
+print('Helm contracts passed for bundled/external MySQL, HPA, ingress (response headers untouched), secrets, probes, draining, the MySQL network policy, the session egress settings and the MCP host (security, labels, token, network policy, on/off).')

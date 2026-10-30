@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.mcp.*
 import me.nathanfallet.teamcode.domain.variants.EffectiveMcpServer
+import me.nathanfallet.teamcode.domain.variants.McpServerTransport
 import me.nathanfallet.teamcode.domain.variants.SecretValue
 import kotlin.test.*
 
@@ -17,7 +18,7 @@ import kotlin.test.*
 class HttpMcpUpstreamTest {
     private val credential = "synthetic-upstream-\"credential\""
     private fun server(config: Map<String, String> = emptyMap(), secret: String? = credential) =
-        EffectiveMcpServer("tracker", "variant", "team", 1, 0, "https://tracker.example.test/mcp", config, secret?.let(::SecretValue))
+        EffectiveMcpServer("tracker", "variant", "team", 1, 0, McpServerTransport.Http("https://tracker.example.test/mcp"), config, secret?.let(::SecretValue))
     private val allowAll = McpAddressPolicy { }
     private val limits = McpLimits(callTimeoutMillis = 2_000, listTimeoutMillis = 2_000, maxResponseBytes = 4_096)
 
@@ -90,7 +91,7 @@ class HttpMcpUpstreamTest {
         val failure = assertFailsWith<McpUpstreamFailure> { unauthorized.listTools(server(), limits) }
         assertFalse(failure.message!!.contains("synthetic"))
         val private = HttpMcpUpstream(HttpClient(MockEngine { error("must not connect") }))
-        assertFailsWith<McpUpstreamFailure> { private.listTools(server().copy(endpoint = "https://127.0.0.1/mcp"), limits) }
+        assertFailsWith<McpUpstreamFailure> { private.listTools(server().copy(transport = McpServerTransport.Http("https://127.0.0.1/mcp")), limits) }
         for (address in listOf("127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1", "2002:a00:1::1", "2001::1", "64:ff9b::a9fe:a9fe",
             "::ffff:0:10.0.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "192.88.99.1", "2001:db8::1", "100::1",
             "2001:2::1", "2001:2:0:ffff::1", "2001:10::1", "2001:1f::1", "2001:20::1", "2001:2f:ffff::1", "2001:1::1", "2001:3::1", "2001:1ff::1",
@@ -103,7 +104,7 @@ class HttpMcpUpstreamTest {
         val old = HttpMcpUpstream(HttpClient(MockEngine { respond("""{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }), allowAll)
         assertFailsWith<McpUpstreamFailure> { old.listTools(server(), limits) }
         val plain = HttpMcpUpstream(HttpClient(MockEngine { error("must not connect") }), allowAll)
-        assertFailsWith<McpUpstreamFailure> { plain.listTools(server().copy(endpoint = "http://tracker.example.test/mcp"), limits) }
+        assertFailsWith<McpUpstreamFailure> { plain.listTools(server().copy(transport = McpServerTransport.Http("http://tracker.example.test/mcp")), limits) }
         Unit
     }
 }

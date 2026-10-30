@@ -170,19 +170,61 @@ fun main() {
     val audit = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlAuditService(it) }
     val skills = database?.let { me.nathanfallet.teamcode.domain.skills.SkillCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlSkillStore(it)) }
     val hooks = database?.let { me.nathanfallet.teamcode.domain.hooks.HookCatalog(me.nathanfallet.teamcode.infrastructure.database.SqlHookStore(it)) }
-    val variants = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(it, cipher!!) }
+    val mcpLimits = mcpLimits()
+    // The MCP stdio host of the release (docs/mcp.md), when the chart runs one: without it, declaring a hosted MCP
+    // command (transport stdio) answers 409 mcp_disabled and hosted variants are withheld from resolution.
+    val mcpHostAddress = mcpHostAddress()
+    val mcpHostHttp = mcpHostAddress?.let { HttpClient(CIO) { followRedirects = false; install(HttpTimeout) { connectTimeoutMillis = 5_000 } } }
+    val mcpHost = mcpHostAddress?.let { (url, token) -> me.nathanfallet.teamcode.infrastructure.mcp.HostMcpUpstream(mcpHostHttp!!, url, token) }
+    val variants = database?.let { db ->
+        me.nathanfallet.teamcode.infrastructure.database.SqlVariantService(db, cipher!!, stdioLaunchers = { mcpHost?.launchers().orEmpty() })
+    }
     /** A member's own environment variables, for `teamcode run`: resolved from the variants on every read. */
     val environment = variants?.let { me.nathanfallet.teamcode.domain.variants.ResolveOwnEnvironmentUseCase(
         me.nathanfallet.teamcode.domain.cloud.ResolveCloudVariablesUseCase(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(it))) }
-    val mcpLimits = mcpLimits()
     val mcpHttp = HttpClient(CIO) {
         followRedirects = false
         engine { dnsResolver = PinnedDns.resolver(me.nathanfallet.teamcode.domain.cloud.CloudAdministrationService::publicAddress) }
         install(HttpTimeout) { connectTimeoutMillis = 10_000; requestTimeoutMillis = maxOf(mcpLimits.callTimeoutMillis, mcpLimits.listTimeoutMillis) + 5_000 }
     }
+    // The states the sweep records for hosted processes, read by GET /api/v1/mcp/servers and the dashboard.
+    val hostedStates = if (mcpHost != null) database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlHostedProcessStateStore(it) } else null
+    val hostedMcp = if (variants != null && mcpHost != null && hostedStates != null) me.nathanfallet.teamcode.domain.mcp.HostedMcpAdministration(variants, hostedStates, mcpHost, variants) else null
     val mcp = mcpAccess?.let {
-        me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!), it,
-            me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpLimits)
+        me.nathanfallet.teamcode.domain.mcp.McpGateway(me.nathanfallet.teamcode.domain.variants.ResolveEffectiveVariantsUseCase(variants!!, hostedCommands = mcpHost != null), it,
+            me.nathanfallet.teamcode.infrastructure.mcp.TransportMcpUpstream(
+                me.nathanfallet.teamcode.infrastructure.mcp.HttpMcpUpstream(mcpHttp, clientVersion = me.nathanfallet.teamcode.api.BuildInfo.VERSION), mcpHost),
+            mcpLimits, hostedStates = hostedStates)
+    }
+    if (variants != null && mcpHost != null) {
+        // The retain sweep: one replica a minute tells the host which processes are still assigned (docs/mcp.md).
+        val work = SqlScheduledWork(database!!)
+        val retain = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase(variants, mcpHost, hostedStates)
+        workers.launch {
+            while (isActive) {
+                try { work.runDue("mcp/retain", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.INTERVAL_MILLIS, timeoutMillis = 60_000) {
+                    when (val sweep = retain()) {
+                        me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.TooMany -> System.err.println("TeamCode MCP host retain sweep skipped: more than ${me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.MAX_ASSIGNMENTS} hosted assignments, no process is stopped.")
+                        is me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.HostUnavailable -> {
+                            System.err.println(if (sweep.reason == me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.REFUSED) "TeamCode MCP host retain sweep: the MCP host refused the request; deploy the server and its MCP host at the same version, with the same token."
+                                else "TeamCode MCP host retain sweep: the MCP host did not answer.")
+                            // mcp.unreachable at most once every ten minutes, whichever replica sees it.
+                            if (hostedStates != null && sweep.teamIds.isNotEmpty()) work.runDue("mcp/unreachable", intervalMillis = me.nathanfallet.teamcode.domain.mcp.RetainHostedMcpProcessesUseCase.UNREACHABLE_INTERVAL_MILLIS, timeoutMillis = 15_000) {
+                                hostedStates.publishUnreachable(sweep.teamIds, sweep.reason)
+                            }
+                        }
+                        is me.nathanfallet.teamcode.domain.mcp.HostedMcpSweep.Done -> {
+                            if (sweep.stopped > 0) println("TeamCode MCP host retain sweep stopped ${sweep.stopped} unassigned process(es).")
+                            if (sweep.changed > 0) println("TeamCode MCP host state sweep recorded ${sweep.changed} state change(s).")
+                        }
+                    }
+                } }
+                catch (_: TimeoutCancellationException) { System.err.println("TeamCode MCP host retain sweep deadline exceeded.") }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { System.err.println("TeamCode MCP host retain sweep is temporarily unavailable.") }
+                delay(15_000)
+            }
+        }
     }
     val artifactAdminStore = database?.let { me.nathanfallet.teamcode.infrastructure.database.SqlArtifactAdminStore(it, cipher!!) }
     val artifactAdmin = artifactAdminStore?.let { me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(it, artifactObjects) }
@@ -225,10 +267,10 @@ fun main() {
         embeddedServer(Netty, configure = {
             connectors.add(EngineConnectorBuilder().also { it.host = host; it.port = port })
             shutdownGracePeriod = shutdownGrace; shutdownTimeout = 620_000
-        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess,
-            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks,
+        }) { configureGateway(koin.koin.get(), token, team, origin, accounts, admission, directives, modelPolicies, readiness = { database?.ready() ?: true }, routes = routes, cancellation = cancellation, devices = devices, serviceKeys = serviceKeys, audit = audit, pacingSettings = pacingSettings, forecasts = forecasts, groups = if (groups != null) koin.koin.get() else null, runs = if (runs != null) koin.koin.get() else null, budgetOverrides = if (budgetOverrides != null) koin.koin.get() else null, reconciliation = if (reconciliation != null) koin.koin.get() else null, variants = variants, environment = environment, skills = skills, hooks = hooks, mcp = mcp, mcpAccess = mcpAccess, hostedMcp = hostedMcp,
+            cloudRuntime = cloud?.runtime, cloudSessions = cloud?.sessions, cloudAdmin = cloud?.admin, cloudRunner = cloud?.runner, github = cloud?.github, cloudConversation = cloud?.conversation, cloudTransfers = cloud?.transfers, webhooks = webhooks, automations = cloud?.automations, waits = cloud?.waits, workflows = cloud?.workflows, workflowRuns = cloud?.workflowRuns,
             apiPrices = apiPrices, poolSizing = poolSizing, artifactAdmin = artifactAdmin, artifacts = artifacts, artifactViewing = artifactViewing, deviceDaemons = cloud?.daemons, trustedProxies = trustedProxies) }.start(wait = true)
-    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); webhookSender?.close(); artifactHttp.close(); database?.close() }
+    } finally { runBlocking { workers.coroutineContext[Job]?.cancelAndJoin() }; koin.close(); cloud?.close(); providerHttp.close(); mcpHttp.close(); mcpHost?.close(); mcpHostHttp?.close(); webhookSender?.close(); artifactHttp.close(); database?.close() }
 }
 
 /**
@@ -266,8 +308,26 @@ private fun mcpLimits(): me.nathanfallet.teamcode.domain.mcp.McpLimits {
             serverConcurrent = int("TEAMCODE_MCP_SERVER_CONCURRENCY", defaults.serverConcurrent),
             memberCallsPerMinute = int("TEAMCODE_MCP_MEMBER_CALLS_PER_MINUTE", defaults.memberCallsPerMinute),
             serverCallsPerMinute = int("TEAMCODE_MCP_SERVER_CALLS_PER_MINUTE", defaults.serverCallsPerMinute),
+            stdioStartTimeoutMillis = long("TEAMCODE_MCP_STDIO_START_TIMEOUT_MS", defaults.stdioStartTimeoutMillis),
         )
     } catch (error: IllegalArgumentException) {
         throw IllegalArgumentException("Invalid TEAMCODE_MCP_* limits: ${error.message ?: "check the documented ranges."}", error)
     }
+}
+
+/**
+ * The MCP stdio host's address and token (`TEAMCODE_MCP_URL`, `TEAMCODE_MCP_TOKEN`, set by the chart's `mcp` block), or
+ * null when the server has none. A URL without its token (the chart mounts the Secret as optional) leaves hosted
+ * commands off, said once on stderr, rather than failing the server's start.
+ */
+internal fun mcpHostAddress(env: Map<String, String> = System.getenv()): Pair<String, String>? {
+    val url = env["TEAMCODE_MCP_URL"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    require(url.startsWith("http://") || url.startsWith("https://")) { "TEAMCODE_MCP_URL must be an HTTP(S) URL." }
+    val token = env["TEAMCODE_MCP_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }
+    if (token == null) {
+        System.err.println("TEAMCODE_MCP_URL is set without TEAMCODE_MCP_TOKEN: hosted MCP commands stay off until the token is available.")
+        return null
+    }
+    require(token.length >= 32) { "TEAMCODE_MCP_TOKEN must hold at least 32 characters." }
+    return url to token
 }

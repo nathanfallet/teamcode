@@ -72,9 +72,13 @@ class SqlServiceKeyService(private val database: Database) : ServiceKeyService {
     }
     private fun metadata(row: ResultRow, creatorName: Column<String>) = ServiceKey(row[Tokens.id], row[Tokens.memberId], row[Tokens.device], requireNotNull(readServiceScopes(row[Tokens.serviceScopes])), requireNotNull(row[Tokens.createdAt]), row[Tokens.expiresAt], row[Tokens.createdBy], row[creatorName])
     private fun missing() = TeamFailure("not_found", 404, "Service key or eligible member not found.")
-    /** Scoped tokens a member created; cloud execution credentials are scoped too but live and die with their execution. */
+    /**
+     * Scoped tokens a member created; cloud execution credentials are scoped too but live and die with their execution,
+     * and an automation's owner credential lives with its automation.
+     */
     private fun serviceKey(): Op<Boolean> = Tokens.serviceScopes.isNotNull() and
-        (Tokens.id notInSubQuery CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId))
+        (Tokens.id notInSubQuery CloudInferenceCredentials.select(CloudInferenceCredentials.tokenId)) and
+        notExists(Automations.select(Automations.id).where { Automations.credentialId eq Tokens.id })
 }
 
 /** Malformed persisted permissions must fail closed rather than become an interactive session. */

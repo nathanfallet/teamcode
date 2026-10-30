@@ -15,4 +15,4 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-include(":api", ":client", ":config", ":domain", ":infrastructure", ":presentation", ":app", ":cli", ":companion", ":companion-android", ":companion-desktop")
+include(":api", ":client", ":config", ":domain", ":infrastructure", ":presentation", ":app", ":mcp", ":cli", ":companion", ":companion-android", ":companion-desktop")

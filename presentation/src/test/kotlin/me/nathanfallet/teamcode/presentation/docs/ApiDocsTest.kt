@@ -68,6 +68,10 @@ class ApiDocsTest {
             },
             cloudTransfers = CloudTransferService(sessionStore, stub(), sessions, CloudRecipientPolicy(sessionStore)),
             webhooks = me.nathanfallet.teamcode.domain.webhooks.WebhookService(stub(), stub()),
+            automations = me.nathanfallet.teamcode.domain.automations.AutomationService(stub(), stub(), stub()),
+            waits = me.nathanfallet.teamcode.domain.waits.WaitService(stub()),
+            workflows = me.nathanfallet.teamcode.domain.workflows.WorkflowService(stub()),
+            workflowRuns = me.nathanfallet.teamcode.domain.workflows.WorkflowRunService(stub()),
             apiPrices = stub(), poolSizing = stub(),
             artifactAdmin = me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(stub(), stub()),
             artifacts = me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),
@@ -145,11 +149,14 @@ class ApiDocsTest {
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("cloud:write")), mapOf(SERVICE_KEY_SCHEME to listOf("admin:cloud"))),
             security("POST /api/v1/cloud/sessions"))
         assertEquals(listOf(mapOf(SESSION_SCHEME to emptyList()), mapOf(SERVICE_KEY_SCHEME to listOf("mcp"))), security("POST /mcp/{server}"))
+        // An automation's webhook proves itself with its signature or secret URL, under every spelling of its path.
+        for (path in listOf("/trigger", "/trigger/{token}", "/v/{version}/trigger", "/v/{version}/trigger/{token}"))
+            assertEquals(emptyList(), security("POST /api/v1/automations/{id}$path"), path)
         // Every protected operation documents its 401 and 403, all in the error envelope.
         for ((key, operation) in operations) {
             val responses = operation.getValue("responses").jsonObject
             assertTrue("default" in responses && "500" in responses, key)
-            if (key != "POST /api/v1/auth/login") assertTrue("401" in responses && "403" in responses, key)
+            if (security(key)?.isEmpty() != true) assertTrue("401" in responses && "403" in responses, key)
         }
     }
 

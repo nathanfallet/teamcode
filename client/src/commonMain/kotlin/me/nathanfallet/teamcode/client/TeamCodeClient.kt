@@ -19,6 +19,8 @@ import io.ktor.utils.io.writeFully
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
 import me.nathanfallet.teamcode.api.Serialization
@@ -411,18 +413,35 @@ class TeamCodeClient(
      */
     suspend fun forwardArtifact(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
         require(path == "/api/v1/artifacts" || path.startsWith("/api/v1/artifacts/")) { "Only artifact routes are relayed." }
+        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), ARTIFACT_RELAY_LIMIT, ARTIFACT_RELAYED_HEADERS)
+    }
+
+    /**
+     * Relays one wait API call received by the local proxy (`teamcode mcp waits`), with this client's credential: only
+     * `/api/v1/waits` paths (the proxy narrows them further), the caller's [idempotencyKey], and a bounded answer.
+     */
+    suspend fun forwardWait(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?, idempotencyKey: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/waits" || path.startsWith("/api/v1/waits/")) { "Only wait routes are relayed." }
+        require(idempotencyKey == null || IDEMPOTENCY_KEY_PATTERN.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return forwardApi(method, path, query, body, contentType, runId, listOfNotNull(idempotencyKey?.let { CloudHeaders.IDEMPOTENCY_KEY to it }).toMap(),
+            WAIT_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
+
+    private suspend fun forwardApi(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?,
+        headers: Map<String, String>, limit: Int, relayed: List<String>): ArtifactRelayResponse {
         require(runId == null || RunIdentifiers.isValid(runId)) { "Invalid run." }
         return http.prepareRequest("$origin$path" + if (query.isEmpty()) "" else "?$query") {
             this.method = method; authenticate()
             runId?.let { header("x-teamcode-run-id", it) }
+            headers.forEach { (name, value) -> header(name, value) }
             if (method != HttpMethod.Get && method != HttpMethod.Delete) setBody(io.ktor.http.content.ByteArrayContent(body, contentType ?: ContentType.Application.OctetStream))
             timeout { requestTimeoutMillis = 120_000 }
         }.execute { response ->
-            // Streamed and bounded: a file answer is at most 16 MiB, the largest the API sends.
-            val bytes = response.bodyAsChannel().readRemaining(ARTIFACT_RELAY_LIMIT + 1L).readByteArray()
-            if (bytes.size > ARTIFACT_RELAY_LIMIT) throw TeamCodeException(502, "The artifact answer exceeds the relay limit.")
+            // Streamed and bounded: an artifact file answer is at most 16 MiB, the largest the API sends.
+            val bytes = response.bodyAsChannel().readRemaining(limit + 1L).readByteArray()
+            if (bytes.size > limit) throw TeamCodeException(502, "The answer exceeds the relay limit.")
             ArtifactRelayResponse(response.status.value, response.contentType(),
-                ARTIFACT_RELAYED_HEADERS.mapNotNull { name -> response.headers[name]?.let { name to it } }.toMap(), bytes)
+                relayed.mapNotNull { name -> response.headers[name]?.let { name to it } }.toMap(), bytes)
         }
     }
 
@@ -757,6 +776,122 @@ class TeamCodeClient(
     suspend fun cloudAccessPolicy(): CloudAccessPolicyView = coded(HttpMethod.Get, "/api/v1/cloud/access", null as Unit?)
     suspend fun saveCloudAccessPolicy(policy: CloudAccessPolicyView): CloudAccessPolicyView = coded(HttpMethod.Put, "/api/v1/cloud/access", policy)
 
+    // Waits (`waits.v1`, docs/waits.md).
+    /** What waits for the caller (or for [assignee], a member id: administrators), open ones by default. Newest first, [before] is the page cursor. */
+    suspend fun waits(assignee: String? = null, status: String = "open", before: String? = null, limit: Int = 50, session: String? = null): WaitPageView {
+        assignee?.let(::identifier); before?.let(::identifier); session?.let(::identifier)
+        require(status in Waits.statuses || status == "all") { "Use open, resolved, cancelled or all." }
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/waits", null as Unit?) {
+            url { assignee?.let { parameters.append("assignee", it) }; parameters.append("status", status); session?.let { parameters.append("session", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun wait(id: String): WaitView { identifier(id); return coded(HttpMethod.Get, "/api/v1/waits/$id", null as Unit?) }
+    /** Asks a person for something; the same [idempotencyKey] returns the wait it created. */
+    suspend fun createWait(input: WaitInput, idempotencyKey: String = Uuid.random().toString()): WaitView =
+        coded(HttpMethod.Post, "/api/v1/waits", CreateWaitRequest(input)) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    /** Answers a stored wait; `409 wait_closed` when someone answered or cancelled it first. */
+    suspend fun answerWait(id: String, action: String, values: Map<String, JsonElement> = emptyMap()): WaitView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/answer", AnswerWaitRequest(action, values))
+    }
+    suspend fun cancelWait(id: String): WaitView { identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/cancel", null as Unit?) }
+
+    // Workflows (`workflows.v1`, docs/workflows.md).
+    suspend fun workflows(after: String? = null, limit: Int = 50): WorkflowPageView {
+        after?.let(::identifier)
+        require(limit in 1..100) { "Use a limit of 1 to 100." }
+        return coded(HttpMethod.Get, "/api/v1/workflows", null as Unit?) {
+            url { after?.let { parameters.append("after", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun workflow(id: String): WorkflowView { identifier(id); return coded(HttpMethod.Get, "/api/v1/workflows/$id", null as Unit?) }
+    suspend fun createWorkflow(draft: WorkflowDraft): WorkflowView = coded(HttpMethod.Post, "/api/v1/workflows", SaveWorkflowRequest(draft))
+    /** Saves a new version; `409 workflow_conflict` when [expectedVersion] is no longer the current one. */
+    suspend fun updateWorkflow(id: String, draft: WorkflowDraft, expectedVersion: Int? = null): WorkflowView {
+        identifier(id); return coded(HttpMethod.Put, "/api/v1/workflows/$id", SaveWorkflowRequest(draft, expectedVersion))
+    }
+    /** Deletes a definition and returns it; runs already started keep the version they run. */
+    suspend fun deleteWorkflow(id: String): WorkflowView { identifier(id); return coded(HttpMethod.Delete, "/api/v1/workflows/$id", null as Unit?) }
+    /** Starts a run; the same [idempotencyKey] returns the run it created. */
+    suspend fun startWorkflowRun(id: String, request: StartWorkflowRunRequest = StartWorkflowRunRequest(), idempotencyKey: String = Uuid.random().toString()): WorkflowRunView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/$id/runs", request) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /** Runs, newest first; [workflow] and [status] (one of [Workflows.runStatuses]) filter, [before] is the page cursor. */
+    suspend fun workflowRuns(workflow: String? = null, status: String? = null, before: String? = null, limit: Int = 50): WorkflowRunPageView {
+        workflow?.let(::identifier); before?.let(::identifier)
+        require(status == null || status in Workflows.runStatuses) { "Use ${Workflows.runStatuses.joinToString(", ")}." }
+        require(limit in 1..100) { "Use a limit of 1 to 100." }
+        return coded(HttpMethod.Get, "/api/v1/workflows/runs", null as Unit?) {
+            url { workflow?.let { parameters.append("workflow", it) }; status?.let { parameters.append("status", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun workflowRun(id: String): WorkflowRunView { identifier(id); return coded(HttpMethod.Get, "/api/v1/workflows/runs/$id", null as Unit?) }
+    suspend fun cancelWorkflowRun(id: String): WorkflowRunView { identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/runs/$id/cancel", null as Unit?) }
+    /** Hands in what the run's current agent node was asked for; refused (`400 invalid_deliverable`) when it does not match the node's deliverable. */
+    suspend fun deliverWorkflowRun(id: String, output: JsonElement): WorkflowRunView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/runs/$id/deliver", DeliverRequest(output))
+    }
+    suspend fun workflowSettings(): WorkflowSettingsView = coded(HttpMethod.Get, "/api/v1/workflows/settings", null as Unit?)
+    suspend fun updateWorkflowEditors(editors: WorkflowEditorsView): WorkflowSettingsView = coded(HttpMethod.Put, "/api/v1/workflows/settings", editors)
+
+    // Automations (`automations.v1`, docs/automations.md).
+    /** The caller's automations, or [owner]'s (a member id, or `all`: administrators). Newest first, [before] is the page cursor. */
+    suspend fun automations(owner: String? = null, before: String? = null, limit: Int = 50): AutomationPageView {
+        owner?.let { if (it != "all") identifier(it) }; before?.let(::identifier)
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/automations", null as Unit?) {
+            url { owner?.let { parameters.append("owner", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+        }
+    }
+    suspend fun automation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Get, "/api/v1/automations/$id", null as Unit?) }
+    /** Created disabled. A webhook automation's signing secret is in the result, once. */
+    suspend fun createAutomation(input: AutomationInput): CreatedAutomationView = coded(HttpMethod.Post, "/api/v1/automations", CreateAutomationRequest(input))
+    /** [version] is the one being replaced (`409 stale_version` otherwise). */
+    suspend fun updateAutomation(id: String, version: Int, input: AutomationInput): AutomationView {
+        identifier(id); return coded(HttpMethod.Put, "/api/v1/automations/$id", UpdateAutomationRequest(version, input))
+    }
+    /** Deletes the automation with its run history; the sessions it created stay the owner's. */
+    suspend fun deleteAutomation(id: String) { identifier(id); coded<Unit, Unit>(HttpMethod.Delete, "/api/v1/automations/$id", null) }
+    /** Arms it (owner only); a cron automation's next slot is computed from now. */
+    suspend fun enableAutomation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/enable", null as Unit?) }
+    /** Pauses it (the owner, or an administrator for any automation of the team). */
+    suspend fun disableAutomation(id: String): AutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/disable", null as Unit?) }
+    /** A new webhook secret, shown once; the former one is still accepted for ten minutes. */
+    suspend fun rotateAutomationSecret(id: String): CreatedAutomationView { identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/webhook/rotate-secret", null as Unit?) }
+    /**
+     * A real test run of the saved definition, with the owner's quota, tools and account like a real run (`202`).
+     * [payload] is required for a webhook automation and refused for a cron one. The same [idempotencyKey] replays the run.
+     */
+    suspend fun runAutomation(id: String, payload: JsonObject? = null, idempotencyKey: String = Uuid.random().toString()): AutomationRunView {
+        identifier(id); require(CloudHeaders.idempotencyKey.matches(idempotencyKey)) { "Invalid idempotency key." }
+        return coded(HttpMethod.Post, "/api/v1/automations/$id/run", RunAutomationRequest(payload, dryRun = false)) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
+    }
+    /** The prompt a test with [payload] would send, its variables and problems, without a run or a session. */
+    suspend fun previewAutomationRun(id: String, payload: JsonObject? = null): AutomationPreviewView {
+        identifier(id); return coded(HttpMethod.Post, "/api/v1/automations/$id/run", RunAutomationRequest(payload, dryRun = true))
+    }
+    /** Checks and renders an unsaved definition (the editor's preview), with the next cron slots. */
+    suspend fun previewAutomation(input: AutomationInput, payload: JsonObject? = null): AutomationPreviewView =
+        coded(HttpMethod.Post, "/api/v1/automations/preview", PreviewAutomationRequest(input, payload))
+    /** The run history, newest first; [sources] and [statuses] filter it (empty: all). */
+    suspend fun automationRuns(id: String, before: String? = null, limit: Int = 50, sources: List<String> = emptyList(), statuses: List<String> = emptyList()): AutomationRunPageView {
+        identifier(id); before?.let(::identifier)
+        require(limit in 1..100) { "Use a page size between 1 and 100." }
+        return coded(HttpMethod.Get, "/api/v1/automations/$id/runs", null as Unit?) {
+            url {
+                before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString())
+                sources.forEach { parameters.append("source", it) }; statuses.forEach { parameters.append("status", it) }
+            }
+        }
+    }
+    suspend fun automationRun(id: String, runId: String): AutomationRunView {
+        identifier(id); identifier(runId); return coded(HttpMethod.Get, "/api/v1/automations/$id/runs/$runId", null as Unit?)
+    }
+    /** Withdraws a waiting run, or pauses the session of a working one. */
+    suspend fun cancelAutomationRun(id: String, runId: String): AutomationRunView {
+        identifier(id); identifier(runId); return coded(HttpMethod.Post, "/api/v1/automations/$id/runs/$runId/cancel", null as Unit?)
+    }
+
     // Ownership transfers (`cloud.transfer.v1`).
     /** Retrying with the same [idempotencyKey] replays the first transfer instead of creating another. */
     suspend fun transferCloudSession(id: String, input: CreateCloudTransferRequest, idempotencyKey: String = Uuid.random().toString(), onBehalfOf: String? = null): CloudTransferView {
@@ -1044,6 +1179,11 @@ class TeamCodeClient(
         private const val MAX_ARTIFACT_DETAIL = 1024 * 1024
         private const val ARTIFACT_RELAY_LIMIT = 16 * 1024 * 1024 + 64 * 1024
         private val ARTIFACT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, HttpHeaders.ContentDisposition, "X-TeamCode-Sha256", "x-teamcode-error", "x-teamcode-request-id")
+        /** A page of waits: up to 100 stored waits of at most 256 KiB each, plus the sessions' permission requests. */
+        private const val WAIT_RELAY_LIMIT = 32 * 1024 * 1024
+        private val WAIT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, CloudHeaders.IDEMPOTENCY_REPLAYED, "x-teamcode-error", "x-teamcode-request-id")
+        /** As the server accepts it (`WaitService`): 1 to 128 letters, digits or `. _ : -`. */
+        private val IDEMPOTENCY_KEY_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID = Regex("[A-Za-z0-9._:-]{1,128}")
         private val REQUEST_ID_HEADERS = listOf("X-Request-Id", "X-Correlation-Id", "CF-Ray")
         /** MCP variant target names, which are also the last segment of the gateway's `/mcp/<server>` endpoints. */

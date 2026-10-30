@@ -30,6 +30,14 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavHostController
+import me.nathanfallet.teamcode.companion.presentation.screens.AutomationEditScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.AutomationScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.AutomationTestScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationEditViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationTestViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationViewModel
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
 import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.screens.WideMainScreen
@@ -51,6 +59,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainTab
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.GitHubLinkScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.McpServersScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SubscriptionAccountsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.TransferSheet
 import me.nathanfallet.teamcode.companion.presentation.screens.TransfersScreen
@@ -66,6 +75,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.ArtifactsViewM
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.RootViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.GitHubLinkViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.McpServersViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
@@ -184,6 +194,9 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenTransfers = { accountId -> navController.navigate(TransfersRoute(accountId)) },
                 onOpenSubscriptions = { accountId -> navController.navigate(SubscriptionAccountsRoute(accountId)) },
                 onOpenGitHub = { accountId -> navController.navigate(GitHubLinkRoute(accountId)) },
+                onOpenMcp = { accountId -> navController.navigate(McpServersRoute(accountId)) },
+                onOpenAutomation = { accountId, automationId -> navController.navigate(AutomationRoute(accountId, automationId)) },
+                onCreateAutomation = { accountId -> navController.navigate(AutomationEditRoute(accountId)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -211,11 +224,17 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val viewModel: GitHubLinkViewModel = koinViewModel { parametersOf(route) }
             GitHubLinkScreen(viewModel, onBack = { navController.popBackStack() })
         }
+        composable<McpServersRoute> { entry ->
+            val route = entry.toRoute<McpServersRoute>()
+            val viewModel: McpServersViewModel = koinViewModel { parametersOf(route) }
+            McpServersScreen(viewModel, onBack = { navController.popBackStack() })
+        }
         composable<TransfersRoute> { entry ->
             val route = entry.toRoute<TransfersRoute>()
             val viewModel: TransfersViewModel = koinViewModel { parametersOf(route) }
             TransfersScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) })
         }
+        automationDestinations(navController)
     }
 
     newServer?.let { origin ->
@@ -290,11 +309,38 @@ internal fun SessionDestination(route: SessionRoute, onBack: (() -> Unit)?, onOp
     }
 }
 
+/** The automation screens pushed over the phone's tabs: the page, the form, the test; each leaves for the page or the list when done. */
+private fun NavGraphBuilder.automationDestinations(navController: NavHostController) {
+    composable<AutomationRoute> { entry ->
+        val route = entry.toRoute<AutomationRoute>()
+        val viewModel: AutomationViewModel = koinViewModel { parametersOf(route) }
+        AutomationScreen(viewModel, onBack = { navController.popBackStack() },
+            onEdit = { navController.navigate(AutomationEditRoute(route.accountId, it.id)) },
+            onTest = { navController.navigate(AutomationTestRoute(route.accountId, it.id)) },
+            onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) },
+            onDeleted = { navController.popBackStack() })
+    }
+    composable<AutomationEditRoute> { entry ->
+        val route = entry.toRoute<AutomationEditRoute>()
+        val viewModel: AutomationEditViewModel = koinViewModel { parametersOf(route) }
+        AutomationEditScreen(viewModel, onBack = { navController.popBackStack() }, onSaved = { id ->
+            // A new automation replaces the form with its page (the secret is shown there); a changed one goes back to it.
+            if (route.automationId == null) navController.navigate(AutomationRoute(route.accountId, id)) { popUpTo<AutomationEditRoute> { inclusive = true } } else navController.popBackStack()
+        })
+    }
+    composable<AutomationTestRoute> { entry ->
+        val route = entry.toRoute<AutomationTestRoute>()
+        val viewModel: AutomationTestViewModel = koinViewModel { parametersOf(route) }
+        AutomationTestScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) })
+    }
+}
+
 /** The tab of the phone layout that [entry], the content panel's first screen, is; null for a screen pushed over the tabs. */
 internal fun panelTab(entry: NavBackStackEntry): MainTab? = when {
     entry.destination.hasRoute<SessionsListRoute>() -> MainTab.SESSIONS
     entry.destination.hasRoute<AccountRoute>() -> MainTab.ACCOUNT
     entry.destination.hasRoute<ArtifactsRoute>() && entry.toRoute<ArtifactsRoute>().sessionId == null -> MainTab.ARTIFACTS
+    entry.destination.hasRoute<AutomationsRoute>() -> MainTab.AUTOMATIONS
     else -> null
 }
 
@@ -303,6 +349,7 @@ internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
     MainTab.SESSIONS -> SessionsListRoute
     MainTab.ACCOUNT -> AccountRoute
     MainTab.ARTIFACTS -> accountId?.let { ArtifactsRoute(it) }
+    MainTab.AUTOMATIONS -> accountId?.let { AutomationsRoute(it) }
 }
 
 /** The route of a screen both layouts show (pushed over the tabs, or in the content panel); null for the others. */
@@ -313,5 +360,9 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<TransfersRoute>() -> toRoute<TransfersRoute>()
     destination.hasRoute<SubscriptionAccountsRoute>() -> toRoute<SubscriptionAccountsRoute>()
     destination.hasRoute<GitHubLinkRoute>() -> toRoute<GitHubLinkRoute>()
+    destination.hasRoute<McpServersRoute>() -> toRoute<McpServersRoute>()
+    destination.hasRoute<AutomationRoute>() -> toRoute<AutomationRoute>()
+    destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>()
+    destination.hasRoute<AutomationTestRoute>() -> toRoute<AutomationTestRoute>()
     else -> null
 }

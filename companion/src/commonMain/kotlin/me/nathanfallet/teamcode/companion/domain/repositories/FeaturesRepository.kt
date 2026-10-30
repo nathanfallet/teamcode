@@ -15,6 +15,8 @@ object Features {
     const val TRANSCRIPT = "cloud.transcript.v1"
     const val MESSAGES = "cloud.messages.v1"
     const val EVENTS = "cloud.events.v1"
+    /** Sessions say what their agent waits for (`waiting`), and the feed takes `cloud.session.waiting` and `.answered`. */
+    const val WAITING = "cloud.sessions.waiting.v1"
     /** Permission requests relayed from Claude Code, answered with `POST …/permissions`. */
     const val PERMISSIONS = "cloud.permissions.v1"
     const val INITIAL_MESSAGE = "cloud.sessions.initial-message.v1"
@@ -30,4 +32,10 @@ object Features {
     const val FILES = "cloud.files.v1"
     /** The member's GitHub link (`/github/link`), offered with cloud sessions and kept when they are off. */
     const val GITHUB_LINK = "github.link.v1"
+    /** The member's MCP servers (`GET /mcp/servers`), served through the server's MCP gateway. */
+    const val MCP_GATEWAY = "mcp.gateway.v1"
+    /** Automations (`/automations`): cron and webhook triggers starting cloud sessions. */
+    const val AUTOMATIONS = "automations.v1"
+    /** Waits (`/waits`): what sessions need from people, with `cloud.wait.*` events on the feed. */
+    const val WAITS = "waits.v1"
 }
