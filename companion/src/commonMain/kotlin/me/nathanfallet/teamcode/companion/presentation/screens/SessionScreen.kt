@@ -284,14 +284,14 @@ fun SessionScreen(
                 }
                 if (layout.threadReplacesMain && thread != null) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = false)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, Modifier.weight(1f)) } }
-                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
+                } else key(null) { ConfirmingLinks { Transcript(state, null, byId, memberId, viewModel, openThread.takeIf { work.hasContent }, utcEpochDay(now), Modifier.weight(1f)) } }
             }
             if (layout.threadBeside && thread != null) {
                 Box(Modifier.width(1.dp).fillMaxHeight().background(colors.line))
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("thread-column")) {
                     ThreadBar(byId[thread], backToMain, onBack = viewModel::backToMain, besideMain = true)
-                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, Modifier.weight(1f)) } }
+                    key(thread) { ConfirmingLinks { Transcript(state, thread, byId, memberId, viewModel, openThread, utcEpochDay(now), Modifier.weight(1f)) } }
                 }
             }
             if (layout.panel == PanelPlacement.SIDE) {
@@ -432,7 +432,7 @@ private fun LiveLabel(state: SessionUiState) {
  */
 @Composable
 private fun Transcript(state: SessionUiState, thread: String?, subagents: Map<String, Subagent>, memberId: String?, viewModel: SessionViewModel,
-    onOpenSubagent: ((String) -> Unit)?, modifier: Modifier) {
+    onOpenSubagent: ((String) -> Unit)?, today: Long, modifier: Modifier) {
     val colors = TeamCode.colors
     val items = remember(state.transcript.events, thread) { transcriptItems(threadEvents(state.transcript.events, thread)) }
     val listState = rememberLazyListState()
@@ -487,7 +487,7 @@ private fun Transcript(state: SessionUiState, thread: String?, subagents: Map<St
                 !state.loaded -> BusyRow(state.error == null)
             }
         }
-        items(items, key = { it.key }) { TranscriptItemView(it, memberId, subagents, onOpenSubagent) }
+        items(items, key = { it.key }) { TranscriptItemView(it, memberId, subagents, onOpenSubagent, today) }
         item(key = "bottom") {
             if (state.loaded && items.isEmpty()) Text(stringResource(if (thread == null) Res.string.session_empty else Res.string.subagents_thread_empty),
                 modifier = Modifier.fillMaxWidth().padding(16.dp), color = colors.muted, textAlign = TextAlign.Center)

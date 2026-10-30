@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import com.adamglin.phosphoricons.regular.Robot
 import me.nathanfallet.teamcode.companion.presentation.screens.SubagentStateChip
 import me.nathanfallet.teamcode.companion.presentation.screens.duration
+import me.nathanfallet.teamcode.companion.presentation.screens.formatEventTime
 import me.nathanfallet.teamcode.companion.resources.subagents_open
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -97,10 +98,13 @@ fun Modifier.atMostBubbleWidth(): Modifier = layout { measurable, constraints ->
 
 /**
  * One item. [subagents] names a subagent card's state ([TranscriptItem.Subagent]); [onOpenSubagent] opens its thread,
- * null where the panel is not offered (its steps then stay folded in the card).
+ * null where the panel is not offered (its steps then stay folded in the card). [today] is the current UTC day
+ * ([utcEpochDay]) that dated lines compare with: they show the date too on another day, and always while it is null.
  */
 @Composable
-fun TranscriptItemView(item: TranscriptItem, memberId: String?, subagents: Map<String, Subagent> = emptyMap(), onOpenSubagent: ((String) -> Unit)? = null) {
+fun TranscriptItemView(
+    item: TranscriptItem, memberId: String?, subagents: Map<String, Subagent> = emptyMap(), onOpenSubagent: ((String) -> Unit)? = null, today: Long? = null,
+) {
     val indent = if (item.nested) Modifier.padding(start = 20.dp) else Modifier
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).then(indent)) {
         when (item) {
@@ -109,8 +113,8 @@ fun TranscriptItemView(item: TranscriptItem, memberId: String?, subagents: Map<S
             is TranscriptItem.Tool -> ToolCard(item)
             is TranscriptItem.Subagent -> SubagentCard(item, subagents[item.call.id], onOpenSubagent)
             is TranscriptItem.Tools -> ToolGroup(item)
-            is TranscriptItem.TurnEnd -> TurnSeparator(item.event)
-            is TranscriptItem.System -> SystemLine(item.event)
+            is TranscriptItem.TurnEnd -> TurnSeparator(item.event, today)
+            is TranscriptItem.System -> SystemLine(item.event, today)
         }
     }
 }
@@ -267,7 +271,7 @@ fun TranscriptSeparator(text: String, color: Color = TeamCode.colors.muted, inse
 }
 
 @Composable
-private fun TurnSeparator(event: TranscriptEvent.Turn) {
+private fun TurnSeparator(event: TranscriptEvent.Turn, today: Long?) {
     val label = stringResource(when (event.phase) {
         TurnPhase.COMPLETED -> Res.string.transcript_turn_completed
         TurnPhase.INTERRUPTED -> Res.string.transcript_turn_interrupted
@@ -278,13 +282,14 @@ private fun TurnSeparator(event: TranscriptEvent.Turn) {
         label,
         event.durationMs?.let { stringResource(Res.string.transcript_seconds, (it / 1000).toInt()) },
         event.steps?.let { pluralStringResource(Res.plurals.transcript_steps, it, it) },
+        formatEventTime(event.at, today),
     ).joinToString(" · ")
     val colors = TeamCode.colors
     TranscriptSeparator(details, if (event.phase == TurnPhase.FAILED) colors.danger else if (event.phase == TurnPhase.INTERRUPTED) colors.warn else colors.muted, inset = 0.dp)
 }
 
 @Composable
-private fun SystemLine(event: TranscriptEvent) {
+private fun SystemLine(event: TranscriptEvent, today: Long?) {
     val text = when (event) {
         is TranscriptEvent.Status -> event.exitCode?.let { stringResource(Res.string.transcript_agent_exited, it) } ?: stringResource(Res.string.transcript_agent_started)
         is TranscriptEvent.Error -> stringResource(Res.string.transcript_error_line, event.message ?: event.code ?: "")
@@ -296,5 +301,8 @@ private fun SystemLine(event: TranscriptEvent) {
         else -> return
     }
     val color = if (event is TranscriptEvent.Error) TeamCode.colors.danger else TeamCode.colors.muted
-    Text(text, fontSize = 13.sp, color = color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().testTag("system-${event.seq}"))
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text, fontSize = 13.sp, color = color, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().testTag("system-${event.seq}"))
+        Text(formatEventTime(event.at, today), style = MetaStyle.copy(fontSize = 11.sp), color = TeamCode.colors.muted, modifier = Modifier.testTag("system-time-${event.seq}"))
+    }
 }
