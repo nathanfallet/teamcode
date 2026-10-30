@@ -225,6 +225,39 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.Accepted, create("admin", "reserved-id").status, "An administrator uses every profile")
     }
 
+    @Test fun renamingASessionIsForItsOwnerAndCloudAdministratorsUnderTheCreationNameRules() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(store), cloudAdmin = CloudAdministrationService(Admin(), FakeCluster), publicOrigin = "http://localhost") }
+        assertTrue("cloud.sessions.rename.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        val created = client.post("/api/v1/cloud/sessions") {
+            bearerAuth("admin"); contentType(ContentType.Application.Json); setBody("""{"name":"Task","profileId":"profile-id"}""")
+            header(CloudHeaders.IDEMPOTENCY_KEY, "rename-1"); header(CloudHeaders.ON_BEHALF_OF, "colleague-id")
+        }
+        val view = Serialization.json.decodeFromString<CloudSessionView>(created.bodyAsText())
+        suspend fun rename(token: String, name: String, id: String = view.id) = client.patch("/api/v1/cloud/sessions/$id") {
+            bearerAuth(token); contentType(ContentType.Application.Json); setBody(Serialization.json.encodeToString(RenameCloudSessionRequest(name)))
+        }
+        val owner = rename("colleague", "Fix the build")
+        assertEquals(HttpStatusCode.OK, owner.status)
+        assertEquals("Fix the build", Serialization.json.decodeFromString<CloudSessionView>(owner.bodyAsText()).name)
+        assertEquals("Fix the build", store.sessions.getValue(view.id).name)
+        assertEquals(HttpStatusCode.OK, rename("colleague-write", "Fix the build 2").status, "cloud:write is enough")
+        assertEquals(HttpStatusCode.Forbidden, rename("colleague-read", "Nope").status, "cloud:read never writes")
+        assertEquals(HttpStatusCode.NotFound, rename("admin-write", "Nope").status, "An administrator's key without admin:cloud is only its owner")
+        assertEquals(HttpStatusCode.OK, rename("admin", "By the admin").status, "A cloud administrator renames any session")
+        for (bad in listOf("", "   ", "x".repeat(121), "line\nbreak")) {
+            val refused = rename("colleague", bad)
+            assertEquals(HttpStatusCode.BadRequest, refused.status, bad); assertTrue("invalid_session" in refused.bodyAsText())
+        }
+        assertEquals("By the admin", store.sessions.getValue(view.id).name)
+        store.sessions["admin-only"] = store.sessions.getValue(view.id).copy(id = "admin-only", ownerId = "admin-id")
+        assertEquals(HttpStatusCode.NotFound, rename("colleague", "Mine now", "admin-only").status)
+        store.sessions[view.id] = store.sessions.getValue(view.id).copy(state = CloudSessionState.TERMINATED)
+        assertEquals(HttpStatusCode.Conflict, rename("colleague", "Too late").status)
+        assertEquals(CredentialAction.CLOUD_WRITE, credentialAction("PATCH", "/api/v1/cloud/sessions/${view.id}", emptySet()))
+        assertEquals(CredentialAction.INTERACTIVE, credentialAction("PATCH", "/api/v1/cloud/sessions/${view.id}/x", emptySet()))
+    }
+
     @Test fun cloudKeysActForTheirOwnerAndOnlyAdminCloudKeysDelegate() = testApplication {
         val store = Store()
         val sessions = CloudSessionService(store)

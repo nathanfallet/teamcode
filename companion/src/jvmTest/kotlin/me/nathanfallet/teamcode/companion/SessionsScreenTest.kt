@@ -3,7 +3,14 @@ package me.nathanfallet.teamcode.companion
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.test.center
 import androidx.compose.ui.test.runComposeUiTest
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -38,7 +45,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         var opened: String? = null
         setContent {
             TeamCodeTheme {
@@ -83,7 +90,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         var newSession = false
         setContent {
             TeamCodeTheme {
@@ -118,7 +125,7 @@ class SessionsScreenTest {
         val features = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1"))
         val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         setContent {
             TeamCodeTheme {
                 SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
@@ -142,7 +149,7 @@ class SessionsScreenTest {
         val features = FakeFeatures()
         val refresh = RefreshAccountUseCase(FakeAuthRepository(), accounts, store, FixedClock())
         val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         setContent {
             TeamCodeTheme {
                 SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
@@ -153,5 +160,59 @@ class SessionsScreenTest {
         onNodeWithText("Session c1").assertExists()
         onNodeWithTag("where-c1", useUnmergedTree = true).assertDoesNotExist()
         assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
+    }
+
+    /** A signed-in list over [rows], with its right-click menu on [account]; the feature set decides whether "Rename" is offered. */
+    private fun androidx.compose.ui.test.ComposeUiTest.listOf(rows: List<me.nathanfallet.teamcode.companion.domain.models.CloudSession>, sessions: FakeSessionRepository,
+        features: FakeFeatures, account: me.nathanfallet.teamcode.companion.domain.models.Account = account("a1")): SessionsViewModel {
+        val accounts = InMemoryAccountRepository(listOf(account))
+        val store = credentials().also { kotlinx.coroutines.runBlocking { it.write("a1", "token") } }
+        val refresh = RefreshAccountUseCase(FakeAuthRepository(), accounts, store, FixedClock())
+        val guard = AccountGuard(refresh)
+        sessions.pages = { _, _ -> SessionPage(rows, null) }
+        rows.forEach { sessions.byId[it.id] = it }
+        val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED).also { it.trySend(LiveUpdate.Opened(false)) }
+        sessions.changes = feed.receiveAsFlow()
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard),
+            FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard),
+            me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
+        setContent { TeamCodeTheme { SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock()) } }
+        waitUntil { list.uiState.value.list?.sessions?.size == rows.size }
+        return list
+    }
+
+    @Test fun theRowMenuEndsASessionAfterTheSameConfirmationAsTheSessionScreen() = runComposeUiTest {
+        val sessions = FakeSessionRepository()
+        listOf(listOf(cloudSession("s1", SessionState.PAUSED)), sessions, FakeFeatures())
+        onNodeWithTag("session-s1").performMouseInput { rightClick(center) }
+        onNodeWithTag("menu-end").assertExists().performClick()
+        // Nothing is sent before the confirmation; cancelling keeps the session.
+        onNodeWithTag("end-confirm").assertExists()
+        assertTrue(sessions.calls.none { it.startsWith("end") })
+        onNodeWithText("Cancel").performClick()
+        onNodeWithTag("end-confirm").assertDoesNotExist()
+        onNodeWithTag("session-s1").performMouseInput { rightClick(center) }
+        onNodeWithTag("menu-end").performClick()
+        onNodeWithTag("end-confirm-yes").performClick()
+        waitUntil { sessions.calls.contains("end s1") }
+        onNodeWithTag("end-confirm").assertDoesNotExist()
+    }
+
+    @Test fun theRowMenuRenamesASessionWithTheServersNameRulesWhenTheServerCan() = runComposeUiTest {
+        val sessions = FakeSessionRepository()
+        val list = listOf(listOf(cloudSession("s1", SessionState.PAUSED)), sessions, FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.rename.v1")))
+        waitUntil { list.uiState.value.renames }
+        onNodeWithTag("session-s1").performMouseInput { rightClick(center) }
+        onNodeWithTag("menu-rename").performClick()
+        // Prefilled with the current name; an unchanged or empty name cannot be saved.
+        onNodeWithTag("rename-name").assertTextContains("Session s1")
+        onNodeWithTag("rename-save").assertIsNotEnabled()
+        onNodeWithTag("rename-name").performTextReplacement("")
+        onNodeWithTag("rename-save").assertIsNotEnabled()
+        onNodeWithTag("rename-name").performTextReplacement("Fix the build")
+        onNodeWithTag("rename-save").assertIsEnabled().performClick()
+        waitUntil { sessions.calls.contains("rename s1 Fix the build") }
+        waitUntil { list.uiState.value.list?.sessions?.single()?.name == "Fix the build" }
+        onNodeWithText("Fix the build").assertExists()
     }
 }

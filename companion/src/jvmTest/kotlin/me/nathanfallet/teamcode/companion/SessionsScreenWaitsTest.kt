@@ -71,7 +71,7 @@ class SessionsScreenWaitsTest {
         sessions.pages = { _, _ -> SessionPage(listOf(cloudSession("s1", SessionState.ACTIVE)), null) }
         val features = FakeFeatures().also { it.features += "waits.v1" }
         val shared = SessionFeed(sessions, features, CoroutineScope(SupervisorJob() + Dispatchers.Default))
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard))
+        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         val waits = Waits()
         val waitsViewModel = WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(shared, features, guard))
         var openedSession: String? = null

@@ -184,6 +184,9 @@ data class CreateCloudSessionRequest(
 data class CloudHostView(val teamId: String, val epoch: Int, val session: CloudSessionView)
 @Serializable
 data class PauseCloudSessionRequest(val force: Boolean = false)
+/** `PATCH /cloud/sessions/{id}` (`cloud.sessions.rename.v1`): the new name, 1-120 characters without control characters. */
+@Serializable
+data class RenameCloudSessionRequest(val name: String)
 /** `PUT /cloud/sessions/{id}/github` (`cloud.sessions.github-access.v1`): `owner`, `shared` or `none`. Owner only. */
 @Serializable
 data class CloudGitHubAccessRequest(val access: String)

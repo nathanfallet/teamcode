@@ -44,6 +44,8 @@ interface SessionRepository {
     suspend fun stopTask(accountId: String, sessionId: String, taskId: String, idempotencyKey: String): InputReceipt
     suspend fun pause(accountId: String, sessionId: String): CloudSession
     suspend fun resume(accountId: String, sessionId: String): CloudSession
+    /** Renames the session (`cloud.sessions.rename.v1`); the server applies the creation's name rules. */
+    suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession
     /** Ends the session and deletes its workspace (`DELETE /cloud/sessions/{id}`); idempotent. */
     suspend fun end(accountId: String, sessionId: String)
 
@@ -52,8 +54,9 @@ interface SessionRepository {
      * starts from now and reports `Opened(resumed = false)`: load the list then, not before. [kinds] as for [sessions].
      * [waiting]: also `cloud.session.waiting` and `cloud.session.answered`, only to a server that announces
      * `cloud.sessions.waiting.v1` (an older one refuses a type it does not know). [waits]: also `cloud.wait.*`, only to a
-     * server that announces `waits.v1`. Screens follow it through
+     * server that announces `waits.v1`. [renames]: also `cloud.session.renamed`, only to a server that announces
+     * `cloud.sessions.rename.v1`. Screens follow it through
      * [me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed], which shares one connection.
      */
-    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false, waits: Boolean = false): Flow<LiveUpdate<SessionChange>>
+    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false, waits: Boolean = false, renames: Boolean = false): Flow<LiveUpdate<SessionChange>>
 }

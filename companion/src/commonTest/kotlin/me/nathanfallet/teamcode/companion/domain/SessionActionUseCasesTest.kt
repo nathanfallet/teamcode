@@ -11,6 +11,7 @@ import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.InvalidInput
 import me.nathanfallet.teamcode.companion.domain.models.InputReceipt
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
@@ -77,7 +78,7 @@ class SessionActionUseCasesTest {
     }
 
     @Test fun nothingToInterruptIsNotAFailureAndControlsFollowTheRole() = runTest {
-        val control = ControlSessionUseCase(sessions, guard, SequenceIds())
+        val control = ControlSessionUseCase(sessions, guard, SequenceIds(), features)
         assertTrue(control.interrupt("a1", "s1", control.interruptKey()))
         sessions.interruptResult = { throw CompanionException.Server(409, "nothing_to_interrupt") }
         assertFalse(control.interrupt("a1", "s1", control.interruptKey()))
@@ -90,6 +91,23 @@ class SessionActionUseCasesTest {
         assertTrue(ControlSessionUseCase.canControl(account(memberId = "m1").copy(role = "ADMIN"), theirs))
         assertTrue(ControlSessionUseCase.canResume(cloudSession("p", SessionState.PAUSED)))
         assertFalse(ControlSessionUseCase.canMessage(cloudSession("t", SessionState.TERMINATED)))
+    }
+
+    @Test fun renamingFollowsTheServersNameRulesAndTheMenuRulesOfEnding() = runTest {
+        val control = ControlSessionUseCase(sessions, guard, SequenceIds(), features)
+        assertFalse(control.supportsRename("a1"))
+        assertFailsWith<CompanionException.Unsupported> { control.rename("a1", "s1", "New name") }
+        features.features += "cloud.sessions.rename.v1"
+        assertTrue(control.supportsRename("a1"))
+        assertEquals("New name", control.rename("a1", "s1", "  New name  ").name)
+        assertTrue(sessions.calls.contains("rename s1 New name"))
+        for (bad in listOf("", "   ", "x".repeat(121), "two\nlines")) assertFailsWith<InvalidInput>(bad) { control.rename("a1", "s1", bad) }
+        assertEquals(1, sessions.calls.count { it.startsWith("rename") })
+        assertTrue(ControlSessionUseCase.validName("x".repeat(120)))
+        // Who may rename and end, and when, is one set of rules for both menus.
+        val ended = cloudSession("e", SessionState.TERMINATED); val failed = cloudSession("f", SessionState.FAILED); val paused = cloudSession("p", SessionState.PAUSED)
+        assertFalse(ControlSessionUseCase.canRename(ended)); assertFalse(ControlSessionUseCase.canRename(failed)); assertTrue(ControlSessionUseCase.canRename(paused))
+        assertFalse(ControlSessionUseCase.canEnd(ended)); assertTrue(ControlSessionUseCase.canEnd(failed)); assertTrue(ControlSessionUseCase.canEnd(paused))
     }
 
     @Test fun creationTrimsAndSendsTheFirstMessageOnlyWhenTheServerTakesIt() = runTest {

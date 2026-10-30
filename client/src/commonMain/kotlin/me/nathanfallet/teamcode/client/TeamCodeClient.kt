@@ -339,6 +339,17 @@ class TeamCodeClient(
     suspend fun pauseCloudSession(id: String, force: Boolean = false, onBehalfOf: String? = null): CloudSessionView =
         cloudAction("/api/v1/cloud/sessions/$id/pause", id, onBehalfOf, PauseCloudSessionRequest(force)).body()
     suspend fun resumeCloudSession(id: String, onBehalfOf: String? = null): CloudSessionView = cloudAction("/api/v1/cloud/sessions/$id/resume", id, onBehalfOf, null).body()
+    /** Renames a session (`cloud.sessions.rename.v1`): its owner, or a cloud administrator. */
+    suspend fun renameCloudSession(id: String, name: String, onBehalfOf: String? = null): CloudSessionView {
+        identifier(id); onBehalfOf?.let(::identifier)
+        val response = http.request("$origin/api/v1/cloud/sessions/$id") {
+            method = HttpMethod.Patch; authenticate(); timeout { requestTimeoutMillis = 10_000 }
+            onBehalfOf?.let { header(CloudHeaders.ON_BEHALF_OF, it) }
+            contentType(ContentType.Application.Json); setBody(RenameCloudSessionRequest(name))
+        }
+        checkResponse(response)
+        return response.body()
+    }
     /** Chooses whose instructions the agent follows with the owner's GitHub token (`cloud.sessions.github-access.v1`); owner only. */
     suspend fun setCloudGitHubAccess(id: String, access: String): CloudSessionView =
         identifier(id).let { request("/api/v1/cloud/sessions/$id/github", HttpMethod.Put, CloudGitHubAccessRequest(access)) }

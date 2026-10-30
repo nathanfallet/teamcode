@@ -19,6 +19,7 @@ This page is the contract and the record of what is implemented. It follows the 
 | Server wiring (reconciler, garbage collection and maintenance workers), `cloud.sessions.v1` advertised while cloud sessions are on in the stored [runtime](#runtime-on-off-runner-image-and-pod-callback) | Implemented (PR 2; runtime moved from deployment variables to the dashboard) |
 | Kubernetes adapter (pods, claims, volumes, storage classes, TokenReview) | Implemented (PR 2) |
 | Runner skeleton `teamcode cloud runner` (register, heartbeat, checkpoint; no agent) | Implemented (PR 2) |
+| Rename a session (`PATCH /cloud/sessions/{id}`, `cloud.sessions.rename.v1`), typed client included; no CLI command yet | Implemented |
 | CLI `teamcode cloud create/list/show/pause/resume/delete` | Implemented (PR 2) |
 | CLI `teamcode cloud profiles`, `--profile` by id or name, `profile_not_found` told from `profile_unassigned`, `?member=` on `GET /cloud/profiles` (`cloud.profiles.member.v1`) | Implemented, see [CLI](#cli) |
 | Opt-in `kind` smoke (`scripts/smoke-cloud-kind.py`) | Implemented (PR 2), not part of pull-request CI |
@@ -162,6 +163,7 @@ Pause, resume and delete are naturally idempotent through the desired state. Mes
 | `GET /cloud/sessions` | List: own sessions; `?owner=<id>` or `?owner=all` for administrators; `state` and `label=k=v` (repeatable) filters; `before=<sessionId>` cursor; `limit` ≤ 50 | Member, administrator | Implemented |
 | `GET /cloud/sessions/{id}` | Read | Owner, administrator | Implemented |
 | `GET /cloud/sessions/{id}/executions` | Pod history: epoch, node, digest, exit reason, checkpoint | Owner, administrator | Implemented |
+| `PATCH /cloud/sessions/{id}` | `{name}`: renames the session under the creation rules (1–120 characters, no control characters; `400 invalid_session`). `409 session_not_running` once it is terminated or being deleted; the same name writes nothing. Audited as `cloud.session.renamed` and published on the [event feed](cloud-conversations.md#event-feed) as `cloud.session.renamed` with the new `name`. `cloud:write`; `cloud.sessions.rename.v1`. The companion offers it in the session's menu and in the list's context menu | Owner, administrator | Implemented |
 | `POST /cloud/sessions/{id}/pause` | `{force?: false}`; `202`. `409 session_preparing` while creating or preparing; repeated pauses write nothing | Owner, administrator | Implemented |
 | `POST /cloud/sessions/{id}/resume` | `202`; during a pause, cancels it when the runner has not checkpointed yet, otherwise resumes as soon as it completes; synchronous recheck that the owner is enabled and still assigned to the profile (`403 owner_unavailable`, `403 profile_unassigned`) | Owner, administrator | Implemented |
 | `DELETE /cloud/sessions/{id}` | Terminate and delete the workspace; `204`, also when already terminated | Owner, administrator | Implemented |

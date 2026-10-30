@@ -76,6 +76,10 @@ import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.ConfirmingLinks
+import me.nathanfallet.teamcode.companion.presentation.components.EndSessionDialog
+import me.nathanfallet.teamcode.companion.presentation.components.RenameSessionDialog
+import me.nathanfallet.teamcode.companion.presentation.components.SessionEndMenuItem
+import me.nathanfallet.teamcode.companion.presentation.components.SessionRenameMenuItem
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.KindChips
@@ -316,11 +320,12 @@ fun SessionScreen(
     }
 }
 
-/** "…": pause, resume or end (owner and administrators), and the artifacts this session published. */
+/** "…": pause, resume, rename or end (owner and administrators; rename and end are shared with the sessions list's menu), and the artifacts this session published. */
 @Composable
 private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOpenArtifacts: () -> Unit, menuItems: @Composable (CloudSession, () -> Unit) -> Unit) {
     var open by remember { mutableStateOf(false) }
     var confirmEnd by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     val session = state.session
     Box {
         TcIconButton(PhosphorIcons.Regular.DotsThree, stringResource(Res.string.session_actions), onClick = { open = true }, modifier = Modifier.testTag("session-menu"))
@@ -336,33 +341,14 @@ private fun SessionMenu(state: SessionUiState, viewModel: SessionViewModel, onOp
             DropdownMenuItem(text = { Text(stringResource(Res.string.artifacts_session_title)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Files, null, Modifier.size(18.dp)) },
                 onClick = { open = false; onOpenArtifacts() }, modifier = Modifier.testTag("session-artifacts"))
             if (session != null) menuItems(session) { open = false }
-            if (session != null && state.canControl && ControlSessionUseCase.canEnd(session)) {
-                DropdownMenuItem(text = { Text(stringResource(Res.string.session_menu_end), color = TeamCode.colors.danger) },
-                    leadingIcon = { Icon(PhosphorIcons.Regular.Stop, null, Modifier.size(18.dp), tint = TeamCode.colors.danger) },
-                    enabled = !state.acting, onClick = { open = false; confirmEnd = true }, modifier = Modifier.testTag("end"))
+            if (session != null) {
+                SessionRenameMenuItem(session, state.canControl, state.renames, state.acting, tag = "rename", onClick = { open = false; renaming = true })
+                SessionEndMenuItem(session, state.canControl, state.acting, tag = "end", onClick = { open = false; confirmEnd = true })
             }
         }
     }
     if (confirmEnd) EndSessionDialog(onConfirm = { confirmEnd = false; viewModel.end() }, onDismiss = { confirmEnd = false })
-}
-
-/** Ending a session deletes its workspace and cannot be undone: asked first. */
-@Composable
-private fun EndSessionDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    val colors = TeamCode.colors
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.widthIn(max = 420.dp).fillMaxWidth().clip(Radii.card).background(colors.panel).border(1.dp, colors.line, Radii.card).padding(18.dp).testTag("end-confirm"),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(stringResource(Res.string.session_end_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(Res.string.session_end_body), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TcButton(stringResource(Res.string.action_cancel), onClick = onDismiss, kind = ButtonKind.SECONDARY, modifier = Modifier.weight(1f))
-                TcButton(stringResource(Res.string.session_menu_end), onClick = onConfirm, kind = ButtonKind.DANGER, modifier = Modifier.weight(1f).testTag("end-confirm-yes"))
-            }
-        }
-    }
+    if (renaming && session != null) RenameSessionDialog(session.name, onConfirm = { renaming = false; viewModel.rename(it) }, onDismiss = { renaming = false })
 }
 
 /** State, stream and the one-line details; a tap shows every detail. */

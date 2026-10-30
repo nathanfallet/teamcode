@@ -222,6 +222,10 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val input = if (call.request.contentType().withoutParameters() == ContentType.Application.Json) call.jsonBody<PauseCloudSessionRequest>() else PauseCloudSessionRequest()
             call.respond(HttpStatusCode.Accepted, sessions.pause(call.principal, call.onBehalfOf(), call.id(), input.force).view())
         }
+        patch("/sessions/{id}") {
+            val input = call.jsonBody<RenameCloudSessionRequest>()
+            call.respond(sessions.rename(call.principal, call.onBehalfOf(), call.id(), input.name).view())
+        }
         put("/sessions/{id}/github") {
             val input = call.jsonBody<CloudGitHubAccessRequest>()
             val access = CloudGitHubAccess.parse(input.access) ?: throw TeamFailure("invalid_github_access", 400, "Use access owner, shared or none.")

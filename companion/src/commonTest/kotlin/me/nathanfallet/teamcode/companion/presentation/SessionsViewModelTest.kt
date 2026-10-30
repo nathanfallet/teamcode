@@ -22,6 +22,8 @@ import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.cloudSession
 import me.nathanfallet.teamcode.companion.credentials
+import me.nathanfallet.teamcode.companion.SequenceIds
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
@@ -53,7 +55,7 @@ class SessionsViewModelTest {
 
     private fun viewModel(features: FakeFeatures = FakeFeatures(), shared: SessionFeed = SessionFeed(sessions, features, feedScope)): SessionsViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        return SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard))
+        return SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
     }
 
     @Test fun twoScreensFollowingTheSameAccountShareOneConnectionAndBothStayCurrent() = runTest(dispatcher) {
@@ -110,6 +112,54 @@ class SessionsViewModelTest {
         // The answer was read before the turn started: the change applies on top of it.
         assertEquals(SessionState.ACTIVE, model.uiState.value.list!!.sessions.single().state)
         assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
+        model.stop()
+    }
+
+    @Test fun aRenameOnTheFeedChangesTheRowInPlaceWhenTheServerAnnouncesIt() = runTest(dispatcher) {
+        sessions.pages = { _, _ -> SessionPage(listOf(cloudSession("a", createdAt = 2_000), cloudSession("b", createdAt = 1_000)), null) }
+        val model = viewModel(FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.rename.v1")))
+        model.start()
+        settle()
+        assertEquals(listOf("feed renames"), sessions.calls)
+        feed.send(LiveUpdate.Opened(false))
+        feed.send(LiveUpdate.Item(SessionChange(1, SessionChange.RENAMED, "b", "m1", 9, SessionState.READY, null, name = "Fix the build")))
+        settle()
+        assertEquals(listOf("a" to "Session a", "b" to "Fix the build"), model.uiState.value.list!!.sessions.map { it.id to it.name })
+        assertEquals(1, sessions.calls.count { it.startsWith("list ") }, "A rename is applied from the event, nothing is read again")
+        assertTrue(model.uiState.value.renames)
+        model.stop()
+    }
+
+    @Test fun theRowMenuEndsAndRenamesThroughTheSessionScreensUseCaseAndTellsAFailure() = runTest(dispatcher) {
+        sessions.pages = { _, _ -> SessionPage(listOf(cloudSession("a", SessionState.PAUSED)), null) }
+        sessions.byId["a"] = cloudSession("a", SessionState.PAUSED)
+        val model = viewModel(FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.rename.v1")))
+        model.start()
+        feed.send(LiveUpdate.Opened(false))
+        settle()
+        model.rename("a", "  Fix the build ")
+        settle()
+        assertEquals("Fix the build", model.uiState.value.list!!.sessions.single().name)
+        assertTrue(sessions.calls.contains("rename a Fix the build"))
+        assertTrue(model.uiState.value.acting.isEmpty())
+        // The server's rules are checked before sending: an empty name never leaves the app.
+        model.rename("a", "   ")
+        settle()
+        assertNotNull(model.uiState.value.actionError)
+        assertTrue(sessions.calls.none { it == "rename a    " || it == "rename a " })
+        model.dismissActionError()
+        assertNull(model.uiState.value.actionError)
+        sessions.endFailure = CompanionException.Server(409, "session_busy")
+        model.end("a")
+        settle()
+        assertNotNull(model.uiState.value.actionError)
+        sessions.endFailure = null
+        model.end("a")
+        settle()
+        assertNull(model.uiState.value.actionError)
+        assertEquals(2, sessions.calls.count { it == "end a" })
+        // The row is read again after an end, as the session screen reads its header.
+        assertTrue(sessions.calls.contains("get a"))
         model.stop()
     }
 

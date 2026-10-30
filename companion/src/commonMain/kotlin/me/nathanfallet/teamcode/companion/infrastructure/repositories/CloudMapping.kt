@@ -80,6 +80,7 @@ internal fun TeamEventView.sessionChange(): SessionChange? {
         waitingReason = if (type == SessionChange.WAITING) data.text("reason") ?: SessionWaiting.PERMISSION else null,
         requestId = data.text("requestId"),
         waitId = if (type in SessionChange.WAIT_TYPES) subjectId else null,
+        name = if (type == SessionChange.RENAMED) data.text("name") else null,
     )
 }
 

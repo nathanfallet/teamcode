@@ -154,10 +154,13 @@ data class SessionChange(
     val requestId: String? = null,
     /** For `cloud.wait.*`: the wait concerned (then [sessionId] is its session and [memberId] its assignee). */
     val waitId: String? = null,
+    /** For `cloud.session.renamed`: the session's new name. */
+    val name: String? = null,
 ) {
     companion object {
         const val WAITING = "cloud.session.waiting"
         const val ANSWERED = "cloud.session.answered"
+        const val RENAMED = "cloud.session.renamed"
         const val WAIT_CREATED = "cloud.wait.created"
         const val WAIT_RESOLVED = "cloud.wait.resolved"
         const val WAIT_CANCELLED = "cloud.wait.cancelled"

@@ -45,6 +45,7 @@ class TeamEventsTest {
         assertEquals(listOf(TeamEventType.SESSION_ENDED), of(ACTIVE, TERMINATED))
         assertEquals(listOf(TeamEventType.SESSION_ENDED), of(PREPARING, FAILED))
         assertEquals(listOf(TeamEventType.SESSION_WOKEN), of(PAUSED, PAUSED, "cloud.session.woken"), "A wake changes no state")
+        assertEquals(listOf(TeamEventType.SESSION_RENAMED), of(READY, READY, "cloud.session.renamed"), "A rename changes no state")
         assertEquals(emptyList(), of(READY, ACTIVE), "A turn is its own event, not a state event")
         assertEquals(emptyList(), of(CREATING, PREPARING))
         assertEquals(emptyList(), of(PAUSED, PAUSED), "A same-state write is silent")

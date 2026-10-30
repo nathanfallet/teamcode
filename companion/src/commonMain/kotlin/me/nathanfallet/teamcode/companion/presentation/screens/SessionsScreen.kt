@@ -69,6 +69,12 @@ import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.ContextMenuBox
+import me.nathanfallet.teamcode.companion.presentation.components.EndSessionDialog
+import me.nathanfallet.teamcode.companion.presentation.components.RenameSessionDialog
+import me.nathanfallet.teamcode.companion.presentation.components.SessionEndMenuItem
+import me.nathanfallet.teamcode.companion.presentation.components.SessionRenameMenuItem
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
+import me.nathanfallet.teamcode.companion.resources.action_close
 import me.nathanfallet.teamcode.companion.presentation.components.arrowKeyNavigation
 import me.nathanfallet.teamcode.companion.presentation.components.Dot
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
@@ -202,6 +208,9 @@ fun SessionsScreen(
         }
 
         val list = state.list
+        // The row menu's two actions: asked for here, and carried out by the same code as the session screen's menu.
+        var confirmEnd by remember { mutableStateOf<CloudSession?>(null) }
+        var renaming by remember { mutableStateOf<CloudSession?>(null) }
         val listState = rememberLazyListState()
         val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
         LaunchedEffect(nearEnd, list?.nextBefore) { if (nearEnd) sessionsViewModel.loadMore() }
@@ -243,6 +252,13 @@ fun SessionsScreen(
                 } else null)
             }
             if (state.reconnecting) item(key = "reconnecting") { Banner(stringResource(Res.string.sessions_reconnecting), Tone.WARN) }
+            state.actionError?.let { failure ->
+                item(key = "action-error") {
+                    Banner(failure.words(), Tone.DANGER, Modifier.testTag("sessions-action-error"), action = {
+                        TcButton(stringResource(Res.string.action_close), onClick = sessionsViewModel::dismissActionError, kind = ButtonKind.SECONDARY, small = true)
+                    })
+                }
+            }
             if (waitsViewModel != null) waitsSection(waits, onInput = waitsViewModel::input, onAnswer = waitsViewModel::answer, onOpenSession = { id -> account?.let { onOpenSessionById(it, id) } })
             val sessions = list?.sessions.orEmpty()
             if (state.loading && sessions.isEmpty()) {
@@ -258,6 +274,11 @@ fun SessionsScreen(
                         modifier = Modifier.testTag("menu-artifacts"))
                     if (finished) DropdownMenuItem(text = { Text(stringResource(Res.string.sidebar_mark_read)) }, leadingIcon = { Icon(PhosphorIcons.Regular.Check, null, Modifier.size(16.dp)) },
                         onClick = { close(); sessionsViewModel.opened(session.id) }, modifier = Modifier.testTag("menu-mark-read"))
+                    // The session screen's own items, with its rules: the owner and administrators, a session not ended, nothing running on it.
+                    val canControl = account != null && ControlSessionUseCase.canControl(account, session)
+                    val busy = session.id in state.acting
+                    SessionRenameMenuItem(session, canControl, state.renames, busy, tag = "menu-rename", onClick = { close(); renaming = session })
+                    SessionEndMenuItem(session, canControl, busy, tag = "menu-end", onClick = { close(); confirmEnd = session })
                 }) {
                     SessionCard(session, finished = finished, now = now, dimmed = error != null, showKind = state.remoteSessions, onClick = open)
                 }
@@ -279,6 +300,8 @@ fun SessionsScreen(
                 }
             }
         }
+        confirmEnd?.let { target -> EndSessionDialog(onConfirm = { confirmEnd = null; sessionsViewModel.end(target.id) }, onDismiss = { confirmEnd = null }) }
+        renaming?.let { target -> RenameSessionDialog(target.name, onConfirm = { renaming = null; sessionsViewModel.rename(target.id, it) }, onDismiss = { renaming = null }) }
     }
 }
 

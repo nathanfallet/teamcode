@@ -348,6 +348,9 @@
     <string name="session_menu_pause">Mettre la session en pause</string>
     <string name="session_menu_resume">Reprendre la session</string>
     <string name="session_menu_end">Terminer la session</string>
+    <string name="session_menu_rename">Renommer</string>
+    <string name="session_rename_title">Renommer la session</string>
+    <string name="session_rename_save">Enregistrer</string>
     <string name="session_end_title">Terminer cette session ?</string>
     <string name="session_end_body">L'agent s'arrête et le workspace de la session est supprimé. Cette action est irréversible.</string>
     <string name="new_session_overrides">Personnalisation · facultatif</string>

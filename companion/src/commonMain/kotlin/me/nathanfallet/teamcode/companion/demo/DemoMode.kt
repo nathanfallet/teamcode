@@ -72,6 +72,14 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         return moved
     }
 
+    /** Renames [id] at once and tells the feed. */
+    fun rename(id: String, name: String): CloudSession {
+        val renamed = session(id).copy(name = name, updatedAt = now())
+        _sessions.update { it + (id to renamed) }
+        feed.tryEmit(SessionChange(next(), SessionChange.RENAMED, id, DemoContent.MEMBER_ID, now(), renamed.state, null, name = name))
+        return renamed
+    }
+
     /**
      * Records the member's [text] (when there is one) and the agent's scripted reply after it, as one finished turn;
      * returns the input id of the message.

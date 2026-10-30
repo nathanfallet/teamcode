@@ -21,6 +21,7 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.FollowSessionListUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
@@ -38,6 +39,12 @@ data class SessionsUiState(
     val error: Failure? = null,
     /** The server announces remote sessions: a row says where its session runs. */
     val remoteSessions: Boolean = false,
+    /** The server renames sessions (`cloud.sessions.rename.v1`): a row's menu offers "Rename". */
+    val renames: Boolean = false,
+    /** The sessions an action of the row's menu is running on: their menu items are disabled meanwhile. */
+    val acting: Set<String> = emptySet(),
+    /** The failure of the last action of a row's menu, until dismissed or the next action. */
+    val actionError: Failure? = null,
 ) {
     val scope: SessionScope get() = list?.scope ?: SessionScope.MINE
     val filter: SessionFilter get() = list?.filter ?: SessionFilter.OPEN
@@ -53,6 +60,7 @@ class SessionsViewModel(
     private val loadSessions: LoadSessionsUseCase,
     private val getSession: GetSessionUseCase,
     private val followList: FollowSessionListUseCase,
+    private val control: ControlSessionUseCase,
 ) : ViewModel() {
     private val state = MutableStateFlow(SessionsUiState())
     val uiState: StateFlow<SessionsUiState> = state.asStateFlow()
@@ -102,6 +110,39 @@ class SessionsViewModel(
         if (state.value.list?.nextBefore == null || follow?.isActive != true || moreQueued) return
         moreQueued = commands.trySend(Command.LoadMore).isSuccess
     }
+    /**
+     * The row menu's "End session": the detail's own action ([ControlSessionUseCase.end]), then the row is read again so it
+     * shows the server's answer. One action per row at a time.
+     */
+    fun end(sessionId: String) = act(sessionId, refresh = true) { accountId -> control.end(accountId, sessionId) }
+
+    /** The row menu's "Rename": the detail's own action ([ControlSessionUseCase.rename]); the row takes the server's answer. */
+    fun rename(sessionId: String, name: String) = act(sessionId, refresh = false) { accountId ->
+        val renamed = control.rename(accountId, sessionId, name)
+        state.update { it.copy(list = it.list?.upserted(renamed)) }
+    }
+
+    fun dismissActionError() = state.update { it.copy(actionError = null) }
+
+    private fun act(sessionId: String, refresh: Boolean, action: suspend (accountId: String) -> Unit) {
+        val accountId = state.value.account?.id ?: return
+        if (sessionId in state.value.acting) return
+        state.update { it.copy(acting = it.acting + sessionId, actionError = null) }
+        viewModelScope.launch {
+            try {
+                action(accountId)
+                // The server's answer: an ended session leaves or changes group, a renamed one shows its name.
+                if (refresh) fetchOne(accountId, sessionId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                state.update { it.copy(actionError = error.userMessage()) }
+            } finally {
+                state.update { it.copy(acting = it.acting - sessionId) }
+            }
+        }
+    }
+
     fun opened(sessionId: String) = state.update { it.copy(list = it.list?.opened(sessionId)) }
 
     private fun changeFilter(scope: SessionScope, filter: SessionFilter) {
@@ -152,7 +193,7 @@ class SessionsViewModel(
                 (unsettled.drop(first) + unsettled.take(first)).take(MAX_SETTLE).forEach { fetchOne(accountId, it) }
             }
             is SessionListSignal.Connection -> state.update { it.copy(reconnecting = signal.reconnecting) }
-            is SessionListSignal.RemoteSessions -> state.update { it.copy(remoteSessions = signal.supported) }
+            is SessionListSignal.RemoteSessions -> state.update { it.copy(remoteSessions = signal.supported, renames = signal.renames) }
             is SessionListSignal.Changed -> {
                 val list = state.value.list ?: return
                 val (applied, fetch) = list.applied(signal.change)

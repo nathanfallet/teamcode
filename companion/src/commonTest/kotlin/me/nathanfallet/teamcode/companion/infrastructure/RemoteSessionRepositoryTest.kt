@@ -291,6 +291,24 @@ class RemoteSessionRepositoryTest {
         assertTrue("\"model\":\"opus\"" in second && "\"initialMessage\":\"Start\"" in second, second)
     }
 
+    @Test fun renamingPatchesTheSessionAndTheRenameEventIsAskedForOnlyWhenTheServerHasIt() = runTest {
+        json(sessionJson.replace("Fix the build", "Better name"))
+        assertEquals("Better name", sessions.rename("a1", "s1", "Better name").name)
+        assertEquals(io.ktor.http.HttpMethod.Patch, requests.single().method)
+        assertTrue(requests.single().url.encodedPath.endsWith("/cloud/sessions/s1"))
+        requests.clear()
+        sse(teamEvent(1, "cloud.session.renamed", data = """{"name":"Better name","state":"paused"}""") + "event: denied\ndata: {}\n\n")
+        val seen = mutableListOf<LiveUpdate<SessionChange>>()
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1", renames = true).collect { seen += it } }
+        assertTrue("cloud.session.renamed" in requests.single().url.parameters["types"].orEmpty().split(","))
+        val renamed = seen.filterIsInstance<LiveUpdate.Item<SessionChange>>().single().value
+        assertEquals("Better name", renamed.name); assertEquals("s1", renamed.sessionId)
+        requests.clear()
+        sse("event: denied\ndata: {}\n\n")
+        assertFailsWith<CompanionException.AccessRevoked> { sessions.sessionChanges("a1").collect { } }
+        assertTrue("cloud.session.renamed" !in requests.single().url.parameters["types"].orEmpty().split(","), "An older server refuses a type it does not know")
+    }
+
     @Test fun pauseAndInterruptMapTheirAnswers() = runTest {
         json(sessionJson.replace("\"state\":\"active\"", "\"state\":\"pausing\""))
         assertEquals(SessionState.PAUSING, sessions.pause("a1", "s1").state)

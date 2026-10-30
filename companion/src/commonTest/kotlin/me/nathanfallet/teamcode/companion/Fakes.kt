@@ -184,9 +184,14 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     override suspend fun pause(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.PAUSING).also { calls += "pause $sessionId" }
     override suspend fun end(accountId: String, sessionId: String) { calls += "end $sessionId"; endFailure?.let { throw it } }
     var endFailure: Exception? = null
+    var renameFailure: Exception? = null
+    override suspend fun rename(accountId: String, sessionId: String, name: String): me.nathanfallet.teamcode.companion.domain.models.CloudSession {
+        calls += "rename $sessionId $name"; renameFailure?.let { throw it }
+        return (byId[sessionId] ?: cloudSession(sessionId)).copy(name = name)
+    }
     override suspend fun resume(accountId: String, sessionId: String) = (byId[sessionId] ?: cloudSession(sessionId)).copy(state = me.nathanfallet.teamcode.companion.domain.models.SessionState.RESUMING).also { calls += "resume $sessionId" }
-    override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean) =
-        changes.also { calls += "feed" + (if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")) + (if (waiting) " waiting" else "") + if (waits) " waits" else "" }
+    override fun sessionChanges(accountId: String, kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean) =
+        changes.also { calls += "feed" + (if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")) + (if (waiting) " waiting" else "") + (if (waits) " waits" else "") + if (renames) " renames" else "" }
 }
 
 fun artifact(id: String, title: String = "Report $id", version: Int = 1, updatedAt: Long = 1_000) = me.nathanfallet.teamcode.companion.domain.models.Artifact(

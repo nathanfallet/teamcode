@@ -120,9 +120,11 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
 
     override suspend fun resume(accountId: String, sessionId: String): CloudSession = demo.store().move(sessionId, SessionState.READY)
 
+    override suspend fun rename(accountId: String, sessionId: String, name: String): CloudSession = demo.store().rename(sessionId, name)
+
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
         val store = demo.store()
         // Listening before saying the feed is open: a change made right after it is never missed.
         launch(start = CoroutineStart.UNDISPATCHED) { store.feed.collect { send(LiveUpdate.Item(it)) } }
