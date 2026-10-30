@@ -127,6 +127,26 @@ class AgentEnvironmentTest {
         job.join()
     }
 
+    @Test fun wakeupBrokerTakesOnlyTheCountOfTheStopHook() = runTest {
+        val connections = Channel<UnixConnection?>(Channel.UNLIMITED)
+        val listener = object : UnixListener {
+            override suspend fun accept() = connections.receive()
+            override fun close() = Unit
+        }
+        val counts = mutableListOf<Int>()
+        val job = launch { WakeupBroker(listener, { counts += it }).serve() }
+        val answers = mutableListOf<String>()
+        val pipes = listOf("wakeups 2", "wakeups 0", "wakeups 1000000", "wakeups -1", "wakeups many", "environment", "protocol=https")
+            .map { line -> Pipe(Channel<String?>(1).also { it.send(line) }, answers) }
+        pipes.forEach { connections.send(it) }
+        repeat(100) { if (!pipes.all { it.closed }) delay(10) }
+        assertTrue(pipes.all { it.closed })
+        assertEquals(listOf(2, 0), counts, "A count in range only; nothing else is read, and nothing is answered")
+        assertTrue(answers.isEmpty())
+        connections.send(null)
+        job.join()
+    }
+
     private class FakeProcess : AgentProcess {
         val output = Channel<String?>(Channel.UNLIMITED)
         var exit: Int? = null
