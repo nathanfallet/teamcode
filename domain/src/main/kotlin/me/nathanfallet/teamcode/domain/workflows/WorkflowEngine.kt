@@ -2,6 +2,8 @@ package me.nathanfallet.teamcode.domain.workflows
 
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 import me.nathanfallet.teamcode.domain.cloud.DesiredState
 import me.nathanfallet.teamcode.domain.team.TeamFailure
@@ -26,10 +28,15 @@ class WorkflowEngine(
         val waitStates = waits.states(active.mapNotNull { it.waitId }.toSet())
         val children = store.children(active.mapNotNull { it.childRunId }.toSet())
         val context = Context(progress, waitStates, children)
-        for (work in claimed) {
-            try { step(work, context) }
-            catch (error: CancellationException) { throw error }
-            catch (_: Exception) { /* the lease expires and the next pass tries again */ }
+        try {
+            for (work in claimed) {
+                try { step(work, context) }
+                catch (error: CancellationException) { throw error }
+                catch (_: Exception) { /* released below: the next pass tries again */ }
+            }
+        } finally {
+            // Also when cancelled: the lease would otherwise hold the runs back for its whole length.
+            withContext(NonCancellable) { try { store.release(claimed.map { it.run.id }) } catch (_: Exception) {} }
         }
         return claimed.size
     }

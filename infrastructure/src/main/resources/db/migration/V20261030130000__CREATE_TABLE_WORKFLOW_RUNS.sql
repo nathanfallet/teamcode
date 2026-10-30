@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS workflow_runs (id VARCHAR(36) PRIMARY KEY, team_id VARCHAR(36) NOT NULL, workflow_id VARCHAR(36) NOT NULL, workflow_name VARCHAR(120) NOT NULL, workflow_version INT NOT NULL, definition MEDIUMTEXT NOT NULL, starter_id VARCHAR(36) NOT NULL, status VARCHAR(12) NOT NULL, inputs text NOT NULL, profile_id VARCHAR(36) NULL, session_id VARCHAR(36) NULL, depth INT NOT NULL, parent_run_id VARCHAR(36) NULL, parent_visit_id VARCHAR(36) NULL, cancel_requested BOOLEAN NOT NULL, failure VARCHAR(100) NULL, output MEDIUMTEXT NULL, credential_id VARCHAR(36) NULL, idempotency_key VARCHAR(128) NULL, lease_until BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, finished_at BIGINT NULL, CONSTRAINT workflow_runs_starter FOREIGN KEY (starter_id) REFERENCES members(id));
+CREATE INDEX wfrun_starter ON workflow_runs (starter_id, team_id, created_at, id);
+CREATE INDEX wfrun_starter_status ON workflow_runs (starter_id, team_id, status, created_at, id);
+CREATE INDEX wfrun_starter_workflow ON workflow_runs (starter_id, workflow_id, created_at, id);
+CREATE INDEX wfrun_team ON workflow_runs (team_id, created_at, id);
+CREATE INDEX wfrun_team_status ON workflow_runs (team_id, status, created_at, id);
+CREATE INDEX wfrun_team_workflow ON workflow_runs (team_id, workflow_id, created_at, id);
+CREATE INDEX wfrun_claim ON workflow_runs (status, lease_until);
+ALTER TABLE workflow_runs ADD CONSTRAINT wfrun_idempotency UNIQUE (starter_id, idempotency_key);
+ALTER TABLE workflow_runs ADD CONSTRAINT wfrun_parent_visit UNIQUE (parent_visit_id);
+CREATE TABLE IF NOT EXISTS workflow_visits (id VARCHAR(36) PRIMARY KEY, run_id VARCHAR(36) NOT NULL, seq INT NOT NULL, node_id VARCHAR(64) NOT NULL, kind VARCHAR(10) NOT NULL, status VARCHAR(10) NOT NULL, outcome VARCHAR(64) NULL, output MEDIUMTEXT NULL, session_id VARCHAR(36) NULL, wait_id VARCHAR(36) NULL, child_run_id VARCHAR(36) NULL, dispatched_at BIGINT NULL, started_at BIGINT NOT NULL, finished_at BIGINT NULL, CONSTRAINT workflow_visits_run FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE);
+ALTER TABLE workflow_visits ADD CONSTRAINT wfvisit_run_seq UNIQUE (run_id, seq);

@@ -71,6 +71,7 @@ class ApiDocsTest {
             automations = me.nathanfallet.teamcode.domain.automations.AutomationService(stub(), stub(), stub()),
             waits = me.nathanfallet.teamcode.domain.waits.WaitService(stub()),
             workflows = me.nathanfallet.teamcode.domain.workflows.WorkflowService(stub()),
+            workflowRuns = me.nathanfallet.teamcode.domain.workflows.WorkflowRunService(stub()),
             apiPrices = stub(), poolSizing = stub(),
             artifactAdmin = me.nathanfallet.teamcode.domain.artifacts.ArtifactAdministrationService(stub(), stub()),
             artifacts = me.nathanfallet.teamcode.domain.artifacts.ArtifactService(stub(), stub(), stub()),

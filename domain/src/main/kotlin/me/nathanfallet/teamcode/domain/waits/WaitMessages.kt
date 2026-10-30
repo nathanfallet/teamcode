@@ -35,6 +35,15 @@ object WaitMessages {
         return if (text.length <= CloudConversationRules.MAX_MESSAGE_CHARS) text else text.take(CloudConversationRules.MAX_MESSAGE_CHARS - TRUNCATED.length) + TRUNCATED
     }
 
+    /** The filled fields of an answered wait as `label: value` lines (a workflow reads this as the node's output). */
+    fun answerLines(wait: Wait): String {
+        val answer = wait.answer ?: return ""
+        return wait.fields.mapNotNull { field ->
+            val value = answer.values[field.id]?.takeUnless { it is JsonNull } ?: return@mapNotNull null
+            line(field.label) + ": " + render(field, value).trim().replace("\n", "\n  ")
+        }.joinToString("\n").take(CloudConversationRules.MAX_MESSAGE_CHARS)
+    }
+
     /** A choice reads with its label beside the value; control characters (but newlines and tabs) are dropped, as a message may not carry them. */
     private fun render(field: WaitField, value: JsonElement): String {
         fun one(element: JsonElement): String {

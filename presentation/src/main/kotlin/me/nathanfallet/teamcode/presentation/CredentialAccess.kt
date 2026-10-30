@@ -31,7 +31,9 @@ private val automationReadPost = Regex("/api/v1/automations/(preview|$CLOUD_ID/r
 private val waitRead = Regex("/api/v1/waits(/$CLOUD_ID)?")
 private val waitWrite = Regex("/api/v1/waits(/$CLOUD_ID/(answer|cancel))?")
 /** Workflow reads only; saving and deleting definitions stay interactive. */
-private val workflowRead = Regex("/api/v1/workflows(/(settings|$CLOUD_ID))?")
+private val workflowRead = Regex("/api/v1/workflows(/(settings|runs|runs/$CLOUD_ID|$CLOUD_ID))?")
+/** A run is delivered into with `cloud:write`: the starter's agent acts with their credential. */
+private val workflowDeliver = Regex("/api/v1/workflows/runs/$CLOUD_ID/deliver")
 private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
@@ -70,6 +72,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     (method == "POST" || method == "PUT" || method == "DELETE") && webhookWrite.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && automationRead.matches(path) -> CredentialAction.CLOUD_READ
     method == "GET" && workflowRead.matches(path) -> CredentialAction.CLOUD_READ
+    method == "POST" && workflowDeliver.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && waitRead.matches(path) -> CredentialAction.WAITS_READ
     method == "POST" && waitWrite.matches(path) -> CredentialAction.WAITS_WRITE
     method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ
