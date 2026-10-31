@@ -72,6 +72,7 @@ import com.adamglin.phosphoricons.regular.Clock
 import com.adamglin.phosphoricons.regular.FlowArrow
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowsAvailabilityUseCase
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowsRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditorsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowsViewModel
 import me.nathanfallet.teamcode.companion.resources.tab_workflows
@@ -91,6 +92,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
 import me.nathanfallet.teamcode.companion.resources.tab_waits
 import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.wfe_copy_suffix
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
 import me.nathanfallet.teamcode.companion.resources.home_sign_in_again
 import me.nathanfallet.teamcode.companion.resources.home_signed_out
@@ -217,6 +219,8 @@ fun MainScreen(
     onOpenWorkflowRun: (accountId: String, runId: String) -> Unit = { _, _ -> },
     onOpenWorkflow: (accountId: String, workflowId: String) -> Unit = { _, _ -> },
     onStartWorkflow: (accountId: String, workflowId: String) -> Unit = { _, _ -> },
+    onCreateWorkflow: (accountId: String) -> Unit = {},
+    onDuplicateWorkflow: (accountId: String, workflowId: String, copySuffix: String) -> Unit = { _, _, _ -> },
     /** The tab to open on (the screen a wider window showed); then the member's. */
     initialTab: MainTab = MainTab.SESSIONS,
     onTabChange: (MainTab) -> Unit = {},
@@ -289,8 +293,11 @@ fun MainScreen(
                 MainTab.WORKFLOWS -> if (account != null && account.signedIn) key(account.id) {
                     val runs: WorkflowRunsViewModel = koinViewModel(key = workflowRunsKey(account.id)) { parametersOf(WorkflowsRoute(account.id)) }
                     val definitions: WorkflowsViewModel = koinViewModel(key = workflowsKey(account.id)) { parametersOf(WorkflowsRoute(account.id)) }
+                    val editors: WorkflowEditorsViewModel = koinViewModel(key = workflowEditorsKey(account.id)) { parametersOf(WorkflowsRoute(account.id)) }
+                    val copySuffix = stringResource(Res.string.wfe_copy_suffix)
                     WorkflowsScreen(runs, definitions, onOpenRun = { onOpenWorkflowRun(account.id, it.id) }, onOpenWorkflow = { onOpenWorkflow(account.id, it.id) },
-                        onStartWorkflow = { onStartWorkflow(account.id, it.id) }, onOpenWaits = { tab = MainTab.WAITS })
+                        onStartWorkflow = { onStartWorkflow(account.id, it.id) }, onOpenWaits = { tab = MainTab.WAITS },
+                        onCreateWorkflow = { onCreateWorkflow(account.id) }, onDuplicateWorkflow = { onDuplicateWorkflow(account.id, it.id, copySuffix) }, editors = editors)
                 } else SignedOutTab(stringResource(Res.string.workflows_title), account, onSignInAgain)
                 MainTab.ACCOUNT -> AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },
                     onOpenSubscriptions = { onOpenSubscriptions(it.id) }, onOpenGitHub = { onOpenGitHub(it.id) }, onOpenMcp = { onOpenMcp(it.id) }, viewModel = settings)
@@ -375,6 +382,7 @@ internal fun rememberWorkflowsOffered(account: Account?): Boolean {
 /** The keys of an account's runs and saved workflows in the signed-in app's store: the phone's tab and the wide layout share them. */
 internal fun workflowRunsKey(accountId: String) = "workflow-runs-$accountId"
 internal fun workflowsKey(accountId: String) = "workflows-$accountId"
+internal fun workflowEditorsKey(accountId: String) = "workflow-editors-$accountId"
 
 /** The key of an account's automation list in the signed-in app's store: the phone's tab and the wide layout's sidebar share it. */
 internal fun automationsKey(accountId: String) = "automations-$accountId"

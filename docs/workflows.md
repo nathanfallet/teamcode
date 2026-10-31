@@ -19,9 +19,10 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | Companion screens to use workflows (`companion`, shown when `workflows.v1` is announced): the runs list (filters, keyset pages, administrators' `?all=true`), the run detail (visits, session, blocking wait, cancel), the read-only definitions list and detail, and a start form (inputs, profile) | Implemented. Tested on the JVM (use cases, view models, repository mapping, UI, demo mode); `companion-android` and `companion-ios` were not compiled |
 | Live run updates: the feed event `cloud.workflow.run.updated` (published in the transaction of each run change, to the starter), announced by the capability `workflows.live.v1`; the list now carries `currentNodeId` and `currentNodeKind` and a read titles each visit (`nodeTitle`) | Implemented |
 | `teamcode workflows list`, `show`, `create`, `update`, `delete`, `settings`, `run`, `runs`, `run-show`, `cancel` ([CLI](#cli)) | Implemented. Tested on the JVM against a fake server; not exercised with a native binary or a real server |
-| Companion definition editor (editing definitions is still API-only), automations that start a workflow | Planned |
+| Companion definition editor (`companion`, commonMain: create, change, duplicate, delete, live checks, drafts, conflict handling, who can edit; not compiled for `companion-android` and `companion-ios`) | Implemented |
+| Automations that start a workflow | Planned |
 
-Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. The companion has screens to start, follow and cancel runs and to read definitions; editing a definition is still done over the API.
+Definitions can be saved, versioned and read, and started over the API, the CLI and the companion app. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. The companion has screens to start, follow and cancel runs and to read definitions; editing a definition is still done over the API.
 
 ## Definition
 
@@ -87,7 +88,7 @@ A session that does not exist, or belongs to another member, or whose run belong
 
 ## Editing rights
 
-`mode` is `all` (every member), `admins`, or `members` with a list. The default is `admins`. Reading is open to every member. Administrators can always edit. The rule is changed by an administrator, signed in, through `PUT /api/v1/workflows/settings` (a dashboard screen comes with the editor); a member list names active members of the team.
+`mode` is `all` (every member), `admins`, or `members` with a list. The default is `admins`. Reading is open to every member. Administrators can always edit. The rule is changed by an administrator, signed in, through `PUT /api/v1/workflows/settings` (the companion has a "Who can edit workflows" section for administrators; there is no dashboard screen); a member list names active members of the team.
 
 ## Routes
 
@@ -156,4 +157,4 @@ teamcode workflows cancel RUNID [--json]
 
 ## What is planned
 
-The order of work: the companion definition editor, automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.
+The order of work: automations that start a workflow. The companion editor has no live update of definitions (the server publishes no feed event for them): the list reloads after the member's own saves and deletes and when the screen starts, not when someone else changes a definition; it keeps only the fields this version of the app knows. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.

@@ -50,6 +50,8 @@ class WorkflowViewModelsTest {
     private fun runs() = WorkflowRunsViewModel(WorkflowsRoute("a1"), LoadWorkflowRunsUseCase(access), GetWorkflowRunUseCase(access), LoadWorkflowsUseCase(access),
         LoadOpenWaitsUseCase(waits, features, guard), follow, accounts)
     private fun run(id: String = "r1") = WorkflowRunViewModel(WorkflowRunRoute("a1", id), GetWorkflowRunUseCase(access), CancelWorkflowRunUseCase(access), LoadOpenWaitsUseCase(waits, features, guard), follow, accounts)
+    private val drafts = InMemoryWorkflowDrafts()
+    private fun detail(id: String = "wf1", changes: WorkflowChanges = WorkflowChanges()) = WorkflowViewModel(WorkflowRoute("a1", id), GetWorkflowUseCase(access), LoadWorkflowSettingsUseCase(access), DeleteWorkflowUseCase(access, changes), LoadWorkflowCatalogUseCase(access), drafts, changes)
     private fun start() = WorkflowStartViewModel(WorkflowStartRoute("a1", "wf1"), GetWorkflowUseCase(access), LoadProfilesUseCase(sessions, features, guard), StartWorkflowRunUseCase(access), SequenceIds())
 
     private fun event(id: String, status: RunStatus, owner: String = "m1", parent: String? = null, seq: Long = 1) =
@@ -224,13 +226,13 @@ class WorkflowViewModelsTest {
     }
 
     @Test fun theSavedWorkflowsPageAndFailGently() = runTest(dispatcher) {
-        val model = WorkflowsViewModel(WorkflowsRoute("a1"), LoadWorkflowsUseCase(access)); settle()
+        val model = WorkflowsViewModel(WorkflowsRoute("a1"), LoadWorkflowsUseCase(access), LoadWorkflowSettingsUseCase(access), WorkflowChanges()); settle()
         assertEquals(listOf("wf1"), model.uiState.value.workflows!!.map { it.id })
         repository.definitions = emptyList(); model.reload(); settle()
         assertTrue(model.uiState.value.empty)
         repository.failure = CompanionException.Unreachable(); model.reload(); settle()
         assertNotNull(model.uiState.value.error)
-        val one = WorkflowViewModel(WorkflowRoute("a1", "nope"), GetWorkflowUseCase(access)); repository.failure = null; one.reload(); settle()
+        val one = detail("nope"); repository.failure = null; one.reload(); settle()
         assertTrue(one.uiState.value.missing)
     }
 
