@@ -92,6 +92,7 @@ object WorkflowVisits : Table("workflow_visits") {
     val dispatchedAt = long("dispatched_at").nullable()
     val startedAt = long("started_at")
     val finishedAt = long("finished_at").nullable()
+    val remindedAt = long("reminded_at").nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         uniqueIndex("wfvisit_run_seq", runId, seq)

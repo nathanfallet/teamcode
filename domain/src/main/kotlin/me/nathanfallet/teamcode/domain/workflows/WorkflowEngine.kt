@@ -74,13 +74,54 @@ class WorkflowEngine(
         val sessionId = visit.sessionId
         if (sessionId == null) return dispatch(work, visit, node, now)
         val progress = context.progress[sessionId] ?: return fail(work, "session_missing", now)
-        when {
-            progress.state == CloudSessionState.FAILED -> fail(work, "session_failed", now)
-            progress.state == CloudSessionState.TERMINATED || progress.desired == DesiredState.TERMINATED -> fail(work, "session_deleted", now)
-            // The turn that took the instruction ended and nothing was delivered; a turn that started before it (the agent
-            // finishing the previous node) does not count.
-            progress.turnEnd != null && (progress.turnStartedAt ?: 0) >= (visit.dispatchedAt ?: Long.MAX_VALUE) -> fail(work, "ended_without_delivery", now)
+        if (progress.state == CloudSessionState.FAILED) return fail(work, "session_failed", now)
+        if (progress.state == CloudSessionState.TERMINATED || progress.desired == DesiredState.TERMINATED) return fail(work, "session_deleted", now)
+        // A turn that ended after the instruction with nothing delivered; a turn that started before it (the agent finishing
+        // the previous node) does not count, and after the reminder only a turn that started after the reminder does.
+        if (progress.turnEnd == null) return
+        val started = progress.turnStartedAt ?: 0
+        if (started < (visit.dispatchedAt ?: Long.MAX_VALUE)) return
+        val remindedAt = visit.remindedAt
+        if (remindedAt != null && started < remindedAt) return
+        // An agent that asked a person ended its turn on purpose: the answer wakes it, so neither a reminder nor a failure.
+        // One `exists` on the session's waits, only for a turn that ended without a delivery.
+        if (store.sessionHasOpenWait(sessionId)) return
+        if (remindedAt != null) return fail(work, "ended_without_delivery", now)
+        remind(work, visit, node, sessionId, now)
+    }
+
+    /**
+     * The first turn of the visit ended with no delivery and no open wait: queue one reminder instead of failing. The mark
+     * comes first and is conditional, so a visit is reminded once across replicas and restarts, and not at all when a delivery
+     * completed it meanwhile. The turn the reminder starts is judged like the first one.
+     */
+    private suspend fun remind(work: RunWork, visit: NodeVisit, node: WorkflowNode, sessionId: String, now: Long) {
+        val starter = store.starter(work.run) ?: return fail(work, "starter_unavailable", now)
+        if (!store.reminded(visit.id, now)) return
+        try {
+            sessions.message(starter, sessionId, reminder(node), "wfrun-${visit.id}-reminder")
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) { try { store.unreminded(visit.id, now) } catch (_: Exception) {} }
+            throw error
+        } catch (error: TeamFailure) {
+            if (error.retryable) store.unreminded(visit.id, now) else fail(work, error.code, now)
+        } catch (error: Exception) {
+            store.unreminded(visit.id, now); throw error
         }
+    }
+
+    /** Written as from the system, like the instruction message: what is missing and the two ways out. */
+    private fun reminder(node: WorkflowNode): String {
+        val deliverable = node.deliverable!!
+        val what = when (deliverable.type) {
+            DeliverableType.ARTIFACT -> "the id of the artifact that holds the result"
+            DeliverableType.URL -> "an https address${deliverable.domain?.let { " on $it" }.orEmpty()}"
+            DeliverableType.TEXT -> "the result as text"
+            DeliverableType.JSON -> "the result as a JSON value${if (deliverable.schema != null) " that matches the step's schema" else ""}"
+        }
+        return "Reminder from TeamCode: the step \"${node.title}\" has not been delivered, and your turn ended without it. " +
+            "Call the `deliver` tool of the teamcode_workflow MCP server once, with $what as its `output`. " +
+            "If you need a person's answer first, call `ask_human` of the teamcode_waits MCP server instead. Then end your turn."
     }
 
     /** Sends the node's instruction to the run's session, or starts a session for it. */

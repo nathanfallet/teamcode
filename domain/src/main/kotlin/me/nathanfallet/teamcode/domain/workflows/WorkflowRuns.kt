@@ -17,11 +17,11 @@ enum class VisitStatus(val wire: String) {
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 
-/** One pass through a node. [dispatchedAt] is when an agent node's instruction reached its session. */
+/** One pass through a node. [dispatchedAt] is when an agent node's instruction reached its session; [remindedAt] is when the engine sent its one reminder (null: none yet). */
 data class NodeVisit(
     val id: String, val runId: String, val seq: Int, val nodeId: String, val kind: NodeKind, val status: VisitStatus,
     val outcome: String? = null, val output: String? = null, val sessionId: String? = null, val waitId: String? = null, val childRunId: String? = null,
-    val dispatchedAt: Long? = null, val startedAt: Long, val finishedAt: Long? = null,
+    val dispatchedAt: Long? = null, val startedAt: Long, val finishedAt: Long? = null, val remindedAt: Long? = null,
 )
 
 /** A run on the [definition] snapshot it started with, so editing or deleting the workflow never changes a run in flight. */
@@ -86,6 +86,13 @@ interface WorkflowRunStore {
 
     /** Records that the agent node's instruction reached [sessionId]; [bindRun] also makes it the run's session. */
     suspend fun dispatched(visitId: String, sessionId: String, bindRun: Boolean, at: Long): Boolean
+    /**
+     * Records the one reminder of an active agent visit that has none: true for exactly one caller, false when the visit was
+     * already reminded or is no longer active (a delivery that arrived first wins).
+     */
+    suspend fun reminded(visitId: String, at: Long): Boolean
+    /** Takes the mark of [reminded] back when the reminder could not be queued, so a later pass sends it; false when [at] is not the mark. */
+    suspend fun unreminded(visitId: String, at: Long): Boolean
     /** Records the wait of a human node and marks the run waiting. */
     suspend fun waiting(visitId: String, waitId: String): Boolean
     /** Starts the child run of a sub-workflow node and records it on the visit, atomically; idempotent per visit. */
