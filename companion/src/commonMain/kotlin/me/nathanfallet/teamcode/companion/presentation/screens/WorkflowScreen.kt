@@ -12,7 +12,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -47,10 +51,20 @@ import org.jetbrains.compose.resources.stringResource
 
 /** One saved workflow, read-only: its description, inputs and steps with their transitions as a list, and Start. */
 @Composable
-fun WorkflowScreen(viewModel: WorkflowViewModel, onBack: (() -> Unit)?, onStart: (Workflow) -> Unit, backLabel: String = stringResource(Res.string.workflows_title)) {
+fun WorkflowScreen(
+    viewModel: WorkflowViewModel,
+    onBack: (() -> Unit)?,
+    onStart: (Workflow) -> Unit,
+    backLabel: String = stringResource(Res.string.workflows_title),
+    onEdit: (Workflow) -> Unit = {},
+    onDuplicate: (Workflow) -> Unit = {},
+    onDeleted: () -> Unit = {},
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
     val workflow = state.workflow
+    var confirmDelete by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.deleted) { if (state.deleted) onDeleted() }
     Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
         NavBar(backLabel, onBack, workflow?.name ?: stringResource(Res.string.workflow_title)) {
             TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.workflows_refresh), onClick = viewModel::reload, enabled = !state.loading, modifier = Modifier.testTag("workflow-refresh"))
@@ -74,8 +88,14 @@ fun WorkflowScreen(viewModel: WorkflowViewModel, onBack: (() -> Unit)?, onStart:
                     workflow.description?.let { Text(it, color = colors.text, fontSize = 14.sp) }
                     Text(stringResource(if (workflow.sessionMode == "handoff") Res.string.workflow_session_handoff else Res.string.workflow_session_same), style = MetaStyle, color = colors.muted)
                     TcButton(stringResource(Res.string.workflow_start), onClick = { onStart(workflow) }, modifier = Modifier.testTag("workflow-start"))
+                    if (state.canEdit) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TcButton(stringResource(Res.string.wfe_edit), onClick = { onEdit(workflow) }, kind = ButtonKind.SECONDARY, small = true, fill = false, modifier = Modifier.testTag("workflow-edit"))
+                        TcButton(stringResource(Res.string.wfe_duplicate), onClick = { onDuplicate(workflow) }, kind = ButtonKind.SECONDARY, small = true, fill = false, modifier = Modifier.testTag("workflow-duplicate"))
+                        TcButton(stringResource(Res.string.wfe_delete), onClick = { viewModel.clearDeleteError(); confirmDelete = true }, kind = ButtonKind.SECONDARY, small = true, fill = false, modifier = Modifier.testTag("workflow-delete"))
+                    }
                 }
-                Text(stringResource(Res.string.workflows_edit_note), style = MetaStyle, color = colors.muted)
+                state.deleteError?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("workflow-delete-error")) }
+                state.usedBy?.let { callers -> Banner(inUseWords(callers), Tone.WARN, Modifier.testTag("workflow-in-use")) }
                 SectionTitle(stringResource(Res.string.workflow_inputs_title))
                 if (workflow.inputs.isEmpty()) Text(stringResource(Res.string.workflow_inputs_none), color = colors.muted, fontSize = 14.sp)
                 else TcCard(Modifier.testTag("workflow-inputs")) {
@@ -98,7 +118,17 @@ fun WorkflowScreen(viewModel: WorkflowViewModel, onBack: (() -> Unit)?, onStart:
             }
         }
     }
+    if (confirmDelete && workflow != null) ConfirmDialog(
+        stringResource(Res.string.wfe_delete_title, workflow.name), stringResource(Res.string.wfe_delete_body), stringResource(Res.string.wfe_delete),
+        onConfirm = { confirmDelete = false; viewModel.delete() }, onDismiss = { confirmDelete = false }, kind = ButtonKind.DANGER, tag = "workflow-delete-confirm",
+    )
 }
+
+/** Why a workflow cannot be deleted: other workflows call it. */
+@Composable
+private fun inUseWords(callers: List<String>): String =
+    if (callers.isEmpty()) stringResource(Res.string.wfe_in_use) else stringResource(Res.string.wfe_in_use_by, callers.joinToString(", "))
+
 
 @Composable
 private fun StepCard(step: WorkflowStep, workflow: Workflow) {

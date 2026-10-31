@@ -22,6 +22,9 @@ import me.nathanfallet.teamcode.companion.domain.models.RunFilter
 import me.nathanfallet.teamcode.companion.domain.models.RunScope
 import me.nathanfallet.teamcode.companion.domain.models.RunStart
 import me.nathanfallet.teamcode.companion.domain.models.RunStatus
+import me.nathanfallet.teamcode.companion.domain.models.StepKind
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowEditors
+import me.nathanfallet.teamcode.companion.domain.models.EditorMode
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
@@ -280,5 +283,32 @@ class DemoModeTest {
         assertTrue(stored.accounts.value.isEmpty())
         assertTrue(DemoContent.account("Bench").isDemo)
         assertFalse(account("a1").isDemo)
+    }
+
+    @Test fun theDemoWorkflowsAreEditableCreatedConflictedAndDeletedLikeTheServerDoesIt() = runTest {
+        val account = startDemo()
+        val workflows = koin.get<me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository>()
+        val settings = workflows.settings(account.id)
+        assertTrue(settings.canEdit)
+        val release = workflows.definition(account.id, "wf-release")
+        val ticket = workflows.definition(account.id, "wf-ticket")
+        assertTrue(release.definition.nodes.any { it.kind == StepKind.WORKFLOW && it.workflowId == "wf-ticket" })
+        assertTrue(ticket.definition.nodes.any { it.transitions.any { t -> t.to == ticket.definition.start } }, "the sample has a loop")
+        assertEquals(emptyList(), me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowChecks.check(ticket.definition), "the sample is valid")
+        // A save with an old version is a conflict; with the current one it makes the next version and the list follows.
+        val renamed = ticket.definition.copy(name = "Renamed")
+        assertEquals(409, assertFailsWith<CompanionException.Server> { workflows.update(account.id, "wf-ticket", renamed, ticket.version + 5) }.statusCode)
+        val saved = workflows.update(account.id, "wf-ticket", renamed, ticket.version)
+        assertEquals(ticket.version + 1, saved.version)
+        assertEquals("Renamed", workflows.workflows(account.id, null).workflows.first { it.id == "wf-ticket" }.name)
+        // A workflow another one calls cannot be deleted; a new one can, and then disappears.
+        assertEquals("workflow_in_use", assertFailsWith<CompanionException.Server> { workflows.delete(account.id, "wf-ticket") }.code)
+        val created = workflows.create(account.id, ticket.definition.copy(name = "Copy"))
+        assertTrue(workflows.workflows(account.id, null).workflows.any { it.id == created.id })
+        workflows.delete(account.id, created.id)
+        assertTrue(workflows.workflows(account.id, null).workflows.none { it.id == created.id })
+        val editors = workflows.updateEditors(account.id, WorkflowEditors(EditorMode.MEMBERS, listOf("m1")))
+        assertEquals(EditorMode.MEMBERS, editors.editors.mode)
+        assertEquals(0, engine.clients)
     }
 }

@@ -17,6 +17,8 @@ import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowDefinition
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowEditors
 import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
 import me.nathanfallet.teamcode.companion.domain.models.RunFilter
 import me.nathanfallet.teamcode.companion.domain.models.RunScope
@@ -215,6 +217,12 @@ class DemoAwareWorkflowRepository(private val real: WorkflowRepository, private 
     override suspend fun run(accountId: String, id: String) = of(accountId).run(accountId, id)
     override suspend fun start(accountId: String, workflowId: String, start: RunStart, idempotencyKey: String) = of(accountId).start(accountId, workflowId, start, idempotencyKey)
     override suspend fun cancel(accountId: String, id: String) = of(accountId).cancel(accountId, id)
+    override suspend fun definition(accountId: String, id: String) = of(accountId).definition(accountId, id)
+    override suspend fun create(accountId: String, definition: WorkflowDefinition) = of(accountId).create(accountId, definition)
+    override suspend fun update(accountId: String, id: String, definition: WorkflowDefinition, expectedVersion: Int) = of(accountId).update(accountId, id, definition, expectedVersion)
+    override suspend fun delete(accountId: String, id: String) = of(accountId).delete(accountId, id)
+    override suspend fun settings(accountId: String) = of(accountId).settings(accountId)
+    override suspend fun updateEditors(accountId: String, editors: WorkflowEditors) = of(accountId).updateEditors(accountId, editors)
 }
 
 class DemoAwareWaitRepository(private val real: WaitRepository, private val demo: WaitRepository) : WaitRepository {

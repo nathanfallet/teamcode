@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.domain.models
 
+import kotlinx.serialization.Serializable
+
 /** The state of a run. [UNKNOWN] is a status a newer server added: shown as text, never as finished. */
 enum class RunStatus(val wire: String) {
     RUNNING("running"), WAITING("waiting"), SUCCEEDED("succeeded"), FAILED("failed"), CANCELLED("cancelled"), UNKNOWN("");
@@ -9,6 +11,7 @@ enum class RunStatus(val wire: String) {
 }
 
 /** What a step is: an agent that works, a person who answers, another workflow. [UNKNOWN] is a kind a newer server added. */
+@Serializable
 enum class StepKind(val wire: String) {
     AGENT("agent"), HUMAN("human"), WORKFLOW("workflow"), UNKNOWN("");
     companion object { fun of(wire: String?) = entries.firstOrNull { it.wire == wire && it != UNKNOWN } ?: UNKNOWN }
@@ -80,9 +83,11 @@ data class WorkflowRun(
 
 data class WorkflowRunPage(val runs: List<WorkflowRun>, val nextBefore: String?)
 
+@Serializable
 data class WorkflowInput(val id: String, val label: String, val required: Boolean, val default: String?, val maxLength: Int)
 
 data class StepAction(val id: String, val label: String)
+@Serializable
 data class StepTransition(val on: String, val to: String?)
 
 /** What a step delivers: its [type] (`artifact`, `url`, `text`, `json`) and, for a `url`, the [domain] it must be on. */

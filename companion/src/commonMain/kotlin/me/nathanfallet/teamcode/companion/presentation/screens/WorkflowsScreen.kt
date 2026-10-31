@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ArrowsClockwise
+import com.adamglin.phosphoricons.regular.Plus
 import com.adamglin.phosphoricons.regular.FlowArrow
 import me.nathanfallet.teamcode.companion.domain.models.RunFilter
 import me.nathanfallet.teamcode.companion.domain.models.RunScope
@@ -57,6 +58,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.Tone
 import me.nathanfallet.teamcode.companion.presentation.theme.MetaStyle
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsUiState
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditorsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.words
@@ -78,6 +80,9 @@ fun WorkflowsScreen(
     onOpenWorkflow: (Workflow) -> Unit,
     onStartWorkflow: (Workflow) -> Unit,
     onOpenWaits: () -> Unit,
+    onCreateWorkflow: () -> Unit = {},
+    onDuplicateWorkflow: (Workflow) -> Unit = {},
+    editors: WorkflowEditorsViewModel? = null,
 ) {
     val colors = TeamCode.colors
     var part by rememberSaveable { mutableStateOf(WorkflowsPart.RUNS) }
@@ -87,6 +92,12 @@ fun WorkflowsScreen(
     LifecycleStartEffect(runs) {
         runs.start()
         onStopOrDispose { runs.stop() }
+    }
+    // Definitions have no feed event: they are read again when the screen comes back (the member's own saves reload them at once).
+    var firstStart by remember { mutableStateOf(true) }
+    LifecycleStartEffect(definitions) {
+        if (firstStart) firstStart = false else definitions.reload()
+        onStopOrDispose { }
     }
     Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
         Column(
@@ -102,9 +113,10 @@ fun WorkflowsScreen(
                 part, { part = it }, Modifier.fillMaxWidth(), tag = { "workflows-part-${it.name.lowercase()}" },
             )
             if (part == WorkflowsPart.RUNS) RunsHeader(runsState, runs)
+            else if (definitionsState.canEdit) TcButton(stringResource(Res.string.wfe_new), onClick = onCreateWorkflow, kind = ButtonKind.SECONDARY, small = true, fill = false, icon = PhosphorIcons.Regular.Plus, modifier = Modifier.testTag("workflows-new"))
             else Text(stringResource(Res.string.workflows_edit_note), style = MetaStyle, color = colors.muted, modifier = Modifier.testTag("workflows-edit-note"))
         }
-        if (part == WorkflowsPart.RUNS) RunsList(runsState, runs, onOpenRun, onOpenWaits) else DefinitionsList(definitionsState, definitions, onOpenWorkflow, onStartWorkflow)
+        if (part == WorkflowsPart.RUNS) RunsList(runsState, runs, onOpenRun, onOpenWaits) else DefinitionsList(definitionsState, definitions, onOpenWorkflow, onStartWorkflow, onDuplicateWorkflow, editors)
     }
 }
 
@@ -192,6 +204,8 @@ private fun DefinitionsList(
     viewModel: WorkflowsViewModel,
     onOpen: (Workflow) -> Unit,
     onStart: (Workflow) -> Unit,
+    onDuplicate: (Workflow) -> Unit,
+    editors: WorkflowEditorsViewModel?,
 ) {
     val colors = TeamCode.colors
     val listState = rememberLazyListState()
@@ -203,6 +217,7 @@ private fun DefinitionsList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (editors != null) item(key = "editors") { WorkflowEditorsCard(editors) }
         item(key = "error") {
             state.error?.let { error ->
                 Banner(error.words(), Tone.DANGER, Modifier.testTag("workflow-definitions-error"), action = {
@@ -218,7 +233,10 @@ private fun DefinitionsList(
                         workflow.description?.let { Text(it, color = colors.muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                         Text(stringResource(Res.string.workflow_version, workflow.version), style = MetaStyle, color = colors.muted)
                     }
-                    TcButton(stringResource(Res.string.workflow_start), onClick = { onStart(workflow) }, small = true, modifier = Modifier.testTag("workflow-start-${workflow.id}"))
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TcButton(stringResource(Res.string.workflow_start), onClick = { onStart(workflow) }, small = true, modifier = Modifier.testTag("workflow-start-${workflow.id}"))
+                        if (state.canEdit) TcButton(stringResource(Res.string.wfe_duplicate), onClick = { onDuplicate(workflow) }, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("workflow-duplicate-${workflow.id}"))
+                    }
                 }
             }
         }
