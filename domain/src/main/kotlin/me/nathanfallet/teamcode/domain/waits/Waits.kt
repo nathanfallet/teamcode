@@ -39,6 +39,8 @@ data class WaitField(
     val id: String, val type: FieldType, val label: String, val help: String? = null, val required: Boolean = false,
     val default: JsonElement? = null, val options: List<WaitOption> = emptyList(), val multiple: Boolean = false,
     val allowOther: Boolean = false, val maxLength: Int? = null,
+    /** Secret fields only: the value is deleted once the agent has used it (docs/waits.md#secrets). */
+    val oneTime: Boolean = false,
 )
 data class WaitAction(val id: String, val label: String, val requires: List<String> = emptyList(), val style: String? = null)
 data class WaitRef(val kind: String, val id: String? = null, val url: String? = null, val title: String? = null)
@@ -85,7 +87,27 @@ data class Wait(
 )
 
 /** The part of a cloud session a wait needs: who owns it and what to call it. */
-data class WaitSession(val id: String, val teamId: String, val ownerId: String, val name: String?)
+data class WaitSession(val id: String, val teamId: String, val ownerId: String, val name: String?, val agentKind: String = "")
+
+/**
+ * A secret to keep for the session of the wait it answers: the variable it is delivered as ([envName], `TEAMCODE_WAIT_…`), the
+ * [fieldId] it came from, [oneTime] and the instant it is deleted at ([expiresAt]). It holds the value: never log or print it.
+ */
+class WaitSecret(val envName: String, val fieldId: String, val value: String, val oneTime: Boolean, val expiresAt: Long) {
+    override fun toString() = "WaitSecret(name=$envName, oneTime=$oneTime, value=[REDACTED])"
+}
+
+/** The secrets served to a session's agent: values by variable name, and the names of those that were deleted by being served. */
+class ServedSecrets(val values: Map<String, String> = emptyMap(), val oneTime: Set<String> = emptySet()) {
+    override fun toString() = "ServedSecrets(names=${values.keys.sorted()}, oneTime=${oneTime.sorted()}, values=[REDACTED])"
+}
+
+/** Where a running session's agent gets the secrets of its answered waits (the runner's variables route, a remote host's read). */
+fun interface WaitSecretSource {
+    /** The unexpired secrets stored for [sessionId] while [ownerId] owned it; a one-time secret is deleted by being served. */
+    suspend fun serve(teamId: String, sessionId: String, ownerId: String): ServedSecrets
+    companion object { val NONE = WaitSecretSource { _, _, _ -> ServedSecrets() } }
+}
 
 data class WaitPage(val waits: List<Wait>, val nextBefore: String?)
 
@@ -133,8 +155,10 @@ interface WaitStore {
      * permission requests of the assignee's sessions, ahead of them. The latter exist only while open.
      */
     suspend fun list(teamId: String, query: WaitQuery): WaitPage
-    /** Closes an open wait atomically; [WaitChange.changed] is false when it was not open (the current state is returned). Audited `wait.answered`. */
-    suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange
+    /** Closes an open wait atomically; [WaitChange.changed] is false when it was not open (the current state is returned). Audited `wait.answered`.
+     * [secrets] are sealed and bound to the session in that same transaction when it changes the wait, and only the fact that
+     * one was provided is audited (`wait.secret_provided`, by field id). A secret of the same name on the session is replaced. */
+    suspend fun answer(actor: Principal, id: String, answer: WaitAnswer, secrets: List<WaitSecret> = emptyList()): WaitChange
     /** Same for a cancellation. Audited `wait.cancelled`. */
     suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange
 
@@ -152,6 +176,11 @@ interface WaitStore {
     /** Resolved waits whose wake message may not have been queued (a failure after [resolve]), oldest first. */
     suspend fun pendingWakes(limit: Int): List<Wait>
     suspend fun wakeDelivered(id: String)
+
+    /** See [WaitSecretSource.serve]. In one transaction, so two replicas never serve a one-time secret twice. Audits `wait.secret_consumed` by field id. */
+    suspend fun serveSecrets(teamId: String, sessionId: String, ownerId: String): ServedSecrets
+    /** Deletes the secrets whose lifetime ended, at most [limit]; returns how many. */
+    suspend fun purgeSecrets(limit: Int): Int
 }
 
 /**

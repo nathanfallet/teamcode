@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.cli
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -90,6 +91,43 @@ class AgentEnvironmentShellTest {
                 writePrivateFile(values, AgentEnvironment.script(second.variables, second.withdrawn.toSet()))
                 assertEquals("<unset> two", bash(values, "printf '%s %s' \"\${NPM_TOKEN-<unset>}\" \"\$OTHER_VALUE\"", mapOf("NPM_TOKEN" to "it's one")))
                 assertNull(withContext(Dispatchers.IO) { requestEnvironment(directory.resolve("missing.sock").toString()) }, "No runner: no answer, no failure")
+            } finally { listener.close(); server.cancel() }
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test fun aWaitSecretReachesTheNextBashCommandThroughTheSocketAndLeavesAtTheEndOfTheTurn() = runBlocking {
+        val directory = Files.createTempDirectory("tc-env")
+        val sentinel = "S3NTINEL-it's \$HOME `id`"
+        try {
+            val socket = directory.resolve("environment.sock").toString()
+            var answer = EnvironmentVariablesView(mapOf("NPM_TOKEN" to "one"))
+            var clock = 0L
+            val variables = RunnerVariables({ answer }, now = { clock })
+            val listener = listenUnix(socket)
+            val server = launch(Dispatchers.IO) { EnvironmentBroker(listener, variables).serve() }
+            try {
+                // The agent's script is written once and holds no value; a command applies what the runner answers, as the script does.
+                assertFalse(AgentEnvironment.cloudScript("teamcode", socket).contains("S3NTINEL"))
+                variables.forStart()
+                // `started`: what the shell of the previous command exported.
+                suspend fun applied(started: Map<String, String> = emptyMap()): String {
+                    val answered = withContext(Dispatchers.IO) { requestEnvironment(socket) }!!
+                    val values = directory.resolve("values.sh").toString()
+                    writePrivateFile(values, AgentEnvironment.script(answered.variables, answered.withdrawn.toSet(), answered.secrets))
+                    return bash(values, "printf '%s' \"\${TEAMCODE_WAIT_SHOP_PASSWORD-<unset>}\"", started)
+                }
+                assertEquals("<unset>", applied(), "before the answer there is nothing")
+                clock += RunnerVariables.MAX_AGE_MILLIS
+                answer = EnvironmentVariablesView(mapOf("NPM_TOKEN" to "one"), secrets = mapOf("TEAMCODE_WAIT_SHOP_PASSWORD" to sentinel), oneTime = listOf("TEAMCODE_WAIT_SHOP_PASSWORD"))
+                assertEquals(sentinel, applied(), "the value reads back exactly and nothing is expanded")
+                // The server deleted the one-time value by serving it; the turn goes on and still has it.
+                clock += RunnerVariables.MAX_AGE_MILLIS
+                answer = EnvironmentVariablesView(mapOf("NPM_TOKEN" to "one"))
+                assertEquals(sentinel, applied(), "held for the rest of the turn")
+                // The agent's Stop hook ends the turn through the same socket.
+                assertTrue(reportWakeups(socket, 0))
+                delay(300)
+                assertEquals("<unset>", applied(mapOf("TEAMCODE_WAIT_SHOP_PASSWORD" to sentinel)), "the next command unsets it")
             } finally { listener.close(); server.cancel() }
         } finally { directory.toFile().deleteRecursively() }
     }

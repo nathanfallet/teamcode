@@ -71,7 +71,9 @@ class WaitsCliTest {
         assertEquals("Pick one", field.label); assertTrue(field.required); assertEquals(listOf("s", "l"), field.options.map { it.value })
         assertEquals("a:b", parseField("n:text:a:b", emptyMap()).label)
         assertFailsWith<UsageError> { parseField("size:choice:Pick", emptyMap()) }
-        assertFailsWith<UsageError> { parseField("x:secret:Key", emptyMap()) }
+        parseField("x:secret:Key:required:oneTime", emptyMap()).let { assertEquals("Key", it.label); assertTrue(it.required && it.oneTime); assertEquals("secret", it.type) }
+        assertFalse(parseField("x:secret:Key", emptyMap()).oneTime)
+        assertFailsWith<UsageError> { parseField("x:text:Key:oneTime", emptyMap()) }
         assertFailsWith<UsageError> { parseField("x:blob:Key", emptyMap()) }
         assertEquals(WaitActionView("ok", "All good: yes"), parseAction("ok:All good: yes"))
         assertFailsWith<UsageError> { parseAction("ok") }
@@ -126,5 +128,36 @@ class WaitsCliTest {
         assertContains(ci.announcement(), "curl -X POST 'https://t/x?token=wev_s'")
         assertFalse("curl" in ci.copy(eventUrl = null).announcement())
         assertFalse("resumes" in wait().line(0), "a person's wait says nothing of the kind")
+    }
+
+    private val sentinel = "S3NTINEL-cli-pa55"
+
+    @Test fun `a secret comes from set-secret only, never from set or set-json`() {
+        val values = answerValues(wait(), listOf("notes" to "fine"), emptyList(), mapOf("pw" to sentinel))
+        assertEquals(JsonPrimitive(sentinel), values["pw"]); assertEquals(JsonPrimitive("fine"), values["notes"])
+        val viaSet = assertFailsWith<CliUserException> { answerValues(wait(), listOf("pw" to sentinel), emptyList()) }
+        assertContains(viaSet.message.orEmpty(), "--set-secret pw"); assertFalse(sentinel in viaSet.message.orEmpty())
+        val viaJson = assertFailsWith<CliUserException> { answerValues(wait(), emptyList(), listOf("pw" to "\"$sentinel\"")) }
+        assertContains(viaJson.message.orEmpty(), "--set-secret pw"); assertFalse(sentinel in viaJson.message.orEmpty())
+        assertFailsWith<CliUserException> { answerValues(wait(), emptyList(), emptyList(), mapOf("notes" to "x")) }
+        assertFailsWith<CliUserException> { answerValues(wait(), emptyList(), emptyList(), mapOf("nope" to "x")) }
+        assertFailsWith<CliUserException> { answerValues(wait(), emptyList(), emptyList(), mapOf("pw" to "x".repeat(Waits.MAX_SECRET_BYTES + 1))) }
+        assertFalse(sentinel in AnswerWaitRequest("approve", values).toString(), "the request never prints its values")
+    }
+
+    @Test fun `secrets are read without echo and a single one may span lines`() {
+        val prompts = mutableListOf<String>()
+        val typed = ArrayDeque(listOf("one", "two"))
+        val hidden = readSecrets(listOf("a", "b"), false, { prompts += it }, { typed.removeFirst() }, { error("not stdin") }, { error("not stdin") })
+        assertEquals(mapOf("a" to "one", "b" to "two"), hidden); assertEquals(2, prompts.size); assertTrue(prompts.none { "one" in it || "two" in it })
+        val piped = ArrayDeque(listOf("first", "second"))
+        assertEquals(mapOf("a" to "first", "b" to "second"), readSecrets(listOf("a", "b"), true, { error("no prompt") }, { error("hidden") }, { piped.removeFirst() }, { error("all") }))
+        assertEquals(mapOf("key" to "-----BEGIN-----\nabc\n-----END-----"), readSecrets(listOf("key"), true, { error("no prompt") }, { error("hidden") }, { error("line") }, { "-----BEGIN-----\nabc\n-----END-----\n" }))
+        assertFailsWith<CliUserException> { readSecrets(listOf("a"), false, {}, { null }, { null }, { "" }) }
+    }
+
+    @Test fun `show tells how to give a secret and never a value`() {
+        val text = wait().copy(fields = fields + WaitFieldView("token", "secret", "Token", oneTime = true)).details()
+        assertContains(text, "--set-secret token"); assertContains(text, "TEAMCODE_WAIT_TOKEN"); assertContains(text, "one time")
     }
 }

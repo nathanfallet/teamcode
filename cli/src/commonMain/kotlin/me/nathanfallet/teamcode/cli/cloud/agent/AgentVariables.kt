@@ -22,10 +22,13 @@ internal fun interface AgentVariables {
     suspend fun launch(kind: String): Map<String, String>
 }
 
-/** What one Bash command applies: the current variables and the names given earlier and no longer assigned. */
+/**
+ * What one Bash command applies: the current variables, the wait [secrets] of the session (`TEAMCODE_WAIT_…`) and the names given
+ * earlier and no longer assigned.
+ */
 @Serializable
-internal class EnvironmentAnswer(val variables: Map<String, String> = emptyMap(), val withdrawn: List<String> = emptyList()) {
-    override fun toString() = "EnvironmentAnswer(names=${variables.keys.sorted()}, withdrawn=$withdrawn, values=[REDACTED])"
+internal class EnvironmentAnswer(val variables: Map<String, String> = emptyMap(), val withdrawn: List<String> = emptyList(), val secrets: Map<String, String> = emptyMap()) {
+    override fun toString() = "EnvironmentAnswer(names=${variables.keys.sorted()}, secrets=${secrets.keys.sorted()}, withdrawn=$withdrawn, values=[REDACTED])"
 }
 
 /**
@@ -34,6 +37,10 @@ internal class EnvironmentAnswer(val variables: Map<String, String> = emptyMap()
  * answer is older than [maxAgeMillis], so a rotated, added or removed variable reaches the agent's next command
  * within that delay, and an idle session costs no request. A failed read keeps the last values and is retried after
  * [retryMillis]; a server without the route (404) is not asked again, and a fenced or refused execution serves nothing.
+ *
+ * The session's wait secrets (docs/waits.md#secrets) arrive with the variables but are kept apart: an agent start never gets them
+ * in its process environment (which would outlive their expiry and their turn), only a Bash command does. A one-time secret, which
+ * the server deleted by serving it, is held in memory until [endTurn] and then withdrawn; the others follow the server's answer.
  */
 internal class RunnerVariables(
     private val fetch: suspend () -> EnvironmentVariablesView,
@@ -49,8 +56,12 @@ internal class RunnerVariables(
     private var nextRead = 0L
     private var stopped = false
     private var failing = false
+    private var lastSecretNames: Set<String> = emptySet()
     /** Every name handed to the agent, by its environment or by a command: a name that disappears is unset. */
     private val given = mutableSetOf<String>()
+    private var secrets: Map<String, String> = emptyMap()
+    /** One-time secrets the server no longer holds: kept here until the turn that uses them ends. */
+    private val onceHeld = mutableMapOf<String, String>()
 
     /** The variables for an agent starting now, asked of the server first. */
     suspend fun forStart(): Map<String, String> = lock.withLock {
@@ -61,8 +72,12 @@ internal class RunnerVariables(
     /** The answer for one Bash command. */
     suspend fun forCommand(): EnvironmentAnswer = lock.withLock {
         if (now() >= nextRead) read(commandWaitMillis)
-        EnvironmentAnswer(current, (given - current.keys).sorted()).also { given += current.keys }
+        val live = secrets + onceHeld
+        EnvironmentAnswer(current, (given - current.keys - live.keys).sorted(), live).also { given += current.keys + live.keys }
     }
+
+    /** The agent's turn ended: the one-time secrets it had are dropped, and the next command unsets them. */
+    suspend fun endTurn() = lock.withLock { onceHeld.clear() }
 
     /** Asks the server, under [lock]; any failure keeps [current]. */
     private suspend fun read(waitMillis: Long) {
@@ -73,7 +88,7 @@ internal class RunnerVariables(
             catch (error: TeamCodeException) {
                 when {
                     // Fenced or refused: another execution owns the session, so nothing is served any more.
-                    error.code == "execution_fenced" || error.statusCode in setOf(401, 403) -> { stopped = true; current = emptyMap() }
+                    error.code == "execution_fenced" || error.statusCode in setOf(401, 403) -> { stopped = true; current = emptyMap(); secrets = emptyMap(); onceHeld.clear() }
                     // A server without the route: the agent runs without variables, as before it existed.
                     error.statusCode == 404 -> { stopped = true; log("The server does not serve variables to running sessions; the agent gets none.") }
                     else -> failed()
@@ -87,6 +102,10 @@ internal class RunnerVariables(
         if (refused.isNotEmpty() && accepted.keys != current.keys) log("Environment variables not given to the agent (reserved names): ${refused.joinToString(", ")}.")
         if (current.isNotEmpty() && accepted != current) log("Environment variables changed: ${accepted.keys.joinToString(", ").ifEmpty { "none" }}.")
         current = accepted
+        val served = AgentEnvironment.acceptedSecrets(view.secrets)
+        secrets = served.filterKeys { it !in view.oneTime }
+        onceHeld += served.filterKeys { it in view.oneTime }
+        if (served.keys.toSet() != lastSecretNames) { lastSecretNames = served.keys.toSet(); if (served.isNotEmpty()) log("Wait secrets for the agent's commands: ${served.keys.sorted().joinToString(", ")}.") }
         nextRead = now() + maxAgeMillis
     }
 
@@ -111,7 +130,7 @@ internal class RunnerVariables(
  * helper receives a credential. One request per connection, at most [MAX_CONCURRENT] at once.
  *
  * The same socket takes the agent's `Stop` hook report ([CloudAgentState]): `wakeups <n>`, the number of its scheduled
- * wake-ups, given to [wakeups] and answered with nothing. A count only says whether the session has background work, so
+ * wake-ups, given to [wakeups] and answered with nothing; it also ends the turn for the one-time wait secrets ([RunnerVariables.endTurn]). A count only says whether the session has background work, so
  * the worst an agent writing it can do is keep its session running up to the team's cap, as a background command would.
  */
 internal class EnvironmentBroker(
@@ -135,7 +154,8 @@ internal class EnvironmentBroker(
     private suspend fun handle(connection: UnixConnection) {
         try {
             val request = withTimeoutOrNull(timeoutMillis) { connection.readLine(MAX_REQUEST_LINE) }
-            if (request != null && request.startsWith(WAKEUPS)) { wakeupCount(request)?.let(wakeups); return }
+            // The Stop hook reports at the end of every turn: that is also when a one-time wait secret is dropped.
+            if (request != null && request.startsWith(WAKEUPS)) { wakeupCount(request)?.let { wakeups(it); variables.endTurn() }; return }
             if (request != REQUEST) return
             val answer = try { variables.forCommand() } catch (error: CancellationException) { throw error } catch (_: Exception) {
                 log("The environment variables could not be served."); EnvironmentAnswer()
@@ -163,11 +183,18 @@ internal class EnvironmentBroker(
 }
 
 /**
- * A remote session's host has no environment to serve, only the agent's `Stop` hook report ([CloudAgentState]) to take:
- * the same `wakeups <n>` line as [EnvironmentBroker], on a socket of its own, handed to [wakeups]. Anything else is ignored
- * and nothing is answered. As there, the count only says whether the session has background work.
+ * A remote session's host serves the agent's `Stop` hook report ([CloudAgentState]): the same `wakeups <n>` line as
+ * [EnvironmentBroker], on a socket of its own, handed to [wakeups]. Anything else is ignored and nothing is answered. As there, the
+ * count only says whether the session has background work.
+ *
+ * With [variables] (the host's [RunnerVariables], reading only the session's wait secrets) it also answers the `environment`
+ * request of the agent's `CLAUDE_ENV_FILE` script exactly as [EnvironmentBroker] does, and the Stop hook ends the turn for the
+ * one-time secrets. The member's own variables are still given at the agent's start only.
  */
-internal class WakeupBroker(private val listener: UnixListener, private val wakeups: (Int) -> Unit, private val timeoutMillis: Long = 10_000) {
+internal class WakeupBroker(
+    private val listener: UnixListener, private val wakeups: (Int) -> Unit, private val timeoutMillis: Long = 10_000,
+    private val variables: RunnerVariables? = null, private val log: (String) -> Unit = {},
+) {
     private val permits = Semaphore(EnvironmentBroker.MAX_CONCURRENT)
 
     suspend fun serve() = coroutineScope {
@@ -177,8 +204,15 @@ internal class WakeupBroker(private val listener: UnixListener, private val wake
                 launch {
                     permits.withPermit {
                         try {
-                            withTimeoutOrNull(timeoutMillis) { connection.readLine(EnvironmentBroker.MAX_REQUEST_LINE) }
-                                ?.takeIf { it.startsWith(EnvironmentBroker.WAKEUPS) }?.let(EnvironmentBroker::wakeupCount)?.let(wakeups)
+                            val request = withTimeoutOrNull(timeoutMillis) { connection.readLine(EnvironmentBroker.MAX_REQUEST_LINE) }
+                            if (request != null && request.startsWith(EnvironmentBroker.WAKEUPS)) {
+                                EnvironmentBroker.wakeupCount(request)?.let { wakeups(it); variables?.endTurn() }
+                            } else if (request == EnvironmentBroker.REQUEST && variables != null) {
+                                val answer = try { variables.forCommand() } catch (error: CancellationException) { throw error } catch (_: Exception) {
+                                    log("The wait secrets could not be served."); EnvironmentAnswer()
+                                }
+                                connection.writeLine(EnvironmentBroker.codec.encodeToString(EnvironmentAnswer.serializer(), answer))
+                            }
                         } finally { connection.close() }
                     }
                 }

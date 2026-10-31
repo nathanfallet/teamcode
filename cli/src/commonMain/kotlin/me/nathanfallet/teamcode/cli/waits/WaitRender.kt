@@ -39,10 +39,11 @@ internal fun WaitView.announcement(): String = buildList {
 }.joinToString("\n")
 
 private fun WaitFieldView.describe(): String {
-    val flags = listOfNotNull(if (required) "required" else null, if (multiple) "multiple" else null, if (allowOther) "other allowed" else null)
+    val flags = listOfNotNull(if (required) "required" else null, if (multiple) "multiple" else null, if (allowOther) "other allowed" else null, if (oneTime) "one time" else null)
     val head = "  $id\t$type\t$label" + if (flags.isEmpty()) "" else " (${flags.joinToString(", ")})"
     val extras = buildList {
         help?.let { add("    $it") }
+        if (type == "secret") add("    secret: give it with teamcode waits answer --set-secret $id; the agent reads it as ${Waits.SECRET_ENV_PREFIX}${id.uppercase()}")
         if (options.isNotEmpty()) add("    options: " + options.joinToString(", ") { if (it.label == it.value) it.value else "${it.value} (${it.label})" })
         default?.let { add("    default: $it") }
     }

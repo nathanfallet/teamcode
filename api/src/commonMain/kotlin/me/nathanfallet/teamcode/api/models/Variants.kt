@@ -78,6 +78,12 @@ data class BulkAssignmentResponse(val assigned: Int, val keptDirect: Int, val ex
  * value cannot be read right now. Holds secrets: never log, persist or echo it.
  */
 @Serializable
-class EnvironmentVariablesView(val variables: Map<String, String> = emptyMap(), val unavailable: List<String> = emptyList()) {
-    override fun toString() = "EnvironmentVariablesView(names=${variables.keys.sorted()}, unavailable=$unavailable, values=[REDACTED])"
+class EnvironmentVariablesView(
+    val variables: Map<String, String> = emptyMap(), val unavailable: List<String> = emptyList(),
+    /** A cloud session's wait secrets (docs/waits.md) by variable name (`TEAMCODE_WAIT_…`); only the runner's route fills it. */
+    val secrets: Map<String, String> = emptyMap(),
+    /** The names in [secrets] the server deleted when it served them: the runner keeps those for the rest of the turn. */
+    val oneTime: List<String> = emptyList(),
+) {
+    override fun toString() = "EnvironmentVariablesView(names=${variables.keys.sorted()}, unavailable=$unavailable, secrets=${secrets.keys.sorted()}, oneTime=$oneTime, values=[REDACTED])"
 }

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.*
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.waits.*
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
+import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 
@@ -12,8 +13,11 @@ import org.jetbrains.exposed.v1.jdbc.*
  * replicas answering at once exactly one changes the row; creation locks its session's row, so the cap of open waits
  * holds across replicas. A session's open permission request is read from the session's own columns, in the same
  * transaction as the stored waits, never copied (docs/waits.md).
+ *
+ * The values of secret fields (docs/waits.md#secrets) are sealed with [cipher] into `wait_secrets`, in the answer's own
+ * transaction; the wait's row holds only "provided". Without a cipher no secret can be stored or served.
  */
-class SqlWaitStore(private val database: Database) : WaitStore {
+class SqlWaitStore(private val database: Database, private val cipher: CredentialCipher? = null) : WaitStore {
     override suspend fun now(): Long = database.query { nowMillis() }
     override suspend fun revalidate(actor: Principal) = database.query { requireCurrent(this, actor) }
     override suspend fun member(teamId: String, memberId: String): Member? = database.query {
@@ -24,9 +28,9 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         CloudInferenceCredentials.select(CloudInferenceCredentials.sessionId).where { CloudInferenceCredentials.tokenId eq tokenId }.singleOrNull()?.get(CloudInferenceCredentials.sessionId)
     }
     override suspend fun session(teamId: String, sessionId: String): WaitSession? = database.query {
-        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.name)
+        CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.name, CloudSessions.agentKind)
             .where { (CloudSessions.id eq sessionId) and (CloudSessions.teamId eq teamId) }.singleOrNull()
-            ?.let { WaitSession(it[CloudSessions.id], it[CloudSessions.teamId], it[CloudSessions.ownerId], it[CloudSessions.name]) }
+            ?.let { WaitSession(it[CloudSessions.id], it[CloudSessions.teamId], it[CloudSessions.ownerId], it[CloudSessions.name], it[CloudSessions.agentKind]) }
     }
 
     override suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange = database.query {
@@ -87,8 +91,9 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         WaitPage(sessions + page, if (rows.size > query.limit) page.last().id else null)
     }
 
-    override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange = database.query {
+    override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer, secrets: List<WaitSecret>): WaitChange = database.query {
         requireCurrent(this, actor)
+        if (secrets.isNotEmpty() && cipher == null) throw TeamFailure("secrets_unavailable", 503, "This server has no encryption key, so it cannot keep a secret.")
         val changed = Waits.update({ (Waits.id eq id) and (Waits.teamId eq actor.teamId) and (Waits.status eq WaitStatus.OPEN.wire) }) {
             it[status] = WaitStatus.RESOLVED.wire; it[answerAction] = answer.action; it[answerValues] = JsonObject(answer.values).toString()
             it[answerAuthorId] = answer.authorId; it[resolvedAt] = answer.answeredAt
@@ -96,9 +101,58 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         val wait = read(actor.teamId, id) ?: throw TeamFailure("not_found", 404, "Wait not found.")
         if (changed) {
             audit(actor.teamId, actor.member.id, "wait.answered", id, null, actor.tokenId, related = wait.assigneeId.takeIf { it != actor.member.id })
+            // Only the fact is audited, by field id: never a value, never the variable's content.
+            if (secrets.isNotEmpty()) {
+                keep(wait, secrets, answer.answeredAt)
+                audit(actor.teamId, actor.member.id, "wait.secret_provided", id, null, actor.tokenId, details = secrets.joinToString(",") { it.fieldId })
+            }
             publish(TeamEventType.WAIT_RESOLVED, wait, answer.answeredAt) { put("action", answer.action) }
         }
         WaitChange(wait, changed)
+    }
+
+    /** Seals [secrets] for the wait's session. The context binds each to its team, session and name; a later answer with the same name replaces the row. */
+    private fun JdbcTransaction.keep(wait: Wait, secrets: List<WaitSecret>, at: Long) {
+        val owner = CloudSessions.select(CloudSessions.ownerId).where { CloudSessions.id eq wait.sessionId!! }.single()[CloudSessions.ownerId]
+        for (secret in secrets) {
+            val sealed = cipher!!.encrypt(secret.value.toByteArray(Charsets.UTF_8), secretContext(wait.teamId, wait.sessionId!!, secret.envName))
+            WaitSecretTable.upsert {
+                it[sessionId] = wait.sessionId!!; it[envName] = secret.envName; it[waitId] = wait.id; it[teamId] = wait.teamId; it[fieldId] = secret.fieldId
+                it[ownerId] = owner; it[oneTime] = secret.oneTime; it[value] = sealed; it[createdAt] = at; it[expiresAt] = secret.expiresAt
+            }
+        }
+    }
+
+    private fun secretContext(teamId: String, sessionId: String, envName: String) = "wait-secret:$teamId:$sessionId:$envName"
+
+    override suspend fun serveSecrets(teamId: String, sessionId: String, ownerId: String): ServedSecrets = database.query {
+        val sealer = cipher ?: return@query ServedSecrets()
+        val now = nowMillis()
+        // `wait_secret_session (session_id, expires_at)`: the session's unexpired rows by index, a handful at most.
+        val rows = WaitSecretTable.selectAll().where {
+            (WaitSecretTable.sessionId eq sessionId) and (WaitSecretTable.teamId eq teamId) and (WaitSecretTable.expiresAt greater now) and (WaitSecretTable.ownerId eq ownerId)
+        }.limit(MAX_SERVED_SECRETS).toList()
+        val values = linkedMapOf<String, String>(); val once = mutableSetOf<String>()
+        for (row in rows) {
+            val name = row[WaitSecretTable.envName]
+            if (row[WaitSecretTable.oneTime]) {
+                // The delete decides: of two replicas serving together, exactly one removes the row, so exactly one hands the value out.
+                val removed = WaitSecretTable.deleteWhere { (WaitSecretTable.sessionId eq sessionId) and (WaitSecretTable.envName eq name) and (WaitSecretTable.waitId eq row[WaitSecretTable.waitId]) } > 0
+                if (!removed) continue
+                once += name
+                audit(teamId, ownerId, "wait.secret_consumed", row[WaitSecretTable.waitId], details = row[WaitSecretTable.fieldId])
+            }
+            values[name] = sealer.decrypt(row[WaitSecretTable.value], secretContext(teamId, sessionId, name)).toString(Charsets.UTF_8)
+        }
+        ServedSecrets(values, once)
+    }
+
+    override suspend fun purgeSecrets(limit: Int): Int = database.query {
+        // `wait_secret_expiry (expires_at)`; delete by key from a bounded read, as a DELETE ... LIMIT is not portable in the DSL.
+        val now = nowMillis()
+        val keys = WaitSecretTable.select(WaitSecretTable.sessionId, WaitSecretTable.envName).where { WaitSecretTable.expiresAt lessEq now }
+            .orderBy(WaitSecretTable.expiresAt to SortOrder.ASC).limit(limit).map { it[WaitSecretTable.sessionId] to it[WaitSecretTable.envName] }
+        keys.sumOf { (session, name) -> WaitSecretTable.deleteWhere { (sessionId eq session) and (envName eq name) and (expiresAt lessEq now) } }
     }
 
     override suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange = database.query {
@@ -222,7 +276,7 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         )
     }
 
-    private companion object { const val MAX_SESSION_WAITS = 100; const val WAKE_GRACE_MILLIS = 15_000L }
+    private companion object { const val MAX_SERVED_SECRETS = 640; const val MAX_SESSION_WAITS = 100; const val WAKE_GRACE_MILLIS = 15_000L }
 }
 
 /** The JSON stored in the wait's columns; unknown members and values are dropped on read, never trusted. */
@@ -249,13 +303,14 @@ internal object WaitJson {
             f.default?.let { put("default", it) }
             put("options", buildJsonArray { f.options.forEach { o -> add(buildJsonObject { put("value", o.value); put("label", o.label); o.description?.let { put("description", it) } }) } })
             put("multiple", f.multiple); put("allowOther", f.allowOther); f.maxLength?.let { put("maxLength", it) }
+            if (f.oneTime) put("oneTime", true)
         }) }
     }.toString()
     fun fields(text: String): List<WaitField> = array(text).map { f ->
         WaitField(
             f.str("id") ?: "", f.str("type")?.let(FieldType::parse) ?: FieldType.TEXT, f.str("label") ?: "", f.str("help"), f["required"].bool(), f["default"],
             (f["options"] as? JsonArray)?.mapNotNull { it as? JsonObject }?.map { WaitOption(it.str("value") ?: "", it.str("label") ?: "", it.str("description")) }.orEmpty(),
-            f["multiple"].bool(), f["allowOther"].bool(), (f["maxLength"] as? JsonPrimitive)?.intOrNull,
+            f["multiple"].bool(), f["allowOther"].bool(), (f["maxLength"] as? JsonPrimitive)?.intOrNull, f["oneTime"].bool(),
         )
     }
 

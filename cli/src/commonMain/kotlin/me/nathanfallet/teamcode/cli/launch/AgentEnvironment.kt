@@ -33,6 +33,17 @@ internal object AgentEnvironment {
     )
     private val reservedPrefixes = listOf("LD_", "DYLD_", "TEAMCODE_", "ANTHROPIC_", "CLAUDE_", "OPENAI_", "CODEX_", "XDG_", "GIT_CONFIG_", "BASH_FUNC_")
 
+    /**
+     * The name of a wait secret (docs/waits.md#secrets): `TEAMCODE_WAIT_` and an upper-cased field id. It is the one exception to
+     * the `TEAMCODE_` prefix, and only [script] takes it, from the `secrets` it is given: a variable of that name in the plain
+     * variables is still withheld.
+     */
+    private val waitSecret = Regex("TEAMCODE_WAIT_[A-Z][A-Z0-9_]{0,63}")
+    fun isWaitSecret(name: String) = waitSecret.matches(name)
+    /** The secrets that may reach a shell: a wait secret's name and a value without a NUL. */
+    fun acceptedSecrets(secrets: Map<String, String>): Map<String, String> =
+        secrets.filter { (key, value) -> isWaitSecret(key) && '\u0000' !in value }.entries.sortedBy { it.key }.associate { it.key to it.value }
+
     /** The variable Claude Code reads its per-command environment script from. */
     const val CLAUDE_ENV_FILE = "CLAUDE_ENV_FILE"
 
@@ -45,11 +56,16 @@ internal object AgentEnvironment {
     /** Names withheld by [accepted], reported by name so an administrator can rename them. */
     fun refused(variables: Map<String, String>): List<String> = (variables.keys - accepted(variables).keys).sorted()
 
-    /** Shell code that sets [variables] and unsets [withdrawn] (names the agent was given earlier and no longer has). */
-    fun script(variables: Map<String, String>, withdrawn: Set<String> = emptySet()): String = buildString {
+    /**
+     * Shell code that sets [variables] and [secrets] (wait secrets) and unsets [withdrawn] (names the agent was given earlier and no
+     * longer has).
+     */
+    fun script(variables: Map<String, String>, withdrawn: Set<String> = emptySet(), secrets: Map<String, String> = emptyMap()): String = buildString {
         appendLine("# Written by TeamCode for this session: your assigned environment variables. Do not edit.")
-        for (variable in withdrawn.filter(::accepted).filter { it !in variables }.sorted()) appendLine("unset $variable")
+        val given = acceptedSecrets(secrets)
+        for (variable in withdrawn.filter { accepted(it) || isWaitSecret(it) }.filter { it !in variables && it !in given }.sorted()) appendLine("unset $variable")
         for ((key, value) in accepted(variables)) appendLine("export $key=${quote(value)}")
+        for ((key, value) in given) appendLine("export $key=${quote(value)}")
     }
 
     /**
@@ -74,8 +90,9 @@ internal object AgentEnvironment {
      * The cloud script: no value, only a call to the runner, which answers with [script] for the current owner. A
      * failure prints nothing, so a Bash command never fails because of it.
      */
-    fun cloudScript(binary: String, socket: String) = buildString {
+    fun cloudScript(binary: String, socket: String, chained: String? = null) = buildString {
         appendLine("# Written by TeamCode: asks the session runner for the owner's current environment variables before each command.")
+        chained?.let { appendLine("[ -f ${quote(it)} ] && . ${quote(it)}") }
         appendLine("eval \"\$(${quote(binary)} cloud environment --socket ${quote(socket)} 2>/dev/null)\"")
     }
 }

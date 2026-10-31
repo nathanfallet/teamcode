@@ -857,6 +857,10 @@
     <string name="waits_problem_date">%1$s doit être une date (AAAA-MM-JJ).</string>
     <string name="waits_problem_too_long">%1$s est trop long.</string>
     <string name="waits_problem_unsupported">%1$s se remplit dans la session. Ouvre-la.</string>
+    <string name="waits_secret_hint">Masqué. Il va dans le shell de l’agent comme variable d’environnement, et personne ne le revoit.</string>
+    <string name="waits_secret_once">Supprimé dès que l’agent l’a utilisé.</string>
+    <string name="waits_secret_provided">secret fourni</string>
+    <string name="waits_secret_not_provided">aucun secret fourni</string>
     <string name="waits_field_in_session">Se remplit dans la session.</string>
     <string name="waits_reconnecting">Reconnexion…</string>
     <string name="tab_waits">En attente</string>
@@ -1189,7 +1193,7 @@
     <string name="wfp_field_duplicate">Deux champs ont l'identifiant %1$s.</string>
     <string name="wfp_field_label">Le champ %1$s a besoin d'un libellé de 1 à %2$s caractères.</string>
     <string name="wfp_field_help">L'aide de %1$s fait au plus %2$s caractères.</string>
-    <string name="wfp_field_secret">Le champ %1$s ne peut pas être secret : les secrets ne sont pas encore disponibles.</string>
+    <string name="wfp_field_secret">Le champ %1$s ne peut pas être secret : une étape de workflow ne prend pas de secret, seule une demande d’un agent en prend.</string>
     <string name="wfp_field_max_length">Seul un champ texte a une limite de longueur, de 1 à %2$s (champ %1$s).</string>
     <string name="wfp_field_options">Le champ %1$s a besoin de 1 à %2$s options, et seul un choix a des options.</string>
     <string name="wfp_field_option_value">Une option de %1$s a besoin d'une valeur et d'un libellé.</string>

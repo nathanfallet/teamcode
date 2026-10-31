@@ -43,6 +43,8 @@ data class WaitField(
     val multiple: Boolean = false,
     val allowOther: Boolean = false,
     val maxLength: Int? = null,
+    /** A secret field: deleted once the agent has used it. */
+    val oneTime: Boolean = false,
 )
 
 data class WaitAction(val id: String, val label: String, val requires: List<String> = emptyList(), val style: String? = null)
@@ -104,9 +106,12 @@ data class AnswerLine(val label: String, val value: AnswerValue)
 sealed interface AnswerValue {
     data class Words(val text: String) : AnswerValue
     data class Flag(val value: Boolean) : AnswerValue
+    /** A secret field: whether a value was given, never the value (the server does not return it). */
+    data class Secret(val provided: Boolean) : AnswerValue
 }
 
 private fun JsonElement.shown(field: WaitField?): AnswerValue {
+    if (field?.type == FieldType.SECRET) return AnswerValue.Secret((this as? JsonPrimitive)?.content == "provided")
     fun label(value: String) = field?.options?.firstOrNull { it.value == value }?.label ?: value
     return when (this) {
         is JsonPrimitive -> if (!isString && (content == "true" || content == "false")) AnswerValue.Flag(content == "true") else AnswerValue.Words(label(content))
@@ -128,6 +133,15 @@ sealed interface FieldInput {
     data class Text(val value: String) : FieldInput
     data class Chosen(val values: Set<String>) : FieldInput
     data class Flag(val value: Boolean) : FieldInput
+    /**
+     * What the member typed for a secret field. It lives in memory only: it prints as `Secret(***)`, is never put in a saved state, and
+     * leaves with its draft when the wait is answered.
+     */
+    class Secret(val value: String) : FieldInput {
+        override fun toString() = "Secret(***)"
+        override fun equals(other: Any?) = other is Secret && other.value == value
+        override fun hashCode() = value.hashCode()
+    }
 }
 
 /** Why an answer cannot be sent yet: the field to fix, in the member's words (its label). */

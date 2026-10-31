@@ -74,7 +74,7 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val body = call.jsonBody<RunnerVariablesRequest>()
             val pod = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
             val resolved = variables.variables(pod.teamId, pod.sessionId, pod.epoch)
-            call.respond(EnvironmentVariablesView(resolved.values, resolved.unavailable))
+            call.respond(EnvironmentVariablesView(resolved.values, resolved.unavailable, resolved.secrets.values, resolved.secrets.oneTime.sorted()))
         }
     }
     channel.inference?.let { inference ->

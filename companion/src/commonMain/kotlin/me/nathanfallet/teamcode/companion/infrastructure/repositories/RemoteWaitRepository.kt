@@ -68,5 +68,5 @@ internal fun WaitView.domain() = Wait(
 private fun WaitRefView.domain() = WaitRef(kind, id, url, title)
 private fun WaitActionView.domain() = WaitAction(id, label, requires, style)
 private fun WaitFieldView.domain() = WaitField(
-    id, FieldType.of(type), label, help, required, default, options.map { WaitOption(it.value, it.label, it.description) }, multiple, allowOther, maxLength,
+    id, FieldType.of(type), label, help, required, default, options.map { WaitOption(it.value, it.label, it.description) }, multiple, allowOther, maxLength, oneTime,
 )

@@ -55,6 +55,7 @@ class WaitsScreenTest {
     private class Waits : WaitRepository {
         val byStatus = mutableMapOf<WaitStatus, List<Wait>>()
         val answers = mutableListOf<String>()
+        val given = mutableListOf<Map<String, JsonElement>>()
         var pageSize = 50
         var failure: Exception? = null
         var timers = listOf<Wait>()
@@ -70,6 +71,7 @@ class WaitsScreenTest {
         }
         override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait {
             answers += "$waitId $action ${values.keys}"
+            given += values
             val wait = byStatus.getValue(WaitStatus.OPEN).first { it.id == waitId }
             byStatus[WaitStatus.OPEN] = byStatus.getValue(WaitStatus.OPEN) - wait
             return wait.copy(open = false)
@@ -102,6 +104,25 @@ class WaitsScreenTest {
         setContent { TeamCodeTheme { WaitsScreen(model, onOpenSession = { account, session -> opened += "$account/$session" }, clock = FixedClock(now)) } }
         feed.trySend(LiveUpdate.Opened(false))
         return Screen(model, waits, feed, opened)
+    }
+
+    @Test fun aSecretFieldIsMaskedSentOnceAndShownNowhereAfterwards() = runComposeUiTest {
+        val secret = WaitField("store_password", FieldType.SECRET, "Store password", required = true, oneTime = true)
+        val screen = screen({
+            byStatus[WaitStatus.OPEN] = listOf(wait("w1", "Sign in", "Fix the build").copy(fields = listOf(secret), actions = listOf(WaitAction("send", "Send"))))
+        })
+        waitUntil { screen.model.uiState.value.loaded }
+        val sentinel = "S3NTINEL-pw-1234"
+        onNodeWithTag("wait-field-store_password").performTextInput(sentinel)
+        // The field is masked: the typed text is on no node, and the model's state and draft print no value.
+        val shown = onNodeWithTag("wait-field-store_password").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text
+        assertFalse(sentinel in shown, "what the field shows (and an accessibility service reads) is masked")
+        assertFalse(screen.model.uiState.value.toString().contains(sentinel), "a log of the state shows no secret")
+        onNodeWithTag("wait-action-send").performClick()
+        waitUntil { screen.waits.answers.isNotEmpty() && screen.model.uiState.value.waits.isEmpty() }
+        assertEquals(listOf(mapOf<String, JsonElement>("store_password" to JsonPrimitive(sentinel))), screen.waits.given)
+        assertFalse(screen.model.uiState.value.toString().contains(sentinel), "and nothing is kept once it is sent")
+        onNodeWithText(sentinel).assertDoesNotExist()
     }
 
     @Test fun everyOpenWaitShowsWithItsSessionKindAndAgeAndIsAnsweredInPlace() = runComposeUiTest {

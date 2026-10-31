@@ -10,6 +10,7 @@ import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.waits.*
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.*
 
 /** The wait routes decode, authorize by credential and encode; the rules are the domain's (WaitService). */
@@ -22,7 +23,7 @@ class WaitRoutesTest {
         override suspend fun executionSession(tokenId: String) = "s1".takeIf { tokenId == "exec-token" }
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun member(teamId: String, memberId: String) = Member(memberId, memberId, Role.MEMBER, false, false)
-        override suspend fun session(teamId: String, sessionId: String) = WaitSession(sessionId, teamId, "admin-id", "Fix the login").takeIf { sessionId == "s1" }
+        override suspend fun session(teamId: String, sessionId: String) = WaitSession(sessionId, teamId, "admin-id", "Fix the login", "claude").takeIf { sessionId == "s1" }
         override suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange {
             idempotencyKey?.let { key -> keys[key]?.let { return WaitChange(waits.getValue(it), false) } }
             waits[wait.id] = wait; idempotencyKey?.let { keys[it] = wait.id }
@@ -41,9 +42,13 @@ class WaitRoutesTest {
         }
         override suspend fun pendingWakes(limit: Int) = emptyList<Wait>()
         override suspend fun wakeDelivered(id: String) = Unit
-        override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange {
+        val kept = mutableListOf<WaitSecret>()
+        override suspend fun serveSecrets(teamId: String, sessionId: String, ownerId: String) = ServedSecrets(kept.associate { it.envName to it.value })
+        override suspend fun purgeSecrets(limit: Int) = 0
+        override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer, secrets: List<WaitSecret>): WaitChange {
             val wait = waits.getValue(id)
             if (wait.status != WaitStatus.OPEN) return WaitChange(wait, false)
+            kept += secrets
             return WaitChange(wait.copy(status = WaitStatus.RESOLVED, answer = answer, resolvedAt = answer.answeredAt).also { waits[id] = it }, true)
         }
         override suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange {
@@ -113,7 +118,7 @@ class WaitRoutesTest {
         }
         suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
         assertEquals("invalid_wait", code(call(HttpMethod.Post, "/api/v1/waits", "admin", review.replace("\"text\"", "\"slider\""))))
-        assertEquals("not_available_yet", code(call(HttpMethod.Post, "/api/v1/waits", "admin", review.replace("\"text\"", "\"secret\""))))
+        assertEquals("invalid_wait", code(call(HttpMethod.Post, "/api/v1/waits", "admin", review.replace("\"text\"", "\"secret\"").replace("\"label\":\"Feedback\"", "\"label\":\"Feedback\",\"default\":\"x\""))), "a secret has no default")
         assertEquals("not_found", code(call(HttpMethod.Post, "/api/v1/waits", "admin", review.replace("\"s1\"", "\"s2\""))))
         assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Get, "/api/v1/waits/not%20an%20id", "admin").status)
         assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/waits?status=pending", "admin").status)
@@ -207,5 +212,35 @@ class WaitRoutesTest {
         repeat(30) { assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/waits/w1/event?token=nope") { setBody("{}") }.status) }
         val limited = client.post("/api/v1/waits/w1/event?token=nope") { setBody("{}") }
         assertEquals(HttpStatusCode.TooManyRequests, limited.status); assertEquals("60", limited.headers["Retry-After"])
+    }
+
+    @Test fun aSecretValueIsInNoResponseAndNoLog() = testApplication {
+        val store = Store(); val sentinel = "S3NTINEL-pa55w0rd-routes"
+        val captured = java.io.ByteArrayOutputStream(); val stdout = System.out; val stderr = System.err
+        System.setOut(java.io.PrintStream(captured)); System.setErr(java.io.PrintStream(captured))
+        val bodies = mutableListOf<String>()
+        try {
+            application { configureGateway(gateway, team = team(), waits = WaitService(store)) }
+            suspend fun call(method: HttpMethod, path: String, token: String, json: String? = null) = client.request(path) {
+                this.method = method; bearerAuth(token)
+                if (json != null) { contentType(ContentType.Application.Json); setBody(json) }
+            }.also { bodies += it.bodyAsText() }
+            val ask = """{"wait":{"sessionId":"s1","title":"Shop access","fields":[{"id":"shop_password","type":"secret","label":"Shop password","required":true,"oneTime":true}]}}"""
+            val created = Serialization.json.decodeFromString<WaitView>(call(HttpMethod.Post, "/api/v1/waits", "admin", ask).also { assertEquals(HttpStatusCode.Created, it.status) }.bodyAsText())
+            assertTrue(created.fields.single().oneTime)
+            val answered = call(HttpMethod.Post, "/api/v1/waits/${created.id}/answer", "admin", """{"action":"done","values":{"shop_password":"$sentinel"}}""")
+            assertEquals(HttpStatusCode.OK, answered.status)
+            val view = Serialization.json.decodeFromString<WaitView>(answered.bodyAsText())
+            assertEquals(JsonPrimitive("provided"), view.answer!!.values["shop_password"])
+            call(HttpMethod.Get, "/api/v1/waits/${created.id}", "admin"); call(HttpMethod.Get, "/api/v1/waits?status=all", "admin")
+            call(HttpMethod.Post, "/api/v1/waits/${created.id}/answer", "admin", """{"action":"done","values":{"shop_password":"$sentinel"}}""")
+            // A refusal never repeats it either.
+            call(HttpMethod.Post, "/api/v1/waits/${created.id}/answer", "admin", """{"action":"other","values":{"shop_password":"$sentinel"}}""")
+            assertEquals(sentinel, store.kept.single().value, "the store did get the value, once")
+            assertFalse(AnswerWaitRequest("done", mapOf("shop_password" to JsonPrimitive(sentinel))).toString().contains(sentinel))
+        } finally { System.setOut(stdout); System.setErr(stderr) }
+        assertTrue(bodies.size >= 6)
+        bodies.forEach { assertFalse(sentinel in it, "a response body: $it") }
+        assertFalse(sentinel in captured.toString(), "the log capture")
     }
 }

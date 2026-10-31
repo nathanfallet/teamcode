@@ -75,7 +75,7 @@ internal class CloudEnvironment : SuspendingCliktCommand(name = "environment") {
     private val socket by option("--socket", help = "The runner's environment socket.").required()
     override suspend fun run() {
         val answer = requestEnvironment(socket) ?: return
-        echo(AgentEnvironment.script(answer.variables, answer.withdrawn.toSet()), trailingNewline = false)
+        echo(AgentEnvironment.script(answer.variables, answer.withdrawn.toSet(), answer.secrets), trailingNewline = false)
     }
 }
 

@@ -82,6 +82,10 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         val session = store.session(actor.teamId, valid.sessionId)?.takeIf { it.ownerId == actor.member.id || actor.canReadTeam }
             ?: throw TeamFailure("not_found", 404, "Session not found.")
         if (session.ownerId != actor.member.id) throw TeamFailure("wait_session_owner_only", 403, "Only the session's owner asks for something on it.")
+        // A secret reaches the agent through the per-command environment of Claude Code only: Codex reads its environment once, when
+        // the process starts, so a value given later could not reach it, and one given earlier could not be withdrawn or expire.
+        if (valid.fields.any { it.type == FieldType.SECRET } && session.agentKind !in WaitRules.SECRET_AGENTS)
+            throw TeamFailure("secret_unsupported_agent", 422, "This session's agent (${session.agentKind.ifBlank { "unknown" }}) cannot receive a secret mid-session: only Claude Code reads its environment again before each command. Ask the person to set the secret up another way.")
         // A wait for a time or an event asks nobody: the session's owner, whose session it wakes, is its assignee.
         if (valid.resolver != WaitResolver.HUMAN && valid.assigneeId != null && valid.assigneeId != session.ownerId)
             throw TeamFailure("invalid_assignee", 400, "A wait for a time or an event asks nobody: leave the assignee out.")
@@ -122,7 +126,10 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         if (wait.status != WaitStatus.OPEN) return repeated(actor, wait, action, values)
         WaitRules.checkAnswer(wait.fields, wait.actions, action, values)
         wait.sessionId?.let { sessions?.authorize(actor, it) }
-        val change = store.answer(actor, id, WaitAnswer(action, values, actor.member.id, store.now()))
+        val answeredAt = store.now()
+        // The values of secret fields leave the answer here: it stores "provided" for them, and the store seals the values apart.
+        val split = WaitSecrets.split(wait.fields, values, answeredAt)
+        val change = store.answer(actor, id, WaitAnswer(action, split.values, actor.member.id, answeredAt), split.secrets)
         if (!change.changed) return repeated(actor, change.wait, action, values)
         return wake(actor, change.wait)
     }
@@ -130,7 +137,9 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
     /** The same member sending the same answer again: the message is queued again (idempotently); anything else is a lost race. */
     private suspend fun repeated(actor: Principal, wait: Wait, action: String, values: Map<String, kotlinx.serialization.json.JsonElement>): Wait {
         val given = wait.answer
-        if (wait.status != WaitStatus.RESOLVED || given == null || given.authorId != actor.member.id || given.action != action || given.values != values) throw closed()
+        // A secret is compared as the stored answer holds it ("provided"): its value is not kept in the answer, and a retry stores nothing.
+        if (wait.status != WaitStatus.RESOLVED || given == null || given.authorId != actor.member.id || given.action != action ||
+            given.values != WaitSecrets.split(wait.fields, values, 0).values) throw closed()
         return wake(actor, wait)
     }
 
@@ -211,6 +220,8 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
             if (!turnFailed) deliver(change.wait)
         }
         for (wait in store.pendingWakes(limit)) deliver(wait)
+        // Secrets past their lifetime are deleted whether used or not (a handful of rows, by index).
+        store.purgeSecrets(limit)
         return resolved
     }
 

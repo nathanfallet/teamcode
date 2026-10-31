@@ -182,6 +182,11 @@ object DemoContent {
             wait("w4", "s2", "Review the release checklist", WaitKind.HUMAN_REQUEST, "Which store do we ship first?", null, 35,
                 listOf(WaitField("store", FieldType.CHOICE, "Store", required = true, options = listOf(WaitOption("ios", "App Store"), WaitOption("android", "Google Play")))),
                 listOf(WaitAction("done", "Send"))),
+            // A secret: typed masked, kept by the server for this session only, and read by the agent as an environment variable.
+            wait("w10", "s2", "Review the release checklist", WaitKind.HUMAN_REQUEST, "Sign in to the store dashboard",
+                "The agent checks the review status of build 2.4. It reads the password from an environment variable in its own shell and never shows it.", 40,
+                listOf(WaitField("store_password", FieldType.SECRET, "Store password", required = true, oneTime = true)),
+                listOf(WaitAction("done", "Send", style = "primary"), WaitAction("skip", "Not now"))),
             wait("w5", "s4", "Write the onboarding guide", WaitKind.HUMAN_REQUEST, "Is the tone right for new developers?", "I drafted the first page in a friendly, direct voice.", 180,
                 listOf(feedback), review).copy(open = false, resolvedAt = now - 150 * MINUTE,
                 answer = WaitAnswer("approve", mapOf("feedback" to JsonPrimitive("Yes, keep it short.")), MEMBER_ID, now - 150 * MINUTE)),

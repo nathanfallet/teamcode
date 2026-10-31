@@ -156,13 +156,17 @@ object WaitAnswerBuilder {
             if (field.type == FieldType.INFO) continue
             val needed = field.required || field.id in action.requires
             fun problem(reason: Reason) = WaitInputProblem(field.id, field.label, reason)
-            if (field.type == FieldType.SECRET || field.type == FieldType.FILE) {
-                // Secrets are not asked yet; a file is attached from the session.
+            if (field.type == FieldType.FILE) {
+                // A file is attached from the session.
                 if (needed) throw problem(Reason.UNSUPPORTED)
                 continue
             }
             val input = inputs[field.id]
             val value: JsonElement? = when (field.type) {
+                FieldType.SECRET -> (input as? FieldInput.Secret)?.value?.takeIf { it.isNotBlank() }?.let { text ->
+                    if (text.encodeToByteArray().size > MAX_SECRET_BYTES || '\u0000' in text) throw problem(Reason.TOO_LONG)
+                    JsonPrimitive(text)
+                }
                 FieldType.CONFIRM -> (input as? FieldInput.Flag)?.let { JsonPrimitive(it.value) }
                 FieldType.CHOICE -> (input as? FieldInput.Chosen)?.values?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }?.let { chosen ->
                     if (field.multiple) JsonArray(chosen.map(::JsonPrimitive)) else JsonPrimitive(chosen.first())
@@ -186,6 +190,7 @@ object WaitAnswerBuilder {
     }
 
     private const val DEFAULT_TEXT = 8_000
+    private const val MAX_SECRET_BYTES = 4096
     private val DATE = Regex("""(\d{4})-(\d{2})-(\d{2})""")
 
     private fun isDate(text: String): Boolean {

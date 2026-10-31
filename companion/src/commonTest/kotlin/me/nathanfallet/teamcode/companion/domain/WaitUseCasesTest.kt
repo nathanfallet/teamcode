@@ -12,7 +12,10 @@ import me.nathanfallet.teamcode.companion.FakeSessionRepository
 import me.nathanfallet.teamcode.companion.FixedClock
 import me.nathanfallet.teamcode.companion.InMemoryAccountRepository
 import me.nathanfallet.teamcode.companion.credentials
+import me.nathanfallet.teamcode.companion.domain.models.AnswerLine
+import me.nathanfallet.teamcode.companion.domain.models.AnswerValue
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
 import me.nathanfallet.teamcode.companion.domain.models.FieldInput
 import me.nathanfallet.teamcode.companion.domain.models.FieldType
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
@@ -98,11 +101,32 @@ class WaitUseCasesTest {
         assertEquals(WaitInputProblem.Reason.TOO_LONG, reason(FieldType.TEXT, "abcd", max = 3))
     }
 
-    @Test fun aSecretOrAFileIsNotFilledHereButDoesNotBlockWhatDoesNotNeedIt() {
+    @Test fun aFileIsNotFilledHereButDoesNotBlockWhatDoesNotNeedIt() {
         val optional = wait(fields = listOf(WaitField("f", FieldType.FILE, "Screenshot"), WaitField("s", FieldType.SECRET, "Password")))
         assertEquals(emptyMap(), WaitAnswerBuilder.build(optional, optional.actions.single(), emptyMap()))
         val needed = wait(fields = listOf(WaitField("f", FieldType.FILE, "Screenshot", required = true)))
         assertEquals(WaitInputProblem.Reason.UNSUPPORTED, problem(needed, "done", emptyMap()).reason)
+    }
+
+    @Test fun aSecretIsSentAsTypedAndNeverPrintsItsValue() {
+        val secret = WaitField("pw", FieldType.SECRET, "Password", required = true)
+        val wait = wait(fields = listOf(secret))
+        val typed = FieldInput.Secret("S3NTINEL-it's \"q\" \n line2")
+        assertEquals(mapOf("pw" to JsonPrimitive(typed.value)), WaitAnswerBuilder.build(wait, wait.actions.single(), mapOf("pw" to typed)), "the value is sent as it was typed, not trimmed or altered")
+        assertFalse("S3NTINEL" in typed.toString() + mapOf("pw" to typed).toString(), "a draft printed in a log shows no value")
+        assertEquals(FieldInput.Secret("a"), FieldInput.Secret("a"))
+        assertEquals(WaitInputProblem.Reason.MISSING, problem(wait, "done", mapOf("pw" to FieldInput.Secret("   "))).reason)
+        assertEquals(WaitInputProblem.Reason.MISSING, problem(wait, "done", emptyMap()).reason)
+        assertEquals(WaitInputProblem.Reason.TOO_LONG, problem(wait, "done", mapOf("pw" to FieldInput.Secret("é".repeat(2049)))).reason, "4 KiB of bytes")
+        assertEquals(emptyMap(), WaitAnswerBuilder.build(wait(fields = listOf(secret.copy(required = false))), wait.actions.single(), emptyMap()), "an optional secret left empty is not sent")
+    }
+
+    @Test fun anAnsweredSecretReadsProvidedNeverAValue() {
+        val secret = WaitField("pw", FieldType.SECRET, "Password")
+        val answered = wait(fields = listOf(secret, WaitField("note", FieldType.TEXT, "Note"))).copy(open = false, answer = WaitAnswer("done", mapOf("pw" to JsonPrimitive("provided"), "note" to JsonPrimitive("ok"))))
+        assertEquals(listOf(AnswerLine("Password", AnswerValue.Secret(true)), AnswerLine("Note", AnswerValue.Words("ok"))), answered.answerLines())
+        val skipped = answered.copy(answer = WaitAnswer("done", mapOf("pw" to JsonPrimitive("not provided"))))
+        assertEquals(AnswerValue.Secret(false), skipped.answerLines().single().value)
     }
 
     private fun guard() = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), InMemoryAccountRepository(), credentials(), FixedClock()))

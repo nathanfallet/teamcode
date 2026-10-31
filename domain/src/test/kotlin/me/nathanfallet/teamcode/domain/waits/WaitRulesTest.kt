@@ -26,8 +26,8 @@ class WaitRulesTest {
         ))
     }
 
-    @Test fun secretsAndOtherResolversAreNotAvailableYet() {
-        assertEquals("not_available_yet", code { WaitRules.validate(definition(WaitField("pw", FieldType.SECRET, "Password"))) })
+    @Test fun aSecretFieldIsAcceptedAndAnEventWaitNeedsItsSource() {
+        WaitRules.validate(definition(WaitField("pw", FieldType.SECRET, "Password", oneTime = true)))
         assertEquals("invalid_wait", code { WaitRules.validate(WaitDefinition("s1", "Wait for CI", resolver = WaitResolver.EVENT)) }, "an event wait names its source")
     }
 
