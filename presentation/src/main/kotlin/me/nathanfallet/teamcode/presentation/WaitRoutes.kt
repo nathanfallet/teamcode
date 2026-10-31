@@ -24,7 +24,7 @@ internal fun WaitInput.domain() = WaitDefinition(
     fields.map { f ->
         WaitField(
             f.id, wire(f.type, FieldType::parse, "type", Waits.fieldTypes), f.label, f.help, f.required, f.default,
-            f.options.map { WaitOption(it.value, it.label, it.description) }, f.multiple, f.allowOther, f.maxLength,
+            f.options.map { WaitOption(it.value, it.label, it.description) }, f.multiple, f.allowOther, f.maxLength, f.oneTime,
         )
     },
     actions.map { WaitAction(it.id, it.label, it.requires, it.style) },
@@ -46,7 +46,7 @@ private fun WaitInput.schedule(): WaitSchedule? {
     )
 }
 
-private fun WaitField.view() = WaitFieldView(id, type.wire, label, help, required, default, options.map { WaitOptionView(it.value, it.label, it.description) }, multiple, allowOther, maxLength)
+private fun WaitField.view() = WaitFieldView(id, type.wire, label, help, required, default, options.map { WaitOptionView(it.value, it.label, it.description) }, multiple, allowOther, maxLength, oneTime)
 
 /** [eventUrl] is the event address, given by the response that creates an `event` wait and by no other: the server keeps only the hash of its secret. */
 internal fun Wait.view(eventUrl: String? = null) = WaitView(

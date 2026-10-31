@@ -24,7 +24,15 @@ object WaitRules {
     private val styles = setOf("primary", "danger", "neutral")
 
     fun invalid(message: String) = TeamFailure("invalid_wait", 400, message)
-    private fun notYet(message: String) = TeamFailure("not_available_yet", 422, message)
+
+    /** The secrets of a wait reach the agent as `TEAMCODE_WAIT_<FIELD ID UPPER-CASED>`; a field id is `[A-Za-z][A-Za-z0-9_]{0,63}`, so the name is always a valid shell identifier. */
+    const val SECRET_ENV_PREFIX = "TEAMCODE_WAIT_"
+    const val MAX_SECRET_BYTES = 4096
+    /** A stored secret is deleted this long after the answer at the latest. */
+    const val SECRET_LIFETIME_MILLIS = 24L * 3600 * 1000
+    /** Only an agent that re-reads its environment before each command can be given a secret that arrives mid-session and ends with it. */
+    val SECRET_AGENTS = setOf("claude")
+    fun secretVariable(fieldId: String) = SECRET_ENV_PREFIX + fieldId.uppercase()
 
     private fun plain(value: String, max: Int, what: String) {
         if (value.isBlank() || value.length > max || value.any { it.isISOControl() }) throw invalid("Use $what of 1 to $max characters without control characters.")
@@ -69,8 +77,12 @@ object WaitRules {
         if (definition.refs.size > MAX_REFS) throw invalid("At most $MAX_REFS references.")
         definition.refs.forEach(::validateRef)
         if (definition.fields.size > MAX_FIELDS) throw invalid("At most $MAX_FIELDS fields.")
-        definition.fields.forEach(::validateField)
+        // A secret is asked by a member or an agent in a session; a workflow's human node or the server's own waits never carry one.
+        val secretsAllowed = definition.kind == WaitKind.HUMAN_REQUEST
+        definition.fields.forEach { validateField(it, secretsAllowed) }
         if (definition.fields.map { it.id }.toSet().size != definition.fields.size) throw invalid("Field ids must be unique.")
+        definition.fields.filter { it.type == FieldType.SECRET }.groupBy { secretVariable(it.id) }.entries.firstOrNull { it.value.size > 1 }
+            ?.let { throw invalid("Secret fields ${it.value.joinToString(" and ") { f -> f.id }} would both be ${it.key}: field ids differ by more than their case.") }
         val actions = definition.actions.ifEmpty { listOf(WaitAction(DEFAULT_ACTION, "Done")) }
         if (actions.size > MAX_ACTIONS) throw invalid("At most $MAX_ACTIONS actions.")
         val fieldIds = definition.fields.filter { it.type != FieldType.INFO }.map { it.id }.toSet()
@@ -133,11 +145,14 @@ object WaitRules {
         ref.title?.let { plain(it, MAX_LABEL, "a reference title") }
     }
 
-    private fun validateField(field: WaitField) {
+    private fun validateField(field: WaitField, secretsAllowed: Boolean) {
         if (!identifier.matches(field.id)) throw invalid("A field id starts with a letter and has at most 64 letters, digits or underscores.")
         plain(field.label, MAX_LABEL, "a field label")
         field.help?.let { if (it.length > MAX_HELP) throw invalid("Field help is at most $MAX_HELP characters.") }
-        if (field.type == FieldType.SECRET) throw notYet("Secret fields are not available yet: secrets cannot reach the agent safely.")
+        if (field.type == FieldType.SECRET) {
+            if (!secretsAllowed) throw invalid("Only a request made in a session takes a secret field, not a workflow step.")
+            if (field.default != null) throw invalid("A secret field has no default: ${field.id}.")
+        } else if (field.oneTime) throw invalid("Only a secret field is oneTime.")
         field.maxLength?.let { if (field.type != FieldType.TEXT || it !in 1..MAX_TEXT) throw invalid("Only a text field has a length limit, 1 to $MAX_TEXT.") }
         if (field.type == FieldType.CHOICE) {
             if (field.options.isEmpty() || field.options.size > MAX_OPTIONS) throw invalid("A choice field has 1 to $MAX_OPTIONS options.")
@@ -148,7 +163,7 @@ object WaitRules {
         field.default?.let { runCatching { checkValue(field, it) }.getOrElse { throw invalid("The default of ${field.id} does not fit the field.") } }
     }
 
-    /** The values of [answer] checked against [wait]; throws `400 invalid_answer`. Secrets cannot be asked yet, so none is read. */
+    /** The values of [answer] checked against [wait]; throws `400 invalid_answer`. A secret's value is checked here like any other and then kept apart by [WaitSecrets]. */
     fun checkAnswer(fields: List<WaitField>, actions: List<WaitAction>, actionId: String, values: Map<String, JsonElement>) {
         val action = actions.singleOrNull { it.id == actionId } ?: throw bad("Choose one of the actions: ${actions.joinToString(", ") { it.id }}.")
         if (values.toString().length > MAX_ANSWER_BYTES) throw bad("The answer is too large.")
@@ -166,7 +181,7 @@ object WaitRules {
 
     private fun bad(message: String) = TeamFailure("invalid_answer", 400, message)
 
-    private fun present(value: JsonElement?) = when {
+    internal fun present(value: JsonElement?) = when {
         value == null || value is JsonNull -> false
         value is JsonPrimitive && value.isString -> value.content.isNotBlank()
         value is JsonArray -> value.isNotEmpty()
@@ -199,7 +214,11 @@ object WaitRules {
                 val name = (value as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("a file name expected")
                 require(name.isNotBlank() && name.length <= 255 && '/' !in name && '\\' !in name && name.none { it.isISOControl() }) { "a file name expected" }
             }
-            FieldType.SECRET -> throw IllegalArgumentException("secrets are not available yet")
+            FieldType.SECRET -> {
+                val text = (value as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw IllegalArgumentException("a secret as text expected")
+                require(text.toByteArray(Charsets.UTF_8).size <= MAX_SECRET_BYTES) { "at most $MAX_SECRET_BYTES bytes" }
+                require('\u0000' !in text) { "no NUL character" }
+            }
             FieldType.INFO -> throw IllegalArgumentException("nothing to fill")
         }
     }

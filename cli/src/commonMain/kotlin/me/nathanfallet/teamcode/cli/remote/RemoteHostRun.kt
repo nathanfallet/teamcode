@@ -19,11 +19,13 @@ import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
 import me.nathanfallet.teamcode.cli.launch.trackedRun
 import me.nathanfallet.teamcode.cli.platform.installServiceSignalHandlers
+import me.nathanfallet.teamcode.cli.platform.environment
 import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.serviceStopRequested
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
+import me.nathanfallet.teamcode.cli.platform.writePrivateFile
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -111,10 +113,19 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         installServiceSignalHandlers()
         val port = proxy.engine.resolvedConnectors().single().port
         val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report, sessionId = session)
-        val variables = if (ENVIRONMENT_CAPABILITY in features) AgentVariables { _ -> memberVariables(client, report) } else null
+        // The wait secrets of the session (docs/waits.md#secrets), read with the runner route as the member's own login: held in
+        // this process only and given to the agent's Bash commands, never to its process environment.
+        val secrets = if ("cloud.variables.v1" in features && record.agent == "claude")
+            RunnerVariables({ client.runnerVariables(RunnerVariablesRequest(team, session, epoch)).let { EnvironmentVariablesView(secrets = it.secrets, oneTime = it.oneTime) } }, log = report)
+        else null
         // The agent's `Stop` hook reports its scheduled wake-ups on a private socket of this host, as in a cloud runner.
         var wakeups: (Int) -> Unit = {}
-        val wakeupSocket = if (record.agent == "claude") wakeupSocket(session, report) { wakeups(it) } else null
+        val wakeupSocket = if (record.agent == "claude") wakeupSocket(session, report, secrets) { wakeups(it) } else null
+        val members = ENVIRONMENT_CAPABILITY in features
+        val variables = if (members || wakeupSocket?.script != null) AgentVariables { kind ->
+            (if (members) memberVariables(client, report) else emptyMap()) +
+                (wakeupSocket?.script?.takeIf { kind == "claude" }?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it) }.orEmpty())
+        } else null
         val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
             inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report),
@@ -196,9 +207,15 @@ private suspend fun memberVariables(client: TeamCodeClient, report: (String) -> 
 } catch (error: CancellationException) { throw error }
 catch (_: Exception) { report("Environment variables could not be read; starting the agent without them."); emptyMap() }
 
-/** The socket the agent's `Stop` hook reports its wake-ups on, its broker, and the hook command that does. */
-internal class WakeupSocket(val path: String, val broker: WakeupBroker, val hook: String) {
-    fun remove() { try { FileSystem.SYSTEM.delete(path.toPath(), mustExist = false) } catch (_: Exception) { } }
+/**
+ * The socket the agent's `Stop` hook reports its wake-ups on, its broker, the hook command that does and, when the host serves wait
+ * secrets, the `CLAUDE_ENV_FILE` [script] that asks this socket for them before each Bash command (it holds no value).
+ */
+internal class WakeupSocket(val path: String, val broker: WakeupBroker, val hook: String, val script: String? = null) {
+    fun remove() {
+        try { FileSystem.SYSTEM.delete(path.toPath(), mustExist = false) } catch (_: Exception) { }
+        script?.let { try { FileSystem.SYSTEM.delete(it.toPath(), mustExist = false) } catch (_: Exception) { } }
+    }
 }
 
 /**
@@ -206,11 +223,17 @@ internal class WakeupSocket(val path: String, val broker: WakeupBroker, val hook
  * bytes), or null where Unix sockets do not exist (Windows) or the socket cannot be opened: the agent then runs without the
  * hook, and a session whose agent has only scheduled wake-ups can be paused for inactivity, as before.
  */
-internal fun wakeupSocket(session: String, report: (String) -> Unit, wakeups: (Int) -> Unit): WakeupSocket? = try {
+internal fun wakeupSocket(session: String, report: (String) -> Unit, secrets: RunnerVariables? = null, wakeups: (Int) -> Unit): WakeupSocket? = try {
     val path = configSibling(configPath(), "remote").toPath() / "${session.take(8)}.wake.sock"
     val binary = (try { managedInstallation()?.paths?.launcher?.toString() } catch (_: Exception) { null }) ?: servicePlatform().executable
-    val broker = WakeupBroker(listenUnix(path.toString()), wakeups)
-    WakeupSocket(path.toString(), broker, "${AgentEnvironment.quote(binary)} cloud agent-state --socket ${AgentEnvironment.quote(path.toString())}")
+    val broker = WakeupBroker(listenUnix(path.toString()), wakeups, variables = secrets, log = report)
+    // A script the user already had in CLAUDE_ENV_FILE still runs, first. It names the socket and holds no value.
+    val script = if (secrets == null) null else try {
+        val file = (configSibling(configPath(), "remote").toPath() / "${session.take(8)}.env.sh").toString()
+        writePrivateFile(file, AgentEnvironment.cloudScript(binary, path.toString(), environment(AgentEnvironment.CLAUDE_ENV_FILE)?.takeIf { it.isNotBlank() }))
+        file
+    } catch (error: CancellationException) { throw error } catch (_: Exception) { report("The environment script could not be written; wait secrets will not reach the agent's commands."); null }
+    WakeupSocket(path.toString(), broker, "${AgentEnvironment.quote(binary)} cloud agent-state --socket ${AgentEnvironment.quote(path.toString())}", script)
 } catch (error: CancellationException) { throw error }
 catch (_: Exception) { null }
 

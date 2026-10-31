@@ -14,7 +14,7 @@ object WaitFixtures {
     class FakeStore : WaitStore {
         var clock = 1_000L
         val members = listOf(ada, bob, po, gone, admin).associateBy { it.id }
-        val sessions = mutableMapOf("s1" to WaitSession("s1", "team", "ada", "Fix the login"), "s2" to WaitSession("s2", "team", "bob", null))
+        val sessions = mutableMapOf("s1" to WaitSession("s1", "team", "ada", "Fix the login", "claude"), "s2" to WaitSession("s2", "team", "bob", null, "codex"))
         val waits = linkedMapOf<String, Wait>()
         val keys = mutableMapOf<Pair<String, String>, String>()
         val audit = mutableListOf<String>()
@@ -39,10 +39,22 @@ object WaitFixtures {
             val page = all.drop(start).take(query.limit)
             return WaitPage(page, page.lastOrNull()?.id?.takeIf { start + page.size < all.size })
         }
-        override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange {
+        /** The sealed secrets of the real store, in the clear here: by session and variable name. */
+        val kept = linkedMapOf<Pair<String, String>, WaitSecret>()
+        override suspend fun serveSecrets(teamId: String, sessionId: String, ownerId: String): ServedSecrets {
+            if (sessions[sessionId]?.ownerId != ownerId) return ServedSecrets()
+            val live = kept.filter { (key, secret) -> key.first == sessionId && secret.expiresAt > clock }
+            val once = live.filter { it.value.oneTime }.keys
+            once.forEach { kept.remove(it) }
+            return ServedSecrets(live.entries.associate { it.key.second to it.value.value }, once.map { it.second }.toSet())
+        }
+        override suspend fun purgeSecrets(limit: Int): Int { val gone = kept.filter { it.value.expiresAt <= clock }.keys.take(limit); gone.forEach { kept.remove(it) }; return gone.size }
+        override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer, secrets: List<WaitSecret>): WaitChange {
             val wait = waits.getValue(id)
             if (wait.status != WaitStatus.OPEN) return WaitChange(wait, false)
             audit += "wait.answered:$id:${actor.member.id}"
+            secrets.forEach { kept[wait.sessionId!! to it.envName] = it }
+            if (secrets.isNotEmpty()) audit += "wait.secret_provided:$id:${secrets.joinToString(",") { it.fieldId }}"
             return WaitChange(wait.copy(status = WaitStatus.RESOLVED, answer = answer, resolvedAt = answer.answeredAt).also { waits[id] = it }, true)
         }
         override suspend fun eventTarget(id: String) = waits[id]?.takeIf { it.resolver == WaitResolver.EVENT }?.let { EventTarget(it.id, it.timer?.tokenHash, it.status == WaitStatus.OPEN) }

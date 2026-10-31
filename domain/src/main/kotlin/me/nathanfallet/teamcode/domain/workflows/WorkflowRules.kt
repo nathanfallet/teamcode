@@ -2,6 +2,7 @@ package me.nathanfallet.teamcode.domain.workflows
 
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.waits.WaitDefinition
+import me.nathanfallet.teamcode.domain.waits.WaitKind
 import me.nathanfallet.teamcode.domain.waits.WaitRules
 
 /** Bounds and pure checks of workflow definitions, run when one is saved (docs/workflows.md). */
@@ -78,7 +79,7 @@ object WorkflowRules {
                 node.assignee?.let { if (!it.ownerOfRun && it.memberId.isNullOrBlank()) throw invalid("$where: name the member to ask.") }
                 if (node.assignee?.ownerOfRun == true && node.assignee.memberId != null) throw invalid("$where: an owner assignee has no member id.")
                 val asked = try {
-                    WaitRules.validate(WaitDefinition("workflow", node.title, node.instruction, null, emptyList(), node.fields, node.actions))
+                    WaitRules.validate(WaitDefinition("workflow", node.title, node.instruction, null, emptyList(), node.fields, node.actions, kind = WaitKind.WORKFLOW))
                 } catch (failure: TeamFailure) { throw invalid("$where: ${failure.message}") }
                 asked.actions.map { it.id }.toSet()
             }

@@ -123,6 +123,22 @@ class WaitsMcpServerTest {
         assertEquals(emptyList(), server.created!!.fields); assertNull(server.created!!.assigneeId, "No assignee asks the session's owner")
     }
 
+    @Test fun aSecretFieldIsAskedAndAnAnsweredOneReadsProvidedNeverItsValue() = runBlocking {
+        val server = Server(); val sentinel = "S3NTINEL-mcp-pa55"
+        val (error, text) = server.tool("ask_human", args("""{"title":"Shop access","fields":[{"id":"shop_password","type":"secret","label":"Shop password","required":true,"oneTime":true}]}"""))
+        assertFalse(error, text)
+        assertEquals(listOf("secret"), server.created!!.fields.map { it.type }); assertTrue(server.created!!.fields.single().oneTime)
+        val tools = Json.parseToJsonElement(server.mcp.handle(request("tools/list"))!!).toString()
+        assertTrue("TEAMCODE_WAIT_" in tools, "the agent is told where the value will be")
+        server.waits = mutableListOf(server.wait(waitId, session).copy(status = "resolved", fields = listOf(WaitFieldView("shop_password", "secret", "Shop password", oneTime = true)),
+            answer = WaitAnswerView("done", mapOf("shop_password" to JsonPrimitive("provided")), "m-owner", 5)))
+        val listed = server.tool("list_waits", args("""{"status":"resolved"}""")).second; val got = server.tool("get_wait", args("""{"id":"$waitId"}""")).second
+        assertTrue("provided" in got, got); assertFalse(sentinel in listed + got)
+        val (refused, why) = Server().also { it.failure = HttpStatusCode.UnprocessableEntity to """{"error":{"type":"secret_unsupported_agent","message":"x"}}""" }
+            .tool("ask_human", args("""{"title":"t","fields":[{"id":"a","type":"secret","label":"K"}]}"""))
+        assertTrue(refused); assertContains(why, "only a Claude Code session")
+    }
+
     @Test fun askHumanRefusesBadArgumentsBeforeSendingAnything() = runBlocking {
         val server = Server()
         val cases = mapOf(
@@ -131,7 +147,8 @@ class WaitsMcpServerTest {
             """{"title":"t","fields":{"id":"a"}}""" to "fields is a list of objects",
             """{"title":"t","fields":[{"type":"text","label":"A"}]}""" to "fields[0].id is required",
             """{"title":"t","fields":[{"id":"1a","type":"text","label":"A"}]}""" to "fields[0].id starts with a letter",
-            """{"title":"t","fields":[{"id":"a","type":"secret","label":"Key"}]}""" to "secret fields are not available yet",
+            """{"title":"t","fields":[{"id":"a","type":"secret","label":"Key","default":"x"}]}""" to "a secret field has no default",
+            """{"title":"t","fields":[{"id":"a","type":"text","label":"Key","oneTime":true}]}""" to "oneTime is for a secret field",
             """{"title":"t","fields":[{"id":"a","type":"color","label":"A"}]}""" to "fields[0].type is one of",
             """{"title":"t","fields":[{"id":"a","type":"text"}]}""" to "fields[0].label is required",
             """{"title":"t","fields":[{"id":"a","type":"choice","label":"A"}]}""" to "give its options",
@@ -251,7 +268,7 @@ class WaitsMcpServerTest {
             (HttpStatusCode.Conflict to "wait_limit") to "already has 20 open waits",
             (HttpStatusCode.BadRequest to "invalid_wait") to "Fix the arguments",
             (HttpStatusCode.BadRequest to "invalid_assignee") to "id of an active member",
-            (HttpStatusCode.UnprocessableEntity to "not_available_yet") to "supported field type",
+            (HttpStatusCode.UnprocessableEntity to "secret_unsupported_agent") to "only a Claude Code session",
             (HttpStatusCode.Conflict to "resolves_by_itself") to "cancel_wait",
             (HttpStatusCode.Forbidden to "wait_session_owner_only") to "Only the session's owner",
             (HttpStatusCode.Forbidden to "credential_scope") to "ask in your reply instead",

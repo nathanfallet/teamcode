@@ -59,3 +59,30 @@ object Waits : Table("waits") {
         index("wait_wake", false, wakePending, resolvedAt)
     }
 }
+
+/**
+ * The secrets an answered wait gave its session (docs/waits.md#secrets), one row per variable name and session: a later answer
+ * with the same name replaces it. [value] is sealed with the server's credential cipher and bound to the team, session and name,
+ * so a copied row does not decrypt. The row ends with its session or its wait (cascade), at [expiresAt] (purged by the worker) or,
+ * for a one-time secret, when it is served. [ownerId] is who owned the session at the answer: a session handed over to someone
+ * else does not serve it to the new owner.
+ */
+object WaitSecretTable : Table("wait_secrets") {
+    val sessionId = reference("session_id", CloudSessions.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "wait_secrets_session")
+    val envName = varchar("env_name", 80)
+    val waitId = reference("wait_id", Waits.id, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.NO_ACTION, fkName = "wait_secrets_wait")
+    val teamId = varchar("team_id", 36)
+    val fieldId = varchar("field_id", 64)
+    val ownerId = varchar("owner_id", 36)
+    val oneTime = bool("one_time")
+    val value = text("value")
+    val createdAt = long("created_at")
+    val expiresAt = long("expires_at")
+    override val primaryKey = PrimaryKey(sessionId, envName)
+    init {
+        // The runner's read is a prefix of the primary key (session_id): a session holds a handful of rows, and the optimizer
+        // keeps the primary key even when a (session_id, expires_at) index exists, so that index was measured and dropped.
+        // The purge: the secrets whose lifetime ended, oldest first.
+        index("wait_secret_expiry", false, expiresAt)
+    }
+}

@@ -46,8 +46,12 @@ data class CloudEnvironmentSpec(
 data class CloudEnvironmentOverride(val repositories: List<CloudRepository>? = null, val workingDirectory: String? = null)
 
 /** Environment variable values assigned to a member. Never logged, stored on a session or put in a pod spec. */
-class CloudVariables(val values: Map<String, String>, val unavailable: List<String> = emptyList()) {
-    override fun toString() = "CloudVariables(names=${values.keys.sorted()}, unavailable=$unavailable)"
+class CloudVariables(
+    val values: Map<String, String>, val unavailable: List<String> = emptyList(),
+    /** The answered waits' secrets of the session (docs/waits.md#secrets); only the running agent's route fills it. */
+    val secrets: me.nathanfallet.teamcode.domain.waits.ServedSecrets = me.nathanfallet.teamcode.domain.waits.ServedSecrets(),
+) {
+    override fun toString() = "CloudVariables(names=${values.keys.sorted()}, unavailable=$unavailable, secrets=${secrets.values.keys.sorted()})"
 }
 
 /**

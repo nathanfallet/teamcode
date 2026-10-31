@@ -15,6 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +50,10 @@ import me.nathanfallet.teamcode.companion.resources.waits_answer_action
 import me.nathanfallet.teamcode.companion.resources.waits_answered_at
 import me.nathanfallet.teamcode.companion.resources.waits_cancelled_at
 import me.nathanfallet.teamcode.companion.resources.waits_field_in_session
+import me.nathanfallet.teamcode.companion.resources.waits_secret_hint
+import me.nathanfallet.teamcode.companion.resources.waits_secret_not_provided
+import me.nathanfallet.teamcode.companion.resources.waits_secret_once
+import me.nathanfallet.teamcode.companion.resources.waits_secret_provided
 import me.nathanfallet.teamcode.companion.resources.waits_from_session
 import me.nathanfallet.teamcode.companion.resources.waits_notice_failed
 import me.nathanfallet.teamcode.companion.resources.waits_notice_refused
@@ -152,6 +159,7 @@ private fun WaitOutcome(wait: Wait, today: Long) {
             val value = when (val v = line.value) {
                 is AnswerValue.Flag -> stringResource(if (v.value) Res.string.waits_yes else Res.string.waits_no)
                 is AnswerValue.Words -> v.text
+                is AnswerValue.Secret -> stringResource(if (v.provided) Res.string.waits_secret_provided else Res.string.waits_secret_not_provided)
             }
             Text("${line.label}: $value", color = colors.muted, fontSize = 13.sp, maxLines = 6, overflow = TextOverflow.Ellipsis)
         }
@@ -174,8 +182,15 @@ private fun WaitFieldInput(wait: Wait, field: WaitField, input: FieldInput?, onI
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         when (field.type) {
             FieldType.INFO -> field.help?.let { Text(it, color = colors.muted, fontSize = 13.sp) }
-            // A file or a secret is not typed here: the session takes it.
-            FieldType.FILE, FieldType.SECRET -> {
+            // A secret is typed masked, kept in memory only, and sent with the answer: no autofill hint, no suggestions, no save prompt.
+            FieldType.SECRET -> TcTextField(
+                (input as? FieldInput.Secret)?.value.orEmpty(), { change(FieldInput.Secret(it)) },
+                label = field.label, hint = listOfNotNull(field.help, stringResource(Res.string.waits_secret_hint), if (field.oneTime) stringResource(Res.string.waits_secret_once) else null).joinToString(" "),
+                password = true, mono = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, capitalization = KeyboardCapitalization.None),
+                tag = "wait-field-${field.id}",
+            )
+            // A file is not typed here: the session takes it.
+            FieldType.FILE -> {
                 Text(field.label, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Text(stringResource(Res.string.waits_field_in_session), style = MetaStyle, color = colors.muted)
             }

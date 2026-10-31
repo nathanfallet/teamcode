@@ -98,6 +98,47 @@ class AgentEnvironmentTest {
         assertEquals(1, reads)
     }
 
+    private val sentinel = "S3NTINEL-runner-pa55"
+
+    @Test fun waitSecretsReachCommandsNeverTheProcessEnvironmentAndAreWithdrawn() = runTest {
+        var clock = 0L
+        val logs = mutableListOf<String>()
+        var answer = EnvironmentVariablesView(mapOf("NPM_TOKEN" to "one"), secrets = mapOf("TEAMCODE_WAIT_SHOP_PASSWORD" to sentinel, "TEAMCODE_WAIT_BAD-NAME" to "x", "PATH" to "/evil", "TEAMCODE_MCP_TOKEN" to "x"))
+        val variables = RunnerVariables({ answer }, now = { clock }, log = { logs += it })
+        assertEquals(mapOf("NPM_TOKEN" to "one"), variables.forStart(), "an agent start never gets a secret in its process environment")
+        val command = variables.forCommand()
+        assertEquals(mapOf("TEAMCODE_WAIT_SHOP_PASSWORD" to sentinel), command.secrets, "only a wait secret's name is accepted there")
+        assertFalse(sentinel in command.toString() + answer.toString() + logs.joinToString())
+        assertTrue(logs.any { "TEAMCODE_WAIT_SHOP_PASSWORD" in it }, "the name is logged, the value never: $logs")
+        // Expired on the server: the next read no longer has it, and the command unsets it.
+        clock += RunnerVariables.MAX_AGE_MILLIS
+        answer = EnvironmentVariablesView(mapOf("NPM_TOKEN" to "one"))
+        val later = variables.forCommand()
+        assertEquals(emptyMap(), later.secrets); assertEquals(listOf("TEAMCODE_WAIT_SHOP_PASSWORD"), later.withdrawn)
+    }
+
+    @Test fun aOneTimeSecretIsHeldUntilTheTurnEndsThenUnset() = runTest {
+        var clock = 0L
+        var answer = EnvironmentVariablesView(secrets = mapOf("TEAMCODE_WAIT_CODE" to sentinel), oneTime = listOf("TEAMCODE_WAIT_CODE"))
+        val variables = RunnerVariables({ answer }, now = { clock })
+        assertEquals(sentinel, variables.forCommand().secrets["TEAMCODE_WAIT_CODE"])
+        // The server deleted it when it served it: the next read has none, but the turn goes on and needs it.
+        clock += RunnerVariables.MAX_AGE_MILLIS
+        answer = EnvironmentVariablesView()
+        assertEquals(sentinel, variables.forCommand().secrets["TEAMCODE_WAIT_CODE"], "kept in memory for the rest of the turn")
+        variables.endTurn()
+        val after = variables.forCommand()
+        assertEquals(emptyMap(), after.secrets); assertEquals(listOf("TEAMCODE_WAIT_CODE"), after.withdrawn)
+        assertEquals(emptyMap(), variables.forCommand().secrets, "and it does not come back")
+    }
+
+    @Test fun theScriptExportsASecretOnlyFromTheSecretsAndUnsetsWithdrawnOnes() {
+        val script = AgentEnvironment.script(mapOf("TEAMCODE_WAIT_X" to "no", "A_VALUE" to "a"), setOf("TEAMCODE_WAIT_OLD", "TEAMCODE_MCP_TOKEN"), mapOf("TEAMCODE_WAIT_SHOP" to "it's $sentinel", "PATH" to "/evil"))
+        assertTrue("export TEAMCODE_WAIT_SHOP=\"it's $sentinel\"" in script, script)
+        assertFalse("TEAMCODE_WAIT_X=" in script, "a plain variable named like a secret is withheld")
+        assertTrue("unset TEAMCODE_WAIT_OLD" in script); assertFalse("TEAMCODE_MCP_TOKEN" in script); assertFalse("PATH" in script)
+    }
+
     private class Pipe(private val requests: Channel<String?>, private val answers: MutableList<String>) : UnixConnection {
         var closed = false
         override suspend fun readLine(maxLine: Int) = requests.receive()
@@ -125,6 +166,24 @@ class AgentEnvironmentTest {
         assertFalse("one" in answer.toString())
         connections.send(null)
         job.join()
+    }
+
+    @Test fun theStopHookEndsTheTurnForOneTimeSecretsOnBothBrokers() = runTest {
+        for (remote in listOf(false, true)) {
+            val connections = Channel<UnixConnection?>(Channel.UNLIMITED)
+            val listener = object : UnixListener { override suspend fun accept() = connections.receive(); override fun close() = Unit }
+            val variables = RunnerVariables({ EnvironmentVariablesView(secrets = mapOf("TEAMCODE_WAIT_CODE" to sentinel), oneTime = listOf("TEAMCODE_WAIT_CODE")) })
+            val job = launch { if (remote) WakeupBroker(listener, {}, variables = variables).serve() else EnvironmentBroker(listener, variables).serve() }
+            val answers = mutableListOf<String>()
+            fun pipe(line: String) = Pipe(Channel<String?>(1).also { it.trySend(line) }, answers)
+            val ask = pipe(EnvironmentBroker.REQUEST); connections.send(ask)
+            repeat(100) { if (!ask.closed) delay(10) }
+            assertEquals(sentinel, EnvironmentBroker.codec.decodeFromString(EnvironmentAnswer.serializer(), answers.single()).secrets["TEAMCODE_WAIT_CODE"], "remote=$remote")
+            val stop = pipe("wakeups 0"); connections.send(stop)
+            repeat(100) { if (!stop.closed) delay(10) }
+            assertEquals(listOf("TEAMCODE_WAIT_CODE"), variables.forCommand().withdrawn, "remote=$remote: the turn ended")
+            connections.send(null); job.join()
+        }
     }
 
     @Test fun wakeupBrokerTakesOnlyTheCountOfTheStopHook() = runTest {

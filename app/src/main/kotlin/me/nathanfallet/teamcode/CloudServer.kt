@@ -31,6 +31,7 @@ import me.nathanfallet.teamcode.domain.waits.WaitKind
 import me.nathanfallet.teamcode.domain.waits.WaitField
 import me.nathanfallet.teamcode.domain.waits.WaitAction
 import me.nathanfallet.teamcode.domain.workflows.WorkflowService
+import me.nathanfallet.teamcode.domain.waits.WaitSecretSource
 import me.nathanfallet.teamcode.domain.waits.WaitService
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.waits.WaitSessions
@@ -108,7 +109,8 @@ class CloudServer(
     private val automationDirectory = AutomationDirectory.Cloud(store, workflowStore)
     val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
     /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
-    val waits = WaitService(SqlWaitStore(database), object : WaitSessions {
+    private val waitStore = SqlWaitStore(database, cipher)
+    val waits = WaitService(waitStore, object : WaitSessions {
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
     })
@@ -117,7 +119,7 @@ class CloudServer(
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
     val workflowRuns = WorkflowRunService(workflowRunStore)
     private val workflowProgress = SqlWorkflowProgress(database)
-    private val waitReads = SqlWaitStore(database)
+    private val waitReads = waitStore
     private val workflowEngine = WorkflowEngine(workflowRunStore, object : WorkflowSessions {
         override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String): String {
             val digest = java.security.MessageDigest.getInstance("SHA-256").digest(key.encodeToByteArray()).joinToString("") { "%02x".format(it) }
@@ -154,7 +156,7 @@ class CloudServer(
     private val logins = me.nathanfallet.teamcode.infrastructure.database.SqlTeamService(database)
     val runner = CloudRunnerChannel(RunnerChannelUseCase(store, variables = variables, github = githubAccess),
         AuthenticateRunnerUseCase(store, cluster, logins = { token -> logins.authenticate(token) }), RunnerInferenceUseCase(store, inferenceCredentials), RunnerGitHubUseCase(store, githubAccess),
-        RunnerVariablesUseCase(store, variables), remoteHosts = true)
+        RunnerVariablesUseCase(store, variables, WaitSecretSource { team, session, owner -> waitStore.serveSecrets(team, session, owner) }), remoteHosts = true)
 
     /**
      * Files sent to sessions (`cloud.files.v1`), kept in the team's artifact bucket: without an object store the server

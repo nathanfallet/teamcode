@@ -13,12 +13,12 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | MySQL store (`waits` table, reviewed migration), routes `GET/POST /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST …/answer`, `POST …/cancel`, the `waits.v1` capability, OpenAPI reference | Implemented |
 | `teamcode waits list`, `show`, `answer`, `cancel`, `ask` ([CLI](#cli)); the "waits" part of the next row is the companion apps only | Implemented |
 | Live updates: `cloud.wait.created` / `.resolved` / `.cancelled` on the [caller-wide feed](cloud-conversations.md#event-feed) | Implemented |
-| "Waiting for you" in the companion apps ([companion](companion.md)): a screen of its own (the Waiting tab on a phone, the first sidebar row on a wide window, both with a live badge) with the Open / Answered / Cancelled filters and keyset pages, newest first from all sessions, updated live from the feed and answered in place (typed fields; `file` and `secret` fields are filled in the session; no cancel button; the team's waits for an administrator are not shown); the Sessions tab only shows a one-line banner that opens it | Implemented |
+| "Waiting for you" in the companion apps ([companion](companion.md)): a screen of its own (the Waiting tab on a phone, the first sidebar row on a wide window, both with a live badge) with the Open / Answered / Cancelled filters and keyset pages, newest first from all sessions, updated live from the feed and answered in place (typed fields, a `secret` one in a masked input; `file` fields are filled in the session; no cancel button; the team's waits for an administrator are not shown); the Sessions tab only shows a one-line banner that opens it | Implemented |
 | Waking the session: an answer is queued on the wait's session as a message, which resumes a paused session | Implemented (see below) |
 | The `teamcode-waits` MCP server (`ask_human`, `list_waits`, `get_wait`, `cancel_wait`), connected beside the agent of a remote session and of a cloud session ([agents](#agents)); never an answer tool, and the loopback relay never relays `…/answer` | Implemented. A local `teamcode run` has no session, so it gets no wait tools. A Kubernetes cloud session gets them from its execution credential's `waits:session` scope ([execution credentials](#execution-credentials)); a session whose execution started before that scope existed keeps running without them until its next start |
 | Waits for a time or an event (`resolver` `time` / `event`): the server resolves them and wakes the session ([below](#waits-that-resolve-by-themselves)) | Implemented: `time` (`at` / `after`) and `event` with `source: webhook`. `github_checks` is **not** implemented: the server has no GitHub integration that reads check status (the GitHub link only hands the owner's token to the agent), so a CI reports through the webhook |
 | "In progress" section of the companion Waiting screen, `teamcode waits list --resolver`, `waits ask --after/--at/--webhook`, MCP `wait_for` | Implemented (the iOS and Android shells are not compiled in CI of this change) |
-| Secret fields | Contract only: refused with `422 not_available_yet` |
+| Secret fields (`secret`, optional `oneTime`): sealed at rest, delivered only as `TEAMCODE_WAIT_<NAME>` in the agent's Bash commands, Claude Code only ([Secrets](#secrets)) | Implemented for Claude Code sessions, cloud (Kubernetes) and remote (a Unix host). A Codex session is refused at ask time. The iOS and Android shells are not compiled in CI of this change |
 | `turn_failed`: when a session's turn ends in an error, the server asks its owner to try again or dismiss ([below](#failed-turns)) | Implemented |
 | Stop hook that requires an agent to deliver or ask | Implemented for the agent of a **workflow step** only, Claude Code in remote and Kubernetes cloud sessions: the first stop with neither a delivery nor an open wait is sent back with an instruction to call `deliver` or `ask_human` ([workflows](workflows.md#stop-hook)). Not for an ordinary session: a plain session that has waits is never forced to ask. Not for Codex |
 | Notifications when a wait is created | Out of scope; the hook point is `WaitService.create` |
@@ -45,7 +45,7 @@ A wait is asked of an **assignee**: the session's owner unless the asker names a
 | `date` | `YYYY-MM-DD`, a real calendar date |
 | `file` | The name of an uploaded file (`cloud.files.v1`) |
 | `info` | No value: it shows `help` |
-| `secret` | Not available yet |
+| `secret` | A string of at most 4 KiB without NUL, for a `human_request` only (not a workflow step); `oneTime` optional; no `default`; the name must not repeat after upper-casing. Stored sealed, never returned: see [Secrets](#secrets) |
 
 An answer is refused with `400 invalid_answer` when it names an unknown action or field, gives a value of the wrong type, or leaves a `required` field or one required by its action empty. Nothing is stored for a refused answer.
 
@@ -60,7 +60,7 @@ An answer is refused with `400 invalid_answer` when it names an unknown action o
 | `POST /api/v1/waits/{id}/cancel` | Withdraw |
 | `POST /api/v1/waits/{id}/event` | An event wait's webhook (no sign-in, the secret is the proof), see [below](#waits-that-resolve-by-themselves) |
 
-Reads need an interactive login or a key with `cloud:read` (or a wider cloud scope); writes need `cloud:write`. Errors: `invalid_wait`, `invalid_assignee`, `invalid_answer`, `invalid_cursor`, `wait_limit` (409), `wait_closed` (409), `answer_through_session` (409), `wait_session_owner_only` (403), `wait_assignee_only` (403), `resolves_by_itself` (409), `invalid_event` (400), `wait_event_rate_limit` (429), `not_available_yet` (422, secret fields).
+Reads need an interactive login or a key with `cloud:read` (or a wider cloud scope); writes need `cloud:write`. Errors: `invalid_wait`, `invalid_assignee`, `invalid_answer`, `invalid_cursor`, `wait_limit` (409), `wait_closed` (409), `answer_through_session` (409), `wait_session_owner_only` (403), `wait_assignee_only` (403), `resolves_by_itself` (409), `invalid_event` (400), `wait_event_rate_limit` (429), `secret_unsupported_agent` (422, a secret field asked in a session that is not Claude Code), `secrets_unavailable` (503, the server has no key to seal with).
 
 ## Who can do what
 
@@ -77,7 +77,7 @@ Reads need an interactive login or a key with `cloud:read` (or a wider cloud sco
 ```sh
 teamcode waits list [--all | --status open|resolved|cancelled|all] [--resolver human|time|event|all] [--assignee MEMBER|all] [--before ID] [--limit N] [--json]
 teamcode waits show ID [--json]
-teamcode waits answer ID [--action ACTION] [--set FIELD=VALUE]... [--set-json FIELD=JSON]... [--json]
+teamcode waits answer ID [--action ACTION] [--set FIELD=VALUE]... [--set-json FIELD=JSON]... [--set-secret FIELD]... [--secret-stdin] [--json]
 teamcode waits cancel ID [--json]
 teamcode waits ask --session ID --title TEXT [--body TEXT] [--assignee MEMBER] [--ref artifact:ID|session:ID|url:https://…]... [--field ID:TYPE:LABEL[:required]]... [--option FIELD=VALUE]... [--action ID:LABEL]... [--json]
 teamcode waits ask --session ID --title TEXT (--after SECONDS | --at ISO | --webhook [--timeout S] [--on-timeout wake|turn_failed]) [--resume-message TEXT] [--json]
@@ -86,7 +86,32 @@ teamcode waits ask --session ID --title TEXT (--after SECONDS | --at ISO | --web
 - The commands need the `waits.v1` capability and say so when the server does not advertise it. `--all` is `--status all`; `--assignee` is for administrators.
 - `list` prints id, status, kind, title, session, age and source. A row with source `session` is a cloud session's own permission request or question: answer it in the session, not with `waits answer` (which refuses it).
 - `answer` reads the wait first and converts `--set` by each field's declared type: `text`, `file` and `date` (`YYYY-MM-DD`) stay strings, `number` becomes a number, `confirm` takes `true`/`false` (or `yes`/`no`), `choice` takes one of the option values (any text when `allowOther`), and a multiple choice repeats `--set tags=a --set tags=b`. `--set-json` gives a JSON value as is. An unknown field, an unconvertible value or an unknown action is refused before anything is sent. `--action` may be omitted when the wait has exactly one action (`done` when it declares none). A wait already answered or cancelled (`409 wait_closed`) is reported as such.
-- `ask` creates a `human_request` with a fresh idempotency key; `secret` fields are refused, and a `choice` field takes its options from `--option`.
+- A secret is given with `--set-secret FIELD`, read from the terminal without echo, or with `--secret-stdin` (one value for a single secret field, from standard input): never as an argument, so it is not in the shell history or the process list. `--set` and `--set-json` refuse a secret field and say so.
+- `ask` creates a `human_request` with a fresh idempotency key; `--field ID:secret:LABEL[:required][:oneTime]` asks for a secret, and a `choice` field takes its options from `--option`.
+
+## Secrets
+
+A field of type `secret` asks a person for a value the agent needs and nobody else should read (a password, a token): the companion shows a masked input, `teamcode waits answer --set-secret FIELD` reads it without echo. The agent asks with `ask_human` (type `secret`); an agent that writes the variable name in the body knows what to read.
+
+**Guarantees.**
+
+- The value is never in the transcript, the wake message (it names only the variable, `TEAMCODE_WAIT_<NAME>`, the field id upper-cased), the audit (`wait.secret_provided` with the field ids, `wait.secret_consumed`), the feed events, the stored answer, any list or read view (`secret: provided` / `not provided`), the server and CLI logs, or the typed client's `toString`. Tests send a sentinel value through the routes, the broker and the shell and search every response and captured log for it.
+- It is stored in `wait_secrets`, sealed with the server's credential cipher (context `wait-secret:<team>:<session>:<variable>`, so a value copied to another row does not open), bound to the wait's session (deleted with it), written in the same transaction as the answer. It lives at most 24 hours; expired values are never served and are purged by the worker that resolves due waits.
+- `oneTime`: the server deletes the value when it serves it to the session's runner (or remote host). The runner holds it in memory for the turn and unsets it when the turn ends (the Stop hook). A value that is not `oneTime` is served until it expires, to every Bash command of the session's current owner.
+- It reaches the agent only through the environment channel of [agent variables](cloud-sessions.md#agent-variables): the script in `CLAUDE_ENV_FILE` (`0600` locally; the runner's socket in a cloud session) prints `export` lines for the current command. It is not in the agent's process environment, a pod spec, a file, the workspace or the pod log. A remote session uses the same channel through its host, so the host needs Unix sockets (not Windows).
+- After a transfer the new owner is served none of the former owner's secrets.
+
+**Claude Code only.** Codex has no per-command reload, so a secret could only go into its process environment, where it would outlive its expiry and its turn. A wait with a secret field on a Codex session is refused at ask time (`422 secret_unsupported_agent`) rather than accepted and silently not delivered.
+
+**Limits, stated plainly.**
+
+- The agent can read the variable it was given and can print it, write it to a file or send it somewhere: a prompt-injected agent included. A secret protects the value from people, logs and storage, not from the agent it is for. Give the agent the least powerful credential.
+- A value that is not `oneTime` stays sealed in the database for up to 24 hours, readable by the server process (it holds the key).
+- A `oneTime` value consumed by a runner or pod that restarts before the turn ends is lost: ask again. The Stop hook also fires when a workflow's hook sends the agent back to work, which ends the turn for this purpose.
+- A retried answer (same action) is recognised by its `provided` marker, not by the value: a second answer to a closed wait is refused (`wait_closed`) and cannot change it.
+- The lifetime is a fixed 24 hours; there is no shorter option except `oneTime`.
+- Secret fields are for `human_request` waits only, not for a workflow's human node.
+- Desktop and mobile autofill and the platform keyboards were not verified here; the input is a password-type field without an autofill hint, and the value lives in memory only until sent.
 
 ## Execution credentials
 
@@ -133,13 +158,13 @@ A session's agent asks with the stdio MCP server `teamcode mcp waits --session <
 
 | Tool | What it does |
 | --- | --- |
-| `ask_human` | `title` (required), `body` (Markdown), `assignee` (a member **id**: the server takes no username or GitHub login; omitted, the session's owner), `fields[]` (`id`, `type`, `label`, `help`, `required`, `default`, `options[{value,label,description}]`, `multiple`, `allowOther`, `maxLength`; types `text`, `choice`, `confirm`, `number`, `date`, `file`, `info`, `secret` being refused for now), `actions[]` (`id`, `label`, `requires[]`, `style`), `refs[]` (`artifact`/`session` by `id`, or an `https` `url`). Creates the wait for this session only, with a fresh `Idempotency-Key` per call. Returns the id and the status, and tells the agent to end its turn: the answer arrives as a message starting with `[TeamCode wait answered]` |
+| `ask_human` | `title` (required), `body` (Markdown), `assignee` (a member **id**: the server takes no username or GitHub login; omitted, the session's owner), `fields[]` (`id`, `type`, `label`, `help`, `required`, `default`, `options[{value,label,description}]`, `multiple`, `allowOther`, `maxLength`; types `text`, `choice`, `confirm`, `number`, `date`, `file`, `info`, `secret`; a secret takes `oneTime` and no `default`, and Codex sessions are refused), `actions[]` (`id`, `label`, `requires[]`, `style`), `refs[]` (`artifact`/`session` by `id`, or an `https` `url`). Creates the wait for this session only, with a fresh `Idempotency-Key` per call. Returns the id and the status, and tells the agent to end its turn: the answer arrives as a message starting with `[TeamCode wait answered]` |
 | `list_waits` | This session's waits asked of its owner (`status`, open by default), read from `GET /waits` (at most five pages of 100). A wait asked of another member is not listed there: the agent keeps its id |
 | `get_wait` | One of this session's waits, its fields, actions and answer |
 | `wait_for` | `title`, `after` (seconds) or `at` (ISO UTC) or `event: {source: "webhook"}` with `timeout`, `onTimeout`, `resumeMessage`. Returns at once with the id, `dueAt`/`timeoutAt` and, for a webhook, the `eventUrl` for the CI; tells the agent to end its turn. The agent is told to prefer it to CronCreate / ScheduleWakeup for anything long, since those die with a paused session |
 | `cancel_wait` | Withdraws one of this session's open waits |
 
-- Arguments are checked before anything is sent (unknown properties, types, ids, counts, `https` urls), and the server's refusals (`invalid_wait`, `invalid_assignee`, `wait_limit`, `wait_closed`, `not_available_yet`, `wait_session_owner_only`, `credential_scope`) come back with what to do. A wait of another session, or a session's own permission request, is refused by `get_wait` and `cancel_wait`.
+- Arguments are checked before anything is sent (unknown properties, types, ids, counts, `https` urls), and the server's refusals (`invalid_wait`, `invalid_assignee`, `wait_limit`, `wait_closed`, `secret_unsupported_agent`, `wait_session_owner_only`, `secret_unsupported_agent`, `credential_scope`) come back with what to do. A wait of another session, or a session's own permission request, is refused by `get_wait` and `cancel_wait`.
 - **No answer.** The session's owner is the default assignee and the relay holds the owner's credential, so the relay is the guard: it relays only `GET /api/v1/waits`, `GET /api/v1/waits/{id}`, `POST /api/v1/waits` and `POST /api/v1/waits/{id}/cancel`, with the same checks as the artifact relay (the token compared in constant time, loopback, no `Origin`, a bounded body, `no-store`, a refused sign-in as `502 relay_sign_in_refused`). Everything else, `POST …/answer` included, is a `404` that never reaches the server. The user service announces it as `wait-relay-v1`.
 - The agent is told, beside the artifact instruction (Claude Code `--append-system-prompt`, Codex `developer_instructions`, with the same exceptions): when it needs an answer, a decision, an approval or a setup only a person can give, call `ask_human` with typed fields instead of guessing, then end its turn.
 - **Where.** A [remote session](cloud-sessions.md) on a member's device gets the tools when the server advertises `waits.v1` (the host runs with the member's own login). A Kubernetes cloud session gets them when the server advertises `waits.v1` and one `GET /waits?limit=1` with the execution credential succeeds, which it does for a credential issued with `waits:session` ([execution credentials](#execution-credentials)); an execution that started with an older credential is refused with `403 credential_scope`, the runner logs it and starts the agent without the tools, and the next start of the session has them. A local `teamcode run` never gets them: it has no session.

@@ -38,11 +38,24 @@ object Waits {
     /** The most an event body holds. */
     const val MAX_EVENT_BYTES = 16 * 1024
     val statuses = listOf("open", "resolved", "cancelled")
-    /** `secret` is part of the contract but refused (`422 not_available_yet`) until secrets reach the agent safely. */
+    /**
+     * `secret` is stored encrypted for the wait's session and reaches the agent only as the environment variable
+     * [SECRET_ENV_PREFIX] + the field id upper-cased (docs/waits.md#secrets). The value is never returned: an answer shows
+     * [SECRET_PROVIDED] or [SECRET_NOT_PROVIDED].
+     */
     val fieldTypes = listOf("text", "choice", "confirm", "number", "date", "secret", "file", "info")
     val refKinds = listOf("artifact", "session", "url")
     /** Where a wait is stored: its own row, or a session's open permission request. */
     val sources = listOf("wait", "session")
+    /** What an answer's `values` and the wake message say for a secret field instead of its value. */
+    const val SECRET_PROVIDED = "provided"
+    const val SECRET_NOT_PROVIDED = "not provided"
+    /** A secret is delivered as `TEAMCODE_WAIT_<FIELD ID UPPER-CASED>` in the agent's shell environment. */
+    const val SECRET_ENV_PREFIX = "TEAMCODE_WAIT_"
+    /** The most a secret holds, in UTF-8 bytes. */
+    const val MAX_SECRET_BYTES = 4096
+    /** How long a secret lives after the answer, at most: it is deleted then, used or not. */
+    const val SECRET_LIFETIME_SECONDS = 24L * 3600
     /** The action of a wait that declares none. */
     const val DEFAULT_ACTION = "done"
 }
@@ -55,7 +68,8 @@ data class WaitOptionView(val value: String, val label: String, val description:
  * A field the person fills. [type] `text` (at most [maxLength] characters, 8,000 by default), `choice` (one of
  * [options], several when [multiple]; [allowOther] adds a free answer), `confirm` (true or false), `number`, `date`
  * (`YYYY-MM-DD`), `secret`, `file` (an uploaded file's name) or `info` (shows [help], takes no value). [default] is a
- * JSON value of the field's type.
+ * JSON value of the field's type. A `secret` field takes a string of at most 4,096 bytes; [oneTime] (secrets only) deletes it
+ * once the agent has used it.
  */
 @Serializable
 data class WaitFieldView(
@@ -69,6 +83,7 @@ data class WaitFieldView(
     val multiple: Boolean = false,
     val allowOther: Boolean = false,
     val maxLength: Int? = null,
+    val oneTime: Boolean = false,
 )
 
 /**
@@ -157,9 +172,14 @@ data class WaitInput(
 @Serializable
 data class CreateWaitRequest(val wait: WaitInput)
 
-/** [values] are checked against the fields of the wait; [action] must be one of its actions. */
+/**
+ * [values] are checked against the fields of the wait; [action] must be one of its actions. A secret field's value travels here
+ * and nowhere else: it holds secrets, so it never prints them.
+ */
 @Serializable
-data class AnswerWaitRequest(val action: String, val values: Map<String, JsonElement> = emptyMap())
+data class AnswerWaitRequest(val action: String, val values: Map<String, JsonElement> = emptyMap()) {
+    override fun toString() = "AnswerWaitRequest(action=$action, fields=${values.keys.sorted()}, values=[REDACTED])"
+}
 
 @Serializable
 data class WaitPageView(val waits: List<WaitView>, val nextBefore: String? = null)

@@ -56,7 +56,7 @@ private fun one(field: WaitFieldView, text: String): JsonElement = when (field.t
             throw CliUserException("Field ${field.id} takes one of: ${field.options.joinToString(", ") { it.value }}. \"$text\" is not one.")
         JsonPrimitive(text)
     }
-    "secret" -> throw CliUserException("Field ${field.id} is a secret: waits do not take secrets yet.")
+    "secret" -> throw CliUserException("Field ${field.id} is a secret: give it with --set-secret ${field.id}, which reads it without echo. A secret is never an argument.")
     "info" -> throw CliUserException("Field ${field.id} only shows information and takes no value.")
     else -> JsonPrimitive(text)
 }
@@ -66,7 +66,7 @@ private fun one(field: WaitFieldView, text: String): JsonElement = when (field.t
  * the field's type; a multiple choice repeats the option), [jsonSets] are JSON from `--set-json`, used as given.
  * Refuses an unknown field or an unconvertible value, so nothing reaches the server.
  */
-internal fun answerValues(wait: WaitView, sets: List<Pair<String, String>>, jsonSets: List<Pair<String, String>>): Map<String, JsonElement> {
+internal fun answerValues(wait: WaitView, sets: List<Pair<String, String>>, jsonSets: List<Pair<String, String>>, secrets: Map<String, String> = emptyMap()): Map<String, JsonElement> {
     val fields = wait.fields.associateBy { it.id }
     fun field(id: String) = fields[id] ?: throw CliUserException(
         "This wait has no field \"$id\"." + if (fields.isEmpty()) " It takes no values." else " Its fields: ${fields.keys.joinToString(", ")}.")
@@ -78,9 +78,16 @@ internal fun answerValues(wait: WaitView, sets: List<Pair<String, String>>, json
         else values[id] = one(f, texts.single())
     }
     jsonSets.forEach { (id, text) ->
-        field(id)
+        if (field(id).type == "secret") throw CliUserException("Field $id is a secret: give it with --set-secret $id, never as an argument.")
         if (id in values) throw CliUserException("Field $id is given twice: use --set or --set-json for it, not both.")
         values[id] = try { Json.parseToJsonElement(text) } catch (_: Exception) { throw CliUserException("The value of $id is not valid JSON (--set-json): write strings in double quotes.") }
+    }
+    // A secret value is never in `sets` (the field's type refuses it there); it comes from [secrets], read without echo.
+    secrets.forEach { (id, text) ->
+        if (field(id).type != "secret") throw CliUserException("Field $id is not a secret: give it with --set $id=VALUE.")
+        if (text.toByteArray().size > Waits.MAX_SECRET_BYTES) throw CliUserException("The value of $id is longer than ${Waits.MAX_SECRET_BYTES} bytes, the most a secret holds.")
+        if (text.isBlank()) throw CliUserException("The value of $id is empty.")
+        values[id] = JsonPrimitive(text)
     }
     return values
 }
@@ -95,20 +102,26 @@ internal fun chooseAction(wait: WaitView, requested: String?): String {
     return actions.singleOrNull() ?: throw CliUserException("This wait has several actions: choose one with --action (${actions.joinToString(", ")}).")
 }
 
-/** `--field ID:TYPE:LABEL[:required]`, with `--option FIELD=VALUE` adding the choices of a `choice` field. */
+/** `--field ID:TYPE:LABEL[:required][:oneTime]`, with `--option FIELD=VALUE` adding the choices of a `choice` field. */
 internal fun parseField(text: String, options: Map<String, List<String>>): WaitFieldView {
     val parts = text.split(":", limit = 3)
     if (parts.size < 3 || parts[2].isBlank()) throw UsageError("--field is ID:TYPE:LABEL[:required], such as notes:text:Notes:required.")
     val (id, type, rest) = parts
     if (!FIELD_ID.matches(id)) throw UsageError("\"$id\" is not a field id: a letter, then letters, digits or _ (64 at most).")
     if (type !in Waits.fieldTypes) throw UsageError("\"$type\" is not a field type: use ${Waits.fieldTypes.joinToString(", ")}.")
-    if (type == "secret") throw UsageError("Secret fields are not available yet.")
-    val required = rest.endsWith(":required")
-    val label = if (required) rest.removeSuffix(":required") else rest
+    // The flags follow the label, in any order: ID:TYPE:LABEL[:required][:oneTime].
+    var label = rest; var required = false; var oneTime = false
+    while (true) {
+        if (label.endsWith(":required")) { required = true; label = label.removeSuffix(":required") }
+        else if (label.endsWith(":oneTime")) { oneTime = true; label = label.removeSuffix(":oneTime") }
+        else break
+    }
+    if (oneTime && type != "secret") throw UsageError(":oneTime is for a secret field, and $id is $type.")
+    if (label.isBlank()) throw UsageError("--field is ID:TYPE:LABEL[:required][:oneTime], such as notes:text:Notes:required.")
     val choices = options[id].orEmpty()
     if (type == "choice" && choices.isEmpty()) throw UsageError("The choice field $id needs its choices: --option $id=VALUE, repeated.")
     if (type != "choice" && choices.isNotEmpty()) throw UsageError("--option $id=… is for a choice field, and $id is $type.")
-    return WaitFieldView(id, type, label, required = required, options = choices.map { WaitOptionView(it, it) })
+    return WaitFieldView(id, type, label, required = required, options = choices.map { WaitOptionView(it, it) }, oneTime = oneTime)
 }
 
 /** `--action ID:LABEL`. */

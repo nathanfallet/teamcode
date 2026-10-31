@@ -184,7 +184,7 @@ class DemoModeTest {
         val waits = koin.get<me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository>()
         val open = waits.list(account.id, WaitStatus.OPEN).waits
         // A session's own request comes first, like the server's first page; the others are answered in place.
-        assertEquals(listOf("w2", "w1", "w3", "w4"), open.map { it.id })
+        assertEquals(listOf("w2", "w1", "w3", "w4", "w10"), open.map { it.id })
         assertEquals(WaitSource.SESSION, open.first().source)
         assertEquals(listOf("w5"), waits.list(account.id, WaitStatus.RESOLVED).waits.map { it.id })
         assertTrue(waits.list(account.id, WaitStatus.CANCELLED).waits.single().cancelled)
@@ -194,7 +194,7 @@ class DemoModeTest {
         kotlinx.coroutines.yield()
         val answered = waits.answer(account.id, "w1", "approve", emptyMap())
         assertEquals(WaitStatus.RESOLVED, answered.status)
-        assertEquals(3, waits.list(account.id, WaitStatus.OPEN).waits.size)
+        assertEquals(4, waits.list(account.id, WaitStatus.OPEN).waits.size)
         assertEquals(SessionChange.WAIT_RESOLVED, announced.await().type)
         // A session's request is answered in the session, a closed wait does not change, an unknown action is refused.
         assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w2", "allow", emptyMap()) }.statusCode)

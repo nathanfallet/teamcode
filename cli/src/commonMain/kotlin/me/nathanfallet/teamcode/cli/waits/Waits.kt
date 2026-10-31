@@ -10,6 +10,7 @@ import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.long
+import com.github.ajalt.mordant.terminal.Terminal
 import kotlinx.serialization.encodeToString
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
@@ -75,20 +76,44 @@ private class WaitsAnswer : SuspendingCliktCommand(name = "answer") {
     private val action by option("--action", help = "The action to take; optional when the wait has only one.")
     private val sets by option("--set", help = "FIELD=VALUE, as text; converted by the field's type.").convert { pair(it) }.multiple()
     private val jsonSets by option("--set-json", help = "FIELD=JSON, used as given: a number, true, \"text\", [\"a\",\"b\"].").convert { pair(it) }.multiple()
+    private val secretSets by option("--set-secret", help = "FIELD: a secret field, read without echo (never an argument). Repeat for several; with --secret-stdin the values are read from standard input, one line each.").multiple()
+    private val secretStdin by option("--secret-stdin", help = "Read the --set-secret values from standard input instead of the terminal: one line per field, or everything for a single field (a multi-line key).").flag()
     private val json by option("--json").flag()
     override suspend fun run() {
         requireWaitId(id)
+        secretSets.forEach { requireWaitId(it, "field id") }
+        if (secretSets.toSet().size != secretSets.size) throw UsageError("--set-secret names each field once.")
         sdk(loadConfig()).use { client ->
             requireWaits(client)
             val wait = client.wait(id)
             if (wait.source == "session") throw CliUserException("This is a request of the cloud session ${wait.sessionName ?: wait.sessionId}: $SESSION_NOTE (teamcode cloud attach), not with teamcode waits answer.")
             if (wait.status != "open") throw CliUserException("This wait is already ${wait.status}.")
             if (wait.resolver != "human") throw CliUserException("This wait resolves by itself (${wait.resolver}): nobody answers it. Withdraw it with teamcode waits cancel ${wait.id}.")
-            val values = answerValues(wait, sets, jsonSets)
+            // Checked before anything is read: a typo in a field name must not cost the person a typed secret.
+            answerValues(wait, sets, jsonSets, secretSets.associateWith { "x" })
+            val secrets = readSecrets(secretSets, secretStdin, { echo(it, trailingNewline = false, err = true) }, { Terminal().readLineOrNull(hideInput = true) }, ::readlnOrNull,
+                { generateSequence(::readlnOrNull).joinToString("\n") })
+            val values = answerValues(wait, sets, jsonSets, secrets)
             val chosen = chooseAction(wait, action)
             val answered = client.answerWait(id, chosen, values)
             echo(if (json) Serialization.json.encodeToString(answered) else "Answered ${answered.id} with ${answered.answer?.action ?: chosen}.")
         }
+    }
+}
+
+/**
+ * The secret values, one per field, read without echo from the terminal ([hidden], Mordant hides the input) or, with [fromStdin],
+ * from standard input: [line] per field, or [everything] for a single field (a multi-line key). Nothing is echoed or logged;
+ * [prompt] names the field only.
+ */
+internal fun readSecrets(
+    fields: List<String>, fromStdin: Boolean, prompt: (String) -> Unit, hidden: () -> String?, line: () -> String?, everything: () -> String,
+): Map<String, String> {
+    if (fields.isEmpty()) return emptyMap()
+    if (fromStdin && fields.size == 1) return mapOf(fields.single() to everything().trimEnd('\n', '\r'))
+    return fields.associateWith { field ->
+        if (!fromStdin) prompt("Secret for $field (hidden): ")
+        (if (fromStdin) line() else hidden()) ?: throw CliUserException("Input ended before the secret for $field was entered.")
     }
 }
 
@@ -119,7 +144,7 @@ private class WaitsAsk : SuspendingCliktCommand(name = "ask") {
     private val onTimeout by option("--on-timeout", help = "With --webhook: wake the session with \"timed out\" (wake, the default) or ask its owner to retry or dismiss (turn_failed).").choice("wake", "turn_failed")
     private val resumeMessage by option("--resume-message", help = "With --after, --at or --webhook: a note added to the message that wakes the session (2000 characters).")
     private val refs by option("--ref", help = "artifact:ID, session:ID or url:https://…; repeatable.").multiple()
-    private val fields by option("--field", help = "ID:TYPE:LABEL[:required]; repeatable. TYPE is text, choice, confirm, number, date, file or info.").multiple()
+    private val fields by option("--field", help = "ID:TYPE:LABEL[:required][:oneTime]; repeatable. TYPE is text, choice, confirm, number, date, secret, file or info. A secret reaches the agent as TEAMCODE_WAIT_<ID upper-cased> in its shell (Claude Code sessions only); :oneTime deletes it once used.").multiple()
     private val choices by option("--option", help = "FIELD=VALUE: a choice of a choice field; repeatable.").convert { pair(it) }.multiple()
     private val actions by option("--action", help = "ID:LABEL; repeatable.").multiple()
     private val json by option("--json").flag()

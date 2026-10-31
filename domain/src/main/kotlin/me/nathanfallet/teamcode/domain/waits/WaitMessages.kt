@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import me.nathanfallet.teamcode.domain.cloud.CloudConversationRules
 
 /**
@@ -34,6 +35,16 @@ object WaitMessages {
         }
         return if (text.length <= CloudConversationRules.MAX_MESSAGE_CHARS) text else text.take(CloudConversationRules.MAX_MESSAGE_CHARS - TRUNCATED.length) + TRUNCATED
     }
+
+    /**
+     * What the message says of a secret field: its variable name and where to read it, never the value. The stored answer holds only
+     * [WaitSecrets.PROVIDED] or [WaitSecrets.NOT_PROVIDED] for it; anything else reads as not provided, so a value that should not be
+     * there cannot be echoed.
+     */
+    private fun secretLine(field: WaitField, value: JsonElement): String =
+        if ((value as? JsonPrimitive)?.contentOrNull == WaitSecrets.PROVIDED)
+            "secret provided: ${WaitRules.secretVariable(field.id)} (available in your shell environment" + (if (field.oneTime) ", for this turn only" else "") + ")"
+        else "secret not provided"
 
     /**
      * The wake message of a wait the server resolved (a time reached, an event received, a timeout): the same first lines as an
@@ -80,6 +91,7 @@ object WaitMessages {
 
     /** A choice reads with its label beside the value; control characters (but newlines and tabs) are dropped, as a message may not carry them. */
     private fun render(field: WaitField, value: JsonElement): String {
+        if (field.type == FieldType.SECRET) return secretLine(field, value)
         fun one(element: JsonElement): String {
             val raw = (element as? JsonPrimitive)?.content ?: element.toString()
             val label = if (field.type == FieldType.CHOICE) field.options.firstOrNull { it.value == raw }?.label?.takeIf { it != raw } else null

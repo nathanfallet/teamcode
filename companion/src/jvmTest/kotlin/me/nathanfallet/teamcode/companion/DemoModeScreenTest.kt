@@ -88,12 +88,12 @@ class DemoModeScreenTest {
         demoApp(CountingEngine()) {
             onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            // Four of the demo's waits are open: the sidebar's row counts them, and the screen lists them with their sessions.
-            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
+            // Five of the demo's waits are open: the sidebar's row counts them, and the screen lists them with their sessions.
+            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("5 waiting for you")
             onNodeWithTag("waits-banner").assertExists()
             onNodeWithTag("sidebar-waits").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("waits-badge").assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("waits-badge").assertContentDescriptionEquals("5 waiting for you")
             onNodeWithTag("wait-w1").assertExists()
             onNodeWithTag("wait-w2").assertExists()
             onNodeWithTag("waits-banner").assertDoesNotExist()
@@ -101,7 +101,7 @@ class DemoModeScreenTest {
             onNodeWithTag("wait-action-approve").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             onNodeWithTag("wait-w1").assertDoesNotExist()
-            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("3 waiting for you")
+            onNodeWithTag("sidebar-waits-badge", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
             // What was answered shows under its filter, with the action and what was given.
             onNodeWithTag("waits-filter-answered").performSemanticsAction(SemanticsActions.OnClick)
             settle()
@@ -114,7 +114,7 @@ class DemoModeScreenTest {
         demoApp(CountingEngine(), width = 390, height = 844) {
             onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("5 waiting for you")
             onNodeWithTag("waits-banner").performSemanticsAction(SemanticsActions.OnClick)
             settle()
             onNodeWithTag("wait-w1").assertExists()
@@ -122,7 +122,7 @@ class DemoModeScreenTest {
             // The badge stays while another tab shows.
             onNodeWithTag("tab-sessions").performSemanticsAction(SemanticsActions.OnClick)
             settle()
-            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("4 waiting for you")
+            onNodeWithTag("tab-badge-waits", useUnmergedTree = true).assertContentDescriptionEquals("5 waiting for you")
         }
     }
 

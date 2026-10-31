@@ -36,7 +36,8 @@ internal fun ApiCatalog.waitOperations() {
         summary = "Ask a person for something"
         description = "The session's owner asks (an agent acts with its owner's credential). Without `assigneeId`, the owner is asked. `resolver: time` (with `at` or `after`) and `resolver: event` " +
             "(`source: webhook`, `timeoutSeconds`, `onTimeout`) wait for nobody: the server wakes the session, and the response to an event wait carries `eventUrl`, shown once. At most 20 open waits per " +
-            "session. The same `Idempotency-Key` returns the first wait (`Idempotency-Replayed: true`). $WAIT_TEXT"
+            "session. A field of type `secret` (human requests only, `oneTime` optional) is stored encrypted when answered, never listed, and reaches the agent only as `TEAMCODE_WAIT_<NAME>` in its shell. " +
+            "The same `Idempotency-Key` returns the first wait (`Idempotency-Replayed: true`). $WAIT_TEXT"
         parameters { headerText("Idempotency-Key", "1 to 128 letters, digits or `. _ : -`; a retry returns the wait it created.") }
         body<CreateWaitRequest>("The wait.")
         responses {
@@ -45,7 +46,7 @@ internal fun ApiCatalog.waitOperations() {
             error(HttpStatusCode.Forbidden, "Not the session's owner (`wait_session_owner_only`).")
             notFound("No such session (`not_found`).")
             conflict("The session holds the maximum of open waits (`wait_limit`).")
-            error(HttpStatusCode.UnprocessableEntity, "A secret field (`not_available_yet`).")
+            error(HttpStatusCode.UnprocessableEntity, "A secret field on a session whose agent cannot receive one (`secret_unsupported_agent`: only Claude Code can).")
         }
     }
     post("/api/v1/waits/{id}/event") {
@@ -76,6 +77,7 @@ internal fun ApiCatalog.waitOperations() {
         operationId = "answerWait"; tag(ApiTags.WAITS)
         summary = "Answer a wait"
         description = "The assignee, or an interactive administrator (audited). `action` is one of the wait's actions; `values` are checked against its fields. " +
+            "A `secret` value is a string of at most 4 KiB, sealed with the server key and kept at most 24 hours; the stored answer, the views, the audit and the feed carry `provided` or `not provided`, never the value. " +
             "The first answer wins. A session's permission request is answered on the session (`POST /api/v1/cloud/sessions/{id}/permissions`)."
         parameters { waitId() }
         body<AnswerWaitRequest>("The action chosen and the values by field id.")
@@ -84,6 +86,7 @@ internal fun ApiCatalog.waitOperations() {
             badRequest("An unknown action or field, a wrong value, or a missing required field (`invalid_answer`).")
             error(HttpStatusCode.Forbidden, "Not the assignee (`wait_assignee_only`).")
             notFound("No such wait (`not_found`).")
+            error(HttpStatusCode.ServiceUnavailable, "The server has no key to seal a secret with (`secrets_unavailable`).")
             conflict("Already answered or cancelled (`wait_closed`), a session's permission request (`answer_through_session`), or a wait for a time or an event (`resolves_by_itself`).")
         }
     }
@@ -96,6 +99,7 @@ internal fun ApiCatalog.waitOperations() {
             ok<WaitView>("The wait, cancelled.")
             error(HttpStatusCode.Forbidden, "Not allowed (`forbidden`).")
             notFound("No such wait (`not_found`).")
+            error(HttpStatusCode.ServiceUnavailable, "The server has no key to seal a secret with (`secrets_unavailable`).")
             conflict("Already answered or cancelled (`wait_closed`), or a session's permission request (`cancel_through_session`).")
         }
     }
