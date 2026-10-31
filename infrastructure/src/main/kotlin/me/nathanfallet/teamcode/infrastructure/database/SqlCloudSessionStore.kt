@@ -222,6 +222,8 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         ended?.let { previous ->
             CloudExecutions.update({ (CloudExecutions.sessionId eq previous.sessionId) and (CloudExecutions.epoch eq previous.epoch) }) { writeExecution(it, previous) }
         }
+        // A host that replaces another one fences it: the replaced epoch's session credentials die with it.
+        revokeInferenceCredentialsBefore(expected.id, execution.epoch)
         CloudExecutions.insert {
             it[sessionId] = execution.sessionId; it[epoch] = execution.epoch; it[createdAt] = now
             writeExecution(it, execution.copy(createdAt = now))

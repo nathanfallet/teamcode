@@ -17,5 +17,9 @@ interface AgentProcess {
     suspend fun stop(graceMillis: Long): Int
 }
 
-/** Starts [command] in [workingDirectory] with the current environment changed by [overrides] (null removes a variable). */
-expect fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String): AgentProcess
+/**
+ * Starts [command] in [workingDirectory] with the current environment changed by [overrides] (null removes a variable).
+ * Inherited variables whose name starts with one of [scrubPrefixes] are dropped first (see [agentInheritedEnvironment]);
+ * [overrides] are applied after, so a variable TeamCode itself sets for the agent always reaches it.
+ */
+expect fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String, scrubPrefixes: List<String> = emptyList()): AgentProcess

@@ -268,6 +268,8 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         // Files need the runner channel their hosts download them from; whether a team has a bucket is its policy's business.
                         if (cloudSessions != null && cloudRunner != null && cloudConversation?.files != null) listOf("cloud.files.v1") else null,
                         if (cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else null,
+                        // A remote host's relays act with a credential confined to the session, not with the member's login.
+                        if (cloudSessions != null && cloudRunner?.inference != null && cloudRunner.remoteHosts && cloudConversation != null) listOf("cloud.remote.session-credential.v1") else null,
                         if (cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else null,
                         if (cloudSessions != null && cloudRunner?.variables != null) listOf("cloud.variables.v1") else null,
                         if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1", "cloud.transfer.recipients.v1") else null,

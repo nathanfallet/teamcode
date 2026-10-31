@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import me.nathanfallet.teamcode.infrastructure.secrets.CredentialCipher
+import me.nathanfallet.teamcode.infrastructure.secrets.Passwords
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
 import org.jetbrains.exposed.v1.migration.jdbc.MigrationUtils
@@ -29,6 +30,7 @@ class CloudSessionPersistenceTest {
         val runner = RunnerChannelUseCase(store)
         val logins = SqlTeamService(database)
         val authenticate = AuthenticateRunnerUseCase(store, cluster, logins = { logins.authenticate(it) })
+        val inference = RunnerInferenceUseCase(store, SqlCloudInferenceCredentialStore(database))
         val garbage = CollectCloudGarbageUseCase(store, cluster)
     }
 
@@ -658,34 +660,51 @@ class CloudSessionPersistenceTest {
         failure("runner_unauthenticated") { ra.authenticate(noDevice.token, admin.teamId, s.id, 1) }
         failure("execution_fenced") { ra.authenticate(laptop.token, admin.teamId, s.id, 2) }
         val identity = ra.authenticate(laptop.token, admin.teamId, s.id, 1)
+        // The session credential for the host's relays is issued only to the registered execution; a pod's route stays closed for a remote session.
+        failure("execution_fenced") { ra.inference.issueRemote(admin.teamId, s.id, 1) }
         ra.runner.register(identity.teamId, identity.sessionId, identity.epoch, identity.podName)
         assertEquals(PREPARING, ra.store.find(admin.teamId, s.id)!!.state)
         rb.runner.heartbeat(admin.teamId, s.id, 1, ready = true)
         s = rb.sessions.get(colleague, s.id)
         assertEquals(READY, s.state)
+        failure("inference_unavailable") { ra.inference.issue(admin.teamId, s.id, 1) }
+        val first = rb.inference.issueRemote(admin.teamId, s.id, 1)
+        sessionCredentialIsConfined(ra, rb, first, colleague, s.id, admin.teamId, laptop.token)
         assertTrue(s.host!!.online && s.host!!.lastHeartbeatAt != null, "The host is online while it heartbeats")
         val listed = rb.sessions.list(colleague, CloudSessionQuery(kinds = setOf(CloudSessionKind.REMOTE))).sessions.single { it.id == s.id }
         assertTrue(listed.host!!.online)
 
-        // A second host on the same device takes a new epoch: the first one is fenced and exits.
+        // A second host on the same device takes a new epoch: the first one is fenced and exits, and its session credential dies with it.
+        val renewed = ra.inference.issueRemote(admin.teamId, s.id, 1)
+        assertNotNull(rb.logins.authenticate(first.token)); assertNotNull(rb.logins.authenticate(renewed.token))
         rb.sessions.host(laptop.principal, s.id)
+        assertNull(ra.logins.authenticate(first.token), "The replaced epoch's credentials are revoked in the transaction that replaces it")
+        assertNull(ra.logins.authenticate(renewed.token))
+        assertEquals(0L, ra.database.query { CloudInferenceCredentials.selectAll().where { CloudInferenceCredentials.sessionId eq s.id }.count() })
+        failure("execution_fenced") { ra.inference.issueRemote(admin.teamId, s.id, 1) }
         failure("execution_fenced") { ra.authenticate(laptop.token, admin.teamId, s.id, 1) }
         assertEquals("replaced", ra.store.execution(s.id, 1)!!.exitReason)
         assertEquals(RESUMING, ra.store.find(admin.teamId, s.id)!!.state)
         ra.authenticate(laptop.token, admin.teamId, s.id, 2).let { ra.runner.register(it.teamId, it.sessionId, it.epoch, it.podName) }
         ra.runner.heartbeat(admin.teamId, s.id, 2, ready = true)
         assertEquals(READY, ra.store.find(admin.teamId, s.id)!!.state)
+        val second = ra.inference.issueRemote(admin.teamId, s.id, 2)
+        assertNotNull(rb.logins.authenticate(second.token))
 
         // A pause drains on the host and completes at its checkpoint: nothing is deleted.
         rb.sessions.pause(laptop.principal, null, s.id, false)
         pass(ra)
         assertEquals(PAUSING, ra.store.find(admin.teamId, s.id)!!.state)
+        val draining = rb.inference.issueRemote(admin.teamId, s.id, 2)
+        assertNotNull(ra.logins.authenticate(draining.token), "A draining host keeps its relays until it checkpoints")
         rb.runner.checkpoint(admin.teamId, s.id, 2, completed = true)
         pass(ra)
         s = ra.store.find(admin.teamId, s.id)!!
         assertEquals(PAUSED to WorkspaceResume.CONSISTENT, s.state to s.resumeWorkspace)
         assertEquals(DeletionState.NONE, s.workspace.deletion)
         assertFalse(rb.sessions.get(colleague, s.id).host!!.online)
+        for (credential in listOf(second, draining)) assertNull(ra.logins.authenticate(credential.token), "Revoked when the execution ended")
+        failure("execution_fenced") { ra.inference.issueRemote(admin.teamId, s.id, 2) }
 
         // Only the host device resumes it; a message's wake elsewhere leaves it waiting for that host.
         failure("remote_host_mismatch") { rb.sessions.resume(desktop.principal, null, s.id) }
@@ -696,6 +715,7 @@ class CloudSessionPersistenceTest {
         rb.sessions.host(laptop.principal, s.id)
         ra.runner.register(admin.teamId, s.id, 3, CloudSessionService.hostExecutionName(3))
         ra.runner.heartbeat(admin.teamId, s.id, 3, ready = true)
+        val third = ra.inference.issueRemote(admin.teamId, s.id, 3)
 
         // A silent host (device asleep, network down) pauses the session after 90 s, "host offline".
         ra.database.query { CloudExecutions.update({ (CloudExecutions.sessionId eq s.id) and (CloudExecutions.epoch eq 3) }) { it[lastHeartbeatAt] = 1 } }
@@ -704,6 +724,7 @@ class CloudSessionPersistenceTest {
         assertEquals(PAUSED to ReconcileCloudSessionsUseCase.HOST_OFFLINE, s.state to s.failure?.code)
         assertEquals("heartbeat_lost", ra.store.execution(s.id, 3)!!.exitReason)
         failure("execution_fenced") { ra.runner.heartbeat(admin.teamId, s.id, 3, ready = true) }
+        assertNull(ra.logins.authenticate(third.token), "A lost host loses its credential")
         // The host starting again resumes it and clears the failure.
         assertNull(rb.sessions.host(laptop.principal, s.id).failure)
 
@@ -722,6 +743,27 @@ class CloudSessionPersistenceTest {
         assertEquals(TERMINATED to DeletionState.NONE, s.state to s.workspace.deletion)
         assertEquals(ExecutionState.ENDED, ra.store.execution(s.id, 4)!!.state)
         assertTrue(cluster(ra).podNames().none { s.id in it } && cluster(ra).claims.keys.none { s.id in it }, "A remote session never reaches the cluster")
+    }
+
+    /** What the credential a remote host gives its relays can and cannot do, as the server authenticates it. */
+    private suspend fun sessionCredentialIsConfined(ra: Replica, rb: Replica, issued: IssuedInferenceCredential, owner: Principal, sessionId: String, teamId: String, loginToken: String) {
+        assertTrue(issued.token.startsWith("tcex_")); assertFalse(issued.toString().contains(issued.token))
+        val principal = assertNotNull(rb.logins.authenticate(issued.token))
+        assertEquals(owner.member.id, principal.member.id, "It acts as the member the execution runs for")
+        assertEquals(setOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION), principal.serviceScopes)
+        for (action in listOf(CredentialAction.WAITS_READ, CredentialAction.WAITS_WRITE, CredentialAction.WORKFLOW_DELIVER, CredentialAction.ARTIFACTS_READ, CredentialAction.ARTIFACTS_WRITE))
+            AuthorizeCredentialUseCase().check(principal, action)
+        for (action in listOf(CredentialAction.INFERENCE, CredentialAction.MCP, CredentialAction.SKILLS_READ, CredentialAction.HOOKS_READ, CredentialAction.SKILLS_PUBLISH,
+            CredentialAction.CLOUD_READ, CredentialAction.CLOUD_WRITE, CredentialAction.USAGE_READ, CredentialAction.INTERACTIVE))
+            failure("credential_scope") { AuthorizeCredentialUseCase().check(principal, action) }
+        // It is not the host's login: it cannot take the runner channel, nor mint another credential, nor serve as a device.
+        failure("runner_unauthenticated") { ra.authenticate(issued.token, teamId, sessionId, 1) }
+        assertNull(ra.store.deviceOf(principal))
+        val tokenId = ra.database.query { Tokens.select(Tokens.id).where { Tokens.tokenHash eq Passwords.digest(issued.token) }.single()[Tokens.id] }
+        assertFalse(tokenId in SqlServiceKeyService(ra.database).list(owner).map { it.id }, "It is not a service key")
+        assertNull(ra.database.query { Tokens.selectAll().where { Tokens.tokenHash eq issued.token }.singleOrNull() }, "Only the digest is stored")
+        assertNotNull(ra.database.query { Tokens.selectAll().where { Tokens.tokenHash eq Passwords.digest(issued.token) }.singleOrNull() })
+        assertNotNull(rb.logins.authenticate(loginToken), "The member's own login is untouched")
     }
 
     private suspend fun failure(code: String, block: suspend () -> Unit) = assertEquals(code, assertFailsWith<TeamFailure> { block() }.code)
