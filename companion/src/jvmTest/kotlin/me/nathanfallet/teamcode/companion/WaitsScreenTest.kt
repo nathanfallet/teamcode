@@ -7,6 +7,7 @@ import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -31,6 +32,7 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitField
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
 import me.nathanfallet.teamcode.companion.domain.models.WaitOption
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
@@ -38,6 +40,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.AnswerWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.CancelWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadInProgressWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.FollowWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadWaitsUseCase
 import me.nathanfallet.teamcode.companion.presentation.screens.WaitsScreen
@@ -53,6 +57,10 @@ class WaitsScreenTest {
         val answers = mutableListOf<String>()
         var pageSize = 50
         var failure: Exception? = null
+        var timers = listOf<Wait>()
+        val cancelled = mutableListOf<String>()
+        override suspend fun inProgress(accountId: String): List<Wait> = timers
+        override suspend fun cancel(accountId: String, waitId: String): Wait { cancelled += waitId; val gone = timers.first { it.id == waitId }; timers = timers - gone; return gone.copy(open = false, cancelled = true) }
         override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage {
             failure?.let { throw it }
             val all = byStatus[status].orEmpty()
@@ -88,7 +96,7 @@ class WaitsScreenTest {
         val features = FakeFeatures().also { it.features += "waits.v1" }
         val shared = SessionFeed(sessions, features, CoroutineScope(SupervisorJob() + Dispatchers.Default))
         val waits = Waits().apply(configure)
-        val model = WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(shared, features, guard))
+        val model = WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(shared, features, guard), LoadInProgressWaitsUseCase(waits, features, guard), CancelWaitUseCase(waits, guard))
         model.start()
         val opened = mutableListOf<String>()
         setContent { TeamCodeTheme { WaitsScreen(model, onOpenSession = { account, session -> opened += "$account/$session" }, clock = FixedClock(now)) } }
@@ -125,6 +133,33 @@ class WaitsScreenTest {
         waitUntil { screen.waits.answers.isNotEmpty() && screen.model.uiState.value.waits.size == 1 }
         assertEquals(listOf("w1 request_changes [feedback]"), screen.waits.answers)
         onNodeWithTag("waits-badge").assertContentDescriptionEquals("1 waiting for you")
+    }
+
+    @Test fun whatTheServerWatchesShowsInProgressBelowWhatWaitsForTheMemberAndCanBeCancelled() = runComposeUiTest {
+        val screen = screen({
+            byStatus[WaitStatus.OPEN] = listOf(wait("w1", "Review the plan", "Fix the build", createdAt = 100_000))
+            timers = listOf(
+                wait("t1", "Check the nightly deploy", "Fix the build", WaitKind.TIMED).copy(resolver = WaitResolver.TIME, dueAt = 1_000_000 + 3 * 3_600_000, fields = emptyList(), actions = emptyList()),
+                wait("t2", "CI of the PR", "Audit webhooks", WaitKind.TIMED).copy(resolver = WaitResolver.EVENT, timeoutAt = 1_000_000 + 20 * 3_600_000, onTimeout = "turn_failed", fields = emptyList(), actions = emptyList()),
+            )
+        })
+        waitUntil { screen.model.uiState.value.loaded && screen.model.uiState.value.inProgress.size == 2 }
+        onNodeWithTag("waits-badge").assertContentDescriptionEquals("1 waiting for you")
+        onNodeWithTag("waits-in-progress-title").assertExists()
+        onNodeWithTag("in-progress-t1").assertExists(); onNodeWithTag("in-progress-t2").assertExists()
+        hasTagged("in-progress-kind-t1", "Timer"); hasTagged("in-progress-kind-t2", "Webhook")
+        onNodeWithTag("in-progress-when-t1").assertTextContains("Resumes", substring = true)
+        onNodeWithTag("in-progress-when-t2").assertTextContains("Waits for a webhook, times out", substring = true); onNodeWithTag("in-progress-when-t2").assertTextContains("then asks you", substring = true)
+        onNodeWithTag("wait-t1").assertDoesNotExist()
+        onNodeWithTag("in-progress-open-t1").performClick()
+        assertEquals(listOf("a1/s-t1"), screen.opened)
+        onNodeWithTag("in-progress-cancel-t1").performClick()
+        waitUntil { screen.model.uiState.value.inProgress.size == 1 }
+        assertEquals(listOf("t1"), screen.waits.cancelled)
+        onNodeWithTag("in-progress-t1").assertDoesNotExist()
+        // The section belongs to the open list: the answered one does not carry it.
+        onNodeWithTag("waits-filter-answered").performClick()
+        onNodeWithTag("waits-in-progress").assertDoesNotExist()
     }
 
     @Test fun theSessionIsOpenedFromItsCard() = runComposeUiTest {

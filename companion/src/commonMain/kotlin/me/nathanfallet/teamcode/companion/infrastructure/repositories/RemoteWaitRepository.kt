@@ -12,6 +12,7 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitField
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
 import me.nathanfallet.teamcode.companion.domain.models.WaitOption
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitRef
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
@@ -27,6 +28,14 @@ class RemoteWaitRepository(private val calls: AccountCalls) : WaitRepository {
 
     override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait =
         calls.withAccount(accountId, resource = true) { it.answerWait(waitId, action, values).domain() }
+
+    override suspend fun inProgress(accountId: String): List<Wait> = calls.withAccount(accountId) { client ->
+        // Two bounded reads (a session holds at most 20 open waits): the server lists one resolver at a time besides "all", which would page through people's waits too.
+        (client.waits(status = "open", limit = PAGE, resolver = "time").waits + client.waits(status = "open", limit = PAGE, resolver = "event").waits)
+            .map { it.domain() }.sortedWith(compareBy<Wait> { it.dueOrTimeout ?: Long.MAX_VALUE }.thenBy { it.id })
+    }
+
+    override suspend fun cancel(accountId: String, waitId: String): Wait = calls.withAccount(accountId, resource = true) { it.cancelWait(waitId).domain() }
 
     private companion object { const val PAGE = 50 }
 }
@@ -49,6 +58,11 @@ internal fun WaitView.domain() = Wait(
     cancelled = status == "cancelled",
     resolvedAt = resolvedAt,
     answer = answer?.let { WaitAnswer(it.action, it.values, it.authorId, it.answeredAt) },
+    resolver = WaitResolver.of(resolver),
+    dueAt = dueAt,
+    timeoutAt = timeoutAt,
+    onTimeout = onTimeout,
+    eventSource = eventSource,
 )
 
 private fun WaitRefView.domain() = WaitRef(kind, id, url, title)

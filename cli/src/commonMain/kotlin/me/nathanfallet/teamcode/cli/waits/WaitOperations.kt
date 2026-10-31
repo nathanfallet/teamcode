@@ -24,11 +24,11 @@ internal fun requireWaitId(value: String, what: String = "wait id"): String {
 }
 
 /** Pages of waits, newest first, until [limit] rows; the second value is the cursor of the next page when more exist. */
-internal suspend fun listWaits(client: TeamCodeClient, assignee: String?, status: String, before: String?, limit: Int): Pair<List<WaitView>, String?> {
+internal suspend fun listWaits(client: TeamCodeClient, assignee: String?, status: String, before: String?, limit: Int, resolver: String? = null): Pair<List<WaitView>, String?> {
     val waits = mutableListOf<WaitView>()
     var cursor = before
     do {
-        val page = client.waits(assignee, status, cursor, minOf(100, limit - waits.size))
+        val page = client.waits(assignee, status, cursor, minOf(100, limit - waits.size), resolver = resolver)
         waits += page.waits
         cursor = page.nextBefore
     } while (cursor != null && waits.size < limit)
@@ -124,4 +124,30 @@ internal fun parseRef(text: String): WaitRefView {
     val value = text.substringAfter(':', "")
     if (kind !in Waits.refKinds || value.isBlank()) throw UsageError("--ref is artifact:ID, session:ID or url:https://… .")
     return if (kind == "url") WaitRefView(kind, url = value) else WaitRefView(kind, id = requireWaitId(value, "$kind id"))
+}
+
+/**
+ * The settings of `waits ask --after/--at/--webhook`, checked before anything is sent; null when none is given (a wait for a
+ * person). The caller adds the session, the title and the references.
+ */
+internal fun timedSettings(after: Long?, at: String?, webhook: Boolean, timeout: Long?, onTimeout: String?, resumeMessage: String?): WaitInput? {
+    val chosen = listOfNotNull(after?.let { "--after" }, at?.let { "--at" }, if (webhook) "--webhook" else null)
+    if (chosen.isEmpty()) {
+        if (timeout != null || onTimeout != null || resumeMessage != null) throw UsageError("--timeout, --on-timeout and --resume-message go with --after, --at or --webhook.")
+        return null
+    }
+    if (chosen.size > 1) throw UsageError("Give one of --after, --at or --webhook, not ${chosen.joinToString(" and ")}.")
+    if (!webhook && (timeout != null || onTimeout != null)) throw UsageError("--timeout and --on-timeout go with --webhook: a wait for a time resolves at its instant.")
+    after?.let { if (it !in Waits.MIN_AFTER_SECONDS..Waits.MAX_AFTER_SECONDS) throw UsageError("--after is ${Waits.MIN_AFTER_SECONDS} to ${Waits.MAX_AFTER_SECONDS} seconds.") }
+    timeout?.let { if (it !in Waits.MIN_AFTER_SECONDS..Waits.MAX_TIMEOUT_SECONDS) throw UsageError("--timeout is ${Waits.MIN_AFTER_SECONDS} to ${Waits.MAX_TIMEOUT_SECONDS} seconds.") }
+    resumeMessage?.let { if (it.isBlank() || it.length > Waits.MAX_RESUME_MESSAGE) throw UsageError("--resume-message is 1 to ${Waits.MAX_RESUME_MESSAGE} characters.") }
+    val instant = at?.let { text ->
+        // Epoch milliseconds are accepted too; anything else must be an ISO-8601 instant, so a typo is caught here.
+        if (text.all { it.isDigit() } && text.isNotEmpty()) JsonPrimitive(text.toLong())
+        else try { kotlin.time.Instant.parse(text); JsonPrimitive(text) } catch (_: Exception) { throw UsageError("--at is an ISO-8601 instant in UTC, such as 2026-11-02T09:00:00Z.") }
+    }
+    return WaitInput(
+        "", "", resolver = if (webhook) "event" else "time", at = instant, after = after, source = if (webhook) "webhook" else null,
+        timeoutSeconds = timeout, onTimeout = onTimeout, resumeMessage = resumeMessage,
+    )
 }

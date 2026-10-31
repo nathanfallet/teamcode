@@ -14,4 +14,13 @@ interface WaitRepository {
     suspend fun list(accountId: String, status: WaitStatus, before: String? = null): WaitPage
     /** `409 wait_closed` ([me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server]) when someone answered or cancelled it first. */
     suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait
+
+    /**
+     * The open waits that resolve by themselves (a time, a webhook), soonest first: at most one page of each kind, since they wait
+     * for nobody and a session holds few. Not part of [list], which is what waits for the member. A repository without them lists none.
+     */
+    suspend fun inProgress(accountId: String): List<Wait> = emptyList()
+
+    /** Withdraws an open wait of the member's (an in-progress one they no longer need). `409 wait_closed` when it ended first. */
+    suspend fun cancel(accountId: String, waitId: String): Wait = throw UnsupportedOperationException("Withdrawing a wait is not supported here.")
 }

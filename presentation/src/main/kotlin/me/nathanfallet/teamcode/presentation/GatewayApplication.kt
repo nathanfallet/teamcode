@@ -118,7 +118,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
             val githubCallback = github != null && path == GITHUB_CALLBACK_PATH
             // An automation's webhook proves itself with its signature or the secret in its path; the service checks either.
             val automationTrigger = automations != null && call.request.httpMethod == HttpMethod.Post && automationTriggerPath.matches(path)
-            if (!runnerCall && !githubCallback && !automationTrigger && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login", API_OPENAPI_PATH, API_DOCS_PATH)) {
+            // A wait's event address proves itself with the wait's own secret (the service checks it): a CI has no TeamCode login.
+            val waitEvent = waits != null && call.request.httpMethod == HttpMethod.Post && waitEventPath.matches(path)
+            if (!runnerCall && !githubCallback && !automationTrigger && !waitEvent && path !in setOf("/health", "/ready", "/", "/dashboard/login", "/api/v1/auth/login", API_OPENAPI_PATH, API_DOCS_PATH)) {
                 val credential = if (path.startsWith("/dashboard")) call.request.cookies["teamcode_session"]
                     else call.request.header(HttpHeaders.Authorization)?.takeIf { it.startsWith("Bearer ") }?.removePrefix("Bearer ")
                 val principal = credential?.let { team.authenticate(it) }
@@ -216,7 +218,7 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
         if (cloudTransfers != null && cloudSessions != null && team != null) cloudTransferRoutes(cloudTransfers)
         if (webhooks != null && team != null) { webhookRoutes(webhooks); webhookDashboardRoutes(webhooks, publicOrigin) }
         if (automations != null && team != null) { automationRoutes(automations); automationTriggerRoutes(automations) }
-        if (waits != null && team != null) waitRoutes(waits)
+        if (waits != null && team != null) { waitRoutes(waits, publicOrigin); waitEventRoutes(waits) }
         if (workflows != null && team != null) workflowRoutes(workflows, workflowRuns)
         if (artifactAdmin != null && team != null) artifactSettingsRoutes(artifactAdmin, publicOrigin)
         if (artifacts != null && team != null) artifactRoutes(artifacts, publicOrigin)

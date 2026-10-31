@@ -244,6 +244,8 @@ class CloudServer(
                 // Like automations: while cloud sessions are off, a run waits instead of creating sessions that cannot start.
                 if (runtime.enabled) step("workflows") { work.runDue("workflows/run", intervalMillis = 2_000, timeoutMillis = 60_000) { workflowEngine.run() } }
                 step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
+                // Waits that resolve by themselves (a time, an event that timed out) wake their sessions; a message to a paused session resumes it.
+                if (runtime.enabled) step("waits") { work.runDue("waits/due", intervalMillis = 5_000, timeoutMillis = 60_000) { waits.resolveDue() } }
                 delay(2_000)
             }
         }

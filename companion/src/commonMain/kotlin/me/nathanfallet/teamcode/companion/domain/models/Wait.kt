@@ -9,8 +9,19 @@ enum class WaitSource { WAIT, SESSION }
 
 /** The kinds of a wait (`waits.v1`). A kind this app does not know (a newer server) is shown as a plain request. */
 enum class WaitKind(val wire: String) {
-    PERMISSION("permission"), QUESTION("question"), HUMAN_REQUEST("human_request"), TURN_FAILED("turn_failed");
+    PERMISSION("permission"), QUESTION("question"), HUMAN_REQUEST("human_request"), TURN_FAILED("turn_failed"),
+    /** A wait the server resolves by itself (a time, an event): nobody is asked, see [WaitResolver]. */
+    TIMED("timed");
     companion object { fun of(wire: String) = entries.firstOrNull { it.wire == wire } ?: HUMAN_REQUEST }
+}
+
+/**
+ * Who resolves a wait: a person ([HUMAN], what "Waiting for you" lists), the clock ([TIME]) or an outside caller such as a CI
+ * ([EVENT]). The last two are "in progress": they wait for nobody.
+ */
+enum class WaitResolver(val wire: String) {
+    HUMAN("human"), TIME("time"), EVENT("event");
+    companion object { fun of(wire: String) = entries.firstOrNull { it.wire == wire } ?: HUMAN }
 }
 
 /** A field type this app does not know (a newer server) is [UNKNOWN] and filled as text. */
@@ -61,7 +72,18 @@ data class Wait(
     val resolvedAt: Long? = null,
     /** What was answered, for a wait that was. */
     val answer: WaitAnswer? = null,
+    val resolver: WaitResolver = WaitResolver.HUMAN,
+    /** A [WaitResolver.TIME] wait: when the server wakes the session. */
+    val dueAt: Long? = null,
+    /** A [WaitResolver.EVENT] wait: when it gives up if nothing arrived. */
+    val timeoutAt: Long? = null,
+    /** An event wait that gives up: `wake` the agent, or `turn_failed` to ask its owner. */
+    val onTimeout: String? = null,
+    val eventSource: String? = null,
 ) {
+    /** The instant that matters to the member: the time of a time wait, the timeout of an event wait. */
+    val dueOrTimeout: Long? get() = dueAt ?: timeoutAt
+
     val status: WaitStatus get() = if (open) WaitStatus.OPEN else if (cancelled) WaitStatus.CANCELLED else WaitStatus.RESOLVED
 
     /** The action chosen, in the words of the wait's own action. */

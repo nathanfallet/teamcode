@@ -36,6 +36,41 @@ class LoadWaitsUseCase(private val waits: WaitRepository, private val features: 
     }
 }
 
+/** The open waits that resolve by themselves (a time, a webhook), soonest first. */
+class LoadInProgressWaitsUseCase(private val waits: WaitRepository, private val features: FeaturesRepository, private val guard: AccountGuard) {
+    suspend operator fun invoke(accountId: String): List<Wait> = guard(accountId) {
+        if (Features.WAITS !in features.features(accountId)) throw CompanionException.Unsupported(Features.WAITS)
+        waits.inProgress(accountId)
+    }
+}
+
+/** What happened to a withdrawal. Never thrown except for cancellation. */
+sealed interface WaitCancelOutcome {
+    data object Cancelled : WaitCancelOutcome
+    /** It ended first (`wait_closed`) or is gone: the list shows what is left. */
+    data object Closed : WaitCancelOutcome
+    /** Offline or a busy server: the same withdrawal can be sent again. */
+    data object Retry : WaitCancelOutcome
+}
+
+/** Withdraws a wait the member no longer needs (an in-progress one). */
+class CancelWaitUseCase(private val waits: WaitRepository, private val guard: AccountGuard) {
+    suspend operator fun invoke(accountId: String, waitId: String): WaitCancelOutcome = try {
+        guard(accountId) { waits.cancel(accountId, waitId) }
+        WaitCancelOutcome.Cancelled
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: CompanionException.Unauthorized) {
+        throw error
+    } catch (error: CompanionException.NotFound) {
+        WaitCancelOutcome.Closed
+    } catch (error: CompanionException.Server) {
+        if (error.statusCode == 409 || error.statusCode == 404 || error.statusCode == 403) WaitCancelOutcome.Closed else WaitCancelOutcome.Retry
+    } catch (error: Exception) {
+        WaitCancelOutcome.Retry
+    }
+}
+
 /** What happened to an answer. Never thrown except for cancellation. */
 sealed interface WaitAnswerOutcome {
     data class Answered(val wait: Wait) : WaitAnswerOutcome

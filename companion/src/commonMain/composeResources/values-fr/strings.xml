@@ -881,6 +881,15 @@
     <string name="waits_answer_action">Réponse : %1$s</string>
     <string name="waits_yes">Oui</string>
     <string name="waits_no">Non</string>
+    <string name="waits_in_progress_title">En cours</string>
+    <string name="waits_in_progress_hint">Elles attendent une heure ou un webhook, pas toi. La session se réveille toute seule.</string>
+    <string name="waits_kind_time">Minuteur</string>
+    <string name="waits_kind_event">Webhook</string>
+    <string name="waits_resumes_at">Reprend %1$s</string>
+    <string name="waits_event_until">Attend un webhook, expire %1$s</string>
+    <string name="waits_event_until_ask">Attend un webhook, expire %1$s, puis te demande</string>
+    <string name="waits_withdraw">Annuler</string>
+    <string name="waits_withdraw_failed">Annulation impossible. Réessaie.</string>
     <string name="tab_workflows">Workflows</string>
     <string name="workflows_title">Workflows</string>
     <string name="workflows_refresh">Actualiser les workflows</string>

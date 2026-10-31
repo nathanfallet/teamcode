@@ -20,6 +20,7 @@ import me.nathanfallet.teamcode.companion.credentials
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.FieldType
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.models.AnswerValue
@@ -89,5 +90,24 @@ class RemoteWaitRepositoryTest {
         answers.addLast(HttpStatusCode.Conflict to """{"error":{"type":"wait_closed","message":"x"}}""")
         val lost = assertFailsWith<CompanionException.Server> { waits.answer("a1", "w1", "approve", emptyMap()) }
         assertEquals(409, lost.statusCode); assertEquals("wait_closed", lost.code)
+    }
+
+    @Test fun theInProgressWaitsAreReadByResolverSoonestFirstAndWithdrawnByCancel() = runTest {
+        val timer = """{"id":"t1","source":"wait","kind":"timed","resolver":"time","status":"open","sessionId":"s1","sessionName":"Fix the login","assigneeId":"m1","title":"Resume at 14:30","createdAt":5,"dueAt":9000}"""
+        val ci = """{"id":"t2","source":"wait","kind":"timed","resolver":"event","status":"open","sessionId":"s1","assigneeId":"m1","title":"CI of the PR","createdAt":6,"timeoutAt":4000,"eventSource":"webhook","onTimeout":"turn_failed"}"""
+        answers.addLast(HttpStatusCode.OK to """{"waits":[$timer]}""")
+        answers.addLast(HttpStatusCode.OK to """{"waits":[$ci]}""")
+        val progress = waits.inProgress("a1")
+        assertEquals(listOf("time", "event"), requests.map { it.url.parameters["resolver"] }); assertEquals(listOf("open", "open"), requests.map { it.url.parameters["status"] })
+        assertEquals(listOf("t2", "t1"), progress.map { it.id }, "the soonest instant first: the CI's timeout, then the timer")
+        val (first, second) = progress
+        assertEquals(WaitKind.TIMED, first.kind); assertEquals(WaitResolver.EVENT, first.resolver); assertEquals(4000L, first.timeoutAt); assertEquals("turn_failed", first.onTimeout); assertEquals("webhook", first.eventSource)
+        assertEquals(WaitResolver.TIME, second.resolver); assertEquals(9000L, second.dueAt)
+
+        answers.addLast(HttpStatusCode.OK to timer.replace(""""status":"open"""", """"status":"cancelled""""))
+        val withdrawn = waits.cancel("a1", "t1")
+        assertTrue(withdrawn.cancelled)
+        val cancel = requests.last()
+        assertEquals(HttpMethod.Post, cancel.method); assertTrue(cancel.url.encodedPath.endsWith("/api/v1/waits/t1/cancel"))
     }
 }

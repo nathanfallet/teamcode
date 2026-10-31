@@ -26,6 +26,7 @@ import me.nathanfallet.teamcode.companion.domain.models.Wait
 import me.nathanfallet.teamcode.companion.domain.models.WaitField
 import me.nathanfallet.teamcode.companion.domain.models.WaitInputProblem
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -61,6 +62,12 @@ import me.nathanfallet.teamcode.companion.resources.waits_status_cancelled
 import me.nathanfallet.teamcode.companion.resources.waits_yes
 import me.nathanfallet.teamcode.companion.resources.waits_no
 import me.nathanfallet.teamcode.companion.resources.waits_turn_failed
+import me.nathanfallet.teamcode.companion.resources.waits_kind_event
+import me.nathanfallet.teamcode.companion.resources.waits_kind_time
+import me.nathanfallet.teamcode.companion.resources.waits_resumes_at
+import me.nathanfallet.teamcode.companion.resources.waits_event_until
+import me.nathanfallet.teamcode.companion.resources.waits_event_until_ask
+import me.nathanfallet.teamcode.companion.resources.waits_withdraw
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -89,6 +96,7 @@ internal fun WaitCard(
                     WaitKind.QUESTION -> Res.string.sessions_waiting_question
                     WaitKind.TURN_FAILED -> Res.string.waits_turn_failed
                     WaitKind.HUMAN_REQUEST -> Res.string.waits_asks_you
+                    WaitKind.TIMED -> if (wait.resolver == WaitResolver.EVENT) Res.string.waits_kind_event else Res.string.waits_kind_time
                 }),
                 tone = when {
                     !wait.open -> Tone.MUTED
@@ -199,6 +207,49 @@ private fun WaitFieldInput(wait: Wait, field: WaitField, input: FieldInput?, onI
                 label = field.label, hint = field.help, singleLine = field.type != FieldType.TEXT && field.type != FieldType.UNKNOWN, minLines = if (field.type == FieldType.TEXT || field.type == FieldType.UNKNOWN) 2 else 1,
                 placeholder = if (field.type == FieldType.DATE) "2026-12-31" else null, tag = "wait-field-${field.id}",
             )
+        }
+    }
+}
+
+/**
+ * A wait that waits for nobody: a timer ("Resumes 14:30") or a webhook ("Waits for a webhook, times out 09:00"). It has no
+ * fields and nothing to answer; the member can only open the session or cancel it. [withdrawing] disables the button while the
+ * request is out.
+ */
+@Composable
+internal fun InProgressCard(
+    wait: Wait,
+    now: Long,
+    withdrawing: Boolean,
+    onWithdraw: (Wait) -> Unit,
+    onOpenSession: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TeamCode.colors
+    val today = utcEpochDay(now)
+    val event = wait.resolver == WaitResolver.EVENT
+    val at = wait.dueOrTimeout?.let { formatEventTime(it, today) }.orEmpty()
+    TcCard(modifier.testTag("in-progress-${wait.id}"), borderColor = colors.line) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Chip(stringResource(if (event) Res.string.waits_kind_event else Res.string.waits_kind_time), tone = Tone.NEUTRAL, modifier = Modifier.testTag("in-progress-kind-${wait.id}"))
+            Spacer(Modifier.weight(1f))
+            Text(relativeTime(wait.createdAt, now), style = MetaStyle, color = colors.muted, maxLines = 1)
+        }
+        wait.sessionName?.let { Text(stringResource(Res.string.waits_from_session, it), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        Text(wait.title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(when {
+                !event -> Res.string.waits_resumes_at
+                wait.onTimeout == "turn_failed" -> Res.string.waits_event_until_ask
+                else -> Res.string.waits_event_until
+            }, at),
+            color = colors.muted, fontSize = 13.sp, modifier = Modifier.testTag("in-progress-when-${wait.id}"),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TcButton(stringResource(Res.string.waits_withdraw), onClick = { onWithdraw(wait) }, kind = ButtonKind.SECONDARY, small = true, enabled = !withdrawing, busy = withdrawing, modifier = Modifier.testTag("in-progress-cancel-${wait.id}"))
+            wait.sessionId?.let { sessionId ->
+                TcButton(stringResource(Res.string.waits_open_session), onClick = { onOpenSession(sessionId) }, kind = ButtonKind.GHOST, small = true, modifier = Modifier.testTag("in-progress-open-${wait.id}"))
+            }
         }
     }
 }

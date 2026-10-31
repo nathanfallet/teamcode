@@ -56,6 +56,7 @@ import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
 import me.nathanfallet.teamcode.companion.domain.models.UploadedFile
 import me.nathanfallet.teamcode.companion.domain.models.Wait
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
@@ -203,13 +204,18 @@ class DemoFeaturesRepository(private val demo: DemoMode) : FeaturesRepository {
 /** The demo's waits: the open ones are answered at once (no agent wakes), and the feed announces it like a server would. */
 class DemoWaitRepository(private val demo: DemoMode) : WaitRepository {
     override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage {
-        val all = demo.store().waits.value.filter { it.status == status }
+        val all = demo.store().waits.value.filter { it.status == status && it.resolver == WaitResolver.HUMAN }
         // Like the server: newest first, a session's own requests ahead of the stored waits on the first page of the open ones.
         val sorted = all.sortedWith(compareByDescending<Wait> { status == WaitStatus.OPEN && it.source == WaitSource.SESSION }.thenByDescending { it.createdAt }.thenByDescending { it.id })
         return WaitPage(if (before == null) sorted else emptyList(), null)
     }
 
     override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait = demo.store().answerWait(waitId, action, values)
+
+    override suspend fun inProgress(accountId: String): List<Wait> =
+        demo.store().waits.value.filter { it.open && it.resolver != WaitResolver.HUMAN }.sortedWith(compareBy<Wait> { it.dueOrTimeout ?: Long.MAX_VALUE }.thenBy { it.id })
+
+    override suspend fun cancel(accountId: String, waitId: String): Wait = demo.store().cancelWait(waitId)
 }
 
 /** The demo's workflows: runs in every state, started and cancelled in memory, announced on the feed like a server would. */

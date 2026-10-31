@@ -17,6 +17,7 @@ import me.nathanfallet.teamcode.domain.team.TeamEventAudience
 import me.nathanfallet.teamcode.domain.team.TeamEventType
 import me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
+import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowRunStore
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
@@ -58,7 +59,94 @@ class WaitPersistenceTest {
             theAnswerWakesTheSession(w)
             anExecutionCredentialIsConfinedToItsSession(a, b, w)
             aFailedTurnOpensAWaitForTheOwner(w)
+            timedWaitsResolveOnceAcrossReplicas(w)
         }
+    }
+
+    /** Waits for a time or an event on real MySQL: claimed once by two replicas, an event and a timeout racing, a secret that is only a hash. */
+    private suspend fun timedWaitsResolveOnceAcrossReplicas(w: AutomationWorld) {
+        suspend fun draft(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        val a = Replica(WaitService(SqlWaitStore(w.a.database), waker(w.a))); val b = Replica(WaitService(SqlWaitStore(w.b.database), waker(w.b)))
+        suspend fun messages(sessionId: String) = w.a.conversation.inputs(w.member, sessionId, null, 50).inputs.filter { it.kind == CloudInputKind.MESSAGE }
+        suspend fun makeDue(id: String) { w.a.database.query { Waits.update({ Waits.id eq id }) { it[dueAt] = 1L } } }
+        val feed = SqlTeamEventStore(w.a.database); val head = feed.head(w.teamId)
+        val owner = TeamEventAudience(w.member.member.id, sessions = true, runs = false, teamSessions = false, teamRuns = false)
+
+        // A due wait is resolved and the session woken exactly once, whatever the two replicas do together.
+        val session = draft("Timed")
+        val time = a.service.create(w.member, WaitDefinition(session.id, "Resume at 14:30", resolver = WaitResolver.TIME, schedule = WaitSchedule(afterSeconds = 60, resumeMessage = "Check the deploy")), null).wait
+        assertEquals(0, a.service.resolveDue() + b.service.resolveDue(), "not due yet")
+        assertTrue(SqlWorkflowRunStore(w.a.database).sessionHasOpenWait(session.id), "an open timed wait counts as an open wait (the Stop hook lets the agent end its turn)")
+        assertEquals(emptyList(), a.service.list(w.member, null, "open", null, 50).waits.filter { it.id == time.id }, "never in Waiting for you")
+        assertEquals(listOf(time.id), b.service.list(w.member, null, "open", null, 50, resolver = "time").waits.map { it.id })
+        makeDue(time.id)
+        val resolved = coroutineScope { listOf(a, b, a, b).map { r -> async(Dispatchers.IO) { r.service.resolveDue() } }.awaitAll() }
+        assertEquals(1, resolved.sum(), "exactly one scan resolved it")
+        val stored = a.service.get(w.member, time.id)
+        assertEquals(WaitStatus.RESOLVED, stored.status); assertEquals("time_reached", stored.answer!!.action)
+        val message = messages(session.id).single()
+        assertTrue(message.wake); assertEquals(w.member.member.id, message.authorId)
+        assertTrue(message.text!!.startsWith("[TeamCode wait answered] Resume at 14:30\nwait: ${time.id}\naction: the time came (time_reached)\nresolved by: TeamCode (the clock)\nresume: Check the deploy"), message.text)
+        assertEquals(1, w.a.database.query { AuditEvents.selectAll().where { (AuditEvents.subjectId eq time.id) and (AuditEvents.action eq "wait.time_reached") }.count() }.toInt())
+        val events = feed.read(w.teamId, owner, head, setOf(TeamEventType.WAIT_RESOLVED), 100).events.filter { it.subjectId == time.id }
+        assertEquals(1, events.size); assertTrue("\"waitKind\":\"timed\"" in events.single().data && "\"action\":\"time_reached\"" in events.single().data, events.single().data)
+        assertFalse(SqlWorkflowRunStore(w.a.database).sessionHasOpenWait(session.id))
+        assertFalse(w.a.database.query { Waits.select(Waits.wakePending).where { Waits.id eq time.id }.single()[Waits.wakePending] }, "the debt of the wake message is cleared")
+
+        // The secret of an event wait is a hash in the table and nowhere else; a wrong token is a 404.
+        val ci = draft("CI")
+        val event = a.service.create(w.member, WaitDefinition(ci.id, "CI of the PR", resolver = WaitResolver.EVENT, schedule = WaitSchedule(source = EventSource.WEBHOOK, timeoutSeconds = 3600)), null)
+        val secret = event.secret!!
+        val row = w.a.database.query { Waits.selectAll().where { Waits.id eq event.wait.id }.single() }
+        assertEquals(java.security.MessageDigest.getInstance("SHA-256").digest(secret.encodeToByteArray()).joinToString("") { "%02x".format(it) }, row[Waits.eventTokenHash])
+        assertFalse(listOf(row[Waits.title], row[Waits.body], row[Waits.refs], row[Waits.fieldDefs], row[Waits.actions], row[Waits.resumeMessage], row[Waits.eventTokenHash]).any { it?.contains(secret) == true })
+        refusedWith("not_found") { b.service.receiveEvent(event.wait.id, "wev_wrong", ByteArray(0)) }
+        refusedWith("not_found") { b.service.receiveEvent(event.wait.id, null, ByteArray(0)) }
+        assertEquals(WaitStatus.OPEN, a.service.get(w.member, event.wait.id).status)
+        b.service.receiveEvent(event.wait.id, secret, """{"result":"success","note":"green"}""".encodeToByteArray())
+        refusedWith("not_found") { a.service.receiveEvent(event.wait.id, secret, ByteArray(0)) }
+        assertEquals("event_received", a.service.get(w.member, event.wait.id).answer!!.action)
+        assertTrue("note: green" in messages(ci.id).single().text!!)
+        assertFalse(secret in messages(ci.id).single().text!!)
+
+        // An event and a timeout race: exactly one wins and the session is woken once, over many rounds on both replicas.
+        var received = 0; var timeouts = 0
+        repeat(12) { round ->
+            val s = draft("Race $round")
+            val created = a.service.create(w.member, WaitDefinition(s.id, "Race", resolver = WaitResolver.EVENT, schedule = WaitSchedule(source = EventSource.WEBHOOK)), null)
+            makeDue(created.wait.id)
+            val outcomes = coroutineScope { listOf(
+                async(Dispatchers.IO) { runCatching { a.service.receiveEvent(created.wait.id, created.secret, ByteArray(0)) }.map { 1 } },
+                async(Dispatchers.IO) { runCatching { b.service.resolveDue() } },
+                async(Dispatchers.IO) { runCatching { b.service.receiveEvent(created.wait.id, created.secret, ByteArray(0)) }.map { 1 } },
+                async(Dispatchers.IO) { runCatching { a.service.resolveDue() } },
+            ).awaitAll() }
+            assertTrue(outcomes.all { it.isSuccess || (it.exceptionOrNull() as? TeamFailure)?.code == "not_found" }, outcomes.toString())
+            val final = a.service.get(w.member, created.wait.id)
+            assertEquals(WaitStatus.RESOLVED, final.status)
+            when (final.answer!!.action) { "event_received" -> received++; "timed_out" -> timeouts++; else -> fail("unexpected ${final.answer!!.action}") }
+            a.service.resolveDue(); b.service.resolveDue()
+            assertEquals(1, messages(s.id).size, "woken once in round $round")
+            assertEquals(1, w.a.database.query { AuditEvents.selectAll().where { (AuditEvents.subjectId eq created.wait.id) and (AuditEvents.action inList listOf("wait.event_received", "wait.timed_out")) }.count() }.toInt())
+        }
+        assertEquals(12, received + timeouts)
+
+        // A timeout that asks the owner opens a turn_failed wait and does not wake the agent.
+        val failing = draft("Gives up")
+        val gives = a.service.create(w.member, WaitDefinition(failing.id, "Never comes", resolver = WaitResolver.EVENT, schedule = WaitSchedule(source = EventSource.WEBHOOK, onTimeout = TimeoutAction.TURN_FAILED)), null).wait
+        makeDue(gives.id)
+        assertEquals(1, b.service.resolveDue())
+        assertEquals("timed_out", a.service.get(w.member, gives.id).answer!!.action)
+        assertEquals(emptyList(), messages(failing.id))
+        val asked = a.service.list(w.member, null, "open", null, 50).waits.single { it.sessionId == failing.id }
+        assertEquals(WaitKind.TURN_FAILED, asked.kind); assertEquals(w.member.member.id, asked.assigneeId)
+
+        // The list filter and the due scan have indexes made for them; the cap of 20 open waits per session counts timed waits too.
+        val capped = draft("Capped")
+        repeat(20) { a.service.create(w.member, WaitDefinition(capped.id, "t$it", resolver = WaitResolver.TIME, schedule = WaitSchedule(afterSeconds = 3600)), null) }
+        refusedWith("wait_limit") { b.service.create(w.member, WaitDefinition(capped.id, "one more", resolver = WaitResolver.TIME, schedule = WaitSchedule(afterSeconds = 3600)), null) }
+        assertEquals(20, a.service.list(w.member, null, "open", null, 100, session = capped.id, resolver = "time").waits.size)
+        assertEquals(emptyList(), a.service.list(w.member, null, "open", null, 100, session = capped.id).waits, "a session's own list is human waits too, unless asked")
     }
 
     private suspend fun aWaitRoundTripsWithItsAssigneeAndSession(a: Replica, b: Replica, w: AutomationWorld, review: WaitDefinition) {

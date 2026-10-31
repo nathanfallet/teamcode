@@ -229,4 +229,6 @@ class DemoAwareWaitRepository(private val real: WaitRepository, private val demo
     private fun of(accountId: String) = if (isDemo(accountId)) demo else real
     override suspend fun list(accountId: String, status: WaitStatus, before: String?) = of(accountId).list(accountId, status, before)
     override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>) = of(accountId).answer(accountId, waitId, action, values)
+    override suspend fun inProgress(accountId: String) = of(accountId).inProgress(accountId)
+    override suspend fun cancel(accountId: String, waitId: String) = of(accountId).cancel(accountId, waitId)
 }

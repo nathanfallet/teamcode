@@ -9,6 +9,7 @@ import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.*
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
+import com.github.ajalt.clikt.parameters.types.long
 import kotlinx.serialization.encodeToString
 import me.nathanfallet.teamcode.api.Serialization
 import me.nathanfallet.teamcode.api.models.*
@@ -29,6 +30,7 @@ private class WaitsList : SuspendingCliktCommand(name = "list") {
     private val all by option("--all", help = "Every status: same as --status all.").flag()
     private val status by option("--status", help = "open (the default), resolved, cancelled or all.").choice("open", "resolved", "cancelled", "all")
     private val assignee by option("--assignee", help = "all, or a member id: the team's or that member's waits; administrators only.")
+    private val resolver by option("--resolver", help = "human (the default: what waits for you), time, event (what the server resolves by itself: a delay, a CI) or all.").choice("human", "time", "event", "all")
     private val before by option("--before", help = "The id the previous page ended with (printed when more exist).")
     private val limit by option("--limit", help = "At most this many rows: 1 to $MAX_LISTED_WAITS (50).").int().default(50)
     private val json by option("--json").flag()
@@ -39,7 +41,7 @@ private class WaitsList : SuspendingCliktCommand(name = "list") {
         before?.let { requireWaitId(it, "cursor") }
         sdk(loadConfig()).use { client ->
             requireWaits(client)
-            val (waits, more) = listWaits(client, assignee, if (all) "all" else status ?: "open", before, limit)
+            val (waits, more) = listWaits(client, assignee, if (all) "all" else status ?: "open", before, limit, resolver)
             if (json) echo(Serialization.json.encodeToString(waits))
             else { val now = Clock.System.now().toEpochMilliseconds(); waits.forEach { echo(it.line(now)) } }
             if (waits.isEmpty() && !json) echo("Nothing waits for you.", err = true)
@@ -81,6 +83,7 @@ private class WaitsAnswer : SuspendingCliktCommand(name = "answer") {
             val wait = client.wait(id)
             if (wait.source == "session") throw CliUserException("This is a request of the cloud session ${wait.sessionName ?: wait.sessionId}: $SESSION_NOTE (teamcode cloud attach), not with teamcode waits answer.")
             if (wait.status != "open") throw CliUserException("This wait is already ${wait.status}.")
+            if (wait.resolver != "human") throw CliUserException("This wait resolves by itself (${wait.resolver}): nobody answers it. Withdraw it with teamcode waits cancel ${wait.id}.")
             val values = answerValues(wait, sets, jsonSets)
             val chosen = chooseAction(wait, action)
             val answered = client.answerWait(id, chosen, values)
@@ -109,6 +112,12 @@ private class WaitsAsk : SuspendingCliktCommand(name = "ask") {
     private val title by option("--title", help = "1 to 200 characters.").required()
     private val body by option("--body")
     private val assignee by option("--assignee", help = "A member id; the session's owner by default.")
+    private val after by option("--after", help = "Wait for a delay instead of a person: wake the session after this many seconds (30 to 2592000).").long()
+    private val at by option("--at", help = "Wake the session at this instant: ISO-8601 in UTC, such as 2026-11-02T09:00:00Z (within 30 days).")
+    private val webhook by option("--webhook", help = "Wait for an event instead of a person: prints an address a CI or a script calls once (the secret is shown only now).").flag()
+    private val timeout by option("--timeout", help = "With --webhook: give up after this many seconds (86400 by default, 604800 at most).").long()
+    private val onTimeout by option("--on-timeout", help = "With --webhook: wake the session with \"timed out\" (wake, the default) or ask its owner to retry or dismiss (turn_failed).").choice("wake", "turn_failed")
+    private val resumeMessage by option("--resume-message", help = "With --after, --at or --webhook: a note added to the message that wakes the session (2000 characters).")
     private val refs by option("--ref", help = "artifact:ID, session:ID or url:https://…; repeatable.").multiple()
     private val fields by option("--field", help = "ID:TYPE:LABEL[:required]; repeatable. TYPE is text, choice, confirm, number, date, file or info.").multiple()
     private val choices by option("--option", help = "FIELD=VALUE: a choice of a choice field; repeatable.").convert { pair(it) }.multiple()
@@ -120,11 +129,16 @@ private class WaitsAsk : SuspendingCliktCommand(name = "ask") {
         val options = choices.groupBy({ it.first }, { it.second })
         val declared = fields.map { parseField(it, options) }
         (options.keys - declared.map { it.id }.toSet()).firstOrNull()?.let { throw UsageError("--option $it=… names a field that no --field declares.") }
-        val input = WaitInput(session, title, body, assignee, refs.map(::parseRef), declared, actions.map(::parseAction))
+        val timed = timedSettings(after, at, webhook, timeout, onTimeout, resumeMessage)
+        if (timed != null && (declared.isNotEmpty() || actions.isNotEmpty() || assignee != null)) throw UsageError("A wait for a time or an event asks nobody: leave out --field, --action and --assignee.")
+        val input = timed?.copy(sessionId = session, title = title, body = body, refs = refs.map(::parseRef))
+            ?: WaitInput(session, title, body, assignee, refs.map(::parseRef), declared, actions.map(::parseAction))
         sdk(loadConfig()).use { client ->
             requireWaits(client)
             val wait = client.createWait(input)
-            echo(if (json) Serialization.json.encodeToString(wait) else "Asked ${wait.assigneeName ?: wait.assigneeId}: ${wait.id} (${wait.title}).")
+            echo(if (json) Serialization.json.encodeToString(wait)
+                else if (wait.resolver == "human") "Asked ${wait.assigneeName ?: wait.assigneeId}: ${wait.id} (${wait.title})."
+                else wait.announcement())
         }
     }
 }

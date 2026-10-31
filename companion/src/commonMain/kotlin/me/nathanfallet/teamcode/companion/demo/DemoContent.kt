@@ -33,6 +33,7 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitAction
 import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
 import me.nathanfallet.teamcode.companion.domain.models.WaitField
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitOption
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import kotlinx.serialization.json.JsonPrimitive
@@ -186,6 +187,13 @@ object DemoContent {
                 answer = WaitAnswer("approve", mapOf("feedback" to JsonPrimitive("Yes, keep it short.")), MEMBER_ID, now - 150 * MINUTE)),
             wait("w6", "s7", "Prototype the search page", WaitKind.HUMAN_REQUEST, "Pick the filter layout", null, 240, actions = listOf(WaitAction("done", "Done")))
                 .copy(open = false, cancelled = true, resolvedAt = now - 230 * MINUTE),
+            // What the server watches and wakes the session for: nobody is asked, so these are "in progress", not "waiting for you".
+            wait("w7", "s1", "Migrate billing to the new API", WaitKind.TIMED, "Check the nightly deploy", null, 12)
+                .copy(resolver = WaitResolver.TIME, dueAt = now + 3 * 60 * MINUTE),
+            wait("w8", "s3", "Speed up the CI cache", WaitKind.TIMED, "CI of the cache pull request", null, 26)
+                .copy(resolver = WaitResolver.EVENT, eventSource = "webhook", onTimeout = "wake", timeoutAt = now + 20 * 60 * MINUTE),
+            wait("w9", "s2", "Review the release checklist", WaitKind.TIMED, "Store review of build 2.4", null, 55)
+                .copy(resolver = WaitResolver.EVENT, eventSource = "webhook", onTimeout = "turn_failed", timeoutAt = now + 46 * 60 * MINUTE),
         )
     }
 
