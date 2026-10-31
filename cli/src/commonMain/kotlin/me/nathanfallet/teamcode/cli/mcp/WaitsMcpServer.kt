@@ -119,8 +119,8 @@ class WaitsMcpServer(
         val wait = client.createWait(input, newKey())
         return buildJsonObject {
             put("id", wait.id); put("status", wait.status)
-            wait.dueAt?.let { put("dueAt", it); put("dueAtIso", java.time.Instant.ofEpochMilli(it).toString()) }
-            wait.timeoutAt?.let { put("timeoutAt", it); put("timeoutAtIso", java.time.Instant.ofEpochMilli(it).toString()) }
+            wait.dueAt?.let { put("dueAt", it); put("dueAtIso", kotlin.time.Instant.fromEpochMilliseconds(it).toString()) }
+            wait.timeoutAt?.let { put("timeoutAt", it); put("timeoutAtIso", kotlin.time.Instant.fromEpochMilliseconds(it).toString()) }
             wait.eventUrl?.let { put("eventUrl", it) }
             put("instruction", (if (wait.eventUrl != null)
                 "Hand this address to whatever should report the event (a CI step, a script): `curl -X POST '<eventUrl>' -H 'Content-Type: application/json' -d '{\"result\":\"success\"}'` " +

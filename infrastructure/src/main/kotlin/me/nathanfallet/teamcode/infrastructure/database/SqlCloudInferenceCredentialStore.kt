@@ -16,7 +16,7 @@ import org.jetbrains.exposed.v1.jdbc.*
  * SHA-256 of the token is stored.
  */
 class SqlCloudInferenceCredentialStore(private val database: Database) : CloudInferenceCredentialStore {
-    override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int): IssuedInferenceCredential? = database.query {
+    override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int, kind: ExecutionCredentialKind): IssuedInferenceCredential? = database.query {
         // The session row lock serializes issuance with every session write that ends the execution (they update
         // the same row before revoking), so a credential is never left behind by a concurrent pause or transfer.
         val session = CloudSessions.select(CloudSessions.currentEpoch, CloudSessions.state, CloudSessions.desiredState, CloudSessions.ownerId)
@@ -46,8 +46,8 @@ class SqlCloudInferenceCredentialStore(private val database: Database) : CloudIn
         val expiresAt = now + ttlMillis
         Tokens.insert {
             it[Tokens.id] = id; it[memberId] = member; it[tokenHash] = Passwords.digest(token)
-            it[device] = "cloud session ${sessionId.take(8)} e$epoch"; it[deviceId] = null; it[createdAt] = now; it[Tokens.expiresAt] = expiresAt
-            it[serviceScopes] = Json.encodeToString(EXECUTION_SCOPES.map { it.wire })
+            it[device] = (if (kind == ExecutionCredentialKind.REMOTE_SESSION) "remote session" else "cloud session") + " ${sessionId.take(8)} e$epoch"; it[deviceId] = null; it[createdAt] = now; it[Tokens.expiresAt] = expiresAt
+            it[serviceScopes] = Json.encodeToString((if (kind == ExecutionCredentialKind.REMOTE_SESSION) REMOTE_SESSION_SCOPES else EXECUTION_SCOPES).map { it.wire })
         }
         CloudInferenceCredentials.insert {
             it[tokenId] = id; it[CloudInferenceCredentials.sessionId] = sessionId; it[CloudInferenceCredentials.epoch] = epoch
@@ -114,3 +114,10 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
  * interactive). Nothing else: no usage, no skill or hook publication, no cloud or interactive route.
  */
 val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION)
+
+/**
+ * What the loopback relays of a remote session's host may do upstream, as the member: the session's own waits (asking,
+ * reading, withdrawing; never answering), its own workflow step, and artifacts (never access changes or deletion). No
+ * inference, MCP, skills, hooks or cloud route: those stay with the host's own login.
+ */
+val REMOTE_SESSION_SCOPES: List<ServiceScope> = listOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION)

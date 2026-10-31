@@ -24,8 +24,10 @@ import me.nathanfallet.teamcode.cli.platform.listenUnix
 import me.nathanfallet.teamcode.cli.platform.secureRandomBytes
 import me.nathanfallet.teamcode.cli.platform.serviceStopRequested
 import me.nathanfallet.teamcode.cli.platform.servicePlatform
+import me.nathanfallet.teamcode.cli.platform.REMOTE_AGENT_SCRUBBED_PREFIXES
 import me.nathanfallet.teamcode.cli.platform.startAgentProcess
 import me.nathanfallet.teamcode.cli.platform.writePrivateFile
+import me.nathanfallet.teamcode.cli.cloud.RunnerInference
 import me.nathanfallet.teamcode.cli.proxy.proxyServer
 import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.client.TeamCodeClient
@@ -37,6 +39,9 @@ import kotlin.time.Clock
 import me.nathanfallet.teamcode.cli.update.BackgroundInstallationLease
 import me.nathanfallet.teamcode.cli.update.applyPendingServiceRestart
 import me.nathanfallet.teamcode.cli.update.managedInstallation
+
+/** Advertised by a server that gives a remote host a credential confined to its session for the agent's relays. */
+internal const val SESSION_CREDENTIAL_CAPABILITY = "cloud.remote.session-credential.v1"
 
 /** The run label that ties the host's registered run to its session, for quotas, budgets and the runs page. */
 internal const val SESSION_RUN_LABEL = "teamcode.session"
@@ -80,6 +85,16 @@ internal suspend fun hostRemoteSession(client: TeamCodeClient, record: RemoteSes
     }
 }
 
+/**
+ * The held session credential of this host's epoch, asked of the server with the member's login (the runner channel) and
+ * renewed like a pod's; null on a server that does not advertise [SESSION_CREDENTIAL_CAPABILITY], where the relays keep the
+ * member's login and the agent can reach the answer route through it (docs/cloud-sessions.md).
+ */
+internal fun remoteSessionCredential(client: TeamCodeClient, features: List<String>, team: String, session: String, epoch: Int, report: (String) -> Unit,
+    now: () -> Long = { Clock.System.now().toEpochMilliseconds() }): RunnerInference? =
+    if (SESSION_CREDENTIAL_CAPABILITY !in features) null
+    else RunnerInference({ client.runnerSessionCredential(RunnerInferenceRequest(team, session, epoch)) }, log = report, what = "session credential", now = now)
+
 /** An epoch the device's daemon already opened (`POST /cloud/sessions/{id}/host`) for this host to run. */
 internal data class AcceptedHost(val teamId: String, val epoch: Int)
 
@@ -106,13 +121,17 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { report("The team hooks could not be prepared; the agent starts without them."); null }
     val localToken = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
-    val proxy = proxyServer(client, localToken, 0) { report(it) }
+    // The agent's artifact, wait and workflow relays act with a credential confined to this session, never with the member's
+    // login, when the server issues one. An older server does not: its relays keep the member's login (docs/waits.md).
+    val sessionCredential = remoteSessionCredential(client, features, team, session, epoch, report)
+    val sessionClient = sessionCredential?.let { held -> client.withCredential { held.token() } }
+    val proxy = proxyServer(client, localToken, 0, upstreamReady = null, sessionClient = sessionClient) { report(it) }
     try {
         proxy.start(wait = false)
         // Again after the proxy, whose engine installs its own handlers.
         installServiceSignalHandlers()
         val port = proxy.engine.resolvedConnectors().single().port
-        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report, sessionId = session)
+        val tools = HostAgentTools(client, record.directory, features, plugin?.directory?.toString(), report, sessionId = session, relayClient = sessionClient)
         // The wait secrets of the session (docs/waits.md#secrets), read with the runner route as the member's own login: held in
         // this process only and given to the agent's Bash commands, never to its process environment.
         val secrets = if ("cloud.variables.v1" in features && record.agent == "claude")
@@ -126,7 +145,7 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
             (if (members) memberVariables(client, report) else emptyMap()) +
                 (wakeupSocket?.script?.takeIf { kind == "claude" }?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it) }.orEmpty())
         } else null
-        val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory) },
+        val agent = AgentHost(channel, { command, overrides, directory -> startAgentProcess(command.command, command.arguments, overrides, directory, REMOTE_AGENT_SCRUBBED_PREFIXES) },
             RemoteSessions().conversation(session), record.directory, BuildInfo.VERSION, log = report,
             inference = { AgentInferenceEndpoint(port, localToken, runId) }, tools = tools, variables = variables, uploads = uploads(session, report),
             stateHook = wakeupSocket?.hook)
@@ -158,6 +177,8 @@ private suspend fun hostExecution(client: TeamCodeClient, record: RemoteSessionR
     } finally {
         withContext(NonCancellable) {
             proxy.stop(500, 5_000)
+            sessionCredential?.clear()
+            sessionClient?.close()
             try { plugin?.close() } catch (_: Exception) { report("The temporary team hooks plugin could not be removed.") }
         }
     }
@@ -257,9 +278,11 @@ internal class HostAgentTools(
     private val plugin: String?,
     private val report: (String) -> Unit,
     private val sessionId: String? = null,
+    /** The credential confined to the session for the artifact policy and the relays, when the server issues one; null: [client]. */
+    private val relayClient: TeamCodeClient? = null,
     private val executable: () -> String = { servicePlatform().executable },
 ) : AgentTools {
-    /** The member's own login runs the host, so the capability is enough: there is no execution credential to check. */
+    /** The host's relays act with the session credential (or, on a server without it, the member's login): the capability is enough, there is nothing to probe. */
     override suspend fun waits(): WaitsMcp? {
         val session = sessionId ?: return null
         if (Waits.CAPABILITY !in features) return null
@@ -285,7 +308,7 @@ internal class HostAgentTools(
 
     override suspend fun artifacts(): ArtifactsMcp? {
         if ("artifacts.policy.v1" !in features) return null
-        val allowed = try { withTimeout(20_000) { client.artifactPolicy() }.canPublish }
+        val allowed = try { withTimeout(20_000) { (relayClient ?: client).artifactPolicy() }.canPublish }
             catch (_: TimeoutCancellationException) { false }
             catch (error: CancellationException) { throw error }
             catch (_: Exception) { false }

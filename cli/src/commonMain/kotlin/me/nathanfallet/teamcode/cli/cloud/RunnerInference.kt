@@ -23,6 +23,8 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 internal class RunnerInference(
     private val fetch: suspend () -> RunnerInferenceCredentialView,
     private val log: (String) -> Unit = {},
+    /** What the credential is called in the log: a remote host asks for a confined session credential through the same renewal. */
+    private val what: String = "inference credential",
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) {
     private class Held(val token: String, val renewAt: Long, val usableUntil: Long)
@@ -56,10 +58,10 @@ internal class RunnerInference(
         catch (error: Exception) {
             retryAt = at + RETRY_MILLIS
             if (error is TeamCodeException) {
-                if (error.statusCode == 404) { if (!unsupported) log("This server does not issue inference credentials to cloud runners."); unsupported = true }
-                else log("The inference credential was refused (HTTP ${error.statusCode}${error.code?.let { " $it" } ?: ""}).")
+                if (error.statusCode == 404) { if (!unsupported) log("This server does not issue a $what to this host."); unsupported = true }
+                else log("The $what was refused (HTTP ${error.statusCode}${error.code?.let { " $it" } ?: ""}).")
                 if (error.statusCode in setOf(401, 403, 404, 409)) held = null
-            } else log("The inference credential could not be renewed; retrying.")
+            } else log("The $what could not be renewed; retrying.")
         }
     }
 

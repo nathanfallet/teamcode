@@ -25,8 +25,10 @@ private class JvmAgentProcess(private val process: Process) : AgentProcess {
     }
 }
 
-actual fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String): AgentProcess {
+actual fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String, scrubPrefixes: List<String>): AgentProcess {
     val builder = ProcessBuilder(listOf(command) + arguments).directory(File(workingDirectory)).redirectError(ProcessBuilder.Redirect.DISCARD)
+    val kept = agentInheritedEnvironment(builder.environment().toMap(), scrubPrefixes)
+    builder.environment().keys.retainAll(kept.keys)
     overrides.forEach { (name, value) -> if (value == null) builder.environment().remove(name) else builder.environment()[name] = value }
     return JvmAgentProcess(builder.start())
 }

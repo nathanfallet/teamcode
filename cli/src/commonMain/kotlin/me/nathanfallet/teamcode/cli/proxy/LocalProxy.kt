@@ -36,6 +36,12 @@ internal fun serviceProof(localToken: String, challenge: String, serviceId: Stri
 fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int = 2 * 1024 * 1024, serviceId: String? = null, serverUrl: String? = null,
     /** False while the upstream credential is unavailable: answer a retryable `503` rather than forward a request bound to be refused. */
     upstreamReady: (suspend () -> Boolean)? = null,
+    /**
+     * The credential of the artifact, wait and workflow relays when it is not [client]'s: a remote session's host relays them
+     * with the credential confined to its session (`cloud.remote.session-credential.v1`), never with the member's login that
+     * [client] holds. Null: those relays use [client], as under `teamcode run` and in a pod (whose [client] is already confined).
+     */
+    sessionClient: TeamCodeClient? = null,
     /** Receives the cause of a TeamCode refusal, once per cause for a while (see [RefusalNotices]). */
     report: ((String) -> Unit)? = null) {
     require(localToken.length >= 32) { "A local proxy token of at least 32 characters is required." }
@@ -63,9 +69,9 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
             }
         }
         mcpRelay(client, localToken, maximumBodyBytes)
-        artifactRelay(client, localToken, maximumBodyBytes)
-        waitRelay(client, localToken, maximumBodyBytes)
-        workflowRelay(client, localToken, maximumBodyBytes)
+        artifactRelay(sessionClient ?: client, localToken, maximumBodyBytes)
+        waitRelay(sessionClient ?: client, localToken, maximumBodyBytes)
+        workflowRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         for (path in listOf("/v1/messages", "/v1/responses")) {
             for (mode in listOf("interactive", "background", "run")) {
                 val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
