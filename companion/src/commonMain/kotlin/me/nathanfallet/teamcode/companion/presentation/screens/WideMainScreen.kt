@@ -90,11 +90,14 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.McpServersRout
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WaitsRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowEditRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowRunRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowStartRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowsRoute
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditorsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowStartViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowViewModel
@@ -114,6 +117,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.McpServersView
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.TransfersViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.wfe_copy_suffix
 import me.nathanfallet.teamcode.companion.resources.account_title
 import me.nathanfallet.teamcode.companion.resources.action_back
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
@@ -382,8 +386,12 @@ fun WideMainScreen(
                         val route = entry.toRoute<WorkflowsRoute>()
                         val runs: WorkflowRunsViewModel = koinViewModel(key = workflowRunsKey(route.accountId)) { parametersOf(route) }
                         val definitions: WorkflowsViewModel = koinViewModel(key = workflowsKey(route.accountId)) { parametersOf(route) }
+                        val editors: WorkflowEditorsViewModel = koinViewModel(key = workflowEditorsKey(route.accountId)) { parametersOf(route) }
+                        val copySuffix = stringResource(Res.string.wfe_copy_suffix)
                         WorkflowsScreen(runs, definitions, onOpenRun = { detail.navigate(WorkflowRunRoute(route.accountId, it.id)) }, onOpenWorkflow = { detail.navigate(WorkflowRoute(route.accountId, it.id)) },
-                            onStartWorkflow = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) }, onOpenWaits = { show(WaitsRoute(route.accountId)) })
+                            onStartWorkflow = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) }, onOpenWaits = { show(WaitsRoute(route.accountId)) },
+                            onCreateWorkflow = { detail.navigate(WorkflowEditRoute(route.accountId)) },
+                            onDuplicateWorkflow = { detail.navigate(WorkflowEditRoute(route.accountId, copyOf = it.id, copySuffix = copySuffix)) }, editors = editors)
                     }
                     composable<WorkflowRunRoute> { entry ->
                         val route = entry.toRoute<WorkflowRunRoute>()
@@ -394,7 +402,18 @@ fun WideMainScreen(
                     composable<WorkflowRoute> { entry ->
                         val route = entry.toRoute<WorkflowRoute>()
                         val viewModel: WorkflowViewModel = koinViewModel { parametersOf(route) }
-                        WorkflowScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onStart = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) })
+                        val copySuffix = stringResource(Res.string.wfe_copy_suffix)
+                        WorkflowScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onStart = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) },
+                            onEdit = { detail.navigate(WorkflowEditRoute(route.accountId, it.id)) },
+                            onDuplicate = { detail.navigate(WorkflowEditRoute(route.accountId, copyOf = it.id, copySuffix = copySuffix)) },
+                            onDeleted = { show(WorkflowsRoute(route.accountId)) })
+                    }
+                    composable<WorkflowEditRoute> { entry ->
+                        val route = entry.toRoute<WorkflowEditRoute>()
+                        val viewModel: WorkflowEditViewModel = koinViewModel { parametersOf(route) }
+                        WorkflowEditScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onSaved = { id ->
+                            if (route.workflowId == null) detail.navigate(WorkflowRoute(route.accountId, id)) { popUpTo<WorkflowEditRoute> { inclusive = true } } else detail.popBackStack()
+                        })
                     }
                     composable<WorkflowStartRoute> { entry ->
                         val route = entry.toRoute<WorkflowStartRoute>()
@@ -534,7 +553,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<ArtifactsRoute>() -> if (toRoute<ArtifactsRoute>().sessionId == null) SidebarSelection.AllArtifacts else SidebarSelection.None
         destination.hasRoute<AutomationsRoute>() -> SidebarSelection.AllAutomations
         destination.hasRoute<WaitsRoute>() -> SidebarSelection.AllWaits
-        destination.hasRoute<WorkflowsRoute>() || destination.hasRoute<WorkflowRunRoute>() || destination.hasRoute<WorkflowRoute>() || destination.hasRoute<WorkflowStartRoute>() -> SidebarSelection.AllWorkflows
+        destination.hasRoute<WorkflowsRoute>() || destination.hasRoute<WorkflowRunRoute>() || destination.hasRoute<WorkflowRoute>() || destination.hasRoute<WorkflowStartRoute>() || destination.hasRoute<WorkflowEditRoute>() -> SidebarSelection.AllWorkflows
         destination.hasRoute<AutomationRoute>() -> SidebarSelection.Automation(toRoute<AutomationRoute>().automationId)
         destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>().automationId?.let { SidebarSelection.Automation(it) } ?: SidebarSelection.AllAutomations
         destination.hasRoute<AutomationTestRoute>() -> SidebarSelection.Automation(toRoute<AutomationTestRoute>().automationId)

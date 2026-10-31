@@ -1,6 +1,7 @@
 package me.nathanfallet.teamcode.companion
 
 import me.nathanfallet.teamcode.companion.domain.models.*
+import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowDraftRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
 
 fun step(id: String, kind: StepKind = StepKind.AGENT, title: String = "Step $id", profileId: String? = null, vararg transitions: StepTransition) =
@@ -42,4 +43,62 @@ class FakeWorkflowRepository : WorkflowRepository {
         record("cancel:$id")
         return runs.getValue(id).copy(status = RunStatus.CANCELLED, rawStatus = "cancelled").also { runs[id] = it }
     }
+
+    /** The whole definitions by id (what the editor reads); the list above is what the lists read. */
+    val saved = linkedMapOf<String, EditableWorkflow>()
+    var settings = WorkflowSettings(WorkflowEditors(EditorMode.ADMINS), canEdit = false)
+    /** A failure for one operation (`create`, `update`, `delete`, `settings`, `editors`), thrown after it is recorded. */
+    val failures = mutableMapOf<String, Exception>()
+    val sentEditors = mutableListOf<WorkflowEditors>()
+
+    private fun record(call: String, operation: String) { record(call); failures[operation]?.let { throw it } }
+
+    override suspend fun definition(accountId: String, id: String): EditableWorkflow { record("definition:$id"); return saved[id] ?: throw CompanionException.NotFound() }
+    override suspend fun create(accountId: String, definition: WorkflowDefinition): EditableWorkflow {
+        record("create", "create")
+        return EditableWorkflow("new-wf", 1, definition, 1L).also { saved[it.id] = it; definitions = definitions + it.toWorkflow() }
+    }
+    override suspend fun update(accountId: String, id: String, definition: WorkflowDefinition, expectedVersion: Int): EditableWorkflow {
+        record("update:$id:$expectedVersion", "update")
+        val current = saved[id] ?: throw CompanionException.NotFound()
+        if (current.version != expectedVersion) throw CompanionException.Server(409, "workflow_conflict")
+        return EditableWorkflow(id, current.version + 1, definition, 2L).also { saved[id] = it; definitions = definitions.map { w -> if (w.id == id) it.toWorkflow() else w } }
+    }
+    override suspend fun delete(accountId: String, id: String) {
+        record("delete:$id", "delete")
+        saved.remove(id); definitions = definitions.filterNot { it.id == id }
+    }
+    override suspend fun settings(accountId: String): WorkflowSettings { record("settings", "settings"); return settings }
+    override suspend fun updateEditors(accountId: String, editors: WorkflowEditors): WorkflowSettings {
+        record("editors", "editors"); sentEditors += editors
+        return WorkflowSettings(editors, settings.canEdit).also { settings = it }
+    }
+}
+
+/** A step that is valid as an agent step: an instruction, a deliverable and an outcome that ends the workflow. */
+fun agentNode(id: String, to: String? = null, title: String = "Step $id", instruction: String = "Do $id.") =
+    DefinitionNode(id, StepKind.AGENT, title, instruction, deliverable = DefinitionDeliverable("text"), transitions = listOf(StepTransition("delivered", to)))
+
+/** A valid definition: an agent step, then a person who approves or sends it back. */
+fun validDefinition(name: String = "Fix a ticket") = WorkflowDefinition(
+    name, "An agent fixes it.", "work", "same", listOf(WorkflowInput("ticket", "Ticket", true, null, 64)),
+    listOf(
+        agentNode("work", "review", "Work", "Fix {{inputs.ticket}}."),
+        DefinitionNode(
+            "review", StepKind.HUMAN, "Review", "Look at {{nodes.work.output}}", fields = listOf(DefinitionField("feedback", "text", "Feedback")),
+            actions = listOf(DefinitionAction("approve", "Approve"), DefinitionAction("request_changes", "Request changes", listOf("feedback"))),
+            transitions = listOf(StepTransition("approve", null), StepTransition("request_changes", "work")),
+        ),
+    ),
+)
+
+fun editable(id: String = "wf1", version: Int = 2, definition: WorkflowDefinition = validDefinition()) = EditableWorkflow(id, version, definition, 1L)
+
+/** The drafts of the editor kept in memory; [saved] counts the writes. */
+class InMemoryWorkflowDrafts : WorkflowDraftRepository {
+    val stored = linkedMapOf<String, StoredWorkflowDraft>()
+    var writes = 0
+    override fun load(accountId: String, key: String) = stored["$accountId/$key"]
+    override fun save(accountId: String, key: String, draft: StoredWorkflowDraft) { writes++; stored["$accountId/$key"] = draft }
+    override fun clear(accountId: String, key: String) { stored.remove("$accountId/$key") }
 }

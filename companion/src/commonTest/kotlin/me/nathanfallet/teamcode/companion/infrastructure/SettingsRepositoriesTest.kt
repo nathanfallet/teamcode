@@ -3,6 +3,9 @@ package me.nathanfallet.teamcode.companion.infrastructure
 import com.russhwolf.settings.MapSettings
 import me.nathanfallet.teamcode.companion.SequenceIds
 import me.nathanfallet.teamcode.companion.account
+import me.nathanfallet.teamcode.companion.domain.models.StoredWorkflowDraft
+import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsWorkflowDraftRepository
+import me.nathanfallet.teamcode.companion.validDefinition
 import me.nathanfallet.teamcode.companion.domain.models.ThemePreference
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsInstallationIdentity
@@ -54,5 +57,25 @@ class SettingsRepositoriesTest {
         SettingsPreferencesRepository(settings).setSidebarWidth(2)
         assertEquals(2, SettingsPreferencesRepository(settings).sidebarWidth)
         assertNull(SettingsPreferencesRepository(MapSettings("preferences.sidebarWidth" to -1)).sidebarWidth)
+    }
+
+    @Test fun aWorkflowDraftSurvivesARestartPerAccountAndIsForgottenWhenCleared() {
+        val settings = MapSettings()
+        val drafts = SettingsWorkflowDraftRepository(settings)
+        val draft = StoredWorkflowDraft(3, validDefinition("Half done"))
+        drafts.save("a1", "wf1", draft); drafts.save("a1", "new", StoredWorkflowDraft(null, validDefinition("New")))
+        val reopened = SettingsWorkflowDraftRepository(settings)
+        assertEquals(draft, reopened.load("a1", "wf1"))
+        assertNull(reopened.load("a2", "wf1"))
+        assertNull(StoredWorkflowDraft(null, validDefinition()).baseVersion)
+        reopened.clear("a1", "wf1")
+        assertNull(SettingsWorkflowDraftRepository(settings).load("a1", "wf1"))
+        assertNotNull(SettingsWorkflowDraftRepository(settings).load("a1", "new"))
+    }
+
+    @Test fun aDamagedWorkflowDraftIsDroppedInsteadOfBreakingTheEditor() {
+        val settings = MapSettings("workflows.draft.a1.wf1" to "{not json")
+        assertNull(SettingsWorkflowDraftRepository(settings).load("a1", "wf1"))
+        assertFalse(settings.hasKey("workflows.draft.a1.wf1"))
     }
 }

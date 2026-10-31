@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,7 +17,12 @@ import me.nathanfallet.teamcode.companion.domain.services.IdGenerator
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.GetWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.DeleteWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowCatalogUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowSettingsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowChanges
+import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowDraftRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.StartWorkflowRunUseCase
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowStartRoute
@@ -29,22 +35,47 @@ data class WorkflowsUiState(
     val loading: Boolean = true,
     val loadingMore: Boolean = false,
     val error: Failure? = null,
+    /** The member may create, change and delete workflows (the team's rule); false until known, so the buttons never flash. */
+    val canEdit: Boolean = false,
 ) {
     val empty: Boolean get() = workflows?.isEmpty() == true && !loading
 }
 
-/** The saved workflows, by id, a page at a time (read-only: editing definitions is still done over the API). */
-class WorkflowsViewModel(private val route: WorkflowsRoute, private val load: LoadWorkflowsUseCase) : ViewModel() {
+/**
+ * The saved workflows, by id, a page at a time, and whether the member may edit them. There is no feed event for definitions: the
+ * list reads again when the member saves or deletes one ([changes]) and whenever the screen comes back.
+ */
+class WorkflowsViewModel(
+    private val route: WorkflowsRoute,
+    private val load: LoadWorkflowsUseCase,
+    private val loadSettings: LoadWorkflowSettingsUseCase,
+    changes: WorkflowChanges,
+) : ViewModel() {
     private val state = MutableStateFlow(WorkflowsUiState())
     val uiState: StateFlow<WorkflowsUiState> = state.asStateFlow()
     private var reading: Job? = null
 
-    init { reload() }
+    init {
+        reload()
+        viewModelScope.launch { changes.changes.collect { reload() } }
+    }
 
     fun reload() {
         reading?.cancel()
         state.update { it.copy(loading = true, loadingMore = false, error = null) }
-        reading = viewModelScope.launch { page(after = null) }
+        reading = viewModelScope.launch {
+            val allowed = async { rights() }
+            page(after = null)
+            state.update { it.copy(canEdit = allowed.await()) }
+        }
+    }
+
+    private suspend fun rights(): Boolean = try {
+        loadSettings(route.accountId).canEdit
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        false
     }
 
     fun loadMore() {
@@ -75,27 +106,76 @@ data class WorkflowUiState(
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: Failure? = null,
+    /** The member may change and delete it (the team's rule). */
+    val canEdit: Boolean = false,
+    val deleting: Boolean = false,
+    /** The failure of the delete, apart from the page's load. */
+    val deleteError: Failure? = null,
+    /** The names of the workflows that call this one: the delete is refused while any does (`409 workflow_in_use`). Null when it was not refused for that. */
+    val usedBy: List<String>? = null,
+    /** Deleted: the screen leaves. */
+    val deleted: Boolean = false,
 )
 
-/** One saved workflow: its inputs, and its steps with their transitions as a readable list. */
-class WorkflowViewModel(private val route: WorkflowRoute, private val get: GetWorkflowUseCase) : ViewModel() {
+/** One saved workflow: its inputs, and its steps with their transitions as a readable list; Edit, Duplicate and Delete for who may edit. */
+class WorkflowViewModel(
+    private val route: WorkflowRoute,
+    private val get: GetWorkflowUseCase,
+    private val loadSettings: LoadWorkflowSettingsUseCase,
+    private val delete: DeleteWorkflowUseCase,
+    private val catalog: LoadWorkflowCatalogUseCase,
+    private val drafts: WorkflowDraftRepository,
+    changes: WorkflowChanges,
+) : ViewModel() {
     private val state = MutableStateFlow(WorkflowUiState())
     val uiState: StateFlow<WorkflowUiState> = state.asStateFlow()
 
-    init { reload() }
+    init {
+        reload()
+        // A save of this workflow (from the editor) reads it again.
+        viewModelScope.launch { changes.changes.collect { if (!state.value.deleted) reload() } }
+    }
 
     fun reload() {
         state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
                 val workflow = get(route.accountId, route.workflowId)
-                state.update { it.copy(workflow = workflow, loading = false, missing = false) }
+                val allowed = try { loadSettings(route.accountId).canEdit } catch (error: CancellationException) { throw error } catch (_: Exception) { false }
+                state.update { it.copy(workflow = workflow, loading = false, missing = false, canEdit = allowed) }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: CompanionException.NotFound) {
                 state.update { it.copy(loading = false, missing = true) }
             } catch (error: Exception) {
                 state.update { it.copy(loading = false, error = error.userMessage()) }
+            }
+        }
+    }
+
+    fun clearDeleteError() = state.update { it.copy(deleteError = null, usedBy = null) }
+
+    /** Deletes it. When another workflow calls it the server refuses; the callers are named so the member knows what to change first. */
+    fun delete() {
+        val workflow = state.value.workflow ?: return
+        if (state.value.deleting) return
+        state.update { it.copy(deleting = true, deleteError = null, usedBy = null) }
+        viewModelScope.launch {
+            try {
+                delete(route.accountId, workflow.id)
+                drafts.clear(route.accountId, workflow.id)
+                state.update { it.copy(deleting = false, deleted = true) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: CompanionException.Server) {
+                if (error.statusCode == 409 && error.code == "workflow_in_use") {
+                    val callers = try {
+                        catalog(route.accountId).filter { other -> other.id != workflow.id && other.steps.any { it.calls == workflow.id } }.map { it.name }
+                    } catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+                    state.update { it.copy(deleting = false, usedBy = callers) }
+                } else state.update { it.copy(deleting = false, deleteError = error.userMessage()) }
+            } catch (error: Exception) {
+                state.update { it.copy(deleting = false, deleteError = error.userMessage()) }
             }
         }
     }

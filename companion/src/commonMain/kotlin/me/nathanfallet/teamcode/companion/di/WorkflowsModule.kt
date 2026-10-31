@@ -1,6 +1,18 @@
 package me.nathanfallet.teamcode.companion.di
 
+import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowDraftRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.DeleteWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowCatalogUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowDefinitionUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowSettingsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.SaveWorkflowEditorsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.SaveWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowChanges
+import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsWorkflowDraftRepository
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowEditRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditorsViewModel
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.CancelWorkflowRunUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.FollowWorkflowRunsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.workflows.GetWorkflowRunUseCase
@@ -40,8 +52,18 @@ val workflowsModule = module {
     single { LoadOpenWaitsUseCase(get(), get(), get()) }
     single { FollowWorkflowRunsUseCase(get(), get(), get()) }
     viewModel { (route: WorkflowsRoute) -> WorkflowRunsViewModel(route, get(), get(), get(), get(), get(), get()) }
-    viewModel { (route: WorkflowsRoute) -> WorkflowsViewModel(route, get()) }
-    viewModel { (route: WorkflowRoute) -> WorkflowViewModel(route, get()) }
+    single { LoadWorkflowCatalogUseCase(get()) }
+    single { LoadWorkflowDefinitionUseCase(get()) }
+    single { LoadWorkflowSettingsUseCase(get()) }
+    single { SaveWorkflowEditorsUseCase(get()) }
+    single { WorkflowChanges() }
+    single { SaveWorkflowUseCase(get(), get()) }
+    single { DeleteWorkflowUseCase(get(), get()) }
+    single<WorkflowDraftRepository> { SettingsWorkflowDraftRepository(get()) }
+    viewModel { (route: WorkflowsRoute) -> WorkflowsViewModel(route, get(), get(), get()) }
+    viewModel { (route: WorkflowsRoute) -> WorkflowEditorsViewModel(route, get(), get(), get(), get()) }
+    viewModel { (route: WorkflowEditRoute) -> WorkflowEditViewModel(route, get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: WorkflowRoute) -> WorkflowViewModel(route, get(), get(), get(), get(), get(), get()) }
     viewModel { (route: WorkflowStartRoute) -> WorkflowStartViewModel(route, get(), get(), get(), get()) }
     viewModel { (route: WorkflowRunRoute) -> WorkflowRunViewModel(route, get(), get(), get(), get(), get()) }
 }

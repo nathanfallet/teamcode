@@ -32,7 +32,9 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationEditScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowEditScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowRunScreen
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowEditViewModel
 import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.WorkflowStartScreen
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunViewModel
@@ -80,6 +82,7 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.GitHubLinkView
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.McpServersViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.SubscriptionAccountsViewModel
 import me.nathanfallet.teamcode.companion.resources.Res
+import me.nathanfallet.teamcode.companion.resources.wfe_copy_suffix
 import me.nathanfallet.teamcode.companion.resources.action_cancel
 import me.nathanfallet.teamcode.companion.resources.link_new_server
 import me.nathanfallet.teamcode.companion.resources.link_new_server_confirm
@@ -202,6 +205,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenWorkflowRun = { accountId, runId -> navController.navigate(WorkflowRunRoute(accountId, runId)) },
                 onOpenWorkflow = { accountId, workflowId -> navController.navigate(WorkflowRoute(accountId, workflowId)) },
                 onStartWorkflow = { accountId, workflowId -> navController.navigate(WorkflowStartRoute(accountId, workflowId)) },
+                onCreateWorkflow = { accountId -> navController.navigate(WorkflowEditRoute(accountId)) },
+                onDuplicateWorkflow = { accountId, workflowId, suffix -> navController.navigate(WorkflowEditRoute(accountId, copyOf = workflowId, copySuffix = suffix)) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -311,7 +316,19 @@ private fun NavGraphBuilder.workflowDestinations(navController: NavHostControlle
     composable<WorkflowRoute> { entry ->
         val route = entry.toRoute<WorkflowRoute>()
         val viewModel: WorkflowViewModel = koinViewModel { parametersOf(route) }
-        WorkflowScreen(viewModel, onBack = { navController.popBackStack() }, onStart = { navController.navigate(WorkflowStartRoute(route.accountId, it.id)) })
+        val suffix = stringResource(Res.string.wfe_copy_suffix)
+        WorkflowScreen(viewModel, onBack = { navController.popBackStack() }, onStart = { navController.navigate(WorkflowStartRoute(route.accountId, it.id)) },
+            onEdit = { navController.navigate(WorkflowEditRoute(route.accountId, it.id)) },
+            onDuplicate = { navController.navigate(WorkflowEditRoute(route.accountId, copyOf = it.id, copySuffix = suffix)) },
+            onDeleted = { navController.popBackStack() })
+    }
+    composable<WorkflowEditRoute> { entry ->
+        val route = entry.toRoute<WorkflowEditRoute>()
+        val viewModel: WorkflowEditViewModel = koinViewModel { parametersOf(route) }
+        WorkflowEditScreen(viewModel, onBack = { navController.popBackStack() }, onSaved = { id ->
+            // A new workflow replaces the form with its page; a changed one goes back to the page it came from.
+            if (route.workflowId == null) navController.navigate(WorkflowRoute(route.accountId, id)) { popUpTo<WorkflowEditRoute> { inclusive = true } } else navController.popBackStack()
+        })
     }
     composable<WorkflowStartRoute> { entry ->
         val route = entry.toRoute<WorkflowStartRoute>()
@@ -384,6 +401,7 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<WorkflowRunRoute>() -> toRoute<WorkflowRunRoute>()
     destination.hasRoute<WorkflowRoute>() -> toRoute<WorkflowRoute>()
     destination.hasRoute<WorkflowStartRoute>() -> toRoute<WorkflowStartRoute>()
+    destination.hasRoute<WorkflowEditRoute>() -> toRoute<WorkflowEditRoute>()
     destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>()
     destination.hasRoute<AutomationTestRoute>() -> toRoute<AutomationTestRoute>()
     else -> null

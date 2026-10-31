@@ -33,6 +33,7 @@ class WorkflowsScreenTest {
     private val accounts = InMemoryAccountRepository(listOf(account()))
     private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
     private val access = WorkflowAccess(repository, features, accounts, guard)
+    private val changes = WorkflowChanges()
     private val openWaits = mutableListOf<Wait>()
     private val waits = object : WaitRepository {
         override suspend fun list(accountId: String, status: WaitStatus, before: String?) = WaitPage(openWaits.toList(), null)
@@ -45,7 +46,7 @@ class WorkflowsScreenTest {
 
     private val follow get() = FollowWorkflowRunsUseCase(SessionFeed(sessions, features, feedScope), features, guard)
     private fun runs() = WorkflowRunsViewModel(WorkflowsRoute("a1"), LoadWorkflowRunsUseCase(access), GetWorkflowRunUseCase(access), LoadWorkflowsUseCase(access), LoadOpenWaitsUseCase(waits, features, guard), follow, accounts)
-    private fun definitions() = WorkflowsViewModel(WorkflowsRoute("a1"), LoadWorkflowsUseCase(access))
+    private fun definitions() = WorkflowsViewModel(WorkflowsRoute("a1"), LoadWorkflowsUseCase(access), LoadWorkflowSettingsUseCase(access), changes)
     private fun page(id: String) = WorkflowRunViewModel(WorkflowRunRoute("a1", id), GetWorkflowRunUseCase(access), CancelWorkflowRunUseCase(access), LoadOpenWaitsUseCase(waits, features, guard), follow, accounts)
     private fun startForm() = WorkflowStartViewModel(WorkflowStartRoute("a1", "wf1"), GetWorkflowUseCase(access), LoadProfilesUseCase(sessions, features, guard), StartWorkflowRunUseCase(access), SequenceIds())
 

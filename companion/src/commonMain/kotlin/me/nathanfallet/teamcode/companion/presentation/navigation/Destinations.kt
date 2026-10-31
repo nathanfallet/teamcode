@@ -78,6 +78,13 @@ data class WorkflowsRoute(val accountId: String)
 @Serializable
 data class WorkflowRoute(val accountId: String, val workflowId: String)
 
+/**
+ * The definition editor: a new workflow, [workflowId] changed, or a new one that starts as a copy of [copyOf] (its name ends with
+ * [copySuffix], after a space). The unsaved edits are kept on the device under the workflow's id (or under "new").
+ */
+@Serializable
+data class WorkflowEditRoute(val accountId: String, val workflowId: String? = null, val copyOf: String? = null, val copySuffix: String = "(copy)")
+
 /** The form that starts a run of [workflowId]: its inputs and, when needed, a profile. */
 @Serializable
 data class WorkflowStartRoute(val accountId: String, val workflowId: String)

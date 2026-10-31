@@ -11,7 +11,14 @@ import me.nathanfallet.teamcode.companion.domain.models.StepDeliverable
 import me.nathanfallet.teamcode.companion.domain.models.StepKind
 import me.nathanfallet.teamcode.companion.domain.models.StepTransition
 import me.nathanfallet.teamcode.companion.domain.models.VisitStatus
+import me.nathanfallet.teamcode.companion.domain.models.DefinitionAction
+import me.nathanfallet.teamcode.companion.domain.models.DefinitionDeliverable
+import me.nathanfallet.teamcode.companion.domain.models.DefinitionField
+import me.nathanfallet.teamcode.companion.domain.models.DefinitionNode
+import me.nathanfallet.teamcode.companion.domain.models.EditableWorkflow
 import me.nathanfallet.teamcode.companion.domain.models.Workflow
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowDefinition
+import me.nathanfallet.teamcode.companion.domain.models.toWorkflow
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowInput
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowStep
@@ -182,30 +189,47 @@ object DemoContent {
         )
     }
 
-    /** The demo's saved workflows: a ticket that an agent works on and a person reviews, and a release that ends with a check. */
-    fun workflows(now: Long): List<Workflow> {
-        fun step(id: String, kind: StepKind, title: String, vararg transitions: StepTransition, instruction: String? = null, actions: List<StepAction> = emptyList(), deliverable: StepDeliverable? = null) =
-            WorkflowStep(id, kind, kind.wire, title, instruction, deliverable, null, if (kind == StepKind.HUMAN) "owner" else null, null, actions, transitions.toList(), 3)
+    /**
+     * The demo's saved workflows, whole, so the editor has something to change: a ticket that an agent works on and a person reviews
+     * (with a typed feedback field and a loop back), and a release that ends with a check by the first workflow.
+     */
+    fun definitions(now: Long): List<EditableWorkflow> {
+        fun node(id: String, kind: StepKind, title: String, vararg transitions: StepTransition, instruction: String = "", deliverable: DefinitionDeliverable? = null,
+                 fields: List<DefinitionField> = emptyList(), actions: List<DefinitionAction> = emptyList(), workflowId: String? = null, arguments: Map<String, String> = emptyMap()) =
+            DefinitionNode(id, kind, title, instruction, deliverable = deliverable, fields = fields, actions = actions, workflowId = workflowId, arguments = arguments, transitions = transitions.toList())
         return listOf(
-            Workflow(
-                "wf-ticket", "Fix a ticket", "An agent fixes the ticket and opens a pull request, you review it, and it loops back until you approve.", 2, "work", "same",
-                listOf(WorkflowInput("ticket", "Ticket", true, null, 64), WorkflowInput("notes", "Notes for the agent", false, "Keep the change small.", 500)),
-                listOf(
-                    step("work", StepKind.AGENT, "Work on the ticket", StepTransition("delivered", "review"), instruction = "Fix {{inputs.ticket}}. {{inputs.notes}}", deliverable = StepDeliverable("url", "github.com")),
-                    step("review", StepKind.HUMAN, "Review the pull request", StepTransition("approve", null), StepTransition("request_changes", "work"),
-                        instruction = "Look at {{nodes.work.output}}", actions = listOf(StepAction("approve", "Approve"), StepAction("request_changes", "Request changes"))),
-                ), 100, now - 3 * 24 * 60 * MINUTE,
+            EditableWorkflow(
+                "wf-ticket", 2,
+                WorkflowDefinition(
+                    "Fix a ticket", "An agent fixes the ticket and opens a pull request, you review it, and it loops back until you approve.", "work", "same",
+                    listOf(WorkflowInput("ticket", "Ticket", true, null, 64), WorkflowInput("notes", "Notes for the agent", false, "Keep the change small.", 500)),
+                    listOf(
+                        node("work", StepKind.AGENT, "Work on the ticket", StepTransition("delivered", "review"), instruction = "Fix {{inputs.ticket}}. {{inputs.notes}}", deliverable = DefinitionDeliverable("url", domain = "github.com")),
+                        node("review", StepKind.HUMAN, "Review the pull request", StepTransition("approve", null), StepTransition("request_changes", "work"),
+                            instruction = "Look at {{nodes.work.output}}",
+                            fields = listOf(DefinitionField("feedback", "text", "What should change?", help = "Needed to request changes.")),
+                            actions = listOf(DefinitionAction("approve", "Approve", style = "primary"), DefinitionAction("request_changes", "Request changes", requires = listOf("feedback")))),
+                    ),
+                ),
+                now - 3 * 24 * 60 * MINUTE,
             ),
-            Workflow(
-                "wf-release", "Ship a release", "Writes the release notes, then checks them with a second workflow.", 1, "notes", "handoff",
-                listOf(WorkflowInput("version", "Version", true, null, 32)),
-                listOf(
-                    step("notes", StepKind.AGENT, "Write the release notes", StepTransition("delivered", "check"), instruction = "Write the notes of {{inputs.version}}.", deliverable = StepDeliverable("text", null)),
-                    WorkflowStep("check", StepKind.WORKFLOW, "workflow", "Check the notes", null, null, null, null, "wf-ticket", emptyList(), listOf(StepTransition("delivered", null)), 3),
-                ), 100, now - 9 * 24 * 60 * MINUTE,
+            EditableWorkflow(
+                "wf-release", 1,
+                WorkflowDefinition(
+                    "Ship a release", "Writes the release notes, then checks them with a second workflow.", "notes", "handoff",
+                    listOf(WorkflowInput("version", "Version", true, null, 32)),
+                    listOf(
+                        node("notes", StepKind.AGENT, "Write the release notes", StepTransition("delivered", "check"), instruction = "Write the notes of {{inputs.version}}.", deliverable = DefinitionDeliverable("text")),
+                        node("check", StepKind.WORKFLOW, "Check the notes", StepTransition("delivered", null), workflowId = "wf-ticket", arguments = mapOf("ticket" to "{{inputs.version}}")),
+                    ),
+                ),
+                now - 9 * 24 * 60 * MINUTE,
             ),
         )
     }
+
+    /** The read model of [definitions]. */
+    fun workflows(now: Long): List<Workflow> = definitions(now).map { it.toWorkflow() }
 
     /** The demo's runs, one in each state; the waiting one is blocked on the first open wait, which is the member's. */
     fun workflowRuns(now: Long): List<WorkflowRun> {

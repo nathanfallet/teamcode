@@ -131,5 +131,12 @@ private fun workflowCodeSentence(code: String?): StringResource? = when (code) {
     "invalid_inputs" -> Res.string.error_workflow_invalid_inputs
     "profile_required" -> Res.string.error_workflow_profile_required
     "run_finished" -> Res.string.error_workflow_run_finished
+    "workflow_conflict" -> Res.string.error_workflow_conflict
+    "workflow_in_use" -> Res.string.error_workflow_in_use
+    "workflow_name_taken" -> Res.string.error_workflow_name_taken
+    "workflow_limit" -> Res.string.error_workflow_limit
+    "workflow_editors_only" -> Res.string.error_workflow_editors_only
+    "invalid_workflow" -> Res.string.error_workflow_invalid
+    "invalid_editors" -> Res.string.error_workflow_invalid_editors
     else -> null
 }

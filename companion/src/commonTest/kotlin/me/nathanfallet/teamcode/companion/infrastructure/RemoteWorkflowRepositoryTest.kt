@@ -116,4 +116,78 @@ class RemoteWorkflowRepositoryTest {
         assertEquals("wf3", requests.single().url.parameters["after"])
         assertEquals("wf9", page.nextAfter)
     }
+
+    // ---- the editor's calls ----
+
+    private fun sentJson(index: Int = requests.lastIndex): kotlinx.serialization.json.JsonObject {
+        val content = requests[index].body
+        val text = when (content) {
+            is io.ktor.http.content.TextContent -> content.text
+            is io.ktor.http.content.OutgoingContent.ByteArrayContent -> content.bytes().decodeToString()
+            else -> error("unexpected body $content")
+        }
+        return kotlinx.serialization.json.Json.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
+    }
+
+    private fun echo(sent: kotlinx.serialization.json.JsonObject, id: String, version: Int) = kotlinx.serialization.json.JsonObject(
+        (sent["workflow"] as kotlinx.serialization.json.JsonObject) + mapOf(
+            "id" to kotlinx.serialization.json.JsonPrimitive(id), "version" to kotlinx.serialization.json.JsonPrimitive(version),
+            "createdAt" to kotlinx.serialization.json.JsonPrimitive(1), "updatedAt" to kotlinx.serialization.json.JsonPrimitive(5),
+        ),
+    ).toString()
+
+    private val rich = validDefinition("Rich").let { base ->
+        base.copy(
+            nodes = base.nodes.map {
+                when (it.id) {
+                    "work" -> it.copy(deliverable = DefinitionDeliverable("json", "Report", null, "{\n    \"type\": \"object\"\n}"), profileId = "p1", agent = "claude", model = "opus")
+                    "review" -> it.copy(
+                        fields = listOf(
+                            DefinitionField("feedback", "text", "Feedback", default = "ok", maxLength = 100),
+                            DefinitionField("level", "choice", "Level", options = listOf(DefinitionOption("a", "A")), default = "a"),
+                            DefinitionField("n", "number", "N", default = "3"),
+                        ),
+                        assigneeMemberId = "m2",
+                    )
+                    else -> it
+                }
+            } + DefinitionNode("call", StepKind.WORKFLOW, "Call", workflowId = "wf2", arguments = mapOf("topic" to "{{inputs.ticket}}"), transitions = listOf(StepTransition("delivered", null))),
+        )
+    }
+
+    @Test fun aDefinitionSurvivesASaveAndAReadWithNothingLost() = runTest {
+        body = "{}"
+        runCatching { repository.create("a1", rich) }
+        val sent = sentJson()
+        assertEquals("/api/v1/workflows", requests.last().url.encodedPath); assertEquals(HttpMethod.Post, requests.last().method)
+        body = echo(sent, "wf9", 1)
+        val saved = repository.create("a1", rich)
+        assertEquals("wf9", saved.id); assertEquals(1, saved.version)
+        assertEquals(rich.copy(description = rich.description), saved.definition)
+        body = echo(sent, "wf9", 1)
+        assertEquals(saved, repository.definition("a1", "wf9"))
+        assertEquals("/api/v1/workflows/wf9", requests.last().url.encodedPath)
+    }
+
+    @Test fun anUpdateSendsTheVersionItStartedFromAndADeleteTheId() = runTest {
+        body = "{}"; runCatching { repository.create("a1", rich) }
+        val sent = sentJson(); body = echo(sent, "wf9", 4)
+        val saved = repository.update("a1", "wf9", rich, expectedVersion = 3)
+        val request = requests.last()
+        assertEquals(HttpMethod.Put, request.method); assertEquals("/api/v1/workflows/wf9", request.url.encodedPath)
+        assertEquals("3", sentJson()["expectedVersion"].toString()); assertEquals(4, saved.version)
+        body = "{}"
+        runCatching { repository.delete("a1", "wf9") }
+        assertEquals(HttpMethod.Delete, requests.last().method); assertEquals("/api/v1/workflows/wf9", requests.last().url.encodedPath)
+    }
+
+    @Test fun theSettingsAndTheEditorsRuleAreReadAndWritten() = runTest {
+        body = """{"editors":{"mode":"members","memberIds":["m2"]},"canEdit":true}"""
+        val settings = repository.settings("a1")
+        assertEquals("/api/v1/workflows/settings", requests.last().url.encodedPath)
+        assertEquals(WorkflowSettings(WorkflowEditors(EditorMode.MEMBERS, listOf("m2")), true), settings)
+        repository.updateEditors("a1", WorkflowEditors(EditorMode.ALL, listOf("m3")))
+        assertEquals(HttpMethod.Put, requests.last().method)
+        assertEquals("all", sentJson()["mode"]?.toString()?.trim('"')); assertEquals("[]", sentJson()["memberIds"].toString())
+    }
 }

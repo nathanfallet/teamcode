@@ -16,7 +16,13 @@ import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.RunVisit
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
 import me.nathanfallet.teamcode.companion.domain.models.VisitStatus
+import me.nathanfallet.teamcode.companion.domain.models.EditableWorkflow
+import me.nathanfallet.teamcode.companion.domain.models.EditorMode
 import me.nathanfallet.teamcode.companion.domain.models.Workflow
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowDefinition
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowEditors
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowSettings
+import me.nathanfallet.teamcode.companion.domain.models.toWorkflow
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
 import me.nathanfallet.teamcode.companion.domain.models.Wait
 import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
@@ -59,7 +65,38 @@ internal class DemoStore(private val clock: Clock, account: Account) {
     private val _waits = MutableStateFlow(DemoContent.waits(startedAt))
     val waits: StateFlow<List<Wait>> = _waits.asStateFlow()
 
-    val workflows = DemoContent.workflows(startedAt)
+    private val _definitions = MutableStateFlow(DemoContent.definitions(startedAt))
+    /** The demo's saved workflows in the read model the lists show. */
+    val workflows: List<Workflow> get() = _definitions.value.map { it.toWorkflow() }
+    private var editors = WorkflowEditors(EditorMode.ADMINS)
+
+    fun definitionOf(id: String): EditableWorkflow = _definitions.value.firstOrNull { it.id == id } ?: throw CompanionException.NotFound()
+
+    fun createDefinition(definition: WorkflowDefinition): EditableWorkflow {
+        val created = EditableWorkflow(newId("wf"), 1, definition, now())
+        _definitions.update { it + created }
+        return created
+    }
+
+    /** Like the server: a save over a version that moved is `409 workflow_conflict`. */
+    fun replaceDefinition(id: String, definition: WorkflowDefinition, expectedVersion: Int): EditableWorkflow {
+        val current = definitionOf(id)
+        if (current.version != expectedVersion) throw CompanionException.Server(409, "workflow_conflict")
+        val saved = EditableWorkflow(id, current.version + 1, definition, now())
+        _definitions.update { all -> all.map { if (it.id == id) saved else it } }
+        return saved
+    }
+
+    /** Like the server: a workflow another one calls is `409 workflow_in_use`. */
+    fun deleteDefinition(id: String) {
+        definitionOf(id)
+        if (_definitions.value.any { other -> other.id != id && other.definition.nodes.any { it.workflowId == id } }) throw CompanionException.Server(409, "workflow_in_use")
+        _definitions.update { all -> all.filterNot { it.id == id } }
+    }
+
+    /** The demo member is an administrator: they may edit, and change the rule. */
+    fun settings() = WorkflowSettings(editors, canEdit = true)
+    fun updateEditors(value: WorkflowEditors): WorkflowSettings { editors = value; return settings() }
     private val _runs = MutableStateFlow(DemoContent.workflowRuns(startedAt))
     val runs: StateFlow<List<WorkflowRun>> = _runs.asStateFlow()
 
