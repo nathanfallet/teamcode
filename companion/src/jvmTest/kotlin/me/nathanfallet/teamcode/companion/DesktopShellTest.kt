@@ -107,7 +107,7 @@ class DesktopShellTest {
         }
     }
 
-    @Test fun theUpdateBannerStartsBelowMacsTitleBar() {
+    @Test fun theUpdateBannerHeadsThePanelWithNoGapUnderMacsTitleBar() {
         val updater = object : me.nathanfallet.teamcode.companion.domain.services.AppUpdater {
             override val appVersion = "1.2.0"
             override suspend fun cliVersion() = "1.2.0"
@@ -126,8 +126,8 @@ class DesktopShellTest {
                 Thread.sleep(500); mainClock.advanceTimeBy(1_000); waitForIdle()
             }
             val banner = onNodeWithTag("update-banner").getBoundsInRoot()
-            // The banner heads the panel, under the window buttons' bar and above the panel's content.
-            assertTrue(banner.top >= WindowTitleBar.MAC.height, "banner $banner")
+            // The window's buttons sit over the sidebar: the banner heads the panel, at the very top, above the panel's content.
+            assertEquals(0.dp, banner.top, "banner $banner")
             assertTrue(onNodeWithTag("content-panel").getBoundsInRoot().top >= banner.bottom, "panel")
         }
     }
@@ -142,8 +142,8 @@ class DesktopShellTest {
             assertTrue(((brand.top + brand.bottom) / 2 - WindowTitleBar.MAC.height / 2).value in -1f..1f, "brand $brand")
             val button = onNodeWithTag("sidebar-new-session").getBoundsInRoot()
             assertTrue(button.top >= 0.dp && button.bottom <= WindowTitleBar.MAC.height, "button $button")
-            // The panel starts below the bar, which stays the window's to drag and double-click.
-            assertEquals(WindowTitleBar.MAC.height, onNodeWithTag("content-panel").getBoundsInRoot().top)
+            // The buttons sit over the sidebar: the panel has no gap of its own under the bar.
+            assertTrue(onNodeWithTag("content-panel").getBoundsInRoot().top < WindowTitleBar.MAC.height)
         }
         // Without the bar (Windows, Linux, fullscreen), the header keeps its own place.
         app {

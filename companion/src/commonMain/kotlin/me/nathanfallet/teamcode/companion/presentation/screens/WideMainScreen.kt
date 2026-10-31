@@ -65,7 +65,6 @@ import me.nathanfallet.teamcode.companion.presentation.components.UpdateBanner
 import me.nathanfallet.teamcode.companion.presentation.components.DemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.underDemoBanner
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
-import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.navigation.AccountRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationEditRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationRoute
@@ -324,8 +323,8 @@ fun WideMainScreen(
             }
         },
         detailPane = {
-            // Under macOS's title bar the panel starts below it (the bar stays the window's to drag and zoom); the update banner heads it.
-            AnimatedPane { Column(Modifier.fillMaxSize().windowTitleBarPadding()) {
+            // The window's buttons sit over the sidebar, so the panel starts at the top of the window; the update banner heads it.
+            AnimatedPane { Column(Modifier.fillMaxSize()) {
                 UpdateBanner()
                 DemoBanner(account)
                 NavHost(
