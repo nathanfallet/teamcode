@@ -48,4 +48,22 @@ for source in root.glob('*/src/**/*.kt'):
     assert not raw_query.search(content), f'{source}: raw SQL is forbidden; use the Exposed DSL'
     assert not re.search(r'\b(?:prepareStatement|prepareCall|createStatement)\s*\(', content), f'{source}: raw JDBC execution is forbidden'
     assert not re.search(r'\.exec\s*\(', content), f'{source}: execute typed Exposed statements, not SQL strings'
+# Shared multiplatform sources also compile for the native targets, which ordinary PR CI does not build (AGENTS.md):
+# no JVM-only API in common code, and no character the native targets refuse in a test name.
+illegal_name = re.compile(r'[,.:;/\\<>\[\]?!*"()]')
+for module in ('api', 'client', 'config', 'cli', 'companion'):
+    for source in (root / module / 'src').rglob('*.kt'):
+        path = source.as_posix()
+        common_test = '/commonTest/' in path
+        if not (common_test or '/commonMain/' in path):
+            continue
+        content = source.read_text()
+        if common_test:
+            for name in re.findall(r'fun `([^`]*)`', content):
+                assert not illegal_name.search(name), f'{source}: the test name `{name}` has a character the native targets refuse (comma, dot, colon...)'
+        for line in content.split('\n'):
+            code = line.strip()
+            if code.startswith(('//', '*', '/*')) or '"java.' in code:
+                continue
+            assert not re.search(r'^import java\.|(?<![\w.])java\.(?:time|io|util|nio|text|security|math)\.[A-Z]', code), f'{source}: JVM-only API in common code ({code[:80]}); use kotlin.* or a platform source set'
 print('Production module boundaries and Exposed query conventions verified.')

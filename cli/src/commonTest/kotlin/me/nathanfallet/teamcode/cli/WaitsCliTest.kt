@@ -88,7 +88,7 @@ class WaitsCliTest {
         assertEquals("2d", age(0, 2 * 86_400_000L))
     }
 
-    @Test fun `show lists fields, actions and options`() {
+    @Test fun `show lists fields and actions and options`() {
         val text = wait(listOf(WaitActionView("changes", "Changes", requires = listOf("notes")))).details()
         assertContains(text, "notes\ttext\tNotes (required)"); assertContains(text, "options: s (Small), l (Large)"); assertContains(text, "changes\tChanges (requires notes)")
     }
@@ -99,7 +99,7 @@ class WaitsCliTest {
         assertContains(message(400, "invalid_answer"), "waits show")
     }
 
-    @Test fun `ask flags for a delay, an instant or a webhook`() {
+    @Test fun `ask flags for a delay or an instant or a webhook`() {
         assertNull(timedSettings(null, null, false, null, null, null), "no flag: a wait for a person")
         val delay = assertNotNull(timedSettings(3600, null, false, null, null, "Check CI"))
         assertEquals("time", delay.resolver); assertEquals(3600L, delay.after); assertEquals("Check CI", delay.resumeMessage)
@@ -132,7 +132,7 @@ class WaitsCliTest {
 
     private val sentinel = "S3NTINEL-cli-pa55"
 
-    @Test fun `a secret comes from set-secret only, never from set or set-json`() {
+    @Test fun `a secret comes from set-secret only and never from set or set-json`() {
         val values = answerValues(wait(), listOf("notes" to "fine"), emptyList(), mapOf("pw" to sentinel))
         assertEquals(JsonPrimitive(sentinel), values["pw"]); assertEquals(JsonPrimitive("fine"), values["notes"])
         val viaSet = assertFailsWith<CliUserException> { answerValues(wait(), listOf("pw" to sentinel), emptyList()) }
