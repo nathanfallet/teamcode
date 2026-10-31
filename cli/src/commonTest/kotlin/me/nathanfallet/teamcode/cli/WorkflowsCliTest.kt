@@ -96,7 +96,7 @@ class WorkflowsCliTest {
         assertFailsWith<CliUserException> { requireValidDefinition(draft.copy(nodes = emptyList())) }
     }
 
-    @Test fun `run is sent with the checked inputs, the profile and a fresh key each time`() = runTest {
+    @Test fun `run is sent with the checked inputs and the profile and a fresh key each time`() = runTest {
         val seen = mutableListOf<Seen>()
         val started = run("running")
         client(seen = seen) { HttpStatusCode.Created to Serialization.json.encodeToString(started) }.use { c ->
@@ -107,7 +107,7 @@ class WorkflowsCliTest {
         assertTrue(posts[0].key.orEmpty().length >= 16); assertNotEquals(posts[0].key, posts[1].key)
     }
 
-    @Test fun `runs ask for all, the filters and follow the cursor to the limit`() = runTest {
+    @Test fun `runs ask for all and the filters and follow the cursor to the limit`() = runTest {
         val seen = mutableListOf<Seen>()
         var page = 0
         val (runs, more) = client(seen = seen) {
@@ -148,7 +148,7 @@ class WorkflowsCliTest {
         assertEquals(listOf(0, 1, 2), listOf("succeeded", "failed", "cancelled").map(::exitCode))
     }
 
-    @Test fun `a poll that fails for a passing reason is tried again, a refusal is not`() = runTest {
+    @Test fun `a poll that fails for a passing reason is tried again and a refusal is not`() = runTest {
         var calls = 0
         val followed = client { calls++; if (calls == 1) HttpStatusCode.BadGateway to "{}" else HttpStatusCode.OK to Serialization.json.encodeToString(run("failed", failure = "session_failed")) }
             .use { follow(it, "r1", 2000, 60_000, emit = {}, pause = {}) }
@@ -164,7 +164,7 @@ class WorkflowsCliTest {
         assertTrue(told)
     }
 
-    @Test fun `show lists inputs, nodes and where outcomes lead`() {
+    @Test fun `show lists inputs and nodes and where outcomes lead`() {
         val text = workflow.details()
         listOf("Write  [w1]  v3", "topic\tTopic (required, max 10)", "draft\tagent\tStep draft  (start)", "delivers: text", "on delivered -> review", "on ok -> end", "on redo -> draft", "action redo\tRedo", "asks: the starter")
             .forEach { assertContains(text, it) }
