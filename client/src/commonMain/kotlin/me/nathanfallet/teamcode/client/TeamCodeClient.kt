@@ -836,13 +836,13 @@ class TeamCodeClient(
     suspend fun startWorkflowRun(id: String, request: StartWorkflowRunRequest = StartWorkflowRunRequest(), idempotencyKey: String = Uuid.random().toString()): WorkflowRunView {
         identifier(id); return coded(HttpMethod.Post, "/api/v1/workflows/$id/runs", request) { header(CloudHeaders.IDEMPOTENCY_KEY, idempotencyKey) }
     }
-    /** Runs, newest first; [workflow] and [status] (one of [Workflows.runStatuses]) filter, [before] is the page cursor, [all] the team's runs (administrators). */
+    /** Runs, newest first; [workflow] and [status] (one of [Workflows.runStatuses]) filter, [before] is the page cursor, [all] asks for the whole team's (administrators). */
     suspend fun workflowRuns(workflow: String? = null, status: String? = null, before: String? = null, limit: Int = 50, all: Boolean = false): WorkflowRunPageView {
         workflow?.let(::identifier); before?.let(::identifier)
         require(status == null || status in Workflows.runStatuses) { "Use ${Workflows.runStatuses.joinToString(", ")}." }
         require(limit in 1..100) { "Use a limit of 1 to 100." }
         return coded(HttpMethod.Get, "/api/v1/workflows/runs", null as Unit?) {
-            url { if (all) parameters.append("all", "true"); workflow?.let { parameters.append("workflow", it) }; status?.let { parameters.append("status", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()) }
+            url { workflow?.let { parameters.append("workflow", it) }; status?.let { parameters.append("status", it) }; before?.let { parameters.append("before", it) }; parameters.append("limit", limit.toString()); if (all) parameters.append("all", "true") }
         }
     }
     suspend fun workflowRun(id: String): WorkflowRunView { identifier(id); return coded(HttpMethod.Get, "/api/v1/workflows/runs/$id", null as Unit?) }

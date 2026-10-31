@@ -88,6 +88,18 @@ private fun httpMessage(error: TeamCodeException, server: String): String {
         "invalid_wait" -> return "The server rejected this wait ($tag). Check the title, fields, actions and references (teamcode waits ask --help)."
         "invalid_assignee" -> return "The member asked is not an active member ($tag). Use a member id."
         "wait_limit" -> return "This session already has the most open waits the team allows ($tag). Answer or cancel one first."
+        "invalid_workflow" -> return "The server rejected this workflow definition ($tag). It names the node, but this CLI does not print server messages: fix what the local check lists, " +
+            "or check that the start node is an agent or workflow step, every outcome has a transition, sub-workflows exist and do not call each other in a loop, and human steps follow the wait rules (teamcode workflows show ID --json is a valid example)."
+        "invalid_editors" -> return "The server rejected the list of editors ($tag): each --member must be an active member id."
+        "workflow_editors_only" -> return "You may not create, edit or delete workflows ($tag). Ask an administrator, or to be added with teamcode workflows settings."
+        "workflow_conflict" -> return "The workflow was saved by someone else since the version you based this on ($tag). Run teamcode workflows show ID --json, merge, and update again with the new --expected-version."
+        "workflow_name_taken" -> return "Another workflow already has this name ($tag). Choose another name."
+        "workflow_limit" -> return "The team already has the most workflows it can ($tag). Delete one first: teamcode workflows delete ID."
+        "workflow_in_use" -> return "Another workflow calls this one ($tag). Change or delete that one first (teamcode workflows list)."
+        "profile_required" -> return "An agent step of this workflow names no cloud profile ($tag). Start it again with --profile ID (teamcode cloud profiles lists yours)."
+        "invalid_inputs" -> return "The server rejected the inputs ($tag): one is unknown, missing or too long. Run teamcode workflows show ID for the inputs."
+        "run_limit" -> return "You already have the most unfinished runs a member may have ($tag). Wait for one to end, or cancel one: teamcode workflows runs, then cancel RUNID."
+        "invalid_limit" -> return "The server rejected the page size ($tag). Use --limit between 1 and 100."
         "wait_assignee_only" -> return "Only the person asked, or an administrator, answers this wait ($tag)."
         "wait_session_owner_only" -> return "Only the session's owner asks for something in this session ($tag)."
         "profile_unassigned" -> return "The session owner is not assigned to this cloud profile ($tag). Run `teamcode cloud profiles` to list your usable profiles " +
