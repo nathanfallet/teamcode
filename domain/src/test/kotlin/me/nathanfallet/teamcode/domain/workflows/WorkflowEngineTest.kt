@@ -56,6 +56,14 @@ class WorkflowEngineTest {
             val v = visits.getValue(visitId); visits[visitId] = v.copy(sessionId = sessionId, dispatchedAt = at)
             if (bindRun) update(v.runId) { it.copy(sessionId = sessionId) }; return true
         }
+        override suspend fun reminded(visitId: String, at: Long): Boolean {
+            val v = visits.getValue(visitId); if (v.status != VisitStatus.ACTIVE || v.remindedAt != null) return false
+            visits[visitId] = v.copy(remindedAt = at); return true
+        }
+        override suspend fun unreminded(visitId: String, at: Long): Boolean {
+            val v = visits.getValue(visitId); if (v.remindedAt != at) return false
+            visits[visitId] = v.copy(remindedAt = null); return true
+        }
         override suspend fun waiting(visitId: String, waitId: String): Boolean {
             val v = visits.getValue(visitId); visits[visitId] = v.copy(waitId = waitId); update(v.runId) { it.copy(status = RunStatus.WAITING) }; return true
         }
@@ -78,13 +86,15 @@ class WorkflowEngineTest {
     private class Sessions : WorkflowSessions {
         val created = mutableListOf<List<String?>>()
         val messages = mutableListOf<Pair<String, String>>()
+        val messageKeys = mutableListOf<String>()
+        var failMessage: TeamFailure? = null
         val progress = mutableMapOf<String, SessionProgress>()
         var failCreate: TeamFailure? = null
         override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String): String {
             failCreate?.let { throw it }
             val id = "s${created.size + 1}"; created += listOf(id, name, profileId, prompt); progress[id] = SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, null, null); return id
         }
-        override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) { messages += sessionId to text }
+        override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) { failMessage?.let { throw it }; messages += sessionId to text; messageKeys += key }
         override suspend fun progress(sessionIds: Set<String>) = progress.filterKeys { it in sessionIds }
     }
 
@@ -209,6 +219,8 @@ class WorkflowEngineTest {
         sessions.progress[s] = SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, at - 1, "completed"); pass()
         assertEquals(RunStatus.RUNNING, run(silent.id).status)
         sessions.progress[s] = SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, at + 5, "completed"); pass()
+        assertEquals(RunStatus.RUNNING, run(silent.id).status, "the first such turn gets a reminder, not a failure")
+        sessions.progress[s] = SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, visits(silent).single().remindedAt!! + 5, "completed"); pass()
         assertEquals("ended_without_delivery", run(silent.id).failure)
 
         sessions.failCreate = TeamFailure("profile_unavailable", 400, "x")
@@ -217,6 +229,70 @@ class WorkflowEngineTest {
         val busy = start("ticket" to "T"); pass(); assertEquals(RunStatus.RUNNING, run(busy.id).status, "a busy cloud is tried again")
         sessions.failCreate = null; store.starterGone = true
         val orphan = start("ticket" to "T").also { store.starterGone = false }; store.starterGone = true; pass(); assertEquals("starter_unavailable", run(orphan.id).failure)
+    }
+
+    private suspend fun silentRun(): Triple<WorkflowRun, String, Long> {
+        val r = start("ticket" to "T"); pass()
+        val v = visits(r).single(); return Triple(r, v.sessionId!!, v.dispatchedAt!!)
+    }
+    private fun ended(s: String, startedAt: Long) { sessions.progress[s] = SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, startedAt, "completed") }
+
+    @Test fun aTurnThatEndsWithoutDeliveryIsRemindedOnceThenFails() = runBlocking {
+        val (r, s, at) = silentRun()
+        store.clock = 5_000; ended(s, at + 1); pass()
+        assertEquals(RunStatus.RUNNING, run(r.id).status); assertEquals(VisitStatus.ACTIVE, visits(r).single().status)
+        assertEquals(5_000L, visits(r).single().remindedAt)
+        val text = sessions.messages.single { it.second.startsWith("Reminder") }.second
+        assertEquals(s, sessions.messages.last().first)
+        assertTrue("\"Analyze\"" in text && "`deliver`" in text && "`ask_human`" in text && "artifact" in text, text)
+        assertEquals("wfrun-${visits(r).single().id}-reminder", sessions.messageKeys.last())
+        // The same ended turn is not judged again, and not reminded again, however many passes.
+        pass(3); assertEquals(1, sessions.messages.count { it.second.startsWith("Reminder") }); assertEquals(RunStatus.RUNNING, run(r.id).status)
+        // The turn the reminder started ends with nothing: the run fails.
+        store.clock = 6_000; ended(s, 5_100); pass()
+        assertEquals("ended_without_delivery", run(r.id).failure); assertEquals(1, sessions.messages.count { it.second.startsWith("Reminder") })
+    }
+
+    @Test fun aDeliveryAfterTheReminderCompletesTheVisit() = runBlocking {
+        val (r, s, at) = silentRun()
+        ended(s, at + 1); pass()
+        ended(s, store.clock + 10)
+        service.deliverBySession(who(ada), s, kotlinx.serialization.json.JsonPrimitive("plan"))
+        assertEquals(VisitStatus.DONE, visits(r).first().status)
+        pass(); assertEquals(RunStatus.RUNNING, run(r.id).status, "the run goes on to the next node")
+    }
+
+    @Test fun noReminderWhileAWaitIsOpenOrWhenTheSessionOrRunIsGone() = runBlocking {
+        val (r, s, at) = silentRun()
+        store.openWaits += s; ended(s, at + 1); pass(2)
+        assertEquals(emptyList(), sessions.messages.filter { it.second.startsWith("Reminder") }); assertNull(visits(r).single().remindedAt); assertEquals(RunStatus.RUNNING, run(r.id).status)
+        store.openWaits -= s; pass()
+        assertNotNull(visits(r).single().remindedAt)
+        // After the reminder, a turn that ended with a wait open is the agent having asked: no failure.
+        store.openWaits += s; ended(s, store.clock + 10); pass(); assertEquals(RunStatus.RUNNING, run(r.id).status)
+
+        val (failed, f, fat) = silentRun()
+        ended(f, fat + 1); sessions.progress[f] = sessions.progress.getValue(f).copy(state = CloudSessionState.FAILED); pass()
+        assertEquals("session_failed", run(failed.id).failure)
+        val (cancelled, c, cat) = silentRun()
+        ended(c, cat + 1); service.cancel(who(ada), cancelled.id); pass()
+        assertEquals(RunStatus.CANCELLED, run(cancelled.id).status)
+        assertEquals(1, sessions.messages.count { it.second.startsWith("Reminder") })
+    }
+
+    @Test fun aVisitAlreadyRemindedIsNeverRemindedAgainAfterARestartAndAFailedSendIsRetried() = runBlocking {
+        val (r, s, at) = silentRun()
+        ended(s, at + 1); sessions.failMessage = TeamFailure("busy", 503, "x"); pass()
+        assertNull(visits(r).single().remindedAt, "a reminder that could not be queued is tried again")
+        sessions.failMessage = null; pass()
+        assertEquals(1, sessions.messages.count { it.second.startsWith("Reminder") })
+        // A new engine (restart, second replica) reads the persisted flag: nothing more is sent.
+        val other = WorkflowEngine(store, sessions, waits); other.run(); other.run()
+        assertEquals(1, sessions.messages.count { it.second.startsWith("Reminder") })
+        // A refusal that cannot be retried ends the run with its code.
+        val (gone, g, gat) = silentRun()
+        ended(g, gat + 1); sessions.failMessage = TeamFailure("session_deleted", 404, "x"); pass()
+        assertEquals("session_deleted", run(gone.id).failure)
     }
 
     @Test fun loopsAreBoundedByTheNodesVisitsAndTheRunsTotal() = runBlocking {

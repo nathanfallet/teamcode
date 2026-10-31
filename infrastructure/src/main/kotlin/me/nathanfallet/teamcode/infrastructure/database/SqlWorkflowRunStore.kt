@@ -165,6 +165,14 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         changed
     }
 
+    override suspend fun reminded(visitId: String, at: Long): Boolean = database.query {
+        WorkflowVisits.update({ (WorkflowVisits.id eq visitId) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) and WorkflowVisits.remindedAt.isNull() }) { it[remindedAt] = at } > 0
+    }
+
+    override suspend fun unreminded(visitId: String, at: Long): Boolean = database.query {
+        WorkflowVisits.update({ (WorkflowVisits.id eq visitId) and (WorkflowVisits.remindedAt eq at) }) { it[remindedAt] = null } > 0
+    }
+
     override suspend fun waiting(visitId: String, waitId: String): Boolean = database.query {
         val visit = WorkflowVisits.select(WorkflowVisits.runId).where { WorkflowVisits.id eq visitId }.singleOrNull() ?: return@query false
         val changed = WorkflowVisits.update({ (WorkflowVisits.id eq visitId) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) and WorkflowVisits.waitId.isNull() }) { it[WorkflowVisits.waitId] = waitId } > 0
@@ -247,7 +255,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
     private fun visit(row: ResultRow, withOutput: Boolean = true) = NodeVisit(
         row[WorkflowVisits.id], row[WorkflowVisits.runId], row[WorkflowVisits.seq], row[WorkflowVisits.nodeId], NodeKind.parse(row[WorkflowVisits.kind]) ?: NodeKind.AGENT,
         VisitStatus.parse(row[WorkflowVisits.status]) ?: VisitStatus.FAILED, row[WorkflowVisits.outcome], if (withOutput) row[WorkflowVisits.output] else null, row[WorkflowVisits.sessionId],
-        row[WorkflowVisits.waitId], row[WorkflowVisits.childRunId], row[WorkflowVisits.dispatchedAt], row[WorkflowVisits.startedAt], row[WorkflowVisits.finishedAt],
+        row[WorkflowVisits.waitId], row[WorkflowVisits.childRunId], row[WorkflowVisits.dispatchedAt], row[WorkflowVisits.startedAt], row[WorkflowVisits.finishedAt], row[WorkflowVisits.remindedAt],
     )
 
     private companion object {

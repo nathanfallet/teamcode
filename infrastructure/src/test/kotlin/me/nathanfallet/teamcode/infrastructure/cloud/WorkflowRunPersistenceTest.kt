@@ -344,4 +344,52 @@ class WorkflowRunPersistenceTest {
             }
         }
     }
+
+    @Test
+    @Timeout(180)
+    fun aTurnEndedWithoutDeliveryIsRemindedOnceAcrossReplicas() = runBlocking {
+        AutomationWorld.run(94) { w ->
+            val definitions = WorkflowService(SqlWorkflowStore(w.a.database))
+            val solo = definitions.create(w.admin, definition("Solo"))
+            val storeA = SqlWorkflowRunStore(w.a.database); val storeB = SqlWorkflowRunStore(w.b.database)
+            val serviceA = WorkflowRunService(storeA)
+            val own = (w.a.sessions.create(w.member, null, CloudSessionDraft("Own", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+            val messages = java.util.concurrent.CopyOnWriteArrayList<Pair<String, String>>()
+            // Every replica sees the turn as ended; the first started with the instruction, the second after the reminder.
+            val sessions = object : WorkflowSessions {
+                @Volatile var turnStart = 0L
+                override suspend fun create(starter: Principal, name: String, profileId: String, model: String?, prompt: String, key: String) = own.id
+                override suspend fun message(starter: Principal, sessionId: String, text: String, key: String) { messages += key to text }
+                override suspend fun progress(sessionIds: Set<String>) = sessionIds.associateWith { SessionProgress(CloudSessionState.ACTIVE, DesiredState.RUNNING, turnStart, "completed") }
+            }
+            val run = serviceA.start(w.member, solo.id, mapOf("ticket" to "T-1"), "p1", null).run
+            val engineA = WorkflowEngine(storeA, sessions, Waits()); val engineB = WorkflowEngine(storeB, sessions, Waits())
+            engineA.run()
+            val visit = storeA.visits(run.id).single()
+            assertNull(visit.remindedAt)
+            // The first turn started when the instruction was sent (a few milliseconds before any reminder).
+            sessions.turnStart = visit.dispatchedAt!!; delay(20)
+
+            // The mark is conditional: exactly one of two replicas wins it, and a visit that is no longer active cannot be marked.
+            val winners = listOf(storeA, storeB).map { async(Dispatchers.Default) { it.reminded(visit.id, 7_000L) } }.awaitAll()
+            assertEquals(1, winners.count { it }); assertEquals(7_000L, storeB.visits(run.id).single().remindedAt)
+            assertFalse(storeB.unreminded(visit.id, 1L), "only the holder of the mark takes it back")
+            assertTrue(storeB.unreminded(visit.id, 7_000L)); assertNull(storeA.visits(run.id).single().remindedAt)
+
+            // Both engines, at the same time, on a visit whose turn ended with nothing delivered: one reminder, the run goes on.
+            repeat(3) { listOf(engineA, engineB).map { async(Dispatchers.Default) { it.run() } }.awaitAll() }
+            assertEquals(1, messages.size, messages.toString()); assertEquals("wfrun-${visit.id}-reminder", messages.single().first)
+            assertTrue("Reminder" in messages.single().second)
+            assertNotNull(storeB.visits(run.id).single().remindedAt); assertEquals(RunStatus.RUNNING, storeB.find(w.teamId, run.id)!!.status)
+
+            // A restart (a fresh engine on a fresh pool) reads the stored mark: still one reminder. The next ended turn fails the run.
+            WorkflowEngine(SqlWorkflowRunStore(w.b.database), sessions, Waits()).run()
+            assertEquals(1, messages.size)
+            sessions.turnStart = Long.MAX_VALUE / 2
+            engineB.run()
+            assertEquals("ended_without_delivery", storeA.find(w.teamId, run.id)!!.failure); assertEquals(1, messages.size)
+            // A finished visit is never marked.
+            assertFalse(storeA.reminded(visit.id, 9_000L))
+        }
+    }
 }
