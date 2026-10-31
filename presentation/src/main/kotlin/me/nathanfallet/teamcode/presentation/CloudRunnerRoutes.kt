@@ -85,6 +85,14 @@ internal fun Route.cloudRunnerRoutes(channel: CloudRunnerChannel) {
             val credential = inference.issue(pod.teamId, pod.sessionId, pod.epoch)
             call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt, credential.lifetimeMillis))
         }
+        // A remote host's relays get a confined credential instead of its member login (`cloud.remote.session-credential.v1`):
+        // returned only to the host of the current epoch, never stored or logged; a pod is refused (it has the route above).
+        if (channel.remoteHosts) post(RUNNER_PATH + "session-credential") {
+            val body = call.jsonBody<RunnerInferenceRequest>()
+            val host = channel.authenticate(call.runnerToken(), body.teamId, body.sessionId, body.epoch)
+            val credential = inference.issueRemote(host.teamId, host.sessionId, host.epoch)
+            call.respond(RunnerInferenceCredentialView(credential.token, credential.expiresAt, credential.lifetimeMillis))
+        }
     }
 }
 

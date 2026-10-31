@@ -811,7 +811,7 @@ class CloudRoutesTest {
         }
         val issued = mutableListOf<Triple<String, Int, Long>>()
         val credentials = object : CloudInferenceCredentialStore {
-            override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int): IssuedInferenceCredential {
+            override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int, kind: ExecutionCredentialKind): IssuedInferenceCredential {
                 issued += Triple(sessionId, epoch, ttlMillis)
                 return IssuedInferenceCredential("tcex_synthetic-inference-credential-${issued.size}", 1_000 + ttlMillis, ttlMillis)
             }
@@ -828,6 +828,11 @@ class CloudRoutesTest {
         store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1)
         store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1)
         assertTrue("cloud.inference.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        assertTrue("cloud.remote.session-credential.v1" !in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features,
+            "Only a server that accepts remote hosts advertises the session credential")
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/runner/session-credential") {
+            bearerAuth("projected-pod-token-1"); contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":1}""")
+        }.status, "No route without remote hosts")
         suspend fun call(token: String?, epoch: Int = 1) = client.post("/api/v1/cloud/runner/inference") {
             token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":$epoch}""")
         }
@@ -849,6 +854,47 @@ class CloudRoutesTest {
             assertEquals("inference_unavailable", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> {
                 runner.runnerInference(RunnerInferenceRequest("default", "s1", 1))
             }.code)
+        } finally { runner.close() }
+    }
+
+    @Test fun theSessionCredentialRouteIsForRemoteHostsOnlyAndAdvertisedWithThem() = testApplication {
+        val store = Store()
+        val cluster = object : ClusterPort by FakeCluster {
+            override suspend fun reviewToken(clusterId: String, token: String, audience: String): TokenIdentity? =
+                if (token == "projected-pod-token-1") TokenIdentity("teamcode", "default", "tc-s1-e1", "uid-1") else null
+        }
+        val credentials = object : CloudInferenceCredentialStore {
+            override suspend fun issue(teamId: String, sessionId: String, epoch: Int, ttlMillis: Long, keep: Int, kind: ExecutionCredentialKind): IssuedInferenceCredential =
+                throw AssertionError("A pod never gets a remote session credential")
+            override suspend fun purge(limit: Int) = 0
+        }
+        val conversations = java.lang.reflect.Proxy.newProxyInstance(CloudConversationStore::class.java.classLoader, arrayOf(CloudConversationStore::class.java)) { _, method, _ ->
+            if (method.name == "toString") "stub" else error("unused: ${method.name}")
+        } as CloudConversationStore
+        val access = CloudAccessService(conversations, store)
+        val sessions = CloudSessionService(store)
+        application {
+            configureGateway(gateway, team = team(), cloudSessions = sessions, cloudAdmin = CloudAdministrationService(Admin(), cluster),
+                cloudRunner = CloudRunnerChannel(RunnerChannelUseCase(store), AuthenticateRunnerUseCase(store, cluster), RunnerInferenceUseCase(store, credentials), remoteHosts = true),
+                cloudConversation = CloudConversation(CloudConversationService(conversations, store, access, { _, _ -> false }), access, RunnerConversationUseCase(store, conversations, { _, _ -> false })),
+                publicOrigin = "http://localhost")
+        }
+        val created = (sessions.create(Principal(colleague, "colleague-session", "default"), null, CloudSessionDraft("Run", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+        store.sessions.clear()
+        store.sessions["s1"] = created.copy(id = "s1", currentEpoch = 1, generation = 1)
+        store.runs["s1" to 1] = CloudExecution("s1", 1, "tc-s1-e1", ExecutionState.PENDING, 1)
+        assertTrue("cloud.remote.session-credential.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
+        suspend fun call(token: String?) = client.post("/api/v1/cloud/runner/session-credential") {
+            token?.let { bearerAuth(it) }; contentType(ContentType.Application.Json); setBody("""{"teamId":"default","sessionId":"s1","epoch":1}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, call(null).status)
+        assertEquals(HttpStatusCode.Unauthorized, call("colleague").status, "A member's login is not a pod's token for a cloud session")
+        val runner = TeamCodeClient("http://localhost", { "projected-pod-token-1" }) { config -> createClient { config(this) } }
+        try {
+            runner.runnerRegister(RunnerRegisterRequest("default", "s1", 1))
+            runner.runnerHeartbeat(RunnerHeartbeatRequest("default", "s1", 1, ready = true))
+            val refused = assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { runner.runnerSessionCredential(RunnerInferenceRequest("default", "s1", 1)) }
+            assertEquals("session_credential_unavailable" to 409, refused.code to refused.statusCode, "A pod uses the inference route; this one is for remote hosts")
         } finally { runner.close() }
     }
 

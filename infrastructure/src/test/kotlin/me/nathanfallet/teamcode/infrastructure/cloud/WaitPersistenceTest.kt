@@ -17,6 +17,7 @@ import me.nathanfallet.teamcode.domain.team.TeamEventAudience
 import me.nathanfallet.teamcode.domain.team.TeamEventType
 import me.nathanfallet.teamcode.infrastructure.database.SqlTeamEventStore
 import me.nathanfallet.teamcode.infrastructure.database.SqlWaitStore
+import me.nathanfallet.teamcode.infrastructure.database.REMOTE_SESSION_SCOPES
 import me.nathanfallet.teamcode.infrastructure.database.SqlWorkflowRunStore
 import me.nathanfallet.teamcode.infrastructure.database.tables.*
 import org.jetbrains.exposed.v1.core.*
@@ -293,6 +294,24 @@ class WaitPersistenceTest {
         assertEquals(listOf(mine.id), b.service.list(agent, "all", "open", null, 50).waits.map { it.id })
         assertEquals(listOf(elsewhere.id), a.service.list(w.member, null, "open", null, 50, session = other.id).waits.map { it.id }, "the owner lists a session's waits by session, asked of anyone")
         assertEquals(WaitStatus.CANCELLED, b.service.cancel(agent, mine.id).status)
+        // The credential of a remote session's host carries the same wait scope without inference: the same confinement.
+        val remoteId = java.util.UUID.randomUUID().toString()
+        w.a.database.query {
+            val now = System.currentTimeMillis()
+            Tokens.insert {
+                it[id] = remoteId; it[memberId] = w.member.member.id; it[tokenHash] = "remote-hash-$remoteId"; it[device] = "remote session"; it[deviceId] = null
+                it[createdAt] = now; it[expiresAt] = now + 3_600_000; it[serviceScopes] = kotlinx.serialization.json.Json.encodeToString(REMOTE_SESSION_SCOPES.map { scope -> scope.wire })
+            }
+            CloudInferenceCredentials.insert { it[CloudInferenceCredentials.tokenId] = remoteId; it[sessionId] = own.id; it[epoch] = 1; it[teamId] = w.teamId; it[createdAt] = now; it[expiresAt] = now + 3_600_000 }
+        }
+        val remoteHost = agent.copy(tokenId = remoteId, serviceScopes = REMOTE_SESSION_SCOPES.toSet())
+        val remoteAsk = a.service.create(remoteHost, ask.copy(title = "Remote host"), "remote-key").wait
+        assertEquals(remoteAsk.id, b.service.create(remoteHost, ask.copy(title = "Remote host"), "remote-key").wait.id)
+        refusedWith("credential_scope") { b.service.answer(remoteHost, remoteAsk.id, "done", emptyMap()) }
+        refusedWith("not_found") { b.service.get(remoteHost, elsewhere.id) }
+        refusedWith("not_found") { a.service.create(remoteHost, ask.copy(sessionId = other.id), null) }
+        assertEquals(listOf(remoteAsk.id), b.service.list(remoteHost, "all", "open", null, 50).waits.map { it.id }, "listed for its own session only")
+        assertEquals(WaitStatus.CANCELLED, b.service.cancel(remoteHost, remoteAsk.id).status)
         // The same scope on a token bound to no session (a key) gets nothing.
         val keyId = java.util.UUID.randomUUID().toString()
         w.a.database.query {

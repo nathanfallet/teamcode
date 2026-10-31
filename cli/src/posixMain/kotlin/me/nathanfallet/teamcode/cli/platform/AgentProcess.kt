@@ -97,7 +97,7 @@ private class PosixAgentProcess(private val pid: Int, private var input: Int, pr
     }
 }
 
-actual fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String): AgentProcess {
+actual fun startAgentProcess(command: String, arguments: List<String>, overrides: Map<String, String?>, workingDirectory: String, scrubPrefixes: List<String>): AgentProcess {
     teamcode_ignore_sigpipe()
     // posix_spawn has no portable chdir action on the glibc baseline: a fixed shell prologue changes directory, then execs.
     val argv = listOf("/bin/sh", "-c", "cd \"\$0\" && exec \"\$@\"", workingDirectory, command) + arguments
@@ -110,6 +110,8 @@ actual fun startAgentProcess(command: String, arguments: List<String>, overrides
             val separator = entry.indexOf('=')
             if (separator > 0) values[entry.substring(0, separator)] = entry.substring(separator + 1)
         }
+        val kept = agentInheritedEnvironment(values, scrubPrefixes)
+        values.keys.retainAll(kept.keys)
         overrides.forEach { (name, value) -> if (value == null) values.remove(name) else values[name] = value }
         fun vector(strings: List<String>): CPointer<CPointerVar<ByteVar>> {
             require(strings.none { '\u0000' in it })

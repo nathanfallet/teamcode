@@ -33,6 +33,9 @@ class TeamCodeClient(
     private val token: suspend () -> String?,
     private val createHttpClient: (io.ktor.client.HttpClientConfig<*>.() -> Unit) -> HttpClient,
 ) : AutoCloseable, RunLifecycleClient {
+    /** A client for the same server and HTTP configuration that authenticates with [credential] instead: a confined session credential, say. */
+    fun withCredential(credential: suspend () -> String?): TeamCodeClient = TeamCodeClient(origin, credential, createHttpClient)
+
     private val origin = Url(serverUrl.also { require(it.isNotBlank()) { "A TeamCode server URL is required." } }).also {
         require(it.protocol == URLProtocol.HTTPS ||
             (it.protocol == URLProtocol.HTTP && it.host in setOf("localhost", "127.0.0.1", "::1"))) {
@@ -1008,6 +1011,11 @@ class TeamCodeClient(
     }
     /** A `tcex_` inference credential for this execution; keep it in memory only. */
     suspend fun runnerInference(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/inference", input)
+    /**
+     * The confined credential of a remote session's host for its loopback relays (`cloud.remote.session-credential.v1`): the
+     * session's own waits (never answering), workflow step and artifacts. Keep it in memory only.
+     */
+    suspend fun runnerSessionCredential(input: RunnerInferenceRequest): RunnerInferenceCredentialView = coded(HttpMethod.Post, "/api/v1/cloud/runner/session-credential", input)
     /** The execution owner's current GitHub token (`status` `linked`), or why there is none; keep it in memory only. */
     suspend fun runnerGitHub(input: RunnerGitHubRequest): RunnerGitHubView = coded(HttpMethod.Post, "/api/v1/cloud/runner/github", input)
     /** The execution owner's current environment variables (`cloud.variables.v1`); keep them in memory only. */

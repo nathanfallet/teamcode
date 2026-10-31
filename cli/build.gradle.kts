@@ -122,3 +122,6 @@ kotlin {
         }
     }
 }
+
+// A sentinel in the test JVM's environment, to prove the spawned agent of a remote session never inherits TeamCode variables.
+tasks.withType<Test>().matching { it.name == "jvmTest" }.configureEach { environment("TEAMCODE_SCRUB_SENTINEL", "sentinel-must-not-reach-the-agent") }
