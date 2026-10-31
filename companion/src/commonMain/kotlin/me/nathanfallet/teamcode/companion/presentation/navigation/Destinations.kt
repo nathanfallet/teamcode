@@ -70,6 +70,10 @@ data class AutomationEditRoute(val accountId: String, val automationId: String? 
 @Serializable
 data class AutomationTestRoute(val accountId: String, val automationId: String)
 
+/** An account's office: its sessions as agents at desks, a screen of the wide layout's content panel only. */
+@Serializable
+data class OfficeRoute(val accountId: String)
+
 /** An account's workflows: the Workflows tab of a phone (the runs, then the saved workflows), and a screen of the wide layout's content panel. */
 @Serializable
 data class WorkflowsRoute(val accountId: String)
