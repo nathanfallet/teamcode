@@ -19,9 +19,9 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.loadConfig
 import me.nathanfallet.teamcode.cli.sdk
 
-/** `teamcode automations`: cloud sessions started by a schedule or a webhook. */
+/** `teamcode automations`: cloud sessions or workflow runs started by a schedule or a webhook. */
 class AutomationsCommand : SuspendingNoOpCliktCommand(name = "automations") {
-    override fun help(context: Context) = "Start cloud sessions on a schedule (cron) or from a webhook, with a prompt that can use the request's fields. " +
+    override fun help(context: Context) = "Start cloud sessions, or workflow runs, on a schedule (cron) or from a webhook, with a prompt (or workflow inputs) that can use the request's fields. " +
         "Requires an interactive login to create, change or enable one."
     init { subcommands(AutomationsList(), AutomationsShow(), AutomationsCreate(), AutomationsEdit(), AutomationsEnable(), AutomationsDisable(), AutomationsDelete(), AutomationsRotateSecret(), AutomationsRuns(), AutomationsRun()) }
 }
@@ -46,8 +46,12 @@ private class DefinitionOptions : OptionGroup("Definition") {
     val timezone by option("--timezone", help = "IANA name for --cron, such as Europe/Paris.")
     val catchup by option("--catchup", help = "After an outage: once (run the latest missed slot once, the default) or skip.").choice("once", "skip")
     val catchupGrace by option("--catchup-grace-minutes", help = "Oldest missed slot still run by --catchup once: 0 to 1440 (360).").int()
-    val action by option("--action", help = "cloud (the default). remote is refused by the server for now.").choice("cloud", "remote")
+    val action by option("--action", help = "cloud (the default), workflow (implied by --workflow) or remote, which the server refuses for now.").choice("cloud", "remote", "workflow")
     val profile by option("--profile", help = "Cloud profile id or name (see teamcode cloud profiles); each run uses its latest version.")
+    val workflow by option("--workflow", help = "Start a run of this workflow (id or name, see teamcode workflows list) instead of a session; --profile then names the profile of its agent steps that name none.")
+    val inputs by option("--input", help = "Workflow action: KEY=TEXT for an input of the workflow; TEXT may use {{name}} like a prompt. Repeatable; on edit, the ones given replace all the saved ones.").convert { text ->
+        text.indexOf('=').let { i -> if (i <= 0) throw UsageError("\"${text.substringBefore('=')}\" needs the form KEY=TEXT.") else text.substring(0, i) to text.substring(i + 1) }
+    }.multiple()
     val model by option("--model")
     val effort by option("--effort")
     val maxRuntime by option("--max-runtime-minutes", help = "A run still working after that long ends timed_out and its session is paused: 1 to 1440 (60).").int()
@@ -64,7 +68,7 @@ private class DefinitionOptions : OptionGroup("Definition") {
     val clearEffort by option("--clear-effort", help = "Edit: go back to the profile's effort.").flag()
     val clearSamplePayload by option("--clear-sample-payload", help = "Edit: drop the sample payload.").flag()
 
-    suspend fun changes(resolveProfile: suspend (String) -> String, readStdin: () -> String = ::readStandardInput): AutomationChanges {
+    suspend fun changes(resolveProfile: suspend (String) -> String, resolveWorkflow: suspend (String) -> String = { it }, readStdin: () -> String = ::readStandardInput): AutomationChanges {
         if ((model != null && clearModel) || (effort != null && clearEffort) || (samplePayload != null && clearSamplePayload)) throw UsageError("Use a value or its --clear-… option, not both.")
         if (prompt != null && promptFile != null) throw UsageError("Use --prompt or --prompt-file, not both.")
         if ((variables.isNotEmpty() || variablesFile != null) && clearVariables) throw UsageError("Use --var or --clear-variables, not both.")
@@ -77,7 +81,8 @@ private class DefinitionOptions : OptionGroup("Definition") {
             else -> null
         }
         return AutomationChanges(name, cron, webhook, timezone, catchup, catchupGrace, action, profile?.let { resolveProfile(it) }, model, effort, maxRuntime,
-            text, declared, samplePayload?.let { parsePayload(readTextFile(it)) }, overlap, maxRunsPerDay, clearModel, clearEffort, clearSamplePayload)
+            text, declared, samplePayload?.let { parsePayload(readTextFile(it)) }, overlap, maxRunsPerDay, clearModel, clearEffort, clearSamplePayload,
+            workflow?.let { resolveWorkflow(it) }, inputs.takeIf { it.isNotEmpty() }?.let(::parseInputs))
     }
 }
 
@@ -126,7 +131,7 @@ private class AutomationsCreate : SuspendingCliktCommand(name = "create") {
         val config = loadConfig()
         sdk(config).use { client ->
             requireAutomations(client)
-            val input = applyChanges(null, definition.changes({ resolveProfileId(client, it) }))
+            val input = applyChanges(null, definition.changes({ resolveProfileId(client, it) }, { resolveWorkflowId(client, it) }))
             val created = client.createAutomation(input)
             if (json) { echo(Serialization.json.encodeToString(created)); return }
             val automation = created.automation
@@ -149,7 +154,7 @@ private class AutomationsEdit : SuspendingCliktCommand(name = "edit") {
         sdk(loadConfig()).use { client ->
             requireAutomations(client)
             val current = client.automation(requireIdentifier(id))
-            val input = applyChanges(current.toInput(), definition.changes({ resolveProfileId(client, it) }))
+            val input = applyChanges(current.toInput(), definition.changes({ resolveProfileId(client, it) }, { resolveWorkflowId(client, it) }))
             val saved = client.updateAutomation(id, current.version, input)
             echo(if (json) Serialization.json.encodeToString(saved) else "Saved $id as version ${saved.version}.")
             if (!json && current.webhook != null && saved.version != current.version)

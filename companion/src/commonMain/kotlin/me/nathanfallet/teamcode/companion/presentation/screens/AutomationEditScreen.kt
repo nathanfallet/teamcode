@@ -46,10 +46,12 @@ import com.adamglin.phosphoricons.regular.CaretDown
 import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.Plus
 import com.adamglin.phosphoricons.regular.Trash
+import me.nathanfallet.teamcode.companion.domain.models.ActionKind
 import me.nathanfallet.teamcode.companion.domain.models.AutomationPreview
 import me.nathanfallet.teamcode.companion.domain.models.AutomationVariable
 import me.nathanfallet.teamcode.companion.domain.models.Profile
 import me.nathanfallet.teamcode.companion.domain.models.TriggerKind
+import me.nathanfallet.teamcode.companion.domain.models.Workflow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -76,8 +78,8 @@ import org.jetbrains.compose.resources.stringResource
 /**
  * The automation form: name; a schedule (five-field cron with its time zone and the catch-up after an outage) or a
  * webhook (declared variables with their JSON paths, a sample payload); the action (a cloud agent on one of the
- * member's profiles; the remote session is shown greyed, it comes later); the prompt, in which `{{name}}` is replaced
- * by a variable or a run value; the overlap and daily limits; and a preview of the rendered prompt. Sections fold, as a
+ * member's profiles, or a run of a saved workflow with the text of its inputs; the remote session is shown greyed, it
+ * comes later); the prompt (or the inputs), in which `{{name}}` is replaced by a variable or a run value; the overlap and daily limits; and a preview of the rendered prompt. Sections fold, as a
  * phone has little room.
  */
 @Composable
@@ -128,22 +130,50 @@ fun AutomationEditScreen(viewModel: AutomationEditViewModel, onBack: (() -> Unit
                 }
 
                 Section("action", stringResource(Res.string.automation_section_action)) {
-                    ActionKinds()
-                    Text(stringResource(Res.string.new_session_profile), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    val workflow = form.action == ActionKind.WORKFLOW
+                    ActionKinds(form.action, workflowsOffered = state.workflows.isNotEmpty() || workflow) { kind -> viewModel.edit { it.copy(action = kind) } }
+                    if (workflow) {
+                        Text(stringResource(Res.string.automation_workflow_pick), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        if (state.workflows.isEmpty()) Text(stringResource(Res.string.automation_workflow_none), color = colors.muted, fontSize = 14.sp, modifier = Modifier.testTag("automation-no-workflow"))
+                        else Group(Modifier.selectableGroup()) {
+                            state.workflows.forEachIndexed { index, workflow ->
+                                if (index > 0) GroupDivider()
+                                WorkflowChoice(workflow, form.workflowId == workflow.id) { viewModel.chooseWorkflow(workflow) }
+                            }
+                        }
+                        if (form.workflowId != null && state.workflows.none { it.id == form.workflowId }) Banner(stringResource(Res.string.automation_workflow_gone), Tone.WARN, Modifier.testTag("automation-workflow-gone"))
+                        Text(stringResource(Res.string.new_session_profile), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(Res.string.automation_workflow_profile_hint), color = colors.muted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                    } else Text(stringResource(Res.string.new_session_profile), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     if (state.profiles.isEmpty()) Text(stringResource(Res.string.new_session_no_profile), color = colors.muted, fontSize = 14.sp, modifier = Modifier.testTag("automation-no-profile"))
                     else Group(Modifier.selectableGroup()) {
                         state.profiles.forEachIndexed { index, profile ->
                             if (index > 0) GroupDivider()
-                            ProfileChoice(profile, form.profileId == profile.id) { viewModel.edit { it.copy(profileId = profile.id) } }
+                            ProfileChoice(profile, form.profileId == profile.id) { viewModel.edit { it.copy(profileId = if (workflow && it.profileId == profile.id) null else profile.id) } }
                         }
                     }
-                    TcTextField(form.model, { v -> viewModel.edit { it.copy(model = v) } }, label = stringResource(Res.string.automation_field_model), keyboardOptions = plainKeyboard, tag = "automation-model")
-                    TcTextField(form.effort, { v -> viewModel.edit { it.copy(effort = v) } }, label = stringResource(Res.string.automation_field_effort), keyboardOptions = plainKeyboard, tag = "automation-effort")
-                    TcTextField(form.maxRuntime, { v -> viewModel.edit { it.copy(maxRuntime = v.filter(Char::isDigit)) } }, label = stringResource(Res.string.automation_field_max_runtime),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), tag = "automation-max-runtime")
+                    if (!workflow) {
+                        TcTextField(form.model, { v -> viewModel.edit { it.copy(model = v) } }, label = stringResource(Res.string.automation_field_model), keyboardOptions = plainKeyboard, tag = "automation-model")
+                        TcTextField(form.effort, { v -> viewModel.edit { it.copy(effort = v) } }, label = stringResource(Res.string.automation_field_effort), keyboardOptions = plainKeyboard, tag = "automation-effort")
+                        TcTextField(form.maxRuntime, { v -> viewModel.edit { it.copy(maxRuntime = v.filter(Char::isDigit)) } }, label = stringResource(Res.string.automation_field_max_runtime),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), tag = "automation-max-runtime")
+                    }
                 }
 
-                Section("prompt", stringResource(Res.string.automation_section_prompt)) {
+                if (form.action == ActionKind.WORKFLOW) Section("inputs", stringResource(Res.string.automation_inputs_title)) {
+                    val chosen = state.workflows.firstOrNull { it.id == form.workflowId }
+                    Text(stringResource(Res.string.automation_inputs_intro), color = colors.muted, fontSize = 13.sp, lineHeight = 18.sp)
+                    when {
+                        chosen == null -> Unit
+                        chosen.inputs.isEmpty() -> Text(stringResource(Res.string.automation_inputs_none), color = colors.muted, fontSize = 14.sp, modifier = Modifier.testTag("automation-inputs-none"))
+                        else -> chosen.inputs.forEach { input ->
+                            TcTextField(form.inputs[input.id].orEmpty(), { v -> viewModel.setInput(input.id, v) },
+                                label = if (input.required && input.default.isNullOrEmpty()) stringResource(Res.string.automation_input_required, input.label) else input.label,
+                                hint = input.default?.takeIf { it.isNotEmpty() }?.let { stringResource(Res.string.automation_input_default, it) }, singleLine = false, minLines = 2,
+                                keyboardOptions = plainKeyboard, tag = "automation-input-${input.id}")
+                        }
+                    }
+                } else Section("prompt", stringResource(Res.string.automation_section_prompt)) {
                     TcTextField(form.prompt, { v -> viewModel.edit { it.copy(prompt = v) } }, hint = stringResource(Res.string.automation_field_prompt_hint), singleLine = false, minLines = 6,
                         keyboardOptions = plainKeyboard, tag = "automation-prompt")
                 }
@@ -188,24 +218,50 @@ private fun Section(id: String, title: String, initiallyOpen: Boolean = true, co
     }
 }
 
-/** The cloud agent, chosen; the remote session, shown greyed and not selectable: it comes later. */
+/** What a run starts: a cloud agent, or a saved workflow (offered when there is one); the remote session is shown greyed and not selectable: it comes later. */
 @Composable
-private fun ActionKinds() {
+private fun ActionKinds(selected: ActionKind, workflowsOffered: Boolean, onSelect: (ActionKind) -> Unit) {
     val colors = TeamCode.colors
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    @Composable
+    fun Tile(kind: ActionKind, title: String, hint: String, enabled: Boolean, modifier: Modifier) {
+        val chosen = selected == kind
         Column(
-            Modifier.weight(1f).border(1.5.dp, colors.accent, Radii.control).padding(10.dp).testTag("automation-action-cloud"),
+            modifier.alpha(if (enabled) 1f else 0.45f).border(if (chosen) 1.5.dp else 1.dp, if (chosen) colors.accent else colors.line, Radii.control)
+                .selectable(chosen, enabled = enabled, role = Role.RadioButton) { onSelect(kind) }.padding(10.dp).testTag("automation-action-${kind.wire}"),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(stringResource(Res.string.automation_action_cloud), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-            Text(stringResource(Res.string.automation_action_cloud_hint), color = colors.muted, fontSize = 12.sp)
+            Text(title, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(hint, color = colors.muted, fontSize = 12.sp)
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Tile(ActionKind.CLOUD, stringResource(Res.string.automation_action_cloud), stringResource(Res.string.automation_action_cloud_hint), true, Modifier.weight(1f))
+            Tile(ActionKind.WORKFLOW, stringResource(Res.string.automation_action_workflow), stringResource(Res.string.automation_action_workflow_hint), workflowsOffered, Modifier.weight(1f))
         }
         Column(
-            Modifier.weight(1f).alpha(0.45f).border(1.dp, colors.line, Radii.control).padding(10.dp).testTag("automation-action-remote"),
+            Modifier.fillMaxWidth().alpha(0.45f).border(1.dp, colors.line, Radii.control).padding(10.dp).testTag("automation-action-remote"),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(stringResource(Res.string.automation_action_remote), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text(stringResource(Res.string.automation_action_remote_soon), color = colors.muted, fontSize = 12.sp, modifier = Modifier.testTag("automation-action-remote-soon"))
+        }
+    }
+}
+
+@Composable
+private fun WorkflowChoice(workflow: Workflow, selected: Boolean, onClick: () -> Unit) {
+    val colors = TeamCode.colors
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).selectable(selected, role = Role.RadioButton, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp).testTag("automation-workflow-${workflow.id}"),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(20.dp).border(1.5.dp, if (selected) colors.accent else colors.line, CircleShape), contentAlignment = Alignment.Center) {
+            if (selected) Box(Modifier.size(10.dp).background(colors.accent, CircleShape))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(workflow.name, color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            workflow.description?.takeIf { it.isNotBlank() }?.let { Text(it, style = MetaStyle, color = colors.muted, maxLines = 2) }
         }
     }
 }
@@ -259,6 +315,12 @@ internal fun PreviewView(preview: AutomationPreview) {
         preview.renderedPrompt?.let { prompt ->
             Text(stringResource(Res.string.automation_rendered_prompt), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Text(prompt, style = MonospaceStyle, color = colors.text, modifier = Modifier.fillMaxWidth().background(colors.panelAlt, Radii.control).padding(10.dp).testTag("automation-rendered-prompt"))
+        }
+        if (preview.renderedInputs.isNotEmpty()) {
+            Text(stringResource(Res.string.automation_rendered_inputs), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            preview.renderedInputs.forEach { (id, text) ->
+                Text("$id = $text", style = MonospaceStyle, color = colors.text, modifier = Modifier.fillMaxWidth().background(colors.panelAlt, Radii.control).padding(10.dp).testTag("automation-rendered-input-$id"))
+            }
         }
         preview.problems.forEach { problem ->
             Text(stringResource(Res.string.automation_problem, problem.path, problem.rule), color = colors.danger, fontSize = 13.sp, modifier = Modifier.testTag("automation-problem"))

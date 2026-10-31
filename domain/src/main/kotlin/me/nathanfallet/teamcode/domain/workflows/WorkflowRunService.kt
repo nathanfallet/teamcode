@@ -31,7 +31,22 @@ class WorkflowRunService(private val store: WorkflowRunStore) {
     }
 
     suspend fun start(actor: Principal, workflowId: String, inputs: Map<String, String>, profileId: String?, idempotencyKey: String?): RunChange {
-        actor.requireInteractive(); actor.requireReady(); store.revalidate(actor)
+        actor.requireInteractive(); actor.requireReady()
+        return begin(actor, workflowId, inputs, profileId, idempotencyKey)
+    }
+
+    /**
+     * An automation's start (docs/automations.md): the same run, as the automation's owner through the credential bound to their
+     * automation (`cloud:write`), so no interactive login is needed. The key makes a retried dispatch return the first run; the
+     * cap of unfinished runs applies.
+     */
+    suspend fun startForAutomation(owner: Principal, workflowId: String, inputs: Map<String, String>, profileId: String?, idempotencyKey: String): RunChange {
+        owner.requireCloudWrite(); owner.requireReady()
+        return begin(owner, workflowId, inputs, profileId, idempotencyKey)
+    }
+
+    private suspend fun begin(actor: Principal, workflowId: String, inputs: Map<String, String>, profileId: String?, idempotencyKey: String?): RunChange {
+        store.revalidate(actor)
         val workflow = store.workflow(actor.teamId, workflowId) ?: throw TeamFailure("not_found", 404, "Workflow not found.")
         val definition = workflow.definition
         val resolved = WorkflowRunRules.inputs(definition, inputs)

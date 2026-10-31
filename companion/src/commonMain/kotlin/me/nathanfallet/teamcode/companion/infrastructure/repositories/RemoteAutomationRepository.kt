@@ -77,7 +77,7 @@ class RemoteAutomationRepository(private val calls: AccountCalls) : AutomationRe
 }
 
 internal fun AutomationTriggerView.domain() = AutomationTrigger(TriggerKind.of(kind), cron, timezone, catchup, catchupGraceMinutes, rawKind = kind)
-internal fun AutomationActionView.domain() = AutomationAction(ActionKind.of(kind), profileId, model, effort, maxRuntimeMinutes, rawKind = kind)
+internal fun AutomationActionView.domain() = AutomationAction(ActionKind.of(kind), profileId, model, effort, maxRuntimeMinutes, rawKind = kind, workflowId = workflowId, inputs = inputs)
 internal fun AutomationVariableView.domain() = AutomationVariable(name, path, type, values, maxLength, required, sensitive)
 private fun AutomationRunSummaryView.domain() = RunSummary(id, RunSource.of(source), status, queuedAt)
 
@@ -98,16 +98,17 @@ internal fun CreatedAutomationView.domain() = CreatedAutomation(automation.domai
 private fun AutomationVariableValueView.domain() = AutomationVariableValue(name, type, value, sensitive, present)
 
 internal fun AutomationRunView.domain() = AutomationRun(
-    id, automationId, automationVersion, RunSource.of(source), status, reason, sessionId, scheduledFor, queuedAt, startedAt, endedAt, cancelRequested, variables.map { it.domain() },
+    id, automationId, automationVersion, RunSource.of(source), status, reason, sessionId, scheduledFor, queuedAt, startedAt, endedAt, cancelRequested, variables.map { it.domain() }, workflowRunId,
 )
 
-internal fun AutomationPreviewView.domain() = AutomationPreview(renderedPrompt, variables.map { it.domain() }, problems.map { AutomationProblem(it.path, it.rule) }, wouldSkip, nextRuns)
+internal fun AutomationPreviewView.domain() = AutomationPreview(renderedPrompt, variables.map { it.domain() }, problems.map { AutomationProblem(it.path, it.rule) }, wouldSkip, nextRuns, renderedInputs)
 
 /** The wire form of a definition; a sample that is not a JSON object is dropped (the use case checks it before). */
 internal fun AutomationDefinition.input() = AutomationInput(
     name = name.trim(),
     trigger = AutomationTriggerView(trigger.rawKind, trigger.cron?.trim(), trigger.timezone?.trim(), trigger.catchup, trigger.catchupGraceMinutes),
-    action = AutomationActionView(action.rawKind, action.profileId, action.model?.takeIf { it.isNotBlank() }, action.effort?.takeIf { it.isNotBlank() }, action.maxRuntimeMinutes),
+    action = if (action.kind == ActionKind.WORKFLOW) AutomationActionView(action.rawKind, action.profileId, workflowId = action.workflowId, inputs = action.inputs.filterValues { it.isNotEmpty() })
+        else AutomationActionView(action.rawKind, action.profileId, action.model?.takeIf { it.isNotBlank() }, action.effort?.takeIf { it.isNotBlank() }, action.maxRuntimeMinutes),
     prompt = prompt,
     variables = if (trigger.kind == TriggerKind.WEBHOOK) variables.map { AutomationVariableView(it.name.trim(), it.path.trim(), it.type, it.values, it.maxLength, it.required, it.sensitive) } else emptyList(),
     samplePayload = if (trigger.kind == TriggerKind.WEBHOOK) samplePayload?.takeIf { it.isNotBlank() }?.let(::parsePayload) else null,

@@ -11,7 +11,7 @@ object Automations {
     const val CAPABILITY = "automations.v1"
     val triggerKinds = listOf("cron", "webhook")
     /** `remote` is part of the contract but refused (`422 not_available_yet`) until the server can start one unattended. */
-    val actionKinds = listOf("cloud", "remote")
+    val actionKinds = listOf("cloud", "remote", "workflow")
     val catchupPolicies = listOf("skip", "once")
     val overlapPolicies = listOf("skip", "queue", "allow")
     val variableTypes = listOf("string", "int", "number", "boolean", "enum")
@@ -42,6 +42,10 @@ data class AutomationTriggerView(
  * What a run starts. [kind] `cloud`: a cloud session on [profileId] (a profile assigned to the owner, at its latest
  * version), with the optional agent [model] and [effort]. [maxRuntimeMinutes] (1 to 1440, 60 by default) ends a run
  * still working after that long (`timed_out`, its session paused). [kind] `remote` is refused for now.
+ * [kind] `workflow`: a run of the saved workflow [workflowId] started as the owner, instead of a session. [inputs] maps a
+ * workflow input id to its value, a template over the same `{{…}}` variables as a prompt; an empty result leaves the
+ * workflow's default. [profileId] (optional) is the profile the workflow's agent nodes run with when they name none;
+ * [model], [effort] and [maxRuntimeMinutes] do not apply.
  */
 @Serializable
 data class AutomationActionView(
@@ -50,6 +54,8 @@ data class AutomationActionView(
     val model: String? = null,
     val effort: String? = null,
     val maxRuntimeMinutes: Int = 60,
+    val workflowId: String? = null,
+    val inputs: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -80,7 +86,8 @@ data class AutomationInput(
     val name: String,
     val trigger: AutomationTriggerView,
     val action: AutomationActionView,
-    val prompt: String,
+    /** Empty for a `workflow` action (its inputs carry the text). */
+    val prompt: String = "",
     val variables: List<AutomationVariableView> = emptyList(),
     val samplePayload: JsonObject? = null,
     val overlap: String = "skip",
@@ -194,6 +201,8 @@ data class AutomationRunView(
     val cancelRequested: Boolean = false,
     val initiatorId: String? = null,
     val variables: List<AutomationVariableValueView> = emptyList(),
+    /** The workflow run a `workflow` action started (`GET /api/v1/workflows/runs/{id}`); null for a session. */
+    val workflowRunId: String? = null,
 )
 
 /** Newest first; [nextBefore] is the cursor of the next page. */
@@ -233,6 +242,8 @@ data class AutomationPreviewView(
     val profileVersion: Int? = null,
     val wouldSkip: String? = null,
     val nextRuns: List<Long> = emptyList(),
+    /** A `workflow` action's inputs as the run would receive them; like [renderedPrompt], never stored or logged. */
+    val renderedInputs: Map<String, String> = emptyMap(),
 )
 
 /** The webhook request headers. A signed request carries [TIMESTAMP] and [SIGNATURE]; [DELIVERY] or `Idempotency-Key` deduplicates. */

@@ -1,0 +1,1 @@
+ALTER TABLE automation_runs ADD workflow_run_id VARCHAR(36) NULL;

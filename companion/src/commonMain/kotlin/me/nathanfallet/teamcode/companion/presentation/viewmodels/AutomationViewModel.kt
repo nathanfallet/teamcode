@@ -22,6 +22,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.automations.LoadAutoma
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.RotateAutomationSecretUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.SetAutomationEnabledUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.GetWorkflowUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.WebhookLink
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.WebhookProof
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.WebhookVersion
@@ -51,6 +52,8 @@ data class AutomationUiState(
     val deleted: Boolean = false,
     /** The name of the action's profile, when the member can list it (the owner's own). */
     val profileName: String? = null,
+    /** The name of the workflow a workflow action starts, when it can be read. */
+    val workflowName: String? = null,
 ) {
     private val owner: Boolean get() = automation?.ownedBy(memberId) == true
     /** The owner arms, changes, rotates and tests: it runs with their quota, accounts and GitHub link. */
@@ -78,6 +81,7 @@ class AutomationViewModel(
     private val cancel: CancelAutomationRunUseCase,
     private val secrets: AutomationSecrets,
     private val profiles: LoadProfilesUseCase,
+    private val workflow: GetWorkflowUseCase,
     accounts: AccountRepository,
 ) : ViewModel() {
     private val account = accounts.accounts.value.firstOrNull { it.id == route.accountId }
@@ -98,6 +102,7 @@ class AutomationViewModel(
                 val automation = get(route.accountId, route.automationId)
                 state.update { it.copy(automation = automation, loading = false) }
                 if (automation.ownedBy(state.value.memberId)) profileName(automation)
+                workflowName(automation)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -112,6 +117,18 @@ class AutomationViewModel(
         try {
             val name = profiles(route.accountId).profiles.firstOrNull { it.id == automation.definition.action.profileId }?.name
             state.update { it.copy(profileName = name) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+        }
+    }
+
+    /** The workflow's name; a failure (or a workflow deleted since) leaves the id. */
+    private suspend fun workflowName(automation: Automation) {
+        val id = automation.definition.action.workflowId ?: return
+        try {
+            val name = workflow(route.accountId, id).name
+            state.update { it.copy(workflowName = name) }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {

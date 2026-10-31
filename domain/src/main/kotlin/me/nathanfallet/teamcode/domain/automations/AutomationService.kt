@@ -13,16 +13,21 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionStore
 import me.nathanfallet.teamcode.domain.cloud.CloudSettings
 import me.nathanfallet.teamcode.domain.cloud.SecretSealer
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.workflows.Workflow
+import me.nathanfallet.teamcode.domain.workflows.WorkflowStore
 
 /** What automations read from cloud sessions: profiles (to check the owner's assignment) and the team's caps. */
 interface AutomationDirectory {
     suspend fun profile(teamId: String, profileId: String): CloudProfile?
     suspend fun settings(teamId: String): CloudSettings
+    /** The last saved version of a workflow, for a `workflow` action. */
+    suspend fun workflow(teamId: String, workflowId: String): Workflow?
 
-    /** Reads them from the cloud session store. */
-    class Cloud(private val store: CloudSessionStore) : AutomationDirectory {
+    /** Reads them from the cloud session store and the workflow store. */
+    class Cloud(private val store: CloudSessionStore, private val workflows: WorkflowStore) : AutomationDirectory {
         override suspend fun profile(teamId: String, profileId: String) = store.profile(teamId, profileId)
         override suspend fun settings(teamId: String) = store.settings(teamId)
+        override suspend fun workflow(teamId: String, workflowId: String) = workflows.find(teamId, workflowId)
     }
 }
 
@@ -34,6 +39,8 @@ class CreatedAutomation(val automation: Automation, val secret: String?) {
 data class AutomationPreview(
     val renderedPrompt: String?, val variables: List<ExtractedVariable>, val problems: List<VariableProblem>, val profileVersion: Int?,
     val wouldSkip: String?, val nextRuns: List<Long>,
+    /** A workflow action's inputs as the run would receive them (empty values left out); never stored or logged either. */
+    val renderedInputs: Map<String, String> = emptyMap(),
 )
 
 /** A webhook request as received: the automation id and optional version from the path, the proof, and the raw body. */
@@ -85,7 +92,7 @@ class AutomationService(
         actor.requireInteractive(); actor.requireReady()
         val now = store.now()
         AutomationRules.validate(definition, now)
-        requireProfile(actor.teamId, actor.member, definition)
+        requireAction(actor.teamId, actor.member, definition)
         val settings = directory.settings(actor.teamId)
         val id = UUID.randomUUID().toString()
         val secret = if (definition.trigger.kind == TriggerKind.WEBHOOK) newSecret() else null
@@ -100,7 +107,7 @@ class AutomationService(
         if (definition.trigger.kind != current.definition.trigger.kind) throw AutomationRules.invalid("The trigger kind of an automation cannot change: create another one.")
         val now = store.now()
         AutomationRules.validate(definition, now)
-        requireProfile(actor.teamId, actor.member, definition)
+        requireAction(actor.teamId, actor.member, definition)
         return store.update(actor, id, version, definition, if (current.enabled) AutomationRules.nextRun(definition, now) else null)
     }
 
@@ -110,7 +117,7 @@ class AutomationService(
         val now = store.now()
         // The rules may have changed since it was saved (a timezone gone, a stricter limit): arming checks them again.
         AutomationRules.validate(current.definition, now)
-        requireProfile(actor.teamId, actor.member, current.definition)
+        requireAction(actor.teamId, actor.member, current.definition)
         return store.setEnabled(actor, id, true, AutomationRules.nextRun(current.definition, now))
     }
 
@@ -144,9 +151,9 @@ class AutomationService(
         store.revalidate(actor)
         val now = store.now()
         AutomationRules.validate(definition, now)
-        val profile = requireProfile(actor.teamId, actor.member, definition)
+        val profileVersion = requireAction(actor.teamId, actor.member, definition)
         val draft = Automation(PREVIEW_ID, actor.teamId, actor.member.id, actor.member.username, definition, false, DISABLED, null, 0, null, 0, null, now, null, now, now)
-        return render(draft, payload, RunSource.TEST, now, profile.version, wouldSkip = null)
+        return render(draft, payload, RunSource.TEST, now, profileVersion, wouldSkip = null)
     }
 
     /**
@@ -165,8 +172,8 @@ class AutomationService(
         val now = store.now()
         if (dryRun) {
             val owner = store.member(actor.teamId, automation.ownerId) ?: throw missing()
-            val profile = requireProfile(actor.teamId, owner, automation.definition)
-            val preview = render(automation, payload, RunSource.TEST, now, profile.version, wouldSkip = if (!automation.enabled) DISABLED else store.wouldSkip(id))
+            val profileVersion = requireAction(actor.teamId, owner, automation.definition)
+            val preview = render(automation, payload, RunSource.TEST, now, profileVersion, wouldSkip = if (!automation.enabled) DISABLED else store.wouldSkip(id))
             store.auditPreview(actor, id)
             return TestOutcome.Preview(preview)
         }
@@ -224,6 +231,16 @@ class AutomationService(
         return store.requestCancel(actor, id, runId)
     }
 
+    /** The action's references: the profile (and its version) of a cloud action; the workflow, its inputs and the optional profile of a workflow action. */
+    private suspend fun requireAction(teamId: String, owner: Member, definition: AutomationDefinition): Int? {
+        val action = definition.action
+        if (action.kind != ActionKind.WORKFLOW) return requireProfile(teamId, owner, definition).version
+        val workflow = directory.workflow(teamId, action.workflowId!!)
+            ?: throw AutomationRules.invalid("No workflow has this id: it was deleted, or is not in this team. List them with GET /api/v1/workflows.")
+        AutomationRules.checkWorkflowInputs(action, workflow.definition)
+        return action.profileId?.let { requireProfile(teamId, owner, definition).version }
+    }
+
     private suspend fun requireProfile(teamId: String, owner: Member, definition: AutomationDefinition): CloudProfile {
         val profile = definition.action.profileId?.let { directory.profile(teamId, it) }
             ?: throw TeamFailure("profile_not_found", 404, "No profile has this id. List the profiles you can use with GET /api/v1/cloud/profiles.")
@@ -234,9 +251,11 @@ class AutomationService(
     private fun render(automation: Automation, payload: JsonObject?, source: RunSource, now: Long, profileVersion: Int?, wouldSkip: String?): AutomationPreview {
         val extraction = AutomationTemplate.extract(automation.definition.variables, payload)
         val values = extraction.values + runVariables(automation, PREVIEW_RUN, source, now)
-        val prompt = if (extraction.problems.isEmpty()) AutomationTemplate.render(automation.definition.prompt, values) else null
+        val workflow = automation.definition.action.kind == ActionKind.WORKFLOW
+        val prompt = if (extraction.problems.isEmpty() && !workflow) AutomationTemplate.render(automation.definition.prompt, values) else null
+        val inputs = if (extraction.problems.isEmpty() && workflow) AutomationRules.renderInputs(automation.definition.action.inputs, values) else emptyMap()
         val nextRuns = automation.definition.trigger.takeIf { it.kind == TriggerKind.CRON }?.let { CronSchedule.parse(it.cron!!, it.timezone!!, now).upcoming(now, 3) }.orEmpty()
-        return AutomationPreview(prompt, extraction.extracted, extraction.problems, profileVersion, wouldSkip, nextRuns)
+        return AutomationPreview(prompt, extraction.extracted, extraction.problems, profileVersion, wouldSkip, nextRuns, inputs)
     }
 
     private fun newSecret() = "whsec_" + Base64.getUrlEncoder().withoutPadding().encodeToString(random())
@@ -278,7 +297,10 @@ fun prepareRun(automation: Automation, source: RunSource, deliveryKey: String, p
     val extraction = if (notObject) AutomationExtraction(emptyMap(), emptyList(), listOf(VariableProblem("$", "not_object")))
         else AutomationTemplate.extract(automation.definition.variables, payload)
     val invalid = extraction.problems.isNotEmpty()
-    val prompt = if (invalid) null else AutomationTemplate.render(automation.definition.prompt, extraction.values + AutomationService.runVariables(automation, id, source, scheduledFor ?: at))
+    val values = extraction.values + AutomationService.runVariables(automation, id, source, scheduledFor ?: at)
+    // A workflow action keeps its rendered inputs, as JSON, where a session action keeps its rendered prompt: until the run starts.
+    val prompt = if (invalid) null else if (automation.definition.action.kind == ActionKind.WORKFLOW) AutomationRules.encodeInputs(AutomationRules.renderInputs(automation.definition.action.inputs, values))
+        else AutomationTemplate.render(automation.definition.prompt, values)
     return PreparedRun(NewRun(id, automation.id, source, deliveryKey, if (invalid) RunStatus.INVALID_PAYLOAD else RunStatus.QUEUED, if (invalid) "invalid_payload" else null,
         prompt, scheduledFor, extraction.extracted, AutomationTemplate.digest(extraction.values), actor?.member?.id, actor?.tokenId, requestDigest), extraction.problems)
 }

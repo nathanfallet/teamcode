@@ -18,13 +18,18 @@ fun automation(id: String = "au1", definition: AutomationDefinition = cronDefini
     if (definition.trigger.kind == TriggerKind.WEBHOOK) AutomationWebhook("/api/v1/automations/$id/trigger", "/api/v1/automations/$id/v/$version/trigger", 1L) else null, 1L, 1L,
 )
 
+fun workflowAutomationDefinition(name: String = "Triage") = AutomationDefinition(
+    name, AutomationTrigger(TriggerKind.WEBHOOK), AutomationAction(ActionKind.WORKFLOW, null, workflowId = "wf1", inputs = mapOf("ticket" to "T-{{ticket.number}}")), "",
+    variables = listOf(AutomationVariable("ticket.number", "$.ticket.number", "int")),
+)
+
 fun summary(id: String = "au1", name: String = "Evening PR summary", ownerId: String = "m1", enabled: Boolean = true, failures: Int = 0, trigger: AutomationTrigger = cronDefinition().trigger) = AutomationSummary(
     id, ownerId, "Ada", name, enabled, if (enabled) null else "disabled", 1, trigger, ActionKind.CLOUD, if (enabled) 5_000_000L else null,
     RunSummary("r1", RunSource.CRON, "succeeded", 900_000L), failures, 1L,
 )
 
-fun run(id: String = "r1", source: RunSource = RunSource.CRON, status: String = "succeeded", sessionId: String? = "s1", reason: String? = null) = AutomationRun(
-    id, "au1", 1, source, status, reason, sessionId, null, 1_000_000L, null, null, false, emptyList(),
+fun run(id: String = "r1", source: RunSource = RunSource.CRON, status: String = "succeeded", sessionId: String? = "s1", reason: String? = null, workflowRunId: String? = null) = AutomationRun(
+    id, "au1", 1, source, status, reason, sessionId, null, 1_000_000L, null, null, false, emptyList(), workflowRunId,
 )
 
 /** Automations answered from memory; every call is recorded in [calls]. */

@@ -11,6 +11,13 @@ import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.automations.RunPage
+import me.nathanfallet.teamcode.domain.workflows.NodeKind
+import me.nathanfallet.teamcode.domain.workflows.SessionMode
+import me.nathanfallet.teamcode.domain.workflows.Transition
+import me.nathanfallet.teamcode.domain.workflows.Workflow
+import me.nathanfallet.teamcode.domain.workflows.WorkflowDefinition
+import me.nathanfallet.teamcode.domain.workflows.WorkflowInput
+import me.nathanfallet.teamcode.domain.workflows.WorkflowNode
 import kotlin.test.*
 
 /** The automation routes decode, authorize by credential and encode; the rules are the domain's (AutomationService). */
@@ -54,6 +61,7 @@ class AutomationRoutesTest {
         override suspend fun retry(runId: String, at: Long) = Unit
         override suspend fun busy(automationId: String) = false
         override suspend fun started(runId: String, sessionId: String, profileVersion: Int) = true
+        override suspend fun startedWorkflow(runId: String, workflowRunId: String) = true
         override suspend fun running(runId: String) = Unit
         override suspend fun finish(runId: String, status: RunStatus, reason: String?) = Unit
         override suspend fun disableBySystem(automationId: String, reason: String) = Unit
@@ -67,6 +75,8 @@ class AutomationRoutesTest {
         override suspend fun profile(teamId: String, profileId: String) =
             CloudProfile("p1", teamId, "dev", 4, CloudProfileSpec("c1", "ns", "image"), setOf("admin-id", "member-id"), 0, 0).takeIf { profileId == "p1" }
         override suspend fun settings(teamId: String) = CloudSettings()
+        override suspend fun workflow(teamId: String, workflowId: String) = Workflow("wf1", teamId, 3, WorkflowDefinition("Triage", null, "a", SessionMode.SAME,
+            listOf(WorkflowInput("ticket", "Ticket")), listOf(WorkflowNode("a", NodeKind.AGENT, "Work", "Do {{inputs.ticket}}", transitions = listOf(Transition("done"))))), 0, 0, null).takeIf { workflowId == "wf1" }
     }
     private val sealer = object : SecretSealer {
         override fun seal(plaintext: ByteArray, context: String) = "$context|" + plaintext.decodeToString()
@@ -121,6 +131,34 @@ class AutomationRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/automations/$id/runs?status=done", "admin").status)
         assertEquals("invalid_automation", Serialization.json.decodeFromString<ApiError>(call(HttpMethod.Post, "/api/v1/automations", "admin",
             webhook.replace("\"allow\"", "\"sometimes\"")).bodyAsText()).error.type)
+    }
+
+    @Test fun aWorkflowActionIsSavedRenderedAndLinkedToItsWorkflowRun() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), automations = AutomationService(store, directory, sealer)) }
+        suspend fun call(method: HttpMethod, path: String, json: String? = null, headers: Map<String, String> = emptyMap()) = client.request(path) {
+            this.method = method; bearerAuth("admin"); headers.forEach { (k, v) -> header(k, v) }
+            if (json != null) { contentType(ContentType.Application.Json); setBody(json) }
+        }
+        val definition = """{"automation":{"name":"Triage","trigger":{"kind":"webhook"},"action":{"kind":"workflow","workflowId":"wf1","profileId":"p1","inputs":{"ticket":"T-{{ticket}}"}},
+            |"variables":[{"name":"ticket","path":"$.ticket","type":"int"}],"overlap":"allow"}}""".trimMargin()
+        val created = call(HttpMethod.Post, "/api/v1/automations", definition)
+        assertEquals(HttpStatusCode.Created, created.status, created.bodyAsText())
+        val view = Serialization.json.decodeFromString<CreatedAutomationView>(created.bodyAsText()).automation
+        assertEquals("workflow", view.action.kind); assertEquals("wf1", view.action.workflowId); assertEquals(mapOf("ticket" to "T-{{ticket}}"), view.action.inputs); assertEquals("", view.prompt)
+        assertEquals("workflow", Serialization.json.decodeFromString<AutomationPageView>(call(HttpMethod.Get, "/api/v1/automations").bodyAsText()).automations.single().actionKind)
+        val dry = Serialization.json.decodeFromString<AutomationPreviewView>(call(HttpMethod.Post, "/api/v1/automations/${view.id}/run", """{"payload":{"ticket":7},"dryRun":true}""").bodyAsText())
+        assertEquals(mapOf("ticket" to "T-7"), dry.renderedInputs); assertNull(dry.renderedPrompt)
+        val draft = Serialization.json.decodeFromString<AutomationPreviewView>(call(HttpMethod.Post, "/api/v1/automations/preview", definition.replace("{\"automation\":", "{\"payload\":{\"ticket\":9},\"automation\":")).bodyAsText())
+        assertEquals(mapOf("ticket" to "T-9"), draft.renderedInputs)
+        // Refusals name the input; an unknown workflow is the same error.
+        for ((change, word) in listOf("\"inputs\":{\"ticket\"" to "\"inputs\":{\"colour\":\"x\",\"ticket\"", "\"workflowId\":\"wf1\"" to "\"workflowId\":\"nope\"", "\"inputs\":{\"ticket\":\"T-{{ticket}}\"}" to "\"inputs\":{}")) {
+            val refused = call(HttpMethod.Post, "/api/v1/automations", definition.replace(change, word))
+            assertEquals(HttpStatusCode.BadRequest, refused.status); assertEquals("invalid_automation", Serialization.json.decodeFromString<ApiError>(refused.bodyAsText()).error.type)
+        }
+        val real = call(HttpMethod.Post, "/api/v1/automations/${view.id}/run", """{"payload":{"ticket":7}}""", mapOf("Idempotency-Key" to "k1"))
+        assertEquals(HttpStatusCode.Accepted, real.status)
+        assertNull(Serialization.json.decodeFromString<AutomationRunView>(real.bodyAsText()).workflowRunId, "not started yet")
     }
 
     @Test fun theWebhookNeedsNoLoginButItsProofAndKeysAreLimitedToTheirScope() = testApplication {

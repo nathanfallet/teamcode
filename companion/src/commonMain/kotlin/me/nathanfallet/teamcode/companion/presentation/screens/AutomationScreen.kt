@@ -36,6 +36,7 @@ import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ArrowsClockwise
 import com.adamglin.phosphoricons.regular.Copy
 import com.adamglin.phosphoricons.regular.PencilSimple
+import me.nathanfallet.teamcode.companion.domain.models.ActionKind
 import me.nathanfallet.teamcode.companion.domain.models.Automation
 import me.nathanfallet.teamcode.companion.domain.models.AutomationRun
 import me.nathanfallet.teamcode.companion.domain.models.TriggerKind
@@ -77,6 +78,8 @@ fun AutomationScreen(
     onTest: (Automation) -> Unit,
     onOpenSession: (String) -> Unit,
     onDeleted: () -> Unit,
+    /** Opens the workflow run a run of a workflow action started. */
+    onOpenWorkflowRun: (String) -> Unit = {},
     backLabel: String = stringResource(Res.string.automations_title),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -117,9 +120,9 @@ fun AutomationScreen(
                 Overview(automation, state, now, onToggle = viewModel::toggle, onTest = { onTest(automation) })
                 TriggerCard(automation, state, now, viewModel, onRotate = { confirmRotate = true })
                 ActionCard(automation, state)
-                PromptCard(automation)
+                if (automation.definition.action.kind == ActionKind.WORKFLOW) InputsCard(automation) else PromptCard(automation)
                 if (automation.definition.variables.isNotEmpty()) VariablesCard(automation)
-                History(state, viewModel, onOpenSession)
+                History(state, viewModel, onOpenSession, onOpenWorkflowRun)
                 if (state.canDelete) TcButton(stringResource(Res.string.automation_delete), onClick = { confirmDelete = true }, kind = ButtonKind.DANGER, enabled = !state.busy, modifier = Modifier.testTag("automation-delete"))
             }
         }
@@ -217,7 +220,9 @@ private fun ActionCard(automation: Automation, state: AutomationUiState) {
     val action = automation.definition.action
     SectionTitle(stringResource(Res.string.automation_section_action))
     TcCard {
-        val line = listOfNotNull(
+        val line = if (action.kind == ActionKind.WORKFLOW) listOfNotNull(
+            stringResource(Res.string.automation_action_workflow_line, state.workflowName ?: action.workflowId.orEmpty()), state.profileName?.let { stringResource(Res.string.automation_action_profile, it) },
+        ) else listOfNotNull(
             stringResource(Res.string.automation_action_cloud), state.profileName?.let { stringResource(Res.string.automation_action_profile, it) },
             action.model, action.effort, stringResource(Res.string.automation_action_max_runtime, action.maxRuntimeMinutes),
         )
@@ -231,6 +236,21 @@ private fun PromptCard(automation: Automation) {
     SectionTitle(stringResource(Res.string.automation_section_prompt))
     TcCard {
         SelectionContainer { Text(automation.definition.prompt, style = MonospaceStyle, color = TeamCode.colors.text, modifier = Modifier.testTag("automation-prompt")) }
+    }
+}
+
+/** The text of each input of a workflow action (a template: `{{name}}` is replaced at each run). */
+@Composable
+private fun InputsCard(automation: Automation) {
+    val colors = TeamCode.colors
+    SectionTitle(stringResource(Res.string.automation_inputs_title))
+    TcCard(Modifier.testTag("automation-inputs")) {
+        val inputs = automation.definition.action.inputs
+        if (inputs.isEmpty()) Text(stringResource(Res.string.automation_inputs_none), color = colors.muted, fontSize = 13.sp)
+        inputs.forEach { (id, text) ->
+            Text(id, style = MetaStyle, color = colors.muted)
+            SelectionContainer { Text(text, style = MonospaceStyle, color = colors.text, modifier = Modifier.testTag("automation-input-$id")) }
+        }
     }
 }
 
@@ -253,7 +273,7 @@ internal fun overlapWords(overlap: String) = when (overlap) {
 }
 
 @Composable
-private fun History(state: AutomationUiState, viewModel: AutomationViewModel, onOpenSession: (String) -> Unit) {
+private fun History(state: AutomationUiState, viewModel: AutomationViewModel, onOpenSession: (String) -> Unit, onOpenWorkflowRun: (String) -> Unit) {
     val colors = TeamCode.colors
     SectionTitle(stringResource(Res.string.automation_section_history))
     Segmented(
@@ -262,7 +282,7 @@ private fun History(state: AutomationUiState, viewModel: AutomationViewModel, on
     )
     state.runsError?.let { Banner(it.words(), Tone.DANGER, Modifier.testTag("automation-runs-error")) }
     Column(Modifier.testTag("automation-runs"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        state.runs.forEach { run -> RunRow(run, canCancel = state.canDelete && !state.busy, onOpenSession = onOpenSession, onCancel = { viewModel.cancelRun(run) }) }
+        state.runs.forEach { run -> RunRow(run, canCancel = state.canDelete && !state.busy, onOpenSession = onOpenSession, onOpenWorkflowRun = onOpenWorkflowRun, onCancel = { viewModel.cancelRun(run) }) }
     }
     BusyRow(state.runsLoading)
     if (!state.runsLoading && state.runsError == null && state.runs.isEmpty()) Text(stringResource(Res.string.automation_history_empty), color = colors.muted, fontSize = 14.sp, modifier = Modifier.testTag("automation-runs-empty"))
@@ -271,7 +291,7 @@ private fun History(state: AutomationUiState, viewModel: AutomationViewModel, on
 
 /** One run: when, from what, its status and reason, its session, and the cancel of a waiting or working one. */
 @Composable
-private fun RunRow(run: AutomationRun, canCancel: Boolean, onOpenSession: (String) -> Unit, onCancel: () -> Unit) {
+private fun RunRow(run: AutomationRun, canCancel: Boolean, onOpenSession: (String) -> Unit, onOpenWorkflowRun: (String) -> Unit, onCancel: () -> Unit) {
     val colors = TeamCode.colors
     TcCard(Modifier.testTag("run-${run.id}"), padding = 10.dp, spacing = 5.dp) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), itemVerticalAlignment = Alignment.CenterVertically) {
@@ -282,6 +302,7 @@ private fun RunRow(run: AutomationRun, canCancel: Boolean, onOpenSession: (Strin
         runReasonWords(run.reason)?.let { Text(it, color = colors.muted, fontSize = 13.sp, modifier = Modifier.testTag("run-reason-${run.id}")) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             run.sessionId?.let { TcButton(stringResource(Res.string.automation_open_session), onClick = { onOpenSession(it) }, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("run-session-${run.id}")) }
+            run.workflowRunId?.let { TcButton(stringResource(Res.string.automation_open_workflow_run), onClick = { onOpenWorkflowRun(it) }, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("run-workflow-${run.id}")) }
             if (run.cancellable && canCancel) TcButton(stringResource(Res.string.automation_cancel_run), onClick = onCancel, kind = ButtonKind.DANGER, small = true, modifier = Modifier.testTag("run-cancel-${run.id}"))
         }
     }

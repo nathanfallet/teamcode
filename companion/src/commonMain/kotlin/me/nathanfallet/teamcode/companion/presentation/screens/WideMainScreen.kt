@@ -432,6 +432,7 @@ fun WideMainScreen(
                             onEdit = { detail.navigate(AutomationEditRoute(route.accountId, it.id)) },
                             onTest = { detail.navigate(AutomationTestRoute(route.accountId, it.id)) },
                             onOpenSession = { detail.navigate(SessionRoute(route.accountId, it)) },
+                            onOpenWorkflowRun = { detail.navigate(WorkflowRunRoute(route.accountId, it)) },
                             onDeleted = { show(AutomationsRoute(route.accountId)) })
                     }
                     composable<AutomationEditRoute> { entry ->
@@ -445,7 +446,8 @@ fun WideMainScreen(
                     composable<AutomationTestRoute> { entry ->
                         val route = entry.toRoute<AutomationTestRoute>()
                         val viewModel: AutomationTestViewModel = koinViewModel { parametersOf(route) }
-                        AutomationTestScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onOpenSession = { detail.navigate(SessionRoute(route.accountId, it)) })
+                        AutomationTestScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onOpenSession = { detail.navigate(SessionRoute(route.accountId, it)) },
+                            onOpenWorkflowRun = { detail.navigate(WorkflowRunRoute(route.accountId, it)) })
                     }
                     composable<AccountRoute> {
                         AccountScreen(onAddAccount = onAddAccount, onSignInAgain = onSignInAgain, onSwitchAccount = { sheets.switcher = true },

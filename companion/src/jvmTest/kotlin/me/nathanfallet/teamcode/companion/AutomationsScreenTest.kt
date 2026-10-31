@@ -16,6 +16,9 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.*
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.GetWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowAccess
 import me.nathanfallet.teamcode.companion.presentation.navigation.*
 import me.nathanfallet.teamcode.companion.presentation.screens.*
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCodeTheme
@@ -27,7 +30,7 @@ import kotlin.test.*
 class AutomationsScreenTest {
     private val repository = FakeAutomationRepository()
     private val sessions = FakeSessionRepository().also { it.profileList = listOf(Profile("p1", "support", "claude")) }
-    private val features = FakeFeatures(setOf("automations.v1", "cloud.sessions.v1"))
+    private val features = FakeFeatures(setOf("automations.v1", "cloud.sessions.v1", "workflows.v1"))
     private val secrets = AutomationSecrets()
     private val accounts = InMemoryAccountRepository(listOf(account()))
     private var role: String
@@ -35,6 +38,8 @@ class AutomationsScreenTest {
         set(value) = accounts.save(account().copy(role = value))
     private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
     private val access = AutomationAccess(repository, features, accounts, guard)
+    private val workflows = FakeWorkflowRepository()
+    private val workflowAccess = WorkflowAccess(workflows, features, accounts, guard)
 
     // The screens read the clock for their relative times.
     @BeforeTest fun startKoin() { org.koin.core.context.startKoin { modules(org.koin.dsl.module { single<me.nathanfallet.teamcode.companion.domain.services.Clock> { FixedClock(1_000_000L) } }) } }
@@ -42,8 +47,8 @@ class AutomationsScreenTest {
 
     private fun list() = AutomationsViewModel(AutomationsRoute("a1"), LoadAutomationsUseCase(access), SetAutomationEnabledUseCase(access), DeleteAutomationUseCase(access), accounts)
     private fun page() = AutomationViewModel(AutomationRoute("a1", "au1"), GetAutomationUseCase(access), SetAutomationEnabledUseCase(access), DeleteAutomationUseCase(access),
-        RotateAutomationSecretUseCase(access), LoadAutomationRunsUseCase(access), CancelAutomationRunUseCase(access), secrets, LoadProfilesUseCase(sessions, features, guard), accounts)
-    private fun form() = AutomationEditViewModel(AutomationEditRoute("a1"), GetAutomationUseCase(access), LoadProfilesUseCase(sessions, features, guard), SaveAutomationUseCase(access), PreviewAutomationUseCase(access), secrets, accounts)
+        RotateAutomationSecretUseCase(access), LoadAutomationRunsUseCase(access), CancelAutomationRunUseCase(access), secrets, LoadProfilesUseCase(sessions, features, guard), GetWorkflowUseCase(workflowAccess), accounts)
+    private fun form() = AutomationEditViewModel(AutomationEditRoute("a1"), GetAutomationUseCase(access), LoadProfilesUseCase(sessions, features, guard), LoadWorkflowsUseCase(workflowAccess), SaveAutomationUseCase(access), PreviewAutomationUseCase(access), secrets, accounts)
     private fun test() = AutomationTestViewModel(AutomationTestRoute("a1", "au1"), GetAutomationUseCase(access), PreviewAutomationUseCase(access), TestAutomationUseCase(access), SequenceIds(), accounts)
 
     private fun ComposeUiTest.assertTagged(tag: String, text: String) {
@@ -129,6 +134,36 @@ class AutomationsScreenTest {
         onNodeWithTag("automation-history-no-tests").performScrollTo().performClick()
         waitUntil { model.uiState.value.runs.size == 1 }
         onNodeWithTag("run-r2").assertDoesNotExist()
+    }
+
+    @Test fun aWorkflowAutomationShowsItsInputsAndOpensTheRunOfEachWorkflowRun() = runComposeUiTest {
+        repository.current = automation(enabled = true, definition = workflowAutomationDefinition())
+        repository.runs = listOf(run("r1", RunSource.WEBHOOK, "running", sessionId = null, workflowRunId = "wr1"), run("r2", RunSource.WEBHOOK, "failed", sessionId = null, reason = "workflow_missing"))
+        val model = page()
+        val opened = mutableListOf<String>()
+        setContent { TeamCodeTheme { AutomationScreen(model, onBack = {}, onEdit = {}, onTest = {}, onOpenSession = {}, onDeleted = {}, onOpenWorkflowRun = { opened += it }) } }
+        waitUntil { model.uiState.value.runs.isNotEmpty() && model.uiState.value.workflowName != null }
+        assertTagged("automation-action", "workflow Fix a ticket")
+        assertTagged("automation-input-ticket", "T-{{ticket.number}}")
+        onNodeWithTag("automation-prompt").assertDoesNotExist()
+        onNodeWithTag("run-session-r1").assertDoesNotExist()
+        onNodeWithTag("run-workflow-r2").assertDoesNotExist()
+        assertTagged("run-reason-r2", "the workflow no longer exists")
+        onNodeWithTag("run-workflow-r1").performScrollTo().performClick()
+        assertEquals(listOf("wr1"), opened)
+    }
+
+    @Test fun theFormOffersTheWorkflowsAndGeneratesTheInputFields() = runComposeUiTest {
+        val model = form()
+        setContent { TeamCodeTheme { AutomationEditScreen(model, onBack = {}, onSaved = {}) } }
+        waitUntil { !model.uiState.value.loading }
+        onNodeWithTag("automation-prompt").performScrollTo().assertExists()
+        onNodeWithTag("automation-action-workflow").performScrollTo().performClick()
+        onNodeWithTag("automation-prompt").assertDoesNotExist()
+        onNodeWithTag("automation-workflow-wf1").performScrollTo().performClick()
+        onNodeWithTag("automation-input-ticket").performScrollTo().performTextInput("T-{{ticket.number}}")
+        onNodeWithTag("automation-input-notes").performScrollTo().assertExists()
+        assertEquals("T-{{ticket.number}}", model.uiState.value.form.inputs["ticket"])
     }
 
     @Test fun anAdministratorsPageOfAMembersAutomationHasNoEditNorRealTest() = runComposeUiTest {

@@ -104,6 +104,7 @@ private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when
     InvalidInput.Problem.AUTOMATION_PAYLOAD -> Res.string.input_automation_payload to emptyList()
     InvalidInput.Problem.AUTOMATION_LIMITS -> Res.string.input_automation_limits to emptyList()
     InvalidInput.Problem.AUTOMATION_NOT_OWNER -> Res.string.input_automation_not_owner to emptyList()
+    InvalidInput.Problem.AUTOMATION_WORKFLOW -> Res.string.input_automation_workflow to emptyList()
     InvalidInput.Problem.WORKFLOW_INPUT_REQUIRED -> Res.string.input_workflow_input_required to emptyList()
     InvalidInput.Problem.WORKFLOW_INPUT_LENGTH -> Res.string.input_workflow_input_length to listOf(limit)
     InvalidInput.Problem.WORKFLOW_NOT_STARTER -> Res.string.input_workflow_not_starter to emptyList()

@@ -4,6 +4,8 @@ import kotlinx.coroutines.*
 import me.nathanfallet.teamcode.domain.automations.*
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.workflows.WorkflowRunService
+import me.nathanfallet.teamcode.domain.workflows.WorkflowService
 import me.nathanfallet.teamcode.infrastructure.database.*
 import me.nathanfallet.teamcode.infrastructure.database.Database
 import me.nathanfallet.teamcode.infrastructure.database.tables.CloudSessions
@@ -26,10 +28,14 @@ class AutomationReplica(val database: Database, val cluster: FakeClusterPort, ci
     val runner = RunnerChannelUseCase(sessionStore)
     val agent = RunnerConversationUseCase(sessionStore, conversations, { _, _ -> false }, sleep = { delay(1) })
     val store = SqlAutomationStore(database)
-    val directory = AutomationDirectory.Cloud(sessionStore)
+    val workflowStore = SqlWorkflowStore(database)
+    val workflowRunStore = SqlWorkflowRunStore(database)
+    val workflowDefinitions = WorkflowService(workflowStore)
+    val workflowRuns = WorkflowRunService(workflowRunStore)
+    val directory = AutomationDirectory.Cloud(sessionStore, workflowStore)
     val automations = AutomationService(store, directory, CipherSecretSealer(cipher))
     val scheduler = ScheduleAutomationsUseCase(store)
-    val dispatcher = DispatchAutomationRunsUseCase(store, CloudAutomationSessions(sessions), directory)
+    val dispatcher = DispatchAutomationRunsUseCase(store, CloudAutomationSessions(sessions), directory, WorkflowRunAutomations(workflowRuns, workflowRunStore))
 }
 
 /** Two replicas over one MySQL 8.4, an administrator, a member and a profile assigned to the member. */

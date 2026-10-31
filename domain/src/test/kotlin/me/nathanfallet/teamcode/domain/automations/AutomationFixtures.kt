@@ -2,6 +2,9 @@ package me.nathanfallet.teamcode.domain.automations
 
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.team.*
+import me.nathanfallet.teamcode.domain.workflows.ChildState
+import me.nathanfallet.teamcode.domain.workflows.Workflow
+import me.nathanfallet.teamcode.domain.workflows.RunStatus as WorkflowRunStatus
 
 /** In-memory persistence for the rules; the SQL behaviour is proven on MySQL by `AutomationPersistenceTest`. */
 class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationStore {
@@ -95,7 +98,7 @@ class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationSt
     }
     override suspend fun claimQueued(limit: Int, leaseMillis: Long) = runs.values.filter { it.status == RunStatus.QUEUED && (attempts[it.id] ?: 0) <= clock }.take(limit)
         .map { attempts[it.id] = clock + leaseMillis; DispatchableRun(it, automations.getValue(it.automationId), prompts[it.id]) }
-    override suspend fun working(teamId: String, ownerId: String) = runs.values.count { it.ownerId == ownerId && it.status in RunStatus.WORKING }
+    override suspend fun working(teamId: String, ownerId: String) = runs.values.count { it.ownerId == ownerId && it.status in RunStatus.WORKING && it.workflowRunId == null }
     override suspend fun ownerPrincipal(automationId: String): Principal? {
         if (automationId in revoked) return null
         val automation = automations[automationId] ?: return null
@@ -107,6 +110,15 @@ class MemoryAutomationStore(var clock: Long = 1_800_000_000_000L) : AutomationSt
     override suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean {
         if (runs.getValue(runId).status != RunStatus.QUEUED) { runs[runId] = runs.getValue(runId).copy(sessionId = sessionId); return false }
         runs[runId] = runs.getValue(runId).copy(status = RunStatus.STARTING, sessionId = sessionId, profileVersion = profileVersion, startedAt = clock); prompts -= runId
+        return true
+    }
+    override suspend fun startedWorkflow(runId: String, workflowRunId: String): Boolean {
+        val run = runs.getValue(runId)
+        if (run.status != RunStatus.QUEUED) {
+            val linked = run.workflowRunId ?: workflowRunId.also { runs[runId] = run.copy(workflowRunId = it) }
+            return linked == workflowRunId && !run.status.final
+        }
+        runs[runId] = run.copy(status = RunStatus.STARTING, workflowRunId = workflowRunId, startedAt = clock); prompts -= runId
         return true
     }
     override suspend fun running(runId: String) { runs[runId] = runs.getValue(runId).copy(status = RunStatus.RUNNING) }
@@ -163,7 +175,23 @@ class FakeAutomationSessions(private val store: MemoryAutomationStore) : Automat
     val gone = mutableSetOf<String>()
 }
 
+/** Records the workflow runs started: one per idempotency key, as the run service does. */
+class FakeAutomationWorkflows : AutomationWorkflows {
+    val started = linkedMapOf<String, Pair<String, Map<String, String>>>()
+    val cancelled = mutableListOf<String>()
+    val states = mutableMapOf<String, ChildState>()
+    var failure: TeamFailure? = null
+    override suspend fun start(owner: Principal, automation: Automation, inputs: Map<String, String>, idempotencyKey: String): String {
+        failure?.let { throw it }
+        return started.getOrPut(idempotencyKey) { "wf-run-${started.size + 1}" to inputs }.first.also { states.putIfAbsent(it, ChildState(WorkflowRunStatus.RUNNING, null)) }
+    }
+    override suspend fun cancel(owner: Principal, workflowRunId: String) { cancelled += workflowRunId }
+    override suspend fun states(ids: Set<String>) = states.filterKeys { it in ids }
+}
+
 class FakeDirectory(var settings: CloudSettings = CloudSettings()) : AutomationDirectory {
+    val workflows = mutableMapOf<String, Workflow>()
+    override suspend fun workflow(teamId: String, workflowId: String) = workflows[workflowId]
     val profiles = mutableMapOf("p1" to CloudProfile("p1", "team", "dev", 3, CloudProfileSpec("c1", "ns", "image"), setOf("ada"), 0, 0))
     override suspend fun profile(teamId: String, profileId: String) = profiles[profileId]
     override suspend fun settings(teamId: String) = settings
@@ -188,7 +216,8 @@ object Fixtures {
         val sessions = FakeAutomationSessions(store)
         private var secrets = 0
         val service = AutomationService(store, directory, sealer, random = { secrets++; ByteArray(32) { secrets.toByte() } })
-        val dispatcher = DispatchAutomationRunsUseCase(store, sessions, directory)
+        val workflows = FakeAutomationWorkflows()
+        val dispatcher = DispatchAutomationRunsUseCase(store, sessions, directory, workflows)
         val scheduler = ScheduleAutomationsUseCase(store)
     }
 }

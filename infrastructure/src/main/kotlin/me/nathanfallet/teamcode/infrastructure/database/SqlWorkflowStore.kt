@@ -99,6 +99,9 @@ class SqlWorkflowStore(private val database: Database) : WorkflowStore {
             val users = Workflows.select(Workflows.name, Workflows.definition).where { (Workflows.teamId eq actor.teamId) and (Workflows.id neq id) }
                 .filter { r -> WorkflowJson.definition(r[Workflows.definition]).nodes.any { it.workflowId == id } }
             if (users.isNotEmpty()) throw TeamFailure("workflow_in_use", 409, "Workflow ${users.first()[Workflows.name]} calls this one. Change it first.")
+            // An automation that starts it: the same refusal as a workflow that calls it (a deleted workflow would fail every run, and silently).
+            Automations.select(Automations.name).where { (Automations.workflowId eq id) and (Automations.teamId eq actor.teamId) }.limit(1).singleOrNull()
+                ?.let { throw TeamFailure("workflow_in_use", 409, "Automation ${it[Automations.name]} starts this workflow. Change or delete it first.") }
             Workflows.deleteWhere { (Workflows.id eq id) and (teamId eq actor.teamId) }
             audit(actor.teamId, actor.member.id, "workflow.deleted", id, null, actor.tokenId)
             workflow(row)

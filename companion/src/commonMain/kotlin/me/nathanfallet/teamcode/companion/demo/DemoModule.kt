@@ -3,6 +3,7 @@ package me.nathanfallet.teamcode.companion.demo
 import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.AutomationRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.AuthRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.DeviceRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository
@@ -18,6 +19,7 @@ import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.CachedFeaturesRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteArtifactRepository
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteAutomationRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteAuthRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteDeviceRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteGitHubLinkRepository
@@ -57,6 +59,7 @@ val demoModule = module {
     single<WaitRepository> { DemoAwareWaitRepository(get<RemoteWaitRepository>(), DemoWaitRepository(get())) }
     single<WorkflowRepository> { DemoAwareWorkflowRepository(get<RemoteWorkflowRepository>(), DemoWorkflowRepository(get())) }
     single<McpServerRepository> { DemoAwareMcpServerRepository(get<RemoteMcpServerRepository>(), DemoMcpServerRepository) }
+    single<AutomationRepository> { DemoAwareAutomationRepository(get<RemoteAutomationRepository>(), DemoAutomationRepository(get(), get())) }
 }
 
 /** "Try the demo" on the sign-in screen: offered only on a device without any account, so a demo never mixes with a real one. */

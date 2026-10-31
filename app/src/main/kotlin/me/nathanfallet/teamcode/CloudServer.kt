@@ -8,6 +8,7 @@ import me.nathanfallet.teamcode.domain.automations.AutomationService
 import me.nathanfallet.teamcode.domain.automations.CloudAutomationSessions
 import me.nathanfallet.teamcode.domain.automations.DispatchAutomationRunsUseCase
 import me.nathanfallet.teamcode.domain.automations.ScheduleAutomationsUseCase
+import me.nathanfallet.teamcode.domain.automations.WorkflowRunAutomations
 import me.nathanfallet.teamcode.domain.cloud.*
 import me.nathanfallet.teamcode.domain.github.GitHubLinkService
 import me.nathanfallet.teamcode.domain.github.ResolveGitHubAccessUseCase
@@ -102,7 +103,9 @@ class CloudServer(
 
     // Automations start sessions as their owner through the same service, so every creation rule applies to them.
     private val automationStore = SqlAutomationStore(database)
-    private val automationDirectory = AutomationDirectory.Cloud(store)
+    private val workflowStore = SqlWorkflowStore(database)
+    private val workflowRunStore = SqlWorkflowRunStore(database)
+    private val automationDirectory = AutomationDirectory.Cloud(store, workflowStore)
     val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
     /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
     val waits = WaitService(SqlWaitStore(database), object : WaitSessions {
@@ -110,8 +113,7 @@ class CloudServer(
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
     })
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
-    val workflows = WorkflowService(SqlWorkflowStore(database))
-    private val workflowRunStore = SqlWorkflowRunStore(database)
+    val workflows = WorkflowService(workflowStore)
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
     val workflowRuns = WorkflowRunService(workflowRunStore)
     private val workflowProgress = SqlWorkflowProgress(database)
@@ -134,7 +136,7 @@ class CloudServer(
         override suspend fun cancel(starter: Principal, id: String) { waits.cancel(starter, id) }
     })
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
-    private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory)
+    private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory, WorkflowRunAutomations(workflowRuns, workflowRunStore))
 
     private val reconciler = ReconcileCloudSessionsUseCase(store, cluster, startAllowed = { runtime.enabled }, onError = { session, error ->
         // Class and HTTP status only: messages from the cluster or the driver may echo request content.

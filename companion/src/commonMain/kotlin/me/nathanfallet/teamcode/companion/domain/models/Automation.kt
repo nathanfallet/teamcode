@@ -9,9 +9,9 @@ enum class TriggerKind(val wire: String) {
     companion object { fun of(wire: String) = entries.firstOrNull { it.wire == wire && it != UNKNOWN } ?: UNKNOWN }
 }
 
-/** What a run starts. `remote` is part of the contract but refused by the server until it can start one unattended. */
+/** What a run starts: a cloud session, or a run of a saved workflow. `remote` is part of the contract but refused by the server until it can start one unattended. */
 enum class ActionKind(val wire: String) {
-    CLOUD("cloud"), REMOTE("remote"), UNKNOWN("");
+    CLOUD("cloud"), REMOTE("remote"), WORKFLOW("workflow"), UNKNOWN("");
     companion object { fun of(wire: String) = entries.firstOrNull { it.wire == wire && it != ActionKind.UNKNOWN } ?: UNKNOWN }
 }
 
@@ -45,6 +45,9 @@ data class AutomationAction(
     val effort: String? = null,
     val maxRuntimeMinutes: Int = 60,
     val rawKind: String = kind.wire,
+    /** A workflow action: the saved workflow it starts and the text of its inputs (input id to a template over the payload and run variables). */
+    val workflowId: String? = null,
+    val inputs: Map<String, String> = emptyMap(),
 )
 
 /** A payload variable, written `{{name}}` in the prompt and read at [path] (`$.ticket.number`) of a webhook body. */
@@ -138,6 +141,8 @@ data class AutomationRun(
     val endedAt: Long?,
     val cancelRequested: Boolean,
     val variables: List<AutomationVariableValue>,
+    /** The workflow run a workflow action started: the run to open. */
+    val workflowRunId: String? = null,
 ) {
     val final: Boolean get() = status in FINAL_STATUSES
     /** A waiting or working run can be withdrawn. */
@@ -162,6 +167,8 @@ data class AutomationPreview(
     val problems: List<AutomationProblem>,
     val wouldSkip: String?,
     val nextRuns: List<Long>,
+    /** A workflow action's inputs as the run would get them (instead of a prompt). */
+    val renderedInputs: Map<String, String> = emptyMap(),
 )
 
 /** A payload typed by the member, as the object it must be: null when it is not a JSON object. */

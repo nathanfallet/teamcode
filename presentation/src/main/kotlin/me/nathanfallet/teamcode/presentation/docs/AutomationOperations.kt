@@ -33,7 +33,7 @@ private fun Operation.Builder.trigger(id: String, versioned: Boolean, secretUrl:
     }
 }
 
-/** Members' automations: cron and webhook triggers that start cloud sessions as their owner. */
+/** Members' automations: cron and webhook triggers that start cloud sessions, or workflow runs, as their owner. */
 internal fun ApiCatalog.automationOperations() {
     get("/api/v1/automations") {
         operationId = "listAutomations"; tag(ApiTags.AUTOMATIONS)
@@ -49,11 +49,12 @@ internal fun ApiCatalog.automationOperations() {
     post("/api/v1/automations") {
         operationId = "createAutomation"; tag(ApiTags.AUTOMATIONS)
         summary = "Create an automation"
-        description = "Created disabled. A webhook automation's secret is in the response once. $OWNER_TEXT"
+        description = "Created disabled. A webhook automation's secret is in the response once. The action starts a cloud session (`cloud`) or a run of a " +
+            "saved workflow (`workflow`: `workflowId` and `inputs`, each a template over the payload and run variables, checked against the workflow's inputs). $OWNER_TEXT"
         body<CreateAutomationRequest>("The definition.")
         responses {
             ok<CreatedAutomationView>("Created.", HttpStatusCode.Created)
-            badRequest("An invalid definition (`invalid_automation`).")
+            badRequest("An invalid definition (`invalid_automation`); for a workflow action also an unknown or deleted workflow, an unknown input or a required input without a value or default.")
             error(HttpStatusCode.Forbidden, "The profile is not assigned to the caller (`profile_unassigned`).")
             notFound("No such profile (`profile_not_found`).")
             conflict("The caller owns the team's maximum of automations (`automation_limit`).")
@@ -63,7 +64,7 @@ internal fun ApiCatalog.automationOperations() {
     post("/api/v1/automations/preview") {
         operationId = "previewAutomation"; tag(ApiTags.AUTOMATIONS)
         summary = "Check and render an unsaved definition"
-        description = "Renders the prompt with the payload as the caller's automation would, without saving anything."
+        description = "Renders the prompt (or the inputs of a workflow action) with the payload as the caller's automation would, without saving anything."
         body<PreviewAutomationRequest>("The draft and an optional payload.")
         responses { ok<AutomationPreviewView>("The rendered prompt, or the problems by path."); badRequest("An invalid definition (`invalid_automation`).") }
     }

@@ -29,6 +29,9 @@ internal class AutomationChanges(
     val clearModel: Boolean = false,
     val clearEffort: Boolean = false,
     val clearSamplePayload: Boolean = false,
+    /** A workflow action: the workflow to start, and its inputs (input id to template); the inputs given replace all the saved ones. */
+    val workflowId: String? = null,
+    val inputs: Map<String, String>? = null,
 )
 
 /**
@@ -55,20 +58,27 @@ internal fun applyChanges(base: AutomationInput?, changes: AutomationChanges): A
         AutomationTriggerView("webhook")
     }
     val previousAction = base?.action
-    val actionKind = changes.action ?: previousAction?.kind ?: "cloud"
+    val actionKind = changes.action ?: (if (changes.workflowId != null || changes.inputs != null) "workflow" else null) ?: previousAction?.kind ?: "cloud"
+    if (actionKind != "workflow" && (changes.workflowId != null || changes.inputs != null)) throw UsageError("--workflow and --input go with a workflow action, not --action $actionKind.")
     val profile = changes.profileId ?: previousAction?.profileId
     // `remote` is sent as is: the server refuses it (`not_available_yet`) and the CLI says what that means.
     if (actionKind == "cloud" && profile == null) throw UsageError("Use --profile ID|NAME (see teamcode cloud profiles).")
+    val workflow = actionKind == "workflow"
+    if (workflow && (changes.prompt != null || changes.model != null || changes.effort != null || changes.maxRuntimeMinutes != null))
+        throw UsageError("A workflow action has no prompt, model, effort or runtime: write the text of each workflow input with --input KEY=TEXT.")
     // The contract's own defaults (runtime, overlap, daily budget) apply to what is not given: no literal is repeated here.
-    val action = AutomationActionView(actionKind, if (actionKind == "cloud") profile else null).let { fresh ->
+    val action = if (workflow) AutomationActionView("workflow", profile, workflowId = changes.workflowId ?: previousAction?.workflowId?.takeIf { previousAction.kind == "workflow" }
+            ?: throw UsageError("Use --workflow ID|NAME (see teamcode workflows list)."),
+        inputs = changes.inputs ?: previousAction?.inputs?.takeIf { previousAction.kind == "workflow" }.orEmpty())
+    else AutomationActionView(actionKind, if (actionKind == "cloud") profile else null).let { fresh ->
         fresh.copy(
             model = if (changes.clearModel) null else changes.model ?: previousAction?.model,
             effort = if (changes.clearEffort) null else changes.effort ?: previousAction?.effort,
             maxRuntimeMinutes = changes.maxRuntimeMinutes ?: previousAction?.maxRuntimeMinutes ?: fresh.maxRuntimeMinutes,
         )
     }
-    val prompt = changes.prompt ?: base?.prompt ?: throw UsageError("Use --prompt TEXT, --prompt-file FILE or --prompt - (standard input).")
-    if (prompt.isBlank()) throw CliUserException("The prompt is empty.")
+    val prompt = if (workflow) "" else changes.prompt ?: base?.prompt?.takeIf { it.isNotBlank() } ?: throw UsageError("Use --prompt TEXT, --prompt-file FILE or --prompt - (standard input).")
+    if (!workflow && prompt.isBlank()) throw CliUserException("The prompt is empty.")
     val variables = changes.variables ?: base?.variables.orEmpty()
     if (kind == "cron" && (changes.variables?.isNotEmpty() == true)) throw UsageError("Payload variables (--var, --variables-file) belong to a webhook automation.")
     if (kind == "cron" && changes.samplePayload != null) throw UsageError("--sample-payload belongs to a webhook automation.")
@@ -83,6 +93,13 @@ internal fun applyChanges(base: AutomationInput?, changes: AutomationChanges): A
 
 /** An [AutomationView] as the definition it was saved from, the base of an edit. */
 internal fun AutomationView.toInput() = AutomationInput(name, trigger, action, prompt, variables, samplePayload, overlap, maxRunsPerDay)
+
+/** `--input KEY=TEXT` pairs as a map; the text is a template over the payload and run variables. A key given twice is refused. */
+internal fun parseInputs(pairs: List<Pair<String, String>>): Map<String, String> {
+    val seen = linkedMapOf<String, String>()
+    for ((key, value) in pairs) if (seen.put(key, value) != null) throw UsageError("The input $key is given twice.")
+    return seen
+}
 
 /**
  * `--var 'NAME=$.json.path[;type=int][;values=a,b][;max=N][;optional][;sensitive]'`: a payload variable, written

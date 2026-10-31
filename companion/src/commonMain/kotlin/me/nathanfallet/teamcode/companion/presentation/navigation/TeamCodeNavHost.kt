@@ -348,6 +348,7 @@ private fun NavGraphBuilder.automationDestinations(navController: NavHostControl
             onEdit = { navController.navigate(AutomationEditRoute(route.accountId, it.id)) },
             onTest = { navController.navigate(AutomationTestRoute(route.accountId, it.id)) },
             onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) },
+            onOpenWorkflowRun = { navController.navigate(WorkflowRunRoute(route.accountId, it)) },
             onDeleted = { navController.popBackStack() })
     }
     composable<AutomationEditRoute> { entry ->
@@ -361,7 +362,8 @@ private fun NavGraphBuilder.automationDestinations(navController: NavHostControl
     composable<AutomationTestRoute> { entry ->
         val route = entry.toRoute<AutomationTestRoute>()
         val viewModel: AutomationTestViewModel = koinViewModel { parametersOf(route) }
-        AutomationTestScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) })
+        AutomationTestScreen(viewModel, onBack = { navController.popBackStack() }, onOpenSession = { navController.navigate(SessionRoute(route.accountId, it)) },
+            onOpenWorkflowRun = { navController.navigate(WorkflowRunRoute(route.accountId, it)) })
     }
 }
 

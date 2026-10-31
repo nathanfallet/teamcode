@@ -72,9 +72,14 @@ class GetAutomationUseCase(private val access: AutomationAccess) {
 fun checkDefinition(definition: AutomationDefinition) {
     val name = definition.name.trim()
     requireInput(name.isNotEmpty() && name.length <= AUTOMATION_NAME_MAX, InvalidInput.Problem.AUTOMATION_NAME, AUTOMATION_NAME_MAX, "Give the automation a name of 1 to $AUTOMATION_NAME_MAX characters.")
-    requireInput(definition.prompt.isNotBlank() && definition.prompt.length <= AUTOMATION_PROMPT_MAX, InvalidInput.Problem.AUTOMATION_PROMPT, AUTOMATION_PROMPT_MAX, "Write a prompt of 1 to $AUTOMATION_PROMPT_MAX characters.")
-    requireInput(definition.action.kind == ActionKind.CLOUD && !definition.action.profileId.isNullOrBlank(), InvalidInput.Problem.CHOOSE_PROFILE, message = "Choose a profile.")
-    requireInput(definition.action.maxRuntimeMinutes in 1..1440 && definition.maxRunsPerDay in 1..1000, InvalidInput.Problem.AUTOMATION_LIMITS, message = "A run lasts 1 to 1440 minutes and an automation runs 1 to 1000 times a day.")
+    if (definition.action.kind == ActionKind.WORKFLOW) {
+        requireInput(!definition.action.workflowId.isNullOrBlank(), InvalidInput.Problem.AUTOMATION_WORKFLOW, message = "Choose the workflow to start.")
+        requireInput(definition.action.inputs.values.all { it.length <= AUTOMATION_PROMPT_MAX }, InvalidInput.Problem.AUTOMATION_PROMPT, AUTOMATION_PROMPT_MAX, "An input is at most $AUTOMATION_PROMPT_MAX characters.")
+    } else {
+        requireInput(definition.prompt.isNotBlank() && definition.prompt.length <= AUTOMATION_PROMPT_MAX, InvalidInput.Problem.AUTOMATION_PROMPT, AUTOMATION_PROMPT_MAX, "Write a prompt of 1 to $AUTOMATION_PROMPT_MAX characters.")
+        requireInput(definition.action.kind == ActionKind.CLOUD && !definition.action.profileId.isNullOrBlank(), InvalidInput.Problem.CHOOSE_PROFILE, message = "Choose a profile.")
+    }
+    requireInput((definition.action.kind == ActionKind.WORKFLOW || definition.action.maxRuntimeMinutes in 1..1440) && definition.maxRunsPerDay in 1..1000, InvalidInput.Problem.AUTOMATION_LIMITS, message = "A run lasts 1 to 1440 minutes and an automation runs 1 to 1000 times a day.")
     if (definition.trigger.kind == TriggerKind.CRON) {
         requireInput(definition.trigger.cron?.trim()?.split(Regex("\\s+"))?.size == 5, InvalidInput.Problem.AUTOMATION_CRON, message = "A schedule has five fields: minute, hour, day of month, month, day of week.")
         requireInput(!definition.trigger.timezone.isNullOrBlank(), InvalidInput.Problem.AUTOMATION_TIMEZONE, message = "Enter a time zone such as Europe/Paris.")
