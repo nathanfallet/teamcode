@@ -17,6 +17,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DesktopComposeUiTest
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -282,6 +283,44 @@ class DesktopShellTest {
             settle()
             onNodeWithTag("menu-copy-link").assertExists()
             onNodeWithTag("menu-browser").assertExists()
+        }
+    }
+
+    @Test fun theOfficeIsASidebarButtonAwayFromTheSessionListAndBack() {
+        app {
+            onNodeWithTag("sidebar-office").assertExists()
+            onNodeWithTag("sidebar-office").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("office").assertExists()
+            System.getenv("TEAMCODE_SCREENSHOTS")?.takeIf { it.isNotBlank() }?.let { with(DesktopScreenshots()) { shot(java.io.File(it).also { dir -> dir.mkdirs() }, "office-shell") } }
+            // The same button leaves it: the sessions list is back.
+            onNodeWithTag("sidebar-office").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("office").assertDoesNotExist()
+            onNodeWithTag("session-s0").assertExists()
+        }
+    }
+
+    @Test fun theWholeOfficeFitsItsPanelAndClickingAnAgentReplacesIt() {
+        app {
+            onNodeWithTag("sidebar-office").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            val panel = onNodeWithTag("office-canvas").getBoundsInRoot()
+            assertTrue(panel.bottom - panel.top > 100.dp)
+            // Sweep the right-hand room (the cloud) until a click lands on an agent: the office is replaced by the session.
+            val canvas = onNodeWithTag("office-canvas")
+            var y = 60f
+            while (y < 900f && onAllNodesWithTag("office").fetchSemanticsNodes().isNotEmpty()) {
+                var x = 300f
+                while (x < 900f && onAllNodesWithTag("office").fetchSemanticsNodes().isNotEmpty()) {
+                    runOnUiThread { canvas.performMouseInput { moveTo(Offset(x, y)); click(Offset(x, y)) } }
+                    settle()
+                    x += 40f
+                }
+                y += 40f
+            }
+            settle()
+            onNodeWithTag("office").assertDoesNotExist()
         }
     }
 

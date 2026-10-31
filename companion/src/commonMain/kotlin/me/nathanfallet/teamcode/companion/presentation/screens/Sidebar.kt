@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.Bell
+import com.adamglin.phosphoricons.regular.Buildings
 import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.Check
 import com.adamglin.phosphoricons.regular.Copy
@@ -92,6 +93,7 @@ import me.nathanfallet.teamcode.companion.resources.sessions_empty_active
 import me.nathanfallet.teamcode.companion.resources.sessions_title
 import me.nathanfallet.teamcode.companion.resources.settings_add_account
 import me.nathanfallet.teamcode.companion.resources.settings_title
+import me.nathanfallet.teamcode.companion.resources.office_title
 import me.nathanfallet.teamcode.companion.resources.sidebar_artifacts_empty
 import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.resources.palette_search
@@ -117,6 +119,7 @@ sealed interface SidebarSelection {
     data object AllAutomations : SidebarSelection
     data object AllWaits : SidebarSelection
     data object AllWorkflows : SidebarSelection
+    data object Office : SidebarSelection
     data object Settings : SidebarSelection
     data class Session(val id: String) : SidebarSelection
     data class Artifact(val id: String) : SidebarSelection
@@ -169,6 +172,8 @@ class SidebarActions(
     val onAllAutomations: () -> Unit = {},
     val onOpenWaits: () -> Unit = {},
     val onOpenWorkflows: () -> Unit = {},
+    /** Switches to the office view of the sessions; null: the account has none to show (no button). */
+    val onOpenOffice: (() -> Unit)? = null,
     /** Opens the command palette; null: no search row. */
     val onSearch: (() -> Unit)? = null,
     /** The palette's shortcut as the platform writes it (⌘K, Ctrl+K), shown on the search row. */
@@ -197,6 +202,13 @@ fun Sidebar(state: SidebarState, actions: SidebarActions, modifier: Modifier = M
         ) {
             BrandGlyph(size = 20.dp)
             Text("TeamCode", color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.weight(1f))
+            // The office is the sessions seen as a room: the button switches to it, and back to the list.
+            val office = actions.onOpenOffice
+            if (account != null && account.signedIn && office != null) {
+                val inOffice = state.selection == SidebarSelection.Office
+                TcIconButton(PhosphorIcons.Regular.Buildings, stringResource(Res.string.office_title), onClick = { if (inOffice) actions.onAllSessions() else office() },
+                    kind = if (inOffice) IconButtonKind.FILLED else IconButtonKind.OUTLINED, modifier = Modifier.then(if (inBar) Modifier.size(minOf(titleBar.height, 28.dp) - 2.dp) else Modifier).testTag("sidebar-office"))
+            }
             if (account != null && account.signedIn) TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.new_session_title), onClick = { actions.onNewSession(account) },
                 kind = IconButtonKind.OUTLINED, modifier = Modifier.then(if (inBar) Modifier.size(minOf(titleBar.height, 28.dp) - 2.dp) else Modifier).testTag("sidebar-new-session"))
         }

@@ -71,6 +71,7 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationEdit
 import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationTestRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.AutomationsRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.OfficeRoute
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationEditViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationTestViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationViewModel
@@ -123,6 +124,7 @@ import me.nathanfallet.teamcode.companion.resources.action_back
 import me.nathanfallet.teamcode.companion.resources.artifacts_title
 import me.nathanfallet.teamcode.companion.resources.session_title_back
 import me.nathanfallet.teamcode.companion.resources.sessions_title
+import me.nathanfallet.teamcode.companion.resources.office_title
 import me.nathanfallet.teamcode.companion.resources.sidebar_resize
 import me.nathanfallet.teamcode.companion.resources.transfers_title
 import org.jetbrains.compose.resources.stringResource
@@ -283,6 +285,7 @@ fun WideMainScreen(
             onAllAutomations = { home.uiState.value.account?.let { show(AutomationsRoute(it.id)) } },
             onOpenWaits = { home.uiState.value.account?.let { show(WaitsRoute(it.id)) } },
             onOpenWorkflows = { home.uiState.value.account?.let { show(WorkflowsRoute(it.id)) } },
+            onOpenOffice = { home.uiState.value.account?.takeIf { it.signedIn }?.let { show(OfficeRoute(it.id)) } },
             onSwitchAccount = { settings.switchTo(it) },
             onSignInAgain = onSignInAgain,
             onAddAccount = onAddAccount,
@@ -343,6 +346,16 @@ fun WideMainScreen(
                             waitsViewModel = waits,
                             onOpenWaits = { a -> show(WaitsRoute(a.id)) },
                             follow = false,
+                        )
+                    }
+                    composable<OfficeRoute> {
+                        OfficeScreen(
+                            sessionsViewModel = sidebarSessions,
+                            onOpenSession = { accountId, sessionId -> show(SessionRoute(accountId, sessionId)) },
+                            onOpenArtifacts = { detail.navigate(it) },
+                            onNewSession = { sheets.newSession(it.id) },
+                            onOpenWorkflows = if (workflowsOffered) ({ home.uiState.value.account?.let { show(WorkflowsRoute(it.id)) }; Unit }) else null,
+                            onOpenAutomations = if (automationsState?.automations != null) ({ home.uiState.value.account?.let { show(AutomationsRoute(it.id)) }; Unit }) else null,
                         )
                     }
                     composable<SessionRoute> { entry ->
@@ -515,6 +528,7 @@ private fun NavHostController.backFrom(entry: NavBackStackEntry): (() -> Unit)? 
 /** The route [this] shows, for the panel's screens and its first one. */
 private fun NavBackStackEntry.detailRouteOrRoot(): Any? = when {
     destination.hasRoute<SessionsListRoute>() -> SessionsListRoute
+    destination.hasRoute<OfficeRoute>() -> toRoute<OfficeRoute>()
     destination.hasRoute<AccountRoute>() -> AccountRoute
     destination.hasRoute<AutomationsRoute>() -> toRoute<AutomationsRoute>()
     destination.hasRoute<WaitsRoute>() -> toRoute<WaitsRoute>()
@@ -530,6 +544,7 @@ private fun NavHostController.backLabel(entry: NavBackStackEntry): String {
     return stringResource(when {
         previous == null -> Res.string.action_back
         previous.hasRoute<SessionsListRoute>() -> Res.string.sessions_title
+        previous.hasRoute<OfficeRoute>() -> Res.string.office_title
         previous.hasRoute<SessionRoute>() -> Res.string.session_title_back
         previous.hasRoute<ArtifactsRoute>() -> Res.string.artifacts_title
         previous.hasRoute<TransfersRoute>() -> Res.string.transfers_title
@@ -548,6 +563,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
     val destination = this?.destination ?: return SidebarSelection.None
     return when {
         destination.hasRoute<SessionsListRoute>() -> SidebarSelection.AllSessions
+        destination.hasRoute<OfficeRoute>() -> SidebarSelection.Office
         destination.hasRoute<SessionRoute>() -> SidebarSelection.Session(toRoute<SessionRoute>().sessionId)
         destination.hasRoute<ArtifactRoute>() -> SidebarSelection.Artifact(toRoute<ArtifactRoute>().artifactId)
         destination.hasRoute<ArtifactsRoute>() -> if (toRoute<ArtifactsRoute>().sessionId == null) SidebarSelection.AllArtifacts else SidebarSelection.None

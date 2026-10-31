@@ -290,7 +290,9 @@ internal fun destinationAfterAccountsChange(had: Boolean, has: Boolean): Any? = 
 
 /** A session with its "…" menu and the transfer sheet; [onOpenArtifacts] opens the session's artifacts. */
 @Composable
-internal fun SessionDestination(route: SessionRoute, onBack: (() -> Unit)?, onOpenArtifacts: (ArtifactsRoute) -> Unit, backLabel: String = stringResource(Res.string.sessions_title)) {
+internal fun SessionDestination(
+    route: SessionRoute, onBack: (() -> Unit)?, onOpenArtifacts: (ArtifactsRoute) -> Unit, backLabel: String = stringResource(Res.string.sessions_title),
+) {
     val viewModel: SessionViewModel = koinViewModel { parametersOf(route) }
     val accounts: AccountRepository = koinInject()
     var transferring by remember { mutableStateOf<TransferRoute?>(null) }
