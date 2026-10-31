@@ -85,7 +85,7 @@ internal fun answerValues(wait: WaitView, sets: List<Pair<String, String>>, json
     // A secret value is never in `sets` (the field's type refuses it there); it comes from [secrets], read without echo.
     secrets.forEach { (id, text) ->
         if (field(id).type != "secret") throw CliUserException("Field $id is not a secret: give it with --set $id=VALUE.")
-        if (text.toByteArray().size > Waits.MAX_SECRET_BYTES) throw CliUserException("The value of $id is longer than ${Waits.MAX_SECRET_BYTES} bytes, the most a secret holds.")
+        if (text.encodeToByteArray().size > Waits.MAX_SECRET_BYTES) throw CliUserException("The value of $id is longer than ${Waits.MAX_SECRET_BYTES} bytes, the most a secret holds.")
         if (text.isBlank()) throw CliUserException("The value of $id is empty.")
         values[id] = JsonPrimitive(text)
     }
