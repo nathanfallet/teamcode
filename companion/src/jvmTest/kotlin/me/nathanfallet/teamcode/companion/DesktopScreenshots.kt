@@ -136,7 +136,8 @@ class DesktopScreenshots {
             // Rendered at 2x: the window is twice the size in pixels and the content sees a density of 2.
             runDesktopComposeUiTest(width * 2, height * 2) {
                 val owner = object : ViewModelStoreOwner { override val viewModelStore = ViewModelStore() }
-                setContent { CompositionLocalProvider(LocalViewModelStoreOwner provides owner, LocalDensity provides Density(2f)) { App() } }
+                // This scene's Koin is the one the screens see: the default of the composition local is read once per JVM, so a later scene would see a closed one.
+                setContent { CompositionLocalProvider(LocalViewModelStoreOwner provides owner, LocalDensity provides Density(2f)) { org.koin.compose.KoinContext(koin) { App() } } }
                 mainClock.advanceTimeBy(1_000); waitForIdle()
                 try { block() } catch (error: Throwable) { error.printStackTrace(); throw error }
                 // Back to the first screen before the scene closes: a pushed entry still entering fails the teardown.

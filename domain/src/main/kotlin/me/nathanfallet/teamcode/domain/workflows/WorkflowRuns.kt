@@ -39,7 +39,8 @@ data class RunWork(val run: WorkflowRun, val visits: List<NodeVisit>) {
     val active get() = visits.lastOrNull { it.status == VisitStatus.ACTIVE }
 }
 
-data class WorkflowRunPage(val runs: List<WorkflowRun>, val nextBefore: String?)
+/** [current] is the active visit of each unfinished run of the page (read in one query), so a list can name the step in progress. */
+data class WorkflowRunPage(val runs: List<WorkflowRun>, val nextBefore: String?, val current: Map<String, NodeVisit> = emptyMap())
 data class RunChange(val run: WorkflowRun, val created: Boolean)
 
 /** What the engine needs of a child run. */

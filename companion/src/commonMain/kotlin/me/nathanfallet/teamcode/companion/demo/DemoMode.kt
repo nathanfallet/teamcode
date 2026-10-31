@@ -12,7 +12,12 @@ import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
+import me.nathanfallet.teamcode.companion.domain.models.RunStatus
+import me.nathanfallet.teamcode.companion.domain.models.RunVisit
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
+import me.nathanfallet.teamcode.companion.domain.models.VisitStatus
+import me.nathanfallet.teamcode.companion.domain.models.Workflow
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
 import me.nathanfallet.teamcode.companion.domain.models.Wait
 import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
@@ -53,6 +58,10 @@ internal class DemoStore(private val clock: Clock, account: Account) {
     val artifacts = DemoContent.artifacts(startedAt)
     private val _waits = MutableStateFlow(DemoContent.waits(startedAt))
     val waits: StateFlow<List<Wait>> = _waits.asStateFlow()
+
+    val workflows = DemoContent.workflows(startedAt)
+    private val _runs = MutableStateFlow(DemoContent.workflowRuns(startedAt))
+    val runs: StateFlow<List<WorkflowRun>> = _runs.asStateFlow()
 
     /** The caller-wide feed: what the session list hears about the demo's sessions. */
     val feed = MutableSharedFlow<SessionChange>(extraBufferCapacity = 64)
@@ -119,7 +128,51 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         val resolved = wait.copy(open = false, resolvedAt = at, answer = WaitAnswer(actionId, values, DemoContent.MEMBER_ID, at))
         _waits.update { all -> all.map { if (it.id == id) resolved else it } }
         feed.tryEmit(SessionChange(next(), SessionChange.WAIT_RESOLVED, wait.sessionId.orEmpty(), DemoContent.MEMBER_ID, at, null, null, waitId = id))
+        finishRunBlockedOn(id, actionId, at)
         return resolved
+    }
+
+    /** The run blocked on a wait that was answered moves on: in the demo, its workflow ends there. */
+    private fun finishRunBlockedOn(waitId: String, actionId: String, at: Long) {
+        val run = runs.value.firstOrNull { r -> r.status.active && r.activeVisit?.waitId == waitId } ?: return
+        val done = run.copy(
+            status = RunStatus.SUCCEEDED, rawStatus = RunStatus.SUCCEEDED.wire, updatedAt = at, finishedAt = at, currentNodeId = null, currentKind = null, output = actionId,
+            visits = run.visits.map { if (it.status == VisitStatus.ACTIVE) it.copy(status = VisitStatus.DONE, outcome = actionId, output = actionId, finishedAt = at) else it },
+        )
+        _runs.update { all -> all.map { if (it.id == run.id) done else it } }
+        announceRun(done)
+    }
+
+    fun run(id: String): WorkflowRun = runs.value.firstOrNull { it.id == id } ?: throw CompanionException.NotFound()
+
+    /** Starts a run of [workflow] at once, at its first step (no agent works in the demo), and tells the feed. */
+    fun startRun(workflow: Workflow, inputs: Map<String, String>): WorkflowRun {
+        val first = workflow.step(workflow.start) ?: throw CompanionException.NotFound()
+        val at = now()
+        val id = newId("run")
+        val visit = RunVisit(1, first.id, first.title, first.kind, VisitStatus.ACTIVE, null, null, null, null, null, at, null)
+        val started = WorkflowRun(id, workflow.id, workflow.name, workflow.version, RunStatus.RUNNING, RunStatus.RUNNING.wire, DemoContent.MEMBER_ID, inputs, null, first.id, first.kind, null, null, null, listOf(visit), at, at, null)
+        _runs.update { listOf(started) + it }
+        announceRun(started)
+        return started
+    }
+
+    /** Cancels a run that moves, as the server would, and tells the feed. */
+    fun cancelRun(id: String): WorkflowRun {
+        val run = run(id)
+        if (!run.status.active) throw CompanionException.Server(409, "run_finished")
+        val at = now()
+        val cancelled = run.copy(
+            status = RunStatus.CANCELLED, rawStatus = RunStatus.CANCELLED.wire, updatedAt = at, finishedAt = at, currentNodeId = null, currentKind = null,
+            visits = run.visits.map { if (it.status == VisitStatus.ACTIVE) it.copy(status = VisitStatus.CANCELLED, finishedAt = at) else it },
+        )
+        _runs.update { all -> all.map { if (it.id == id) cancelled else it } }
+        announceRun(cancelled)
+        return cancelled
+    }
+
+    private fun announceRun(run: WorkflowRun) {
+        feed.tryEmit(SessionChange(next(), SessionChange.WORKFLOW_RUN, "", DemoContent.MEMBER_ID, now(), null, null, runId = run.id, runStatus = run.status, runWorkflowId = run.workflowId))
     }
 
     fun newId(prefix: String) = "demo-$prefix-${next()}"

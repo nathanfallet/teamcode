@@ -17,6 +17,10 @@ import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferRequest
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
+import me.nathanfallet.teamcode.companion.domain.models.RunFilter
+import me.nathanfallet.teamcode.companion.domain.models.RunScope
+import me.nathanfallet.teamcode.companion.domain.models.RunStart
 import kotlinx.serialization.json.JsonElement
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.ArtifactRepository
@@ -138,7 +142,7 @@ class DemoAwareSessionRepository(private val real: SessionRepository, private va
     override suspend fun resume(accountId: String, sessionId: String) = of(accountId).resume(accountId, sessionId)
     override suspend fun rename(accountId: String, sessionId: String, name: String) = of(accountId).rename(accountId, sessionId, name)
     override suspend fun end(accountId: String, sessionId: String) = of(accountId).end(accountId, sessionId)
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits, renames)
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean) = of(accountId).sessionChanges(accountId, kinds, waiting, waits, renames, workflows)
 }
 
 class DemoAwareTranscriptRepository(private val real: TranscriptRepository, private val demo: TranscriptRepository) : TranscriptRepository {
@@ -201,6 +205,16 @@ class DemoAwareGitHubLinkRepository(private val real: GitHubLinkRepository, priv
 
 class DemoAwareMcpServerRepository(private val real: McpServerRepository, private val demo: McpServerRepository) : McpServerRepository {
     override suspend fun servers(accountId: String) = (if (isDemo(accountId)) demo else real).servers(accountId)
+}
+
+class DemoAwareWorkflowRepository(private val real: WorkflowRepository, private val demo: WorkflowRepository) : WorkflowRepository {
+    private fun of(accountId: String) = if (isDemo(accountId)) demo else real
+    override suspend fun workflows(accountId: String, after: String?) = of(accountId).workflows(accountId, after)
+    override suspend fun workflow(accountId: String, id: String) = of(accountId).workflow(accountId, id)
+    override suspend fun runs(accountId: String, scope: RunScope, filter: RunFilter, before: String?) = of(accountId).runs(accountId, scope, filter, before)
+    override suspend fun run(accountId: String, id: String) = of(accountId).run(accountId, id)
+    override suspend fun start(accountId: String, workflowId: String, start: RunStart, idempotencyKey: String) = of(accountId).start(accountId, workflowId, start, idempotencyKey)
+    override suspend fun cancel(accountId: String, id: String) = of(accountId).cancel(accountId, id)
 }
 
 class DemoAwareWaitRepository(private val real: WaitRepository, private val demo: WaitRepository) : WaitRepository {

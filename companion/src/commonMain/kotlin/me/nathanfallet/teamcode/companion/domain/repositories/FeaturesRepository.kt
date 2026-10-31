@@ -40,4 +40,8 @@ object Features {
     const val AUTOMATIONS = "automations.v1"
     /** Waits (`/waits`): what sessions need from people, with `cloud.wait.*` events on the feed. */
     const val WAITS = "waits.v1"
+    /** Workflows (`/workflows`): saved sequences of agent, person and sub-workflow steps, and their runs. */
+    const val WORKFLOWS = "workflows.v1"
+    /** The feed carries `cloud.workflow.run.updated`: asked for only then (an older server refuses a type it does not know). */
+    const val WORKFLOWS_LIVE = "workflows.live.v1"
 }

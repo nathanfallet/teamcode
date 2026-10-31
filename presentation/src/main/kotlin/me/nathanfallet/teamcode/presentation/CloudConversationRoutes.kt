@@ -114,7 +114,7 @@ private fun ApplicationCall.sessionKinds(): Set<String> = request.queryParameter
 }?.toSet() ?: setOf(CloudSessionKind.CLOUD.wire)
 
 /** Whether a session event belongs to one of [kinds]; events from before kinds existed are cloud sessions'. */
-private fun TeamEventView.ofKinds(kinds: Set<String>) = subject != TeamEventSubject.SESSION.wire ||
+private fun TeamEventView.ofKinds(kinds: Set<String>) = subject != TeamEventSubject.SESSION.wire || type == TeamEventType.WORKFLOW_RUN_UPDATED.wire ||
     ((data["kind"] as? JsonPrimitive)?.contentOrNull ?: CloudSessionKind.CLOUD.wire) in kinds
 
 /** The caller-wide feed; a plain function so a server without the journal does not mount it. */

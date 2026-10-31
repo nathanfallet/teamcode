@@ -6,6 +6,8 @@ import kotlinx.serialization.json.JsonElement
 /** Wire names of the closed enums of workflows (`workflows.v1`, docs/workflows.md). Clients tolerate an unknown value from a newer server. */
 object Workflows {
     const val CAPABILITY = "workflows.v1"
+    /** The feed carries `cloud.workflow.run.updated` (an older server refuses a type it does not know, so a client asks for it only when this is announced). */
+    const val LIVE_CAPABILITY = "workflows.live.v1"
     /** `agent` runs an agent on a prompt until it delivers; `human` asks a person (a [Waits] wait); `workflow` runs another workflow. */
     val nodeKinds = listOf("agent", "human", "workflow")
     /** What an agent node delivers. `artifact` is an artifact id, `url` an https address (optionally within a domain), `text` a string, `json` a value matching a schema. */
@@ -123,11 +125,14 @@ data class WorkflowVisitView(
     val childRunId: String? = null,
     val startedAt: Long,
     val finishedAt: Long? = null,
+    /** The node's title in the definition the run started with; set on a single read of a run, not in lists. */
+    val nodeTitle: String? = null,
 )
 
 /**
  * A run of a workflow, on the version it started with. [status] is one of [Workflows.runStatuses]; [failure] is a short
- * code when it failed. [output] is what the last node delivered. [visits] is filled on a single read, not in lists.
+ * code when it failed. [output] is what the last node delivered. [visits] is filled on a single read, not in lists;
+ * [currentNodeId] and [currentNodeKind] name the step in progress there and in lists (a list does not read the definition, so no title).
  */
 @Serializable
 data class WorkflowRunView(
@@ -140,6 +145,8 @@ data class WorkflowRunView(
     val inputs: Map<String, String> = emptyMap(),
     val sessionId: String? = null,
     val currentNodeId: String? = null,
+    /** The kind (`agent`, `human`, `workflow`) of the node the run is at; set with [currentNodeId], in lists too. */
+    val currentNodeKind: String? = null,
     val parentRunId: String? = null,
     val failure: String? = null,
     val output: String? = null,

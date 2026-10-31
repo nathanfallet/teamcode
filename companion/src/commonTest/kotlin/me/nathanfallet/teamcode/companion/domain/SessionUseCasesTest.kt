@@ -169,6 +169,12 @@ class SessionUseCasesTest {
         }
     }
 
+    @Test fun aWorkflowRunEventIsNoSessionsChange() {
+        val list = SessionList(SessionScope.MINE, SessionFilter.OPEN, "m1").loaded(SessionPage(listOf(cloudSession("a", SessionState.ACTIVE)), null))
+        val (same, fetch) = list.applied(SessionChange(9, SessionChange.WORKFLOW_RUN, "", "m1", 9_000, null, null, runId = "r1"))
+        assertEquals(list, same); assertNull(fetch)
+    }
+
     @Test fun theListReloadsWhenTheFeedOpensFromNowAndOnAGapButNotOnAResume() = runTest {
         val sessions = FakeSessionRepository()
         val c = change(1, "a")

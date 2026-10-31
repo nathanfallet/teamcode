@@ -71,6 +71,14 @@ import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.SubscriptionAccountRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TranscriptRepository
 import me.nathanfallet.teamcode.companion.domain.repositories.TransferRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository
+import me.nathanfallet.teamcode.companion.domain.models.RunFilter
+import me.nathanfallet.teamcode.companion.domain.models.RunScope
+import me.nathanfallet.teamcode.companion.domain.models.RunStart
+import me.nathanfallet.teamcode.companion.domain.models.Workflow
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowPage
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
+import me.nathanfallet.teamcode.companion.domain.models.WorkflowRunPage
 
 /*
  * The demo's side of every repository: answered from the running [DemoMode]'s memory, never from a network. The
@@ -130,7 +138,7 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
 
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
         val store = demo.store()
         // Listening before saying the feed is open: a change made right after it is never missed.
         launch(start = CoroutineStart.UNDISPATCHED) { store.feed.collect { send(LiveUpdate.Item(it)) } }
@@ -198,6 +206,28 @@ class DemoWaitRepository(private val demo: DemoMode) : WaitRepository {
     }
 
     override suspend fun answer(accountId: String, waitId: String, action: String, values: Map<String, JsonElement>): Wait = demo.store().answerWait(waitId, action, values)
+}
+
+/** The demo's workflows: runs in every state, started and cancelled in memory, announced on the feed like a server would. */
+class DemoWorkflowRepository(private val demo: DemoMode) : WorkflowRepository {
+    override suspend fun workflows(accountId: String, after: String?) = WorkflowPage(if (after == null) demo.store().workflows else emptyList(), null)
+    override suspend fun workflow(accountId: String, id: String): Workflow = demo.store().workflows.firstOrNull { it.id == id } ?: throw CompanionException.NotFound()
+
+    override suspend fun runs(accountId: String, scope: RunScope, filter: RunFilter, before: String?): WorkflowRunPage {
+        val all = demo.store().runs.value.filter { filter.status == null || it.status.wire == filter.status }
+        // Like the server: newest first, and a list carries no visits.
+        val sorted = all.sortedWith(compareByDescending<WorkflowRun> { it.createdAt }.thenByDescending { it.id }).map { it.copy(visits = emptyList()) }
+        return WorkflowRunPage(if (before == null) sorted else emptyList(), null)
+    }
+
+    override suspend fun run(accountId: String, id: String): WorkflowRun = demo.store().run(id)
+
+    override suspend fun start(accountId: String, workflowId: String, start: RunStart, idempotencyKey: String): WorkflowRun {
+        val workflow = workflow(accountId, workflowId)
+        return demo.store().startRun(workflow, start.inputs)
+    }
+
+    override suspend fun cancel(accountId: String, id: String): WorkflowRun = demo.store().cancelRun(id)
 }
 
 /**

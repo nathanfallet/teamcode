@@ -356,7 +356,7 @@ private fun Option(title: String, subtitle: String?, selected: Boolean, tag: Str
 }
 
 @Composable
-private fun ProfileOption(profile: Profile, selected: Boolean, onClick: () -> Unit) {
+internal fun ProfileOption(profile: Profile, selected: Boolean, onClick: () -> Unit) {
     val colors = TeamCode.colors
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected, role = Role.RadioButton, onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp).testTag("profile-${profile.id}"),

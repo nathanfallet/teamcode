@@ -17,6 +17,11 @@ import me.nathanfallet.teamcode.companion.FakePlatform
 import me.nathanfallet.teamcode.companion.account
 import me.nathanfallet.teamcode.companion.di.appModules
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
+import me.nathanfallet.teamcode.companion.domain.models.CompanionException
+import me.nathanfallet.teamcode.companion.domain.models.RunFilter
+import me.nathanfallet.teamcode.companion.domain.models.RunScope
+import me.nathanfallet.teamcode.companion.domain.models.RunStart
+import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.LiveUpdate
 import me.nathanfallet.teamcode.companion.domain.models.NewSession
 import me.nathanfallet.teamcode.companion.domain.models.PendingMessage
@@ -192,6 +197,40 @@ class DemoModeTest {
         assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w2", "allow", emptyMap()) }.statusCode)
         assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w1", "approve", emptyMap()) }.statusCode)
         assertEquals(400, assertFailsWith<me.nathanfallet.teamcode.companion.domain.models.CompanionException.Server> { waits.answer(account.id, "w3", "nope", emptyMap()) }.statusCode)
+        assertEquals(0, engine.clients)
+    }
+
+    @Test fun theDemoHasWorkflowRunsInEachStateAndStartsAndCancelsOneAnnouncingItOnTheFeed() = runTest {
+        val account = startDemo()
+        val workflows = koin.get<me.nathanfallet.teamcode.companion.domain.repositories.WorkflowRepository>()
+        assertTrue("workflows.v1" in DemoContent.features && "workflows.live.v1" in DemoContent.features)
+        val all = workflows.runs(account.id, RunScope.MINE, RunFilter.ALL, null).runs
+        assertEquals(listOf("run1", "run2", "run3", "run4", "run5"), all.map { it.id })
+        assertTrue(all.all { it.visits.isEmpty() }, "a list carries no visits")
+        assertEquals(listOf("run1"), workflows.runs(account.id, RunScope.MINE, RunFilter.RUNNING, null).runs.map { it.id })
+        assertEquals(listOf("run2"), workflows.runs(account.id, RunScope.MINE, RunFilter.WAITING, null).runs.map { it.id })
+        assertEquals(listOf("run3"), workflows.runs(account.id, RunScope.MINE, RunFilter.DONE, null).runs.map { it.id })
+        assertEquals(listOf("run4"), workflows.runs(account.id, RunScope.MINE, RunFilter.FAILED, null).runs.map { it.id })
+        assertEquals("session_failed", workflows.run(account.id, "run4").failure)
+        assertEquals("w1", workflows.run(account.id, "run2").activeVisit?.waitId, "the waiting run is blocked on the member's wait")
+        assertEquals(2, workflows.workflows(account.id, null).workflows.size)
+
+        val feed = koin.get<SessionRepository>().sessionChanges(account.id, workflows = true)
+        val announced = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { feed.filterIsInstance<LiveUpdate.Item<SessionChange>>().take(2).toList().map { it.value } }
+        kotlinx.coroutines.yield()
+        val definition = workflows.workflows(account.id, null).workflows.first()
+        val started = workflows.start(account.id, definition.id, RunStart(mapOf("ticket" to "ACME-1"), "demo-claude"), "key")
+        assertEquals(RunStatus.RUNNING, started.status)
+        assertEquals(started.id, workflows.runs(account.id, RunScope.MINE, RunFilter.ALL, null).runs.first().id, "newest first")
+        assertEquals(RunStatus.CANCELLED, workflows.cancel(account.id, started.id).status)
+        assertEquals(409, assertFailsWith<CompanionException.Server> { workflows.cancel(account.id, started.id) }.statusCode)
+        val events = announced.await()
+        assertEquals(listOf(SessionChange.WORKFLOW_RUN, SessionChange.WORKFLOW_RUN), events.map { it.type })
+        assertEquals(listOf(RunStatus.RUNNING, RunStatus.CANCELLED), events.map { it.runStatus })
+
+        // Answering the wait a run is blocked on moves that run on.
+        koin.get<me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository>().answer(account.id, "w1", "approve", emptyMap())
+        assertEquals(RunStatus.SUCCEEDED, workflows.run(account.id, "run2").status)
         assertEquals(0, engine.clients)
     }
 

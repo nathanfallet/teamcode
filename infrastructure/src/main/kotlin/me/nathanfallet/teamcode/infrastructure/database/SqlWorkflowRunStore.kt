@@ -48,6 +48,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         insertRun(run.copy(credentialId = credential), idempotencyKey)
         insertVisit(first)
         audit(actor.teamId, actor.member.id, "workflow.run.started", run.id, null, actor.tokenId, details = run.workflowId)
+        publish(run.id, run.createdAt)
         RunChange(run, true)
     }
 
@@ -110,7 +111,12 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         // The definition snapshot is not read for a list: a page shows the run, not its graph.
         val rows = WorkflowRuns.select(listColumns).where { condition }.orderBy(WorkflowRuns.createdAt to SortOrder.DESC, WorkflowRuns.id to SortOrder.DESC).limit(limit + 1).toList()
         val page = rows.take(limit).map { run(it, summary = true) }
-        WorkflowRunPage(page, if (rows.size > limit) page.last().id else null)
+        // One read for the step in progress of every unfinished run of the page (a run has at most one active visit).
+        val unfinished = page.filter { it.status in setOf(RunStatus.RUNNING, RunStatus.WAITING) }.map { it.id }
+        val current = if (unfinished.isEmpty()) emptyMap() else
+            // The output column (MEDIUMTEXT) is not read: a list shows the step, not what it delivered.
+            WorkflowVisits.select(WorkflowVisits.columns - WorkflowVisits.output).where { (WorkflowVisits.runId inList unfinished) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) }.map { visit(it, withOutput = false) }.associateBy { it.runId }
+        WorkflowRunPage(page, if (rows.size > limit) page.last().id else null, current)
     }
 
     override suspend fun requestCancel(teamId: String, id: String): Boolean = database.query {
@@ -155,6 +161,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
             it[WorkflowVisits.sessionId] = sessionId; it[dispatchedAt] = at
         } > 0
         if (changed && bindRun) WorkflowRuns.update({ WorkflowRuns.id eq visit[WorkflowVisits.runId] }) { it[WorkflowRuns.sessionId] = sessionId; it[updatedAt] = at }
+        if (changed) publish(visit[WorkflowVisits.runId], at)
         changed
     }
 
@@ -162,6 +169,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         val visit = WorkflowVisits.select(WorkflowVisits.runId).where { WorkflowVisits.id eq visitId }.singleOrNull() ?: return@query false
         val changed = WorkflowVisits.update({ (WorkflowVisits.id eq visitId) and (WorkflowVisits.status eq VisitStatus.ACTIVE.wire) and WorkflowVisits.waitId.isNull() }) { it[WorkflowVisits.waitId] = waitId } > 0
         if (changed) WorkflowRuns.update({ (WorkflowRuns.id eq visit[WorkflowVisits.runId]) and (WorkflowRuns.status eq RunStatus.RUNNING.wire) }) { it[status] = RunStatus.WAITING.wire; it[updatedAt] = nowMillis() }
+        if (changed) publish(visit[WorkflowVisits.runId], nowMillis())
         changed
     }
 
@@ -174,6 +182,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         if (!recorded) return@query false
         insertRun(child.copy(credentialId = parent[WorkflowRuns.credentialId]), null)
         insertVisit(first)
+        publish(child.id, child.createdAt)
         true
     }
 
@@ -183,6 +192,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
             it[WorkflowVisits.status] = status.wire; it[WorkflowVisits.outcome] = outcome; it[WorkflowVisits.output] = output; it[finishedAt] = at
         } > 0
         if (changed) WorkflowRuns.update({ (WorkflowRuns.id eq visit[WorkflowVisits.runId]) and (WorkflowRuns.status eq RunStatus.WAITING.wire) }) { it[WorkflowRuns.status] = RunStatus.RUNNING.wire; it[updatedAt] = at }
+        if (changed) publish(visit[WorkflowVisits.runId], at)
         changed
     }
 
@@ -193,6 +203,7 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         if (!WorkflowVisits.select(WorkflowVisits.id).where { (WorkflowVisits.runId eq runId) and (WorkflowVisits.seq eq visit.seq) }.empty()) return@query false
         insertVisit(visit)
         WorkflowRuns.update({ WorkflowRuns.id eq runId }) { it[updatedAt] = visit.startedAt }
+        publish(runId, visit.startedAt)
         true
     }
 
@@ -205,8 +216,22 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
             // The credential belongs to the root run: it goes with it.
             if (row[WorkflowRuns.parentRunId] == null) row[WorkflowRuns.credentialId]?.let { credential -> Tokens.deleteWhere { Tokens.id eq credential } }
             audit(row[WorkflowRuns.teamId], row[WorkflowRuns.starterId], "workflow.run.${status.wire}", runId, null, null, details = failure)
+            publish(runId, at)
         }
         changed
+    }
+
+    /**
+     * `cloud.workflow.run.updated` on the feed, last in the transaction of every change a screen shows (start, a session or a
+     * wait bound to a step, a step done, a new step, the end; see [publishTeamEvent]). It belongs to the starter and carries
+     * the run's id, workflow, status and parent, never its inputs, outputs or failure: the client reads the run for those.
+     */
+    private fun JdbcTransaction.publish(runId: String, at: Long) {
+        val row = WorkflowRuns.select(WorkflowRuns.teamId, WorkflowRuns.starterId, WorkflowRuns.workflowId, WorkflowRuns.status, WorkflowRuns.parentRunId).where { WorkflowRuns.id eq runId }.single()
+        publishTeamEvent(row[WorkflowRuns.teamId], TeamEventType.WORKFLOW_RUN_UPDATED, runId, row[WorkflowRuns.starterId], buildJsonObject {
+            put("runId", runId); put("workflowId", row[WorkflowRuns.workflowId]); put("status", row[WorkflowRuns.status]); put("ownerId", row[WorkflowRuns.starterId])
+            row[WorkflowRuns.parentRunId]?.let { put("parentRunId", it) }
+        }, at)
     }
 
     private val listColumns = WorkflowRuns.columns - WorkflowRuns.definition
@@ -219,9 +244,9 @@ class SqlWorkflowRunStore(private val database: Database) : WorkflowRunStore {
         row[WorkflowRuns.updatedAt], row[WorkflowRuns.finishedAt], row[WorkflowRuns.credentialId],
     )
 
-    private fun visit(row: ResultRow) = NodeVisit(
+    private fun visit(row: ResultRow, withOutput: Boolean = true) = NodeVisit(
         row[WorkflowVisits.id], row[WorkflowVisits.runId], row[WorkflowVisits.seq], row[WorkflowVisits.nodeId], NodeKind.parse(row[WorkflowVisits.kind]) ?: NodeKind.AGENT,
-        VisitStatus.parse(row[WorkflowVisits.status]) ?: VisitStatus.FAILED, row[WorkflowVisits.outcome], row[WorkflowVisits.output], row[WorkflowVisits.sessionId],
+        VisitStatus.parse(row[WorkflowVisits.status]) ?: VisitStatus.FAILED, row[WorkflowVisits.outcome], if (withOutput) row[WorkflowVisits.output] else null, row[WorkflowVisits.sessionId],
         row[WorkflowVisits.waitId], row[WorkflowVisits.childRunId], row[WorkflowVisits.dispatchedAt], row[WorkflowVisits.startedAt], row[WorkflowVisits.finishedAt],
     )
 

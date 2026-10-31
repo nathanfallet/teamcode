@@ -156,6 +156,12 @@ data class SessionChange(
     val waitId: String? = null,
     /** For `cloud.session.renamed`: the session's new name. */
     val name: String? = null,
+    /** For `cloud.workflow.run.updated`: the run concerned and its status (then [sessionId] is empty and [memberId] the run's starter). */
+    val runId: String? = null,
+    val runStatus: RunStatus? = null,
+    val runWorkflowId: String? = null,
+    /** The parent run, for the run of a sub-workflow. */
+    val runParentId: String? = null,
 ) {
     companion object {
         const val WAITING = "cloud.session.waiting"
@@ -165,6 +171,7 @@ data class SessionChange(
         const val WAIT_RESOLVED = "cloud.wait.resolved"
         const val WAIT_CANCELLED = "cloud.wait.cancelled"
         val WAIT_TYPES = setOf(WAIT_CREATED, WAIT_RESOLVED, WAIT_CANCELLED)
+        const val WORKFLOW_RUN = "cloud.workflow.run.updated"
         const val TURN = "cloud.turn"
     }
 }

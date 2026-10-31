@@ -63,6 +63,19 @@ class WorkflowRunRoutesTest {
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Post, "/api/v1/workflows/runs/r1/cancel", "reader").status)
     }
 
+    @Test fun aRunNamesItsStepInAListAndTitlesItsVisitsOnARead() {
+        val run = WorkflowRun("r1", "team", "wf1", "Fix", 1, definition, "admin-id", RunStatus.RUNNING, emptyMap(), "p1", "s1", 0, null, null, false, null, null, 1, 1, null)
+        val active = NodeVisit("v1", "r1", 1, "ship", NodeKind.AGENT, VisitStatus.ACTIVE, sessionId = "s1", startedAt = 1)
+        // A list does not read the definition or the visits: the page's active visit names the step and its kind.
+        val listed = run.copy(definition = WorkflowDefinition("", null, "", SessionMode.SAME, emptyList(), emptyList())).view(current = active)
+        assertEquals("ship", listed.currentNodeId); assertEquals("agent", listed.currentNodeKind); assertEquals(emptyList(), listed.visits)
+        // A single read titles each visit from the definition the run started with; a node the definition no longer has gets none.
+        val read = run.view(listOf(active, active.copy(seq = 2, nodeId = "gone", status = VisitStatus.DONE)))
+        assertEquals(listOf("Ship", null), read.visits.map { it.nodeTitle })
+        assertEquals("ship", read.currentNodeId); assertEquals("agent", read.currentNodeKind)
+        assertNull(run.view().currentNodeKind)
+    }
+
     private val definition = WorkflowDefinition("Fix", null, "ship", SessionMode.SAME, emptyList(),
         listOf(WorkflowNode("ship", NodeKind.AGENT, "Ship", "Ship it", deliverable = Deliverable(DeliverableType.TEXT), transitions = listOf(Transition("delivered")))))
     /** One run of `admin-id` whose agent step runs in session s1; the token `exec-token` is the execution credential of s1, `exec-9` that of another session. */

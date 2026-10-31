@@ -89,12 +89,16 @@ internal fun Route.workflowRoutes(workflows: WorkflowService, runs: WorkflowRunS
     }
 }
 
-internal fun WorkflowRun.view(visits: List<NodeVisit> = emptyList()) = WorkflowRunView(
-    id, workflowId, workflowName, workflowVersion, status.wire, starterId, inputs, sessionId, visits.lastOrNull { it.status == VisitStatus.ACTIVE }?.nodeId, parentRunId,
-    failure, output, visits.map { it.view() }, createdAt, updatedAt, finishedAt,
-)
+/** [current] is the step in progress of a listed run (whose visits are not read); a single read takes it from [visits]. */
+internal fun WorkflowRun.view(visits: List<NodeVisit> = emptyList(), current: NodeVisit? = null): WorkflowRunView {
+    val active = current ?: visits.lastOrNull { it.status == VisitStatus.ACTIVE }
+    return WorkflowRunView(
+        id, workflowId, workflowName, workflowVersion, status.wire, starterId, inputs, sessionId, active?.nodeId, active?.kind?.wire, parentRunId,
+        failure, output, visits.map { visit -> visit.view(definition.nodes.firstOrNull { it.id == visit.nodeId }?.title) }, createdAt, updatedAt, finishedAt,
+    )
+}
 
-private fun NodeVisit.view() = WorkflowVisitView(seq, nodeId, kind.wire, status.wire, outcome, output, sessionId, waitId, childRunId, startedAt, finishedAt)
+private fun NodeVisit.view(title: String?) = WorkflowVisitView(seq, nodeId, kind.wire, status.wire, outcome, output, sessionId, waitId, childRunId, startedAt, finishedAt, nodeTitle = title)
 
 private const val RUN_BYTES = 128 * 1024
 
@@ -104,7 +108,7 @@ private fun Route.workflowRunRoutes(runs: WorkflowRunService) {
         val query = call.request.queryParameters
         val page = runs.list(call.principal, query["all"] == "true", query["workflow"]?.also { if (!workflowId.matches(it)) throw TeamFailure("not_found", 404, "Workflow not found.") },
             query["status"], query["before"]?.also { if (!workflowId.matches(it)) throw TeamFailure("invalid_cursor", 400, "Unknown run cursor.") }, query["limit"]?.toIntOrNull() ?: 50)
-        call.respond(WorkflowRunPageView(page.runs.map { it.view() }, page.nextBefore))
+        call.respond(WorkflowRunPageView(page.runs.map { it.view(current = page.current[it.id]) }, page.nextBefore))
     }
     get("/runs/{id}") {
         val (run, visits) = runs.get(call.principal, call.workflowId())

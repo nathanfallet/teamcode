@@ -85,7 +85,7 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
         calls.withAccount(accountId, resource = true) { it.deleteCloudSession(sessionId) }
     }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean): Flow<LiveUpdate<SessionChange>> = flow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean): Flow<LiveUpdate<SessionChange>> = flow {
         // One cursor per collection, shared by its attempts: a reconnection resumes after the last event seen, any subject.
         var cursor: Long? = null
         emitAll(reconnecting(policy, resource = false) { send, progress ->
@@ -93,7 +93,7 @@ class RemoteSessionRepository(private val calls: AccountCalls, private val polic
             val resumed = cursor != null
             client.followTeamEvents(
                 after = cursor,
-                types = SESSION_EVENT_TYPES + (if (waiting) WAITING_EVENT_TYPES else emptySet()) + (if (waits) SessionChange.WAIT_TYPES else emptySet()) + (if (renames) setOf(SessionChange.RENAMED) else emptySet()),
+                types = SESSION_EVENT_TYPES + (if (waiting) WAITING_EVENT_TYPES else emptySet()) + (if (waits) SessionChange.WAIT_TYPES else emptySet()) + (if (renames) setOf(SessionChange.RENAMED) else emptySet()) + (if (workflows) setOf(SessionChange.WORKFLOW_RUN) else emptySet()),
                 kinds = kinds.map { it.wire }.toSet(),
                 onGap = { send(LiveUpdate.Gap) },
                 onOpen = { progress.opened(); send(LiveUpdate.Opened(resumed)) },

@@ -90,6 +90,17 @@ import me.nathanfallet.teamcode.companion.presentation.navigation.McpServersRout
 import me.nathanfallet.teamcode.companion.presentation.navigation.SubscriptionAccountsRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.TransfersRoute
 import me.nathanfallet.teamcode.companion.presentation.navigation.WaitsRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowRunRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowStartRoute
+import me.nathanfallet.teamcode.companion.presentation.navigation.WorkflowsRoute
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunsViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowStartViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowsViewModel
+import me.nathanfallet.teamcode.companion.resources.workflow_title
+import me.nathanfallet.teamcode.companion.resources.workflows_title
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitsViewModel
 import me.nathanfallet.teamcode.companion.resources.waits_title
 import me.nathanfallet.teamcode.companion.presentation.theme.TeamCode
@@ -206,6 +217,7 @@ fun WideMainScreen(
     val sidebarAutomations: AutomationsViewModel? = signedIn?.let { key(it.id) { koinViewModel(key = automationsKey(it.id)) { parametersOf(AutomationsRoute(it.id)) } } }
     val automationsState = sidebarAutomations?.uiState?.collectAsStateWithLifecycle()?.value
 
+    val workflowsOffered = rememberWorkflowsOffered(signedIn)
     val current by detail.currentBackStackEntryAsState()
     val selection = current.selection()
     val selectionNow = rememberUpdatedState(selection)
@@ -266,6 +278,7 @@ fun WideMainScreen(
             onOpenAutomation = { automation -> home.uiState.value.account?.let { show(AutomationRoute(it.id, automation.id)) } },
             onAllAutomations = { home.uiState.value.account?.let { show(AutomationsRoute(it.id)) } },
             onOpenWaits = { home.uiState.value.account?.let { show(WaitsRoute(it.id)) } },
+            onOpenWorkflows = { home.uiState.value.account?.let { show(WorkflowsRoute(it.id)) } },
             onSwitchAccount = { settings.switchTo(it) },
             onSignInAgain = onSignInAgain,
             onAddAccount = onAddAccount,
@@ -292,7 +305,7 @@ fun WideMainScreen(
                             artifacts = artifactsState?.artifacts.orEmpty().take(SIDEBAR_ROWS), artifactsLoading = artifactsState?.loading ?: false,
                             artifactsError = artifactsState?.error,
                             automations = automationsState?.automations,
-                            waitsOpen = waitsState.takeIf { it.available }?.openCount, waitsMore = waitsState.moreOpen,
+                            waitsOpen = waitsState.takeIf { it.available }?.openCount, waitsMore = waitsState.moreOpen, workflowsOffered = workflowsOffered,
                             selection = selection, now = now,
                             sessionsFilter = sessionsFilterLabel(sessionsState), artifactsFilter = artifactsFilterLabel(artifactsState),
                         ),
@@ -364,6 +377,31 @@ fun WideMainScreen(
                         val route = entry.toRoute<AutomationsRoute>()
                         val viewModel: AutomationsViewModel = sidebarAutomations?.takeIf { route.accountId == signedIn?.id } ?: koinViewModel { parametersOf(route) }
                         AutomationsScreen(viewModel, onOpen = { detail.navigate(AutomationRoute(route.accountId, it.id)) }, onCreate = { detail.navigate(AutomationEditRoute(route.accountId)) })
+                    }
+                    composable<WorkflowsRoute> { entry ->
+                        val route = entry.toRoute<WorkflowsRoute>()
+                        val runs: WorkflowRunsViewModel = koinViewModel(key = workflowRunsKey(route.accountId)) { parametersOf(route) }
+                        val definitions: WorkflowsViewModel = koinViewModel(key = workflowsKey(route.accountId)) { parametersOf(route) }
+                        WorkflowsScreen(runs, definitions, onOpenRun = { detail.navigate(WorkflowRunRoute(route.accountId, it.id)) }, onOpenWorkflow = { detail.navigate(WorkflowRoute(route.accountId, it.id)) },
+                            onStartWorkflow = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) }, onOpenWaits = { show(WaitsRoute(route.accountId)) })
+                    }
+                    composable<WorkflowRunRoute> { entry ->
+                        val route = entry.toRoute<WorkflowRunRoute>()
+                        val viewModel: WorkflowRunViewModel = koinViewModel { parametersOf(route) }
+                        WorkflowRunScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onOpenSession = { detail.navigate(SessionRoute(route.accountId, it)) },
+                            onOpenRun = { detail.navigate(WorkflowRunRoute(route.accountId, it)) }, onOpenWaits = { show(WaitsRoute(route.accountId)) })
+                    }
+                    composable<WorkflowRoute> { entry ->
+                        val route = entry.toRoute<WorkflowRoute>()
+                        val viewModel: WorkflowViewModel = koinViewModel { parametersOf(route) }
+                        WorkflowScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onStart = { detail.navigate(WorkflowStartRoute(route.accountId, it.id)) })
+                    }
+                    composable<WorkflowStartRoute> { entry ->
+                        val route = entry.toRoute<WorkflowStartRoute>()
+                        val viewModel: WorkflowStartViewModel = koinViewModel { parametersOf(route) }
+                        WorkflowStartScreen(viewModel, onBack = detail.backFrom(entry), backLabel = detail.backLabel(entry), onStarted = { run ->
+                            detail.navigate(WorkflowRunRoute(route.accountId, run.id)) { popUpTo<WorkflowStartRoute> { inclusive = true } }
+                        })
                     }
                     composable<WaitsRoute> {
                         WaitsScreen(waits, onOpenSession = { accountId, sessionId -> detail.navigate(SessionRoute(accountId, sessionId)) })
@@ -459,6 +497,7 @@ private fun NavBackStackEntry.detailRouteOrRoot(): Any? = when {
     destination.hasRoute<AccountRoute>() -> AccountRoute
     destination.hasRoute<AutomationsRoute>() -> toRoute<AutomationsRoute>()
     destination.hasRoute<WaitsRoute>() -> toRoute<WaitsRoute>()
+    destination.hasRoute<WorkflowsRoute>() -> toRoute<WorkflowsRoute>()
     else -> detailRoute()
 }
 
@@ -476,6 +515,8 @@ private fun NavHostController.backLabel(entry: NavBackStackEntry): String {
         previous.hasRoute<AccountRoute>() -> Res.string.account_title
         previous.hasRoute<AutomationsRoute>() -> Res.string.automations_title
         previous.hasRoute<WaitsRoute>() -> Res.string.waits_title
+        previous.hasRoute<WorkflowsRoute>() -> Res.string.workflows_title
+        previous.hasRoute<WorkflowRoute>() -> Res.string.workflow_title
         previous.hasRoute<AutomationRoute>() -> Res.string.automation_title
         else -> Res.string.action_back
     })
@@ -491,6 +532,7 @@ private fun NavBackStackEntry?.selection(): SidebarSelection {
         destination.hasRoute<ArtifactsRoute>() -> if (toRoute<ArtifactsRoute>().sessionId == null) SidebarSelection.AllArtifacts else SidebarSelection.None
         destination.hasRoute<AutomationsRoute>() -> SidebarSelection.AllAutomations
         destination.hasRoute<WaitsRoute>() -> SidebarSelection.AllWaits
+        destination.hasRoute<WorkflowsRoute>() || destination.hasRoute<WorkflowRunRoute>() || destination.hasRoute<WorkflowRoute>() || destination.hasRoute<WorkflowStartRoute>() -> SidebarSelection.AllWorkflows
         destination.hasRoute<AutomationRoute>() -> SidebarSelection.Automation(toRoute<AutomationRoute>().automationId)
         destination.hasRoute<AutomationEditRoute>() -> toRoute<AutomationEditRoute>().automationId?.let { SidebarSelection.Automation(it) } ?: SidebarSelection.AllAutomations
         destination.hasRoute<AutomationTestRoute>() -> SidebarSelection.Automation(toRoute<AutomationTestRoute>().automationId)

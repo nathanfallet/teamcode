@@ -55,8 +55,9 @@ interface SessionRepository {
      * [waiting]: also `cloud.session.waiting` and `cloud.session.answered`, only to a server that announces
      * `cloud.sessions.waiting.v1` (an older one refuses a type it does not know). [waits]: also `cloud.wait.*`, only to a
      * server that announces `waits.v1`. [renames]: also `cloud.session.renamed`, only to a server that announces
-     * `cloud.sessions.rename.v1`. Screens follow it through
+     * `cloud.sessions.rename.v1`. [workflows]: also `cloud.workflow.run.updated`, only to a server that announces
+     * `workflows.live.v1`. Screens follow it through
      * [me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed], which shares one connection.
      */
-    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false, waits: Boolean = false, renames: Boolean = false): Flow<LiveUpdate<SessionChange>>
+    fun sessionChanges(accountId: String, kinds: Set<SessionKind> = emptySet(), waiting: Boolean = false, waits: Boolean = false, renames: Boolean = false, workflows: Boolean = false): Flow<LiveUpdate<SessionChange>>
 }

@@ -77,7 +77,7 @@ private fun CompanionException.sentence(): Pair<StringResource?, List<Any>> = wh
         "folder_not_configured", "folder_missing", "folder_moved", "folder_refused" -> Res.string.error_device_resume_folder to listOf<Any>(code)
         else -> visibleCode(code)?.let { Res.string.error_device_refused_code to listOf<Any>(it) } ?: (Res.string.error_device_refused to emptyList())
     }
-    is CompanionException.Server -> automationCodeSentence(code)?.let { it to emptyList<Any>() } ?: visibleCode(code)?.let { Res.string.error_server_http_code to listOf<Any>(statusCode, it) } ?: (Res.string.error_server_http to listOf<Any>(statusCode))
+    is CompanionException.Server -> (automationCodeSentence(code) ?: workflowCodeSentence(code))?.let { it to emptyList<Any>() } ?: visibleCode(code)?.let { Res.string.error_server_http_code to listOf<Any>(statusCode, it) } ?: (Res.string.error_server_http to listOf<Any>(statusCode))
 }
 
 private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when (problem) {
@@ -104,6 +104,9 @@ private fun InvalidInput.inputSentence(): Pair<StringResource, List<Any>> = when
     InvalidInput.Problem.AUTOMATION_PAYLOAD -> Res.string.input_automation_payload to emptyList()
     InvalidInput.Problem.AUTOMATION_LIMITS -> Res.string.input_automation_limits to emptyList()
     InvalidInput.Problem.AUTOMATION_NOT_OWNER -> Res.string.input_automation_not_owner to emptyList()
+    InvalidInput.Problem.WORKFLOW_INPUT_REQUIRED -> Res.string.input_workflow_input_required to emptyList()
+    InvalidInput.Problem.WORKFLOW_INPUT_LENGTH -> Res.string.input_workflow_input_length to listOf(limit)
+    InvalidInput.Problem.WORKFLOW_NOT_STARTER -> Res.string.input_workflow_not_starter to emptyList()
 }
 
 /** The sentence of a code an automation call answers with (`409 stale_version`, `422 not_available_yet`...), when the app words it. */
@@ -118,5 +121,14 @@ private fun automationCodeSentence(code: String?): StringResource? = when (code)
     "automation_disabled" -> Res.string.error_automation_disabled
     "automation_owner_only" -> Res.string.input_automation_not_owner
     "invalid_payload" -> Res.string.error_automation_invalid_payload
+    else -> null
+}
+
+/** The sentence of a code a workflow call answers with (`409 run_limit`, `400 profile_required`...), when the app words it. */
+private fun workflowCodeSentence(code: String?): StringResource? = when (code) {
+    "run_limit" -> Res.string.error_workflow_run_limit
+    "invalid_inputs" -> Res.string.error_workflow_invalid_inputs
+    "profile_required" -> Res.string.error_workflow_profile_required
+    "run_finished" -> Res.string.error_workflow_run_finished
     else -> null
 }
