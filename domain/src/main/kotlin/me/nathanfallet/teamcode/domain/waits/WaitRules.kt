@@ -30,11 +30,42 @@ object WaitRules {
         if (value.isBlank() || value.length > max || value.any { it.isISOControl() }) throw invalid("Use $what of 1 to $max characters without control characters.")
     }
 
-    /** Everything but the session and the assignee, which need the store. */
-    fun validate(definition: WaitDefinition): WaitDefinition {
+    const val MIN_AFTER_SECONDS = 30L
+    const val MAX_AFTER_SECONDS = 30L * 24 * 3600
+    const val DEFAULT_TIMEOUT_SECONDS = 24L * 3600
+    const val MAX_TIMEOUT_SECONDS = 7L * 24 * 3600
+    const val MAX_RESUME_MESSAGE = 2_000
+    const val MAX_EVENT_BYTES = 16 * 1024
+    const val MAX_EVENT_RESULT = 64
+    const val MAX_EVENT_NOTE = 2_000
+    const val MAX_EVENT_URL = 2_000
+
+    /** An instant written as ISO-8601 in UTC (`2026-11-02T09:00:00Z`) or as epoch milliseconds; null when it is neither. */
+    fun parseInstant(text: String): Long? {
+        val value = text.trim()
+        if (value.isNotEmpty() && value.length <= 16 && value.all { it.isDigit() }) return value.toLongOrNull()
+        return try { java.time.Instant.parse(value).toEpochMilli() } catch (_: Exception) { null }
+    }
+
+    /**
+     * The instant ([now] included) a wait resolves at, or the timeout of an event wait; null for a human wait. [validate]
+     * has checked the definition.
+     */
+    fun dueAt(definition: WaitDefinition, now: Long): Long? {
+        val schedule = definition.schedule ?: return null
+        return when (definition.resolver) {
+            WaitResolver.TIME -> schedule.at ?: (now + schedule.afterSeconds!! * 1000)
+            WaitResolver.EVENT -> now + (schedule.timeoutSeconds ?: DEFAULT_TIMEOUT_SECONDS) * 1000
+            WaitResolver.HUMAN -> null
+        }
+    }
+
+    /** Everything but the session and the assignee, which need the store. [now] is the database clock, for `at`. */
+    fun validate(definition: WaitDefinition, now: Long = System.currentTimeMillis()): WaitDefinition {
         plain(definition.title, MAX_TITLE, "a title")
         definition.body?.let { if (it.length > MAX_BODY) throw invalid("The description is at most $MAX_BODY characters.") }
-        if (definition.resolver != WaitResolver.HUMAN) throw notYet("Waits for a time or an event are not available yet: ask a person.")
+        if (definition.resolver != WaitResolver.HUMAN) return validateSelfResolving(definition, now)
+        if (definition.schedule != null) throw invalid("at, after, source, timeoutSeconds, onTimeout and resumeMessage belong to waits for a time or an event: set resolver to time or event.")
         if (definition.refs.size > MAX_REFS) throw invalid("At most $MAX_REFS references.")
         definition.refs.forEach(::validateRef)
         if (definition.fields.size > MAX_FIELDS) throw invalid("At most $MAX_FIELDS fields.")
@@ -54,6 +85,40 @@ object WaitRules {
     }
 
     const val DEFAULT_ACTION = "done"
+
+    /** A wait for a time or an event asks nobody: no fields, no actions, and exactly the settings of its resolver. */
+    private fun validateSelfResolving(definition: WaitDefinition, now: Long): WaitDefinition {
+        val schedule = definition.schedule ?: throw invalid(
+            if (definition.resolver == WaitResolver.TIME) "A wait for a time needs at (an instant) or after (seconds)." else "A wait for an event needs source (webhook).")
+        if (definition.fields.isNotEmpty() || definition.actions.isNotEmpty()) throw invalid("A wait for a time or an event asks nobody: it has no fields and no actions.")
+        if (definition.refs.size > MAX_REFS) throw invalid("At most $MAX_REFS references.")
+        definition.refs.forEach(::validateRef)
+        schedule.resumeMessage?.let {
+            if (it.isBlank() || it.length > MAX_RESUME_MESSAGE || it.any { c -> c.isISOControl() && c != '\n' && c != '\t' }) throw invalid("resumeMessage is 1 to $MAX_RESUME_MESSAGE characters.")
+        }
+        if (definition.resolver == WaitResolver.TIME) {
+            if (schedule.source != null || schedule.timeoutSeconds != null || schedule.onTimeout != null) throw invalid("source, timeoutSeconds and onTimeout belong to waits for an event.")
+            if ((schedule.at == null) == (schedule.afterSeconds == null)) throw invalid("Give either at or after, not both and not neither.")
+            schedule.afterSeconds?.let { if (it !in MIN_AFTER_SECONDS..MAX_AFTER_SECONDS) throw invalid("after is $MIN_AFTER_SECONDS seconds to 30 days ($MAX_AFTER_SECONDS seconds).") }
+            schedule.at?.let {
+                if (it <= now) throw invalid("at must be in the future.")
+                if (it > now + MAX_AFTER_SECONDS * 1000) throw invalid("at is at most 30 days from now.")
+            }
+        } else {
+            if (schedule.at != null || schedule.afterSeconds != null) throw invalid("at and after belong to waits for a time.")
+            if (schedule.source == null) throw invalid("A wait for an event needs source (webhook).")
+            schedule.timeoutSeconds?.let { if (it !in MIN_AFTER_SECONDS..MAX_TIMEOUT_SECONDS) throw invalid("timeoutSeconds is $MIN_AFTER_SECONDS seconds to 7 days ($MAX_TIMEOUT_SECONDS seconds).") }
+        }
+        return definition.copy(actions = emptyList(), kind = WaitKind.TIMED)
+    }
+
+    /** What an outside caller posted to an event address, checked: a short `result`, an https `url`, a `note`. Throws `400 invalid_event`. */
+    fun checkEvent(result: String, url: String?, note: String?) {
+        fun bad(message: String) = TeamFailure("invalid_event", 400, message)
+        if (result.isBlank() || result.length > MAX_EVENT_RESULT || result.any { it.isISOControl() }) throw bad("result is 1 to $MAX_EVENT_RESULT characters, for example success or failure.")
+        url?.let { if (it.length > MAX_EVENT_URL || !it.startsWith("https://") || it.any { c -> c.isWhitespace() || c.isISOControl() }) throw bad("url is an https address without spaces.") }
+        note?.let { if (it.length > MAX_EVENT_NOTE || it.any { c -> c.isISOControl() && c != '\n' && c != '\t' }) throw bad("note is at most $MAX_EVENT_NOTE characters.") }
+    }
 
     private fun validateRef(ref: WaitRef) {
         when (ref.kind) {

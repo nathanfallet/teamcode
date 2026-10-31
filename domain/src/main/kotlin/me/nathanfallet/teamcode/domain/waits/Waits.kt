@@ -7,11 +7,21 @@ import me.nathanfallet.teamcode.domain.team.Principal
 enum class WaitKind(val wire: String) {
     PERMISSION("permission"), QUESTION("question"), HUMAN_REQUEST("human_request"), TURN_FAILED("turn_failed"),
     /** A question a workflow run asks at a human node: its answer moves the run on, it does not wake the session. */
-    WORKFLOW("workflow");
+    WORKFLOW("workflow"),
+    /** A wait for a time or an event: the server resolves it and wakes the session; nobody is asked. */
+    TIMED("timed");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 enum class WaitResolver(val wire: String) {
     HUMAN("human"), TIME("time"), EVENT("event");
+    companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
+enum class EventSource(val wire: String) {
+    WEBHOOK("webhook");
+    companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
+}
+enum class TimeoutAction(val wire: String) {
+    WAKE("wake"), TURN_FAILED("turn_failed");
     companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } }
 }
 enum class WaitStatus(val wire: String) {
@@ -35,12 +45,31 @@ data class WaitRef(val kind: String, val id: String? = null, val url: String? = 
 data class WaitAnswer(val action: String, val values: Map<String, JsonElement>, val authorId: String, val answeredAt: Long)
 
 /** What a member or an agent asks for; [WaitService.create] checks it and the store assigns the identity. */
+/**
+ * What a request says about a wait that resolves by itself: the instant ([at], epoch milliseconds, or [afterSeconds] from now) of
+ * a `time` wait, or the [source], [timeoutSeconds] and [onTimeout] of an `event` wait. [resumeMessage] joins the wake message.
+ */
+data class WaitSchedule(
+    val at: Long? = null, val afterSeconds: Long? = null, val source: EventSource? = null, val timeoutSeconds: Long? = null,
+    val onTimeout: TimeoutAction? = null, val resumeMessage: String? = null,
+)
+
+/**
+ * What a stored wait that resolves by itself carries: [dueAt] is the instant of a `time` wait, or the timeout of an `event`
+ * wait. [tokenHash] (SHA-256, hex) of an event wait's secret never leaves the server.
+ */
+data class WaitTimer(
+    val dueAt: Long, val eventSource: EventSource? = null, val onTimeout: TimeoutAction? = null, val resumeMessage: String? = null,
+    val tokenHash: String? = null,
+)
+
 data class WaitDefinition(
     val sessionId: String, val title: String, val body: String? = null, val assigneeId: String? = null,
     val refs: List<WaitRef> = emptyList(), val fields: List<WaitField> = emptyList(), val actions: List<WaitAction> = emptyList(),
     val resolver: WaitResolver = WaitResolver.HUMAN,
-    /** Set by the server for its own waits; a request always makes a `human_request`. */
+    /** Set by the server for its own waits; a request makes a `human_request`, or a `timed` wait for a time or an event. */
     val kind: WaitKind = WaitKind.HUMAN_REQUEST,
+    val schedule: WaitSchedule? = null,
 )
 
 /**
@@ -52,6 +81,7 @@ data class Wait(
     val sessionId: String?, val sessionName: String?, val requestId: String?, val assigneeId: String, val assigneeName: String?,
     val createdById: String?, val title: String, val body: String?, val refs: List<WaitRef>, val fields: List<WaitField>,
     val actions: List<WaitAction>, val answer: WaitAnswer?, val createdAt: Long, val resolvedAt: Long?,
+    val timer: WaitTimer? = null,
 )
 
 /** The part of a cloud session a wait needs: who owns it and what to call it. */
@@ -61,10 +91,29 @@ data class WaitPage(val waits: List<Wait>, val nextBefore: String?)
 
 /** One of the page's reads: [assignee] null for the whole team, [status] null for any. */
 /** [sessionId]: only the waits of that session, whoever they are asked of (then no session request is added). */
-data class WaitQuery(val assignee: String?, val status: WaitStatus?, val before: String?, val limit: Int, val sessionId: String? = null)
+data class WaitQuery(
+    val assignee: String?, val status: WaitStatus?, val before: String?, val limit: Int, val sessionId: String? = null,
+    /** Only these resolvers; the human waits when the request names none (what "Waiting for you" shows). Null: every resolver. */
+    val resolvers: Set<WaitResolver>? = setOf(WaitResolver.HUMAN),
+)
 
-/** Result of the store's atomic create, answer or cancel: the wait as it is after, and whether this call changed it. */
-data class WaitChange(val wait: Wait, val changed: Boolean)
+/**
+ * Result of the store's atomic create, answer or cancel: the wait as it is after, and whether this call changed it.
+ * [secret] is the event wait's secret, set by the creation that made it and nowhere else.
+ */
+data class WaitChange(val wait: Wait, val changed: Boolean, val secret: String? = null)
+
+/** What the server records when it resolves a wait itself: the system answer's [action] and [values], and when. */
+data class WaitResolution(val action: String, val values: Map<String, JsonElement>, val at: Long)
+
+/** An open wait that is due, as the scan reads it. */
+data class DueWait(val id: String, val teamId: String, val resolver: WaitResolver, val onTimeout: TimeoutAction?)
+
+/** What an event address needs to know before it trusts the caller: the stored hash of the secret, and whether the wait still listens. */
+data class EventTarget(val id: String, val tokenHash: String?, val listening: Boolean)
+
+/** Who or what closes a wait the server resolves: the clock (the wait must be due) or an event (the wait must be an open `event` wait). */
+enum class ResolveCause { DUE, EVENT }
 
 interface WaitStore {
     suspend fun now(): Long
@@ -88,6 +137,21 @@ interface WaitStore {
     suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange
     /** Same for a cancellation. Audited `wait.cancelled`. */
     suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange
+
+    /** The stored hash of an event wait's secret and whether it still listens; null for an unknown wait or one that waits for a person. */
+    suspend fun eventTarget(id: String): EventTarget?
+    /** Open waits whose instant has come (`status = open and due_at <= now`, database clock), oldest first, at most [limit]. */
+    suspend fun dueWaits(limit: Int): List<DueWait>
+    /**
+     * Closes a wait the server resolves, in one transaction like an answer (status, system answer, audit, feed event), by one
+     * conditional update: of two replicas, or of an event and a timeout, exactly one changes the row ([WaitChange.changed]).
+     * [openTurnFailed] also opens the owner's `turn_failed` wait; [wake] marks the session's wake message as owed until
+     * [wakeDelivered].
+     */
+    suspend fun resolve(id: String, cause: ResolveCause, resolution: WaitResolution, openTurnFailed: Boolean, wake: Boolean): WaitChange?
+    /** Resolved waits whose wake message may not have been queued (a failure after [resolve]), oldest first. */
+    suspend fun pendingWakes(limit: Int): List<Wait>
+    suspend fun wakeDelivered(id: String)
 }
 
 /**

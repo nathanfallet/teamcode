@@ -96,4 +96,35 @@ class WaitsCliTest {
         assertContains(message(409, "answer_through_session"), "in the session")
         assertContains(message(400, "invalid_answer"), "waits show")
     }
+
+    @Test fun `ask flags for a delay, an instant or a webhook`() {
+        assertNull(timedSettings(null, null, false, null, null, null), "no flag: a wait for a person")
+        val delay = assertNotNull(timedSettings(3600, null, false, null, null, "Check CI"))
+        assertEquals("time", delay.resolver); assertEquals(3600L, delay.after); assertEquals("Check CI", delay.resumeMessage)
+        assertEquals(JsonPrimitive("2026-11-02T09:00:00Z"), timedSettings(null, "2026-11-02T09:00:00Z", false, null, null, null)!!.at)
+        assertEquals(JsonPrimitive(1800000000000L), timedSettings(null, "1800000000000", false, null, null, null)!!.at)
+        val hook = assertNotNull(timedSettings(null, null, true, 7200, "turn_failed", null))
+        assertEquals("event", hook.resolver); assertEquals("webhook", hook.source); assertEquals(7200L, hook.timeoutSeconds); assertEquals("turn_failed", hook.onTimeout)
+    }
+
+    @Test fun `ask flags that do not fit are refused before anything is sent`() {
+        listOf<() -> Unit>(
+            { timedSettings(10, null, false, null, null, null) }, { timedSettings(30L * 24 * 3600 + 1, null, false, null, null, null) },
+            { timedSettings(60, "2026-11-02T09:00:00Z", false, null, null, null) }, { timedSettings(60, null, true, null, null, null) },
+            { timedSettings(null, "tomorrow", false, null, null, null) }, { timedSettings(60, null, false, 60, null, null) },
+            { timedSettings(null, null, true, 5, null, null) }, { timedSettings(null, null, true, 7L * 24 * 3600 + 1, null, null) },
+            { timedSettings(null, null, false, 60, null, null) }, { timedSettings(null, null, false, null, "wake", null) },
+            { timedSettings(60, null, false, null, null, "x".repeat(2001)) },
+        ).forEachIndexed { index, block -> assertFailsWith<UsageError>("case $index") { block() } }
+    }
+
+    @Test fun `a wait that resolves by itself is listed with when it resumes`() {
+        val timed = wait().copy(resolver = "time", kind = "timed", dueAt = 1_800_000_000_000)
+        assertContains(timed.line(0), "resumes at 2027-01-15T08:00:00Z")
+        val ci = wait().copy(resolver = "event", kind = "timed", timeoutAt = 1_800_000_000_000, eventSource = "webhook", onTimeout = "turn_failed", eventUrl = "https://t/x?token=wev_s")
+        assertContains(ci.line(0), "waits for webhook, times out at 2027-01-15T08:00:00Z (turn_failed)")
+        assertContains(ci.announcement(), "curl -X POST 'https://t/x?token=wev_s'")
+        assertFalse("curl" in ci.copy(eventUrl = null).announcement())
+        assertFalse("resumes" in wait().line(0), "a person's wait says nothing of the kind")
+    }
 }

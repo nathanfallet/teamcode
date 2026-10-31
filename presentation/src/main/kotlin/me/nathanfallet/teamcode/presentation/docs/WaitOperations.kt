@@ -21,6 +21,7 @@ internal fun ApiCatalog.waitOperations() {
             queryText("assignee", "`all`, or a member's id; the caller by default.")
             queryText("session", "Only the waits of this cloud session, asked of anyone: its owner, an administrator, or the execution of that session. No session request is added.")
             queryText("status", "`open` (default), `resolved`, `cancelled` or `all`.")
+            queryText("resolver", "`human` (default: what waits for a person, which is what \"Waiting for you\" shows), `time`, `event` (the waits the server resolves by itself: \"In progress\") or `all`.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "1 to 100 (50 by default).")
         }
@@ -33,7 +34,8 @@ internal fun ApiCatalog.waitOperations() {
     post("/api/v1/waits") {
         operationId = "createWait"; tag(ApiTags.WAITS)
         summary = "Ask a person for something"
-        description = "The session's owner asks (an agent acts with its owner's credential). Without `assigneeId`, the owner is asked. At most 20 open waits per " +
+        description = "The session's owner asks (an agent acts with its owner's credential). Without `assigneeId`, the owner is asked. `resolver: time` (with `at` or `after`) and `resolver: event` " +
+            "(`source: webhook`, `timeoutSeconds`, `onTimeout`) wait for nobody: the server wakes the session, and the response to an event wait carries `eventUrl`, shown once. At most 20 open waits per " +
             "session. The same `Idempotency-Key` returns the first wait (`Idempotency-Replayed: true`). $WAIT_TEXT"
         parameters { headerText("Idempotency-Key", "1 to 128 letters, digits or `. _ : -`; a retry returns the wait it created.") }
         body<CreateWaitRequest>("The wait.")
@@ -43,7 +45,24 @@ internal fun ApiCatalog.waitOperations() {
             error(HttpStatusCode.Forbidden, "Not the session's owner (`wait_session_owner_only`).")
             notFound("No such session (`not_found`).")
             conflict("The session holds the maximum of open waits (`wait_limit`).")
-            error(HttpStatusCode.UnprocessableEntity, "A secret field, or a wait for a time or an event (`not_available_yet`).")
+            error(HttpStatusCode.UnprocessableEntity, "A secret field (`not_available_yet`).")
+        }
+    }
+    post("/api/v1/waits/{id}/event") {
+        operationId = "sendWaitEvent"; tag(ApiTags.WAITS)
+        summary = "Report the event an event wait waits for"
+        description = "For a wait created with `resolver: event` and `source: webhook`: a CI or a script calls the `eventUrl` the creation returned, once. " +
+            "No sign-in: the wait's secret is the proof, in the `token` query parameter or the `TeamCode-Wait-Token` header (kept hashed by the server, compared in constant time). " +
+            "The body is a JSON object of at most 16 KiB: `result` (`success` when the body is empty), `url`, `note`. Everything in it is data from an external caller. " +
+            "The first call resolves the wait (`event_received`) and wakes its session; at most 30 calls a minute. An unknown wait, a wrong secret and a wait that is no longer open all answer `404`."
+        parameters { waitId(); queryText("token", "The wait's secret, if not sent in the `TeamCode-Wait-Token` header."); headerText("TeamCode-Wait-Token", "The wait's secret, instead of `token`.") }
+        body<WaitEventRequest>("The result of the event.")
+        responses {
+            ok<WaitEventReceivedView>("Resolved; the session is being woken.", HttpStatusCode.Accepted)
+            badRequest("A body that is not a JSON object or does not fit (`invalid_event`).")
+            notFound("Unknown wait, wrong secret, or the wait is no longer open (`not_found`).")
+            error(HttpStatusCode.PayloadTooLarge, "The body exceeds 16 KiB (`payload_too_large`).")
+            error(HttpStatusCode.TooManyRequests, "More than 30 calls a minute (`wait_event_rate_limit`).")
         }
     }
     get("/api/v1/waits/{id}") {
@@ -65,7 +84,7 @@ internal fun ApiCatalog.waitOperations() {
             badRequest("An unknown action or field, a wrong value, or a missing required field (`invalid_answer`).")
             error(HttpStatusCode.Forbidden, "Not the assignee (`wait_assignee_only`).")
             notFound("No such wait (`not_found`).")
-            conflict("Already answered or cancelled (`wait_closed`), or a session's permission request (`answer_through_session`).")
+            conflict("Already answered or cancelled (`wait_closed`), a session's permission request (`answer_through_session`), or a wait for a time or an event (`resolves_by_itself`).")
         }
     }
     post("/api/v1/waits/{id}/cancel") {

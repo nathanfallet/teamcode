@@ -2,6 +2,8 @@ package me.nathanfallet.teamcode.companion.di
 
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.AnswerWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.CancelWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadInProgressWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.FollowWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadWaitsUseCase
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteWaitRepository
@@ -17,5 +19,7 @@ val waitsModule = module {
     single { LoadWaitsUseCase(get(), get(), get()) }
     single { AnswerWaitUseCase(get(), get()) }
     single { FollowWaitsUseCase(get(), get(), get()) }
-    viewModel { WaitsViewModel(get(), get(), get(), get()) }
+    single { LoadInProgressWaitsUseCase(get(), get(), get()) }
+    single { CancelWaitUseCase(get(), get()) }
+    viewModel { WaitsViewModel(get(), get(), get(), get(), get(), get()) }
 }

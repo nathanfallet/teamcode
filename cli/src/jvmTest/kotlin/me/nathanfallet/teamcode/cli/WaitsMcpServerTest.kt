@@ -45,7 +45,13 @@ class WaitsMcpServerTest {
                 request.method == HttpMethod.Post && path == "/api/v1/waits" -> {
                     val input = Serialization.json.decodeFromString(CreateWaitRequest.serializer(), body).wait
                     created = input
-                    json(encode(wait("w-new", input.sessionId).copy(title = input.title)), HttpStatusCode.Created)
+                    json(encode(wait("w-new", input.sessionId).copy(title = input.title).let {
+                        when (input.resolver) {
+                            "time" -> it.copy(resolver = "time", kind = "timed", dueAt = 1_800_000_060_000)
+                            "event" -> it.copy(resolver = "event", kind = "timed", timeoutAt = 1_800_086_400_000, eventSource = "webhook", eventUrl = "https://team.example/api/v1/waits/w-new/event?token=wev_secret")
+                            else -> it
+                        }
+                    }), HttpStatusCode.Created)
                 }
                 request.method == HttpMethod.Get && path == "/api/v1/waits" ->
                     json(Serialization.json.encodeToString(WaitPageView.serializer(), WaitPageView(waits, nextBefore)))
@@ -78,7 +84,7 @@ class WaitsMcpServerTest {
         assertTrue("[TeamCode wait answered]" in init["instructions"]!!.jsonPrimitive.content)
         val tools = Json.parseToJsonElement(server.mcp.handle(request("tools/list"))!!).jsonObject["result"]!!.jsonObject["tools"]!!.jsonArray
             .map { it.jsonObject["name"]!!.jsonPrimitive.content }
-        assertEquals(listOf("ask_human", "list_waits", "get_wait", "cancel_wait"), tools)
+        assertEquals(listOf("ask_human", "wait_for", "list_waits", "get_wait", "cancel_wait"), tools)
         assertFalse(tools.any { "answer" in it }, "An agent never answers its own wait")
         assertNull(server.mcp.handle("""{"jsonrpc":"2.0","method":"notifications/initialized"}"""), "A notification gets no answer")
         assertEquals(-32700, Json.parseToJsonElement(server.mcp.handle("not json")!!).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.int)
@@ -156,9 +162,9 @@ class WaitsMcpServerTest {
         val listed = args(text)["waits"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content }
         assertEquals(listOf(waitId), listed, "Neither another session's wait nor this session's own permission request")
         assertTrue("warning" in args(text))
-        assertEquals("GET /api/v1/waits?status=open&limit=100", server.requests.single().first)
+        assertEquals("GET /api/v1/waits?status=open&resolver=all&limit=100", server.requests.single().first)
         assertFalse(server.tool("list_waits", args("""{"status":"all"}""")).first)
-        assertEquals("GET /api/v1/waits?status=all&limit=100", server.requests.last().first)
+        assertEquals("GET /api/v1/waits?status=all&resolver=all&limit=100", server.requests.last().first)
         assertTrue(server.tool("list_waits", args("""{"status":"closed"}""")).first)
         // A cursor that never ends stops after a few pages.
         server.requests.clear(); server.nextBefore = "older"
@@ -187,6 +193,58 @@ class WaitsMcpServerTest {
         assertTrue("already resolved" in server.tool("cancel_wait", args("""{"id":"$waitId"}""")).second)
     }
 
+    @Test fun waitForCreatesATimeWaitAndTellsTheAgentToEndItsTurn() = runBlocking {
+        val server = Server()
+        val (error, text) = server.tool("wait_for", args("""{"title":"Resume at 9","after":3600,"resumeMessage":"Check CI"}"""))
+        assertFalse(error, text)
+        val input = server.created!!
+        assertEquals("time", input.resolver); assertEquals(3600L, input.after); assertNull(input.at); assertEquals("Check CI", input.resumeMessage); assertEquals(session, input.sessionId)
+        assertEquals("key-1", server.requests.single { it.first == "POST /api/v1/waits" }.second)
+        val result = args(text)
+        assertEquals(1_800_000_060_000, result["dueAt"]!!.jsonPrimitive.long); assertNull(result["eventUrl"])
+        assertTrue("End your turn" in result["instruction"]!!.jsonPrimitive.content && "paused" in result["instruction"]!!.jsonPrimitive.content && "[TeamCode wait answered]" in result["instruction"]!!.jsonPrimitive.content)
+        server.tool("wait_for", args("""{"title":"Tomorrow","at":"2026-11-02T09:00:00Z"}"""))
+        assertEquals(JsonPrimitive("2026-11-02T09:00:00Z"), server.created!!.at)
+    }
+
+    @Test fun waitForAWebhookReturnsTheAddressForTheCi() = runBlocking {
+        val server = Server()
+        val (error, text) = server.tool("wait_for", args("""{"title":"CI of the PR","event":{"source":"webhook"},"timeout":7200,"onTimeout":"turn_failed"}"""))
+        assertFalse(error, text)
+        val input = server.created!!
+        assertEquals("event", input.resolver); assertEquals("webhook", input.source); assertEquals(7200L, input.timeoutSeconds); assertEquals("turn_failed", input.onTimeout)
+        val result = args(text)
+        assertEquals("https://team.example/api/v1/waits/w-new/event?token=wev_secret", result["eventUrl"]!!.jsonPrimitive.content)
+        assertTrue("curl -X POST" in result["instruction"]!!.jsonPrimitive.content && "do not commit" in result["instruction"]!!.jsonPrimitive.content)
+        assertTrue(result["timeoutAtIso"]!!.jsonPrimitive.content.startsWith("2027-"))
+    }
+
+    @Test fun waitForChecksItsArgumentsBeforeSendingAnything() = runBlocking {
+        val server = Server()
+        for ((arguments, expected) in listOf(
+            """{"title":"x"}""" to "exactly one of",
+            """{"title":"x","after":60,"at":"2026-11-02T09:00:00Z"}""" to "exactly one of",
+            """{"title":"x","after":60,"timeout":60}""" to "belong to an event wait",
+            """{"title":"x","event":{"source":"carrier-pigeon"}}""" to "webhook",
+            """{"title":"x","event":{"source":"webhook"},"onTimeout":"explode"}""" to "wake or turn_failed",
+            """{"title":"x","after":60,"fields":[]}""" to "no argument fields",
+            """{"after":60}""" to "title",
+        )) {
+            val (error, text) = server.tool("wait_for", args(arguments))
+            assertTrue(error && expected in text, "$arguments: $text")
+        }
+        assertTrue(server.requests.isEmpty())
+    }
+
+    @Test fun listedWaitsSayWhenTheyResolveByThemselves() = runBlocking {
+        val server = Server()
+        server.waits = mutableListOf(server.wait(waitId, session).copy(resolver = "time", kind = "timed", dueAt = 99, title = "Resume at 9"))
+        val (_, text) = server.tool("list_waits", JsonObject(emptyMap()))
+        val entry = args(text)["waits"]!!.jsonArray.single().jsonObject
+        assertEquals("time", entry["resolver"]!!.jsonPrimitive.content); assertEquals(99, entry["dueAt"]!!.jsonPrimitive.long)
+        assertTrue(server.requests.any { it.first.contains("resolver=all") }, "the agent sees its own timed waits")
+    }
+
     @Test fun serverRefusalsAreReadable() = runBlocking {
         val server = Server()
         val cases = mapOf(
@@ -194,6 +252,7 @@ class WaitsMcpServerTest {
             (HttpStatusCode.BadRequest to "invalid_wait") to "Fix the arguments",
             (HttpStatusCode.BadRequest to "invalid_assignee") to "id of an active member",
             (HttpStatusCode.UnprocessableEntity to "not_available_yet") to "supported field type",
+            (HttpStatusCode.Conflict to "resolves_by_itself") to "cancel_wait",
             (HttpStatusCode.Forbidden to "wait_session_owner_only") to "Only the session's owner",
             (HttpStatusCode.Forbidden to "credential_scope") to "ask in your reply instead",
             (HttpStatusCode.Conflict to "wait_closed") to "already answered or cancelled",

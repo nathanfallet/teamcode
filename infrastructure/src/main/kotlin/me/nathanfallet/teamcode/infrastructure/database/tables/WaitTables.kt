@@ -27,6 +27,15 @@ object Waits : Table("waits") {
     val idempotencyKey = varchar("idempotency_key", 128).nullable()
     val createdAt = long("created_at")
     val resolvedAt = long("resolved_at").nullable()
+    /** Waits that resolve by themselves: the instant of a `time` wait, or the timeout of an `event` wait. Null for a person's. */
+    val dueAt = long("due_at").nullable()
+    val eventSource = varchar("event_source", 16).nullable()
+    val onTimeout = varchar("on_timeout", 16).nullable()
+    val resumeMessage = text("resume_message").nullable()
+    /** SHA-256 (hex) of an event wait's secret: the secret itself is shown once and never kept. */
+    val eventTokenHash = varchar("event_token_hash", 64).nullable()
+    /** Set when the server resolved the wait and still owes its session the wake message; cleared once queued. */
+    val wakePending = bool("wake_pending").default(false)
     override val primaryKey = PrimaryKey(id)
     init {
         // A member's waits by status, newest first: equality columns, then the sort. It leads with the assignee so the
@@ -40,5 +49,13 @@ object Waits : Table("waits") {
         // The cap of open waits per session.
         index("wait_session", false, sessionId, status)
         uniqueIndex("wait_idempotency", createdById, idempotencyKey)
+        // The same with the resolver, which every list now filters on (human by default): equality columns first, so a member's
+        // timers are read without walking their people's waits, and the default list reads only its own.
+        index("wait_assignee_resolver", false, assigneeId, teamId, status, resolver, createdAt, id)
+        // The due scan: open waits whose instant has come, oldest first. Only waits for a time or an event have a due_at, so the
+        // range alone selects them; the planner reads exactly the due entries.
+        index("wait_due", false, status, dueAt)
+        // The wake messages still owed after a resolution: a handful of rows, none in the normal case.
+        index("wait_wake", false, wakePending, resolvedAt)
     }
 }

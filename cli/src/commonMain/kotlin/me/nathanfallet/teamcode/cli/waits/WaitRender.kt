@@ -19,8 +19,24 @@ internal fun age(createdAt: Long, now: Long): String {
 internal const val SESSION_NOTE = "answer it in the session"
 
 /** One row of `waits list`: id, status, kind, title, session name, age, source. A session's own request is answered in the session. */
-internal fun WaitView.line(now: Long) = listOf(id, status, kind, title, sessionName ?: sessionId ?: "-", age(createdAt, now),
-    if (source == "session") "session ($SESSION_NOTE)" else source).joinToString("\t")
+internal fun WaitView.line(now: Long) = listOfNotNull(id, status, kind, title, sessionName ?: sessionId ?: "-", age(createdAt, now),
+    if (source == "session") "session ($SESSION_NOTE)" else source, schedule()).joinToString("\t")
+
+/** What a wait the server resolves says of itself: "resumes at …", or "webhook, times out at …". Null for a person's wait. */
+internal fun WaitView.schedule(): String? = when {
+    dueAt != null -> "resumes at ${time(dueAt!!)}"
+    timeoutAt != null -> "waits for ${eventSource ?: "an event"}, times out at ${time(timeoutAt!!)} (${onTimeout ?: "wake"})"
+    else -> null
+}
+
+/** What `waits ask` prints for a wait the server resolves, including the event address of a webhook (shown only now). */
+internal fun WaitView.announcement(): String = buildList {
+    add("Waiting: $id ($title). ${schedule() ?: ""}".trim())
+    eventUrl?.let {
+        add("Event address (shown only now; it holds the wait's secret):")
+        add("  curl -X POST '$it' -H 'Content-Type: application/json' -d '{\"result\":\"success\"}'")
+    }
+}.joinToString("\n")
 
 private fun WaitFieldView.describe(): String {
     val flags = listOfNotNull(if (required) "required" else null, if (multiple) "multiple" else null, if (allowOther) "other allowed" else null)
@@ -38,6 +54,8 @@ internal fun WaitView.details(): String = buildList {
     add("$title  [$id]")
     add("Status: $status" + (resolvedAt?.let { " at ${time(it)}" } ?: "") + "; kind: $kind; source: $source")
     add("Asked of: ${assigneeName ?: assigneeId}; session: ${sessionName ?: sessionId ?: "-"}; created ${time(createdAt)}")
+    schedule()?.let { add("Resolves by itself ($resolver): $it") }
+    resumeMessage?.let { add("Resume message: $it") }
     if (source == "session") add("This is a request of a cloud session: $SESSION_NOTE, not with teamcode waits answer.")
     body?.let { add(""); add(it) }
     if (refs.isNotEmpty()) { add(""); add("References:"); refs.forEach { add("  ${it.kind}\t${it.id ?: it.url}" + (it.title?.let { t -> "\t$t" } ?: "")) } }

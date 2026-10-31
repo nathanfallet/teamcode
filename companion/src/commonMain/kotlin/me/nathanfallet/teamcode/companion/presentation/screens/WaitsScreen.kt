@@ -80,6 +80,9 @@ import me.nathanfallet.teamcode.companion.resources.waits_filter_open
 import me.nathanfallet.teamcode.companion.resources.waits_load_failed
 import me.nathanfallet.teamcode.companion.resources.waits_reconnecting
 import me.nathanfallet.teamcode.companion.resources.waits_title
+import me.nathanfallet.teamcode.companion.resources.waits_in_progress_title
+import me.nathanfallet.teamcode.companion.resources.waits_in_progress_hint
+import me.nathanfallet.teamcode.companion.resources.waits_withdraw_failed
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.koinInject
 
@@ -116,6 +119,7 @@ fun WaitsScreen(
                 ),
                 state.filter, viewModel::setFilter, Modifier.fillMaxWidth(), tag = { "waits-filter-${it.name.lowercase()}" },
             )
+            if (state.withdrawFailed) Banner(stringResource(Res.string.waits_withdraw_failed), Tone.DANGER, Modifier.testTag("waits-withdraw-failed"))
             if (state.reconnecting) Banner(stringResource(Res.string.waits_reconnecting), Tone.WARN, Modifier.testTag("waits-reconnecting"))
             if (state.closedElsewhere) Banner(stringResource(Res.string.waits_closed_elsewhere), Tone.NEUTRAL, Modifier.testTag("waits-closed"), icon = null)
             // A failed load with something to show: the list stays, the banner offers the reload.
@@ -149,6 +153,21 @@ fun WaitsScreen(
                 }
                 if (state.shownNext != null && !state.loadingMore) {
                     TcButton(stringResource(Res.string.sessions_load_more), onClick = viewModel::loadMore, kind = ButtonKind.GHOST, modifier = Modifier.testTag("waits-more"))
+                }
+            }
+            // Below what waits for the member, never mixed with it: what the server watches (a timer, a webhook) and wakes the session for.
+            if (state.filter == WaitFilter.OPEN && state.inProgress.isNotEmpty()) {
+                item(key = "in-progress-header") {
+                    Column(Modifier.padding(top = 10.dp).testTag("waits-in-progress"), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(stringResource(Res.string.waits_in_progress_title), color = colors.text, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("waits-in-progress-title"))
+                        Text(stringResource(Res.string.waits_in_progress_hint), style = MetaStyle, color = colors.muted)
+                    }
+                }
+                items(state.inProgress, key = { "in-progress-${it.id}" }) { wait ->
+                    InProgressCard(
+                        wait, now, wait.id in state.withdrawing, viewModel::withdraw,
+                        onOpenSession = { id -> account?.let { onOpenSession(it.id, id) } },
+                    )
                 }
             }
         }

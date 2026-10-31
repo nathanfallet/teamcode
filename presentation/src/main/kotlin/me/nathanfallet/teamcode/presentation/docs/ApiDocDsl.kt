@@ -137,12 +137,15 @@ internal class ApiAccess(val public: Boolean, val keyScopes: List<String>?) {
     companion object {
         private const val SAMPLE_ID = "00000000-0000-4000-8000-000000000000"
         private val automationTriggerTemplate = Regex("/api/v1/automations/\\{id}(/v/\\{version})?/trigger(/\\{token})?")
+        private val waitEventTemplate = Regex("/api/v1/waits/\\{id}/event")
         private val samples = mapOf("server" to "github", "name" to "example-skill", "version" to "1.0.0")
 
         fun of(method: HttpMethod, path: String, inferencePaths: Set<String>): ApiAccess {
             if (method == HttpMethod.Post && path == "/api/v1/auth/login") return ApiAccess(public = true, keyScopes = null)
             // An automation's webhook proves itself with its signature or its secret URL.
             if (method == HttpMethod.Post && automationTriggerTemplate.matches(path)) return ApiAccess(public = true, keyScopes = null)
+            // An event wait's address proves itself with the wait's own secret.
+            if (method == HttpMethod.Post && waitEventTemplate.matches(path)) return ApiAccess(public = true, keyScopes = null)
             val sample = Regex("\\{([^}]+)}").replace(path) { samples[it.groupValues[1]] ?: SAMPLE_ID }
             val scopes = when (credentialAction(method.value, sample, inferencePaths)) {
                 CredentialAction.DISCOVERY, CredentialAction.IDENTITY, CredentialAction.LOGOUT -> emptyList()

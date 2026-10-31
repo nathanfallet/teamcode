@@ -881,6 +881,15 @@
     <string name="waits_answer_action">Answer: %1$s</string>
     <string name="waits_yes">Yes</string>
     <string name="waits_no">No</string>
+    <string name="waits_in_progress_title">In progress</string>
+    <string name="waits_in_progress_hint">These wait for a time or for a webhook, not for you. The session wakes by itself.</string>
+    <string name="waits_kind_time">Timer</string>
+    <string name="waits_kind_event">Webhook</string>
+    <string name="waits_resumes_at">Resumes %1$s</string>
+    <string name="waits_event_until">Waits for a webhook, times out %1$s</string>
+    <string name="waits_event_until_ask">Waits for a webhook, times out %1$s, then asks you</string>
+    <string name="waits_withdraw">Cancel</string>
+    <string name="waits_withdraw_failed">Could not cancel. Try again.</string>
     <string name="tab_workflows">Workflows</string>
     <string name="workflows_title">Workflows</string>
     <string name="workflows_refresh">Refresh the workflows</string>

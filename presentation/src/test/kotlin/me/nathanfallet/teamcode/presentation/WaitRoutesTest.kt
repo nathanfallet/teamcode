@@ -9,6 +9,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.domain.gateway.*
 import me.nathanfallet.teamcode.domain.team.*
 import me.nathanfallet.teamcode.domain.waits.*
+import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 /** The wait routes decode, authorize by credential and encode; the rules are the domain's (WaitService). */
@@ -28,7 +29,18 @@ class WaitRoutesTest {
             return WaitChange(wait, true)
         }
         override suspend fun find(teamId: String, id: String) = waits[id]
-        override suspend fun list(teamId: String, query: WaitQuery) = WaitPage(waits.values.filter { (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) }, null)
+        override suspend fun list(teamId: String, query: WaitQuery) = WaitPage(waits.values.filter { (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) && (query.resolvers == null || it.resolver in query.resolvers!!) }, null)
+        override suspend fun eventTarget(id: String) = waits[id]?.takeIf { it.resolver == WaitResolver.EVENT }?.let { EventTarget(it.id, it.timer?.tokenHash, it.status == WaitStatus.OPEN) }
+        override suspend fun dueWaits(limit: Int) = emptyList<DueWait>()
+        val woken = mutableListOf<String>()
+        override suspend fun resolve(id: String, cause: ResolveCause, resolution: WaitResolution, openTurnFailed: Boolean, wake: Boolean): WaitChange? {
+            val wait = waits[id] ?: return null
+            if (wait.status != WaitStatus.OPEN) return WaitChange(wait, false)
+            woken += id
+            return WaitChange(wait.copy(status = WaitStatus.RESOLVED, answer = WaitAnswer(resolution.action, resolution.values, "", resolution.at), resolvedAt = resolution.at).also { waits[id] = it }, true)
+        }
+        override suspend fun pendingWakes(limit: Int) = emptyList<Wait>()
+        override suspend fun wakeDelivered(id: String) = Unit
         override suspend fun answer(actor: Principal, id: String, answer: WaitAnswer): WaitChange {
             val wait = waits.getValue(id)
             if (wait.status != WaitStatus.OPEN) return WaitChange(wait, false)
@@ -134,5 +146,66 @@ class WaitRoutesTest {
         assertEquals("credential_scope", code(call(HttpMethod.Get, "/api/v1/waits", "exec-unbound")))
         assertEquals("credential_scope", code(call(HttpMethod.Get, "/api/v1/waits", "exec-old")))
         assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/waits?session=not%20an%20id", "admin").status)
+    }
+
+    @Test fun aTimeAndAnEventWaitAreAskedListedOnRequestAndTheEventAddressNeedsNoLogin() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), waits = WaitService(store), publicOrigin = "https://teamcode.example") }
+        suspend fun call(method: HttpMethod, path: String, token: String?, json: String? = null, headers: Map<String, String> = emptyMap()) = client.request(path) {
+            this.method = method; if (token != null) bearerAuth(token); headers.forEach { (k, v) -> header(k, v) }
+            if (json != null) { contentType(ContentType.Application.Json); setBody(json) }
+        }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        fun view(text: String) = Serialization.json.decodeFromString<WaitView>(text)
+
+        val time = call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"Resume at 14:30","resolver":"time","after":120,"resumeMessage":"Check CI"}}""")
+        assertEquals(HttpStatusCode.Created, time.status)
+        val timed = view(time.bodyAsText())
+        assertEquals("time", timed.resolver); assertEquals("timed", timed.kind); assertEquals(1_800_000_000_000L + 120_000, timed.dueAt); assertNull(timed.eventUrl); assertEquals("Check CI", timed.resumeMessage)
+        val iso = view(call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"Later","resolver":"time","at":"2027-01-15T08:20:00Z"}}""").bodyAsText())
+        assertEquals(java.time.Instant.parse("2027-01-15T08:20:00Z").toEpochMilli(), iso.dueAt)
+        val millis = view(call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"Later","resolver":"time","at":1800000300000}}""").bodyAsText())
+        assertEquals(1_800_000_300_000L, millis.dueAt)
+        assertEquals("invalid_wait", code(call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"x","resolver":"time","at":"tomorrow"}}""")))
+        assertEquals("invalid_wait", code(call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"x","resolver":"time","after":5}}""")))
+        assertEquals("invalid_wait", code(call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"x","resolver":"event","source":"carrier-pigeon"}}""")))
+
+        val event = call(HttpMethod.Post, "/api/v1/waits", "admin", """{"wait":{"sessionId":"s1","title":"CI of the PR","resolver":"event","source":"webhook","timeoutSeconds":3600,"onTimeout":"turn_failed"}}""")
+        val ci = view(event.bodyAsText())
+        val url = assertNotNull(ci.eventUrl)
+        assertTrue(url.startsWith("https://teamcode.example/api/v1/waits/${ci.id}/event?token=wev_"), url)
+        assertEquals(1_800_000_000_000L + 3_600_000, ci.timeoutAt); assertEquals("turn_failed", ci.onTimeout); assertEquals("webhook", ci.eventSource)
+        assertNull(view(call(HttpMethod.Get, "/api/v1/waits/${ci.id}", "admin").bodyAsText()).eventUrl, "the secret is shown once")
+        assertFalse(call(HttpMethod.Get, "/api/v1/waits/${ci.id}", "admin").bodyAsText().contains(url.substringAfter("token=")))
+
+        fun ids(path: String) = runBlocking { Serialization.json.decodeFromString<WaitPageView>(call(HttpMethod.Get, path, "admin").bodyAsText()).waits.map { it.id } }
+        assertEquals(emptyList(), ids("/api/v1/waits"), "Waiting for you shows none of them")
+        assertEquals(setOf(timed.id, iso.id, millis.id), ids("/api/v1/waits?resolver=time").toSet())
+        assertEquals(listOf(ci.id), ids("/api/v1/waits?resolver=event"))
+        assertEquals(4, ids("/api/v1/waits?resolver=all").size)
+        assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Get, "/api/v1/waits?resolver=robot", "admin").status)
+        assertEquals("resolves_by_itself", code(call(HttpMethod.Post, "/api/v1/waits/${timed.id}/answer", "admin", """{"action":"done"}""")))
+
+        // The event address: no credential, the secret in the query or in a header.
+        val token = url.substringAfter("token=")
+        val path = "/api/v1/waits/${ci.id}/event"
+        assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "$path?token=wev_wrong", null, "{}").status)
+        assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, path, null, "{}").status)
+        assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "/api/v1/waits/unknown/event?token=$token", null, "{}").status)
+        assertEquals(HttpStatusCode.BadRequest, call(HttpMethod.Post, "$path?token=$token", null, "[1]").status)
+        assertEquals(HttpStatusCode.PayloadTooLarge, call(HttpMethod.Post, "$path?token=$token", null, "{\"note\":\"" + "x".repeat(17 * 1024) + "\"}").status)
+        val accepted = call(HttpMethod.Post, path, null, """{"result":"failure","url":"https://ci.example/7"}""", mapOf("TeamCode-Wait-Token" to token))
+        assertEquals(HttpStatusCode.Accepted, accepted.status)
+        assertEquals(listOf(ci.id), store.woken)
+        assertEquals(HttpStatusCode.NotFound, call(HttpMethod.Post, "$path?token=$token", null, "{}").status, "a second call, once resolved")
+        assertEquals("event_received", view(call(HttpMethod.Get, "/api/v1/waits/${ci.id}", "admin").bodyAsText()).answer!!.action)
+    }
+
+    @Test fun theEventAddressIsRateLimitedAndStillRevealsNothing() = testApplication {
+        val store = Store()
+        application { configureGateway(gateway, team = team(), waits = WaitService(store)) }
+        repeat(30) { assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/waits/w1/event?token=nope") { setBody("{}") }.status) }
+        val limited = client.post("/api/v1/waits/w1/event?token=nope") { setBody("{}") }
+        assertEquals(HttpStatusCode.TooManyRequests, limited.status); assertEquals("60", limited.headers["Retry-After"])
     }
 }

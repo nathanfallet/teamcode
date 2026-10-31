@@ -33,6 +33,7 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitAnswer
 import me.nathanfallet.teamcode.companion.domain.models.WaitField
 import me.nathanfallet.teamcode.companion.domain.models.WaitKind
 import me.nathanfallet.teamcode.companion.domain.models.WaitPage
+import me.nathanfallet.teamcode.companion.domain.models.WaitResolver
 import me.nathanfallet.teamcode.companion.domain.models.WaitSource
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.WaitRepository
@@ -40,6 +41,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.AnswerWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.CancelWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadInProgressWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.FollowWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadWaitsUseCase
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WaitFilter
@@ -56,6 +59,15 @@ class WaitsViewModelTest {
         var pageSize = 50
         var failure: Exception? = null
         var gate: CompletableDeferred<Unit>? = null
+        var timers = listOf<Wait>()
+        var cancelFailure: Exception? = null
+        val cancelled = mutableListOf<String>()
+        override suspend fun inProgress(accountId: String): List<Wait> { calls += "in progress"; failure?.let { throw it }; return timers }
+        override suspend fun cancel(accountId: String, waitId: String): Wait {
+            cancelFailure?.let { throw it }
+            cancelled += waitId
+            return timers.first { it.id == waitId }.copy(open = false, cancelled = true)
+        }
         override suspend fun list(accountId: String, status: WaitStatus, before: String?): WaitPage {
             calls += "list ${status.wire} ${before.orEmpty()}".trim()
             gate?.await()
@@ -88,7 +100,7 @@ class WaitsViewModelTest {
 
     private fun viewModel(): WaitsViewModel {
         val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
-        return WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(SessionFeed(sessions, features, feedScope), features, guard))
+        return WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(SessionFeed(sessions, features, feedScope), features, guard), LoadInProgressWaitsUseCase(waits, features, guard), CancelWaitUseCase(waits, guard))
     }
 
     private fun wait(id: String, open: Boolean = true, cancelled: Boolean = false, session: String = "Fix the build", source: WaitSource = WaitSource.WAIT) = Wait(
@@ -111,7 +123,7 @@ class WaitsViewModelTest {
         // Nothing is read before the feed is open, so nothing is missed between the load and the stream.
         assertEquals(emptyList(), waits.calls)
         feed.send(LiveUpdate.Opened(false)); settle()
-        assertEquals(listOf("list open"), waits.calls)
+        assertEquals(listOf("list open", "in progress"), waits.calls)
         val state = model.uiState.value
         assertTrue(state.available && state.loaded)
         assertEquals(2, state.openCount)
@@ -175,13 +187,13 @@ class WaitsViewModelTest {
         assertTrue(model.uiState.value.moreOpen)
         model.loadMore(); settle()
         assertEquals(listOf("w5", "w4", "w3", "w2"), model.uiState.value.waits.map { it.id })
-        assertEquals(listOf("list open", "list open w4"), waits.calls)
+        assertEquals(listOf("list open", "in progress", "list open w4"), waits.calls)
         model.loadMore(); settle()
         assertEquals(listOf("w5", "w4", "w3", "w2", "w1"), model.uiState.value.waits.map { it.id })
         assertFalse(model.uiState.value.moreOpen)
         // No cursor left: nothing more is asked.
         model.loadMore(); settle()
-        assertEquals(3, waits.calls.size)
+        assertEquals(4, waits.calls.size)
         model.stop()
     }
 
@@ -220,7 +232,7 @@ class WaitsViewModelTest {
         model.loadMore(); settle()
         assertEquals(listOf("w2", "w1"), model.uiState.value.shown.map { it.id })
         assertNull(model.uiState.value.shownNext)
-        assertEquals(listOf("list open", "list resolved", "list resolved w2"), waits.calls)
+        assertEquals(listOf("list open", "in progress", "list resolved", "list resolved w2"), waits.calls)
         // The badge still counts the open waits while another list shows.
         assertEquals(1, model.uiState.value.openCount)
 
@@ -280,6 +292,45 @@ class WaitsViewModelTest {
         assertEquals(listOf("w1"), model.uiState.value.waits.map { it.id })
         assertEquals(1, model.uiState.value.openCount)
         assertNull(model.uiState.value.drafts["w2"])
+        model.stop()
+    }
+
+    private fun timer(id: String, resolver: WaitResolver = WaitResolver.TIME) = wait(id).copy(
+        kind = WaitKind.TIMED, resolver = resolver, fields = emptyList(), actions = emptyList(), dueAt = if (resolver == WaitResolver.TIME) 5_000 else null,
+        timeoutAt = if (resolver == WaitResolver.EVENT) 9_000 else null,
+    )
+
+    @Test fun whatTheServerWatchesIsInProgressAndNeverCountedAsWaitingForTheMember() = runTest(dispatcher) {
+        waits.byStatus[WaitStatus.OPEN] = listOf(wait("w1"))
+        waits.timers = listOf(timer("t1"), timer("t2", WaitResolver.EVENT))
+        val model = viewModel()
+        opened(model)
+        val state = model.uiState.value
+        assertEquals(listOf("t1", "t2"), state.inProgress.map { it.id })
+        assertEquals(1, state.openCount, "the badge counts the waits for the member only")
+        assertEquals(listOf("w1"), state.waits.map { it.id })
+        // The feed announces a timer that fired or was created like any wait: the section reloads with the list.
+        waits.timers = listOf(timer("t2", WaitResolver.EVENT))
+        feed.send(LiveUpdate.Item(event(SessionChange.WAIT_RESOLVED))); settle()
+        assertEquals(listOf("t2"), model.uiState.value.inProgress.map { it.id })
+        model.stop()
+    }
+
+    @Test fun anInProgressWaitIsWithdrawnAndLeavesTheListOrKeepsAnErrorToRetry() = runTest(dispatcher) {
+        waits.timers = listOf(timer("t1"), timer("t2"))
+        val model = viewModel()
+        opened(model)
+        waits.cancelFailure = CompanionException.Unreachable()
+        model.withdraw(model.uiState.value.inProgress.first()); settle()
+        assertEquals(listOf("t1", "t2"), model.uiState.value.inProgress.map { it.id }); assertTrue(model.uiState.value.withdrawFailed); assertTrue(model.uiState.value.withdrawing.isEmpty())
+        waits.cancelFailure = null
+        model.withdraw(model.uiState.value.inProgress.first()); settle()
+        assertEquals(listOf("t2"), model.uiState.value.inProgress.map { it.id }); assertFalse(model.uiState.value.withdrawFailed)
+        assertEquals(listOf("t1"), waits.cancelled)
+        // It ended first: the server says so, and the card goes all the same.
+        waits.cancelFailure = CompanionException.Server(409, "wait_closed")
+        model.withdraw(model.uiState.value.inProgress.single()); settle()
+        assertEquals(emptyList(), model.uiState.value.inProgress)
         model.stop()
     }
 

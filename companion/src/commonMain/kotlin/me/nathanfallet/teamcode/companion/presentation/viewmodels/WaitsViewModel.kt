@@ -19,6 +19,9 @@ import me.nathanfallet.teamcode.companion.domain.models.WaitInputProblem
 import me.nathanfallet.teamcode.companion.domain.models.WaitStatus
 import me.nathanfallet.teamcode.companion.domain.repositories.AccountRepository
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.AnswerWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.CancelWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadInProgressWaitsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.WaitCancelOutcome
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.FollowWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.WaitAnswerOutcome
@@ -58,6 +61,11 @@ data class WaitsUiState(
     val historyNext: String? = null,
     val historyLoaded: Boolean = false,
     val loadingMore: Boolean = false,
+    /** What waits for nobody: a time or a webhook the server watches, soonest first. Shown below the open waits, never counted by the badge. */
+    val inProgress: List<Wait> = emptyList(),
+    /** The in-progress waits being withdrawn, and the last withdrawal that did not go through. */
+    val withdrawing: Set<String> = emptySet(),
+    val withdrawFailed: Boolean = false,
     /** The last load of the shown list failed (offline, a busy server): what is shown stays, and a retry reloads. */
     val error: Boolean = false,
 ) {
@@ -80,6 +88,8 @@ class WaitsViewModel(
     private val loadWaits: LoadWaitsUseCase,
     private val answerWait: AnswerWaitUseCase,
     private val followWaits: FollowWaitsUseCase,
+    private val loadInProgress: LoadInProgressWaitsUseCase,
+    private val cancelWait: CancelWaitUseCase,
 ) : ViewModel() {
     private val state = MutableStateFlow(WaitsUiState())
     val uiState: StateFlow<WaitsUiState> = state.asStateFlow()
@@ -177,6 +187,22 @@ class WaitsViewModel(
         return this + more.filter { seen.add(it.id) }
     }
 
+    /** Withdraws an in-progress wait; it leaves the list at once when the server agrees (or says it ended already). */
+    fun withdraw(wait: Wait) {
+        val account = state.value.account ?: return
+        if (wait.id in state.value.withdrawing) return
+        state.update { it.copy(withdrawing = it.withdrawing + wait.id, withdrawFailed = false) }
+        viewModelScope.launch {
+            val outcome = try { cancelWait(account.id, wait.id) } catch (error: CancellationException) {
+                state.update { it.copy(withdrawing = it.withdrawing - wait.id) }; throw error
+            } catch (error: Exception) { WaitCancelOutcome.Retry }
+            state.update { current ->
+                val done = outcome != WaitCancelOutcome.Retry
+                current.copy(withdrawing = current.withdrawing - wait.id, withdrawFailed = !done, inProgress = if (done) current.inProgress.filterNot { it.id == wait.id } else current.inProgress)
+            }
+        }
+    }
+
     fun dismissClosed() = state.update { it.copy(closedElsewhere = false) }
 
     private fun setDraft(waitId: String, change: (WaitDraft) -> WaitDraft) = state.update { current ->
@@ -218,6 +244,7 @@ class WaitsViewModel(
                     error = if (current.filter == WaitFilter.OPEN) false else current.error)
             }
             state.value.filter.takeIf { it != WaitFilter.OPEN }?.let { loadHistory(accountId, it) }
+            loadInProgressWaits(accountId)
         } catch (error: CancellationException) {
             throw error
         } catch (error: CompanionException.Unsupported) {
@@ -227,6 +254,20 @@ class WaitsViewModel(
         } catch (error: Exception) {
             // Offline or a busy server: keep what is shown; the next event or reconnection loads again.
             state.update { it.copy(error = true) }
+        }
+    }
+
+    /** What the server watches for the member; a failure keeps what is shown (these are not what the member waits on). */
+    private suspend fun loadInProgressWaits(accountId: String) {
+        try {
+            val waits = loadInProgress(accountId)
+            state.update { it.copy(inProgress = waits) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: CompanionException.Unauthorized) {
+            throw error
+        } catch (error: Exception) {
+            // Offline or a server without the filter (an older one): the section keeps what it had.
         }
     }
 

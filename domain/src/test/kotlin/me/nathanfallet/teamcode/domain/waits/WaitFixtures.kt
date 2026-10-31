@@ -34,7 +34,7 @@ object WaitFixtures {
         }
         override suspend fun find(teamId: String, id: String) = waits[id]
         override suspend fun list(teamId: String, query: WaitQuery): WaitPage {
-            val all = waits.values.filter { (query.sessionId == null || it.sessionId == query.sessionId) && (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) }.sortedByDescending { it.createdAt }
+            val all = waits.values.filter { (query.sessionId == null || it.sessionId == query.sessionId) && (query.assignee == null || it.assigneeId == query.assignee) && (query.status == null || it.status == query.status) && (query.resolvers == null || it.resolver in query.resolvers!!) }.sortedByDescending { it.createdAt }
             val start = query.before?.let { id -> all.indexOfFirst { it.id == id } + 1 } ?: 0
             val page = all.drop(start).take(query.limit)
             return WaitPage(page, page.lastOrNull()?.id?.takeIf { start + page.size < all.size })
@@ -45,6 +45,22 @@ object WaitFixtures {
             audit += "wait.answered:$id:${actor.member.id}"
             return WaitChange(wait.copy(status = WaitStatus.RESOLVED, answer = answer, resolvedAt = answer.answeredAt).also { waits[id] = it }, true)
         }
+        override suspend fun eventTarget(id: String) = waits[id]?.takeIf { it.resolver == WaitResolver.EVENT }?.let { EventTarget(it.id, it.timer?.tokenHash, it.status == WaitStatus.OPEN) }
+        override suspend fun dueWaits(limit: Int) = waits.values.filter { it.status == WaitStatus.OPEN && it.timer != null && it.timer.dueAt <= clock }
+            .sortedBy { it.timer!!.dueAt }.take(limit).map { DueWait(it.id, it.teamId, it.resolver, it.timer!!.onTimeout) }
+        val owed = mutableSetOf<String>()
+        var turnFailedOpened = 0
+        override suspend fun resolve(id: String, cause: ResolveCause, resolution: WaitResolution, openTurnFailed: Boolean, wake: Boolean): WaitChange? {
+            val wait = waits[id] ?: return null
+            val eligible = wait.status == WaitStatus.OPEN && wait.resolver != WaitResolver.HUMAN && (cause == ResolveCause.EVENT || wait.timer!!.dueAt <= clock)
+            if (!eligible) return WaitChange(wait, false)
+            audit += "wait.${resolution.action}:$id"
+            if (openTurnFailed) turnFailedOpened++
+            if (wake) owed += id
+            return WaitChange(wait.copy(status = WaitStatus.RESOLVED, answer = WaitAnswer(resolution.action, resolution.values, "", resolution.at), resolvedAt = resolution.at).also { waits[id] = it }, true)
+        }
+        override suspend fun pendingWakes(limit: Int) = owed.mapNotNull { waits[it] }.take(limit)
+        override suspend fun wakeDelivered(id: String) { owed -= id }
         override suspend fun cancel(actor: Principal, id: String, at: Long): WaitChange {
             val wait = waits.getValue(id)
             if (wait.status != WaitStatus.OPEN) return WaitChange(wait, false)

@@ -45,6 +45,10 @@ class SqlWaitStore(private val database: Database) : WaitStore {
             it[status] = WaitStatus.OPEN.wire; it[assigneeId] = wait.assigneeId; it[createdById] = wait.createdById; it[title] = wait.title; it[body] = wait.body
             it[refs] = WaitJson.refs(wait.refs); it[fieldDefs] = WaitJson.fields(wait.fields); it[actions] = WaitJson.actions(wait.actions)
             it[Waits.idempotencyKey] = idempotencyKey; it[createdAt] = wait.createdAt
+            wait.timer?.let { timer ->
+                it[dueAt] = timer.dueAt; it[eventSource] = timer.eventSource?.wire; it[onTimeout] = timer.onTimeout?.wire
+                it[resumeMessage] = timer.resumeMessage; it[eventTokenHash] = timer.tokenHash
+            }
         }
         audit(actor.teamId, actor.member.id, "wait.created", wait.id, null, actor.tokenId, related = wait.assigneeId.takeIf { it != actor.member.id })
         val stored = read(wait.teamId, wait.id)!!
@@ -72,12 +76,14 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         query.assignee?.let { condition = condition and (Waits.assigneeId eq it) }
         query.sessionId?.let { condition = condition and (Waits.sessionId eq it) }
         query.status?.let { condition = condition and (Waits.status eq it.wire) }
+        query.resolvers?.let { allowed -> condition = condition and (if (allowed.size == 1) Waits.resolver eq allowed.single().wire else Waits.resolver inList allowed.map { it.wire }) }
         if (cursor != null) condition = condition and ((Waits.createdAt less cursor) or ((Waits.createdAt eq cursor) and (Waits.id less query.before!!)))
         val rows = Waits.selectAll().where { condition }.orderBy(Waits.createdAt to SortOrder.DESC, Waits.id to SortOrder.DESC).limit(query.limit + 1).toList()
         val names = names(rows.take(query.limit).map { it[Waits.assigneeId] }.toSet(), rows.take(query.limit).map { it[Waits.sessionId] }.toSet())
         val page = rows.take(query.limit).map { wait(it, names) }
         // Permission requests are only ever open, and listed once, ahead of the stored waits.
-        val sessions = if (query.sessionId == null && query.before == null && (query.status == null || query.status == WaitStatus.OPEN)) sessionWaits(teamId, query.assignee) else emptyList()
+        val sessions = if (query.sessionId == null && query.before == null && (query.status == null || query.status == WaitStatus.OPEN) &&
+            (query.resolvers?.contains(WaitResolver.HUMAN) != false)) sessionWaits(teamId, query.assignee) else emptyList()
         WaitPage(sessions + page, if (rows.size > query.limit) page.last().id else null)
     }
 
@@ -138,8 +144,56 @@ class SqlWaitStore(private val database: Database) : WaitStore {
             row[Waits.title], row[Waits.body], WaitJson.refs(row[Waits.refs]), WaitJson.fields(row[Waits.fieldDefs]), WaitJson.actions(row[Waits.actions]),
             answered?.let { WaitAnswer(it, WaitJson.values(row[Waits.answerValues]), row[Waits.answerAuthorId] ?: "", row[Waits.resolvedAt] ?: 0) },
             row[Waits.createdAt], row[Waits.resolvedAt],
+            row[Waits.dueAt]?.let { WaitTimer(it, row[Waits.eventSource]?.let(EventSource::parse), row[Waits.onTimeout]?.let(TimeoutAction::parse), row[Waits.resumeMessage], row[Waits.eventTokenHash]) },
         )
     }
+
+    override suspend fun eventTarget(id: String): EventTarget? = database.query {
+        Waits.select(Waits.id, Waits.eventTokenHash, Waits.status, Waits.resolver).where { Waits.id eq id }.singleOrNull()
+            ?.takeIf { it[Waits.resolver] == WaitResolver.EVENT.wire }
+            ?.let { EventTarget(it[Waits.id], it[Waits.eventTokenHash], it[Waits.status] == WaitStatus.OPEN.wire) }
+    }
+
+    override suspend fun dueWaits(limit: Int): List<DueWait> = database.query {
+        // `wait_due (status, due_at)`: the range reads exactly the due entries, in order; a person's wait has no due_at.
+        val now = nowMillis()
+        Waits.select(Waits.id, Waits.teamId, Waits.resolver, Waits.onTimeout)
+            .where { (Waits.status eq WaitStatus.OPEN.wire) and (Waits.dueAt lessEq now) }.orderBy(Waits.dueAt to SortOrder.ASC).limit(limit)
+            .mapNotNull { row -> WaitResolver.parse(row[Waits.resolver])?.takeIf { it != WaitResolver.HUMAN }?.let { DueWait(row[Waits.id], row[Waits.teamId], it, row[Waits.onTimeout]?.let(TimeoutAction::parse)) } }
+    }
+
+    override suspend fun resolve(id: String, cause: ResolveCause, resolution: WaitResolution, openTurnFailed: Boolean, wake: Boolean): WaitChange? = database.query {
+        val now = nowMillis()
+        // One conditional update closes the wait: of two replicas, or of an event and the timeout, exactly one changes the row.
+        val condition: Op<Boolean> = (Waits.id eq id) and (Waits.status eq WaitStatus.OPEN.wire) and
+            if (cause == ResolveCause.DUE) (Waits.dueAt lessEq now) and (Waits.resolver inList listOf(WaitResolver.TIME.wire, WaitResolver.EVENT.wire)) else (Waits.resolver eq WaitResolver.EVENT.wire)
+        val changed = Waits.update({ condition }) {
+            it[status] = WaitStatus.RESOLVED.wire; it[answerAction] = resolution.action; it[answerValues] = JsonObject(resolution.values).toString()
+            it[answerAuthorId] = null; it[resolvedAt] = resolution.at; it[wakePending] = wake
+        } > 0
+        val row = Waits.selectAll().where { Waits.id eq id }.singleOrNull() ?: return@query null
+        val wait = wait(row, names(setOf(row[Waits.assigneeId]), setOf(row[Waits.sessionId])))
+        if (!changed) return@query WaitChange(wait, false)
+        // The owner is who the wait belonged to; the credential is none, the server did it.
+        audit(wait.teamId, wait.assigneeId, "wait.${resolution.action}", id)
+        publish(TeamEventType.WAIT_RESOLVED, wait, resolution.at) { put("action", resolution.action) }
+        if (openTurnFailed) {
+            val kind = CloudSessions.select(CloudSessions.kind).where { CloudSessions.id eq wait.sessionId!! }.single()[CloudSessions.kind]
+            publishTeamEvents(wait.teamId, with(TurnFailedWaits) { opened(wait.teamId, wait.sessionId!!, wait.assigneeId, resolution.at) }
+                .map { e -> e.copy(data = JsonObject(e.data + ("kind" to JsonPrimitive(kind)))) })
+        }
+        WaitChange(wait, true)
+    }
+
+    override suspend fun pendingWakes(limit: Int): List<Wait> = database.query {
+        // Not the ones resolved a moment ago: their own delivery is still running. `wait_wake (wake_pending, resolved_at)`.
+        val before = nowMillis() - WAKE_GRACE_MILLIS
+        val rows = Waits.selectAll().where { (Waits.wakePending eq true) and (Waits.resolvedAt lessEq before) }.orderBy(Waits.resolvedAt to SortOrder.ASC).limit(limit).toList()
+        val names = names(rows.map { it[Waits.assigneeId] }.toSet(), rows.map { it[Waits.sessionId] }.toSet())
+        rows.map { wait(it, names) }
+    }
+
+    override suspend fun wakeDelivered(id: String) { database.query { Waits.update({ (Waits.id eq id) and (Waits.wakePending eq true) }) { it[wakePending] = false } } }
 
     /** The open permission request or question of sessions: [assignee]'s, or the team's when null. At most [MAX_SESSION_WAITS], newest first. */
     private fun JdbcTransaction.sessionWaits(teamId: String, assignee: String?): List<Wait> {
@@ -168,7 +222,7 @@ class SqlWaitStore(private val database: Database) : WaitStore {
         )
     }
 
-    private companion object { const val MAX_SESSION_WAITS = 100 }
+    private companion object { const val MAX_SESSION_WAITS = 100; const val WAKE_GRACE_MILLIS = 15_000L }
 }
 
 /** The JSON stored in the wait's columns; unknown members and values are dropped on read, never trusted. */

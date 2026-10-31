@@ -31,6 +31,8 @@ import me.nathanfallet.teamcode.companion.domain.usecases.sessions.GetSessionUse
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadSessionsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.AnswerWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.CancelWaitUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadInProgressWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.FollowWaitsUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.waits.LoadWaitsUseCase
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionsScreen
@@ -67,7 +69,7 @@ class SessionsScreenWaitsTest {
         val shared = SessionFeed(sessions, features, CoroutineScope(SupervisorJob() + Dispatchers.Default))
         val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(shared, features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
         val waits = Waits()
-        val waitsViewModel = WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(shared, features, guard))
+        val waitsViewModel = WaitsViewModel(accounts, LoadWaitsUseCase(waits, features, guard), AnswerWaitUseCase(waits, guard), FollowWaitsUseCase(shared, features, guard), LoadInProgressWaitsUseCase(waits, features, guard), CancelWaitUseCase(waits, guard))
         // The signed-in shell follows the waits; the sessions list only shows them.
         waitsViewModel.start()
         var opened: String? = null

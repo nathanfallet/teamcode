@@ -169,6 +169,17 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         return resolved
     }
 
+    /** Withdraws an open wait, as the server would, and tells the feed. */
+    fun cancelWait(id: String): Wait {
+        val wait = waits.value.firstOrNull { it.id == id } ?: throw CompanionException.NotFound()
+        if (!wait.open || wait.source == WaitSource.SESSION) throw CompanionException.Server(409, "wait_closed")
+        val at = now()
+        val cancelled = wait.copy(open = false, cancelled = true, resolvedAt = at)
+        _waits.update { all -> all.map { if (it.id == id) cancelled else it } }
+        feed.tryEmit(SessionChange(next(), SessionChange.WAIT_CANCELLED, wait.sessionId.orEmpty(), DemoContent.MEMBER_ID, at, null, null, waitId = id))
+        return cancelled
+    }
+
     /** The run blocked on a wait that was answered moves on: in the demo, its workflow ends there. */
     private fun finishRunBlockedOn(waitId: String, actionId: String, at: Long) {
         val run = runs.value.firstOrNull { r -> r.status.active && r.activeVisit?.waitId == waitId } ?: return
