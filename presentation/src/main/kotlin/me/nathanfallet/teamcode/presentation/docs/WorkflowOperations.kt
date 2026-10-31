@@ -78,7 +78,7 @@ internal fun ApiCatalog.workflowOperations() {
             ok<WorkflowView>("Deleted.")
             error(HttpStatusCode.Forbidden, "Not allowed to edit (`workflow_editors_only`).")
             notFound("No such workflow (`not_found`).")
-            conflict("Another workflow calls it (`workflow_in_use`).")
+            conflict("Another workflow calls it, or an automation starts it (`workflow_in_use`).")
         }
     }
     post("/api/v1/workflows/{id}/runs") {

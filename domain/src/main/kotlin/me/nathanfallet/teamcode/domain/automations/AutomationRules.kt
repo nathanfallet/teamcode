@@ -1,9 +1,13 @@
 package me.nathanfallet.teamcode.domain.automations
 
 import java.security.MessageDigest
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import me.nathanfallet.teamcode.domain.team.TeamFailure
+import me.nathanfallet.teamcode.domain.workflows.NodeKind
+import me.nathanfallet.teamcode.domain.workflows.WorkflowDefinition
 
 /** Bounds and pure checks of automations (docs/automations.md). */
 object AutomationRules {
@@ -28,7 +32,10 @@ object AutomationRules {
     const val KEEP_SESSIONS = 10
     const val DEFAULT_MAX_PER_MEMBER = 20
     const val DEFAULT_RUNNING_PER_MEMBER = 2
+    const val MAX_INPUTS = 50
     val deliveryKey = Regex("[A-Za-z0-9._:-]{1,128}")
+    private val idPattern = Regex("[a-zA-Z0-9-]{1,36}")
+    private val inputId = Regex("[A-Za-z][A-Za-z0-9_]{0,63}")
     private val modelValue = Regex("[a-zA-Z0-9._:/-]{1,120}")
 
     fun invalid(message: String) = TeamFailure("invalid_automation", 400, message)
@@ -48,17 +55,61 @@ object AutomationRules {
         }
         val action = definition.action
         if (action.kind == ActionKind.REMOTE) throw TeamFailure("not_available_yet", 422, "Remote sessions are not available to automations yet: use a cloud action.")
-        if (action.profileId.isNullOrBlank() || !Regex("[a-zA-Z0-9-]{1,36}").matches(action.profileId)) throw invalid("A cloud action needs the profileId of a profile assigned to the owner.")
-        for (value in listOfNotNull(action.model, action.effort)) if (!modelValue.matches(value)) throw invalid("Use a valid agent model and effort.")
-        if (action.maxRuntimeMinutes !in 1..MAX_RUNTIME_MINUTES) throw invalid("The maximum runtime is 1 to $MAX_RUNTIME_MINUTES minutes.")
         if (definition.maxRunsPerDay !in 1..MAX_RUNS_PER_DAY) throw invalid("The runs per day are 1 to $MAX_RUNS_PER_DAY.")
-        AutomationTemplate.validateDefinition(definition.prompt, definition.variables, trigger.kind == TriggerKind.WEBHOOK)
+        if (action.maxRuntimeMinutes !in 1..MAX_RUNTIME_MINUTES) throw invalid("The maximum runtime is 1 to $MAX_RUNTIME_MINUTES minutes.")
+        if (action.kind == ActionKind.WORKFLOW) validateWorkflowAction(definition)
+        else {
+            if (action.workflowId != null || action.inputs.isNotEmpty()) throw invalid("Only a workflow action has a workflow and inputs.")
+            if (action.profileId.isNullOrBlank() || !Regex("[a-zA-Z0-9-]{1,36}").matches(action.profileId)) throw invalid("A cloud action needs the profileId of a profile assigned to the owner.")
+            for (value in listOfNotNull(action.model, action.effort)) if (!modelValue.matches(value)) throw invalid("Use a valid agent model and effort.")
+            AutomationTemplate.validateDefinition(definition.prompt, definition.variables, trigger.kind == TriggerKind.WEBHOOK)
+        }
         definition.samplePayload?.let { sample ->
             if (sample.toString().encodeToByteArray().size > MAX_PAYLOAD_BYTES) throw invalid("The sample payload is at most 64 KiB.")
             val problems = AutomationTemplate.extract(definition.variables, sample).problems
             if (problems.isNotEmpty()) throw invalid("The sample payload does not match the variables: ${describe(problems)}.")
         }
     }
+
+    /**
+     * A workflow action: no prompt (the inputs carry the text), no agent model or effort (the workflow's nodes choose), a profile
+     * only to give agent nodes that name none, and every input value a template over the declared and the run variables.
+     */
+    private fun validateWorkflowAction(definition: AutomationDefinition) {
+        val action = definition.action
+        if (action.workflowId.isNullOrBlank() || !idPattern.matches(action.workflowId)) throw invalid("A workflow action needs the workflowId of a saved workflow.")
+        if (definition.prompt.isNotEmpty()) throw invalid("A workflow action has no prompt: write the text of each input instead.")
+        if (action.model != null || action.effort != null) throw invalid("A workflow action has no model or effort: the workflow's agent nodes choose.")
+        if (action.profileId != null && !idPattern.matches(action.profileId)) throw invalid("The profileId is not a profile id.")
+        if (action.inputs.size > MAX_INPUTS) throw invalid("A workflow action has at most $MAX_INPUTS inputs.")
+        AutomationTemplate.validateVariables(definition.variables, definition.trigger.kind == TriggerKind.WEBHOOK)
+        for ((id, text) in action.inputs) {
+            if (!inputId.matches(id)) throw invalid("The input id $id is not valid.")
+            if (text.length > AutomationTemplate.MAX_PROMPT) throw invalid("The input $id is at most ${AutomationTemplate.MAX_PROMPT} characters.")
+            AutomationTemplate.checkPlaceholders("The input $id", text, definition.variables)
+        }
+    }
+
+    /**
+     * The inputs of a workflow action against the workflow it names: each declared by the workflow, and each required one (no
+     * default) given. `invalid_automation`, naming the input.
+     */
+    fun checkWorkflowInputs(action: AutomationAction, workflow: WorkflowDefinition) {
+        val declared = workflow.inputs.associateBy { it.id }
+        action.inputs.keys.firstOrNull { it !in declared }?.let { throw invalid("The workflow ${workflow.name} has no input $it.") }
+        workflow.inputs.firstOrNull { it.required && it.default.isNullOrEmpty() && action.inputs[it.id].isNullOrEmpty() }
+            ?.let { throw invalid("The input ${it.id} of the workflow ${workflow.name} is required and has no default: give it a value.") }
+        if (action.profileId == null && workflow.nodes.any { it.kind == NodeKind.AGENT && it.profileId == null })
+            throw invalid("The workflow ${workflow.name} has agent nodes without a profile: choose the profile they run with.")
+    }
+
+    private val inputsSerializer = MapSerializer(String.serializer(), String.serializer())
+    fun encodeInputs(inputs: Map<String, String>): String = kotlinx.serialization.json.Json.encodeToString(inputsSerializer, inputs)
+    fun decodeInputs(text: String): Map<String, String> = kotlinx.serialization.json.Json.decodeFromString(inputsSerializer, text)
+
+    /** The values a workflow action's inputs take for one run: each template rendered, an empty one left out so the workflow's default applies. */
+    fun renderInputs(inputs: Map<String, String>, values: Map<String, String>): Map<String, String> =
+        inputs.mapValues { (_, text) -> AutomationTemplate.render(text, values) }.filterValues { it.isNotEmpty() }
 
     /** `$.ticket.number: type:int, $.kind: enum` for an error message: paths and rules only. */
     fun describe(problems: List<VariableProblem>) = problems.take(10).joinToString(", ") { "${it.path}: ${it.rule}" }

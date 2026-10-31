@@ -44,8 +44,21 @@ object AutomationTemplate {
 
     /** At save: the prompt's bounds, each variable's declaration, and every placeholder known. */
     fun validateDefinition(prompt: String, variables: List<AutomationVariable>, webhook: Boolean) {
+        if (prompt.isBlank() || prompt.length > MAX_PROMPT) throw TeamFailure("invalid_automation", 400, "Write a prompt of 1 to $MAX_PROMPT characters.")
+        validateVariables(variables, webhook)
+        checkPlaceholders("The prompt", prompt, variables)
+    }
+
+    /** Every `{{…}}` of [text] names a declared or a run variable. [what] opens the message ("The prompt", "The input x"). */
+    fun checkPlaceholders(what: String, text: String, variables: List<AutomationVariable>) {
+        val names = variables.map { it.name }.toSet()
+        val unknown = placeholders(text).filter { it !in names && it !in RUN_VARIABLES }.distinct()
+        if (unknown.isNotEmpty()) throw TeamFailure("invalid_automation", 400, "$what uses unknown variables: ${unknown.take(5).joinToString(", ") { it.take(64) }}.")
+    }
+
+    /** The declaration of the payload [variables] (names, paths, bounds), without any text that uses them. */
+    fun validateVariables(variables: List<AutomationVariable>, webhook: Boolean) {
         fun invalid(message: String): Nothing = throw TeamFailure("invalid_automation", 400, message)
-        if (prompt.isBlank() || prompt.length > MAX_PROMPT) invalid("Write a prompt of 1 to $MAX_PROMPT characters.")
         if (variables.isNotEmpty() && !webhook) invalid("Only a webhook automation has payload variables; a cron one uses the run variables.")
         if (variables.size > MAX_VARIABLES) invalid("Declare at most $MAX_VARIABLES variables.")
         val names = mutableSetOf<String>()
@@ -59,8 +72,6 @@ object AutomationTemplate {
                 invalid("The enum ${variable.name} needs 1 to $MAX_ENUM_VALUES values.")
             if (variable.type != VariableType.ENUM && variable.values.isNotEmpty()) invalid("Only an enum variable has values.")
         }
-        val unknown = placeholders(prompt).filter { it !in names && it !in RUN_VARIABLES }.distinct()
-        if (unknown.isNotEmpty()) invalid("The prompt uses unknown variables: ${unknown.take(5).joinToString(", ") { it.take(64) }}.")
     }
 
     /** Reads each variable from [payload]; a problem per broken rule, in declaration order. */

@@ -95,6 +95,11 @@ fun runReasonWords(reason: String?): String? = when (reason) {
     "cloud_session_limit" -> stringResource(Res.string.automation_reason_cloud_session_limit)
     "session_failed" -> stringResource(Res.string.automation_reason_session_failed)
     "message_rejected" -> stringResource(Res.string.automation_reason_message_rejected)
+    "workflow_missing" -> stringResource(Res.string.automation_reason_workflow_missing)
+    "run_limit" -> stringResource(Res.string.automation_reason_run_limit)
+    "invalid_inputs" -> stringResource(Res.string.automation_reason_invalid_inputs)
+    "workflow_failed" -> stringResource(Res.string.automation_reason_workflow_failed)
+    "workflow_cancelled" -> stringResource(Res.string.automation_reason_workflow_cancelled)
     else -> visibleCode(reason)
 }
 

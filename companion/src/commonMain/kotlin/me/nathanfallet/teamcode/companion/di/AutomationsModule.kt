@@ -28,7 +28,8 @@ import org.koin.dsl.module
 
 /** Automations (`automations.v1`): cron and webhook triggers that start cloud sessions as their owner. */
 val automationsModule = module {
-    single<AutomationRepository> { RemoteAutomationRepository(get()) }
+    single { RemoteAutomationRepository(get()) }
+    single<AutomationRepository> { get<RemoteAutomationRepository>() }
     single { AutomationSecrets() }
     single { AutomationsAvailabilityUseCase(get(), get()) }
     single { AutomationAccess(get(), get(), get(), get()) }
@@ -43,7 +44,7 @@ val automationsModule = module {
     single { LoadAutomationRunsUseCase(get()) }
     single { CancelAutomationRunUseCase(get()) }
     viewModel { (route: AutomationsRoute) -> AutomationsViewModel(route, get(), get(), get(), get()) }
-    viewModel { (route: AutomationRoute) -> AutomationViewModel(route, get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    viewModel { (route: AutomationEditRoute) -> AutomationEditViewModel(route, get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: AutomationRoute) -> AutomationViewModel(route, get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { (route: AutomationEditRoute) -> AutomationEditViewModel(route, get(), get(), get(), get(), get(), get(), get()) }
     viewModel { (route: AutomationTestRoute) -> AutomationTestViewModel(route, get(), get(), get(), get(), get()) }
 }

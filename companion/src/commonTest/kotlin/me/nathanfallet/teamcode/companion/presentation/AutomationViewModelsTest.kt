@@ -14,6 +14,9 @@ import me.nathanfallet.teamcode.companion.domain.usecases.auth.AccountGuard
 import me.nathanfallet.teamcode.companion.domain.usecases.auth.RefreshAccountUseCase
 import me.nathanfallet.teamcode.companion.domain.usecases.automations.*
 import me.nathanfallet.teamcode.companion.domain.usecases.sessions.LoadProfilesUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.GetWorkflowUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.LoadWorkflowsUseCase
+import me.nathanfallet.teamcode.companion.domain.usecases.workflows.WorkflowAccess
 import me.nathanfallet.teamcode.companion.presentation.navigation.*
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.*
 import kotlin.test.*
@@ -26,20 +29,23 @@ class AutomationViewModelsTest {
 
     private val repository = FakeAutomationRepository()
     private val sessions = FakeSessionRepository()
-    private val features = FakeFeatures(setOf("automations.v1", "cloud.sessions.v1"))
+    private val features = FakeFeatures(setOf("automations.v1", "cloud.sessions.v1", "workflows.v1"))
     private val secrets = AutomationSecrets()
     private val accounts = InMemoryAccountRepository(listOf(account()))
     private var role: String
         get() = accounts.accounts.value.single().role
         set(value) = accounts.save(account().copy(role = value))
-    private val access = AutomationAccess(repository, features, accounts, AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock())))
+    private val guard = AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock()))
+    private val access = AutomationAccess(repository, features, accounts, guard)
+    private val workflows = FakeWorkflowRepository()
+    private val workflowAccess = WorkflowAccess(workflows, features, accounts, guard)
     private val profiles = LoadProfilesUseCase(sessions, features, AccountGuard(RefreshAccountUseCase(FakeAuthRepository(), accounts, credentials(), FixedClock())))
 
     private fun TestScope.settle() = runCurrent()
     private fun list() = AutomationsViewModel(AutomationsRoute("a1"), LoadAutomationsUseCase(access), SetAutomationEnabledUseCase(access), DeleteAutomationUseCase(access), accounts)
     private fun page() = AutomationViewModel(AutomationRoute("a1", "au1"), GetAutomationUseCase(access), SetAutomationEnabledUseCase(access), DeleteAutomationUseCase(access),
-        RotateAutomationSecretUseCase(access), LoadAutomationRunsUseCase(access), CancelAutomationRunUseCase(access), secrets, profiles, accounts)
-    private fun form(id: String? = null) = AutomationEditViewModel(AutomationEditRoute("a1", id), GetAutomationUseCase(access), profiles, SaveAutomationUseCase(access), PreviewAutomationUseCase(access), secrets, accounts)
+        RotateAutomationSecretUseCase(access), LoadAutomationRunsUseCase(access), CancelAutomationRunUseCase(access), secrets, profiles, GetWorkflowUseCase(workflowAccess), accounts)
+    private fun form(id: String? = null) = AutomationEditViewModel(AutomationEditRoute("a1", id), GetAutomationUseCase(access), profiles, LoadWorkflowsUseCase(workflowAccess), SaveAutomationUseCase(access), PreviewAutomationUseCase(access), secrets, accounts)
     private fun test() = AutomationTestViewModel(AutomationTestRoute("a1", "au1"), GetAutomationUseCase(access), PreviewAutomationUseCase(access), TestAutomationUseCase(access), SequenceIds(), accounts)
 
     @Test fun theListLoadsAndShowsTheEmptyAndErrorStates() = runTest(dispatcher) {
@@ -159,6 +165,44 @@ class AutomationViewModelsTest {
         assertEquals("au9", model.uiState.value.savedId)
         assertEquals("whsec_new", secrets.secret("au9"))
         assertEquals("Nightly", repository.saved.single().name)
+    }
+
+    @Test fun aWorkflowActionIsChosenFilledAndSavedWithItsInputs() = runTest(dispatcher) {
+        sessions.profileList = listOf(Profile("p1", "support", "claude"))
+        val model = form(); settle()
+        assertEquals(listOf("wf1"), model.uiState.value.workflows.map { it.id })
+        model.edit { it.copy(name = "Triage", kind = TriggerKind.WEBHOOK, action = ActionKind.WORKFLOW) }
+        model.save(); settle()
+        assertNotNull(model.uiState.value.error, "a workflow must be chosen")
+        model.chooseWorkflow(model.uiState.value.workflows.single())
+        model.setInput("ticket", "T-{{ticket.number}}")
+        model.save(); settle()
+        val saved = repository.saved.single()
+        assertEquals(ActionKind.WORKFLOW, saved.action.kind); assertEquals("wf1", saved.action.workflowId); assertEquals(mapOf("ticket" to "T-{{ticket.number}}"), saved.action.inputs)
+        assertEquals("", saved.prompt)
+    }
+
+    @Test fun anotherWorkflowStartsFromEmptyInputsAndTheEditKeepsTheSavedOnes() = runTest(dispatcher) {
+        workflows.definitions = listOf(workflow("wf1"), workflow("wf2"))
+        repository.current = automation(definition = workflowAutomationDefinition())
+        val model = form("au1"); settle()
+        assertEquals(ActionKind.WORKFLOW, model.uiState.value.form.action); assertEquals(mapOf("ticket" to "T-{{ticket.number}}"), model.uiState.value.form.inputs)
+        model.chooseWorkflow(workflow("wf1")); assertEquals(1, model.uiState.value.form.inputs.size, "the same workflow keeps its inputs")
+        model.chooseWorkflow(workflow("wf2")); assertTrue(model.uiState.value.form.inputs.isEmpty())
+    }
+
+    @Test fun aServerWithoutWorkflowsStillEditsCloudActions() = runTest(dispatcher) {
+        features.features = setOf("automations.v1", "cloud.sessions.v1")
+        val model = form(); settle()
+        assertTrue(model.uiState.value.workflows.isEmpty()); assertNull(model.uiState.value.loadError)
+    }
+
+    @Test fun thePageNamesTheWorkflowAndLinksTheRunsToTheirWorkflowRuns() = runTest(dispatcher) {
+        repository.current = automation(definition = workflowAutomationDefinition())
+        repository.runs = listOf(run("r1", RunSource.WEBHOOK, "running", sessionId = null, workflowRunId = "wr1"))
+        val state = page().also { settle() }.uiState.value
+        assertEquals("Fix a ticket", state.workflowName)
+        assertEquals("wr1", state.runs.single().workflowRunId)
     }
 
     @Test fun aRefusedFormShowsTheProblemAndSendsNothing() = runTest(dispatcher) {

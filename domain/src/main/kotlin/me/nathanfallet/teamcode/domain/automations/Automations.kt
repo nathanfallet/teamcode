@@ -6,9 +6,12 @@ import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
 import me.nathanfallet.teamcode.domain.cloud.DesiredState
 import me.nathanfallet.teamcode.domain.team.Member
 import me.nathanfallet.teamcode.domain.team.Principal
+import me.nathanfallet.teamcode.domain.workflows.ChildState
+import me.nathanfallet.teamcode.domain.workflows.WorkflowRunService
+import me.nathanfallet.teamcode.domain.workflows.WorkflowRunStore
 
 enum class TriggerKind(val wire: String) { CRON("cron"), WEBHOOK("webhook"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
-enum class ActionKind(val wire: String) { CLOUD("cloud"), REMOTE("remote"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
+enum class ActionKind(val wire: String) { CLOUD("cloud"), REMOTE("remote"), WORKFLOW("workflow"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
 enum class CatchupPolicy(val wire: String) { SKIP("skip"), ONCE("once"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
 enum class OverlapPolicy(val wire: String) { SKIP("skip"), QUEUE("queue"), ALLOW("allow"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
 enum class RunSource(val wire: String) { CRON("cron"), WEBHOOK("webhook"), TEST("test"); companion object { fun parse(value: String) = entries.singleOrNull { it.wire == value } } }
@@ -32,7 +35,14 @@ data class AutomationTrigger(
     val kind: TriggerKind, val cron: String? = null, val timezone: String? = null,
     val catchup: CatchupPolicy = CatchupPolicy.ONCE, val catchupGraceMinutes: Int = AutomationRules.DEFAULT_GRACE_MINUTES,
 )
-data class AutomationAction(val kind: ActionKind, val profileId: String?, val model: String? = null, val effort: String? = null, val maxRuntimeMinutes: Int = 60)
+/**
+ * [workflowId] and [inputs] (input id to a `{{…}}` template, rendered like a prompt) are those of a `workflow` action, which
+ * starts a workflow run instead of a session; its [profileId] is then the profile the workflow's agent nodes run with.
+ */
+data class AutomationAction(
+    val kind: ActionKind, val profileId: String?, val model: String? = null, val effort: String? = null, val maxRuntimeMinutes: Int = 60,
+    val workflowId: String? = null, val inputs: Map<String, String> = emptyMap(),
+)
 
 /** What the owner edits; every saved change bumps [Automation.version]. */
 data class AutomationDefinition(
@@ -55,6 +65,8 @@ data class AutomationRun(
     val status: RunStatus, val reason: String?, val sessionId: String?, val profileVersion: Int?, val scheduledFor: Long?, val queuedAt: Long,
     val startedAt: Long?, val endedAt: Long?, val cancelRequested: Boolean, val initiatorId: String?,
     val variables: List<ExtractedVariable> = emptyList(),
+    /** The workflow run a `workflow` action started (shown to open it); null for a session. */
+    val workflowRunId: String? = null,
 )
 
 /**
@@ -150,12 +162,18 @@ interface AutomationStore {
      * records the session, unreleased, so that it is deleted now or by a later release.
      */
     suspend fun started(runId: String, sessionId: String, profileVersion: Int): Boolean
+    /**
+     * Links the workflow run to its queued run, like [started]. True when the run is now starting or working on exactly that
+     * workflow run (also when a second replica links the same one); false when it ended meanwhile (cancelled): the caller then
+     * cancels the workflow run.
+     */
+    suspend fun startedWorkflow(runId: String, workflowRunId: String): Boolean
     suspend fun running(runId: String)
     /** Ends a run; cron and webhook runs update the automation's consecutive failures. */
     suspend fun finish(runId: String, status: RunStatus, reason: String?)
     /** Pauses the automation for a system reason (`owner_unavailable`, `invalid_schedule`) and clears its next slot, audited with actor `system`. */
     suspend fun disableBySystem(automationId: String, reason: String)
-    /** Runs starting or working, with their session. */
+    /** Runs starting or working, with their session or workflow run. */
     suspend fun active(limit: Int): List<ActiveRun>
     suspend fun progress(sessionIds: List<String>): Map<String, SessionProgress>
     /** Sessions of the automation's ended runs beyond its [keep] latest, not yet released. */
@@ -172,4 +190,26 @@ interface AutomationSessions {
     suspend fun create(owner: Principal, automation: Automation, run: AutomationRun, prompt: String, idempotencyKey: String): Pair<String, Int>
     suspend fun pause(owner: Principal, sessionId: String)
     suspend fun delete(owner: Principal, sessionId: String)
+}
+
+/** The workflow runs a `workflow` action starts, as the owner (docs/automations.md). */
+interface AutomationWorkflows {
+    /**
+     * Starts the workflow run of [run] with [inputs] (already rendered); [idempotencyKey] makes a retried start return the same run.
+     * Returns the workflow run's id. Refusals are the workflow service's (`run_limit`, `invalid_inputs`, `profile_required`, `not_found`).
+     */
+    suspend fun start(owner: Principal, automation: Automation, inputs: Map<String, String>, idempotencyKey: String): String
+    suspend fun cancel(owner: Principal, workflowRunId: String)
+    /** The state of the workflow runs, in one read; a run missing from the answer does not exist (any more). */
+    suspend fun states(ids: Set<String>): Map<String, ChildState>
+}
+
+/** Starts workflow runs through the run service, as the owner's credential. */
+class WorkflowRunAutomations(private val service: WorkflowRunService, private val store: WorkflowRunStore) : AutomationWorkflows {
+    override suspend fun start(owner: Principal, automation: Automation, inputs: Map<String, String>, idempotencyKey: String): String {
+        val action = automation.definition.action
+        return service.startForAutomation(owner, action.workflowId!!, inputs, action.profileId, idempotencyKey).run.id
+    }
+    override suspend fun cancel(owner: Principal, workflowRunId: String) { store.requestCancel(owner.teamId, workflowRunId) }
+    override suspend fun states(ids: Set<String>) = store.children(ids)
 }

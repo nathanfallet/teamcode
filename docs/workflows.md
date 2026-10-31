@@ -19,7 +19,7 @@ Workflows belong to the team (there is no per-team scoping beyond the deployment
 | Companion screens to use workflows (`companion`, shown when `workflows.v1` is announced): the runs list (filters, keyset pages, administrators' `?all=true`), the run detail (visits, session, blocking wait, cancel), the read-only definitions list and detail, and a start form (inputs, profile) | Implemented. Tested on the JVM (use cases, view models, repository mapping, UI, demo mode); `companion-android` and `companion-ios` were not compiled |
 | Live run updates: the feed event `cloud.workflow.run.updated` (published in the transaction of each run change, to the starter), announced by the capability `workflows.live.v1`; the list now carries `currentNodeId` and `currentNodeKind` and a read titles each visit (`nodeTitle`) | Implemented |
 | `teamcode workflows list`, `show`, `create`, `update`, `delete`, `settings`, `run`, `runs`, `run-show`, `cancel` ([CLI](#cli)) | Implemented. Tested on the JVM against a fake server; not exercised with a native binary or a real server |
-| Companion definition editor (editing definitions is still API-only), automations that start a workflow | Planned |
+| Companion definition editor (editing definitions is still API-only) | Planned |
 
 Definitions can be saved, versioned and read, and started over the API. An agent node ends when its agent calls `deliver` of the [`teamcode_workflow` MCP server](#agent-delivery) (or when the starter sends a delivery with their own credential, `POST …/deliver`); a turn that ends without a delivery (and without an open wait) first gets one reminder from the [Stop hook](#stop-hook) and, if it still ends without either, fails the run with `ended_without_delivery`. The companion has screens to start, follow and cancel runs and to read definitions; editing a definition is still done over the API.
 
@@ -54,7 +54,7 @@ A save is refused with `400 invalid_workflow` (and a message naming the node) wh
 
 Sub-workflows are checked against the other saved workflows: each must exist, none may lead back to the one being saved (a call loop is refused with the path), the chain may not be deeper than `limits.maxDepth`, and the arguments must cover the callee's required inputs and name no unknown one.
 
-Reads need an interactive login or a key with `cloud:read` (or a wider cloud scope). **Writes are interactive only**: a service key never saves or deletes a definition, whatever its scopes. Errors: `invalid_workflow`, `invalid_editors`, `invalid_limit`, `invalid_cursor` (400), `workflow_editors_only`, `forbidden` (403), `not_found` (404), `workflow_conflict`, `workflow_name_taken`, `workflow_limit` (200 per team), `workflow_in_use` (409).
+Reads need an interactive login or a key with `cloud:read` (or a wider cloud scope). **Writes are interactive only**: a service key never saves or deletes a definition, whatever its scopes. Errors: `invalid_workflow`, `invalid_editors`, `invalid_limit`, `invalid_cursor` (400), `workflow_editors_only`, `forbidden` (403), `not_found` (404), `workflow_conflict`, `workflow_name_taken`, `workflow_limit` (200 per team), `workflow_in_use` (409: another workflow calls it, or an automation starts it).
 
 **Concurrency.** A save or a delete first locks the team's `workflow_settings` row, so two replicas saving at once cannot both create a call loop, take the same name or pass the cap; the call-loop check runs on the definitions read under that lock. A replacement with `expectedVersion` is one conditional update on the version, so of two replicas saving the same version exactly one succeeds. Saves, deletions and changes of the rule are audited (`workflow.created`, `workflow.updated`, `workflow.deleted`, `workflow.editors.changed`).
 
@@ -97,7 +97,7 @@ A session that does not exist, or belongs to another member, or whose run belong
 | `GET /api/v1/workflows/{id}` | One definition |
 | `POST /api/v1/workflows` | Create (`{workflow, expectedVersion}`) |
 | `PUT /api/v1/workflows/{id}` | New version; `409 workflow_conflict` when `expectedVersion` is stale |
-| `DELETE /api/v1/workflows/{id}` | Delete (returns the definition); `409 workflow_in_use` while another workflow calls it |
+| `DELETE /api/v1/workflows/{id}` | Delete (returns the definition); `409 workflow_in_use` while another workflow calls it or an automation starts it |
 | `GET`/`PUT /api/v1/workflows/settings` | Who may edit |
 
 ### Run routes
@@ -156,4 +156,4 @@ teamcode workflows cancel RUNID [--json]
 
 ## What is planned
 
-The order of work: the companion definition editor, automations that start a workflow. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.
+Automations can start a workflow ([automations.md](automations.md#workflow-action)). The order of work: the companion definition editor. Each step updates this page. Not done on the Stop hook: Codex; a reminder for an ordinary (non-workflow) session, which is never forced to deliver or ask; verifying it against a real Claude Code session and a native binary.

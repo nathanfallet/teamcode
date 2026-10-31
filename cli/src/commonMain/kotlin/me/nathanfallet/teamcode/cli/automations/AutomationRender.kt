@@ -16,13 +16,14 @@ internal fun AutomationTriggerView.describe(): String = when (kind) {
 private fun state(enabled: Boolean, reason: String?) = if (enabled) "enabled" else "paused" + (reason?.let { " ($it)" } ?: "")
 
 /** One row of `automations list`: id, name, state, trigger, version, next slot, latest run and failures in a row. */
-internal fun AutomationSummaryView.line() = listOf(id, name, state(enabled, disabledReason), trigger.describe(), "v$version",
+internal fun AutomationSummaryView.line() = listOf(id, name, state(enabled, disabledReason), trigger.describe() + if (actionKind == "workflow") " -> workflow" else "", "v$version",
     "next " + (nextRunAt?.let(::time) ?: "-"), "last " + (lastRun?.let { "${it.status} (${it.source})" } ?: "-"),
     if (consecutiveFailures > 0) "$consecutiveFailures failed in a row" else "").joinToString("\t").trimEnd()
 
 /** One row of `automations runs`: id, status and reason, trigger, definition version, queued time and session. */
 internal fun AutomationRunView.line() = listOf(id, status + (reason?.let { " ($it)" } ?: "") + if (cancelRequested) " (cancel requested)" else "", source,
-    "v$automationVersion", "queued ${time(queuedAt)}", "session " + (sessionId ?: "-")).joinToString("\t")
+    "v$automationVersion", "queued ${time(queuedAt)}",
+    if (workflowRunId != null) "workflow run $workflowRunId" else "session " + (sessionId ?: "-")).joinToString("\t")
 
 /**
  * What to tell after a real test run. The server records a run it did not start (`skipped_overlap`, `skipped_budget`)
@@ -32,7 +33,7 @@ internal fun AutomationRunView.line() = listOf(id, status + (reason?.let { " ($i
 internal fun AutomationRunView.testHint(automationId: String): String {
     val history = "teamcode automations runs $automationId --source test"
     return when {
-        status !in Automations.finalRunStatuses -> "Follow it: $history (the session appears once it starts)."
+        status !in Automations.finalRunStatuses -> "Follow it: $history (the session, or the workflow run, appears once it starts)."
         status.startsWith("skipped") -> "No session was started" + (reason?.let { " ($it)" } ?: "") +
             ": the run is kept in the history ($history); wait for the running one, or raise --max-runs-per-day."
         else -> "This run already ended as $status: $history."
@@ -95,8 +96,10 @@ internal fun AutomationView.details(origin: String, pinned: Int? = null, mode: W
     add("Version:      $version")
     add("Trigger:      ${trigger.describe()}" + if (trigger.kind == "cron") ", catch-up ${trigger.catchup ?: "once"}" +
         (trigger.catchupGraceMinutes?.let { " (grace $it min)" } ?: "") else "")
-    add("Action:       ${action.kind}" + (action.profileId?.let { " on profile $it" } ?: "") +
+    if (action.kind == "workflow") add("Action:       workflow ${action.workflowId}" + (action.profileId?.let { " with profile $it for its agent steps" } ?: ""))
+    else add("Action:       ${action.kind}" + (action.profileId?.let { " on profile $it" } ?: "") +
         listOfNotNull(action.model, action.effort).joinToString(" ", prefix = " ").trimEnd() + ", at most ${action.maxRuntimeMinutes} min")
+    if (action.kind == "workflow") action.inputs.forEach { (key, text) -> add("Input:        $key = $text") }
     add("Overlap:      $overlap, at most $maxRunsPerDay runs per 24 h")
     nextRunAt?.let { add("Next run:     ${time(it)}") }
     if (upcomingRuns.isNotEmpty()) add("Upcoming:     " + upcomingRuns.joinToString(", ", transform = ::time))
@@ -107,14 +110,13 @@ internal fun AutomationView.details(origin: String, pinned: Int? = null, mode: W
             ", max ${variable.maxLength}, ${if (variable.required) "required" else "optional"}${if (variable.sensitive) ", sensitive" else ""})")
     }
     addAll(webhookInstructions(origin, this@details, pinned, mode, secret))
-    add("Prompt:")
-    prompt.lines().forEach { add("  $it") }
+    if (action.kind != "workflow") { add("Prompt:"); prompt.lines().forEach { add("  $it") } }
 }.joinToString("\n")
 
 /** A dry run or draft check: the problems, or the prompt the agent would get, with each variable (sensitive ones masked). */
 internal fun AutomationPreviewView.text() = buildList {
     if (problems.isNotEmpty()) {
-        add("The payload does not validate; no session would start:")
+        add("The payload does not validate; nothing would start:")
         problems.forEach { add("  ${it.path}\t${it.rule}") }
     }
     variables.forEach { add("Variable:     {{${it.name}}} (${it.type}) = " + when {
@@ -127,4 +129,8 @@ internal fun AutomationPreviewView.text() = buildList {
     if (nextRuns.isNotEmpty()) add("Next runs:    " + nextRuns.joinToString(", ", transform = ::time))
     if (renderedPrompt != null && variables.any { it.sensitive }) add("Note:         the prompt below holds the values of the sensitive variables, as the agent would get them.")
     renderedPrompt?.let { add("Rendered prompt:"); it.lines().forEach { line -> add("  $line") } }
+    if (renderedInputs.isNotEmpty()) {
+        if (variables.any { it.sensitive }) add("Note:         the inputs below hold the values of the sensitive variables, as the workflow run would get them.")
+        add("Rendered inputs:"); renderedInputs.forEach { (key, value) -> add("  $key = ${value.lines().joinToString("\n    ")}") }
+    }
 }.joinToString("\n")

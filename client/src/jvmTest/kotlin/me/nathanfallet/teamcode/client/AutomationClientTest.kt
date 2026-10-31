@@ -39,6 +39,20 @@ class AutomationClientTest {
         }
     }
 
+    @Test fun aWorkflowActionSendsItsWorkflowAndInputsAndReadsTheWorkflowRunBack() = runBlocking {
+        client { request ->
+            if (request.url.encodedPath.endsWith("/runs/r1")) respond("""{"id":"r1","automationId":"a1","automationVersion":1,"source":"test","status":"running","queuedAt":5,"workflowRunId":"wr1"}""", HttpStatusCode.OK, json)
+            else respond("""{"automation":${view.replace(""""kind":"cloud","profileId":"p1"""", """"kind":"workflow","profileId":"p1","workflowId":"wf1","inputs":{"ticket":"T-{{ticket}}"}""")}}""", HttpStatusCode.Created, json)
+        }.use { client ->
+            val input = AutomationInput("Triage", AutomationTriggerView("webhook"), AutomationActionView("workflow", "p1", workflowId = "wf1", inputs = mapOf("ticket" to "T-{{ticket}}")))
+            val created = client.createAutomation(input)
+            assertEquals("wf1", created.automation.action.workflowId); assertEquals(mapOf("ticket" to "T-{{ticket}}"), created.automation.action.inputs)
+            val action = body(requests.single())["automation"]!!.jsonObject["action"]!!.jsonObject
+            assertEquals("workflow", action["kind"]!!.jsonPrimitive.content); assertEquals("T-{{ticket}}", action["inputs"]!!.jsonObject["ticket"]!!.jsonPrimitive.content)
+            assertEquals("wr1", client.automationRun("a1", "r1").workflowRunId)
+        }
+    }
+
     @Test fun aTestRunCarriesItsIdempotencyKeyAndPayload() = runBlocking {
         client { respond(run, HttpStatusCode.Accepted, json) }.use { client ->
             val result = client.runAutomation("a1", buildJsonObject { put("ticket", buildJsonObject { put("number", 735) }) }, idempotencyKey = "test-1")

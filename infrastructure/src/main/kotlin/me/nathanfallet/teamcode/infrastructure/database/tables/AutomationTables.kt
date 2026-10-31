@@ -22,6 +22,9 @@ object Automations : Table("automations") {
     val model = varchar("model", 128).nullable()
     val effort = varchar("effort", 32).nullable()
     val maxRuntimeMinutes = integer("max_runtime_minutes")
+    /** A `workflow` action: the workflow it starts and its input templates (JSON object, input id to text); null for a session. */
+    val workflowId = varchar("workflow_id", 36).nullable()
+    val workflowInputs = text("workflow_inputs").nullable()
     val prompt = mediumText("prompt")
     val variables = text("variables")
     val samplePayload = mediumText("sample_payload").nullable()
@@ -49,6 +52,8 @@ object Automations : Table("automations") {
         index("automation_team", false, teamId, createdAt)
         // The scheduler's scan: enabled cron automations by slot.
         index("automation_due", false, enabled, triggerKind, nextRunAt)
+        // Deleting a workflow: is any automation using it.
+        index("automation_workflow", false, workflowId, teamId)
     }
 }
 
@@ -73,6 +78,8 @@ object AutomationRuns : Table("automation_runs") {
     val variablesDigest = char("variables_digest", 64).nullable()
     val requestDigest = char("request_digest", 64).nullable()
     val sessionId = varchar("session_id", 36).nullable()
+    /** The workflow run a `workflow` action started. */
+    val workflowRunId = varchar("workflow_run_id", 36).nullable()
     val profileVersion = integer("profile_version").nullable()
     val scheduledFor = long("scheduled_for").nullable()
     val queuedAt = long("queued_at")

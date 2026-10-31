@@ -7,6 +7,7 @@ import me.nathanfallet.teamcode.api.models.*
 import me.nathanfallet.teamcode.cli.CliUserException
 import me.nathanfallet.teamcode.cli.cloud.PROFILE_ID
 import me.nathanfallet.teamcode.cli.cloud.resolveProfile
+import me.nathanfallet.teamcode.cli.workflows.listAllWorkflows
 import me.nathanfallet.teamcode.client.TeamCodeClient
 import me.nathanfallet.teamcode.client.TeamCodeException
 import okio.FileSystem
@@ -69,6 +70,14 @@ internal suspend fun resolveProfileId(client: TeamCodeClient, profile: String): 
     if (PROFILE_ID.matches(profile)) return profile
     val profiles = try { client.cloudProfiles() } catch (_: TeamCodeException) { emptyList() }
     return resolveProfile(profile, profiles)
+}
+
+/** `--workflow`: an id as is, a name looked up in the team's workflows (a list that cannot be read sends it as given: the server answers). */
+internal suspend fun resolveWorkflowId(client: TeamCodeClient, workflow: String): String {
+    val workflows = try { listAllWorkflows(client) } catch (_: TeamCodeException) { return workflow }
+    return workflows.firstOrNull { it.id == workflow }?.id
+        ?: workflows.filter { it.name.equals(workflow, ignoreCase = true) }.singleOrNull()?.id
+        ?: workflow
 }
 
 private const val MAX_TEXT_FILE_BYTES = 1024 * 1024L

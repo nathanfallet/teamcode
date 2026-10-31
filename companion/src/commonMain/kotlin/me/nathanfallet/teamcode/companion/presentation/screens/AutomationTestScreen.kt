@@ -50,7 +50,7 @@ import org.jetbrains.compose.resources.stringResource
  * confirmation, and shows the run with a link to its session. An administrator only previews another member's.
  */
 @Composable
-fun AutomationTestScreen(viewModel: AutomationTestViewModel, onBack: (() -> Unit)?, onOpenSession: (String) -> Unit, backLabel: String = stringResource(Res.string.action_back)) {
+fun AutomationTestScreen(viewModel: AutomationTestViewModel, onBack: (() -> Unit)?, onOpenSession: (String) -> Unit, backLabel: String = stringResource(Res.string.action_back), onOpenWorkflowRun: (String) -> Unit = {}) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val colors = TeamCode.colors
     var confirm by remember { mutableStateOf(false) }
@@ -93,6 +93,7 @@ fun AutomationTestScreen(viewModel: AutomationTestViewModel, onBack: (() -> Unit
                         runReasonWords(run.reason)?.let { Text(it, color = colors.muted, fontSize = 13.sp, modifier = Modifier.testTag("automation-test-reason")) }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             run.sessionId?.let { TcButton(stringResource(Res.string.automation_open_session), onClick = { onOpenSession(it) }, small = true, modifier = Modifier.testTag("automation-test-session")) }
+                            run.workflowRunId?.let { TcButton(stringResource(Res.string.automation_open_workflow_run), onClick = { onOpenWorkflowRun(it) }, small = true, modifier = Modifier.testTag("automation-test-workflow-run")) }
                             if (!run.final) TcButton(stringResource(Res.string.automations_refresh), onClick = viewModel::refreshRun, kind = ButtonKind.SECONDARY, small = true, modifier = Modifier.testTag("automation-test-refresh"))
                         }
                     }

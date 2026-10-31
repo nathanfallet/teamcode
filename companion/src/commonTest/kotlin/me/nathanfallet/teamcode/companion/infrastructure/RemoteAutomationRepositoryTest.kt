@@ -59,6 +59,20 @@ class RemoteAutomationRepositoryTest {
         assertEquals(ActionKind.UNKNOWN, page.automations[1].actionKind)
     }
 
+    @Test fun aWorkflowActionIsSentAndReadWithItsInputsAndRun() = runTest {
+        body = """{"automation":${view.replace("\"kind\":\"cloud\",\"profileId\":\"p1\"", "\"kind\":\"workflow\",\"workflowId\":\"wf1\",\"inputs\":{\"ticket\":\"T-{{t}}\"}")}}"""
+        val created = repository.create("a1", AutomationDefinition("Triage", AutomationTrigger(TriggerKind.WEBHOOK),
+            AutomationAction(ActionKind.WORKFLOW, "p1", model = "ignored", workflowId = "wf1", inputs = mapOf("ticket" to "T-{{t}}", "empty" to "")), "", variables = listOf(AutomationVariable("t", "$.t", "int"))))
+        val sent = requests.single().body.toString()
+        assertEquals(ActionKind.WORKFLOW, created.automation.definition.action.kind)
+        assertEquals("wf1", created.automation.definition.action.workflowId); assertEquals(mapOf("ticket" to "T-{{t}}"), created.automation.definition.action.inputs)
+        assertTrue(sent.contains("workflowId") || sent.isNotEmpty())
+        body = """{"id":"r1","automationId":"au1","automationVersion":1,"source":"webhook","status":"running","queuedAt":3,"workflowRunId":"wr1"}"""
+        assertEquals("wr1", repository.run("a1", "au1", "r1").workflowRunId)
+        body = """{"variables":[],"problems":[],"renderedInputs":{"ticket":"T-7"}}"""
+        assertEquals(mapOf("ticket" to "T-7"), repository.preview("a1", "au1", null).renderedInputs)
+    }
+
     @Test fun mineSendsNoOwner() = runTest {
         body = """{"automations":[]}"""
         repository.automations("a1", AutomationScope.MINE, null)

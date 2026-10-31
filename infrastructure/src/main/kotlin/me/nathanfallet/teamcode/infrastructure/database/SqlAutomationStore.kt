@@ -270,7 +270,8 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
 
     override suspend fun working(teamId: String, ownerId: String): Int = database.query {
         AutomationRuns.select(AutomationRuns.id).where {
-            (AutomationRuns.ownerId eq ownerId) and (AutomationRuns.status inList RunStatus.WORKING.map { it.wire }) and (AutomationRuns.teamId eq teamId)
+            (AutomationRuns.ownerId eq ownerId) and (AutomationRuns.status inList RunStatus.WORKING.map { it.wire }) and (AutomationRuns.teamId eq teamId) and
+                AutomationRuns.workflowRunId.isNull()
         }.count().toInt()
     }
 
@@ -304,6 +305,22 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
         // Ended meanwhile (cancelled): it keeps the session, unreleased, so that a failed delete is retried by a later release.
         else AutomationRuns.update({ (AutomationRuns.id eq runId) and AutomationRuns.sessionId.isNull() }) { it[AutomationRuns.sessionId] = sessionId; it[sessionReleased] = false }
         updated == 1
+    }
+
+    override suspend fun startedWorkflow(runId: String, workflowRunId: String): Boolean = database.query {
+        val row = AutomationRuns.select(AutomationRuns.automationId, AutomationRuns.teamId, AutomationRuns.ownerId).where { AutomationRuns.id eq runId }.singleOrNull() ?: return@query false
+        val now = nowMillis()
+        val updated = AutomationRuns.update({ (AutomationRuns.id eq runId) and (AutomationRuns.status eq RunStatus.QUEUED.wire) }) {
+            it[status] = RunStatus.STARTING.wire; it[AutomationRuns.workflowRunId] = workflowRunId; it[startedAt] = now; it[nextAttemptAt] = now; it[prompt] = null
+        }
+        if (updated == 1) {
+            audit(row[AutomationRuns.teamId], "system", "automation.run_started", "${row[AutomationRuns.automationId]}/$runId", row[AutomationRuns.ownerId])
+            return@query true
+        }
+        // Not queued any more: the same dispatch replayed by a second replica (it is linked to this very run), or the run ended meanwhile.
+        AutomationRuns.update({ (AutomationRuns.id eq runId) and AutomationRuns.workflowRunId.isNull() }) { it[AutomationRuns.workflowRunId] = workflowRunId }
+        val current = AutomationRuns.select(AutomationRuns.status, AutomationRuns.workflowRunId).where { AutomationRuns.id eq runId }.single()
+        current[AutomationRuns.workflowRunId] == workflowRunId && RunStatus.parse(current[AutomationRuns.status])?.final == false
     }
 
     override suspend fun running(runId: String) = database.query {
@@ -443,6 +460,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
             it[Automations.catchup] = d.trigger.catchup.wire; it[Automations.catchupGraceMinutes] = d.trigger.catchupGraceMinutes
             it[Automations.actionKind] = d.action.kind.wire; it[Automations.profileId] = d.action.profileId; it[Automations.model] = d.action.model
             it[Automations.effort] = d.action.effort; it[Automations.maxRuntimeMinutes] = d.action.maxRuntimeMinutes
+            it[Automations.workflowId] = d.action.workflowId; it[Automations.workflowInputs] = if (d.action.workflowId != null) AutomationRules.encodeInputs(d.action.inputs) else null
             it[Automations.prompt] = d.prompt; it[Automations.variables] = encodeVariables(d.variables); it[Automations.samplePayload] = d.samplePayload?.toString()
             it[Automations.overlap] = d.overlap.wire; it[Automations.maxRunsPerDay] = d.maxRunsPerDay
         }
@@ -453,7 +471,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
                 AutomationTrigger(TriggerKind.parse(row[Automations.triggerKind]) ?: TriggerKind.WEBHOOK, row[Automations.cron], row[Automations.timezone],
                     CatchupPolicy.parse(row[Automations.catchup]) ?: CatchupPolicy.ONCE, row[Automations.catchupGraceMinutes]),
                 AutomationAction(ActionKind.parse(row[Automations.actionKind]) ?: ActionKind.CLOUD, row[Automations.profileId], row[Automations.model], row[Automations.effort],
-                    row[Automations.maxRuntimeMinutes]),
+                    row[Automations.maxRuntimeMinutes], row[Automations.workflowId], row[Automations.workflowInputs]?.let { AutomationRules.decodeInputs(it) }.orEmpty()),
                 row[Automations.prompt], decodeVariables(row[Automations.variables]),
                 row[Automations.samplePayload]?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() },
                 OverlapPolicy.parse(row[Automations.overlap]) ?: OverlapPolicy.SKIP, row[Automations.maxRunsPerDay],
@@ -472,6 +490,7 @@ class SqlAutomationStore(private val database: Database) : AutomationStore {
             RunSource.parse(row[AutomationRuns.runSource]) ?: RunSource.TEST, RunStatus.parse(row[AutomationRuns.status]) ?: RunStatus.FAILED, row[AutomationRuns.reason],
             row[AutomationRuns.sessionId], row[AutomationRuns.profileVersion], row[AutomationRuns.scheduledFor], row[AutomationRuns.queuedAt], row[AutomationRuns.startedAt],
             row[AutomationRuns.endedAt], row[AutomationRuns.cancelRequested], row[AutomationRuns.initiatorId], decodeExtracted(row[AutomationRuns.variables]),
+            row[AutomationRuns.workflowRunId],
         )
 
         internal fun encodeVariables(variables: List<AutomationVariable>) = JsonArray(variables.map { v ->

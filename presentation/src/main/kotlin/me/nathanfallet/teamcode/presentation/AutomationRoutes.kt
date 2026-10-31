@@ -32,7 +32,7 @@ internal fun AutomationInput.domain() = AutomationDefinition(
         wire(trigger.catchup, CatchupPolicy::parse, "trigger.catchup", Automations.catchupPolicies) ?: CatchupPolicy.ONCE,
         trigger.catchupGraceMinutes ?: AutomationRules.DEFAULT_GRACE_MINUTES,
     ),
-    AutomationAction(wire(action.kind, ActionKind::parse, "action.kind", Automations.actionKinds)!!, action.profileId, action.model, action.effort, action.maxRuntimeMinutes),
+    AutomationAction(wire(action.kind, ActionKind::parse, "action.kind", Automations.actionKinds)!!, action.profileId, action.model, action.effort, action.maxRuntimeMinutes, action.workflowId, action.inputs),
     prompt,
     variables.map { AutomationVariable(it.name, it.path, wire(it.type, VariableType::parse, "type", Automations.variableTypes)!!, it.values, it.maxLength, it.required, it.sensitive) },
     samplePayload,
@@ -41,7 +41,7 @@ internal fun AutomationInput.domain() = AutomationDefinition(
 )
 
 private fun AutomationTrigger.view() = AutomationTriggerView(kind.wire, cron, timezone, catchup.wire.takeIf { kind == TriggerKind.CRON }, catchupGraceMinutes.takeIf { kind == TriggerKind.CRON })
-private fun AutomationAction.view() = AutomationActionView(kind.wire, profileId, model, effort, maxRuntimeMinutes)
+private fun AutomationAction.view() = AutomationActionView(kind.wire, profileId, model, effort, maxRuntimeMinutes, workflowId, inputs)
 private fun AutomationVariable.view() = AutomationVariableView(name, path, type.wire, values, maxLength, required, sensitive)
 private fun RunSummary.view() = AutomationRunSummaryView(id, source.wire, status.wire, queuedAt)
 private fun ExtractedVariable.view() = AutomationVariableValueView(name, type.wire, value.takeUnless { sensitive }, sensitive, present)
@@ -58,9 +58,9 @@ private fun Automation.summary() = AutomationSummaryView(id, ownerId, ownerName,
     definition.action.kind.wire, nextRunAt, lastRun?.view(), consecutiveFailures, updatedAt)
 private fun CreatedAutomation.view() = CreatedAutomationView(automation.view(), secret)
 internal fun AutomationRun.view() = AutomationRunView(id, automationId, automationVersion, source.wire, status.wire, reason, sessionId, profileVersion, scheduledFor,
-    queuedAt, startedAt, endedAt, cancelRequested, initiatorId, variables.map { it.view() })
+    queuedAt, startedAt, endedAt, cancelRequested, initiatorId, variables.map { it.view() }, workflowRunId)
 private fun AutomationPreview.view() = AutomationPreviewView(renderedPrompt, variables.map { it.view() }, problems.map { AutomationProblemView(it.path, it.rule) },
-    profileVersion, wouldSkip, nextRuns)
+    profileVersion, wouldSkip, nextRuns, renderedInputs)
 
 private suspend fun ApplicationCall.respondRun(outcome: RunOutcome) {
     if (outcome is RunOutcome.Replayed) response.header(CloudHeaders.IDEMPOTENCY_REPLAYED, "true")
