@@ -54,6 +54,7 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
+import me.nathanfallet.teamcode.companion.presentation.components.OnShake
 import me.nathanfallet.teamcode.companion.presentation.components.SheetViewModels
 import me.nathanfallet.teamcode.companion.presentation.components.TransfersButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
@@ -128,6 +129,9 @@ class MainSheets internal constructor(
     var switcher by switcher
 
     fun newSession(accountId: String) { if (localHost != null) chooserFor = accountId else newSessionFor = accountId }
+
+    /** Whether one of the sheets shows. */
+    val anyOpen: Boolean get() = newSessionFor != null || chooserFor != null || localSessionFor != null || switcher
 }
 
 @Composable
@@ -224,6 +228,8 @@ fun MainScreen(
     /** The tab to open on (the screen a wider window showed); then the member's. */
     initialTab: MainTab = MainTab.SESSIONS,
     onTabChange: (MainTab) -> Unit = {},
+    /** Pushes the office over the tabs (a shake of the device, the Sessions title's button); null: no way into it. */
+    onOpenOffice: ((accountId: String) -> Unit)? = null,
     home: HomeViewModel = koinViewModel(),
     settings: SettingsViewModel = koinViewModel(),
     waits: WaitsViewModel = koinViewModel(),
@@ -263,6 +269,11 @@ fun MainScreen(
         }
     }
 
+    // A shake opens the office (the wide layout has its sidebar button): only from the tabs themselves, signed in, never
+    // over a sheet or the palette. Covered by a pushed screen, the tabs are stopped and the sensor is off.
+    val officeAccount = account?.takeIf { it.signedIn }
+    OnShake(enabled = onOpenOffice != null && officeAccount != null && !palette && !sheets.anyOpen) { officeAccount?.let { onOpenOffice?.invoke(it.id) } }
+
     Column(Modifier.fillMaxSize().background(TeamCode.colors.background)) {
         // The desktop's narrow window gets the banner too: shown by platform, never by size (nothing binds it on mobile).
         UpdateBanner()
@@ -274,7 +285,7 @@ fun MainScreen(
                     onOpenSession = { a, session -> onOpenSession(a.id, session.id) },
                     onNewSession = { sheets.newSession(it.id) },
                     onSwitchAccount = { sheets.switcher = true },
-                    titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) } },
+                    titleActions = { TransfersButton(it.id) { onOpenTransfers(it.id) }; if (onOpenOffice != null) OfficeButton { onOpenOffice(it.id) } },
                     viewModel = home,
                     waitsViewModel = waits,
                     onOpenWaits = { tab = MainTab.WAITS },

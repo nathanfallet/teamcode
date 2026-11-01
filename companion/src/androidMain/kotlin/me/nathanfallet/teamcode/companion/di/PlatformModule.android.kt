@@ -8,16 +8,19 @@ import io.ktor.client.engine.okhttp.OkHttp
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.domain.services.SecureRandom
+import me.nathanfallet.teamcode.companion.domain.services.ShakeDetector
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.KeystoreCredentialStore
 import me.nathanfallet.teamcode.companion.infrastructure.system.AndroidPlatformInfo
+import me.nathanfallet.teamcode.companion.infrastructure.system.AndroidShakeDetector
 import me.nathanfallet.teamcode.companion.infrastructure.system.JavaSecureRandom
 import org.koin.dsl.module
 
-/** Android: tokens encrypted by an Android Keystore key, preferences excluded from backups, the OkHttp engine. */
+/** Android: tokens encrypted by an Android Keystore key, preferences excluded from backups, the OkHttp engine, the accelerometer's shakes. */
 fun platformModule(context: Context) = module {
     single<Settings> { SharedPreferencesSettings(context.getSharedPreferences("teamcode", Context.MODE_PRIVATE)) }
     single<CredentialStore> { KeystoreCredentialStore(context.getSharedPreferences(KeystoreCredentialStore.FILE, Context.MODE_PRIVATE)) }
     single<HttpClientEngineFactory<*>> { OkHttp }
     single<PlatformInfo> { AndroidPlatformInfo }
     single<SecureRandom> { JavaSecureRandom }
+    single<ShakeDetector> { AndroidShakeDetector(context) }
 }
