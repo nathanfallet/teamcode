@@ -99,6 +99,8 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import me.nathanfallet.teamcode.companion.domain.usecases.mcp.McpServersAvailabilityUseCase
+import me.nathanfallet.teamcode.companion.resources.automations_row_hint
+import me.nathanfallet.teamcode.companion.resources.automations_title
 import me.nathanfallet.teamcode.companion.resources.mcp_row_hint
 import me.nathanfallet.teamcode.companion.resources.mcp_title
 
@@ -111,6 +113,8 @@ fun AccountScreen(
     onOpenSubscriptions: (Account) -> Unit = {},
     onOpenGitHub: (Account) -> Unit = {},
     onOpenMcp: (Account) -> Unit = {},
+    /** Set on the phone, where Automations are not a tab: a row opens them (only when the server offers automations). Null on a wide window, whose sidebar lists them. */
+    onOpenAutomations: ((Account) -> Unit)? = null,
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -203,6 +207,7 @@ fun AccountScreen(
             }
 
             active?.takeIf { it.signedIn }?.let { account -> McpServersEntry(account, onOpenMcp) }
+            if (onOpenAutomations != null) active?.takeIf { it.signedIn }?.let { account -> AutomationsEntry(account, onOpenAutomations) }
 
             Section(stringResource(Res.string.account_other)) {
                 Group {
@@ -277,6 +282,24 @@ private fun McpServersEntry(account: Account, onOpen: (Account) -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(Res.string.mcp_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                     Text(stringResource(Res.string.mcp_row_hint), color = colors.muted, fontSize = 12.5.sp)
+                }
+                Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+/** The row that opens the automations from Settings, shown only when the active account's server offers them. */
+@Composable
+private fun AutomationsEntry(account: Account, onOpen: (Account) -> Unit) {
+    if (!rememberAutomationsOffered(account)) return
+    val colors = TeamCode.colors
+    Section(stringResource(Res.string.automations_title)) {
+        Group {
+            GroupRow(Modifier.testTag("automations-row"), onClick = { onOpen(account) }) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(Res.string.automations_title), color = colors.text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text(stringResource(Res.string.automations_row_hint), color = colors.muted, fontSize = 12.5.sp)
                 }
                 Icon(PhosphorIcons.Regular.CaretRight, contentDescription = null, tint = colors.muted, modifier = Modifier.size(16.dp))
             }
