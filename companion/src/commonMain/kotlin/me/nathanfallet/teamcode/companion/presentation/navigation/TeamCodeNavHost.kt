@@ -61,6 +61,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainTab
+import me.nathanfallet.teamcode.companion.presentation.screens.PhoneOfficeScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.GitHubLinkScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.McpServersScreen
@@ -147,8 +148,9 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             // Only screens the panel shows: a sign-in in progress stays where it is.
             if (routes.size == above.size && main >= 0) {
                 if (routes.isNotEmpty()) navController.popBackStack<MainRoute>(inclusive = false)
-                // The tab's list first (a session opened from the artifacts goes back to them), unless a pushed screen is already its own.
-                val first = tabRoute(tab, accountRepository.activeAccountId.value)
+                // The tab's list first (a session opened from the artifacts goes back to them), unless a pushed screen is already its own,
+                // or is the office: a first screen of the panel, as its sidebar button opens it.
+                val first = tabRoute(tab, accountRepository.activeAccountId.value).takeUnless { routes.firstOrNull() is OfficeRoute }
                 pendingDetail = listOfNotNull(first.takeIf { it != routes.firstOrNull() }) + routes
             }
         } else if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true) {
@@ -207,6 +209,18 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onStartWorkflow = { accountId, workflowId -> navController.navigate(WorkflowStartRoute(accountId, workflowId)) },
                 onCreateWorkflow = { accountId -> navController.navigate(WorkflowEditRoute(accountId)) },
                 onDuplicateWorkflow = { accountId, workflowId, suffix -> navController.navigate(WorkflowEditRoute(accountId, copyOf = workflowId, copySuffix = suffix)) },
+                // From the tabs only, and once: never an office over another.
+                onOpenOffice = { accountId -> if (navController.currentBackStackEntry?.destination?.hasRoute<MainRoute>() == true) navController.navigate(OfficeRoute(accountId)) { launchSingleTop = true } },
+            )
+        }
+        // The phone's office: a session opened from it replaces it, so back from the session lands on the tabs.
+        composable<OfficeRoute> {
+            PhoneOfficeScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSession = { accountId, sessionId -> navController.navigate(SessionRoute(accountId, sessionId)) { popUpTo<MainRoute>() } },
+                onOpenArtifacts = { navController.navigate(it) },
+                onSignInAgain = { account -> navController.navigate(LoginRoute(account.origin, account.username)) },
+                onAddAccount = { navController.navigate(AddServerRoute) },
             )
         }
         composable<ArtifactsRoute> { entry ->
@@ -393,6 +407,8 @@ internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
 /** The route of a screen both layouts show (pushed over the tabs, or in the content panel); null for the others. */
 internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<SessionRoute>() -> toRoute<SessionRoute>()
+    // The panel's first screen in the wide layout, pushed over the tabs on the phone.
+    destination.hasRoute<OfficeRoute>() -> toRoute<OfficeRoute>()
     destination.hasRoute<ArtifactRoute>() -> toRoute<ArtifactRoute>()
     destination.hasRoute<ArtifactsRoute>() -> toRoute<ArtifactsRoute>()
     destination.hasRoute<TransfersRoute>() -> toRoute<TransfersRoute>()
