@@ -41,10 +41,12 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowRunVie
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowStartViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.WorkflowViewModel
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationScreen
+import me.nathanfallet.teamcode.companion.presentation.screens.AutomationsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.AutomationTestScreen
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationEditViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationTestViewModel
 import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationViewModel
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.AutomationsViewModel
 import me.nathanfallet.teamcode.companion.presentation.components.LocalWideLayout
 import me.nathanfallet.teamcode.companion.presentation.components.windowTitleBarPadding
 import me.nathanfallet.teamcode.companion.presentation.screens.WideMainScreen
@@ -61,6 +63,7 @@ import me.nathanfallet.teamcode.companion.presentation.screens.ArtifactsScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.LoginScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.MainTab
+import me.nathanfallet.teamcode.companion.presentation.screens.MainTabSaver
 import me.nathanfallet.teamcode.companion.presentation.screens.SessionScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.GitHubLinkScreen
 import me.nathanfallet.teamcode.companion.presentation.screens.McpServersScreen
@@ -134,7 +137,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
     // are pushed over the tabs.
     var pendingDetail by remember { mutableStateOf<List<Any>>(emptyList()) }
     // The phone layout's tab: the panel opens on the same list, and the tab on the panel's first screen.
-    var tab by rememberSaveable { mutableStateOf(MainTab.SESSIONS) }
+    var tab by rememberSaveable(stateSaver = MainTabSaver) { mutableStateOf(MainTab.SESSIONS) }
     var wasWide by remember { mutableStateOf(wide) }
     LaunchedEffect(wide) {
         if (wide == wasWide) return@LaunchedEffect
@@ -155,7 +158,8 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
             val panel = detail.currentBackStack.value.filter { it.destination !is androidx.navigation.NavGraph }
             val root = panel.firstOrNull()?.let { panelTab(it) }
             // The panel's first screen is a tab's (the sessions, the artifacts, Settings): that tab opens, the screens above are pushed.
-            tab = root ?: MainTab.SESSIONS
+            // The automations list is not a tab on the phone: Settings opens, the list is pushed over it (back returns to Settings).
+            tab = root ?: if (panel.firstOrNull()?.destination?.hasRoute<AutomationsRoute>() == true) MainTab.ACCOUNT else MainTab.SESSIONS
             panel.drop(if (root != null) 1 else 0).mapNotNull { it.detailRoute() }.forEach { navController.navigate(it) }
         }
     }
@@ -200,8 +204,7 @@ fun TeamCodeNavHost(rootViewModel: RootViewModel = koinViewModel()) {
                 onOpenSubscriptions = { accountId -> navController.navigate(SubscriptionAccountsRoute(accountId)) },
                 onOpenGitHub = { accountId -> navController.navigate(GitHubLinkRoute(accountId)) },
                 onOpenMcp = { accountId -> navController.navigate(McpServersRoute(accountId)) },
-                onOpenAutomation = { accountId, automationId -> navController.navigate(AutomationRoute(accountId, automationId)) },
-                onCreateAutomation = { accountId -> navController.navigate(AutomationEditRoute(accountId)) },
+                onOpenAutomations = { accountId -> navController.navigate(AutomationsRoute(accountId)) },
                 onOpenWorkflowRun = { accountId, runId -> navController.navigate(WorkflowRunRoute(accountId, runId)) },
                 onOpenWorkflow = { accountId, workflowId -> navController.navigate(WorkflowRoute(accountId, workflowId)) },
                 onStartWorkflow = { accountId, workflowId -> navController.navigate(WorkflowStartRoute(accountId, workflowId)) },
@@ -341,8 +344,14 @@ private fun NavGraphBuilder.workflowDestinations(navController: NavHostControlle
     }
 }
 
-/** The automation screens pushed over the phone's tabs: the page, the form, the test; each leaves for the page or the list when done. */
+/** The automation screens pushed over the phone's tabs (the list from Settings): the list, the page, the form, the test; each leaves for the page or the list when done. */
 private fun NavGraphBuilder.automationDestinations(navController: NavHostController) {
+    composable<AutomationsRoute> { entry ->
+        val route = entry.toRoute<AutomationsRoute>()
+        val viewModel: AutomationsViewModel = koinViewModel { parametersOf(route) }
+        AutomationsScreen(viewModel, onOpen = { navController.navigate(AutomationRoute(route.accountId, it.id)) },
+            onCreate = { navController.navigate(AutomationEditRoute(route.accountId)) }, onBack = { navController.popBackStack() })
+    }
     composable<AutomationRoute> { entry ->
         val route = entry.toRoute<AutomationRoute>()
         val viewModel: AutomationViewModel = koinViewModel { parametersOf(route) }
@@ -374,7 +383,6 @@ internal fun panelTab(entry: NavBackStackEntry): MainTab? = when {
     entry.destination.hasRoute<SessionsListRoute>() -> MainTab.SESSIONS
     entry.destination.hasRoute<AccountRoute>() -> MainTab.ACCOUNT
     entry.destination.hasRoute<ArtifactsRoute>() && entry.toRoute<ArtifactsRoute>().sessionId == null -> MainTab.ARTIFACTS
-    entry.destination.hasRoute<AutomationsRoute>() -> MainTab.AUTOMATIONS
     entry.destination.hasRoute<WaitsRoute>() -> MainTab.WAITS
     entry.destination.hasRoute<WorkflowsRoute>() -> MainTab.WORKFLOWS
     else -> null
@@ -385,7 +393,6 @@ internal fun tabRoute(tab: MainTab, accountId: String?): Any? = when (tab) {
     MainTab.SESSIONS -> SessionsListRoute
     MainTab.ACCOUNT -> AccountRoute
     MainTab.ARTIFACTS -> accountId?.let { ArtifactsRoute(it) }
-    MainTab.AUTOMATIONS -> accountId?.let { AutomationsRoute(it) }
     MainTab.WAITS -> accountId?.let { WaitsRoute(it) }
     MainTab.WORKFLOWS -> accountId?.let { WorkflowsRoute(it) }
 }
@@ -399,6 +406,7 @@ internal fun NavBackStackEntry.detailRoute(): Any? = when {
     destination.hasRoute<SubscriptionAccountsRoute>() -> toRoute<SubscriptionAccountsRoute>()
     destination.hasRoute<GitHubLinkRoute>() -> toRoute<GitHubLinkRoute>()
     destination.hasRoute<McpServersRoute>() -> toRoute<McpServersRoute>()
+    destination.hasRoute<AutomationsRoute>() -> toRoute<AutomationsRoute>()
     destination.hasRoute<AutomationRoute>() -> toRoute<AutomationRoute>()
     destination.hasRoute<WorkflowRunRoute>() -> toRoute<WorkflowRunRoute>()
     destination.hasRoute<WorkflowRoute>() -> toRoute<WorkflowRoute>()

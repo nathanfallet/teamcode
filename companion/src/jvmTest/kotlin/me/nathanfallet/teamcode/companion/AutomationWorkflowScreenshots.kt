@@ -53,8 +53,8 @@ class AutomationWorkflowScreenshots {
                 scene(window.first, window.second, theme, listOf(automations())) {
                     var waited = 0
                     fun present(tag: String) = onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
-                    while (!present("tab-automations") && !present("sidebar-automation-au1") && waited++ < 20) { Thread.sleep(100); mainClock.advanceTimeBy(250); waitForIdle() }
-                    if (present("tab-automations")) { tap("tab-automations"); shot(output, "$prefix-1-list"); tap("automation-au1") } else tap("sidebar-automation-au1")
+                    while (!present("tab-account") && !present("sidebar-automation-au1") && waited++ < 20) { Thread.sleep(100); mainClock.advanceTimeBy(250); waitForIdle() }
+                    if (present("tab-account")) { tap("tab-account"); tap("automations-row"); shot(output, "$prefix-1-list"); tap("automation-au1") } else tap("sidebar-automation-au1")
                     shot(output, "$prefix-2-page")
                     scrollTo("run-workflow-r1")
                     shot(output, "$prefix-3-runs")
