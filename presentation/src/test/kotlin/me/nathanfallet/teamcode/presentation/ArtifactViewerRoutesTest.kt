@@ -364,6 +364,27 @@ class ArtifactViewerRoutesTest {
         assertTrue(System.nanoTime() - started < 5_000_000_000, "Unclosed brackets are rendered in linear time")
     }
 
+    @Test fun markdownTablesBecomeHtmlTables() {
+        val html = Markdown.render("Intro\n| Name | Count | Note |\n|:--|--:|:-:|\n| **a** | 1 | `x\\|y` |\n| b | 2 |\n\nAfter")
+        assertTrue("<table>" in html && "<th style=\"text-align:left\">Name</th>" in html, html)
+        assertTrue("<th style=\"text-align:right\">Count</th>" in html && "<th style=\"text-align:center\">Note</th>" in html, html)
+        assertTrue("<td style=\"text-align:left\"><strong>a</strong></td>" in html, html)
+        assertTrue("<code>x|y</code>" in html, "An escaped pipe stays in its cell: $html")
+        assertTrue("<td style=\"text-align:center\"></td></tr>" in html, "A short row is padded to the header: $html")
+        assertEquals(2, Regex("<tr>").findAll(html.substringAfter("<tbody>")).count(), html)
+        assertTrue("<p>Intro</p>" in html && "<p>After</p>" in html && '|' !in html.replace("x|y", ""), "The table ends at the blank line: $html")
+        // Without outer pipes, and escaped like any other text.
+        val bare = Markdown.render("a | b\n--- | ---\n<script>1</script> | 2")
+        assertTrue("<th>a</th><th>b</th>" in bare && "&lt;script&gt;" in bare && "<script>" !in bare, bare)
+        // Not tables: a pipe in prose, a delimiter of another width, a rule.
+        assertFalse("<table>" in Markdown.render("a | b\n\nplain"), "A pipe alone is prose")
+        assertFalse("<table>" in Markdown.render("| a | b |\n|---|\n| 1 | 2 |"), "The delimiter must have the header's width")
+        assertTrue("<hr>" in Markdown.render("text\n\n---\n"))
+        val started = System.nanoTime()
+        Markdown.render("|".repeat(500_000) + "\n" + "|-".repeat(500_000) + "\n" + "|".repeat(500_000))
+        assertTrue(System.nanoTime() - started < 5_000_000_000, "Crafted pipes are rendered in linear time")
+    }
+
     @Test fun anUntitledArtifactIsDeletedByTypingUntitled() = testApplication {
         val store = Store().apply { title = "" }; install(store)
         val csrf = FakeTeam().authenticate("admin")!!.tokenId

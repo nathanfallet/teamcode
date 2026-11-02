@@ -39,7 +39,8 @@ internal object ArtifactPages {
         "pre{background:#f6f8fa;padding:12px 14px;border-radius:8px;overflow:auto}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}" +
         ":not(pre)>code{background:#f6f8fa;padding:1px 5px;border-radius:5px}blockquote{margin:0;padding:0 14px;border-left:3px solid #d0d7de;color:#57606a}" +
         "h1,h2,h3{line-height:1.25}hr{border:0;border-top:1px solid #d0d7de}" +
-        "@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre,:not(pre)>code{background:#161b22}blockquote{color:#8b949e;border-color:#30363d}a{color:#58a6ff}}"
+        ".table{overflow-x:auto;margin:0 0 16px}table{border-collapse:collapse;width:max-content;max-width:100%;font-size:.95em}th,td{border:1px solid #d0d7de;padding:6px 12px;vertical-align:top}th{background:#f6f8fa;text-align:left}tbody tr:nth-child(even){background:#f6f8fa}" +
+        "@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}pre,:not(pre)>code{background:#161b22}blockquote{color:#8b949e;border-color:#30363d}a{color:#58a6ff}th,td{border-color:#30363d}th,tbody tr:nth-child(even){background:#161b22}}"
 
     /** A Markdown page as a whole HTML document; [title] is the file's name (the content route knows only the file). */
     fun markdown(source: String, title: String): String =
@@ -49,7 +50,8 @@ internal object ArtifactPages {
 
 /**
  * A small CommonMark subset, enough for agent reports: ATX headings, paragraphs, fenced and indented code, block quotes,
- * bullet and numbered lists, rules, and inline code, emphasis, strong text and links. Every character of the source is
+ * bullet and numbered lists, rules, GitHub-style tables (a header row, a `---` delimiter row with optional `:` alignment,
+ * then rows up to the first blank line or line without a `|`), and inline code, emphasis, strong text and links. Every character of the source is
  * escaped first; only the markup produced here is HTML, and links keep `http`, `https`, `mailto` and relative targets.
  */
 internal object Markdown {
@@ -76,6 +78,11 @@ internal object Markdown {
                     out.append("<pre><code>").append(escape(code.joinToString("\n"))).append("</code></pre>\n")
                 }
                 trimmed.isEmpty() -> flush()
+                isTableStart(lines, i) -> {
+                    flush()
+                    i = table(lines, i, out)
+                    continue
+                }
                 HEADING.matches(trimmed) -> {
                     flush()
                     val level = trimmed.takeWhile { it == '#' }.length
@@ -116,6 +123,61 @@ internal object Markdown {
     }
 
     private const val MAX_QUOTE_DEPTH = 8
+    private const val MAX_TABLE_COLUMNS = 64
+    private val TABLE_DELIMITER_CELL = Regex("^:?-{1,}:?$")
+
+    /** A row's cells: split on `|` that a backslash does not escape, without the optional outer pipes. */
+    private fun cells(row: String): List<String> {
+        var text = row.trim()
+        if (text.startsWith("|")) text = text.drop(1)
+        if (text.endsWith("|") && !text.endsWith("\\|")) text = text.dropLast(1)
+        val cells = mutableListOf<String>()
+        val cell = StringBuilder()
+        var k = 0
+        while (k < text.length) {
+            val c = text[k]
+            if (c == '\\' && k + 1 < text.length && text[k + 1] == '|') { cell.append('|'); k += 2; continue }
+            if (c == '|') { cells += cell.toString().trim(); cell.setLength(0) } else cell.append(c)
+            k++
+        }
+        cells += cell.toString().trim()
+        return cells
+    }
+
+    /** The header line at [at] and a delimiter line after it with as many cells (a table needs at least one pipe). */
+    private fun isTableStart(lines: List<String>, at: Int): Boolean {
+        if (at + 1 >= lines.size || '|' !in lines[at]) return false
+        val delimiter = lines[at + 1].trim()
+        if ('|' !in delimiter || '-' !in delimiter) return false
+        val marks = cells(delimiter)
+        if (marks.size > MAX_TABLE_COLUMNS || !marks.all { TABLE_DELIMITER_CELL.matches(it) }) return false
+        return cells(lines[at]).size == marks.size
+    }
+
+    /** Writes the table that starts at [start] and returns the index of the first line after it. */
+    private fun table(lines: List<String>, start: Int, out: StringBuilder): Int {
+        val header = cells(lines[start])
+        val align = cells(lines[start + 1]).map {
+            when { it.startsWith(":") && it.endsWith(":") -> "center"; it.endsWith(":") -> "right"; it.startsWith(":") -> "left"; else -> null }
+        }
+        fun cell(tag: String, index: Int, text: String) {
+            out.append("<$tag").append(align[index]?.let { " style=\"text-align:$it\"" } ?: "").append(">").append(inline(text)).append("</$tag>")
+        }
+        out.append("<div class=\"table\"><table>\n<thead><tr>")
+        header.forEachIndexed { index, text -> cell("th", index, text) }
+        out.append("</tr></thead>\n<tbody>\n")
+        var i = start + 2
+        while (i < lines.size && lines[i].isNotBlank() && '|' in lines[i]) {
+            val row = cells(lines[i])
+            out.append("<tr>")
+            // A row is cut or padded to the header's width, as GitHub does.
+            for (index in header.indices) cell("td", index, row.getOrElse(index) { "" })
+            out.append("</tr>\n")
+            i++
+        }
+        out.append("</tbody>\n</table></div>\n")
+        return i
+    }
     private val FENCE = Regex("^(```+|~~~+)")
     private val HEADING = Regex("^#{1,6}(\\s.*)?$")
     private val RULE = Regex("^(\\*\\s*){3,}$|^(-\\s*){3,}$|^(_\\s*){3,}$")
