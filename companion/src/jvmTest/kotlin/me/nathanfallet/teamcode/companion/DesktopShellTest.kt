@@ -359,6 +359,71 @@ class DesktopShellTest {
         }
     }
 
+    private fun automationsOffered() = org.koin.dsl.module {
+        single<me.nathanfallet.teamcode.companion.domain.repositories.FeaturesRepository> {
+            FakeFeatures(setOf("cloud.sessions.v1", "cloud.transcript.v1", "cloud.messages.v1", "cloud.events.v1", "cloud.permissions.v1", "artifacts.v1", "automations.v1", "workflows.v1", "waits.v1"))
+        }
+        single<me.nathanfallet.teamcode.companion.domain.repositories.AutomationRepository> { FakeAutomationRepository() }
+    }
+
+    @Test fun settingsHasNoAutomationsRowWhenTheServerOffersNone() {
+        app(390, 844) {
+            onNodeWithTag("tab-account").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("account-ada").assertExists()
+            onNodeWithTag("automations-row").assertDoesNotExist()
+        }
+    }
+
+    @Test fun onAPhoneWithWaitsWorkflowsAndAutomationsOfferedTheTabBarHoldsAtMostFiveTabs() {
+        app(390, 844, modules = demoModules() + automationsOffered()) {
+            awaitTag("tab-workflows")
+            val tabs = listOf("sessions", "waits", "artifacts", "workflows", "automations", "account").count { onAllNodesWithTag("tab-$it").fetchSemanticsNodes().isNotEmpty() }
+            assertTrue(tabs <= 5, "tabs $tabs")
+            onNodeWithTag("tab-automations").assertDoesNotExist()
+        }
+    }
+
+    @Test fun theAutomationsListOpenedFromSettingsFollowsTheWindowAcrossTheBreakpoint() {
+        val wide = mutableStateOf(false)
+        app(modules = demoModules() + automationsOffered(), content = { CompositionLocalProvider(LocalWideLayout provides wide.value) { TeamCodeNavHost() } }) {
+            onNodeWithTag("tab-account").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            awaitTag("automations-row")
+            onNodeWithTag("automations-row").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            // Widened: the sidebar's Automations list, in the panel.
+            wide.value = true
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            onNodeWithTag("sidebar-all-automations").assertIsSelected()
+            // Narrowed again: Settings is the tab under the list, and back goes to it.
+            wide.value = false
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            onNodeWithTag("back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("tab-account").assertIsSelected()
+        }
+    }
+
+    @Test fun theAutomationsListOpenInTheWidePanelBecomesSettingsThenTheListWhenTheWindowNarrows() {
+        val wide = mutableStateOf(true)
+        app(modules = demoModules() + automationsOffered(), content = { CompositionLocalProvider(LocalWideLayout provides wide.value) { TeamCodeNavHost() } }) {
+            onNodeWithTag("sidebar-all-automations").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            wide.value = false
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            onNodeWithTag("back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("tab-account").assertIsSelected()
+            awaitTag("automations-row")
+        }
+    }
+
     @Test fun aSessionOpensOnItsLastMessageOnTheDesktopAndOnAPhone() {
         for ((width, height) in listOf(1200 to 800, 390 to 844)) {
             app(width, height, modules = demoModules(transcript = longTranscript())) {
@@ -388,6 +453,13 @@ class DesktopShellTest {
         settle()
     }
 
+    /** Waits for [tag] to appear: the offered-capability checks run on the clock, so it advances while real time passes. */
+    private fun DesktopComposeUiTest.awaitTag(tag: String) {
+        var waited = 0
+        while (onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty() && waited++ < 60) { Thread.sleep(100); mainClock.advanceTimeBy(250); waitForIdle() }
+        onNodeWithTag(tag).assertExists()
+    }
+
     private fun DesktopComposeUiTest.settle() {
         mainClock.advanceTimeBy(1_000)
         waitForIdle()
@@ -407,7 +479,8 @@ class DesktopShellTest {
         try {
             runDesktopComposeUiTest(width, height) {
                 val owner = object : ViewModelStoreOwner { override val viewModelStore = ViewModelStore() }
-                setContent { CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { TeamCodeTheme { content() } } }
+                // This test's Koin is the one the screens see: the composition local's default is read once per JVM.
+                setContent { CompositionLocalProvider(LocalViewModelStoreOwner provides owner) { org.koin.compose.KoinContext(koin) { TeamCodeTheme { content() } } } }
                 settle()
                 block()
                 mainClock.advanceTimeBy(2_000)
