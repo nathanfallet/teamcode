@@ -70,6 +70,7 @@ import me.nathanfallet.teamcode.companion.domain.usecases.office.OfficeScene
 import me.nathanfallet.teamcode.companion.domain.usecases.office.OfficeZone
 import me.nathanfallet.teamcode.companion.domain.usecases.office.SessionActivity
 import me.nathanfallet.teamcode.companion.domain.usecases.transcript.LoadTranscriptUseCase
+import me.nathanfallet.teamcode.companion.presentation.components.BackLink
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
@@ -165,6 +166,9 @@ fun OfficeScreen(
     onNewSession: (Account) -> Unit,
     onOpenWorkflows: (() -> Unit)? = null,
     onOpenAutomations: (() -> Unit)? = null,
+    /** Pushed over the phone's tabs: the way back, named [backLabel]; null in the wide layout's panel (the sidebar is the way out). */
+    onBack: (() -> Unit)? = null,
+    backLabel: String = "",
     clock: Clock = koinInject(),
     loadTranscript: LoadTranscriptUseCase = koinInject(),
 ) {
@@ -230,7 +234,7 @@ fun OfficeScreen(
         }
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                OfficeHeader(font, counts, agents.size, focus) { focus = if (it == focus) null else it }
+                OfficeHeader(font, counts, agents.size, focus, onBack, backLabel) { focus = if (it == focus) null else it }
                 BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                     val density = LocalDensity.current
                     val widthPx = constraints.maxWidth
@@ -348,9 +352,10 @@ private fun pickAt(at: Offset, grid: Grid, seating: Seating, live: Live, focus: 
 }
 
 @Composable
-private fun OfficeHeader(font: FontFamily, counts: Map<OfficeMood, Int>, total: Int, focus: OfficeMood?, onFocus: (OfficeMood) -> Unit) {
+private fun OfficeHeader(font: FontFamily, counts: Map<OfficeMood, Int>, total: Int, focus: OfficeMood?, onBack: (() -> Unit)?, backLabel: String, onFocus: (OfficeMood) -> Unit) {
     val colors = TeamCode.colors
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    Row(Modifier.fillMaxWidth().padding(start = if (onBack != null) 4.dp else 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (onBack != null) BackLink(backLabel, onBack, Modifier.widthIn(max = 120.dp))
         Text(stringResource(Res.string.office_title), color = colors.text, fontFamily = font, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1)
         Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             MoodPill(stringResource(Res.string.office_filter_all), total, null, focus == null, "office-filter-all") { focus?.let(onFocus) }

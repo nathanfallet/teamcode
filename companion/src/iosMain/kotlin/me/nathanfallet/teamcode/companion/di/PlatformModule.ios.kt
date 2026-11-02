@@ -7,14 +7,16 @@ import io.ktor.client.engine.darwin.Darwin
 import me.nathanfallet.teamcode.companion.domain.services.CredentialStore
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.domain.services.SecureRandom
+import me.nathanfallet.teamcode.companion.domain.services.ShakeDetector
 import me.nathanfallet.teamcode.companion.infrastructure.credentials.KeychainCredentialStore
 import me.nathanfallet.teamcode.companion.infrastructure.settings.SettingsAccountRepository
 import me.nathanfallet.teamcode.companion.infrastructure.system.IosPlatformInfo
 import me.nathanfallet.teamcode.companion.infrastructure.system.IosSecureRandom
+import me.nathanfallet.teamcode.companion.infrastructure.system.IosShakeDetector
 import org.koin.dsl.module
 import platform.Foundation.NSUserDefaults
 
-/** iOS: the Keychain, the standard user defaults (metadata only) and the Darwin HTTP engine. */
+/** iOS: the Keychain, the standard user defaults (metadata only), the Darwin HTTP engine and CoreMotion's shakes. */
 fun platformModule() = module {
     single<Settings> { NSUserDefaultsSettings(NSUserDefaults.standardUserDefaults) }
     // No accounts in the settings: a first launch, or a reinstall that wiped them, so Keychain items are orphans.
@@ -22,4 +24,5 @@ fun platformModule() = module {
     single<HttpClientEngineFactory<*>> { Darwin }
     single<PlatformInfo> { IosPlatformInfo }
     single<SecureRandom> { IosSecureRandom }
+    single<ShakeDetector> { IosShakeDetector() }
 }
