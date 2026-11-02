@@ -11,6 +11,8 @@ import androidx.compose.ui.test.DesktopComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -166,6 +168,35 @@ class DemoModeScreenTest {
         }
     }
 
+    @Test fun onAPhoneAutomationsAreNotATabSettingsOpensThemAndBackReturnsToSettings() {
+        demoApp(CountingEngine(), width = 390, height = 844) {
+            onNodeWithTag("try-demo").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            val tabs = listOf("sessions", "waits", "artifacts", "workflows", "automations", "account").count { onAllNodesWithTag("tab-$it").fetchSemanticsNodes().isNotEmpty() }
+            assertTrue(tabs <= 5, "tabs $tabs")
+            onNodeWithTag("tab-automations").assertDoesNotExist()
+            onNodeWithTag("tab-account").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            awaitTag("automations-row")
+            onNodeWithTag("automations-row").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("automations-new").assertExists()
+            onNodeWithTag("automation-${me.nathanfallet.teamcode.companion.demo.DemoAutomations.ID}").assertExists()
+            onNodeWithTag("tab-account").assertDoesNotExist()
+            onNodeWithTag("back").performSemanticsAction(SemanticsActions.OnClick)
+            settle()
+            onNodeWithTag("tab-account").assertIsSelected()
+            onNodeWithTag("automations-row").assertExists()
+        }
+    }
+
+    /** Waits for [tag] to appear: the offered-capability checks run on the clock, so it advances while real time passes. */
+    private fun DesktopComposeUiTest.awaitTag(tag: String) {
+        var waited = 0
+        while (onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty() && waited++ < 60) { Thread.sleep(100); mainClock.advanceTimeBy(250); waitForIdle() }
+        onNodeWithTag(tag).assertExists()
+    }
+
     private fun DesktopComposeUiTest.settle() {
         repeat(3) { mainClock.advanceTimeBy(1_000); waitForIdle() }
     }
@@ -197,7 +228,7 @@ internal fun demoApp(engine: HttpClientEngineFactory<*>, width: Int = 1200, heig
             val owner = object : ViewModelStoreOwner { override val viewModelStore = ViewModelStore() }
             setContent {
                 CompositionLocalProvider(LocalViewModelStoreOwner provides owner, androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density)) {
-                    TeamCodeTheme { App() }
+                    org.koin.compose.KoinContext(koin) { TeamCodeTheme { App() } }
                 }
             }
             mainClock.advanceTimeBy(1_000); waitForIdle()

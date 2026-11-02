@@ -670,9 +670,8 @@
     <string name="demo_settings_title">TeamCode on GitHub</string>
     <string name="demo_settings_hint">Star the project and deploy your own server.</string>
     <!-- Automations -->
-    <string name="tab_automations">Automations</string>
-    <string name="tab_automations_short">Auto.</string>
     <string name="automations_title">Automations</string>
+    <string name="automations_row_hint">The scheduled and webhook-triggered runs, their state and history.</string>
     <string name="automation_title">Automation</string>
     <string name="automations_refresh">Refresh</string>
     <string name="automations_new">New automation</string>

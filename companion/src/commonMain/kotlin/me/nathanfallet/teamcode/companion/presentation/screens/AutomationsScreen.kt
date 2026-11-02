@@ -48,6 +48,7 @@ import me.nathanfallet.teamcode.companion.presentation.components.ContentWidth
 import me.nathanfallet.teamcode.companion.presentation.components.EmptyState
 import me.nathanfallet.teamcode.companion.presentation.components.IconButtonKind
 import me.nathanfallet.teamcode.companion.presentation.components.LargeTitle
+import me.nathanfallet.teamcode.companion.presentation.components.NavBar
 import me.nathanfallet.teamcode.companion.presentation.components.Segmented
 import me.nathanfallet.teamcode.companion.presentation.components.TcButton
 import me.nathanfallet.teamcode.companion.presentation.components.TcCard
@@ -65,7 +66,14 @@ import org.jetbrains.compose.resources.stringResource
  * failures, and a switch to arm or pause. A row opens the automation's page; the plus creates one.
  */
 @Composable
-fun AutomationsScreen(viewModel: AutomationsViewModel, onOpen: (AutomationSummary) -> Unit, onCreate: () -> Unit) {
+fun AutomationsScreen(
+    viewModel: AutomationsViewModel,
+    onOpen: (AutomationSummary) -> Unit,
+    onCreate: () -> Unit,
+    /** Set when the list is pushed over Settings (the phone): a bar with the way back replaces the large title. */
+    onBack: (() -> Unit)? = null,
+    backLabel: String = stringResource(Res.string.account_title),
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val now = rememberNow()
     val colors = TeamCode.colors
@@ -77,15 +85,18 @@ fun AutomationsScreen(viewModel: AutomationsViewModel, onOpen: (AutomationSummar
         started = true
         onStopOrDispose { }
     }
+    val actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+        TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.automations_refresh), onClick = viewModel::reload, enabled = !state.loading, modifier = Modifier.testTag("automations-refresh"))
+        TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.automations_new), onClick = onCreate, kind = IconButtonKind.OUTLINED, modifier = Modifier.testTag("automations-new"))
+    }
     Column(Modifier.fillMaxSize().background(colors.background), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (onBack != null) NavBar(backLabel, onBack, stringResource(Res.string.automations_title), actions = actions)
         Column(
-            Modifier.widthIn(max = ContentWidth).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 10.dp),
+            Modifier.widthIn(max = ContentWidth).fillMaxWidth().then(if (onBack == null) Modifier.windowInsetsPadding(WindowInsets.statusBars) else Modifier)
+                .padding(start = 16.dp, end = 16.dp, top = if (onBack == null) 8.dp else 0.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            LargeTitle(stringResource(Res.string.automations_title)) {
-                TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.automations_refresh), onClick = viewModel::reload, enabled = !state.loading, modifier = Modifier.testTag("automations-refresh"))
-                TcIconButton(PhosphorIcons.Regular.Plus, stringResource(Res.string.automations_new), onClick = onCreate, kind = IconButtonKind.OUTLINED, modifier = Modifier.testTag("automations-new"))
-            }
+            if (onBack == null) LargeTitle(stringResource(Res.string.automations_title), actions = actions)
             if (state.administrator) Segmented(
                 listOf(AutomationScope.MINE to stringResource(Res.string.automations_mine), AutomationScope.TEAM to stringResource(Res.string.automations_team)),
                 selected = state.scope, onSelect = viewModel::setScope, modifier = Modifier.fillMaxWidth(), tag = { "automations-${it.name.lowercase()}" },
