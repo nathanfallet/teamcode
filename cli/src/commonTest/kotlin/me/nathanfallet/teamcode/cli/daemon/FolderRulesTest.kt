@@ -116,7 +116,19 @@ class FolderRulesTest {
         val home = "/home/me".toPath()
         val existing = setOf("/home/me/.local/bin", "/opt/homebrew/bin")
         assertEquals("/home/me/.nvm/bin:/usr/bin:/bin:/home/me/.local/bin:/opt/homebrew/bin",
-            agentSearchPath("/usr/bin:/bin", "/home/me/.nvm/bin:relative:/usr/bin", home) { it in existing })
-        assertNull(agentSearchPath("/usr/bin", null, null) { false }, "Nothing to add")
+            agentSearchPath("/usr/bin:/bin", "/home/me/.nvm/bin:relative:/usr/bin", home, windows = false) { it in existing })
+        assertNull(agentSearchPath("/usr/bin", null, null, windows = false) { false }, "Nothing to add")
+    }
+
+    @Test fun theAgentsSearchPathOnWindowsUsesSemicolonsAndDriveLetters() {
+        val home = "C:\\Users\\me".toPath()
+        val existing = setOf("C:\\Users\\me\\.local\\bin", "C:\\Users\\me\\AppData\\Roaming\\npm")
+        // The terminal's entries come first, a relative one is dropped, c:/windows and C:\\Windows are one directory, and only the usual directories that exist are added.
+        assertEquals("D:\\tools;C:\\Windows;C:\\Windows\\System32;C:\\Users\\me\\.local\\bin;C:\\Users\\me\\AppData\\Roaming\\npm",
+            agentSearchPath("C:\\Windows;c:/windows;C:\\Windows\\System32;bin", "D:\\tools;relative\\dir", home, windows = true,
+                appData = "C:\\Users\\me\\AppData\\Roaming", localAppData = "C:\\Users\\me\\AppData\\Local") { it in existing })
+        assertNull(agentSearchPath("C:\\Windows", null, null, windows = true) { false }, "Nothing to add")
+        // A POSIX-looking entry is not a Windows directory.
+        assertNull(agentSearchPath(null, "/usr/bin", null, windows = true) { false })
     }
 }

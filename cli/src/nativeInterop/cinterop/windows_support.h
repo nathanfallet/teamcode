@@ -3,6 +3,8 @@
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
 #endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <bcrypt.h>
 #include <wincrypt.h>
@@ -437,4 +439,211 @@ done:
     for (int i = 0; i < opened; i++) CloseHandle(handles[i]);
     return result;
 }
+
+/*
+ * An agent child with line-oriented pipes: stdin and stdout are anonymous pipes (the parent's ends are not inherited),
+ * stderr is NUL (agent diagnostics may hold prompts and are never kept). The child runs in a private job object that
+ * owns it and its descendants, without a console window (the daemon has no console either). Ownership of the pipe
+ * handles stays here: the caller closes them with teamcode_windows_agent_close_* and the process with teamcode_windows_close.
+ */
+typedef struct {
+    teamcode_windows_child base;
+    HANDLE input;  /* parent's write end of the child's stdin */
+    HANDLE output; /* parent's read end of the child's stdout */
+} teamcode_windows_agent;
+
+static inline void *teamcode_windows_spawn_piped(const wchar_t *application, wchar_t *command_line,
+        const wchar_t *environment, const wchar_t *directory) {
+    SECURITY_ATTRIBUTES inheritable = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    HANDLE child_in = NULL, parent_in = NULL, child_out = NULL, parent_out = NULL, nul = INVALID_HANDLE_VALUE;
+    STARTUPINFOEXW startup = {0};
+    PROCESS_INFORMATION process = {0};
+    SIZE_T size = 0;
+    int initialized = 0;
+    teamcode_windows_agent *agent = NULL;
+    HANDLE job = CreateJobObjectW(NULL, NULL);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) goto cleanup;
+    /* A 1 MiB buffer: one JSON line of the agent protocol is written in a single call without waiting for the child. */
+    if (!CreatePipe(&child_in, &parent_in, &inheritable, 1 << 20)) goto cleanup;
+    if (!CreatePipe(&parent_out, &child_out, &inheritable, 1 << 20)) goto cleanup;
+    if (!SetHandleInformation(parent_in, HANDLE_FLAG_INHERIT, 0) || !SetHandleInformation(parent_out, HANDLE_FLAG_INHERIT, 0)) goto cleanup;
+    nul = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, NULL);
+    if (nul == INVALID_HANDLE_VALUE) goto cleanup;
+    HANDLE handles[3] = { child_in, child_out, nul };
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = child_in;
+    startup.StartupInfo.hStdOutput = child_out;
+    startup.StartupInfo.hStdError = nul;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
+    if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size)) goto cleanup;
+    initialized = 1;
+    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, sizeof(handles), NULL, NULL)) goto cleanup;
+    if (!CreateProcessW(application, command_line, NULL, NULL, TRUE,
+        CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, (void *)environment, directory,
+        &startup.StartupInfo, &process)) goto cleanup;
+    if (!AssignProcessToJobObject(job, process.hProcess)) goto cleanup;
+    agent = (teamcode_windows_agent *)calloc(1, sizeof(teamcode_windows_agent));
+    if (!agent) goto cleanup;
+    if (ResumeThread(process.hThread) == (DWORD)-1) { free(agent); agent = NULL; goto cleanup; }
+    agent->base.process = process.hProcess;
+    agent->base.job = job;
+    agent->input = parent_in; parent_in = NULL;
+    agent->output = parent_out; parent_out = NULL;
+cleanup:
+    if (!agent && process.hProcess) { TerminateProcess(process.hProcess, 130); CloseHandle(process.hProcess); }
+    if (!agent && job) CloseHandle(job);
+    if (process.hThread) CloseHandle(process.hThread);
+    if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
+    free(startup.lpAttributeList);
+    /* The child's own ends are closed here whatever happened, so the parent sees end of stream when the child exits. */
+    if (child_in) CloseHandle(child_in);
+    if (child_out) CloseHandle(child_out);
+    if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+    if (parent_in) CloseHandle(parent_in);
+    if (parent_out) CloseHandle(parent_out);
+    return agent;
+}
+
+/* Bytes read (> 0), 0 when nothing is available yet, -1 at end of stream or on error. Never blocks. */
+static inline int teamcode_windows_agent_read(void *process, void *buffer, int capacity) {
+    teamcode_windows_agent *agent = (teamcode_windows_agent *)process;
+    if (!agent->output) return -1;
+    DWORD available = 0;
+    if (!PeekNamedPipe(agent->output, NULL, 0, NULL, &available, NULL)) return -1;
+    if (available == 0) return 0;
+    if (available > (DWORD)capacity) available = (DWORD)capacity;
+    DWORD count = 0;
+    if (!ReadFile(agent->output, buffer, available, &count, NULL)) return -1;
+    return (int)count;
+}
+/* Bytes written, or -1 when the child no longer reads. Blocks while the 1 MiB pipe is full: call it off the main dispatcher. */
+static inline int teamcode_windows_agent_write(void *process, const void *buffer, int length) {
+    teamcode_windows_agent *agent = (teamcode_windows_agent *)process;
+    if (!agent->input) return -1;
+    DWORD count = 0;
+    if (!WriteFile(agent->input, buffer, (DWORD)length, &count, NULL)) return -1;
+    return (int)count;
+}
+static inline void teamcode_windows_agent_close_input(void *process) {
+    teamcode_windows_agent *agent = (teamcode_windows_agent *)process;
+    if (agent->input) { CloseHandle(agent->input); agent->input = NULL; }
+}
+static inline void teamcode_windows_agent_close_output(void *process) {
+    teamcode_windows_agent *agent = (teamcode_windows_agent *)process;
+    if (agent->output) { CloseHandle(agent->output); agent->output = NULL; }
+}
+/* Releases the process, its job and whatever pipe end is still open. */
+static inline void teamcode_windows_agent_close(void *process) {
+    teamcode_windows_agent_close_input(process);
+    teamcode_windows_agent_close_output(process);
+    teamcode_windows_close(process);
+}
+
+/*
+ * Unix stream sockets on Windows (AF_UNIX, Windows 10 1803 and later), for the wake-up channel between the agent's hooks
+ * and the host. The toolchain has no afunix.h: the address is declared here. sun_path is narrow: a path outside ASCII is
+ * rewritten through its 8.3 short form, and refused when it still is not ASCII (the caller then runs without the socket).
+ */
+typedef struct { USHORT family; char path[108]; } teamcode_sockaddr_un;
+
+static inline int teamcode_wsock_start(void) {
+    static int state = 0;
+    if (state == 0) { WSADATA data; state = WSAStartup(MAKEWORD(2, 2), &data) == 0 ? 1 : -1; }
+    return state > 0;
+}
+static inline int teamcode_wsock_address(const wchar_t *path, teamcode_sockaddr_un *address) {
+    wchar_t shortened[MAX_PATH];
+    const wchar_t *use = path;
+    int ascii = 1;
+    for (const wchar_t *c = path; *c; c++) if (*c > 127) ascii = 0;
+    if (!ascii) {
+        const wchar_t *slash = wcsrchr(path, L'\\');
+        if (!slash || (size_t)(slash - path) >= MAX_PATH) return 0;
+        wchar_t directory[MAX_PATH];
+        wmemcpy(directory, path, (size_t)(slash - path)); directory[slash - path] = 0;
+        wchar_t short_directory[MAX_PATH];
+        DWORD length = GetShortPathNameW(directory, short_directory, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) return 0;
+        if (swprintf(shortened, MAX_PATH, L"%ls%ls", short_directory, slash) < 0) return 0;
+        use = shortened;
+    }
+    memset(address, 0, sizeof(*address));
+    address->family = AF_UNIX;
+    for (const wchar_t *c = use; *c; c++) if (*c > 127) return 0;
+    int length = WideCharToMultiByte(CP_ACP, 0, use, -1, address->path, (int)sizeof(address->path), NULL, NULL);
+    return length > 0 && length < (int)sizeof(address->path);
+}
+static inline int teamcode_wsock_nonblocking(SOCKET handle) { u_long on = 1; return ioctlsocket(handle, FIONBIO, &on) == 0; }
+
+/* 0 on success (the listener in *out), else a Winsock error code or -1. Replaces a stale socket file. */
+static inline int teamcode_wsock_listen(const wchar_t *path, long long *out) {
+    teamcode_sockaddr_un address;
+    if (!teamcode_wsock_start() || !teamcode_wsock_address(path, &address)) return -1;
+    DeleteFileW(path);
+    SOCKET handle = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (handle == INVALID_SOCKET) return WSAGetLastError();
+    if (bind(handle, (struct sockaddr *)&address, sizeof(address)) != 0 || listen(handle, 16) != 0 || !teamcode_wsock_nonblocking(handle)) {
+        int error = WSAGetLastError();
+        closesocket(handle); DeleteFileW(path);
+        return error ? error : -1;
+    }
+    *out = (long long)handle;
+    return 0;
+}
+/* 1 accepted (in *out), 0 nothing pending, -1 the listener is closed or failed. */
+static inline int teamcode_wsock_accept(long long listener, long long *out) {
+    SOCKET next = accept((SOCKET)listener, NULL, NULL);
+    if (next == INVALID_SOCKET) return WSAGetLastError() == WSAEWOULDBLOCK ? 0 : -1;
+    if (!teamcode_wsock_nonblocking(next)) { closesocket(next); return -1; }
+    *out = (long long)next;
+    return 1;
+}
+static inline int teamcode_wsock_connect(const wchar_t *path, long long *out) {
+    teamcode_sockaddr_un address;
+    if (!teamcode_wsock_start() || !teamcode_wsock_address(path, &address)) return -1;
+    SOCKET handle = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (handle == INVALID_SOCKET) return WSAGetLastError();
+    if (connect(handle, (struct sockaddr *)&address, sizeof(address)) != 0 || !teamcode_wsock_nonblocking(handle)) {
+        int error = WSAGetLastError();
+        closesocket(handle);
+        return error ? error : -1;
+    }
+    *out = (long long)handle;
+    return 0;
+}
+/* Bytes read (> 0), 0 when nothing is available yet, -1 at end of stream or on error. */
+static inline int teamcode_wsock_read(long long handle, void *buffer, int capacity) {
+    int count = recv((SOCKET)handle, (char *)buffer, capacity, 0);
+    if (count > 0) return count;
+    if (count == 0) return -1;
+    return WSAGetLastError() == WSAEWOULDBLOCK ? 0 : -1;
+}
+/* Bytes written (0: the buffer is full, try again), -1 when the peer is gone. */
+static inline int teamcode_wsock_write(long long handle, const void *buffer, int length) {
+    int count = send((SOCKET)handle, (const char *)buffer, length, 0);
+    if (count >= 0) return count;
+    return WSAGetLastError() == WSAEWOULDBLOCK ? 0 : -1;
+}
+static inline void teamcode_wsock_close(long long handle) { closesocket((SOCKET)handle); }
+static inline void teamcode_wsock_remove(const wchar_t *path) { DeleteFileW(path); }
+
+/*
+ * Console control events (Ctrl+C, Ctrl+Break, closing the window, logoff, shutdown) become a flag the long-running
+ * commands (a session host, the runner, the service) poll, like SIGTERM on POSIX: the host then pauses its session with
+ * a checkpoint instead of being cut off. Only those commands install it; `teamcode run` keeps the default behaviour.
+ */
+static volatile LONG teamcode_windows_stop_flag = 0;
+static BOOL WINAPI teamcode_windows_control(DWORD event) {
+    if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT || event == CTRL_CLOSE_EVENT || event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT) {
+        InterlockedExchange(&teamcode_windows_stop_flag, 1);
+        return TRUE;
+    }
+    return FALSE;
+}
+static inline void teamcode_windows_install_control(void) { SetConsoleCtrlHandler(teamcode_windows_control, TRUE); }
+static inline int teamcode_windows_stop_requested(void) { return InterlockedCompareExchange(&teamcode_windows_stop_flag, 0, 0) != 0; }
 #endif

@@ -2,6 +2,8 @@
 package me.nathanfallet.teamcode.cli.platform
 
 import kotlinx.cinterop.*
+import me.nathanfallet.teamcode.cli.interop.windows.teamcode_windows_install_control
+import me.nathanfallet.teamcode.cli.interop.windows.teamcode_windows_stop_requested
 import me.nathanfallet.teamcode.cli.interop.windows.teamcode_windows_user_sid
 import platform.windows.*
 
@@ -14,6 +16,8 @@ actual fun servicePlatform(): ServicePlatform = memScoped {
     finally { LocalFree(sid) }
 }
 
-// Task Scheduler uses a private cooperative stop marker; no console or privileged process kill is required.
-actual fun installServiceSignalHandlers() = Unit
-actual fun serviceStopRequested(): Boolean = false
+// Task Scheduler stops the service through a private cooperative marker (see stopRequested in the service runtime), with
+// no console or privileged process kill. A session host or runner started from a terminal, or from the daemon, also stops
+// on Ctrl+C, Ctrl+Break, a closed window, logoff or shutdown: the console handler only raises a flag the loops poll.
+actual fun installServiceSignalHandlers() = teamcode_windows_install_control()
+actual fun serviceStopRequested(): Boolean = teamcode_windows_stop_requested() != 0

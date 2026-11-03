@@ -68,3 +68,14 @@ The reference below was checked against TeamClaude commit `88fe9b37862c40fefa459
 | Provider sign-in | [`openBrowser`](https://github.com/KarpelesLab/teamclaude/blob/88fe9b37862c40fefa459a90cd3dbd2c31db98ce/src/login-flow.js#L80) opens the browser with an HTTP(S) URL and keeps a manual fallback | Claude and Codex enrollment print the URL for manual opening and validate a pasted result. Codex uses the registered localhost callback address without starting a listener. Automatic browser opening and live Codex browser-consent acceptance remain follow-up work. |
 
 TeamClaude uses Node for Unicode file access and process support. TeamCode's native executable must supply those platform adapters; the reference's service behavior does not include a Windows implementation to port.
+
+## Sessions hosted on this device
+
+`teamcode remote start`, the device daemon (`teamcode service install`) and TeamCode Desktop host sessions on Windows as on macOS and Linux: the daemon is online, shows the device's folders, takes orders and resumes a host it lost.
+
+- **The agent.** The host starts the agent (`claude` or `codex`, from `PATH` the way `teamcode run` finds it, including the npm layouts) as a child process with stdin and stdout pipes and stderr discarded, in a job object that terminates it and its descendants on stop. Its environment is the host's, without the `TEAMCODE_*` variables, plus what the session sets.
+- **Stopping.** Ctrl+C, Ctrl+Break, closing the console, logoff and shutdown pause the session with a checkpoint instead of cutting the host off (the session otherwise shows "host offline" 90 seconds later). The Task Scheduler service keeps its own stop request file.
+- **The hook channel.** The agent's `Stop` hook (scheduled wake-ups) and the wait secrets reach the host through a Unix socket (AF_UNIX, Windows 10 1803 or later). A path that is not ASCII is rewritten to its 8.3 short form; when that fails, the agent runs without the channel and a session whose agent has only scheduled wake-ups can be paused for inactivity.
+- **Daemon `PATH`.** Entries are separated by `;`, and `%USERPROFILE%\.local\bin`, `%APPDATA%\npm` and the other usual install directories are added when they exist.
+- **Not on Windows yet.** Team hooks (`docs/hooks.md`, "What is planned").
+- **Verification.** The native Windows binary compiles in CI and `AgentProcessTest` and `UnixSocketTest` drive real processes and sockets. They run in the Windows acceptance of the full native matrix (`full_validation=true`); ordinary pull-request CI does not run Windows.

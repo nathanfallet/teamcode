@@ -74,8 +74,8 @@ internal suspend fun localHostWaker(client: TeamCodeClient, sessionId: String, n
 }
 
 /** Whether this device's daemon is online to take its sessions; an unreachable answer counts as online (no second host). */
-internal suspend fun daemonOnline(client: TeamCodeClient, windows: Boolean = servicePlatform().os == "windows"): Boolean = try {
-    daemonDevice(client, client.capabilities().features, windows) != null
+internal suspend fun daemonOnline(client: TeamCodeClient): Boolean = try {
+    daemonDevice(client, client.capabilities().features) != null
 } catch (error: CancellationException) { throw error } catch (_: Exception) { true }
 
 private const val HOST_START_MILLIS = 30_000L

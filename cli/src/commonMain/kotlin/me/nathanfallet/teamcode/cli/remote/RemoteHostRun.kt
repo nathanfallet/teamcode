@@ -241,8 +241,8 @@ internal class WakeupSocket(val path: String, val broker: WakeupBroker, val hook
 
 /**
  * Opens the host's wake-up socket beside the remote records (a short, private path: socket paths are limited to about 100
- * bytes), or null where Unix sockets do not exist (Windows) or the socket cannot be opened: the agent then runs without the
- * hook, and a session whose agent has only scheduled wake-ups can be paused for inactivity, as before.
+ * bytes; on Windows an AF_UNIX socket, which needs Windows 10 1803 and an ASCII-only path or 8.3 short path), or null when the
+ * socket cannot be opened: the agent then runs without the hook, and a session whose agent has only scheduled wake-ups can be paused for inactivity, as before.
  */
 internal fun wakeupSocket(session: String, report: (String) -> Unit, secrets: RunnerVariables? = null, wakeups: (Int) -> Unit): WakeupSocket? = try {
     val path = configSibling(configPath(), "remote").toPath() / "${session.take(8)}.wake.sock"

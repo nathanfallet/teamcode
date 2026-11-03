@@ -88,17 +88,16 @@ private class RemoteStart : SuspendingCliktCommand(name = "start") {
                 name = name ?: path.name, kind = CloudSessionKinds.REMOTE, agent = CloudAgentRequest(model, effort, agent), labels = parseLabels(labels),
                 directoryName = path.name, permissionMode = if (bypass) RemotePermissionModes.BYPASS else RemotePermissionModes.ASK, initialMessage = message,
             )
-            val windows = servicePlatform().os == "windows"
             // Continuing a conversation goes through the daemon only: no host of this command forks it.
             val resumeDevice = resume?.let {
-                when (val target = localResumeTarget(client, features, windows)) {
+                when (val target = localResumeTarget(client, features)) {
                     is LocalResume.Ready -> target.deviceId
                     is LocalResume.Unavailable -> throw CliUserException(localResumeRefusal(target.reason))
                 }
             }
-            (resumeDevice ?: daemonDevice(client, features, windows))?.let { device ->
+            (resumeDevice ?: daemonDevice(client, features))?.let { device ->
                 val report: (String) -> Unit = { echo(it, err = true) }
-                val session = startThroughDaemon(client, device, path, request, agent, homeDirectory(), windows, environment("PATH"), report, resumeSessionId = resume)
+                val session = startThroughDaemon(client, device, path, request, agent, homeDirectory(), servicePlatform().os == "windows", environment("PATH"), report, resumeSessionId = resume)
                 if (json) echo(Serialization.json.encodeToString(session))
                 echo("Remote session ${session.id} on this device, in ${path}; this device's daemon hosts it.", err = true)
                 awaitDaemonHost(client, session.id, session.currentEpoch, report)
@@ -133,7 +132,7 @@ private class RemoteResume : SuspendingCliktCommand(name = "resume") {
             val features = requireRemote(client)
             val current = client.cloudSession(session)
             // A session started through the daemon is the daemon's to host: resuming puts it back in its queue.
-            if (current.host?.folderId != null && daemonDevice(client, features, servicePlatform().os == "windows") != null &&
+            if (current.host?.folderId != null && daemonDevice(client, features) != null &&
                 !(current.host?.online == true && current.desiredState == "running")) {
                 val report: (String) -> Unit = { echo(it, err = true) }
                 if (current.desiredState != "running") client.resumeCloudSession(session)
@@ -168,7 +167,7 @@ private class RemoteResumable : SuspendingCliktCommand(name = "resumable") {
         val windows = servicePlatform().os == "windows"
         refuseFolder(path, homeDirectory(), windows)
         val view = sdk(loadConfig()).use { client ->
-            localResumables(ClaudeTranscripts.local(), localResumeTarget(client, requireRemote(client), windows), path, limit, before)
+            localResumables(ClaudeTranscripts.local(), localResumeTarget(client, requireRemote(client)), path, limit, before)
         }
         if (json) { echo(Serialization.json.encodeToString(view)); return }
         view.unavailable?.let { throw CliUserException(localResumeRefusal(it)) }

@@ -255,12 +255,11 @@ class DeviceDaemonTest {
         f.server.queue("s1", folder.id, "project")
         f.records.save(RemoteSessionRecord("s1", (f.home / "project").toString(), "claude"))
         val client = f.server.client()
-        assertFalse(daemonOnline(client, windows = false), "Never polled: offline")
-        val online = suspend { daemonOnline(client, windows = false) }
+        assertFalse(daemonOnline(client), "Never polled: offline")
+        val online = suspend { daemonOnline(client) }
         assertNotNull(localHostWaker(client, "s1", {}, f.records, online), "A stopped daemon takes nothing: the terminal hosts it")
         f.server.daemonOnline = true
-        assertTrue(daemonOnline(client, windows = false))
-        assertFalse(daemonOnline(client, windows = true), "No daemon hosts sessions on Windows")
+        assertTrue(daemonOnline(client))
         assertNull(localHostWaker(client, "s1", {}, f.records, online), "The daemon's queue wakes it")
     }
 
@@ -283,12 +282,11 @@ class DeviceDaemonTest {
 
     @Test fun remoteStartGoesThroughTheDaemonWithTheDevicesId() = test { f ->
         val client = f.server.client()
-        assertNull(daemonDevice(client, listOf(DAEMON_CAPABILITY), windows = false), "No daemon online: remote start hosts the session itself")
+        assertNull(daemonDevice(client, listOf(DAEMON_CAPABILITY)), "No daemon online: remote start hosts the session itself")
         val daemon = f.start(this)
         waitUntil { f.server.daemonOnline }
-        assertNull(daemonDevice(client, emptyList(), windows = false), "A server without the capability")
-        assertNull(daemonDevice(client, listOf(DAEMON_CAPABILITY), windows = true), "Not hosted on Windows")
-        val device = assertNotNull(daemonDevice(client, listOf(DAEMON_CAPABILITY), windows = false))
+        assertNull(daemonDevice(client, emptyList()), "A server without the capability")
+        val device = assertNotNull(daemonDevice(client, listOf(DAEMON_CAPABILITY)))
         FileSystem.SYSTEM.createDirectories(f.home / "app")
         val request = CreateCloudSessionRequest(name = "app", kind = CloudSessionKinds.REMOTE, agent = CloudAgentRequest(null, null, "codex"),
             directoryName = "app", permissionMode = "ask")
@@ -330,16 +328,15 @@ class DeviceDaemonTest {
     @Test fun onlyAnOnlineDaemonThatResumesLetsThisDeviceContinueItsOwnConversation() = test { f ->
         val client = f.server.client()
         val features = listOf(DAEMON_CAPABILITY, ResumableSessions.CAPABILITY)
-        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_OFFLINE), localResumeTarget(client, features, windows = false),
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_OFFLINE), localResumeTarget(client, features),
             "Without its daemon, this device starts no session that continues a conversation")
         val daemon = f.start(this)
         waitUntil { f.server.daemonOnline }
-        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(DAEMON_CAPABILITY), windows = false))
-        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(ResumableSessions.CAPABILITY), windows = false))
-        assertEquals(LocalResume.Unavailable(LocalResumeReasons.PLATFORM_UNSUPPORTED), localResumeTarget(client, features, windows = true))
-        assertEquals(LocalResume.Ready("d1"), localResumeTarget(client, features, windows = false))
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(DAEMON_CAPABILITY)))
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED), localResumeTarget(client, listOf(ResumableSessions.CAPABILITY)))
+        assertEquals(LocalResume.Ready("d1"), localResumeTarget(client, features))
         f.server.deviceFeatures = emptyList()
-        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_TOO_OLD), localResumeTarget(client, features, windows = false))
+        assertEquals(LocalResume.Unavailable(LocalResumeReasons.DAEMON_TOO_OLD), localResumeTarget(client, features))
         f.stop = true
         daemon.join()
     }
