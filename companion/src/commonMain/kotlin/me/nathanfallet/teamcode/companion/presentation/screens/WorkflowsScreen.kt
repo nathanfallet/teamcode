@@ -43,6 +43,7 @@ import me.nathanfallet.teamcode.companion.domain.models.RunScope
 import me.nathanfallet.teamcode.companion.domain.models.RunStatus
 import me.nathanfallet.teamcode.companion.domain.models.Workflow
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -150,6 +151,7 @@ private fun RunsList(state: WorkflowRunsUiState, viewModel: WorkflowRunsViewMode
     val listState = rememberLazyListState()
     val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
     LaunchedEffect(nearEnd, state.nextBefore) { if (nearEnd) viewModel.loadMore() }
+    KeepAtTopOnNewFirstRow(listState, state.runs?.firstOrNull()?.id ?: "end")
     LazyColumn(
         Modifier.widthIn(max = ContentWidth).fillMaxWidth().testTag("workflow-runs"),
         state = listState,

@@ -36,6 +36,7 @@ import me.nathanfallet.teamcode.companion.domain.models.TransferDirection
 import me.nathanfallet.teamcode.companion.domain.models.TransferState
 import me.nathanfallet.teamcode.companion.domain.services.Clock
 import me.nathanfallet.teamcode.companion.domain.usecases.transfers.TransferAction
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -100,6 +101,7 @@ fun TransfersScreen(viewModel: TransfersViewModel, onBack: (() -> Unit)?, onOpen
         val listState = rememberLazyListState()
         val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
         LaunchedEffect(nearEnd, state.list.nextBefore) { if (nearEnd) viewModel.loadMore() }
+        KeepAtTopOnNewFirstRow(listState, if (state.error != null) "error" else state.list.transfers.firstOrNull()?.id ?: "end")
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).testTag("transfers"),
             state = listState,

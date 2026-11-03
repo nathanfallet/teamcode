@@ -40,6 +40,7 @@ import com.adamglin.phosphoricons.regular.Clock
 import com.adamglin.phosphoricons.regular.Plus
 import me.nathanfallet.teamcode.companion.domain.models.AutomationScope
 import me.nathanfallet.teamcode.companion.domain.models.AutomationSummary
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -111,6 +112,7 @@ fun AutomationsScreen(
         val listState = rememberLazyListState()
         val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
         LaunchedEffect(nearEnd, state.nextBefore) { if (nearEnd) viewModel.loadMore() }
+        KeepAtTopOnNewFirstRow(listState, state.automations?.firstOrNull()?.id ?: "end")
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).testTag("automations"),
             state = listState,

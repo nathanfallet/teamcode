@@ -53,6 +53,7 @@ import com.adamglin.phosphoricons.regular.Link
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -151,6 +152,7 @@ fun ArtifactsScreen(
         // Searching filters what is loaded; it never pulls every page.
         LaunchedEffect(nearEnd, state.nextBefore) { if (nearEnd && state.query.isBlank()) viewModel.loadMore() }
         val shown = state.shown
+        KeepAtTopOnNewFirstRow(listState, shown.firstOrNull()?.id ?: "end")
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("artifacts"),
             state = listState,
