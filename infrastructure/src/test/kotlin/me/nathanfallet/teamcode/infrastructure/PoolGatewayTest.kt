@@ -350,7 +350,7 @@ class PoolGatewayTest {
         HttpClient(MockEngine { req ->
             calls++
             assertEquals("api.anthropic.com", req.url.host, "A preferred account remains; do not switch providers yet")
-            if (calls < 7) respond("rate limited", HttpStatusCode.TooManyRequests)
+            if (calls < 7) respond("rate limited", HttpStatusCode.TooManyRequests, subscriptionSpent())
             else respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
         }) { install(HttpTimeout) }.use { http ->
             val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http), CodexTransport(http)), FakeModelPolicies(), routes(RouteTarget("anthropic"), RouteTarget("codex", "gpt-6-astra")))
@@ -360,6 +360,8 @@ class PoolGatewayTest {
             assertEquals(7, calls)
             assertEquals(List(6) { 0L }, store.charges.take(6))
             assertEquals(6L, store.charges.last())
+            assertTrue(store.cooldowns.isEmpty(), "A spent subscription is recorded by its quota window, not paused")
+            assertEquals(6, store.observations.count { (_, update) -> update.windows.any { it.utilization >= 1.0 } })
         }
     }
 
@@ -482,7 +484,7 @@ class PoolGatewayTest {
     @Test fun boundedSearchIsNotMisreportedAsExhaustedCapacity() = runBlocking {
         val store = FakeAdmission(account, accountsPerProvider = 65)
         var calls = 0
-        HttpClient(MockEngine { calls++; respond("rate limited", HttpStatusCode.TooManyRequests) }) { install(HttpTimeout) }.use { http ->
+        HttpClient(MockEngine { calls++; respond("rate limited", HttpStatusCode.TooManyRequests, subscriptionSpent()) }) { install(HttpTimeout) }.use { http ->
             val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
             val error = assertFailsWith<TeamFailure> { gateway.forward(request()) { _, _ -> fail("No provider response should be committed") } }
             assertEquals(503, error.status)
@@ -491,6 +493,155 @@ class PoolGatewayTest {
             assertEquals(64, store.charges.size)
             assertTrue(store.charges.all { it == 0L })
         }
+    }
+    /** Claude's quota headers on a 429 that spent the five-hour window: the account itself is at its limit. */
+    private fun subscriptionSpent() = headersOf(
+        "anthropic-ratelimit-unified-5h-status" to listOf("rejected"),
+        "anthropic-ratelimit-unified-5h-reset" to listOf((System.currentTimeMillis() / 1000 + 3600).toString()),
+    )
+
+    @Test fun aRateLimitBeforeAnyOutputFailsOverToAnotherAccountAndPausesTheFirstAsBefore() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        HttpClient(MockEngine {
+            calls++
+            if (calls == 1) respond("rate limited", HttpStatusCode.TooManyRequests, headersOf("retry-after", "10"))
+            else respond(FixtureGatewayService.EVENTS.joinToString(""), headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val before = System.currentTimeMillis()
+            val output = StringBuilder()
+            var heads = 0
+            gateway.forward(request()) { head, chunks -> heads++; assertEquals(200, head.status); chunks.collect { output.append(it.decodeToString()) } }
+            assertEquals(1, heads, "The member sees one answer, never the provider's 429")
+            assertEquals(FixtureGatewayService.EVENTS.joinToString(""), output.toString())
+            assertEquals(2, calls)
+            // The refused account is paused for the provider's Retry-After exactly as before; the reservation it held
+            // settles at zero and enters no token ledger; the second account is charged its real usage.
+            val (paused, until, reconnect) = store.cooldowns.single()
+            assertEquals("anthropic-0", paused)
+            assertTrue(until in before + 10_000..System.currentTimeMillis() + 10_000)
+            assertFalse(reconnect)
+            assertEquals<List<Long?>>(listOf(0L, 6L), store.charges)
+            assertEquals(listOf(null, MeteredUsage("anthropic", "claude-opus-test", TokenUsage(input = 1, output = 1))), store.usages)
+        }
+    }
+    @Test fun aRateLimitOnTheSecondAccountStopsInsteadOfPausingTheWholePool() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 6)
+        var calls = 0
+        HttpClient(MockEngine {
+            calls++
+            respond("rate limited", HttpStatusCode.TooManyRequests, headersOf("retry-after", if (calls == 1) "40" else "25"))
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val error = assertFailsWith<TeamFailure> { gateway.forward(request()) { _, _ -> fail("A refusal must not commit output") } }
+            assertEquals("provider_rate_limited", error.code)
+            assertEquals(429, error.status)
+            assertEquals(25, error.retryAfterSeconds, "The shortest wait the provider announced")
+            assertTrue(error.retryable)
+            assertEquals(2, calls, "One switch on a rate limit, not a walk through the six accounts")
+            assertEquals(listOf("anthropic-0", "anthropic-1"), store.cooldowns.map { it.first })
+            assertEquals<List<Long?>>(listOf(0L, 0L), store.charges)
+            assertEquals(2, store.reservedUnits.size, "No third reservation")
+        }
+    }
+    @Test fun aRateLimitedProviderStillFallsBackToAnotherConfiguredProvider() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 4)
+        val seen = mutableListOf<String>()
+        val responses = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+        HttpClient(MockEngine { req ->
+            seen += req.url.host
+            if (req.url.host == "api.anthropic.com") respond("rate limited", HttpStatusCode.TooManyRequests)
+            else respond(responses, headers = headersOf(HttpHeaders.ContentType, "text/event-stream"))
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http), CodexTransport(http)), FakeModelPolicies(),
+                routes(RouteTarget("anthropic"), RouteTarget("anthropic", "claude-haiku-test"), RouteTarget("codex", "gpt-6-astra")))
+            gateway.forward(request()) { head, chunks -> assertEquals("codex", head.headers["x-teamcode-provider"]); chunks.collect {} }
+            // The second Anthropic model meets the same provider-wide limit: skipped, not tried on two more accounts.
+            assertEquals(listOf("api.anthropic.com", "api.anthropic.com", "chatgpt.com"), seen)
+        }
+    }
+    @Test fun everyAccountAtItsLimitEndsWithTheAdmissionRefusalAndItsRetryAfter() = runBlocking {
+        val refusal = TeamFailure("pool_unavailable", 429, "No Claude account in your TeamCode pool is usable. 3 accounts are at their subscription limit. " +
+            "The next account should be usable at 14:05 UTC (in 1 h 5 min).", retryAfterSeconds = 3900, retryable = false)
+        val store = FakeAdmission(account, accountsPerProvider = 3, exhausted = refusal)
+        var calls = 0
+        HttpClient(MockEngine { calls++; respond("limited", HttpStatusCode.TooManyRequests, subscriptionSpent()) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val error = assertFailsWith<TeamFailure> { gateway.forward(request()) { _, _ -> fail("A refusal must not commit output") } }
+            assertSame(refusal, error, "The pool refusal that says when the next account is usable reaches the member unchanged")
+            assertEquals(3, calls, "Each account once")
+            assertTrue(store.cooldowns.isEmpty())
+            assertEquals<List<Long?>>(listOf(0L, 0L, 0L), store.charges)
+        }
+    }
+    @Test fun aRateLimitInsideAnAcceptedStreamIsRelayedNeverRetried() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        val events = FixtureGatewayService.EVENTS.first() +
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"limited\"}}\n\n"
+        HttpClient(MockEngine { calls++; respond(events, headers = headersOf(HttpHeaders.ContentType, "text/event-stream")) }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            val output = StringBuilder()
+            gateway.forward(request()) { head, chunks -> assertEquals(200, head.status); chunks.collect { output.append(it.decodeToString()) } }
+            assertEquals(events, output.toString())
+            assertEquals(1, calls, "Output was committed: no other account")
+            assertTrue(store.cooldowns.isEmpty())
+        }
+    }
+    @Test fun aClientThatClosesDuringTheProviderCallCancelsTheRequestWithoutAnUpstreamFailure() = runBlocking {
+        // Production: Ktor's server cancels the call with a ConnectionClosedException cause when the member's client
+        // closes, and the provider client's validator rethrows that cause unwrapped. It was logged and answered as
+        // 502 upstream_unavailable.
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        val dispatched = CompletableDeferred<Unit>()
+        HttpClient(MockEngine { calls++; dispatched.complete(Unit); awaitCancellation() }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            var outcome: Throwable? = null
+            val call = launch(Dispatchers.Default) {
+                try { gateway.forward(request()) { _, _ -> fail("Nothing was answered") } }
+                catch (error: Throwable) { outcome = error; throw error }
+            }
+            dispatched.await()
+            call.cancel(CancellationException("Call context was cancelled by `HttpRequestLifecycle` plugin", io.ktor.utils.io.ConnectionClosedException()))
+            call.join()
+            assertIs<CancellationException>(outcome, "Got $outcome")
+            assertEquals(1, calls, "Never retried")
+            assertEquals(1, store.reservedUnits.size)
+            assertEquals(1, store.charges.size, "The reservation still settles")
+        }
+    }
+    @Test fun aRequestCancelledWhileAnAccountRefusesReservesNoOtherAccount() = runBlocking {
+        val store = FakeAdmission(account, accountsPerProvider = 3)
+        var calls = 0
+        lateinit var call: Job
+        HttpClient(MockEngine {
+            calls++
+            call.cancel()
+            respond("rate limited", HttpStatusCode.TooManyRequests)
+        }) { install(HttpTimeout) }.use { http ->
+            val gateway = PoolGateway(store, credentials, listOf(ClaudeTransport(http)), FakeModelPolicies())
+            var outcome: Throwable? = null
+            call = launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+                try { gateway.forward(request()) { _, _ -> fail("Nothing was answered") } }
+                catch (error: Throwable) { outcome = error; throw error }
+            }
+            call.start()
+            call.join()
+            assertIs<CancellationException>(outcome, "Got $outcome")
+            assertEquals(1, calls)
+            assertEquals(1, store.reservedUnits.size, "No second reservation after cancellation")
+        }
+    }
+    @Test fun dispatchUpstreamAndSettledLinesCarryTheAttemptChainAndMillisecondsOnly() {
+        assertEquals("TeamCode inference dispatch request=r-2 account=a-2 provider=anthropic model=claude-opus-test attempt=2 previous=r-1",
+            dispatchLog("r-2", "a-2", "anthropic", "claude-opus-test", 2, "r-1"))
+        assertEquals("TeamCode inference dispatch request=r-1 account=a-1 provider=anthropic model=claude-opus-test attempt=1",
+            dispatchLog("r-1", "a-1", "anthropic", "claude-opus-test", 1, null))
+        assertEquals("TeamCode inference upstream request=r-1 status=429 encoding=none durationMs=312", upstreamLog("r-1", 429, "none", 312))
+        assertEquals("TeamCode inference settled request=r-1 units=unknown terminal=message_start failure=none durationMs=48211",
+            settledLog("r-1", null, "message_start", "none", 48211))
     }
     @Test fun ambiguousServerErrorDoesNotTryFallback() = runBlocking {
         val store = FakeAdmission(account)
@@ -588,7 +739,8 @@ class PoolGatewayTest {
         }
     }
 }
-private class FakeAdmission(private val account: AccountRecord, private val accountsPerProvider: Int = 1, private val knownExhaustedModels: Set<String> = emptySet()) : AdmissionStore {
+private class FakeAdmission(private val account: AccountRecord, private val accountsPerProvider: Int = 1, private val knownExhaustedModels: Set<String> = emptySet(),
+    private val exhausted: TeamFailure = TeamFailure("pool_unavailable", 429, "No eligible account.")) : AdmissionStore {
     val affinities = mutableMapOf<RequestAffinity, RouteTarget>()
     override suspend fun preferredTarget(actor: Principal, affinity: RequestAffinity): RouteTarget? = affinities[affinity]
     override suspend fun statistics() = AdmissionStatistics(0, 0)
@@ -611,7 +763,7 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
     override suspend fun reserve(actor: Principal, units: Long, model: String, provider: String, excludedAccountIds: Set<String>, affinity: RequestAffinity?): Reservation {
         reservedUnits += units
         val id = (0 until accountsPerProvider).map { "$provider-$it" }.firstOrNull { it !in excludedAccountIds }
-            ?: throw TeamFailure("pool_unavailable", 429, "No eligible account.")
+            ?: throw exhausted
         selectedProvider = provider
         affinity?.let { affinities[it] = RouteTarget(provider, model) }
         return Reservation("request-$id", account.copy(id = id, identity = account.identity.copy(provider = provider)), units)
@@ -634,7 +786,9 @@ private class FakeAdmission(private val account: AccountRecord, private val acco
         observations += accountId to update
     }
     override suspend fun isQuotaExhausted(accountId: String, model: String) = model in knownExhaustedModels
-    override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) { cooled = true; this.reconnect = reconnect }
+    /** Every pause, in order: account, until (epoch ms), reconnect. */
+    val cooldowns = mutableListOf<Triple<String, Long, Boolean>>()
+    override suspend fun coolDown(accountId: String, untilMillis: Long, reconnect: Boolean) { cooled = true; this.reconnect = reconnect; cooldowns += Triple(accountId, untilMillis, reconnect) }
 }
 
 private class FakeModelPolicies(var translation: Boolean = true) : ModelPolicyStore {
