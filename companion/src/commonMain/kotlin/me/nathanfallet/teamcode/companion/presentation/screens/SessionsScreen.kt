@@ -62,6 +62,7 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.services.Clock
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.phaseLabel
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BrandGlyph
@@ -210,20 +211,15 @@ fun SessionsScreen(
         val nearEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 3 } == true } }
         LaunchedEffect(nearEnd, list?.nextBefore) { if (nearEnd) sessionsViewModel.loadMore() }
         val error = state.error ?: home.error
-        // A row that arrives above the first one shown keeps that one in place: the first page after the empty list's
-        // last row (a screen composed before its account was known, a first sign-in, the demo) scrolled the list down
-        // to its end. A list at the top stays at the top; one scrolled down keeps its place.
+        // The first row shown, for [KeepAtTopOnNewFirstRow] (a screen composed before its account was known, a first
+        // sign-in, the demo: the first page after the end row scrolled the list down to its end).
         val firstRow: Any = when {
             account != null && !account.signedIn -> "signed-out"
             error != null -> "error"
             state.reconnecting -> "reconnecting"
             else -> list?.sessions?.firstOrNull()?.id ?: if (state.loading) "skeleton-0" else "end"
         }
-        val shownFirstRow = remember { arrayOf(firstRow) }
-        if (shownFirstRow[0] != firstRow) {
-            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) listState.requestScrollToItem(0)
-            shownFirstRow[0] = firstRow
-        }
+        KeepAtTopOnNewFirstRow(listState, firstRow)
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("sessions"),
             state = listState,

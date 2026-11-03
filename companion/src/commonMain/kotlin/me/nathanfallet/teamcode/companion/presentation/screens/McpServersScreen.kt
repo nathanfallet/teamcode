@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import me.nathanfallet.teamcode.companion.domain.models.McpReason
 import me.nathanfallet.teamcode.companion.domain.models.McpServer
 import me.nathanfallet.teamcode.companion.domain.models.McpStatus
 import me.nathanfallet.teamcode.companion.domain.models.McpTransport
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -78,8 +80,11 @@ fun McpServersScreen(viewModel: McpServersViewModel, onBack: (() -> Unit)?, back
         NavBar(backLabel, onBack, stringResource(Res.string.mcp_title)) {
             TcIconButton(PhosphorIcons.Regular.ArrowsClockwise, stringResource(Res.string.mcp_refresh), onClick = viewModel::refresh, enabled = !state.loading, modifier = Modifier.testTag("mcp-refresh"))
         }
+        val listState = rememberLazyListState()
+        KeepAtTopOnNewFirstRow(listState, if (state.error != null) "error" else state.servers?.firstOrNull()?.name ?: "end")
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).testTag("mcp-list"),
+            state = listState,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {

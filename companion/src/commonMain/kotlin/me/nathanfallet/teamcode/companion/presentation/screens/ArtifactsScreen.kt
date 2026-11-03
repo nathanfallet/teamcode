@@ -53,6 +53,7 @@ import com.adamglin.phosphoricons.regular.Link
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import me.nathanfallet.teamcode.companion.domain.models.Artifact
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
+import me.nathanfallet.teamcode.companion.presentation.components.KeepAtTopOnNewFirstRow
 import me.nathanfallet.teamcode.companion.presentation.components.Banner
 import me.nathanfallet.teamcode.companion.presentation.components.BusyRow
 import me.nathanfallet.teamcode.companion.presentation.components.ButtonKind
@@ -151,11 +152,7 @@ fun ArtifactsScreen(
         // Searching filters what is loaded; it never pulls every page.
         LaunchedEffect(nearEnd, state.nextBefore) { if (nearEnd && state.query.isBlank()) viewModel.loadMore() }
         val shown = state.shown
-        // A list that holds on to the row it showed opens mid-page: its first rows arrive above the end row it was showing,
-        // and a reload puts newer rows above the old first one. A new first row (a reload, a scope, a search) starts at the top;
-        // the next pages come below and leave the head as it is.
-        val head = shown.firstOrNull()?.id
-        LaunchedEffect(head) { listState.scrollToItem(0) }
+        KeepAtTopOnNewFirstRow(listState, shown.firstOrNull()?.id ?: "end")
         LazyColumn(
             Modifier.widthIn(max = ContentWidth).fillMaxWidth().weight(1f).arrowKeyNavigation().testTag("artifacts"),
             state = listState,
@@ -175,8 +172,7 @@ fun ArtifactsScreen(
                     ArtifactCard(artifact, now) { onOpen(artifact) }
                 }
             }
-            // No key: the end row stays at its index, so the first rows arriving above it do not carry the list down to it.
-            item {
+            item(key = "end") {
                 BusyRow(state.loading || state.loadingMore)
                 if (!state.loading && state.error == null && shown.isEmpty()) {
                     if (state.artifacts.isEmpty()) {
