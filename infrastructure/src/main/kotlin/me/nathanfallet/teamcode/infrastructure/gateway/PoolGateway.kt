@@ -26,6 +26,24 @@ internal fun refusalLog(memberId: String?, failure: TeamFailure): String =
     "TeamCode inference refused member=${memberId ?: "anonymous"} code=${failure.code} status=${failure.status}" +
         (failure.retryAfterSeconds?.let { " retryAfter=$it" } ?: "") + " reason=\"" + failure.message.orEmpty().map { if (it == '"') '\'' else if (it.isISOControl()) ' ' else it }.joinToString("") + "\""
 
+/**
+ * Identifiers, counts and milliseconds only. [attempt] numbers the accounts one client request reached (1 for the first);
+ * [previous] is the reservation the provider refused just before, so a failover reads as one chain in the logs.
+ */
+internal fun dispatchLog(reservationId: String, accountId: String, provider: String, model: String, attempt: Int, previous: String?): String =
+    "TeamCode inference dispatch request=$reservationId account=$accountId provider=$provider model=$model attempt=$attempt" +
+        (previous?.let { " previous=$it" } ?: "")
+
+/** [durationMs]: from sending to the provider until its status and headers arrived. */
+internal fun upstreamLog(reservationId: String, status: Int, encoding: String, durationMs: Long): String =
+    "TeamCode inference upstream request=$reservationId status=$status encoding=$encoding durationMs=$durationMs"
+
+/** [durationMs]: from the reservation's attempt start (credentials included) until settlement, stream included. */
+internal fun settledLog(reservationId: String, units: Long?, terminal: String?, failure: String?, durationMs: Long): String =
+    "TeamCode inference settled request=$reservationId units=${units ?: "unknown"} terminal=$terminal failure=$failure durationMs=$durationMs"
+
+private fun millisSince(startedNanos: Long): Long = (System.nanoTime() - startedNanos) / 1_000_000
+
 /** Native passthrough by default; explicit routes translate only when the destination protocol changes. */
 class PoolGateway(private val admission: AdmissionStore, private val credentials: CredentialSource, private val transports: List<ProviderTransport>, private val modelPolicies: ModelPolicyStore, private val routes: RoutingStore? = null, private val codecs: ConversationCodec = ConversationCodec(), private val queued: AwaitAdmissionUseCase? = null) : GatewayService {
     override suspend fun status(): GatewaySnapshot = admission.statistics().let { GatewaySnapshot("subscription-pool", it.active, it.completed, it.queued) }
@@ -77,8 +95,13 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         var translationFailure: TeamFailure? = null
         var waitingFailure: TeamFailure? = null
         var poolFailure: TeamFailure? = null
+        val failover = ProviderFailoverBudget()
+        var previousReservation: String? = null
         // Exhaust eligible accounts for each preferred target before trying the next configured provider/model.
         for (target in targets) {
+            // Its provider rate-limited this request as often as one request may switch on it: another model of the
+            // same provider would only meet the same limit. Another provider's target is still tried.
+            if (!failover.allows(target.provider)) continue
             val resolved = target.model ?: model
             val attemptedAccounts = attemptedTargets.getOrPut(target.provider to resolved) { mutableSetOf() }
             val transport = transports.singleOrNull { it.provider == target.provider }
@@ -112,6 +135,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             // for the model maximum on every request must not need twice the allowance to be admitted.
             val estimate = maxOf(request.body.size, outgoing.toString().toByteArray().size).toLong() + 16_384 + minOf(maximumOutput, HELD_OUTPUT_TOKENS) * 5
             while (true) {
+                // A client gone (or the deadline passed) after a refusal must not reserve and dispatch another account.
+                currentCoroutineContext().ensureActive()
                 if (attempts >= 64) throw TeamFailure("routing_attempt_limit", 503, "The request reached its bounded routing limit. Retry shortly; available capacity has not been ruled out.")
                 val waitStarted = System.nanoTime()
                 val reservation = try {
@@ -133,9 +158,17 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 attemptedAccounts += reservation.account.id
                 attempts++
                 try {
-                    attempt(request, receive, transport, outgoing, resolved, model, reservation, translated, reauthenticatedAccounts, conversation?.tools)
+                    attempt(request, receive, transport, outgoing, resolved, model, reservation, translated, reauthenticatedAccounts, conversation?.tools, attempts, previousReservation)
                     return
-                } catch (_: SafeRetry) { /* This definite rejection settled with zero charge; select another account. */ }
+                } catch (retry: SafeRetry) {
+                    // This definite rejection settled with zero charge and nothing reached the client; the account is
+                    // already paused or recorded at its limit. Select another one unless the rate-limit switch is spent.
+                    previousReservation = reservation.id
+                    if (!failover.record(transport.provider, retry.refusal, retry.retryAfterSeconds)) {
+                        poolFailure = moreHopeful(poolFailure, failover.failure(transport.provider)!!)
+                        break
+                    }
+                }
             }
         }
         if (!compatibleTargetFound) translationFailure?.let { throw it }
@@ -150,7 +183,8 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         else -> if ((next.retryAfterSeconds ?: Long.MAX_VALUE) < (current.retryAfterSeconds ?: Long.MAX_VALUE)) next else current
     }
 
-    private class SafeRetry(val failure: TeamFailure) : RuntimeException()
+    /** A refusal before any output: [refusal] says how far it reaches, [retryAfterSeconds] how long the account is paused. */
+    private class SafeRetry(val failure: TeamFailure, val refusal: ProviderRefusal, val retryAfterSeconds: Long) : RuntimeException()
 
     /** Best-effort write after the provider answered; cancellation still propagates. */
     private suspend fun bookkeeping(reservation: Reservation, step: String, block: suspend () -> Unit) {
@@ -159,7 +193,9 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         catch (error: Exception) { System.err.println("TeamCode inference bookkeeping skipped request=${reservation.id} step=$step cause=${error::class.simpleName}") }
     }
     private suspend fun attempt(request: GenerationRequest, receive: suspend (GenerationHead, kotlinx.coroutines.flow.Flow<ByteArray>) -> Unit,
-        transport: ProviderTransport, body: JsonObject, model: String, requestedModel: String, reservation: Reservation, translated: Boolean, reauthenticatedAccounts: MutableSet<String>, replyTools: List<ToolDefinition>?) {
+        transport: ProviderTransport, body: JsonObject, model: String, requestedModel: String, reservation: Reservation, translated: Boolean, reauthenticatedAccounts: MutableSet<String>, replyTools: List<ToolDefinition>?,
+        attemptNumber: Int, previousReservation: String?) {
+        val started = System.nanoTime()
         val meter = SseUsageMeter()
         var knownCharge: Long? = null
         var upstreamStatus: Int? = null
@@ -171,15 +207,16 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
             } catch (error: TeamFailure) {
                 if (error.code !in setOf("provider_reconnect", "access_token_expired", "account_unavailable", "refresh_in_progress")) throw error
                 admission.coolDown(reservation.account.id, System.currentTimeMillis() + 60_000)
-                throw SafeRetry(error)
+                throw SafeRetry(error, ProviderRefusal.ACCOUNT, 60)
             }
             var token = credential()
-            System.out.println("TeamCode inference dispatch request=${reservation.id} account=${reservation.account.id} provider=${transport.provider} model=$model")
+            System.out.println(dispatchLog(reservation.id, reservation.account.id, transport.provider, model, attemptNumber, previousReservation))
             dispatched = true
             withTimeout(10 * 60_000L) {
                 while (true) {
                     var refreshRejected = false
                     knownCharge = null
+                    val sent = System.nanoTime()
                     transport.send(reservation.account, token, body, request.headers - setOf("x-teamcode-run-id", "x-teamcode-workload")) { response ->
                         // The provider has answered: recording its request id and quota headers is bookkeeping, and a
                         // database timeout there must not turn a paid answer into a 502 the client retries.
@@ -191,7 +228,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                         val status = response.status.value
                         upstreamStatus = status
                         val encoding = response.headers["content-encoding"]?.takeIf { it in setOf("gzip", "br", "deflate", "zstd", "identity") } ?: "none"
-                        System.out.println("TeamCode inference upstream request=${reservation.id} status=$status encoding=$encoding")
+                        System.out.println(upstreamLog(reservation.id, status, encoding, millisSince(sent)))
                         if (status !in 200..299) {
                             if (status in 400..499) knownCharge = 0
                             if (status == 401 && reauthenticatedAccounts.add(reservation.account.id)) {
@@ -204,7 +241,11 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                             // entire subscription: another configured model may still be available.
                             val exhausted = status == 429 && (spent.isNotEmpty() || admission.isQuotaExhausted(reservation.account.id, model))
                             if ((status == 429 && !exhausted) || status >= 500 || status == 401 || status == 403) admission.coolDown(reservation.account.id, now + retry * 1000, reconnect = status == 401)
-                            if (status in setOf(401, 403, 429)) throw SafeRetry(TeamFailure("pool_unavailable", 429, "Configured subscriptions are unavailable or rate-limited. Retry shortly."))
+                            // Nothing was written to the client yet: a definite refusal moves the request to another
+                            // account, within the request's failover budget (route).
+                            ProviderRefusal.of(status, exhausted)?.let { refusal ->
+                                throw SafeRetry(TeamFailure("pool_unavailable", 429, "Configured subscriptions are unavailable or rate-limited. Retry shortly."), refusal, retry)
+                            }
                             val publicStatus = if (status in setOf(400, 413, 429)) status else 502
                             val publicError = if (status == 429) "The selected subscription is rate-limited. Retry after the indicated delay." else "The provider rejected this request. Check the model and account status."
                             val type = InferenceErrors.type(request.protocol, publicStatus, "upstream_error")
@@ -246,6 +287,10 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
             if (error is SafeRetry) throw error
+            // The member's client closed its connection: Ktor's server cancels the call with a ConnectionClosedException
+            // cause, and the provider call's validator rethrows that cause unwrapped. It is a cancellation, not a
+            // provider failure: never answer it with upstream_unavailable, never retry it.
+            currentCoroutineContext().ensureActive()
             if (error is TeamFailure) System.err.println("TeamCode inference failure request=${reservation.id} category=${error.code}")
             if (committed) throw error // Never write a replacement response or replay a committed stream.
             if (error is TeamFailure) throw error
@@ -265,7 +310,7 @@ class PoolGateway(private val admission: AdmissionStore, private val credentials
                 val usage = if (!dispatched || knownCharge != null || refused) null else MeteredUsage(transport.provider, model, meter.tokens)
                 try {
                     withTimeout(5_000) { admission.settle(reservation, charge, terminalUsage != null, usage) }
-                    System.out.println("TeamCode inference settled request=${reservation.id} units=${charge ?: "unknown"} terminal=${meter.lastEvent} failure=${meter.failureCategory}")
+                    System.out.println(settledLog(reservation.id, charge, meter.lastEvent, meter.failureCategory, millisSince(started)))
                 } catch (_: Exception) {
                     // The durable reservation remains charged; never mask cancellation or a stream failure.
                     System.err.println("TeamCode inference settlement pending request=${reservation.id}")

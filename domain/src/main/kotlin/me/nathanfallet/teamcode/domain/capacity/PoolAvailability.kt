@@ -58,10 +58,13 @@ data class PoolStanding(
     val waiting: Int get() = coolingDown + quotaExhausted
 }
 
+/** The provider's name in a refusal the member reads. */
+fun providerLabel(provider: String): String = when (provider) { "anthropic", "claude" -> "Claude"; "codex" -> "Codex"; else -> provider }
+
 /** Turns a [PoolStanding] into the refusal the agent shows: the cause, what to do, and when to retry. */
 class DescribePoolUnavailableUseCase {
     fun failure(standing: PoolStanding, now: Long): TeamFailure {
-        val provider = when (standing.provider) { "anthropic", "claude" -> "Claude"; "codex" -> "Codex"; else -> standing.provider }
+        val provider = providerLabel(standing.provider)
         if (standing.accounts == 0) return TeamFailure(CODE, 503,
             "No $provider account is connected to your TeamCode pool. An administrator must add one with " +
                 "`teamcode accounts add` and assign it to your pool.", retryable = false)
