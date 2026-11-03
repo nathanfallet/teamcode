@@ -33,7 +33,8 @@ private class WindowsAgentProcess(private val handle: COpaquePointer) : AgentPro
     private fun take(length: Int, consumed: Int, maxLine: Int): String {
         val line = pending.decodeToString(0, minOf(length, maxLine))
         pending.copyInto(pending, 0, consumed, size); size -= consumed
-        return line
+        // A Windows program may end its lines with CRLF; the protocol is lines, so the carriage return is not part of one.
+        return line.removeSuffix("\r")
     }
 
     override suspend fun writeLine(line: String): Boolean {
