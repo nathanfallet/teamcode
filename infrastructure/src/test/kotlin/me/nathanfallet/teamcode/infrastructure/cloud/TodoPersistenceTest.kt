@@ -115,6 +115,50 @@ class TodoPersistenceTest {
         }
     }
 
+    @Test @Timeout(240)
+    fun theStopHookCountsOnceAcrossReplicasAndAnOpenWaitLetsTheStopPass() = runBlocking {
+        AutomationWorld.run(92) { w ->
+            val drops = WaitBackedDropWaits(SqlWaitStore(w.a.database))
+            val a = TodoService(SqlTodoStore(w.a.database), drops); val b = TodoService(SqlTodoStore(w.b.database), WaitBackedDropWaits(SqlWaitStore(w.b.database)))
+            val session = (w.a.sessions.create(w.member, null, CloudSessionDraft("Stop", w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session.id
+            a.create(w.member, session, "The plan", emptyList(), listOf(item("a"), item("b", "a")))
+            val verify = TodoStopInput(TodoStopPhase.VERIFY, orphans = listOf("https://github.com/acme/backend/pull/5"), lastMessage = "stuck")
+            assertEquals(TodoStopAction.VERIFY, a.stop(w.member, session, TodoStopInput(TodoStopPhase.BEGIN)).action)
+            // Two stops at once, from two replicas, each counted once: 1 and 2, never both 1.
+            coroutineScope { listOf(a, b).map { s -> async(Dispatchers.IO) { s.stop(w.member, session, verify) } }.awaitAll() }
+            val counted = a.get(w.member, session)!!
+            assertEquals(2, counted.stall)
+            assertEquals(listOf("a", "b", "finish-pr-5"), counted.items.map { it.id }, "the orphan PR is added once, by whichever replica comes first")
+            // The limit: of two stops that arrive together, exactly one opens the wait.
+            val results = coroutineScope { listOf(a, b).map { s -> async(Dispatchers.IO) { runCatching { s.stop(w.member, session, verify) }.getOrNull() } }.awaitAll() }
+            assertEquals(1, results.count { it?.escalated == true }, "one wait is opened, not two")
+            assertEquals(1, results.count { it?.action == TodoStopAction.BLOCK })
+            val after = a.get(w.member, session)!!
+            val stuck = after.items.single { it.status == TodoItemStatus.DROP_REQUESTED }
+            assertEquals("a", stuck.id)
+            w.a.database.query { assertEquals(1L, Waits.selectAll().where { (Waits.sessionId eq session) and (Waits.status eq "open") }.count()) }
+            assertEquals(listOf("blocked"), after.hookEvents.map { it.kind })
+            // A wait of the session is open: every stop passes without a question, from either replica.
+            assertEquals("wait_open", b.stop(w.member, session, TodoStopInput(TodoStopPhase.BEGIN)).why)
+            // The owner answers: the drop is applied, and what the hook recorded about itself survives.
+            WaitService(SqlWaitStore(w.a.database), waker(w.a)).answer(w.member, stuck.dropWaitId!!, WaitBackedDropWaits.NO, emptyMap())
+            assertEquals(TodoItemStatus.TODO, b.get(w.member, session)!!.item("a")!!.status)
+            assertEquals(TodoStopAction.VERIFY, b.stop(w.member, session, TodoStopInput(TodoStopPhase.BEGIN)).action)
+            a.hookError(w.member, session, "The stop hook failed (IllegalStateException).")
+            assertEquals(listOf("blocked", "hook_error"), b.get(w.member, session)!!.hookEvents.map { it.kind })
+            // Done items are checked again at the end: a PR that was reverted reopens its item.
+            val ok = { index: Int -> TodoCheckReport(index, true, "MERGED") }
+            b.stop(w.member, session, TodoStopInput(TodoStopPhase.VERIFY, items = listOf("a", "b", "finish-pr-5").map { TodoStopItemReport(it, listOf(ok(0))) }))
+            assertEquals(TodoStopAction.SETTLE, b.stop(w.member, session, TodoStopInput(TodoStopPhase.VERIFY)).action)
+            val reverted = a.stop(w.member, session, TodoStopInput(TodoStopPhase.SETTLE, items = listOf(TodoStopItemReport("a", listOf(TodoCheckReport(0, false, "PR #1 was reverted"))), TodoStopItemReport("b", listOf(ok(0))), TodoStopItemReport("finish-pr-5", listOf(ok(0))))))
+            assertEquals(TodoStopAction.BLOCK, reverted.action)
+            assertEquals(TodoItemStatus.TODO, a.get(w.member, session)!!.item("a")!!.status)
+            b.stop(w.member, session, TodoStopInput(TodoStopPhase.VERIFY, items = listOf(TodoStopItemReport("a", listOf(ok(0))))))
+            val settled = b.stop(w.member, session, TodoStopInput(TodoStopPhase.SETTLE, items = listOf("a", "b", "finish-pr-5").map { TodoStopItemReport(it, listOf(ok(0))) }))
+            assertEquals(listOf(TodoStopAction.ALLOW, "settled", TodoListStatus.DONE), listOf(settled.action, settled.why, a.get(w.member, session)!!.status))
+        }
+    }
+
     private suspend fun anExecutionCredentialIsConfinedToItsSession(a: TodoService, b: TodoService, w: AutomationWorld, own: String, other: String) {
         suspend fun credential(scopes: Set<ServiceScope>, bound: String?): Principal {
             val tokenId = java.util.UUID.randomUUID().toString()

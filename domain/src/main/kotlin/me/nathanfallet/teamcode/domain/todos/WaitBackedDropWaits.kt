@@ -25,5 +25,22 @@ class WaitBackedDropWaits(private val waits: WaitStore) : TodoDropWaits {
         waits.cancel(actor, waitId, waits.now())
     }
 
-    companion object { const val YES = "yes"; const val NO = "no" }
+    override suspend fun openBlocked(actor: Principal, sessionId: String, title: String, body: String, dropItem: Boolean): String {
+        val session = waits.session(actor.teamId, sessionId)?.takeIf { it.ownerId == actor.member.id } ?: throw TeamFailure("not_found", 404, "Session not found.")
+        val owner = waits.member(actor.teamId, session.ownerId)?.takeUnless { it.disabled } ?: throw TeamFailure("invalid_assignee", 400, "The session's owner is not an active member.")
+        val wait = Wait(
+            id = UUID.randomUUID().toString(), teamId = actor.teamId, source = WaitSource.WAIT, kind = WaitKind.HUMAN_REQUEST, resolver = WaitResolver.HUMAN,
+            status = WaitStatus.OPEN, sessionId = session.id, sessionName = session.name, requestId = null, assigneeId = owner.id, assigneeName = owner.username,
+            createdById = actor.member.id, title = title.take(WaitRules.MAX_TITLE), body = body.take(WaitRules.MAX_BODY), refs = listOf(WaitRef("session", id = session.id)), fields = emptyList(),
+            actions = listOfNotNull(
+                WaitAction(NO, "Resume", style = "primary"),
+                if (dropItem) WaitAction(YES, "Drop this item", style = "danger") else null,
+                WaitAction(STOP, "Stop here"),
+            ),
+            answer = null, createdAt = waits.now(), resolvedAt = null,
+        )
+        return waits.create(actor, wait, null, WaitRules.MAX_OPEN_PER_SESSION).wait.id
+    }
+
+    companion object { const val YES = "yes"; const val NO = "no"; const val STOP = "stop" }
 }

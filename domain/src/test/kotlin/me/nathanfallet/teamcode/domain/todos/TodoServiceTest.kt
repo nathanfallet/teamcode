@@ -10,6 +10,7 @@ class TodoServiceTest {
         var list: TodoList? = null
         var artifacts = mutableMapOf<String, Int>()
         var waits = mutableMapOf<String, WaitState>()
+        var openWait = false
         override suspend fun now() = 1_000L
         override suspend fun revalidate(actor: Principal) = Unit
         override suspend fun executionSession(tokenId: String): String? = null
@@ -19,6 +20,7 @@ class TodoServiceTest {
         override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T { val (next, value) = change(list!!); list = next; return value }
         override suspend fun artifactVersion(teamId: String, artifactId: String) = artifacts[artifactId]
         override suspend fun waitState(teamId: String, sessionId: String, waitId: String) = waits[waitId]
+        override suspend fun hasOpenWait(teamId: String, sessionId: String) = openWait
         override suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>) = emptyMap<String, DropOutcome>()
     }
     private val ada = Principal(Member("ada", "ada", Role.MEMBER, false, false), "token", "team", null)
@@ -62,5 +64,125 @@ class TodoServiceTest {
         assertEquals("invalid_proof", code(listOf(TodoCheckReport(0, true, "x", listOf("http://insecure.example")))))
         assertEquals("not_done", code(listOf(TodoCheckReport(0, true, "merged"))), "the second check was not reported")
         assertEquals(TodoItemStatus.DONE, service.complete(ada, "s1", "a", listOf(TodoCheckReport(0, true, "merged"), TodoCheckReport(1, true, "green"))).item("a")!!.status)
+    }
+
+    private class Drops : TodoDropWaits {
+        val blocked = mutableListOf<Triple<String, String, Boolean>>()
+        override suspend fun open(actor: Principal, sessionId: String, item: TodoItem, reason: String) = "drop-1"
+        override suspend fun cancel(actor: Principal, waitId: String) = Unit
+        override suspend fun openBlocked(actor: Principal, sessionId: String, title: String, body: String, dropItem: Boolean): String { blocked += Triple(title, body, dropItem); return "blocked-1" }
+    }
+    private fun begin(observe: Boolean = false, background: Boolean = false) = TodoStopInput(TodoStopPhase.BEGIN, background = background, observe = observe)
+    private fun verify(observe: Boolean = false, vararg items: TodoStopItemReport, orphans: List<String> = emptyList()) = TodoStopInput(TodoStopPhase.VERIFY, observe = observe, items = items.toList(), orphans = orphans, lastMessage = "I am stuck")
+    private val pr = TodoCheck.PrMerged("acme/x")
+
+    @Test fun aStopWithNothingToHoldBackPassesWithoutAQuestion() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        assertEquals("no_list", service.stop(ada, "s1", begin()).why)
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr)))
+        assertEquals(TodoStopAction.VERIFY, service.stop(ada, "s1", begin()).action)
+        assertEquals("background_task", service.stop(ada, "s1", begin(background = true)).why)
+        store.openWait = true
+        assertEquals("wait_open", service.stop(ada, "s1", begin()).why, "any open wait of the session lets the stop pass, and nothing is verified")
+        store.openWait = false
+        store.list = store.list!!.copy(status = TodoListStatus.DONE)
+        assertEquals("finished", service.stop(ada, "s1", begin()).why)
+    }
+
+    @Test fun anItemWhoseChecksPassIsTickedAndAllClosedMeansSettle() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr), item("b", pr)))
+        val first = service.stop(ada, "s1", verify(false, TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "PR #1 MERGED")))))
+        assertEquals(TodoStopAction.BLOCK, first.action)
+        assertEquals(TodoItemStatus.DONE, store.list!!.item("a")!!.status)
+        assertTrue(first.reason!!.startsWith("[TeamCode todo] 1 of 2 items done."), first.reason)
+        assertTrue(first.reason!!.contains("Next item: b"))
+        val second = service.stop(ada, "s1", verify(false, TodoStopItemReport("b", listOf(TodoCheckReport(0, true, "PR #2 MERGED")))))
+        assertEquals(TodoStopAction.SETTLE, second.action)
+        // A check that regressed reopens the item; the list is done only when every condition still holds.
+        val reopened = service.stop(ada, "s1", TodoStopInput(TodoStopPhase.SETTLE, items = listOf(TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "ok"))), TodoStopItemReport("b", listOf(TodoCheckReport(0, false, "PR #2 was reverted"))))))
+        assertEquals(TodoStopAction.BLOCK, reopened.action)
+        assertEquals(TodoItemStatus.TODO, store.list!!.item("b")!!.status)
+        assertTrue(reopened.reason!!.contains("PR #2 was reverted"))
+        service.stop(ada, "s1", verify(false, TodoStopItemReport("b", listOf(TodoCheckReport(0, true, "PR #2 MERGED again")))))
+        val done = service.stop(ada, "s1", TodoStopInput(TodoStopPhase.SETTLE, items = listOf(TodoStopItemReport("a", listOf(TodoCheckReport(0, true, "ok"))), TodoStopItemReport("b", listOf(TodoCheckReport(0, true, "ok"))))))
+        assertEquals(listOf(TodoStopAction.ALLOW, "settled", TodoListStatus.DONE), listOf(done.action, done.why, store.list!!.status))
+    }
+
+    @Test fun anUnknownOrFailedCheckNeverTicksAnItem() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr)))
+        service.stop(ada, "s1", verify(false, TodoStopItemReport("a", listOf(TodoCheckReport(0, null, "unknown: gh did not answer")))))
+        assertEquals(TodoItemStatus.TODO, store.list!!.item("a")!!.status)
+        assertNull(store.list!!.item("a")!!.proof!!.passed)
+    }
+
+    @Test fun theCounterOnlyCountsStopsWithoutProgressAndTheThirdOpensAWait() = runBlocking {
+        val store = Store(); val drops = Drops(); val service = TodoService(store, drops)
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr), item("b", pr)))
+        // Stop 1 and 2: no progress. Stop 2 sees the same counters as stop 1.
+        assertEquals(1, service.stop(ada, "s1", verify()).let { store.list!!.stall })
+        assertEquals(2, service.stop(ada, "s1", verify()).let { store.list!!.stall })
+        // A note is progress: the counter starts again, and the agent is not stopped by the limit however many times it advances.
+        service.note(ada, "s1", "a", "tried the merge queue")
+        assertEquals(0, service.stop(ada, "s1", verify()).let { store.list!!.stall })
+        assertEquals(TodoStopAction.BLOCK, service.stop(ada, "s1", verify()).action)
+        assertEquals(1, store.list!!.stall)
+        assertEquals(TodoStopAction.BLOCK, service.stop(ada, "s1", verify()).action)
+        assertEquals(2, store.list!!.stall)
+        val third = service.stop(ada, "s1", verify())
+        assertEquals(listOf(TodoStopAction.ALLOW, "escalated", true), listOf(third.action, third.why, third.escalated))
+        assertEquals(1, drops.blocked.size)
+        assertTrue(drops.blocked.single().second.contains("I am stuck"))
+        assertEquals(0, store.list!!.stall, "the counter starts again once the owner was asked")
+        assertEquals(TodoItemStatus.DROP_REQUESTED, store.list!!.item("a")!!.status)
+        assertEquals("blocked-1", store.list!!.item("a")!!.dropWaitId)
+        assertEquals("blocked", store.list!!.hookEvents.last().kind)
+    }
+
+    @Test fun observationRecordsWhatWouldBeBlockedAndNeverMovesTheCounter() = runBlocking {
+        val store = Store(); val drops = Drops(); val service = TodoService(store, drops)
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr)))
+        repeat(5) { assertEquals(listOf(TodoStopAction.ALLOW, true), service.stop(ada, "s1", verify(observe = true)).let { listOf(it.action, it.wouldBlock) }) }
+        assertEquals(0, store.list!!.stall)
+        assertTrue(drops.blocked.isEmpty())
+        assertEquals(TodoRules.MAX_HOOK_EVENTS.coerceAtMost(5), store.list!!.hookEvents.size)
+        assertTrue(store.list!!.hookEvents.all { it.kind == "would_block" && it.text.startsWith("Would block: 0 of 1 items done, next a") })
+    }
+
+    @Test fun aPullRequestOfTheSessionThatNoItemCoversBecomesAnItem() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr)))
+        service.link(ada, "s1", "a", TodoLink("pr", "https://github.com/acme/x/pull/1", 1), false)
+        service.stop(ada, "s1", verify(false, orphans = listOf("https://github.com/acme/x/pull/1", "https://github.com/acme/x/pull/7", "https://example.com/acme/x/pull/9")))
+        assertEquals(listOf("a", "finish-pr-7"), store.list!!.items.map { it.id })
+        val added = store.list!!.item("finish-pr-7")!!
+        assertEquals(TodoOrigin.DISCOVERED, added.origin)
+        assertEquals("https://github.com/acme/x/pull/7", added.links.single().ref)
+        assertEquals(listOf<TodoCheck>(TodoCheck.PrMerged("acme/x")), added.doneWhen.checks)
+        service.stop(ada, "s1", verify(false, orphans = listOf("https://github.com/acme/x/pull/7")))
+        assertEquals(2, store.list!!.items.size, "the same PR is not added twice")
+    }
+
+    @Test fun aHookErrorIsKeptOnTheListAndOnlyTheNewestAreKept() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        service.create(ada, "s1", "Plan", emptyList(), listOf(item("a", pr)))
+        repeat(25) { service.hookError(ada, "s1", "The stop hook failed ($it).") }
+        assertEquals(TodoRules.MAX_HOOK_EVENTS, store.list!!.hookEvents.size)
+        assertEquals("The stop hook failed (24).", store.list!!.hookEvents.last().text)
+        assertTrue(store.list!!.hookEvents.all { it.kind == "hook_error" })
+    }
+
+    @Test fun theResumeMessageGivesTheReferenceTheWholeListAndTheNextItemInFull() {
+        val list = TodoRules.create("0123456789abcdef", "s1", "team", "Plan validated: https://example.com/a (v3). Ship Vestiaire.", emptyList(),
+            listOf(item("one", pr), item("two", TodoCheck.ReleaseContains("acme/x", of = "one")), item("three", TodoCheck.Attested("watch 24 h"))), 0)
+        val done = list.copy(items = list.items.map { if (it.id == "one") it.copy(status = TodoItemStatus.DONE, links = listOf(TodoLink("pr", "https://github.com/acme/x/pull/812", 812))) else it })
+        val text = TodoMessages.resume(done.copy(items = done.items.map { if (it.id == "two") it.copy(proof = TodoProof(14 * 3_600_000L + 2 * 60_000L, false, "no published release contains 4e1c9a2")) else it }))
+        assertTrue(text.startsWith("[TeamCode todo] 1 of 3 items done. Items remain and no wait is open, so the turn goes on.\nPlan reference:\n  Plan validated"), text)
+        assertTrue(text.contains("Next item: two — Item two\n  $long"))
+        assertTrue(text.contains("Last check (14:02): no published release contains 4e1c9a2"))
+        assertTrue(text.contains("  ✓ one") && text.contains("PR #812 merged") && text.contains("  → two") && text.contains("  · three") && text.contains("(attested)"))
+        assertTrue(text.endsWith("todo_drop. Each of these ends the turn properly."))
+        assertTrue(text.length <= TodoMessages.MAX_CHARS)
     }
 }

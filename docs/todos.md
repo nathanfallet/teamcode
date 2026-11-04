@@ -11,7 +11,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 | Domain model and rules (`domain/.../todos`) | implemented |
 | Storage (`session_todos`, `session_todo_items`), routes `/api/v1/todos/session/…`, `todo:session` scope, capability `todos.v1`, typed client | implemented |
 | `teamcode_todo` MCP server (`teamcode mcp todo`), its relay, the checks run from the agent's environment, links, `todo_help` | implemented; real-session and sample-plan trials: see the pull request |
-| `teamcode cloud todo-stop` Stop hook | planned |
+| `teamcode cloud todo-stop` Stop hook, its routes (`/stop`, `/hook-error`), the resume message, the stall counter, orphan PRs, hook events | implemented, in **observation** (`would_block`); enforcement per profile: planned (`observe-then-block`) |
 | Reference at wake-up and after compaction | planned |
 | Server-side reminder (Codex, safety net) | planned |
 | Companion Todo view | planned |
@@ -45,6 +45,8 @@ Every route lives under `/api/v1/todos/session` and is advertised by the capabil
 | `POST /items/{item}/proof` | Reports what each check observed; done only if all passed (`409 not_done` keeps the proof) |
 | `POST /items/{item}/link` | Binds a PR, a release, an artifact or a wait to an item; a link is frozen (`409 already_linked`), except to replace a PR closed without merge |
 | `POST /items/{item}/drop` | Opens a wait for the owner; the item is `drop_requested` until they answer |
+| `POST /stop` | One stop of the agent, asked by the Stop hook in up to three phases (see [The Stop hook](#the-stop-hook)) |
+| `POST /hook-error` | Records a failure of the Stop hook on the list (`hookEvents`, the newest 20) |
 
 Who may call: the session's owner (naming `sessionId`) reads and writes; an administrator, or a `team:read` key, reads; the session's execution credential (`tcex_`) carries the new scope `todo:session` and is confined to the one session it was issued for, whatever `sessionId` says, exactly like `waits:session` and `workflow:session`. The remote-host credential carries it too. A service key that carries `todo:session` (it is not offered when creating one), and an execution credential issued before the scope existed, get `403 credential_scope`.
 
@@ -87,4 +89,27 @@ The condition is read from the server's stored item, never from the agent, so th
 
 ### What is not verified yet
 
-The agent's process runs the checks and reports their outcome, so an agent that bypasses the MCP and calls the API with its credential could report a false pass. The server has no GitHub reader; the Stop hook (planned) re-runs the cheap checks itself, outside the agent's context.
+The agent's process runs the checks and reports their outcome, so an agent that bypasses the MCP and calls the API with its credential could report a false pass (`/proof` and `/stop` take the same reports). The server has no GitHub reader; the Stop hook re-runs the cheap checks itself, from the agent's machine and outside its context, at every stop. A server-side reader remains planned.
+
+## The Stop hook
+
+`teamcode cloud todo-stop --relay URL --session ID [--run ID] [--mode observe|block]` is a `Stop` hook (not `SubagentStop`: sub-agents do not keep the list), installed with `--settings` next to the runner's and the workflow's, with a timeout of 150 s. It exists for Claude Code sessions in a cloud pod or hosted remotely that have the `teamcode_todo` tool; Codex has no such hook (the server-side reminder, planned, covers it).
+
+It asks the server, through the launcher's loopback relay, up to three times per stop (`POST /api/v1/todos/session/stop`, phase `begin`, `verify`, `settle`), and runs on the agent's machine what the answers ask for:
+
+1. **`begin`.** The stop passes, with nothing run, when the session has no list, the list is done or abandoned, a background task or scheduled wake-up of the session is still in the hook input (`background_tasks`, `session_crons`), or **any** wait of the session is open (one `exists` on `wait_session`). A list never blocks a session that has none: a quick question costs nothing. Otherwise the server answers `verify`.
+2. **`verify`.** The hook runs the checks of the item in progress (a `command` too, at most 120 s) and of every `todo` item whose checks are all cheap (`pr_merged`, `release_contains`, `artifact_published`, `wait_answered`; never a `command` of an item not in progress), in parallel, each bounded; a PR found by its marker is linked. It reads the session's transcript for the pull requests it opened (the address a successful `gh pr create` printed; only addresses leave the hook). The server ticks what passed with its proof (the agent often finished without ticking), verifies `artifact_published` and `wait_answered` itself, adds each PR no item covers as a `discovered` item "Finish PR #n" already linked (`pr_merged`; drop it with `todo_drop` if it was closed), then counts the stop.
+3. **`settle`.** When every item is done or dropped, the hook re-runs **every** check of the done items; if all hold the list becomes `done` and the stop passes, otherwise a regressed item is reopened and the stop is blocked.
+
+The counter (`stall`, kept on the list, so it survives a restart and two replicas count once each under the list's lock) adds one for a stop with no item finished, no item added and no note since the previous blocked stop, and goes back to 0 on progress. **The hook never relaxes on `stop_hook_active`**: an agent that makes progress is sent back as many times as there are items; the bound is the counter. At 3 the server opens a wait for the owner ("Blocked: …", with the list, the agent's last message at most 600 characters and the actions `Resume`, `Drop this item`, `Stop here`), marks the stuck item `drop_requested` on that wait (so `Drop this item` uses the drop path above and `Resume` puts it back to `todo`), starts the counter again and lets the stop pass. Claude Code's own cap (8 consecutive blocks without a tool call) stays above ours.
+
+A block's `reason` is the resume message (`TodoMessages.resume`, at most 8 000 characters): the count, the plan reference first, the next item in full with its last check, the whole list one line per item, and one instruction (do it; `ask_human` for a person, `wait_for` for a CI or a delay, `todo_drop` if it no longer makes sense).
+
+**It fails open.** A relay that is unreachable, a server older than `todos.v1`, an answer later than 20 s, the 140 s budget exceeded or any error lets the stop pass; the failure is recorded on the list (`hook_error`, in `hookEvents`, newest 20) when the relay still answers, so a broken hook shows in the companion (planned) instead of passing unnoticed. A check that does not answer is `unknown`, never done.
+
+**Observation first.** The default mode is `observe`: the decision is computed and recorded (`would_block`, with the count and the next item) but the stop always passes, and the counter does not move (no wait is opened); ticks, linked PRs, added orphans and the final settle still apply, since they only record what is true. `TEAMCODE_TODO_STOP_MODE=block` in the runner's environment turns enforcement on for that runner (the per-profile switch and the week of observation are the `observe-then-block` item). Nothing but addresses, outcomes and the last message leaves the machine; prompts, tool inputs and the rest of the transcript are not read beyond the search for `gh pr create`.
+
+Cost per stop: reading the list, one `exists` on open waits, the ticks and counter in one transaction, one read of the artifacts and one of the waits for all items however many (no query per item), plus 1 to 5 `gh` calls from the agent's machine. `EXPLAIN ANALYZE` of the new reads (MySQL 8.4, 300 000 `waits` and 300 000 `artifacts`): the open-wait check is an index lookup on `wait_session (session_id, status)` returning one row in about 0.07 ms (`team_id` is checked on that row: session identifiers are unique), the artifact and wait batches are primary-key range scans of a few rows (about 0.02 ms).
+
+### Not done yet
+Enforcement by default; the per-profile switch; the server-side reminder and Codex; showing `hookEvents` in the companion; the reference at wake-up and after compaction; `teamcode run` (a local session has no hook until `local-run`).

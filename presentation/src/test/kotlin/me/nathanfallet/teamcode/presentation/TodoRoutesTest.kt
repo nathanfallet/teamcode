@@ -27,6 +27,7 @@ class TodoRoutesTest {
         }
         override suspend fun artifactVersion(teamId: String, artifactId: String) = 2.takeIf { artifactId == "art-1" }
         override suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState? = null
+        override suspend fun hasOpenWait(teamId: String, sessionId: String) = false
         override suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>) = emptyMap<String, DropOutcome>()
     }
     private val gateway = object : GatewayService {
@@ -113,5 +114,29 @@ class TodoRoutesTest {
         // A key that carries todo:session without being bound to a session, and a credential from before the scope, get nothing.
         assertEquals("credential_scope", code(call(HttpMethod.Get, "/api/v1/todos/session", "exec-unbound")))
         assertEquals(HttpStatusCode.Forbidden, call(HttpMethod.Get, "/api/v1/todos/session", "exec-old").status)
+    }
+
+    @Test fun theStopHookAsksThroughItsRoutesAndAFailureIsRecorded() = testApplication {
+        application { configureGateway(gateway, team = team(), todos = TodoService(Store())) }
+        suspend fun call(path: String, token: String, json: String) = client.request(path) { this.method = HttpMethod.Post; bearerAuth(token); contentType(ContentType.Application.Json); setBody(json) }
+        suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
+        suspend fun stop(json: String) = Serialization.json.decodeFromString<TodoStopView>(call("/api/v1/todos/session/stop", "exec-token", json).bodyAsText())
+        assertEquals("no_list", stop("""{}""").why)
+        call("/api/v1/todos/session", "exec-token", create)
+        assertEquals("verify", stop("""{"phase":"begin"}""").action)
+        assertEquals("invalid_todo", code(call("/api/v1/todos/session/stop", "exec-token", """{"phase":"later"}""")))
+        val first = stop("""{"phase":"verify","items":[{"itemId":"a","checks":[{"index":0,"passed":true,"observed":"PR #1 MERGED"}]}],"orphans":["https://github.com/acme/backend/pull/5"],"lastMessage":"done"}""")
+        assertEquals("block", first.action)
+        assertTrue(first.reason!!.startsWith("[TeamCode todo] 1 of 3 items done."), first.reason)
+        assertEquals(listOf("a", "finish-pr-5", "b").sorted(), first.todo!!.items.map { it.id }.sorted())
+        // Observation: the same stop is recorded and passes.
+        val observed = stop("""{"phase":"verify","observe":true}""")
+        assertEquals(listOf("allow", true), listOf(observed.action, observed.wouldBlock))
+        assertEquals("would_block", observed.todo!!.hookEvents.single().kind)
+        val failed = Serialization.json.decodeFromString<TodoSessionView>(call("/api/v1/todos/session/hook-error", "exec-token", """{"text":"The stop hook ran out of time (140 s)."}""").bodyAsText())
+        assertEquals(listOf("would_block", "hook_error"), failed.todo!!.hookEvents.map { it.kind })
+        // Another credential (the reader, a key without todo:session) never reaches them.
+        assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/stop", "reader", """{}""").status)
+        assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/hook-error", "reader", """{"text":"x"}""").status)
     }
 }
