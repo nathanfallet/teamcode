@@ -113,11 +113,11 @@ internal fun revokeInferenceCredentialsBefore(sessionId: String, epoch: Int) {
  * (the agent's `teamcode mcp artifacts`, through the runner's relay; never making public or deleting, which stay
  * interactive). Nothing else: no usage, no skill or hook publication, no cloud or interactive route.
  */
-val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION)
+val EXECUTION_SCOPES: List<ServiceScope> = listOf(ServiceScope.INFERENCE, ServiceScope.MCP, ServiceScope.SKILLS_READ, ServiceScope.HOOKS_READ, ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION)
 
 /**
  * What the loopback relays of a remote session's host may do upstream, as the member: the session's own waits (asking,
  * reading, withdrawing; never answering), its own workflow step, and artifacts (never access changes or deletion). No
  * inference, MCP, skills, hooks or cloud route: those stay with the host's own login.
  */
-val REMOTE_SESSION_SCOPES: List<ServiceScope> = listOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION)
+val REMOTE_SESSION_SCOPES: List<ServiceScope> = listOf(ServiceScope.ARTIFACTS_WRITE, ServiceScope.WAITS_SESSION, ServiceScope.WORKFLOW_SESSION, ServiceScope.TODO_SESSION)

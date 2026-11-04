@@ -1,0 +1,94 @@
+package me.nathanfallet.teamcode.presentation.docs
+
+import io.ktor.http.HttpStatusCode
+import io.ktor.openapi.Parameters
+import me.nathanfallet.teamcode.api.models.*
+
+private const val TODO_TEXT = "A session keeps one todo: the plan reference and items, each with a complete description and a typed end condition. An item is done only when " +
+    "its checks pass. Callers: the session's owner (naming `sessionId`), or the session's execution credential (`todo:session`), confined to its own session. See docs/todos.md."
+
+private fun Parameters.Builder.todoItem() = pathId("item", "The item's identifier: a slug of at most 40 characters.")
+
+/** A session's todo (`todos.v1`). */
+internal fun ApiCatalog.todoOperations() {
+    get("/api/v1/todos/session") {
+        operationId = "getSessionTodo"; tag(ApiTags.TODOS)
+        summary = "Read a session's todo"
+        description = "The list with its items in order, the proof of the last verification of each, and `nextItemId`. `todo` is null while the session has none. Answers to drop requests are applied on this read. " +
+            "The owner, an administrator or a `team:read` key, or the session's execution credential. $TODO_TEXT"
+        parameters { queryText("sessionId", "The session; ignored for an execution credential.") }
+        responses { ok<TodoSessionView>("The todo, or none."); notFound("No such session (`not_found`).") }
+    }
+    post("/api/v1/todos/session") {
+        operationId = "createSessionTodo"; tag(ApiTags.TODOS)
+        summary = "Create a session's todo"
+        description = "Once per session, active at once. At most 50 items; each needs a description of 80 to 4 000 characters and at least one typed check. No check names a PR number or a version: " +
+            "the PR is found by the marker `startTodoItem` returns. $TODO_TEXT"
+        body<CreateTodoRequest>("The reference and the items.")
+        responses {
+            ok<TodoSessionView>("Created.", HttpStatusCode.Created)
+            badRequest("An invalid list (`invalid_todo`, `check_required`, `invalid_check`, `guessed_number`, `description_too_short`, `duplicate_item`, `unknown_dependency`, `dependency_cycle`, `too_many_items`).")
+            notFound("No such session (`not_found`).")
+            conflict("The session already has a todo (`todo_exists`).")
+        }
+    }
+    post("/api/v1/todos/session/items") {
+        operationId = "addTodoItem"; tag(ApiTags.TODOS)
+        summary = "Add an item found on the way"
+        description = "Marked `discovered` with its `reason`, placed after the item in progress and after its own dependencies. $TODO_TEXT"
+        body<AddTodoItemRequest>("The item and why it is needed.")
+        responses {
+            ok<TodoSessionView>("The list.")
+            badRequest("An invalid item (same codes as the creation).")
+            notFound("No such session (`not_found`), or it has no todo (`todo_not_found`).")
+            conflict("The todo is closed (`todo_closed`).")
+        }
+    }
+    post("/api/v1/todos/session/items/{item}/start") {
+        operationId = "startTodoItem"; tag(ApiTags.TODOS)
+        summary = "Start an item"
+        description = "Puts the item in progress (another item in progress goes back to `todo`, unless `background`) and returns the `marker` to put in the body of the item's pull request. $TODO_TEXT"
+        parameters { todoItem() }
+        body<StartTodoItemRequest>("Optionally a background agent.")
+        responses {
+            ok<StartTodoItemView>("The list and the marker.")
+            notFound("No such session, todo or item (`not_found`, `todo_not_found`, `unknown_item`).")
+            conflict("A dependency is not done (`dependency_open`), the item is closed (`item_closed`) or waits for a drop answer (`drop_pending`).")
+        }
+    }
+    post("/api/v1/todos/session/items/{item}/notes") {
+        operationId = "noteTodoItem"; tag(ApiTags.TODOS)
+        summary = "Add a note to an item"
+        description = "A dated note, at most 2 000 characters and 100 per item. Notes are never rewritten. $TODO_TEXT"
+        parameters { todoItem() }
+        body<NoteTodoItemRequest>("The note.")
+        responses { ok<TodoSessionView>("The list."); notFound("No such session, todo or item (`unknown_item`).") }
+    }
+    post("/api/v1/todos/session/items/{item}/proof") {
+        operationId = "completeTodoItem"; tag(ApiTags.TODOS)
+        summary = "Report what an item's checks observed"
+        description = "`checks` gives, by position in the item's stored condition, whether each check passed, what was observed and https URLs. The item is done only when every check passed: " +
+            "a failed or unknown one, or one not reported, refuses with `409 not_done` and keeps the proof. The agent cannot choose or change the checks. $TODO_TEXT"
+        parameters { todoItem() }
+        body<CompleteTodoItemRequest>("The outcome of each check.")
+        responses {
+            ok<TodoSessionView>("The item is done.")
+            badRequest("A position outside the condition, a position twice, or an oversized proof (`invalid_proof`).")
+            notFound("No such session, todo or item (`unknown_item`).")
+            conflict("Not done yet (`not_done`: the message says what is missing), or the item is closed (`item_closed`).")
+        }
+    }
+    post("/api/v1/todos/session/items/{item}/drop") {
+        operationId = "requestTodoDrop"; tag(ApiTags.TODOS)
+        summary = "Ask to drop an item"
+        description = "Opens a wait for the session's owner and puts the item in `drop_requested`. Nothing is deleted: the item is dropped only on the owner's yes. $TODO_TEXT"
+        parameters { todoItem() }
+        body<DropTodoItemRequest>("Why the item no longer makes sense.")
+        responses {
+            ok<TodoSessionView>("The list.")
+            notFound("No such session, todo or item (`unknown_item`).")
+            conflict("The item is done or dropped (`item_closed`), or already waits (`drop_pending`).")
+            error(HttpStatusCode.ServiceUnavailable, "Waits are not available (`waits_unavailable`).")
+        }
+    }
+}
