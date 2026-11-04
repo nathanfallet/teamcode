@@ -42,6 +42,15 @@ data class TodoItemDefinition(
     val id: String, val name: String, val description: String, val doneWhen: TodoDoneWhen, val dependsOn: List<String> = emptyList(),
 )
 
+/**
+ * What an item is bound to once it exists (docs/todos.md, "The link"): a `pr` or a `release` ([ref] is its https address), an
+ * `artifact` or a `wait` ([ref] is its id). A link is frozen: see [TodoRules.link]. [number], [sha] (a PR's merge commit) and [tag]
+ * (a release's) are what `${pr:<item>.number}` style values in a command check cite.
+ */
+data class TodoLink(val kind: String, val ref: String, val number: Int? = null, val sha: String? = null, val tag: String? = null, val at: Long = 0) {
+    companion object { val kinds = listOf("pr", "release", "artifact", "wait") }
+}
+
 data class TodoNote(val at: Long, val text: String)
 
 /** What the last verification observed: [passed] null is "unknown" (it never counts as done). */
@@ -53,6 +62,7 @@ data class TodoItem(
     val dropReason: String? = null,
     /** The wait asked of the session's owner while the item is in `drop_requested`. */
     val dropWaitId: String? = null,
+    val links: List<TodoLink> = emptyList(),
 )
 
 /** A counter snapshot taken at a stop: a stop made progress when an item was finished or added, or a note written, since. */

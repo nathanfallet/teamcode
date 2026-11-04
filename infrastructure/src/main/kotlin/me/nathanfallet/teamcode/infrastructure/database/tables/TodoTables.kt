@@ -45,6 +45,8 @@ object SessionTodoItems : Table("session_todo_items") {
     val notes = mediumText("notes")
     val dropReason = text("drop_reason").nullable()
     val dropWaitId = varchar("drop_wait_id", 36).nullable()
+    /** JSON: what the item is bound to (a PR, a release, an artifact, a wait). Null before the first link. */
+    val links = mediumText("links").nullable()
     override val primaryKey = PrimaryKey(sessionId, id)
     init {
         // The list is read whole, in order: equality on the session, then the sort.

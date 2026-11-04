@@ -359,6 +359,15 @@ internal const val WORKFLOW_INSTRUCTIONS = "When you are working on a workflow s
     "Do not call it for an ordinary session."
 
 /**
+ * `teamcode mcp todo`, started by the agent itself as a stdio server beside a cloud or remote session: [command] is this TeamCode
+ * executable and [sessionId] the session whose todo it keeps. A local `teamcode run` has no session, so it never gets one.
+ */
+internal class TodoMcp(val command: String, val sessionId: String) {
+    init { require(SESSION_ID.matches(sessionId)) { "Invalid session." } }
+    private companion object { val SESSION_ID = Regex("[a-zA-Z0-9-]{1,36}") }
+}
+
+/**
  * The caller's options without `--append-system-prompt`, and the text Claude Code would have used (the last one), so it
  * can be merged into TeamCode's. `--append-system-prompt-file` is left alone: Claude Code combines it with the text.
  */
@@ -424,7 +433,7 @@ internal fun mcpLabel(server: String) = "teamcode-" + server.replace('.', '_')
 
 /** Null values remove inherited provider credentials without changing the parent environment or config files. */
 internal class AgentLaunch(val arguments: List<String>, val environment: Map<String, String?>)
-internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true, identity: String? = null, waits: WaitsMcp? = null, workflow: WorkflowMcp? = null): AgentLaunch {
+internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, token: String, guidancePlugin: String? = null, codexGuidance: List<String> = emptyList(), workload: String = "interactive", runId: String? = null, mcpServers: List<String> = emptyList(), claudeLogin: Boolean = false, inheritedHeaders: String? = null, hookToken: Boolean = guidancePlugin != null, artifacts: ArtifactsMcp? = null, codexInstructions: Boolean = true, identity: String? = null, waits: WaitsMcp? = null, workflow: WorkflowMcp? = null, todo: TodoMcp? = null): AgentLaunch {
     require(agent in setOf("claude", "codex") && port in 1..65535 && token.length >= 32 && workload in setOf("interactive", "background"))
     require(runId == null || me.nathanfallet.teamcode.api.models.RunIdentifiers.isValid(runId))
     require(mcpServers.all { TeamCodeClient.MCP_SERVER_NAME.matches(it) })
@@ -445,15 +454,17 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
     val waitArguments = waits?.let { listOf("mcp", "waits", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     // The workflow tool reaches the same proxy's workflow relay, which relays the delivery of this session and nothing else.
     val workflowArguments = workflow?.let { listOf("mcp", "workflow", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
+    // The todo tools reach the same proxy's todo relay, which relays this session's list and nothing else.
+    val todoArguments = todo?.let { listOf("mcp", "todo", "--session", it.sessionId) + (runId?.let { id -> listOf("--run", id) } ?: emptyList()) }
     val relay = "http://127.0.0.1:$port"
     // What TeamCode adds to the agent's instructions: who runs the session ([OwnerIdentity]), then the artifact and wait tools.
-    val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }, WAITS_INSTRUCTIONS.takeIf { waits != null }, WORKFLOW_INSTRUCTIONS.takeIf { workflow != null })
+    val instructions = listOfNotNull(identity, ARTIFACTS_INSTRUCTIONS.takeIf { artifacts != null }, WAITS_INSTRUCTIONS.takeIf { waits != null }, WORKFLOW_INSTRUCTIONS.takeIf { workflow != null }, me.nathanfallet.teamcode.cli.todo.TodoDocs.PROMPT.takeIf { todo != null })
         .joinToString("\n\n").ifEmpty { null }
     // Agent options go before a literal "--" delimiter, and after the caller's own options because
     // Claude Code's --mcp-config is variadic and would otherwise swallow a following prompt argument.
     val delimiter = arguments.indexOf("--").let { if (it < 0) arguments.size else it }
     return if (agent == "claude") {
-        val mcpConfig = if (mcp.isEmpty() && artifacts == null && waits == null && workflow == null) emptyList() else listOf("--mcp-config", buildJsonObject {
+        val mcpConfig = if (mcp.isEmpty() && artifacts == null && waits == null && workflow == null && todo == null) emptyList() else listOf("--mcp-config", buildJsonObject {
             putJsonObject("mcpServers") {
                 for ((label, server) in mcp) putJsonObject(label) {
                     put("type", "http"); put("url", mcpUrl(server))
@@ -474,6 +485,11 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                     put("type", "stdio"); put("command", workflow.command)
                     putJsonArray("args") { workflowArguments!!.forEach { add(it) } }
                     putJsonObject("env") { put("TEAMCODE_WORKFLOW_URL", relay); put("TEAMCODE_WORKFLOW_TOKEN", "\${TEAMCODE_MCP_TOKEN}"); put("TEAMCODE_WORKFLOW_TOKEN_VAR", "TEAMCODE_WORKFLOW_TOKEN") }
+                }
+                if (todo != null) putJsonObject(me.nathanfallet.teamcode.cli.todo.TodoDocs.LABEL) {
+                    put("type", "stdio"); put("command", todo.command)
+                    putJsonArray("args") { todoArguments!!.forEach { add(it) } }
+                    putJsonObject("env") { put("TEAMCODE_TODO_URL", relay); put("TEAMCODE_TODO_TOKEN", "\${TEAMCODE_MCP_TOKEN}"); put("TEAMCODE_TODO_TOKEN_VAR", "TEAMCODE_TODO_TOKEN") }
                 }
             }
         }.toString())
@@ -496,7 +512,7 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
         AgentLaunch((guidancePlugin?.let { listOf("--plugin-dir", it) }.orEmpty()) + options + artifactOptions + mcpConfig + arguments.drop(delimiter), claudeProviderOverrides + mapOf(
         "TEAMCODE_HOOK_TOKEN" to if (guidancePlugin != null && hookToken) token else null,
         "TEAMCODE_RUN_ID" to runId,
-        "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty() || artifacts != null || waits != null || workflow != null) token else null,
+        "TEAMCODE_MCP_TOKEN" to if (mcp.isNotEmpty() || artifacts != null || waits != null || workflow != null || todo != null) token else null,
         "ANTHROPIC_BASE_URL" to origin,
         "ANTHROPIC_AUTH_TOKEN" to if (keepLogin) null else token,
         "ANTHROPIC_CUSTOM_HEADERS" to headers,
@@ -512,6 +528,8 @@ internal fun agentLaunch(agent: String, arguments: List<String>, port: Int, toke
                 "args=[${waitArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_WAITS_URL=${toml(relay)},TEAMCODE_WAITS_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
             (if (workflow == null) emptyList() else listOf("-c", "mcp_servers.$WORKFLOW_MCP_LABEL={command=${toml(workflow.command)}," +
                 "args=[${workflowArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_WORKFLOW_URL=${toml(relay)},TEAMCODE_WORKFLOW_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
+            (if (todo == null) emptyList() else listOf("-c", "mcp_servers.${me.nathanfallet.teamcode.cli.todo.TodoDocs.LABEL}={command=${toml(todo.command)}," +
+                "args=[${todoArguments!!.joinToString(",") { toml(it) }}],env={TEAMCODE_TODO_URL=${toml(relay)},TEAMCODE_TODO_TOKEN_VAR=\"TEAMCODE_LOCAL_TOKEN\"},env_vars=[\"TEAMCODE_LOCAL_TOKEN\"]}")) +
             // Codex has no artifact tool of its own; it only gets the instructions, unless the caller set its own
             // developer instructions, which an override would replace.
             (if (instructions == null || !codexInstructions || hasCodexOverride(arguments, "developer_instructions")) emptyList()

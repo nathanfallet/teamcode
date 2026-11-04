@@ -53,6 +53,15 @@ class SqlTodoStore(private val database: Database) : TodoStore {
             }
     }
 
+    override suspend fun artifactVersion(teamId: String, artifactId: String): Int? = database.query {
+        Artifacts.select(Artifacts.currentVersion).where { (Artifacts.id eq artifactId) and (Artifacts.teamId eq teamId) and Artifacts.deletedAt.isNull() }.singleOrNull()?.get(Artifacts.currentVersion)
+    }
+
+    override suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState? = database.query {
+        Waits.select(Waits.status, Waits.answerAction).where { (Waits.id eq waitId) and (Waits.teamId eq teamId) and (Waits.sessionId eq sessionId) }.singleOrNull()
+            ?.let { WaitState(it[Waits.status], it[Waits.answerAction]) }
+    }
+
     private fun JdbcTransaction.read(teamId: String, sessionId: String, lock: Boolean): TodoList? {
         val query = SessionTodos.selectAll().where { (SessionTodos.sessionId eq sessionId) and (SessionTodos.teamId eq teamId) }
         val row = (if (lock) query.forUpdate() else query).singleOrNull() ?: return null
@@ -69,6 +78,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
         TodoJson.strings(row[SessionTodoItems.dependsOn]), TodoOrigin.parse(row[SessionTodoItems.origin]) ?: error("Unknown todo origin."), row[SessionTodoItems.originReason],
         TodoItemStatus.parse(row[SessionTodoItems.status]) ?: error("Unknown todo item status."), row[SessionTodoItems.proof]?.let(TodoJson::proof),
         TodoJson.notes(row[SessionTodoItems.notes]), row[SessionTodoItems.dropReason], row[SessionTodoItems.dropWaitId],
+        TodoJson.links(row[SessionTodoItems.links]),
     )
 
     private fun JdbcTransaction.insertItem(sessionId: String, index: Int, item: TodoItem) {
@@ -82,6 +92,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
         it[SessionTodoItems.dependsOn] = TodoJson.strings(item.dependsOn); it[SessionTodoItems.origin] = item.origin.wire; it[SessionTodoItems.originReason] = item.originReason
         it[SessionTodoItems.status] = item.status.wire; it[SessionTodoItems.proof] = item.proof?.let(TodoJson::proof); it[SessionTodoItems.notes] = TodoJson.notes(item.notes)
         it[SessionTodoItems.dropReason] = item.dropReason; it[SessionTodoItems.dropWaitId] = item.dropWaitId
+        it[SessionTodoItems.links] = item.links.takeIf { it.isNotEmpty() }?.let(TodoJson::links)
     }
 
     /** Writes only what changed: the list row, new items, and the items whose content or place moved. Nothing is deleted. */

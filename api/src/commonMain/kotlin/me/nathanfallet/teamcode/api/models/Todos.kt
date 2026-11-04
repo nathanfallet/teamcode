@@ -8,6 +8,7 @@ object Todos {
     val checkTypes = listOf("pr_merged", "pr_closed", "release_contains", "ci_green", "command", "artifact_published", "wait_answered", "attested")
     val itemStatuses = listOf("todo", "doing", "done", "drop_requested", "dropped")
     val listStatuses = listOf("active", "done", "abandoned")
+    val linkKinds = listOf("pr", "release", "artifact", "wait")
 }
 
 /**
@@ -60,6 +61,17 @@ data class NoteTodoItemRequest(val sessionId: String? = null, val text: String)
 @Serializable
 data class DropTodoItemRequest(val sessionId: String? = null, val reason: String)
 
+/**
+ * Binds a PR, a release (their https address in [ref]), an artifact or a wait (their id) to an item. A link is frozen: the same [ref]
+ * may be completed with [number] (a PR's), [sha] (its merge commit) or [tag] (a release's); another of the same kind is refused
+ * (`already_linked`), except to replace a PR closed without merge ([replaceClosed]).
+ */
+@Serializable
+data class LinkTodoItemRequest(val sessionId: String? = null, val kind: String, val ref: String, val number: Int? = null, val sha: String? = null, val tag: String? = null, val replaceClosed: Boolean = false)
+
+@Serializable
+data class TodoLinkView(val kind: String, val ref: String, val number: Int? = null, val sha: String? = null, val tag: String? = null, val at: Long = 0)
+
 /** What the check at [index] of the item's stored condition observed; [passed] null is "unknown". */
 @Serializable
 data class TodoCheckReportInput(val index: Int, val passed: Boolean? = null, val observed: String, val urls: List<String> = emptyList())
@@ -109,6 +121,7 @@ data class TodoItemView(
     val notes: List<TodoNoteView> = emptyList(),
     val dropReason: String? = null,
     val dropWaitId: String? = null,
+    val links: List<TodoLinkView> = emptyList(),
     /** `true` when every check of the condition is `attested`: nothing verifies it. */
     val unverified: Boolean = false,
 )

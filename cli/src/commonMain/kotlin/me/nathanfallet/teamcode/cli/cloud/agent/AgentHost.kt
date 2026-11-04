@@ -433,7 +433,7 @@ internal class AgentHost(
         val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" }, workflowStop = workflowStop)?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
-            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
+            hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, todo = tools?.todo(), identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })
         return AgentCommand(base.command, hooks + plan.arguments) to owner + AGENT_ENVIRONMENT + plan.environment
     }
 

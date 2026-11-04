@@ -78,6 +78,20 @@ internal fun ApiCatalog.todoOperations() {
             conflict("Not done yet (`not_done`: the message says what is missing), or the item is closed (`item_closed`).")
         }
     }
+    post("/api/v1/todos/session/items/{item}/link") {
+        operationId = "linkTodoItem"; tag(ApiTags.TODOS)
+        summary = "Bind a PR, a release, an artifact or a wait to an item"
+        description = "`kind` is `pr`, `release` (their https address in `ref`), `artifact` or `wait` (their id). A link is frozen: the same `ref` may be completed with `number`, `sha` (a PR's merge commit) or `tag`; " +
+            "another one of the same kind is refused, except to replace a PR closed without merge (`replaceClosed`), which a note records. `artifact_published` and `wait_answered` are verified by the server through these links. $TODO_TEXT"
+        parameters { todoItem() }
+        body<LinkTodoItemRequest>("What to bind.")
+        responses {
+            ok<TodoSessionView>("The list.")
+            badRequest("An invalid link (`invalid_link`).")
+            notFound("No such session, todo or item (`unknown_item`).")
+            conflict("The item already has a link of this kind (`already_linked`), or the todo is closed (`todo_closed`).")
+        }
+    }
     post("/api/v1/todos/session/items/{item}/drop") {
         operationId = "requestTodoDrop"; tag(ApiTags.TODOS)
         summary = "Ask to drop an item"

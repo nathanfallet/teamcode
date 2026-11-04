@@ -21,9 +21,16 @@ interface TodoStore {
      * same transaction. [change] returns the new list and a value for the caller; `404 todo_not_found` when there is no list.
      */
     suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T
+    /** The current version of an artifact of the team that is not deleted, or null. */
+    suspend fun artifactVersion(teamId: String, artifactId: String): Int?
+    /** The status and answered action of a wait of this session, or null when it is not one of the session's. */
+    suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState?
     /** The outcome of each of these drop waits that was decided, in one read. */
     suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>): Map<String, DropOutcome>
 }
+
+/** A wait's `status` (open, resolved, cancelled) and, once answered, the `action` chosen. */
+data class WaitState(val status: String, val action: String?)
 
 /** Opens and withdraws the wait that asks a session's owner to agree to drop an item; implemented on the wait store. */
 interface TodoDropWaits {

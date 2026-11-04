@@ -202,4 +202,24 @@ class TodoRulesTest {
         assertFalse(TodoRules.mostlyAttested(list(item("a"), item("b"), item("c", checks = attested))))
         assertTrue(TodoRules.mostlyAttested(list(item("a"), item("b", checks = attested), item("c", checks = attested))))
     }
+
+    @Test fun aLinkIsFrozenButMayBeCompletedOrReplacedAfterAnUnmergedClose() {
+        val l = list(item("a"))
+        val pr = TodoLink("pr", "https://github.com/acme/backend/pull/7", number = 7)
+        var linked = TodoRules.link(l, "a", pr, false, 10L)
+        assertEquals(listOf(pr.copy(at = 10L)), linked.item("a")!!.links)
+        // The same PR learns its merge commit; another PR is refused.
+        linked = TodoRules.link(linked, "a", pr.copy(sha = "4e1c9a2"), false, 20L)
+        assertEquals("4e1c9a2", linked.item("a")!!.links.single().sha); assertEquals(7, linked.item("a")!!.links.single().number)
+        assertEquals("already_linked", code { TodoRules.link(linked, "a", TodoLink("pr", "https://github.com/acme/backend/pull/8"), false, 30L) })
+        val replaced = TodoRules.link(linked, "a", TodoLink("pr", "https://github.com/acme/backend/pull/8", number = 8), true, 40L)
+        assertEquals(8, replaced.item("a")!!.links.single().number)
+        assertTrue(replaced.item("a")!!.notes.single().text.contains("pull/7"), "the change is noted")
+        // Other kinds are independent; a link has bounds.
+        val both = TodoRules.link(linked, "a", TodoLink("release", "https://github.com/acme/backend/releases/tag/v1.2.0", tag = "v1.2.0"), false, 50L)
+        assertEquals(setOf("pr", "release"), both.item("a")!!.links.map { it.kind }.toSet())
+        assertEquals("invalid_link", code { TodoRules.link(l, "a", TodoLink("pr", "http://insecure/1"), false, 1L) })
+        assertEquals("invalid_link", code { TodoRules.link(l, "a", TodoLink("tweet", "x"), false, 1L) })
+        assertEquals("unknown_item", code { TodoRules.link(l, "ghost", pr, false, 1L) })
+    }
 }

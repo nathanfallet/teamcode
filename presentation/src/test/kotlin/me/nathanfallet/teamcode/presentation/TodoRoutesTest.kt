@@ -25,6 +25,8 @@ class TodoRoutesTest {
         override suspend fun <T> mutate(teamId: String, sessionId: String, change: (TodoList) -> Pair<TodoList, T>): T {
             val (next, value) = change(list ?: throw TeamFailure("todo_not_found", 404, "none")); list = next; return value
         }
+        override suspend fun artifactVersion(teamId: String, artifactId: String) = 2.takeIf { artifactId == "art-1" }
+        override suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState? = null
         override suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>) = emptyMap<String, DropOutcome>()
     }
     private val gateway = object : GatewayService {
@@ -78,6 +80,10 @@ class TodoRoutesTest {
         val done = todo(call(HttpMethod.Post, "/api/v1/todos/session/items/a/proof", "admin", """{"sessionId":"s1","checks":[{"index":0,"passed":true,"observed":"MERGED","urls":["https://github.com/acme/backend/pull/1"]}]}"""))
         assertEquals("done", done.items.first { it.id == "a" }.status); assertEquals("b", done.nextItemId)
 
+        val linked = todo(call(HttpMethod.Post, "/api/v1/todos/session/items/b/link", "admin", """{"sessionId":"s1","kind":"pr","ref":"https://github.com/acme/backend/pull/9","number":9}"""))
+        assertEquals(9, linked.items.first { it.id == "b" }.links.single().number)
+        assertEquals("already_linked", code(call(HttpMethod.Post, "/api/v1/todos/session/items/b/link", "admin", """{"sessionId":"s1","kind":"pr","ref":"https://github.com/acme/backend/pull/10"}""")))
+        assertEquals("invalid_link", code(call(HttpMethod.Post, "/api/v1/todos/session/items/b/link", "admin", """{"sessionId":"s1","kind":"tweet","ref":"x"}""")))
         val noted = todo(call(HttpMethod.Post, "/api/v1/todos/session/items/b/notes", "admin", """{"sessionId":"s1","text":"Waiting for review"}"""))
         assertEquals("Waiting for review", noted.items.first { it.id == "b" }.notes.single().text)
         val added = todo(call(HttpMethod.Post, "/api/v1/todos/session/items", "admin", """{"sessionId":"s1","reason":"Found a migration","item":${item("extra")}}"""))

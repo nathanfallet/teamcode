@@ -95,6 +95,12 @@ class TodoPersistenceTest {
             assertEquals(TodoItemStatus.TODO, a.get(w.member, session)!!.item("c")!!.status, "no keeps the item")
             assertNull(a.get(w.member, session)!!.item("c")!!.dropWaitId)
 
+            // A link is stored with the item, completed by the same address and frozen against another one, across replicas.
+            val pr = TodoLink("pr", "https://github.com/acme/backend/pull/7", number = 7)
+            a.link(w.member, session, "b", pr, false)
+            b.link(w.member, session, "b", pr.copy(sha = "4e1c9a2"), false)
+            assertEquals(listOf("4e1c9a2"), a.get(w.member, session)!!.item("b")!!.links.map { it.sha })
+            refusedWith("already_linked") { a.link(w.member, session, "b", TodoLink("pr", "https://github.com/acme/backend/pull/8"), false) }
             // Others cannot touch the list; an administrator reads it.
             refusedWith("not_found") { a.note(w.admin, session, "a", "mine") }
             assertEquals(session, a.get(w.admin, session)!!.sessionId, "an administrator reads the team's todos")

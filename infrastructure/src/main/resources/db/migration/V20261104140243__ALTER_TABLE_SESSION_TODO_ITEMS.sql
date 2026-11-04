@@ -1,0 +1,1 @@
+ALTER TABLE session_todo_items ADD links MEDIUMTEXT NULL;
