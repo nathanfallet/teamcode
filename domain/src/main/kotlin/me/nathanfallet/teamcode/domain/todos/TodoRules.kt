@@ -13,6 +13,7 @@ object TodoRules {
     const val MAX_DESCRIPTION = 4_000
     const val MAX_DONE_TEXT = 1_000
     const val MAX_NOTE = 2_000
+    const val MAX_NOTES_PER_ITEM = 100
     const val MAX_PROOF = 2_000
     const val MAX_REASON = 1_000
     const val DEFAULT_COMMAND_SECONDS = 60
@@ -209,7 +210,8 @@ object TodoRules {
     fun note(list: TodoList, id: String, text: String, now: Long): TodoList {
         requireActive(list)
         text(text, MAX_NOTE, "a note")
-        requireItem(list, id)
+        val item = requireItem(list, id)
+        if (item.notes.size >= MAX_NOTES_PER_ITEM) throw invalid("too_many_notes", "An item holds at most $MAX_NOTES_PER_ITEM notes.")
         return list.copy(items = list.items.map { if (it.id == id) it.copy(notes = it.notes + TodoNote(now, text)) else it })
     }
 
@@ -235,20 +237,20 @@ object TodoRules {
     }
 
     /** Asks the owner to drop an item. Nothing is deleted: the item waits in `drop_requested` for the answer. */
-    fun requestDrop(list: TodoList, id: String, reason: String): TodoList {
+    fun requestDrop(list: TodoList, id: String, reason: String, waitId: String? = null): TodoList {
         requireActive(list)
         text(reason, MAX_REASON, "a reason")
         val item = requireItem(list, id)
         if (item.status == TodoItemStatus.DONE || item.status == TodoItemStatus.DROPPED) throw conflict("item_closed", "Item $id is ${item.status.wire}.")
         if (item.status == TodoItemStatus.DROP_REQUESTED) throw conflict("drop_pending", "Item $id already waits for the owner.")
-        return list.copy(items = list.items.map { if (it.id == id) it.copy(status = TodoItemStatus.DROP_REQUESTED, dropReason = reason) else it })
+        return list.copy(items = list.items.map { if (it.id == id) it.copy(status = TodoItemStatus.DROP_REQUESTED, dropReason = reason, dropWaitId = waitId) else it })
     }
 
     /** The owner's answer: "yes" drops the item, anything else puts it back to `todo`. */
     fun resolveDrop(list: TodoList, id: String, approved: Boolean): TodoList {
         val item = requireItem(list, id)
         if (item.status != TodoItemStatus.DROP_REQUESTED) throw conflict("no_drop_request", "Item $id has no drop request.")
-        return list.copy(items = list.items.map { if (it.id == id) it.copy(status = if (approved) TodoItemStatus.DROPPED else TodoItemStatus.TODO) else it })
+        return list.copy(items = list.items.map { if (it.id == id) it.copy(status = if (approved) TodoItemStatus.DROPPED else TodoItemStatus.TODO, dropWaitId = null) else it })
     }
 
     /** The owner abandons the whole list. */

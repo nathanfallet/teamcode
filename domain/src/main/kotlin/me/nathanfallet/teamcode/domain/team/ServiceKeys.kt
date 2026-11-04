@@ -60,8 +60,15 @@ enum class ServiceScope(val wire: String) {
      * wherever it is used (docs/workflows.md). Not offered when creating a key.
      */
     WORKFLOW_SESSION("workflow:session"),
+    /**
+     * Read and keep the todo of the one cloud session an execution credential was issued for (create it, add, start and note
+     * items, record the outcome of a check, ask to drop an item), and nothing else. Held by `tcex_` credentials only, exactly
+     * like [WAITS_SESSION]: a service key that carries it is refused wherever it is used (docs/todos.md). Not offered when
+     * creating a key.
+     */
+    TODO_SESSION("todo:session"),
 }
-enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
+enum class CredentialAction { DISCOVERY, IDENTITY, LOGOUT, INFERENCE, USAGE_READ, GUIDANCE, SKILLS_READ, SKILLS_PUBLISH, HOOKS_READ, HOOKS_PUBLISH, MCP, CLOUD_READ, CLOUD_WRITE, WAITS_READ, WAITS_WRITE, WORKFLOW_DELIVER, TODO_READ, TODO_WRITE, TEAM_READ, ARTIFACTS_READ, ARTIFACTS_WRITE, INTERACTIVE }
 
 fun Principal.requireInteractive() {
     if (serviceScopes != null) throw TeamFailure("credential_scope", 403, "Sign in with an interactive account for this operation.")
@@ -118,6 +125,20 @@ fun Principal.requireWorkflowDeliver() {
 val Principal.workflowSessionOnly: Boolean
     get() = serviceScopes != null && ServiceScope.WORKFLOW_SESSION in serviceScopes &&
         serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ }
+/** Todo reads: what reads the cloud ([requireCloudRead]), or an execution credential's `todo:session`, which the todo service binds to its session. */
+fun Principal.requireTodoRead() {
+    requireReady()
+    if (serviceScopes != null && ServiceScope.TODO_SESSION !in serviceScopes) requireCloudRead()
+}
+/** Todo writes: what writes the cloud ([requireCloudWrite]), or `todo:session`. */
+fun Principal.requireTodoWrite() {
+    requireReady()
+    if (serviceScopes != null && ServiceScope.TODO_SESSION !in serviceScopes) requireCloudWrite()
+}
+/** An execution credential acting only on its own session's todo: it holds `todo:session` and no cloud scope of its own. */
+val Principal.todoSessionOnly: Boolean
+    get() = serviceScopes != null && ServiceScope.TODO_SESSION in serviceScopes &&
+        serviceScopes.none { it == ServiceScope.CLOUD_READ || it == ServiceScope.CLOUD_WRITE || it == ServiceScope.ADMIN_CLOUD || it == ServiceScope.TEAM_READ }
 /** Artifact reads: an interactive login, or a key with `artifacts:read`, `artifacts:write` or `team:read`. */
 fun Principal.requireArtifactRead() {
     requireReady()
@@ -167,6 +188,8 @@ class AuthorizeCredentialUseCase {
             CredentialAction.WAITS_READ -> actor.requireWaitRead()
             CredentialAction.WAITS_WRITE -> actor.requireWaitWrite()
             CredentialAction.WORKFLOW_DELIVER -> actor.requireWorkflowDeliver()
+            CredentialAction.TODO_READ -> actor.requireTodoRead()
+            CredentialAction.TODO_WRITE -> actor.requireTodoWrite()
             CredentialAction.ARTIFACTS_READ -> actor.requireArtifactRead()
             CredentialAction.ARTIFACTS_WRITE -> actor.requireArtifactWrite()
             CredentialAction.INTERACTIVE -> actor.requireInteractive()

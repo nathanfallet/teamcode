@@ -51,6 +51,8 @@ data class TodoItem(
     val id: String, val name: String, val description: String, val doneWhen: TodoDoneWhen, val dependsOn: List<String>,
     val origin: TodoOrigin, val originReason: String?, val status: TodoItemStatus, val proof: TodoProof?, val notes: List<TodoNote>,
     val dropReason: String? = null,
+    /** The wait asked of the session's owner while the item is in `drop_requested`. */
+    val dropWaitId: String? = null,
 )
 
 /** A counter snapshot taken at a stop: a stop made progress when an item was finished or added, or a note written, since. */

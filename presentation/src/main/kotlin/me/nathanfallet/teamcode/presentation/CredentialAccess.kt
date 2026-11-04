@@ -30,6 +30,8 @@ private val automationReadPost = Regex("/api/v1/automations/(preview|$CLOUD_ID/r
 /** Waits: reads, and the answer / cancel / creation writes, whose rules the service enforces. */
 private val waitRead = Regex("/api/v1/waits(/$CLOUD_ID)?")
 private val waitWrite = Regex("/api/v1/waits(/$CLOUD_ID/(answer|cancel))?")
+/** A session's todo: reads, and the writes whose rules the service enforces. An execution credential's `todo:session` is bound to its session by the service. */
+private val todoPath = Regex("/api/v1/todos/session(/items(/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|drop))?)?")
 /** Workflow reads only; saving and deleting definitions stay interactive. */
 private val workflowRead = Regex("/api/v1/workflows(/(settings|runs|runs/$CLOUD_ID|$CLOUD_ID))?")
 /** A run is delivered into with `cloud:write`: the starter's agent acts with their credential. */
@@ -80,6 +82,8 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && workflowDeliver.matches(path) -> CredentialAction.CLOUD_WRITE
     method == "GET" && path == workflowSessionPending -> CredentialAction.WORKFLOW_DELIVER
     method == "POST" && path == workflowSessionDeliver -> CredentialAction.WORKFLOW_DELIVER
+    method == "GET" && todoPath.matches(path) -> CredentialAction.TODO_READ
+    method == "POST" && todoPath.matches(path) -> CredentialAction.TODO_WRITE
     method == "GET" && waitRead.matches(path) -> CredentialAction.WAITS_READ
     method == "POST" && waitWrite.matches(path) -> CredentialAction.WAITS_WRITE
     method == "POST" && automationReadPost.matches(path) -> CredentialAction.CLOUD_READ

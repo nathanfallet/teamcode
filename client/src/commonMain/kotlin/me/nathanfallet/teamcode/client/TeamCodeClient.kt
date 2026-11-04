@@ -823,6 +823,29 @@ class TeamCodeClient(
     }
     suspend fun cancelWait(id: String): WaitView { identifier(id); return coded(HttpMethod.Post, "/api/v1/waits/$id/cancel", null as Unit?) }
 
+    // Session todo (`todos.v1`, docs/todos.md). [sessionId] is named by the session's owner; an execution credential names none.
+    suspend fun sessionTodo(sessionId: String? = null): TodoSessionView {
+        sessionId?.let(::identifier)
+        return coded(HttpMethod.Get, "/api/v1/todos/session", null as Unit?) { url { sessionId?.let { parameters.append("sessionId", it) } } }
+    }
+    suspend fun createSessionTodo(request: CreateTodoRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session", request)
+    suspend fun addTodoItem(request: AddTodoItemRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session/items", request)
+    /** Puts an item in progress; the result carries the marker to put in the body of its pull request. */
+    suspend fun startTodoItem(itemId: String, request: StartTodoItemRequest = StartTodoItemRequest()): StartTodoItemView {
+        identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/start", request)
+    }
+    suspend fun noteTodoItem(itemId: String, request: NoteTodoItemRequest): TodoSessionView {
+        identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/notes", request)
+    }
+    /** Reports what the checks of an item observed; `409 not_done` while any check has not passed. */
+    suspend fun completeTodoItem(itemId: String, request: CompleteTodoItemRequest): TodoSessionView {
+        identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/proof", request)
+    }
+    /** Asks the session's owner to drop an item; nothing is deleted until they say yes. */
+    suspend fun requestTodoDrop(itemId: String, request: DropTodoItemRequest): TodoSessionView {
+        identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/drop", request)
+    }
+
     // Workflows (`workflows.v1`, docs/workflows.md).
     suspend fun workflows(after: String? = null, limit: Int = 50): WorkflowPageView {
         after?.let(::identifier)

@@ -114,6 +114,8 @@ class CloudServer(
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
     })
+    /** A session's todo; dropping an item asks its owner through an ordinary wait (docs/todos.md). */
+    val todos = me.nathanfallet.teamcode.domain.todos.TodoService(me.nathanfallet.teamcode.infrastructure.database.SqlTodoStore(database), me.nathanfallet.teamcode.domain.todos.WaitBackedDropWaits(waitStore))
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
     val workflows = WorkflowService(workflowStore)
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
