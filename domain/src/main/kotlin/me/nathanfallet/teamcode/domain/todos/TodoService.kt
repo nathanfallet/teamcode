@@ -69,23 +69,64 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
         val id = session(actor, sessionId, write = true)
         val now = store.now()
         val refusal = arrayOfNulls<TeamFailure>(1)
+        // What the server can see itself (an artifact, a wait of the session) it verifies: the caller's report on those checks is ignored.
+        val observed = current(actor.teamId, id, itemId)?.let { serverChecks(actor.teamId, id, it) }.orEmpty()
         val list = store.mutate(actor.teamId, id) { current ->
             val item = current.item(itemId) ?: throw TeamFailure("unknown_item", 404, "No item '$itemId' in this todo.")
             val checks = item.doneWhen.checks
             if (reports.any { it.index !in checks.indices } || reports.map { it.index }.distinct().size != reports.size)
                 throw TodoRules.invalid("invalid_proof", "Report each check of the item once, by its position 0 to ${checks.size - 1}.")
-            val results = reports.map { r ->
+            val results = reports.filter { r -> checks[r.index] !in observed.keys }.map { r ->
                 if (r.observed.length > TodoRules.MAX_PROOF || r.urls.size > 10 || r.urls.any { !it.startsWith("https://") || it.length > 2_000 })
                     throw TodoRules.invalid("invalid_proof", "Keep observed under ${TodoRules.MAX_PROOF} characters and give at most 10 https URLs.")
                 TodoCheckResult(checks[r.index], r.passed, r.observed, r.urls)
             }
-            when (val outcome = TodoRules.complete(current, itemId, results, now)) {
+            when (val outcome = TodoRules.complete(current, itemId, results + observed.map { (check, result) -> result }, now)) {
                 is TodoCompletion.Done -> outcome.list.touch(now) to outcome.list
                 is TodoCompletion.Refused -> { refusal[0] = outcome.failure; outcome.list.touch(now) to outcome.list }
             }
         }
         refusal[0]?.let { throw it }
         return list
+    }
+
+    private suspend fun current(teamId: String, sessionId: String, itemId: String) = store.find(teamId, sessionId)?.item(itemId)
+
+    /** The outcome of the checks the server verifies by itself: `artifact_published` and `wait_answered`, through what the item is linked to. */
+    private suspend fun serverChecks(teamId: String, sessionId: String, item: TodoItem): Map<TodoCheck, TodoCheckResult> = buildMap {
+        for (check in item.doneWhen.checks) when (check) {
+            is TodoCheck.ArtifactPublished -> {
+                val id = check.id ?: item.links.firstOrNull { it.kind == "artifact" }?.ref
+                val result = if (id == null) TodoCheckResult(check, false, "No artifact is linked to this item: publish it, then link it with todo_link.")
+                else store.artifactVersion(teamId, id).let { version ->
+                    when {
+                        version == null -> TodoCheckResult(check, false, "Artifact $id is not published.")
+                        check.minVersion != null && version < check.minVersion -> TodoCheckResult(check, false, "Artifact $id is at version $version, version ${check.minVersion} is needed.")
+                        else -> TodoCheckResult(check, true, "Artifact $id is published (version $version).")
+                    }
+                }
+                put(check, result)
+            }
+            is TodoCheck.WaitAnswered -> {
+                val id = item.links.firstOrNull { it.kind == "wait" }?.ref
+                val state = id?.let { store.waitState(teamId, sessionId, it) }
+                put(check, when {
+                    id == null -> TodoCheckResult(check, false, "No wait is linked to this item: ask with ask_human, then link the wait with todo_link.")
+                    state == null -> TodoCheckResult(check, false, "Wait $id is not one of this session's.")
+                    state.status != "resolved" -> TodoCheckResult(check, false, "Wait $id is ${state.status}: nobody answered it yet.")
+                    check.action != null && state.action != check.action -> TodoCheckResult(check, false, "Wait $id was answered with '${state.action}', not '${check.action}'.")
+                    else -> TodoCheckResult(check, true, "Wait $id was answered with '${state.action}'.")
+                })
+            }
+            else -> {}
+        }
+    }
+
+    /** Binds a PR, a release, an artifact or a wait to an item, once (see [TodoRules.link]). */
+    suspend fun link(actor: Principal, sessionId: String?, itemId: String, link: TodoLink, replaceClosed: Boolean): TodoList {
+        val id = session(actor, sessionId, write = true)
+        val now = store.now()
+        return store.mutate(actor.teamId, id) { val changed = TodoRules.link(it, itemId, link, replaceClosed, now).copy(updatedAt = now); changed to changed }
     }
 
     /** Asks the session's owner to drop an item. Nothing is deleted: the item waits in `drop_requested` for the answer. */

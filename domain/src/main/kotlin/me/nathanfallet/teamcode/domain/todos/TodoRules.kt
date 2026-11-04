@@ -236,6 +236,30 @@ object TodoRules {
         return TodoCompletion.Done(list.copy(items = list.items.map { if (it.id == id) it.copy(status = TodoItemStatus.DONE, proof = proof) else it }))
     }
 
+    /**
+     * Binds [link] to [id]. A link is frozen: the same address may be completed (a PR learns its number and merge commit, a
+     * release its tag), but another one of the same kind is refused with `already_linked`, so the agent cannot swap in an easier
+     * PR. The one exception is a PR that was closed without merge ([replaceClosed], which the caller has just observed): the new
+     * one replaces it and a note records the change.
+     */
+    fun link(list: TodoList, id: String, link: TodoLink, replaceClosed: Boolean, now: Long): TodoList {
+        requireActive(list)
+        val item = requireItem(list, id)
+        if (link.kind !in TodoLink.kinds) throw invalid("invalid_link", "Use a link of kind ${TodoLink.kinds.joinToString(", ")}.")
+        if (link.ref.isBlank() || link.ref.length > 2_000 || link.ref.any { it.isISOControl() }) throw invalid("invalid_link", "Use a link reference of 1 to 2000 characters.")
+        if (link.kind in setOf("pr", "release") && !link.ref.startsWith("https://")) throw invalid("invalid_link", "A ${link.kind} link is an https address.")
+        val existing = item.links.firstOrNull { it.kind == link.kind }
+        val stamped = link.copy(at = now)
+        val links = when {
+            existing == null -> item.links + stamped
+            existing.ref == link.ref -> item.links.map { if (it === existing) existing.copy(number = link.number ?: existing.number, sha = link.sha ?: existing.sha, tag = link.tag ?: existing.tag) else it }
+            link.kind == "pr" && replaceClosed -> item.links.map { if (it === existing) stamped else it }
+            else -> throw conflict("already_linked", "Item $id is already linked to ${existing.ref}: a link does not change. Only a PR closed without merge may be replaced.")
+        }
+        val noted = if (existing != null && existing.ref != link.ref) item.notes + TodoNote(now, "Linked ${link.ref} instead of ${existing.ref}, which was closed without merge.") else item.notes
+        return list.copy(items = list.items.map { if (it.id == id) it.copy(links = links, notes = noted) else it })
+    }
+
     /** Asks the owner to drop an item. Nothing is deleted: the item waits in `drop_requested` for the answer. */
     fun requestDrop(list: TodoList, id: String, reason: String, waitId: String? = null): TodoList {
         requireActive(list)

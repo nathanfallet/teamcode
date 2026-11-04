@@ -841,6 +841,18 @@ class TeamCodeClient(
     suspend fun completeTodoItem(itemId: String, request: CompleteTodoItemRequest): TodoSessionView {
         identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/proof", request)
     }
+    /** Binds a PR, a release, an artifact or a wait to an item; a link does not change once made (`409 already_linked`). */
+    suspend fun linkTodoItem(itemId: String, request: LinkTodoItemRequest): TodoSessionView {
+        identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/link", request)
+    }
+    /**
+     * Relays one todo call received by the local proxy (`teamcode mcp todo`), with this client's credential: only
+     * `/api/v1/todos/session` and its item routes (the proxy narrows each to its method), and a bounded answer.
+     */
+    suspend fun forwardTodo(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
+        require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/items")) { "Only the session todo is relayed." }
+        return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
+    }
     /** Asks the session's owner to drop an item; nothing is deleted until they say yes. */
     suspend fun requestTodoDrop(itemId: String, request: DropTodoItemRequest): TodoSessionView {
         identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/drop", request)
@@ -1261,6 +1273,8 @@ class TeamCodeClient(
         /** A page of waits: up to 100 stored waits of at most 256 KiB each, plus the sessions' permission requests. */
         private const val WAIT_RELAY_LIMIT = 32 * 1024 * 1024
         private const val WORKFLOW_RELAY_LIMIT = 1024 * 1024
+        /** A todo with 50 items of 4 000 characters and their notes. */
+        private const val TODO_RELAY_LIMIT = 1024 * 1024
         private val WAIT_RELAYED_HEADERS = listOf(HttpHeaders.RetryAfter, CloudHeaders.IDEMPOTENCY_REPLAYED, "x-teamcode-error", "x-teamcode-request-id")
         /** As the server accepts it (`WaitService`): 1 to 128 letters, digits or `. _ : -`. */
         private val IDEMPOTENCY_KEY_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")

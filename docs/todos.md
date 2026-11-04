@@ -10,7 +10,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 | --- | --- |
 | Domain model and rules (`domain/.../todos`) | implemented |
 | Storage (`session_todos`, `session_todo_items`), routes `/api/v1/todos/session/…`, `todo:session` scope, capability `todos.v1`, typed client | implemented |
-| `teamcode_todo` MCP server and checks run on GitHub | planned |
+| `teamcode_todo` MCP server (`teamcode mcp todo`), its relay, the checks run from the agent's environment, links, `todo_help` | implemented; real-session and sample-plan trials: see the pull request |
 | `teamcode cloud todo-stop` Stop hook | planned |
 | Reference at wake-up and after compaction | planned |
 | Server-side reminder (Codex, safety net) | planned |
@@ -43,6 +43,7 @@ Every route lives under `/api/v1/todos/session` and is advertised by the capabil
 | `POST /items/{item}/start` | Puts an item in progress and returns the marker for its PR |
 | `POST /items/{item}/notes` | Appends a dated note |
 | `POST /items/{item}/proof` | Reports what each check observed; done only if all passed (`409 not_done` keeps the proof) |
+| `POST /items/{item}/link` | Binds a PR, a release, an artifact or a wait to an item; a link is frozen (`409 already_linked`), except to replace a PR closed without merge |
 | `POST /items/{item}/drop` | Opens a wait for the owner; the item is `drop_requested` until they answer |
 
 Who may call: the session's owner (naming `sessionId`) reads and writes; an administrator, or a `team:read` key, reads; the session's execution credential (`tcex_`) carries the new scope `todo:session` and is confined to the one session it was issued for, whatever `sessionId` says, exactly like `waits:session` and `workflow:session`. The remote-host credential carries it too. A service key that carries `todo:session` (it is not offered when creating one), and an execution credential issued before the scope existed, get `403 credential_scope`.
@@ -54,3 +55,36 @@ A drop request opens an ordinary wait for the session's owner with the actions `
 ### Cost
 
 A read is two queries (the list row, then its items in order) plus one on `waits` by primary key only while a drop request is open; a change adds the same reads under the row lock and writes only the rows that changed. No query runs per item. `EXPLAIN ANALYZE` on MySQL 8.4 with 100 000 lists and 900 000 items (and 300 000 waits) is in the pull request.
+
+## The `teamcode_todo` MCP server
+
+`teamcode mcp todo --session <id>` is a stdio server the session runner (pods and remote hosts, Claude Code and Codex) starts beside the agent, like `teamcode_waits` and `teamcode_workflow`. It reaches the server through the launcher's loopback relay (capability `todo-relay-v1`), which allows only the todo routes above and holds the credential; the agent never holds it. It is connected when the server advertises `todos.v1` and the execution's credential may read the session's todo (an execution credential from before `todo:session` gets `403 credential_scope` on that read, and then the agent is simply not offered the tools). A local `teamcode run` has no session and gets none (planned: `local-run`). The agent's instructions gain one sentence (`TodoDocs.PROMPT`) that says to call `todo_create` before a multi-step task and that a turn cannot end while items remain unless a wait is open.
+
+| Tool | What it does |
+| --- | --- |
+| `todo_help` | The rules, the schema of an item and three examples (a PR, a release, a research ending on an artifact). Local, no call |
+| `todo_create` | Creates the list once: `reference`, optional `refs`, `items` |
+| `todo_show` | The list as text: reference first, next item in full, one line per item |
+| `todo_start` | Puts an item in progress; returns the marker to put in its PR body |
+| `todo_complete` | Runs the item's stored checks and asks the server to decide; refusals say what is missing |
+| `todo_link` | Binds an existing PR, release, artifact or wait; the kind of a GitHub address is deduced |
+| `todo_add`, `todo_note`, `todo_drop` | Add an item with a reason, append a note, ask the owner to drop an item |
+
+The server instructions (field `instructions` of the MCP handshake) and `todo_help` are `TodoDocs`; the refusals of the server carry a code and the tool adds the action to take (`not_done`, `todo_exists`, `already_linked`…). The typed client carries only the server's error code, so `todo_complete` reads the proof the server stored for a refusal and shows that.
+
+### Where each check runs
+
+| Check | Run by | How |
+| --- | --- | --- |
+| `pr_merged`, `pr_closed` | the MCP process, with `gh` | the PR linked to the item, else the PR of the repo whose body carries the item's marker (`gh pr list --search "<list prefix> <item id> in:body"`, then the exact marker decides) and whose author is the token's login; found PRs are bound to the item |
+| `release_contains` | the MCP process, with `gh` | the earliest published, non-draft release (the 30 newest are listed, at most 15 compared) whose tag is ahead of or at the merge commit of the item named by `of` (or `commit`); it is bound to the item with its tag |
+| `ci_green` | the MCP process, with `gh run list --commit` | every run on the commit completed and green; none yet, running or failed is "not done" |
+| `command` | the MCP process, in a shell (`sh -c`, `cmd /c` on Windows) | the stored command, with `${pr:<item>.number}`, `${pr:<item>.mergeSha}`, `${release:<item>.tag}` replaced from the links; a value not linked yet leaves the check unknown and nothing runs; output is bounded to 300 characters and masked |
+| `artifact_published`, `wait_answered` | the server | through the item's `artifact` and `wait` links; what the caller reports is ignored |
+| `attested` | nobody | the agent gives `proof.text` and https URLs; the item is flagged `unverified` |
+
+The condition is read from the server's stored item, never from the agent, so the agent chooses neither the command nor the moment. A check that does not answer (`gh` down, a timeout) is reported as unknown and never counts as done. A PR is found by GitHub's search index, which can lag a few minutes behind a new PR: the check then says no PR carries the marker, and a retry finds it. `gh` and the token are those of the agent's environment (`GH_TOKEN` in a pod).
+
+### What is not verified yet
+
+The agent's process runs the checks and reports their outcome, so an agent that bypasses the MCP and calls the API with its credential could report a false pass. The server has no GitHub reader; the Stop hook (planned) re-runs the cheap checks itself, outside the agent's context.

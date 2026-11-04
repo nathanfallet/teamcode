@@ -357,6 +357,9 @@ internal interface AgentTools {
     /** The workflow tool (`deliver`) to start beside the agent for this session, or null. Never throws except on cancellation. */
     suspend fun workflow(): me.nathanfallet.teamcode.cli.launch.WorkflowMcp? = null
 
+    /** The todo tools (`todo_create`…) to start beside the agent for this session, or null. Never throws except on cancellation. */
+    suspend fun todo(): me.nathanfallet.teamcode.cli.launch.TodoMcp? = null
+
     /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
     suspend fun claudePlugin(): String? = null
 }
@@ -496,6 +499,29 @@ internal class RunnerAgentTools(
         catch (error: CancellationException) { throw error }
         catch (_: Exception) { false }
         return if (usable) try { me.nathanfallet.teamcode.cli.launch.WorkflowMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
+    }
+
+    /**
+     * `teamcode mcp todo` in the agent's container, for this session, when the server serves todos (`todos.v1`) and the execution's
+     * credential may keep them: an execution credential from before the `todo:session` scope gets a `403 credential_scope` on the read,
+     * and then the agent is not offered tools that would always be refused. The read changes nothing.
+     */
+    override suspend fun todo(): me.nathanfallet.teamcode.cli.launch.TodoMcp? {
+        val command = binary ?: return null
+        val session = sessionId ?: return null
+        val usable = try {
+            withTimeout(20_000) {
+                if (me.nathanfallet.teamcode.api.models.Todos.CAPABILITY !in client.capabilities().features) false
+                else { client.sessionTodo(); true }
+            }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+        catch (error: CancellationException) { throw error }
+        catch (error: me.nathanfallet.teamcode.client.TeamCodeException) {
+            if (error.code == "credential_scope") log("This execution's credential cannot keep a todo; the todo tools are not connected.")
+            false
+        }
+        catch (_: Exception) { false }
+        return if (usable) try { me.nathanfallet.teamcode.cli.launch.TodoMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
     }
 
     /**

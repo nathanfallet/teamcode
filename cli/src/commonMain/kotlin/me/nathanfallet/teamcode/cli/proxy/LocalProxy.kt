@@ -64,7 +64,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
                     if (challenge != null) put("proof", serviceProof(localToken, challenge, serviceId, serverUrl))
                     else { put("id", serviceId); put("serverUrl", serverUrl) }
                     put("version", me.nathanfallet.teamcode.cli.VERSION)
-                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")); add(JsonPrimitive("wait-relay-v1")); add(JsonPrimitive("workflow-relay-v1")) }
+                    putJsonArray("capabilities") { add(JsonPrimitive("workload-routing-v1")); add(JsonPrimitive("run-routing-v1")); add(JsonPrimitive("mcp-relay-v1")); add(JsonPrimitive("local-token-header-v1")); add(JsonPrimitive("artifact-relay-v1")); add(JsonPrimitive("activity-relay-v1")); add(JsonPrimitive("wait-relay-v1")); add(JsonPrimitive("workflow-relay-v1")); add(JsonPrimitive("todo-relay-v1")) }
                 }.toString(), ContentType.Application.Json)
             }
         }
@@ -72,6 +72,7 @@ fun Application.localProxy(client: TeamCodeClient, localToken: String, maximumBo
         artifactRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         waitRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         workflowRelay(sessionClient ?: client, localToken, maximumBodyBytes)
+        todoRelay(sessionClient ?: client, localToken, maximumBodyBytes)
         for (path in listOf("/v1/messages", "/v1/responses")) {
             for (mode in listOf("interactive", "background", "run")) {
                 val prefix = when (mode) { "background" -> "/_teamcode/workloads/background"; "run" -> "/_teamcode/runs/{runId}/{workload}"; else -> "" }
@@ -305,6 +306,21 @@ internal val WORKFLOW_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
     HttpMethod.Get to listOf(Regex("/api/v1/workflows/session/pending")),
     HttpMethod.Post to listOf(Regex("/api/v1/workflows/session/deliver")),
 )
+
+/**
+ * The todo calls of `teamcode mcp todo`: reading the session's list, creating it, and the item routes (add, start, note, proof, link,
+ * drop). The session is named by the credential, not by the caller; nothing else of the API is reachable through this relay.
+ */
+internal val TODO_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
+    HttpMethod.Get to listOf(Regex("/api/v1/todos/session")),
+    HttpMethod.Post to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/items"), Regex("/api/v1/todos/session/items/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|link|drop)")),
+)
+
+/** Relays the todo calls of `teamcode mcp todo`, as [apiRelay] does. */
+private fun Routing.todoRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =
+    apiRelay("/api/v1/todos/session", TODO_RELAY_ROUTES, localToken, maximumBodyBytes) { request ->
+        client.forwardTodo(request.method, request.path, request.query, request.body, request.contentType, request.runId)
+    }
 
 /** Relays the delivery call of `teamcode mcp workflow`, as [apiRelay] does. */
 private fun Routing.workflowRelay(client: TeamCodeClient, localToken: String, maximumBodyBytes: Int) =

@@ -48,7 +48,7 @@ private fun TodoCheck.view() = when (this) {
 
 private fun TodoItem.view() = TodoItemView(
     id, name, description, TodoDoneWhenView(doneWhen.text, doneWhen.checks.map { it.view() }), dependsOn, origin.wire, originReason, status.wire,
-    proof?.let { TodoProofView(it.at, it.passed, it.text, it.urls) }, notes.map { TodoNoteView(it.at, it.text) }, dropReason, dropWaitId,
+    proof?.let { TodoProofView(it.at, it.passed, it.text, it.urls) }, notes.map { TodoNoteView(it.at, it.text) }, dropReason, dropWaitId, links.map { TodoLinkView(it.kind, it.ref, it.number, it.sha, it.tag, it.at) },
     unverified = doneWhen.checks.all { it is TodoCheck.Attested },
 )
 
@@ -85,6 +85,10 @@ internal fun Route.todoRoutes(todos: TodoService) {
         post("/items/{item}/proof") {
             val input = call.jsonBody<CompleteTodoItemRequest>(TODO_BYTES)
             call.respond(TodoSessionView(todos.complete(call.principal, session(input.sessionId), call.itemId(), input.checks.map { TodoCheckReport(it.index, it.passed, it.observed, it.urls) }).view()))
+        }
+        post("/items/{item}/link") {
+            val input = call.jsonBody<LinkTodoItemRequest>(TODO_BYTES)
+            call.respond(TodoSessionView(todos.link(call.principal, session(input.sessionId), call.itemId(), TodoLink(input.kind, input.ref, input.number, input.sha, input.tag), input.replaceClosed).view()))
         }
         post("/items/{item}/drop") {
             val input = call.jsonBody<DropTodoItemRequest>(TODO_BYTES)

@@ -15,6 +15,8 @@ import me.nathanfallet.teamcode.cli.launch.AgentEnvironment
 import me.nathanfallet.teamcode.cli.launch.ArtifactsMcp
 import me.nathanfallet.teamcode.cli.launch.WaitsMcp
 import me.nathanfallet.teamcode.cli.launch.WorkflowMcp
+import me.nathanfallet.teamcode.cli.launch.TodoMcp
+import me.nathanfallet.teamcode.api.models.Todos
 import me.nathanfallet.teamcode.cli.launch.ENVIRONMENT_CAPABILITY
 import me.nathanfallet.teamcode.cli.launch.GuidancePlugin
 import me.nathanfallet.teamcode.cli.launch.trackedRun
@@ -297,6 +299,15 @@ internal class HostAgentTools(
         if (Workflows.CAPABILITY !in features) return null
         return try { WorkflowMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
             report("The workflow tool could not be prepared; the agent starts without it."); null
+        }
+    }
+
+    /** Likewise for the todo tools: the capability is enough. */
+    override suspend fun todo(): TodoMcp? {
+        val session = sessionId ?: return null
+        if (Todos.CAPABILITY !in features) return null
+        return try { TodoMcp(executable(), session) } catch (error: CancellationException) { throw error } catch (_: Exception) {
+            report("The todo tools could not be prepared; the agent starts without them."); null
         }
     }
 

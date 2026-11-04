@@ -58,4 +58,12 @@ internal object TodoJson {
 
     fun notes(notes: List<TodoNote>) = buildJsonArray { notes.forEach { n -> add(buildJsonObject { put("at", n.at); put("text", n.text) }) } }.toString()
     fun notes(text: String) = json.parseToJsonElement(text).jsonArray.map { TodoNote(it.jsonObject.getValue("at").jsonPrimitive.long, it.jsonObject.getValue("text").jsonPrimitive.content) }
+
+    fun links(links: List<TodoLink>) = buildJsonArray {
+        links.forEach { l -> add(buildJsonObject { put("kind", l.kind); put("ref", l.ref); l.number?.let { put("number", it) }; l.sha?.let { put("sha", it) }; l.tag?.let { put("tag", it) }; put("at", l.at) }) }
+    }.toString()
+    fun links(text: String?): List<TodoLink> = if (text == null) emptyList() else json.parseToJsonElement(text).jsonArray.map {
+        val o = it.jsonObject
+        TodoLink(o.getValue("kind").jsonPrimitive.content, o.getValue("ref").jsonPrimitive.content, o["number"]?.jsonPrimitive?.int, o["sha"]?.jsonPrimitive?.content, o["tag"]?.jsonPrimitive?.content, o.getValue("at").jsonPrimitive.long)
+    }
 }
