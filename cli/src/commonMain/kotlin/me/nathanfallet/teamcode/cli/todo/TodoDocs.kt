@@ -30,6 +30,10 @@ internal object TodoDocs {
         - ci_green {repo, of: <item id>}, command {run} (may cite ${'$'}{pr:<item>.number},
           ${'$'}{pr:<item>.mergeSha}, ${'$'}{release:<item>.tag}), artifact_published {id},
           wait_answered {}, attested {what} (unverified: last resort).
+        Most items can be checked. An item of research, writing or analysis ends on
+        artifact_published (publish what you found as an artifact); an item that needs
+        a person's decision ends on wait_answered (ask with ask_human). Use attested
+        only when nothing can be observed.
         While working:
         - todo_start before an item; todo_complete when its checks should pass:
           the checks run, and a refusal says what is missing.
@@ -57,6 +61,8 @@ internal object TodoDocs {
         Check types: pr_merged {repo}, pr_closed {repo, reason}, release_contains {repo, of | commit}, ci_green {repo, of | ref, workflow?},
         command {run, cwd?, expectExit?, timeoutSeconds?}, artifact_published {id?, minVersion?}, wait_answered {action?}, attested {what}.
         Never write a PR number or a version: use pr_merged and the marker todo_start returns.
+        Prefer a check that can be observed: research, writing and analysis end on artifact_published, a decision on wait_answered;
+        attested is the last resort and is shown as unverified.
 
         EXAMPLE 1: a fix in one PR
         {"id":"fix-login","name":"Fix the login redirect","dependsOn":[],
