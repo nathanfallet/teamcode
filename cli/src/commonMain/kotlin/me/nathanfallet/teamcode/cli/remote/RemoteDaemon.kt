@@ -22,8 +22,8 @@ import okio.Path
  * This device's id when its daemon is online and the server starts sessions on devices (decision 8: `teamcode remote
  * start` then goes through the daemon); null otherwise, and the command hosts the session itself as before.
  */
-internal suspend fun daemonDevice(client: TeamCodeClient, features: List<String>, windows: Boolean): String? {
-    if (windows || DAEMON_CAPABILITY !in features) return null
+internal suspend fun daemonDevice(client: TeamCodeClient, features: List<String>): String? {
+    if (DAEMON_CAPABILITY !in features) return null
     return client.devices().firstOrNull { it.current }?.takeIf { it.daemon?.online == true }?.id
 }
 
@@ -37,12 +37,11 @@ internal sealed interface LocalResume {
 /**
  * A session continuing a conversation of this device goes through its daemon, never through a host the command starts
  * itself: the daemon checks the conversation against the folder and has its host fork it, the code of
- * `cloud.sessions.remote.resume.v1`. So the server must announce it, the daemon must host sessions here (not on
- * Windows), be online, and have announced [DaemonFeatures.RESUME].
+ * `cloud.sessions.remote.resume.v1`. So the server must announce it, the daemon must be online here, and have
+ * announced [DaemonFeatures.RESUME]. It is the same on every platform.
  */
-internal suspend fun localResumeTarget(client: TeamCodeClient, features: List<String>, windows: Boolean): LocalResume {
+internal suspend fun localResumeTarget(client: TeamCodeClient, features: List<String>): LocalResume {
     if (DAEMON_CAPABILITY !in features || ResumableSessions.CAPABILITY !in features) return LocalResume.Unavailable(LocalResumeReasons.SERVER_UNSUPPORTED)
-    if (windows) return LocalResume.Unavailable(LocalResumeReasons.PLATFORM_UNSUPPORTED)
     val device = client.devices().firstOrNull { it.current }
     val daemon = device?.daemon?.takeIf { it.online } ?: return LocalResume.Unavailable(LocalResumeReasons.DAEMON_OFFLINE)
     if (DaemonFeatures.RESUME !in daemon.features) return LocalResume.Unavailable(LocalResumeReasons.DAEMON_TOO_OLD)
@@ -63,7 +62,8 @@ internal fun localResumables(transcripts: ClaudeTranscripts, target: LocalResume
 /** The sentence `teamcode remote start --resume` and `remote resumable` give for a [LocalResumeReasons] code. */
 internal fun localResumeRefusal(reason: String): String = when (reason) {
     LocalResumeReasons.SERVER_UNSUPPORTED -> "This server does not continue a conversation of a device (cloud.sessions.remote.resume.v1): update it."
-    LocalResumeReasons.PLATFORM_UNSUPPORTED -> "Continuing a conversation goes through this device's daemon, which does not host sessions on Windows."
+    // Sent by an older daemon that did not host sessions on Windows; no current CLI reports it.
+    LocalResumeReasons.PLATFORM_UNSUPPORTED -> "Continuing a conversation goes through this device's daemon, which does not host sessions on this platform: run teamcode update."
     LocalResumeReasons.DAEMON_OFFLINE -> "Continuing a conversation goes through this device's daemon, which is not running: start it with teamcode service install."
     LocalResumeReasons.DAEMON_TOO_OLD -> "This device's daemon is too old to continue a conversation: run teamcode update."
     else -> "This device cannot continue a conversation ($reason)."
