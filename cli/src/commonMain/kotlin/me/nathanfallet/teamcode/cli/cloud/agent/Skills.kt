@@ -373,6 +373,9 @@ private const val WORKFLOW_STOP_TIMEOUT_SECONDS = 5
 /** The todo `Stop` hook runs the checks of the open items (`gh`, at most 120 s for a `command`) and gives up at 140 s itself ([me.nathanfallet.teamcode.cli.todo.TodoStop.TIMEOUT_MILLIS]). */
 private const val TODO_STOP_TIMEOUT_SECONDS = 150
 
+/** The todo `SessionStart` hook reads one small answer from the relay and gives up at 20 s itself ([me.nathanfallet.teamcode.cli.todo.TodoStop.CALL_MILLIS]). */
+private const val TODO_CONTEXT_TIMEOUT_SECONDS = 25
+
 /** Where cloud sessions install team hooks, relative to the agent's home. */
 internal const val CLOUD_HOOKS_DIR = ".teamcode/hooks"
 
@@ -386,11 +389,11 @@ internal data class CloudHook(val name: String, val definition: HookDefinitionVi
  * Claude Code settings for the installed team hooks, passed with `--settings`: each hook runs its executable from the
  * agent's home through the shell (`"$HOME"/'<dir>/<name>/<command>'`), merged by Claude Code with the agent's own hooks.
  * [runnerStop], the runner's own `Stop` command ([CloudAgentState]), comes after the team's `Stop` hooks, then [workflowStop]
- * ([CloudWorkflowStop], only when the `teamcode_workflow` tool is connected), then [todoStop] ([me.nathanfallet.teamcode.cli.todo.CloudTodoStop], only when the
+ * ([CloudWorkflowStop], only when the `teamcode_workflow` tool is connected), then [todoContext], the `SessionStart` reminder on `compact` and `resume` ([me.nathanfallet.teamcode.cli.todo.CloudTodoContext]), and [todoStop] ([me.nathanfallet.teamcode.cli.todo.CloudTodoStop], only when the
  * `teamcode_todo` tool is connected): each is one more entry of the `Stop` list, none replaces another.
  */
-internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null, workflowStop: String? = null, todoStop: String? = null): String? {
-    val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull((runnerStop ?: workflowStop ?: todoStop)?.let { "Stop" })).distinct().sorted()
+internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null, workflowStop: String? = null, todoStop: String? = null, todoContext: String? = null): String? {
+    val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull((runnerStop ?: workflowStop ?: todoStop)?.let { "Stop" }, todoContext?.let { "SessionStart" })).distinct().sorted()
     if (events.isEmpty()) return null
     return buildJsonObject { putJsonObject("hooks") {
         for (event in events) putJsonArray(event) {
@@ -404,6 +407,10 @@ internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = nul
             })
             if (event == "Stop" && runnerStop != null) add(buildJsonObject {
                 putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", runnerStop); put("timeout", RUNNER_STOP_TIMEOUT_SECONDS) }) }
+            })
+            if (event == "SessionStart" && todoContext != null) add(buildJsonObject {
+                put("matcher", "compact|resume")
+                putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", todoContext); put("timeout", TODO_CONTEXT_TIMEOUT_SECONDS) }) }
             })
             if (event == "Stop" && todoStop != null) add(buildJsonObject {
                 putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", todoStop); put("timeout", TODO_STOP_TIMEOUT_SECONDS) }) }

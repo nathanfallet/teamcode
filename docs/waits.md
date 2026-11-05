@@ -156,7 +156,9 @@ answered by: <username>
 <field label>: <value>        one line per filled field, a choice also with its label, a list joined by ", "; a multi-line value is indented by two spaces
 ```
 
-It is cut at 32,000 characters, the most a message holds. The message is queued with the key `wait-answer-<wait id>`, scoped to the session and the author by the conversation store, so sending it twice queues one. That is what makes a failure safe: the answer is stored first and the message queued second, in two transactions; if the second fails the caller gets an error (`5xx`), and sending the same answer again (the companion app does, on a retry) queues the message without a `wait_closed`. A session that has ended takes nothing, and the answer stays recorded.
+When the session keeps an active [todo](todos.md#the-reference-everywhere), a blank line and its block follow: `[TeamCode todo] Your todo: N of M items done.`, the plan reference, the next item (the one in progress first) and the list, with the owner's answers to drop requests applied (it is the same block after a timed or event wake-up below). A session without a todo, or with a finished one, gets exactly the message above.
+
+It is cut at 32,000 characters, the most a message holds (the todo block gives way first, never the answer). The message is queued with the key `wait-answer-<wait id>`, scoped to the session and the author by the conversation store, so sending it twice queues one. That is what makes a failure safe: the answer is stored first and the message queued second, in two transactions; if the second fails the caller gets an error (`5xx`), and sending the same answer again (the companion app does, on a retry) queues the message without a `wait_closed`. A session that has ended takes nothing, and the answer stays recorded.
 
 A session whose agent holds its owner's GitHub token takes instructions from its owner only (`github_owner_only`, [cloud sessions](cloud-sessions.md)): an assignee who is not the owner gets that `403` **before** the answer is stored, so a wait never ends up answered but undeliverable. A wait cancelled by someone else does not wake the session.
 

@@ -69,6 +69,7 @@ internal fun Route.todoRoutes(todos: TodoService) {
             val list = todos.create(call.principal, session(input.sessionId), input.reference, input.refs.map { WaitRef(it.kind, it.id, it.url, it.title) }, input.items.map { it.domain() })
             call.respond(HttpStatusCode.Created, TodoSessionView(list.view()))
         }
+        get("/context") { call.respond(TodoContextView(todos.context(call.principal, session(call.request.queryParameters["sessionId"])))) }
         post("/stop") {
             val input = call.jsonBody<TodoStopRequest>(TODO_BYTES)
             val phase = when (input.phase) { "begin" -> TodoStopPhase.BEGIN; "verify" -> TodoStopPhase.VERIFY; "settle" -> TodoStopPhase.SETTLE; else -> throw invalid("Use a phase of begin, verify or settle.") }

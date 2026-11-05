@@ -149,3 +149,40 @@ class TodoStopTest {
         assertEquals(150, entry["timeout"]!!.jsonPrimitive.int)
     }
 }
+
+/** The `SessionStart` reminder: only after a compaction or on resume, only with an active list, never in the way of a start. */
+class TodoContextHookTest {
+    private val session = "00000000-0000-4000-8000-0000000000cc"
+    private fun start(source: String?) = """{"hook_event_name":"SessionStart"${source?.let { ""","source":"$it"""" } ?: ""}}"""
+
+    @Test fun compactionAndResumeGetTheBlockAsAdditionalContext() = kotlinx.coroutines.runBlocking {
+        for (source in listOf("compact", "resume")) {
+            val out = Json.parseToJsonElement(assertNotNull(TodoStop.contextOutput(start(source)) { "[TeamCode todo] Your todo: 2 of 4 items done." })).jsonObject["hookSpecificOutput"]!!.jsonObject
+            assertEquals("SessionStart", out["hookEventName"]!!.jsonPrimitive.content)
+            assertEquals("[TeamCode todo] Your todo: 2 of 4 items done.", out["additionalContext"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test fun anotherStartAnEmptyListOrAFailureSaysNothing() = kotlinx.coroutines.runBlocking {
+        var asked = 0
+        for (source in listOf("startup", "clear", null)) assertNull(TodoStop.contextOutput(start(source)) { asked++; "block" })
+        assertEquals(0, asked, "the server is not even asked at a fresh start")
+        assertNull(TodoStop.contextOutput(start("compact")) { null })
+        assertNull(TodoStop.contextOutput(start("compact")) { "  " })
+        assertNull(TodoStop.contextOutput(start("compact")) { throw IllegalStateException("relay down") })
+        assertNull(TodoStop.contextOutput("""{"hook_event_name":"Stop","source":"compact"}""") { "block" })
+        assertNull(TodoStop.contextOutput("not json") { "block" })
+    }
+
+    @Test fun theHookIsInstalledOnSessionStartForCompactAndResumeOnly() {
+        val command = TodoStop.contextCommand("/opt/teamcode/teamcode", 4711, session, null)
+        assertEquals("'/opt/teamcode/teamcode' cloud todo-context --relay http://127.0.0.1:4711 --session $session", command)
+        val stop = TodoStop.hookCommand("/opt/teamcode/teamcode", 4711, session, null)
+        val hooks = Json.parseToJsonElement(assertNotNull(cloudHookSettings(emptyList(), todoStop = stop, todoContext = command))).jsonObject["hooks"]!!.jsonObject
+        assertEquals(setOf("SessionStart", "Stop"), hooks.keys)
+        val entry = hooks["SessionStart"]!!.jsonArray.single().jsonObject
+        assertEquals("compact|resume", entry["matcher"]!!.jsonPrimitive.content)
+        assertEquals(command, entry["hooks"]!!.jsonArray.single().jsonObject["command"]!!.jsonPrimitive.content)
+        assertFailsWith<IllegalArgumentException> { TodoStop.contextCommand("/t", 0, session, null) }
+    }
+}

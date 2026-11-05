@@ -168,6 +168,10 @@ data class TodoStopRequest(
 @Serializable
 data class TodoStopView(val action: String, val todo: TodoView? = null, val reason: String? = null, val why: String? = null, val wouldBlock: Boolean = false, val escalated: Boolean = false)
 
+/** The block a session is reminded of after a compaction or on resume: [text] is null while the session has no active list. */
+@Serializable
+data class TodoContextView(val text: String? = null)
+
 /** A failure of the hook, recorded on the list so a broken hook shows. */
 @Serializable
 data class TodoHookErrorRequest(val sessionId: String? = null, val text: String)

@@ -173,6 +173,33 @@ class TodoServiceTest {
         assertTrue(store.list!!.hookEvents.all { it.kind == "hook_error" })
     }
 
+    @Test fun theWakeBlockIsTheListWithoutTheInstructionAndAppliesTheOwnersDropAnswer() = runBlocking {
+        val store = Store(); val service = TodoService(store, Drops())
+        assertNull(service.wakeBlock("team", "s1"), "no list, no block")
+        service.create(ada, "s1", "Plan: https://example.com/plan (v2)", emptyList(), listOf(item("a", pr), item("b", pr)))
+        val block = service.wakeBlock("team", "s1")!!
+        assertTrue(block.startsWith("[TeamCode todo] Your todo: 0 of 2 items done.\nPlan reference:\n  Plan: https://example.com/plan (v2)\nNext item: a"), block)
+        assertTrue(block.contains("  → a ") && block.contains("  · b "))
+        assertFalse(block.contains("Do the next item now") || block.contains("the turn goes on"), "a wake block gives no order to go on")
+        assertEquals(block, service.context(ada, "s1"))
+        store.list = store.list!!.copy(status = TodoListStatus.DONE)
+        assertNull(service.wakeBlock("team", "s1"), "a finished list says nothing more")
+    }
+
+    @Test fun theItemInProgressIsTheOneToFinish() {
+        val list = TodoRules.create("0123456789abcdef", "s1", "team", "Plan", emptyList(), listOf(item("a", pr), item("b", pr)), 0)
+        val started = TodoRules.start(list, "a", now = 1)
+        val text = TodoMessages.context(started)
+        assertTrue(text.contains("Next item: a — Item a") && text.contains("  → a ") && text.contains("  · b "), text)
+    }
+
+    @Test fun aListWithNothingOpenSaysSo() {
+        val list = TodoRules.create("0123456789abcdef", "s1", "team", "Plan", emptyList(), listOf(item("a", pr)), 0)
+        val done = list.copy(items = list.items.map { it.copy(status = TodoItemStatus.DONE) })
+        assertTrue(TodoMessages.context(done).contains("No item remains open."))
+        assertFalse(TodoMessages.context(done).contains("Call todo_show"))
+    }
+
     @Test fun theResumeMessageGivesTheReferenceTheWholeListAndTheNextItemInFull() {
         val list = TodoRules.create("0123456789abcdef", "s1", "team", "Plan validated: https://example.com/a (v3). Ship Vestiaire.", emptyList(),
             listOf(item("one", pr), item("two", TodoCheck.ReleaseContains("acme/x", of = "one")), item("three", TodoCheck.Attested("watch 24 h"))), 0)

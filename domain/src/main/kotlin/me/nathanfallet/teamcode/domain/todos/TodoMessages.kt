@@ -38,27 +38,36 @@ object TodoMessages {
     }
 
     /** The message that sends the agent back to work: `block` reason of the Stop hook, and the server-side reminder. */
-    fun resume(list: TodoList): String {
-        val next = TodoRules.next(list) ?: list.items.firstOrNull { it.status == TodoItemStatus.DOING }
-        val head = "[TeamCode todo] ${list.doneCount} of ${list.items.size} items done. Items remain and no wait is open, so the turn goes on."
+    fun resume(list: TodoList): String = compose(list,
+        "[TeamCode todo] ${list.doneCount} of ${list.items.size} items done. Items remain and no wait is open, so the turn goes on.",
+        "Do the next item now. If a person must decide or act, call ask_human; to wait\nfor a CI or a delay, call wait_for; if an item no longer makes sense, call\ntodo_drop. Each of these ends the turn properly.")
+
+    /**
+     * The same block without the instruction to go on: what a session is reminded of when an answer wakes it, after a compaction
+     * and when it resumes (docs/todos.md, "The reference everywhere"). It says where the plan stands; what to do comes from the message it follows.
+     */
+    fun context(list: TodoList): String = compose(list,
+        "[TeamCode todo] Your todo: ${list.doneCount} of ${list.items.size} items done" + (if (list.status == TodoListStatus.ACTIVE) "." else " (${list.status.wire})."), null)
+
+    private fun compose(list: TodoList, head: String, tail: String?): String {
+        // The item in progress comes first: after a compaction or a pause it is the one to finish, not the next one to start.
+        val next = list.items.firstOrNull { it.status == TodoItemStatus.DOING } ?: TodoRules.next(list)
         val reference = list.reference.trim().lines().joinToString("\n") { "  $it" }
         val items = list.items.joinToString("\n") { item ->
             val detail = detail(item)
             "  ${mark(item, next)} ${item.id.padEnd(22)} ${oneLine(item.name, 60)}" + if (detail.isEmpty()) "" else "   $detail"
         }
-        val nextBlock = if (next == null) "No item is ready: an item waits for another one, or for the owner. Call todo_show." else buildString {
+        val nextBlock = if (list.status != TodoListStatus.ACTIVE || list.allClosed) "No item remains open." else if (next == null) "No item is ready: an item waits for another one, or for the owner. Call todo_show." else buildString {
             appendLine("Next item: ${next.id} — ${oneLine(next.name, 80)}")
             next.description.trim().lines().forEach { appendLine("  $it") }
             appendLine("  Done when: ${next.doneWhen.text.trim().lines().joinToString("\n  ")}")
             next.proof?.let { appendLine("  Last check (${clock(it.at)}): ${oneLine(it.text, 400)}") }
         }.trimEnd()
-        val tail = "Do the next item now. If a person must decide or act, call ask_human; to wait\nfor a CI or a delay, call wait_for; if an item no longer makes sense, call\ntodo_drop. Each of these ends the turn properly."
-        val parts = listOf(head, "Plan reference:\n$reference", nextBlock, "Items:\n$items", tail)
-        val text = parts.joinToString("\n")
+        val text = listOfNotNull(head, "Plan reference:\n$reference", nextBlock, "Items:\n$items", tail).joinToString("\n")
         if (text.length <= MAX_CHARS) return text
         // Too long: the item list is what gives way (the reference and the next item are what the agent needs).
         val short = list.items.joinToString("\n") { "  ${mark(it, next)} ${it.id}" }
-        return listOf(head, "Plan reference:\n$reference", nextBlock, "Items:\n$short", tail).joinToString("\n").take(MAX_CHARS)
+        return listOfNotNull(head, "Plan reference:\n$reference", nextBlock, "Items:\n$short", tail).joinToString("\n").take(MAX_CHARS)
     }
 
     /** The title and body of the wait the hook opens for the owner on the third stop without progress. */

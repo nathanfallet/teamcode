@@ -78,6 +78,13 @@ internal fun ApiCatalog.todoOperations() {
             conflict("Not done yet (`not_done`: the message says what is missing), or the item is closed (`item_closed`).")
         }
     }
+    get("/api/v1/todos/session/context") {
+        operationId = "readTodoContext"; tag(ApiTags.TODOS)
+        summary = "The reminder block of the session's todo"
+        description = "The plan reference, the list and the next item, as a text without instruction to go on. Read by the `SessionStart` hook (`teamcode cloud todo-context`) after a compaction and on resume; `text` is null without an active list. $TODO_TEXT"
+        parameters { queryText("sessionId", "The session; ignored for an execution credential.") }
+        responses { ok<TodoContextView>("The block, or null."); notFound("No such session.") }
+    }
     post("/api/v1/todos/session/stop") {
         operationId = "stopTodoSession"; tag(ApiTags.TODOS)
         summary = "Decide what a stop of the agent leads to"

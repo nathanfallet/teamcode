@@ -110,12 +110,12 @@ class CloudServer(
     val automations = AutomationService(automationStore, automationDirectory, CipherSecretSealer(cipher))
     /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
     private val waitStore = SqlWaitStore(database, cipher)
+    /** A session's todo; dropping an item asks its owner through an ordinary wait (docs/todos.md). */
+    val todos = me.nathanfallet.teamcode.domain.todos.TodoService(me.nathanfallet.teamcode.infrastructure.database.SqlTodoStore(database), me.nathanfallet.teamcode.domain.todos.WaitBackedDropWaits(waitStore))
     val waits = WaitService(waitStore, object : WaitSessions {
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
-    })
-    /** A session's todo; dropping an item asks its owner through an ordinary wait (docs/todos.md). */
-    val todos = me.nathanfallet.teamcode.domain.todos.TodoService(me.nathanfallet.teamcode.infrastructure.database.SqlTodoStore(database), me.nathanfallet.teamcode.domain.todos.WaitBackedDropWaits(waitStore))
+    }, context = me.nathanfallet.teamcode.domain.waits.WaitWakeContext { teamId, sessionId -> todos.wakeBlock(teamId, sessionId) })
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
     val workflows = WorkflowService(workflowStore)
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */

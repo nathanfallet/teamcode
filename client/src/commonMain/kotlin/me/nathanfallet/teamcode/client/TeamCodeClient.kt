@@ -853,6 +853,11 @@ class TeamCodeClient(
         require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/items")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
+    /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
+    suspend fun todoContext(sessionId: String? = null): TodoContextView {
+        sessionId?.let(::identifier)
+        return coded(HttpMethod.Get, "/api/v1/todos/session/context", null as Unit?) { url { sessionId?.let { parameters.append("sessionId", it) } } }
+    }
     /** One stop of the agent for the Stop hook (`teamcode cloud todo-stop`): what to run next, whether the stop passes, or the message to block with. */
     suspend fun todoStop(request: TodoStopRequest): TodoStopView = coded(HttpMethod.Post, "/api/v1/todos/session/stop", request)
     /** Records a failure of the Stop hook on the session's list. */
