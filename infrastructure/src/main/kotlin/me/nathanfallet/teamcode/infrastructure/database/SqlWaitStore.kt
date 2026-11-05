@@ -35,12 +35,18 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
 
     override suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange = database.query {
         requireCurrent(this, actor)
+        insertWait(actor.teamId, actor.member.id, actor.tokenId, wait, idempotencyKey, limit)
+    }
+
+    override suspend fun createForSystem(wait: Wait, limit: Int): WaitChange = database.query { insertWait(wait.teamId, "system", null, wait, null, limit) }
+
+    private fun JdbcTransaction.insertWait(auditTeam: String, auditActor: String, credential: String?, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange {
         // The session's row serializes its creations, so two replicas cannot pass the cap together.
         CloudSessions.select(CloudSessions.id).where { (CloudSessions.id eq wait.sessionId!!) and (CloudSessions.teamId eq wait.teamId) }.forUpdate().singleOrNull()
             ?: throw TeamFailure("not_found", 404, "Session not found.")
         if (idempotencyKey != null) {
-            Waits.select(Waits.id).where { (Waits.createdById eq actor.member.id) and (Waits.idempotencyKey eq idempotencyKey) }.singleOrNull()
-                ?.let { return@query WaitChange(read(wait.teamId, it[Waits.id])!!, false) }
+            Waits.select(Waits.id).where { (Waits.createdById eq auditActor) and (Waits.idempotencyKey eq idempotencyKey) }.singleOrNull()
+                ?.let { return WaitChange(read(wait.teamId, it[Waits.id])!!, false) }
         }
         if (Waits.select(Waits.id).where { (Waits.sessionId eq wait.sessionId!!) and (Waits.status eq WaitStatus.OPEN.wire) }.limit(limit).count() >= limit)
             throw TeamFailure("wait_limit", 409, "A session holds at most $limit open waits. Answer or cancel one first.")
@@ -54,11 +60,11 @@ class SqlWaitStore(private val database: Database, private val cipher: Credentia
                 it[resumeMessage] = timer.resumeMessage; it[eventTokenHash] = timer.tokenHash
             }
         }
-        audit(actor.teamId, actor.member.id, "wait.created", wait.id, null, actor.tokenId, related = wait.assigneeId.takeIf { it != actor.member.id })
+        audit(auditTeam, auditActor, "wait.created", wait.id, null, credential, related = wait.assigneeId.takeIf { it != auditActor })
         val stored = read(wait.teamId, wait.id)!!
         // Notifications (push, mail) are a separate piece of work; this is the place to start them.
         publish(TeamEventType.WAIT_CREATED, stored, stored.createdAt)
-        WaitChange(stored, true)
+        return WaitChange(stored, true)
     }
 
     override suspend fun find(teamId: String, id: String): Wait? = database.query { read(teamId, id) ?: sessionWait(teamId, id) }

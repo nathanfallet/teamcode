@@ -111,7 +111,8 @@ class CloudServer(
     /** An answer to a wait is queued on its session as a message, which wakes it (docs/waits.md). */
     private val waitStore = SqlWaitStore(database, cipher)
     /** A session's todo; dropping an item asks its owner through an ordinary wait (docs/todos.md). */
-    val todos = me.nathanfallet.teamcode.domain.todos.TodoService(me.nathanfallet.teamcode.infrastructure.database.SqlTodoStore(database), me.nathanfallet.teamcode.domain.todos.WaitBackedDropWaits(waitStore))
+    private val todoStore = me.nathanfallet.teamcode.infrastructure.database.SqlTodoStore(database)
+    val todos = me.nathanfallet.teamcode.domain.todos.TodoService(todoStore, me.nathanfallet.teamcode.domain.todos.WaitBackedDropWaits(waitStore))
     val waits = WaitService(waitStore, object : WaitSessions {
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
@@ -119,7 +120,11 @@ class CloudServer(
     /** Saved workflow definitions; runs are a later piece of work (docs/workflows.md). */
     val workflows = WorkflowService(workflowStore)
     /** Starting, reading, cancelling and delivering into workflow runs; the engine below moves them on (docs/workflows.md). */
-    val workflowRuns = WorkflowRunService(workflowRunStore)
+    val workflowRuns = WorkflowRunService(workflowRunStore, me.nathanfallet.teamcode.domain.workflows.WorkflowTodoGate { teamId, sessionId ->
+        todos.openItems(teamId, sessionId)?.takeIf { it.isNotEmpty() }?.let { open ->
+            "This step's todo still has ${open.size} open item${if (open.size == 1) "" else "s"} (${open.take(5).joinToString { it.id }}${if (open.size > 5) ", …" else ""}). Finish them, or drop what no longer makes sense with todo_drop, then deliver."
+        }
+    })
     private val workflowProgress = SqlWorkflowProgress(database)
     private val waitReads = waitStore
     private val workflowEngine = WorkflowEngine(workflowRunStore, object : WorkflowSessions {
@@ -139,6 +144,14 @@ class CloudServer(
         override suspend fun states(ids: Set<String>) = waitReads.findMany(ids).associate { it.id to WaitState(it.status, it.answer?.action, WaitMessages.answerLines(it)) }
         override suspend fun cancel(starter: Principal, id: String) { waits.cancel(starter, id) }
     })
+    /**
+     * The server-side reminder of a session's todo (docs/todos.md): observation (`would_block`) until `TEAMCODE_TODO_REMINDER=enforce`, like the
+     * Stop hook's mode.
+     */
+    private val todoReminder = me.nathanfallet.teamcode.domain.todos.TodoReminderEngine(todoStore, todos, object : WaitSessions {
+        override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
+        override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
+    }, enforce = System.getenv("TEAMCODE_TODO_REMINDER") == "enforce")
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory, WorkflowRunAutomations(workflowRuns, workflowRunStore))
 
@@ -247,6 +260,8 @@ class CloudServer(
                 if (runtime.enabled) step("dispatch") { work.runDue("automations/dispatch", intervalMillis = 2_000, timeoutMillis = 60_000) { dispatchAutomations.run() } }
                 // Like automations: while cloud sessions are off, a run waits instead of creating sessions that cannot start.
                 if (runtime.enabled) step("workflows") { work.runDue("workflows/run", intervalMillis = 2_000, timeoutMillis = 60_000) { workflowEngine.run() } }
+                // A turn that ended with open todo items, no wait and no Stop hook having judged it: the same message and counter as the hook.
+                if (runtime.enabled) step("todo-reminder") { work.runDue("todos/remind", intervalMillis = 5_000, timeoutMillis = 60_000) { todoReminder.run() } }
                 step("maintain") { work.runDue("automations/maintain", intervalMillis = 60_000) { automationStore.purge(1_000) } }
                 // Waits that resolve by themselves (a time, an event that timed out) wake their sessions; a message to a paused session resumes it.
                 if (runtime.enabled) step("waits") { work.runDue("waits/due", intervalMillis = 5_000, timeoutMillis = 60_000) { waits.resolveDue() } }

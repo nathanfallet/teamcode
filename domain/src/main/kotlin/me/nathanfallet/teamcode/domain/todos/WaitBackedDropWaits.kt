@@ -39,7 +39,8 @@ class WaitBackedDropWaits(private val waits: WaitStore) : TodoDropWaits {
             ),
             answer = null, createdAt = waits.now(), resolvedAt = null,
         )
-        return waits.create(actor, wait, null, WaitRules.MAX_OPEN_PER_SESSION).wait.id
+        // The hook runs with the agent's credential and the reminder with none: the owner is asked by the server, not as the agent.
+        return waits.createForSystem(wait, WaitRules.MAX_OPEN_PER_SESSION).wait.id
     }
 
     companion object { const val YES = "yes"; const val NO = "no"; const val STOP = "stop" }

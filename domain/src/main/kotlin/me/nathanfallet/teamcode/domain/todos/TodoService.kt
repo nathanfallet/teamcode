@@ -12,6 +12,9 @@ data class TodoCheckReport(val index: Int, val passed: Boolean?, val observed: S
  * acts with its execution credential (`todo:session`), confined to its own session; the session's owner, or an administrator
  * for a read, names the session. No method deletes an item, rewrites a condition or marks an item done without its checks.
  */
+/** What [TodoService.remind] did with a turn end. */
+enum class TodoReminderOutcome { NONE, SKIPPED, OBSERVED, REMINDED, ESCALATED }
+
 enum class TodoStopPhase { BEGIN, VERIFY, SETTLE }
 enum class TodoStopAction(val wire: String) { ALLOW("allow"), VERIFY("verify"), SETTLE("settle"), BLOCK("block") }
 
@@ -186,11 +189,15 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
         val id = session(actor, sessionId, write = true)
         val list = reconcile(actor.teamId, id) ?: return TodoStopDecision(TodoStopAction.ALLOW, null, why = "no_list")
         if (list.status != TodoListStatus.ACTIVE) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "finished")
-        if (input.background) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "background_task")
-        if (store.hasOpenWait(actor.teamId, id)) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "wait_open")
-        if (input.phase == TodoStopPhase.BEGIN) return TodoStopDecision(TodoStopAction.VERIFY, list)
-        validate(input)
+        if (input.background || store.hasOpenWait(actor.teamId, id)) {
+            val why = if (input.background) "background_task" else "wait_open"
+            val at = store.now()
+            return TodoStopDecision(TodoStopAction.ALLOW, store.mutate(actor.teamId, id) { current -> current.copy(lastHookAt = at).let { it to it } }, why = why)
+        }
         val now = store.now()
+        // The hook asked about this turn's end: the server-side reminder does not judge it again (one small write per stop).
+        if (input.phase == TodoStopPhase.BEGIN) return TodoStopDecision(TodoStopAction.VERIFY, store.mutate(actor.teamId, id) { current -> current.copy(lastHookAt = now).let { it to it } })
+        validate(input)
         val wanted = input.items.mapNotNull { r -> list.item(r.itemId) }
         val observed = if (wanted.isEmpty()) emptyMap() else serverChecks(actor.teamId, id, wanted)
         var settled = false
@@ -228,23 +235,7 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
             return TodoStopDecision(TodoStopAction.ALLOW, recorded, why = "observation", wouldBlock = true)
         }
         if (counted?.escalate != true) return TodoStopDecision(TodoStopAction.BLOCK, after, reason = TodoMessages.resume(after))
-        // Third stop without progress: ask the owner (outside any lock), mark the item that is stuck as waiting on that answer, and let the stop pass.
-        val waits = drops ?: throw TeamFailure("waits_unavailable", 503, "Waits are not available on this server.")
-        val stuck = TodoRules.next(after) ?: after.items.firstOrNull { it.status == TodoItemStatus.DOING }
-        val waitId = waits.openBlocked(actor, id, TodoMessages.blockedTitle(after), TodoMessages.blockedBody(after, input.lastMessage), dropItem = stuck != null)
-        val saved = try {
-            store.mutate(actor.teamId, id) { current ->
-                var changed = current
-                if (stuck != null && changed.item(stuck.id)?.status.let { it == TodoItemStatus.TODO || it == TodoItemStatus.DOING })
-                    changed = TodoRules.requestDrop(changed, stuck.id, "The agent stopped three times without progress on this item.", waitId)
-                changed = TodoRules.recordEvent(changed, "blocked", "Blocked on ${stuck?.id ?: "the todo"}: a wait asks the owner.", now)
-                changed.copy(updatedAt = now) to changed
-            }
-        } catch (e: Throwable) {
-            runCatching { waits.cancel(actor, waitId) }
-            throw e
-        }
-        return TodoStopDecision(TodoStopAction.ALLOW, saved, why = "escalated", escalated = true)
+        return escalate(actor, id, after, input.lastMessage, now)
     }
 
     /** The block a session is reminded of after a compaction or on resume ([TodoMessages.context]), or null without a list. */
@@ -261,6 +252,87 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
     suspend fun wakeBlock(teamId: String, sessionId: String): String? {
         val list = reconcile(teamId, sessionId) ?: return null
         return if (list.status == TodoListStatus.ACTIVE) TodoMessages.context(list) else null
+    }
+
+    /**
+     * The third stop without progress (the hook's or the server-side reminder's): ask the owner outside any lock, mark the item that is
+     * stuck as waiting on that answer, and let the stop pass.
+     */
+    private suspend fun escalate(actor: Principal, id: String, after: TodoList, lastMessage: String?, now: Long): TodoStopDecision {
+        val waits = drops ?: throw TeamFailure("waits_unavailable", 503, "Waits are not available on this server.")
+        val stuck = TodoRules.next(after) ?: after.items.firstOrNull { it.status == TodoItemStatus.DOING }
+        val waitId = waits.openBlocked(actor, id, TodoMessages.blockedTitle(after), TodoMessages.blockedBody(after, lastMessage), dropItem = stuck != null)
+        val saved = try {
+            store.mutate(actor.teamId, id) { current ->
+                var changed = current
+                if (stuck != null && changed.item(stuck.id)?.status.let { it == TodoItemStatus.TODO || it == TodoItemStatus.DOING })
+                    changed = TodoRules.requestDrop(changed, stuck.id, "The agent stopped three times without progress on this item.", waitId)
+                changed = TodoRules.recordEvent(changed, "blocked", "Blocked on ${stuck?.id ?: "the todo"}: a wait asks the owner.", now)
+                changed.copy(updatedAt = now) to changed
+            }
+        } catch (e: Throwable) {
+            runCatching { waits.cancel(actor, waitId) }
+            throw e
+        }
+        return TodoStopDecision(TodoStopAction.ALLOW, saved, why = "escalated", escalated = true)
+    }
+
+    /**
+     * The server-side reminder (Codex, which runs no Stop hook, and the safety net for a Claude Code hook that did not run): called for a
+     * session whose turn [turn] ended normally. Judges each turn end once, across replicas and restarts (the turn's sequence is marked
+     * under the list's lock, first); lets it go when the hook already judged this turn, when a wait of the session is open, or when no item
+     * remains open. Otherwise it counts the stop like the hook does (same counter, same limit and wait) and, below the limit, hands the
+     * resume message to [deliver]; a delivery that fails puts the counter back so the next pass tries again. Without [enforce] it only
+     * records `would_block`. The server reads no GitHub: it goes by the last proof, so it ticks nothing.
+     */
+    suspend fun remind(teamId: String, owner: Principal, sessionId: String, turn: TodoTurnEnd, enforce: Boolean, deliver: suspend (text: String, key: String) -> Unit): TodoReminderOutcome {
+        val now = store.now()
+        val before = store.find(teamId, sessionId) ?: return TodoReminderOutcome.NONE
+        if (before.status != TodoListStatus.ACTIVE || before.allClosed || (before.reminderSeq ?: -1) >= turn.seq) return TodoReminderOutcome.NONE
+        val openWait = store.hasOpenWait(teamId, sessionId)
+        var outcome = TodoReminderOutcome.NONE
+        var counted: TodoStop? = null
+        var previous: TodoList? = null
+        val after = store.mutate(teamId, sessionId) { current ->
+            if (current.status != TodoListStatus.ACTIVE || current.allClosed || (current.reminderSeq ?: -1) >= turn.seq) return@mutate current to current
+            previous = current
+            var changed = current.copy(reminderSeq = turn.seq)
+            val hookRan = current.lastHookAt != null && turn.startedAt != null && current.lastHookAt >= turn.startedAt
+            if (hookRan || openWait) { outcome = TodoReminderOutcome.SKIPPED; return@mutate changed to changed }
+            if (!enforce) {
+                outcome = TodoReminderOutcome.OBSERVED
+                changed = TodoRules.recordEvent(changed, "would_block", "Would remind: ${changed.doneCount} of ${changed.items.size} items done, next ${TodoRules.next(changed)?.id ?: "none ready"}.", now)
+                return@mutate changed.copy(updatedAt = now) to changed.copy(updatedAt = now)
+            }
+            val stop = TodoRules.stop(changed)
+            counted = stop
+            outcome = if (stop.escalate) TodoReminderOutcome.ESCALATED else TodoReminderOutcome.REMINDED
+            changed = if (stop.escalate) TodoRules.resetStall(stop.list) else stop.list
+            changed.copy(updatedAt = now) to changed.copy(updatedAt = now)
+        }
+        if (outcome == TodoReminderOutcome.ESCALATED) { escalate(owner, sessionId, after, null, now); return outcome }
+        if (outcome != TodoReminderOutcome.REMINDED) return outcome
+        try {
+            deliver(TodoMessages.resume(after), "todo-reminder-${after.id}-${turn.seq}")
+        } catch (e: Throwable) {
+            // Not delivered: the turn is judged again at the next pass, with the counter as it was.
+            val back = previous
+            if (back != null) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                runCatching { store.mutate(teamId, sessionId) { current -> current.copy(stall = back.stall, lastStop = back.lastStop, reminderSeq = back.reminderSeq).let { it to it } } }
+            }
+            throw e
+        }
+        return outcome
+    }
+
+    /** The store's clock, for the engine that drives [remind]. */
+    suspend fun now(): Long = store.now()
+
+    /** The open items of the session's active list, for a workflow step that must not deliver before the list is done: null when there is none. */
+    suspend fun openItems(teamId: String, sessionId: String): List<TodoItem>? {
+        val list = store.find(teamId, sessionId) ?: return null
+        if (list.status != TodoListStatus.ACTIVE || list.allClosed) return null
+        return list.items.filter { it.status != TodoItemStatus.DONE && it.status != TodoItemStatus.DROPPED }
     }
 
     /** What the hook failed to do (relay unreachable, slow, a server too old): recorded so a broken hook shows in the companion. */

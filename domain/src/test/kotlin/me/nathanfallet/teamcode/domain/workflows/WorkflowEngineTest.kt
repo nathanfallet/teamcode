@@ -262,6 +262,23 @@ class WorkflowEngineTest {
         pass(); assertEquals(RunStatus.RUNNING, run(r.id).status, "the run goes on to the next node")
     }
 
+    @Test fun aStepWhoseSessionKeepsAnOpenTodoDeliversOnlyOnceTheListIsDone() = runBlocking {
+        var refusal: String? = "This step's todo still has 2 open items (a, b). Finish them, then deliver."
+        val gated = WorkflowRunService(store, WorkflowTodoGate { team, session -> assertEquals("team", team); refusal.takeIf { session == "s1" } })
+        val run = start("ticket" to "T-42"); pass()
+        assertEquals("s1", run(run.id).sessionId)
+        assertEquals("todo_open", code { gated.deliverBySession(who(ada), "s1", JsonPrimitive("plan-1")) })
+        assertEquals(VisitStatus.ACTIVE, visits(run).first().status, "a refused delivery completes nothing")
+        refusal = null
+        gated.deliverBySession(who(ada), "s1", JsonPrimitive("plan-1"))
+        assertEquals(VisitStatus.DONE, visits(run).first().status)
+        // The run route is gated the same way.
+        val other = start("ticket" to "T-43"); pass()
+        refusal = "open"
+        val sessionOfOther = run(other.id).sessionId!!
+        assertEquals("todo_open", code { WorkflowRunService(store, WorkflowTodoGate { _, s -> "open".takeIf { s == sessionOfOther } }).deliver(who(ada), other.id, JsonPrimitive("plan-2")) })
+    }
+
     @Test fun noReminderWhileAWaitIsOpenOrWhenTheSessionOrRunIsGone() = runBlocking {
         val (r, s, at) = silentRun()
         store.openWaits += s; ended(s, at + 1); pass(2)

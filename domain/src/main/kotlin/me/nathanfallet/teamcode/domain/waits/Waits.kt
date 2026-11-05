@@ -149,6 +149,11 @@ interface WaitStore {
      * (changed = false). Fails `409 wait_limit` past [limit] open waits for the session.
      */
     suspend fun create(actor: Principal, wait: Wait, idempotencyKey: String?, limit: Int): WaitChange
+    /**
+     * Stores a wait the server itself opens for a session's owner (the todo's blocked wait, opened by the Stop hook or by the server-side
+     * reminder, which has no sign-in of the owner to check): same rules and cap as [create], audited as `system`. A store that cannot says so.
+     */
+    suspend fun createForSystem(wait: Wait, limit: Int): WaitChange = throw UnsupportedOperationException("This store opens no server-made waits.")
     suspend fun find(teamId: String, id: String): Wait?
     /**
      * In one transaction: stored waits by keyset (newest first), and, on the first page only (`before` null), the open

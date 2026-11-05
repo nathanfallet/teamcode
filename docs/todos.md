@@ -13,7 +13,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 | `teamcode_todo` MCP server (`teamcode mcp todo`), its relay, the checks run from the agent's environment, links, `todo_help` | implemented; real-session and sample-plan trials: see the pull request |
 | `teamcode cloud todo-stop` Stop hook, its routes (`/stop`, `/hook-error`), the resume message, the stall counter, orphan PRs, hook events | implemented, in **observation** (`would_block`); enforcement per profile: planned (`observe-then-block`) |
 | Reference at wake-up (the wait message, then the block), after a compaction and on resume (`SessionStart` hook `teamcode cloud todo-context`), route `GET /context` | implemented |
-| Server-side reminder (Codex, safety net) | planned |
+| Server-side reminder (Codex, safety net): the engine's `todo-reminder` pass, the workflow `deliver` gate (`todo_open`) | implemented, in **observation** (`would_block`); delivery with `TEAMCODE_TODO_REMINDER=enforce` |
 | Companion Todo view | planned |
 | Session for a local `teamcode run` | planned |
 
@@ -94,7 +94,7 @@ The agent's process runs the checks and reports their outcome, so an agent that 
 
 ## The Stop hook
 
-`teamcode cloud todo-stop --relay URL --session ID [--run ID] [--mode observe|block]` is a `Stop` hook (not `SubagentStop`: sub-agents do not keep the list), installed with `--settings` next to the runner's and the workflow's, with a timeout of 150 s. It exists for Claude Code sessions in a cloud pod or hosted remotely that have the `teamcode_todo` tool; Codex has no such hook (the server-side reminder, planned, covers it).
+`teamcode cloud todo-stop --relay URL --session ID [--run ID] [--mode observe|block]` is a `Stop` hook (not `SubagentStop`: sub-agents do not keep the list), installed with `--settings` next to the runner's and the workflow's, with a timeout of 150 s. It exists for Claude Code sessions in a cloud pod or hosted remotely that have the `teamcode_todo` tool; Codex has no such hook (the [server-side reminder](#server-side-reminder) covers it).
 
 It asks the server, through the launcher's loopback relay, up to three times per stop (`POST /api/v1/todos/session/stop`, phase `begin`, `verify`, `settle`), and runs on the agent's machine what the answers ask for:
 
@@ -121,5 +121,10 @@ The plan reference must be in front of the agent whatever woke it, not only at a
 - **The block** (`TodoMessages.context`) is the stop message of [The Stop hook](#the-stop-hook) without its first line and last instruction: the reference first, the item in progress (else the next one) in full with its last check, the whole list one line per item. It never orders the agent to go on; what to do comes from the message it follows.
 - A background agent's notification adds nothing: the list comes back at the next stop. At the end of a list no last message is imposed: the companion shows the finished list with its proofs.
 
+### Server-side reminder
+The engine's `todo-reminder` pass (every 5 s, with the other engine steps) covers the sessions that have no Stop hook (Codex in a cloud pod or hosted remotely) and is a safety net for Claude Code when its hook did not run. It reads, in batches of 200, the sessions that are `active` and wanted `running` and have an active list updated in the last 30 days, and the latest `turn` event of each (`phase` `completed`). For a turn end it has not judged yet, with open items, no open wait, and no hook pass during the turn (`lastHookAt` is recorded by the hook's `begin` phase), it sends the same resume message as the hook, with the same stall counter: after 3 reminders without progress it opens the same blocked wait to the owner (Resume / Drop this item / Stop here). It does not re-run GitHub checks: it goes by the last proof the agent reported. `reminderSeq` is set under the list's row lock, so a turn end is judged once across replicas and restarts; a failed delivery gives the count back. Delivery is idempotent (`todo-reminder-<list>-<seq>`). By default it only records `would_block`; `TEAMCODE_TODO_REMINDER=enforce` delivers.
+
+A workflow `deliver` (the agent's tool or the starter's) is refused with `409 todo_open` while the session's list has open items, so a step cannot end with work declared and not done.
+
 ### Not done yet
-Enforcement by default; the per-profile switch; the server-side reminder and Codex; showing `hookEvents` in the companion; `teamcode run` (a local session has no hook until `local-run`).
+Enforcement by default; the per-profile switch; the reminder's own trial on a real Codex session (tested only by the engine and persistence tests); showing `hookEvents` in the companion; `teamcode run` (a local session has no hook until `local-run`).
