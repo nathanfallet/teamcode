@@ -14,6 +14,19 @@ object LabelRules {
             throw TeamFailure("invalid_label", 400, "Use at most 16 labels with lowercase keys of 1–63 characters and values of at most 256 characters.")
     }
 
+    /**
+     * The label the server puts on a child session (docs/orchestration.md): its parent's id. Reserved: a creation request that sets
+     * it is refused (`400 reserved_label`), so a filter on it (`label=teamcode.parent=<id>`) only ever finds real children. Every
+     * other key, `teamcode.` ones included, stays free as before.
+     */
+    const val PARENT_LABEL = "teamcode.parent"
+    val RESERVED = setOf(PARENT_LABEL)
+
+    fun requireUnreserved(labels: Map<String, String>) {
+        val reserved = labels.keys.filter { it in RESERVED }
+        if (reserved.isNotEmpty()) throw TeamFailure("reserved_label", 400, "The label ${reserved.joinToString()} is set by the server on child sessions; choose another key.")
+    }
+
     fun validateFilter(labels: Map<String, String>) {
         if (labels.size > MAX_LABELS) throw TeamFailure("invalid_label", 400, "Filter on at most 16 labels.")
     }

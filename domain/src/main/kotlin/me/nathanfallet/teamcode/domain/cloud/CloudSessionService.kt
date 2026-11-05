@@ -41,6 +41,25 @@ class CloudSessionService(
     suspend fun create(principal: Principal, onBehalfOf: String?, draft: CloudSessionDraft, idempotency: IdempotencyRequest?): CloudCreateOutcome {
         val actor = actor(principal, onBehalfOf)
         validate(draft)
+        LabelRules.requireUnreserved(draft.labels)
+        return createCloud(principal, actor, draft, idempotency, null)
+    }
+
+    /**
+     * Creates a child of the session [link] names, for the orchestration service (docs/orchestration.md), which has already
+     * confined [principal] (the parent's execution credential, acting as its owner) to that parent and chosen the profile. Every
+     * rule of [create] applies to the owner (profile assignment, access policy, retained cap), plus the parent's cap of children
+     * not yet ended, checked by the store under the same lock. The child carries the reserved label `teamcode.parent`.
+     */
+    internal suspend fun createChild(principal: Principal, draft: CloudSessionDraft, idempotency: IdempotencyRequest, link: ChildSessionLink): CloudCreateOutcome {
+        validate(draft)
+        LabelRules.requireUnreserved(draft.labels)
+        val labels = draft.labels + (LabelRules.PARENT_LABEL to link.parentId)
+        LabelRules.validate(labels)
+        return createCloud(principal, CloudActor(principal, principal.member.id), draft.copy(labels = labels, automationId = null), idempotency, link)
+    }
+
+    private suspend fun createCloud(principal: Principal, actor: CloudActor, draft: CloudSessionDraft, idempotency: IdempotencyRequest?, link: ChildSessionLink?): CloudCreateOutcome {
         // A profile id is random and only listed to the members who may use it: saying that an id exists but is not
         // assigned reveals nothing a member could guess. Names are resolved by clients among the profiles listed to
         // the caller, so an unassigned profile is never found by its name.
@@ -83,10 +102,12 @@ class CloudSessionService(
             // Created on someone's behalf, the session runs the creator's instructions: no GitHub token until its owner allows it (audit M2).
             githubAccess = if (onBehalf) CloudGitHubAccess.NONE else CloudGitHubAccess.OWNER,
             automationId = draft.automationId,
+            parentSessionId = link?.parentId, rootSessionId = link?.rootId, depth = link?.depth ?: 0,
         )
         if (onBehalf && session.environment.requireGitHub) throw TeamFailure("github_owner_consent", 422,
             "This profile requires GitHub, and a session created on someone's behalf has no GitHub access until its owner allows it. Ask the owner to create the session.")
-        val outcome = store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
+        val outcome = if (link == null) store.insert(session, actor, idempotency, settings.maxRetainedSessionsPerMember)
+            else store.insertChild(session, actor, idempotency!!, settings.maxRetainedSessionsPerMember, link)
         // Queued after the session commits, idempotently: if this step fails, the client's retry with the same
         // Idempotency-Key replays the creation and queues the message then.
         draft.initialMessage?.let { text ->
@@ -110,6 +131,7 @@ class CloudSessionService(
         if (actor.effectiveMemberId != principal.member.id)
             throw TeamFailure("on_behalf_forbidden", 403, "A remote session runs on the caller's own device; it cannot be created on behalf of another member.")
         validateRemote(draft)
+        LabelRules.requireUnreserved(draft.labels)
         val (device, folder) = if (draft.deviceId == null) deviceOf(principal) to null else targetFolder(principal, draft)
         val owner = store.member(principal.teamId, principal.member.id)
             ?: throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
@@ -421,6 +443,20 @@ class CloudSessionService(
             )
         } ?: throw missing()
     }
+
+    /**
+     * Terminates a child for the orchestration service, which has confined [principal] to the child's parent: the same move as
+     * [delete], audited as `cloud.session.child_terminated` with the parent's execution credential. Idempotent.
+     */
+    internal suspend fun terminateChild(principal: Principal, id: String): CloudSession =
+        transition(principal.teamId, id) { current ->
+            if (current.state == CloudSessionState.TERMINATED || current.desiredState == DesiredState.TERMINATED) return@transition null
+            val now = store.now()
+            CloudTransition(
+                current.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "deleted", updatedAt = now),
+                CloudWrite(actor = CloudActor(principal, current.ownerId), auditAction = "cloud.session.child_terminated", reconcileAt = now),
+            )
+        } ?: throw missing()
 
     /** The owner's session. A role, an administrator's included, opens nobody else's. */
     private fun visible(principal: Principal, session: CloudSession?): CloudSession {

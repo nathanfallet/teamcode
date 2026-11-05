@@ -8,8 +8,12 @@ class IssuedInferenceCredential(val token: String, val expiresAt: Long, val life
     override fun toString() = "IssuedInferenceCredential(token=[REDACTED], expiresAt=$expiresAt)"
 }
 
-/** What a `tcex_` credential may do: [CLOUD] is a pod's full execution credential, [REMOTE_SESSION] the confined one of a remote host's relays. */
-enum class ExecutionCredentialKind { CLOUD, REMOTE_SESSION }
+/**
+ * What a `tcex_` credential may do: [CLOUD] is a pod's full execution credential, [ORCHESTRATOR] the same plus `sessions:children`
+ * (a session whose profile version enables orchestration, below its maximum depth: docs/orchestration.md), [REMOTE_SESSION] the
+ * confined one of a remote host's relays.
+ */
+enum class ExecutionCredentialKind { CLOUD, ORCHESTRATOR, REMOTE_SESSION }
 
 /**
  * Inference credentials of cloud executions. Each is a hashed member token limited to inference, attributed to
@@ -47,7 +51,9 @@ class RunnerInferenceUseCase(private val sessions: CloudSessionStore, private va
         if (execution.state != ExecutionState.RUNNING) throw fenced()
         // A draining execution still finishes its turn, so `pausing` keeps its inference until the pod stops.
         if (session.state !in INFERENCE_STATES) throw TeamFailure("inference_unavailable", 409, "The session cannot run inference in its current state.")
-        return credentials.issue(teamId, sessionId, epoch, TTL_MILLIS, KEEP) ?: throw fenced()
+        // The pinned profile version decides, so publishing a new version never widens a running session's credential.
+        val orchestrates = sessions.profileVersion(teamId, session.profileId, session.profileVersion)?.orchestration?.allows(session.depth) == true
+        return credentials.issue(teamId, sessionId, epoch, TTL_MILLIS, KEEP, if (orchestrates) ExecutionCredentialKind.ORCHESTRATOR else ExecutionCredentialKind.CLOUD) ?: throw fenced()
     }
 
     /**

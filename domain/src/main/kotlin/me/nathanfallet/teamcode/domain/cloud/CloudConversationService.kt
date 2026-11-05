@@ -54,6 +54,39 @@ class CloudConversationService(
         if (outcome is InputOutcome.Accepted) wake(principal.teamId, session.id, principal)
     }
 
+    /**
+     * A message from a parent session's agent to its [child] (docs/orchestration.md), written by the parent's execution credential
+     * as the owner. The orchestration service has confined [principal] to the child's parent; this applies the message rules, the
+     * GitHub owner-only guard (the author is the owner, so it passes) and the wake of any message. Idempotent per [clientKey].
+     */
+    internal suspend fun sendFromParent(principal: Principal, child: CloudSession, text: String, clientKey: String): InputOutcome {
+        CloudConversationRules.validateMessage(text)
+        sessions.revalidate(principal)
+        requireGitHubInstructor(principal, child)
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("parent\n$text".encodeToByteArray()).joinToString("") { "%02x".format(it) }
+        val input = newInput(principal, child, CloudInputKind.MESSAGE, text, InputRequest(text, true, clientKey, digest, null))
+        return when (val outcome = store.insertInput(NewInput(input, null, child.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)) {
+            is InputOutcome.Replayed -> outcome
+            is InputOutcome.Accepted -> InputOutcome.Accepted(outcome.input.copy(woke = wake(principal.teamId, child.id, principal)))
+        }
+    }
+
+    /** Stops the [child]'s current turn for its parent, as [interrupt] does for a member. */
+    internal suspend fun interruptFromParent(principal: Principal, child: CloudSession, clientKey: String?): InputOutcome {
+        sessions.revalidate(principal)
+        if (child.state != READY && child.state != ACTIVE)
+            throw TeamFailure("nothing_to_interrupt", 409, "The child session has no running agent to interrupt.")
+        val digest = clientKey?.let { java.security.MessageDigest.getInstance("SHA-256").digest("interrupt".encodeToByteArray()).joinToString("") { b -> "%02x".format(b) } }
+        val input = newInput(principal, child, CloudInputKind.INTERRUPT, null, InputRequest(null, false, clientKey, digest, null))
+        return store.insertInput(NewInput(input, null, child.ownerId), CloudConversationRules.MAX_PENDING_INPUTS)
+    }
+
+    /** The newest events of a [child] for its parent, oldest first, at most [limit] before [before] (bounded by the page rules). */
+    internal suspend fun transcriptOf(child: CloudSession, before: Long?, limit: Int): CloudEventPage {
+        CloudConversationRules.validatePage(limit, null, before)
+        return store.events(child.id, null, before ?: Long.MAX_VALUE, limit)
+    }
+
     suspend fun events(principal: Principal, id: String, after: Long?, before: Long?, limit: Int): CloudEventPage {
         CloudConversationRules.validatePage(limit, after, before)
         val session = open(principal, id, CloudPermission.TRANSCRIPT)
