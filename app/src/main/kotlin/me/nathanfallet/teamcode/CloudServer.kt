@@ -145,13 +145,12 @@ class CloudServer(
         override suspend fun cancel(starter: Principal, id: String) { waits.cancel(starter, id) }
     })
     /**
-     * The server-side reminder of a session's todo (docs/todos.md): observation (`would_block`) until `TEAMCODE_TODO_REMINDER=enforce`, like the
-     * Stop hook's mode.
+     * The server-side reminder of a session's todo (docs/todos.md): always on, like the Stop hook.
      */
     private val todoReminder = me.nathanfallet.teamcode.domain.todos.TodoReminderEngine(todoStore, todos, object : WaitSessions {
         override suspend fun authorize(actor: Principal, sessionId: String) = conversationService.authorizeWaitAnswer(actor, sessionId)
         override suspend fun deliver(actor: Principal, sessionId: String, text: String, clientKey: String) = conversationService.queueWaitAnswer(actor, sessionId, text, clientKey)
-    }, enforce = System.getenv("TEAMCODE_TODO_REMINDER") == "enforce")
+    })
     private val scheduleAutomations = ScheduleAutomationsUseCase(automationStore)
     private val dispatchAutomations = DispatchAutomationRunsUseCase(automationStore, CloudAutomationSessions(sessions), automationDirectory, WorkflowRunAutomations(workflowRuns, workflowRunStore))
 

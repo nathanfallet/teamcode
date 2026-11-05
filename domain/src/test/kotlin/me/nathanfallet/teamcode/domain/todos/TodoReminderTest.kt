@@ -46,7 +46,7 @@ class TodoReminderTest {
     private fun item(id: String) = TodoItemDefinition(id, "Item $id", long, TodoDoneWhen("done", listOf(TodoCheck.PrMerged("acme/x"))))
     private val store = Store(); private val drops = Drops(); private val sessions = Sessions()
     private val service = TodoService(store, drops)
-    private fun engine(enforce: Boolean = true) = TodoReminderEngine(store, service, sessions, enforce)
+    private fun engine() = TodoReminderEngine(store, service, sessions)
     private fun endTurn(seq: Long, startedAt: Long = store.clock - 500) { store.turns["s1"] = TodoTurnEnd(seq, startedAt) }
     private suspend fun create() { service.create(ada, "s1", "Plan: https://example.com/p (v3)", emptyList(), listOf(item("a"), item("b"))); store.list = store.list!!.copy(updatedAt = store.clock) }
 
@@ -60,7 +60,7 @@ class TodoReminderTest {
         assertEquals("todo-reminder-${store.list!!.id}-10", key)
         assertEquals(1, store.list!!.stall); assertEquals(10L, store.list!!.reminderSeq)
         // The same turn end is judged once: another pass, or another replica, sends nothing.
-        assertEquals(0, engine().run()); assertEquals(0, TodoReminderEngine(store, TodoService(store, drops), sessions, true).run())
+        assertEquals(0, engine().run()); assertEquals(0, TodoReminderEngine(store, TodoService(store, drops), sessions).run())
         assertEquals(1, sessions.delivered.size)
     }
 
@@ -108,16 +108,6 @@ class TodoReminderTest {
         service.note(ada, "s1", "a", "tried the merge queue")
         endTurn(12); engine().run()
         assertEquals(0, store.list!!.stall, "a note is progress"); assertEquals(3, sessions.delivered.size); assertEquals(emptyList(), drops.blocked)
-    }
-
-    @Test fun inObservationItOnlyRecordsWhatItWouldHaveSent() = runBlocking {
-        create(); endTurn(10)
-        assertEquals(0, engine(enforce = false).run())
-        assertEquals(emptyList(), sessions.delivered)
-        assertEquals(0, store.list!!.stall)
-        assertEquals("would_block", store.list!!.hookEvents.single().kind)
-        assertTrue(store.list!!.hookEvents.single().text.startsWith("Would remind: 0 of 2 items done, next a."))
-        assertEquals(0, engine(enforce = false).run(), "judged once"); assertEquals(1, store.list!!.hookEvents.size)
     }
 
     @Test fun aFailedDeliveryPutsTheCounterBackAndTheNextPassTriesAgain() = runBlocking {
