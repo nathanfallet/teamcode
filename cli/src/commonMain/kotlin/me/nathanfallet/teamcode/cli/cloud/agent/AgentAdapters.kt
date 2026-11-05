@@ -34,7 +34,9 @@ data class AgentSettings(val kind: String, val version: String?, val model: Stri
     /** The server takes `tasks` events ([CloudTasks.FEATURE]): the agent's background tasks are reported to the session's members. */
     val backgroundTasks: Boolean = false,
     /** Who the execution runs for, told to the agent at its start ([me.nathanfallet.teamcode.cli.launch.OwnerIdentity]); null from an older server. */
-    val owner: RunnerOwnerView? = null) {
+    val owner: RunnerOwnerView? = null,
+    /** `background` for a child session (docs/orchestration.md): its inference goes through the proxy's background workload. */
+    val workload: String? = null) {
     /** Whether the agent skips its own permission checks and sandbox. */
     val bypass get() = permissionMode != RemotePermissionModes.ASK
 }

@@ -360,6 +360,9 @@ internal interface AgentTools {
     /** The todo tools (`todo_create`…) to start beside the agent for this session, or null. Never throws except on cancellation. */
     suspend fun todo(): me.nathanfallet.teamcode.cli.launch.TodoMcp? = null
 
+    /** The child-session tools (`spawn_session`…) of an orchestrating session, or null. Never throws except on cancellation. */
+    suspend fun sessions(): me.nathanfallet.teamcode.cli.launch.SessionsMcp? = null
+
     /** A Claude Code plugin directory carrying hooks (a member's approved team hooks on their own device), or null. */
     suspend fun claudePlugin(): String? = null
 }
@@ -540,6 +543,27 @@ internal class RunnerAgentTools(
         }
         catch (_: Exception) { false }
         return if (usable) try { me.nathanfallet.teamcode.cli.launch.TodoMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
+    }
+
+    /**
+     * `teamcode mcp sessions` in the agent's container, for this session, when the server serves orchestration (`cloud.orchestration.v1`)
+     * and the execution's credential holds `sessions:children` (docs/orchestration.md): any other credential gets a `403` on the read
+     * (`credential_scope`, `orchestration_disabled`), and then the agent is not offered tools that would always be refused. The read
+     * changes nothing.
+     */
+    override suspend fun sessions(): me.nathanfallet.teamcode.cli.launch.SessionsMcp? {
+        val command = binary ?: return null
+        val session = sessionId ?: return null
+        val usable = try {
+            withTimeout(20_000) {
+                if (me.nathanfallet.teamcode.api.models.Orchestration.CAPABILITY !in client.capabilities().features) false
+                else { client.childSessions(limit = 1); true }
+            }
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) { false }
+        catch (error: CancellationException) { throw error }
+        catch (_: me.nathanfallet.teamcode.client.TeamCodeException) { false }
+        catch (_: Exception) { false }
+        return if (usable) try { me.nathanfallet.teamcode.cli.launch.SessionsMcp(command, session) } catch (_: IllegalArgumentException) { null } else null
     }
 
     /**
