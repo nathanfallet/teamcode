@@ -200,8 +200,8 @@ object CloudSessions : Table("cloud_sessions") {
         index("cloud_session_cluster_waiting", false, clusterId, waitingSince)
         // The daemon's queue: a device's sessions waiting for their host, oldest request first.
         index("cloud_session_host_waiting", false, hostDeviceId, phase, desiredState, updatedAt)
-        // A parent's children, newest first (keyset on created_at, id), and the count of those not ended, for the child cap.
-        index("cloud_session_parent", false, parentSessionId, createdAt, id)
+        // A parent's children of the team, newest first (keyset on created_at, id), and the count of those not ended, for the child cap.
+        index("cloud_session_parent", false, parentSessionId, teamId, createdAt, id)
         index("cloud_session_parent_state", false, parentSessionId, state, desiredState)
     }
 }
