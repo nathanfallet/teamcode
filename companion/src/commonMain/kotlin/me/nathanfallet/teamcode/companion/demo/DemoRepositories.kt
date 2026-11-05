@@ -1,5 +1,7 @@
 package me.nathanfallet.teamcode.companion.demo
 
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.domain.repositories.TodoRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
@@ -143,7 +145,7 @@ class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
 
     override suspend fun end(accountId: String, sessionId: String) { demo.store().move(sessionId, SessionState.TERMINATED) }
 
-    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
+    override fun sessionChanges(accountId: String, kinds: Set<SessionKind>, waiting: Boolean, waits: Boolean, renames: Boolean, workflows: Boolean, todos: Boolean): Flow<LiveUpdate<SessionChange>> = channelFlow {
         val store = demo.store()
         // Listening before saying the feed is open: a change made right after it is never missed.
         launch(start = CoroutineStart.UNDISPATCHED) { store.feed.collect { send(LiveUpdate.Item(it)) } }
@@ -313,4 +315,9 @@ class DemoSessionFileRepository(private val types: SessionFileRepository) : Sess
     override suspend fun upload(accountId: String, sessionId: String, file: PickedFile, contentType: String?, idempotencyKey: String, onProgress: (Long, Long) -> Unit): UploadedFile =
         throw CompanionException.Unsupported("cloud.files.v1")
     override fun typeFor(name: String): String? = types.typeFor(name)
+}
+
+/** The demo's session todos: the first session has a plan under way; the others have none yet. */
+class DemoTodoRepository(private val demo: DemoMode) : TodoRepository {
+    override suspend fun todo(accountId: String, sessionId: String): SessionTodo? = demo.store().todo(sessionId)
 }

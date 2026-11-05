@@ -162,6 +162,9 @@ data class SessionChange(
     val runWorkflowId: String? = null,
     /** The parent run, for the run of a sub-workflow. */
     val runParentId: String? = null,
+    /** For `cloud.todo`: the counter of the session's list. */
+    val todoDone: Int? = null,
+    val todoTotal: Int? = null,
 ) {
     companion object {
         const val WAITING = "cloud.session.waiting"
@@ -172,6 +175,7 @@ data class SessionChange(
         const val WAIT_CANCELLED = "cloud.wait.cancelled"
         val WAIT_TYPES = setOf(WAIT_CREATED, WAIT_RESOLVED, WAIT_CANCELLED)
         const val WORKFLOW_RUN = "cloud.workflow.run.updated"
+        const val TODO = "cloud.todo"
         const val TURN = "cloud.turn"
     }
 }

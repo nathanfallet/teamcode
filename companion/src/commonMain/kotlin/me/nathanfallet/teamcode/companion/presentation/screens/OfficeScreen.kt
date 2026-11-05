@@ -101,6 +101,8 @@ import me.nathanfallet.teamcode.companion.resources.office_card_doing
 import me.nathanfallet.teamcode.companion.resources.office_card_last_activity
 import me.nathanfallet.teamcode.companion.resources.office_card_started
 import me.nathanfallet.teamcode.companion.resources.office_card_steps
+import org.koin.mp.KoinPlatform
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.ReadTodoUseCase
 import me.nathanfallet.teamcode.companion.resources.office_card_subagents
 import me.nathanfallet.teamcode.companion.resources.office_card_where
 import me.nathanfallet.teamcode.companion.resources.office_close_panel
@@ -215,7 +217,10 @@ fun OfficeScreen(
 
     // What an agent does is read when the pointer rests on it, one session at a time.
     val scope = rememberCoroutineScope()
-    val peeks = remember(account?.id) { ActivityPeeks(load = { accountId, sessionId -> loadTranscript(accountId, sessionId) }, scope = scope, now = clock::nowMillis) }
+    val peeks = remember(account?.id) { ActivityPeeks(
+        load = { accountId, sessionId -> loadTranscript(accountId, sessionId) }, scope = scope, now = clock::nowMillis,
+        todo = KoinPlatform.getKoinOrNull()?.getOrNull<ReadTodoUseCase>()?.let { read -> { accountId, sessionId -> read(accountId, sessionId) } },
+    ) }
     val activity by peeks.known.collectAsStateWithLifecycle()
     val peekId = hoveredId ?: previewId
     LaunchedEffect(peekId, account?.id) {

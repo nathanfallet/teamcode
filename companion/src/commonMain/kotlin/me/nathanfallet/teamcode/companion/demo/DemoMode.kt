@@ -10,6 +10,11 @@ import me.nathanfallet.teamcode.companion.domain.models.Account
 import me.nathanfallet.teamcode.companion.domain.models.CloudSession
 import me.nathanfallet.teamcode.companion.domain.models.CompanionException
 import me.nathanfallet.teamcode.companion.domain.models.SessionChange
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.domain.models.TodoItem
+import me.nathanfallet.teamcode.companion.domain.models.TodoItemState
+import me.nathanfallet.teamcode.companion.domain.models.TodoProof
+import me.nathanfallet.teamcode.companion.domain.usecases.todos.TodoShortcuts
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.RunStatus
@@ -62,6 +67,9 @@ internal class DemoStore(private val clock: Clock, account: Account) {
     private val _transcripts = MutableStateFlow(DemoContent.sessions(startedAt).associate { it.id to DemoContent.transcript(it.id, startedAt) })
     val transcripts: StateFlow<Map<String, List<TranscriptEvent>>> = _transcripts.asStateFlow()
     val artifacts = DemoContent.artifacts(startedAt)
+    private val _todos = MutableStateFlow(DemoContent.sessions(startedAt).mapNotNull { s -> DemoContent.todo(s.id, startedAt)?.let { s.id to it } }.toMap())
+    /** The demo's session todos, by session. */
+    val todos: StateFlow<Map<String, SessionTodo>> = _todos.asStateFlow()
     private val _waits = MutableStateFlow(DemoContent.waits(startedAt))
     val waits: StateFlow<List<Wait>> = _waits.asStateFlow()
 
@@ -152,7 +160,34 @@ internal class DemoStore(private val clock: Clock, account: Account) {
         }
         _sessions.update { all -> all[sessionId]?.let { all + (sessionId to it.copy(lastActivityAt = at, updatedAt = at)) } ?: all }
         announce(sessionId, null, TurnPhase.COMPLETED.wire)
+        if (text != null) moveTodo(sessionId, text)
         return inputId
+    }
+
+    /**
+     * What a turn does to the session's todo, as it would on a server: the shortcut "Add to your todo: …" adds that item;
+     * any other message moves the plan one point on. Tells the feed, as every change does.
+     */
+    private fun moveTodo(sessionId: String, text: String) {
+        val todo = todos.value[sessionId] ?: return
+        val at = now()
+        val items = if (text.startsWith(TodoShortcuts.ADD_PREFIX)) {
+            val name = text.removePrefix(TodoShortcuts.ADD_PREFIX).substringBefore(". Write it as").trim().trimEnd('.')
+            todo.items + TodoItem("added-${next()}", name, name, "Done when the agent says so.", TodoItemState.TODO, addedLater = true, addedReason = "Added by ${DemoContent.USERNAME}.", proof = null, unverified = false, dropReason = null)
+        } else {
+            val doing = todo.items.indexOfFirst { it.state == TodoItemState.DOING }
+            if (doing < 0) return
+            todo.items.mapIndexed { index, item ->
+                when {
+                    index == doing -> item.copy(state = TodoItemState.DONE, proof = TodoProof(at, true, "Pull request merged.", emptyList()))
+                    index == doing + 1 -> item.copy(state = TodoItemState.DOING)
+                    else -> item
+                }
+            }
+        }
+        val changed = todo.copy(items = items, updatedAt = at)
+        _todos.update { it + (sessionId to changed) }
+        feed.tryEmit(SessionChange(next(), SessionChange.TODO, sessionId, DemoContent.MEMBER_ID, at, null, null, todoDone = changed.done, todoTotal = changed.total))
     }
 
     /** Answers an open wait of the member's at once, as the server would, and tells the feed. */
@@ -222,6 +257,8 @@ internal class DemoStore(private val clock: Clock, account: Account) {
     private fun announceRun(run: WorkflowRun) {
         feed.tryEmit(SessionChange(next(), SessionChange.WORKFLOW_RUN, "", DemoContent.MEMBER_ID, now(), null, null, runId = run.id, runStatus = run.status, runWorkflowId = run.workflowId))
     }
+
+    fun todo(sessionId: String): SessionTodo? = todos.value[sessionId]
 
     fun newId(prefix: String) = "demo-$prefix-${next()}"
 

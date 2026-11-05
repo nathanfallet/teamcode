@@ -1246,4 +1246,30 @@
     <string name="office_close_panel">Fermer la session</string>
     <string name="office_waiting_permission">Demande l'autorisation d'utiliser un outil</string>
     <string name="office_waiting_question">A une question pour toi</string>
+
+    <!-- Todo de session (todos.v1) : la vue Todo du panneau, son compteur et ses raccourcis -->
+    <string name="todo_tab">Todo</string>
+    <string name="agents_tab">Agents</string>
+    <string name="todo_reference">Plan</string>
+    <string name="todo_current">En cours : %1$s</string>
+    <string name="todo_done_when">Fini quand : %1$s</string>
+    <string name="todo_last_proof">Dernière preuve, %1$s : %2$s</string>
+    <string name="todo_added_along">Ajouté en cours de route</string>
+    <string name="todo_unverified">Non vérifié</string>
+    <string name="todo_attested_flag">Plus d'un tiers des points reposent sur la seule parole de l'agent.</string>
+    <string name="todo_hook_errors">Erreurs du hook d'arrêt</string>
+    <string name="todo_reconnecting">Reconnexion : la liste peut avoir du retard.</string>
+    <string name="todo_status_done">Terminée</string>
+    <string name="todo_status_abandoned">Abandonnée</string>
+    <string name="todo_state_todo">À faire</string>
+    <string name="todo_state_doing">En cours</string>
+    <string name="todo_state_done">Fait</string>
+    <string name="todo_state_drop_requested">Abandon demandé</string>
+    <string name="todo_state_dropped">Abandonné</string>
+    <string name="todo_counter_description">Todo : %1$d sur %2$d faits. Ouvrir la liste.</string>
+    <string name="todo_verify_plan">Vérifier contre le plan</string>
+    <string name="todo_add_item">Ajouter un point…</string>
+    <string name="todo_add_hint">Que doit ajouter l'agent ?</string>
+    <string name="todo_add_action">Demander à l'agent de l'ajouter</string>
+    <string name="todo_panel_title">Todo</string>
 </resources>

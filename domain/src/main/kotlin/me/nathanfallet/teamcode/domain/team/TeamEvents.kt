@@ -54,6 +54,12 @@ enum class TeamEventType(val wire: String, val subject: TeamEventSubject) {
      * read the team's sessions); the subject is the run. It carries no `kind`: it passes whatever session kinds a stream asks for.
      */
     WORKFLOW_RUN_UPDATED("cloud.workflow.run.updated", TeamEventSubject.SESSION),
+    /**
+     * The session's todo changed in a way a screen shows (created, an item added, started, done, dropped, the list ended, the
+     * stall counter, a hook error): `{sessionId, kind, status, done, total}`. It belongs to the session's owner; the subject is the
+     * session. It carries the counter only: the client reads the list (`GET /todos/session`) for the rest.
+     */
+    TODO_UPDATED("cloud.todo", TeamEventSubject.SESSION),
     RUN_STARTED("run.started", TeamEventSubject.RUN),
     /** No heartbeat for [AgentRunService.HEARTBEAT_TTL_MILLIS]; a later heartbeat and another silence emit it again. */
     RUN_STALE("run.stale", TeamEventSubject.RUN),

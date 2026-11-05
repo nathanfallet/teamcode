@@ -71,6 +71,11 @@ import me.nathanfallet.teamcode.companion.presentation.transcript.Subagent
 import me.nathanfallet.teamcode.companion.presentation.transcript.SubagentState
 import me.nathanfallet.teamcode.companion.resources.Res
 import me.nathanfallet.teamcode.companion.resources.action_cancel
+import me.nathanfallet.teamcode.companion.resources.agents_tab
+import me.nathanfallet.teamcode.companion.resources.todo_panel_title
+import me.nathanfallet.teamcode.companion.resources.todo_tab
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.presentation.viewmodels.PanelTab
 import me.nathanfallet.teamcode.companion.resources.subagents_badge
 import me.nathanfallet.teamcode.companion.resources.subagents_close_panel
 import me.nathanfallet.teamcode.companion.resources.subagents_commands
@@ -216,14 +221,28 @@ fun SubagentPanel(
     modifier: Modifier = Modifier,
     onClose: (() -> Unit)? = null,
     onHide: (() -> Unit)? = null,
+    /** The session's todo (`todos.v1`): with it the panel offers its Todo view, beside the agents' when there are some. */
+    todo: SessionTodo? = null,
+    tab: PanelTab = PanelTab.AGENTS,
+    onTab: (PanelTab) -> Unit = {},
+    todoReconnecting: Boolean = false,
+    onVerify: (() -> Unit)? = null,
+    onAddItem: ((String) -> Unit)? = null,
 ) {
     val colors = TeamCode.colors
+    // Nothing else to list: the todo is the panel.
+    val showTodo = todo != null && (tab == PanelTab.TODO || !work.hasContent)
     Column(modifier.background(colors.panel).testTag("subagent-panel")) {
         Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(Res.string.subagents_title), color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(stringResource(if (todo != null && !work.hasContent) Res.string.todo_panel_title else Res.string.subagents_title), color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (work.running > 0) Chip(pluralStringResource(Res.plurals.subagents_running_badge, work.running, work.running), tone = Tone.ACCENT, dot = true)
             onHide?.let { TcIconButton(PhosphorIcons.Regular.SidebarSimple, stringResource(Res.string.subagents_hide_panel), onClick = it, modifier = Modifier.testTag("panel-hide")) }
             onClose?.let { TcIconButton(PhosphorIcons.Regular.X, stringResource(Res.string.subagents_close_panel), onClick = it, modifier = Modifier.testTag("panel-close")) }
+        }
+        if (todo != null && work.hasContent) PanelTabs(tab, todo, onTab)
+        if (todo != null && showTodo) {
+            TodoView(todo, now, todoReconnecting, onVerify, onAddItem, Modifier.weight(1f))
+            return@Column
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             PanelRow(PhosphorIcons.Regular.ChatCircle, stringResource(Res.string.subagents_main), stringResource(Res.string.subagents_main_hint), selected = thread == null,
@@ -271,6 +290,22 @@ fun SubagentPanel(
                 else -> null
             }
             note?.let { Text(stringResource(it), fontSize = 11.5.sp, lineHeight = 16.sp, color = colors.muted, modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp).testTag("panel-note")) }
+        }
+    }
+}
+
+/** "Agents | Todo 4 / 9": which of the panel's two views shows. */
+@Composable
+private fun PanelTabs(selected: PanelTab, todo: SessionTodo, onTab: (PanelTab) -> Unit) {
+    val colors = TeamCode.colors
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(Radii.control).border(1.dp, colors.line, Radii.control).testTag("panel-tabs")) {
+        for ((tab, label) in listOf(PanelTab.AGENTS to stringResource(Res.string.agents_tab), PanelTab.TODO to "${stringResource(Res.string.todo_tab)} ${todoCounter(todo)}")) {
+            val on = tab == selected
+            Box(
+                Modifier.weight(1f).heightIn(min = 32.dp).then(if (on) Modifier.background(colors.accentDim) else Modifier.hoverHighlight(Radii.control))
+                    .handCursor().clickable(role = Role.Tab, onClick = { onTab(tab) }).testTag(if (tab == PanelTab.TODO) "tab-todo" else "tab-agents"),
+                contentAlignment = Alignment.Center,
+            ) { Text(label, fontSize = 12.5.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, color = if (on) colors.accentText else colors.muted, maxLines = 1) }
         }
     }
 }

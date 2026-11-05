@@ -24,6 +24,10 @@ import me.nathanfallet.teamcode.companion.domain.models.WorkflowRun
 import me.nathanfallet.teamcode.companion.domain.models.WorkflowStep
 import me.nathanfallet.teamcode.companion.domain.models.SessionHost
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
+import me.nathanfallet.teamcode.companion.domain.models.SessionTodo
+import me.nathanfallet.teamcode.companion.domain.models.TodoItem
+import me.nathanfallet.teamcode.companion.domain.models.TodoItemState
+import me.nathanfallet.teamcode.companion.domain.models.TodoProof
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.TranscriptEvent
 import me.nathanfallet.teamcode.companion.domain.models.TurnPhase
@@ -61,7 +65,7 @@ object DemoContent {
     /** What the demo server announces: waits, workflows and one automation, but no transfers, devices, files, GitHub link or MCP gateway, so their screens stay quiet. */
     val features = setOf(
         Features.SESSIONS, Features.TRANSCRIPT, Features.MESSAGES, Features.EVENTS, Features.INITIAL_MESSAGE, Features.ARTIFACTS, Features.RENAME, Features.WAITS,
-        Features.WORKFLOWS, Features.WORKFLOWS_LIVE, Features.AUTOMATIONS,
+        Features.WORKFLOWS, Features.WORKFLOWS_LIVE, Features.AUTOMATIONS, Features.TODOS, Features.TODOS_LIVE,
     )
 
     /**
@@ -109,6 +113,32 @@ object DemoContent {
         id = id, name = name, ownerId = MEMBER_ID, state = state, phase = null, agentKind = profile.agentKind, model = model, effort = null,
         profileId = profile.id, repositories = emptyList(), lastActivityAt = createdAt, createdAt = createdAt, updatedAt = createdAt, problemCode = null,
     )
+
+    /** The first session's todo: a plan of nine points, four done, the fifth under way, one added along the way, one resting on the agent's word. */
+    fun todo(sessionId: String, now: Long): SessionTodo? {
+        if (sessionId != "s0") return null
+        fun item(id: String, name: String, description: String, doneWhen: String, state: TodoItemState, proof: String? = null, minutesAgo: Long = 0, addedLater: Boolean = false, unverified: Boolean = false) = TodoItem(
+            id = id, name = name, description = description, doneWhen = doneWhen, state = state, addedLater = addedLater,
+            addedReason = if (addedLater) "The first run showed a second flaky assertion." else null,
+            proof = proof?.let { TodoProof(now - minutesAgo * MINUTE, if (unverified) null else true, it, emptyList()) }, unverified = unverified, dropReason = null,
+        )
+        return SessionTodo(
+            sessionId = sessionId,
+            reference = "Fix the flaky login test, following the plan in the artifact \"Login test: root cause and fix\". The test must pass 50 runs in a row on CI, the change ships as one pull request, and the release notes mention it.",
+            artifactId = "demo-artifact-1", status = "active", updatedAt = now,
+            items = listOf(
+                item("reproduce", "Reproduce the failure", "Run LoginTest in a loop until it fails once.", "The failing run's output is attached.", TodoItemState.DONE, "5 failures in 50 runs, output attached.", 38, unverified = true),
+                item("root-cause", "Find the root cause", "Explain why the session cookie is missing.", "An artifact with the explanation is published.", TodoItemState.DONE, "Artifact \"Login test: root cause and fix\" v2 is published.", 31),
+                item("fix", "Wait for the redirect", "Assert the cookie only after the redirect completes.", "The change is committed on the branch.", TodoItemState.DONE, "Commit 4f2a9c1 on fix/login-flaky.", 22),
+                item("second-assertion", "Fix the second flaky assertion", "The avatar check races the same redirect.", "The 50 local runs pass.", TodoItemState.DONE, "50 of 50 runs pass.", 12, addedLater = true),
+                item("pr", "Open the pull request", "One PR with the fix and the test, linked to this list.", "The pull request is merged.", TodoItemState.DOING),
+                item("ci", "CI is green", "Every workflow on the merge commit passes.", "ci_green on the merge commit.", TodoItemState.TODO),
+                item("fifty", "50 CI runs in a row", "Run the login job 50 times on CI.", "The command prints 50 passes.", TodoItemState.TODO),
+                item("notes", "Release notes", "Add a line to the changelog.", "An artifact with the line is published.", TodoItemState.TODO),
+                item("release", "Released", "The next release contains the fix.", "release_contains on the merge commit.", TodoItemState.TODO),
+            ),
+        )
+    }
 
     /** The transcript of [sessionId]: a full one with tools for the first session, a question and its answer for the others. */
     fun transcript(sessionId: String, now: Long): List<TranscriptEvent> {

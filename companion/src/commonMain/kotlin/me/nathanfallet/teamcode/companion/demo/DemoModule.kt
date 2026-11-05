@@ -27,7 +27,9 @@ import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteMcpS
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionFileRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSessionRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteSubscriptionAccountRepository
+import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTodoRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTranscriptRepository
+import me.nathanfallet.teamcode.companion.domain.repositories.TodoRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteTransferRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteWaitRepository
 import me.nathanfallet.teamcode.companion.infrastructure.repositories.RemoteWorkflowRepository
@@ -56,6 +58,7 @@ val demoModule = module {
         get<RemoteSubscriptionAccountRepository>().let { DemoAwareSubscriptionAccountRepository(it, DemoSubscriptionAccountRepository(it.types)) }
     }
     single<GitHubLinkRepository> { DemoAwareGitHubLinkRepository(get<RemoteGitHubLinkRepository>(), DemoGitHubLinkRepository) }
+    single<TodoRepository> { DemoAwareTodoRepository(get<RemoteTodoRepository>(), DemoTodoRepository(get())) }
     single<WaitRepository> { DemoAwareWaitRepository(get<RemoteWaitRepository>(), DemoWaitRepository(get())) }
     single<WorkflowRepository> { DemoAwareWorkflowRepository(get<RemoteWorkflowRepository>(), DemoWorkflowRepository(get())) }
     single<McpServerRepository> { DemoAwareMcpServerRepository(get<RemoteMcpServerRepository>(), DemoMcpServerRepository) }

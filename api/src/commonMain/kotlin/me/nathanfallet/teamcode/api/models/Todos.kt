@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 /** Wire names of a session's todo (`todos.v1`, docs/todos.md). A client must tolerate an unknown value from a newer server: show it as text. */
 object Todos {
     const val CAPABILITY = "todos.v1"
+    /** The caller-wide feed carries `cloud.todo` (the list changed: `sessionId`, `status`, `done`, `total`), so a screen follows a list live. */
+    const val LIVE_CAPABILITY = "todos.live.v1"
     val checkTypes = listOf("pr_merged", "pr_closed", "release_contains", "ci_green", "command", "artifact_published", "wait_answered", "attested")
     val itemStatuses = listOf("todo", "doing", "done", "drop_requested", "dropped")
     val listStatuses = listOf("active", "done", "abandoned")
