@@ -27,6 +27,32 @@ class WaitWakeTest {
         assertEquals(listOf("po:s1"), sessions.authorized, "checked before anything is stored")
     }
 
+    @Test fun theWakeMessageIsFollowedByTheBlockOfTheSessionsTodoAndNothingElseChanges() = runBlocking {
+        val sessions = FakeSessions(); val asked = mutableListOf<String>()
+        val service = WaitService(WaitFixtures.FakeStore(), sessions, context = WaitWakeContext { team, session -> asked += "$team:$session"; "[TeamCode todo] Your todo: 1 of 3 items done.\nPlan reference:\n  The plan" })
+        val id = service.create(principal(ada), review.copy(assigneeId = "po"), null).wait.id
+        service.answer(principal(po), id, "approve", emptyMap())
+        val text = sessions.delivered.single().third
+        assertEquals("[TeamCode wait answered] Review the plan\nwait: $id\naction: Approve (approve)\nanswered by: po\n\n[TeamCode todo] Your todo: 1 of 3 items done.\nPlan reference:\n  The plan", text)
+        assertEquals(listOf("team:s1"), asked)
+        // A session without a todo gets exactly the message it got before, and a failing reader never costs the wake.
+        for (reader in listOf(WaitWakeContext { _, _ -> null }, WaitWakeContext { _, _ -> throw IllegalStateException("db down") })) {
+            val other = FakeSessions(); val plain = WaitService(WaitFixtures.FakeStore(), other, context = reader)
+            val second = plain.create(principal(ada), review.copy(assigneeId = "po"), null).wait.id
+            plain.answer(principal(po), second, "approve", emptyMap())
+            assertEquals("[TeamCode wait answered] Review the plan\nwait: $second\naction: Approve (approve)\nanswered by: po", other.delivered.single().third)
+        }
+    }
+
+    @Test fun theBlockGivesWayBeforeTheAnswerDoes() {
+        val message = "[TeamCode wait answered] T\nwait: w\naction: Done (done)\nanswered by: ada\nF: " + "x".repeat(31_000)
+        val text = WaitMessages.withContext(message, "y".repeat(5_000))
+        assertTrue(text.startsWith(message)); assertEquals(32_000, text.length); assertTrue(text.endsWith("[truncated]"))
+        assertEquals(message, WaitMessages.withContext(message + "z".repeat(1_000 - 1), "block").let { it.take(message.length) }, "the message is never cut for the block")
+        val full = "a".repeat(31_990)
+        assertEquals(full, WaitMessages.withContext(full, "block"), "no room, no block")
+    }
+
     @Test fun onlyRetryingAFailedTurnWakesTheSession() {
         val failed = WaitFixtures.review.let {
             Wait("w", "team", WaitSource.WAIT, WaitKind.TURN_FAILED, WaitResolver.HUMAN, WaitStatus.RESOLVED, "s1", null, null, "ada", null, null, TurnFailedWait.TITLE, null, emptyList(), TurnFailedWait.fields, TurnFailedWait.actions, null, 1, 5)

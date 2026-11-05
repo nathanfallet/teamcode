@@ -12,7 +12,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 | Storage (`session_todos`, `session_todo_items`), routes `/api/v1/todos/session/…`, `todo:session` scope, capability `todos.v1`, typed client | implemented |
 | `teamcode_todo` MCP server (`teamcode mcp todo`), its relay, the checks run from the agent's environment, links, `todo_help` | implemented; real-session and sample-plan trials: see the pull request |
 | `teamcode cloud todo-stop` Stop hook, its routes (`/stop`, `/hook-error`), the resume message, the stall counter, orphan PRs, hook events | implemented, in **observation** (`would_block`); enforcement per profile: planned (`observe-then-block`) |
-| Reference at wake-up and after compaction | planned |
+| Reference at wake-up (the wait message, then the block), after a compaction and on resume (`SessionStart` hook `teamcode cloud todo-context`), route `GET /context` | implemented |
 | Server-side reminder (Codex, safety net) | planned |
 | Companion Todo view | planned |
 | Session for a local `teamcode run` | planned |
@@ -45,6 +45,7 @@ Every route lives under `/api/v1/todos/session` and is advertised by the capabil
 | `POST /items/{item}/proof` | Reports what each check observed; done only if all passed (`409 not_done` keeps the proof) |
 | `POST /items/{item}/link` | Binds a PR, a release, an artifact or a wait to an item; a link is frozen (`409 already_linked`), except to replace a PR closed without merge |
 | `POST /items/{item}/drop` | Opens a wait for the owner; the item is `drop_requested` until they answer |
+| `GET /context` | The reminder block (`text` is null without an active list); read by the `SessionStart` hook |
 | `POST /stop` | One stop of the agent, asked by the Stop hook in up to three phases (see [The Stop hook](#the-stop-hook)) |
 | `POST /hook-error` | Records a failure of the Stop hook on the list (`hookEvents`, the newest 20) |
 
@@ -111,5 +112,14 @@ A block's `reason` is the resume message (`TodoMessages.resume`, at most 8 000 c
 
 Cost per stop: reading the list, one `exists` on open waits, the ticks and counter in one transaction, one read of the artifacts and one of the waits for all items however many (no query per item), plus 1 to 5 `gh` calls from the agent's machine. `EXPLAIN ANALYZE` of the new reads (MySQL 8.4, 300 000 `waits` and 300 000 `artifacts`): the open-wait check is an index lookup on `wait_session (session_id, status)` returning one row in about 0.07 ms (`team_id` is checked on that row: session identifiers are unique), the artifact and wait batches are primary-key range scans of a few rows (about 0.02 ms).
 
+## The reference everywhere
+
+The plan reference must be in front of the agent whatever woke it, not only at a block:
+
+- **A wait is answered, a delay passes or an event arrives.** The message `[TeamCode wait answered] …` ([waits](waits.md#waking-the-session)) is followed by the block of the session's todo, composed by the server in the same place (`WaitService`, through `WaitWakeContext` wired to `TodoService.wakeBlock`). The block is the list as it stands after the owner's answer: a drop that was agreed shows the item as dropped, a refused one puts it back to `todo`. No list, a finished list or a failure to read it: the message is unchanged. It is cut before the answer is.
+- **After a compaction and on resume.** A `SessionStart` hook with the matcher `compact|resume` (`teamcode cloud todo-context`, 25 s, installed by `--settings` beside the Stop hook, Claude Code only) prints the same block as `additionalContext`, which Claude Code injects. At `startup` or `clear`, without an active list, or on any failure it prints nothing and a session never fails to start because of it.
+- **The block** (`TodoMessages.context`) is the stop message of [The Stop hook](#the-stop-hook) without its first line and last instruction: the reference first, the item in progress (else the next one) in full with its last check, the whole list one line per item. It never orders the agent to go on; what to do comes from the message it follows.
+- A background agent's notification adds nothing: the list comes back at the next stop. At the end of a list no last message is imposed: the companion shows the finished list with its proofs.
+
 ### Not done yet
-Enforcement by default; the per-profile switch; the server-side reminder and Codex; showing `hookEvents` in the companion; the reference at wake-up and after compaction; `teamcode run` (a local session has no hook until `local-run`).
+Enforcement by default; the per-profile switch; the server-side reminder and Codex; showing `hookEvents` in the companion; `teamcode run` (a local session has no hook until `local-run`).

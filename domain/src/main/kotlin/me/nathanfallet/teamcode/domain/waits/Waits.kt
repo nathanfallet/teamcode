@@ -187,6 +187,11 @@ interface WaitStore {
  * The cloud sessions waits talk back to: an answer is queued as a message of the session, which wakes it. Implemented
  * on the conversation service in the composition root; the domain of waits does not know how a session is reached.
  */
+fun interface WaitWakeContext {
+    /** Text to put after the message that wakes [sessionId], or null for none. */
+    suspend fun block(teamId: String, sessionId: String): String?
+}
+
 interface WaitSessions {
     /** Refuses before anything is stored when [actor] may not instruct the session (the owner-only rule of a session holding its owner's GitHub token). */
     suspend fun authorize(actor: Principal, sessionId: String)

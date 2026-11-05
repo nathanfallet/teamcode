@@ -435,7 +435,8 @@ internal class AgentHost(
         // An agent that keeps a todo is sent back to work while items remain and nothing waits (Claude Code only: see [TodoStop]; observation until the profile enforces it).
         val todo = tools?.todo()
         val todoStop = todo?.takeIf { kind == "claude" }?.let { TodoStop.hookCommand(it.command, endpoint.port, it.sessionId, endpoint.runId, TodoStop.modeOf(environment("TEAMCODE_TODO_STOP_MODE"))) }
-        val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" }, workflowStop = workflowStop, todoStop = todoStop)?.let { listOf("--settings", it) }.orEmpty()
+        val todoContext = todo?.takeIf { kind == "claude" }?.let { TodoStop.contextCommand(it.command, endpoint.port, it.sessionId, endpoint.runId) }
+        val hooks = cloudHookSettings(tools?.hooks(kind).orEmpty(), runnerStop = stateHook.takeIf { kind == "claude" }, workflowStop = workflowStop, todoStop = todoStop, todoContext = todoContext)?.let { listOf("--settings", it) }.orEmpty()
         val plugin = if (kind == "claude") tools?.claudePlugin() else null
         val plan = agentLaunch(kind, base.arguments, endpoint.port, endpoint.token, guidancePlugin = plugin, runId = endpoint.runId, mcpServers = servers,
             hookToken = false, artifacts = tools?.artifacts(), waits = tools?.waits(), workflow = workflow, todo = todo, identity = settings?.owner?.let { OwnerIdentity.sentence(it.username, it.githubLogin) })

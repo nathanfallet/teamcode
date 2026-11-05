@@ -312,7 +312,7 @@ internal val WORKFLOW_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
  * drop). The session is named by the credential, not by the caller; nothing else of the API is reachable through this relay.
  */
 internal val TODO_RELAY_ROUTES: Map<HttpMethod, List<Regex>> = mapOf(
-    HttpMethod.Get to listOf(Regex("/api/v1/todos/session")),
+    HttpMethod.Get to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/context")),
     HttpMethod.Post to listOf(Regex("/api/v1/todos/session"), Regex("/api/v1/todos/session/items"), Regex("/api/v1/todos/session/stop"), Regex("/api/v1/todos/session/hook-error"), Regex("/api/v1/todos/session/items/[a-z0-9][a-z0-9-]{0,39}/(start|notes|proof|link|drop)")),
 )
 

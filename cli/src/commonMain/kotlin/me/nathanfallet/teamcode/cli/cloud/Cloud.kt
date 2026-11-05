@@ -20,6 +20,7 @@ import me.nathanfallet.teamcode.cli.cloud.agent.CloudPreparationLog
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudEnvironment
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudAgentState
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudWorkflowStop
+import me.nathanfallet.teamcode.cli.todo.CloudTodoContext
 import me.nathanfallet.teamcode.cli.todo.CloudTodoStop
 import me.nathanfallet.teamcode.cli.cloud.agent.CloudInstallSkills
 import me.nathanfallet.teamcode.cli.loadConfig
@@ -30,7 +31,7 @@ import me.nathanfallet.teamcode.client.TeamCodeException
 /** `teamcode cloud`: sessions that run on the team's Kubernetes cluster. */
 class Cloud : SuspendingNoOpCliktCommand(name = "cloud") {
     override fun help(context: Context) = "Create and manage cloud sessions on your team's cluster. Requires an interactive login."
-    init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudGitHub(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAnswer(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudPreparationLog(), CloudCredential(), CloudEnvironment(), CloudAgentState(), CloudWorkflowStop(), CloudTodoStop(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
+    init { subcommands(CloudCreate(), CloudProfiles(), CloudList(), CloudShow(), CloudPause(), CloudResume(), CloudGitHub(), CloudDelete(), CloudLogs(), CloudSend(), CloudInterrupt(), CloudAnswer(), CloudAttach(), CloudTransfer(), CloudTransfers(), CloudRunner(), CloudAgentSupervisor(), CloudPreparationLog(), CloudCredential(), CloudEnvironment(), CloudAgentState(), CloudWorkflowStop(), CloudTodoStop(), CloudTodoContext(), CloudInstallSkills(), CloudInstallSkills(hooks = true)) }
 }
 
 /** One row: id, state, name, epoch, last update, kind, and where it runs (the profile of a cloud session, the device of a remote one). */

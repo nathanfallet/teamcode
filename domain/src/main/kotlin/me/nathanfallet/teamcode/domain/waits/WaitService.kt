@@ -16,7 +16,7 @@ import me.nathanfallet.teamcode.domain.team.*
  * Notifications on creation are a separate piece of work: the place to hook them is [create], after the store
  * returned a changed wait.
  */
-class WaitService(private val store: WaitStore, private val sessions: WaitSessions? = null, private val limiter: EventRateLimit = EventRateLimit()) {
+class WaitService(private val store: WaitStore, private val sessions: WaitSessions? = null, private val limiter: EventRateLimit = EventRateLimit(), private val context: WaitWakeContext? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Wait not found.")
     private fun closed() = TeamFailure("wait_closed", 409, "This wait was already answered or cancelled.")
 
@@ -143,9 +143,15 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         return wake(actor, wait)
     }
 
+    /** The wake message, followed by what the session keeps besides waits (its todo); a failure to read it never costs the wake. */
+    private suspend fun withContext(message: String, teamId: String, sessionId: String): String {
+        val block = try { context?.block(teamId, sessionId) } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (_: Exception) { null } ?: return message
+        return WaitMessages.withContext(message, block)
+    }
+
     private suspend fun wake(actor: Principal, wait: Wait): Wait {
         val sessionId = wait.sessionId
-        if (sessions != null && sessionId != null && TurnFailedWait.wakes(wait, wait.answer?.action.orEmpty())) sessions.deliver(actor, sessionId, WaitMessages.answered(wait, actor.member.username), WaitMessages.clientKey(wait.id))
+        if (sessions != null && sessionId != null && TurnFailedWait.wakes(wait, wait.answer?.action.orEmpty())) sessions.deliver(actor, sessionId, withContext(WaitMessages.answered(wait, actor.member.username), wait.teamId, sessionId), WaitMessages.clientKey(wait.id))
         return wait
     }
 
@@ -231,7 +237,7 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         if (sessions != null) {
             val owner = store.member(wait.teamId, wait.assigneeId)?.takeUnless { it.disabled }
             // An owner who can no longer be an author takes nothing: the wait stays recorded.
-            if (owner != null) sessions.deliver(Principal(owner, SYSTEM_CREDENTIAL, wait.teamId), sessionId, WaitMessages.resolved(wait), WaitMessages.clientKey(wait.id))
+            if (owner != null) sessions.deliver(Principal(owner, SYSTEM_CREDENTIAL, wait.teamId), sessionId, withContext(WaitMessages.resolved(wait), wait.teamId, sessionId), WaitMessages.clientKey(wait.id))
         }
         store.wakeDelivered(wait.id)
     }

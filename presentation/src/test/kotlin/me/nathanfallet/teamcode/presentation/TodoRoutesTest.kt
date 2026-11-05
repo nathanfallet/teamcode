@@ -122,7 +122,11 @@ class TodoRoutesTest {
         suspend fun code(response: HttpResponse) = Serialization.json.decodeFromString<ApiError>(response.bodyAsText()).error.type
         suspend fun stop(json: String) = Serialization.json.decodeFromString<TodoStopView>(call("/api/v1/todos/session/stop", "exec-token", json).bodyAsText())
         assertEquals("no_list", stop("""{}""").why)
+        suspend fun context() = Serialization.json.decodeFromString<TodoContextView>(client.request("/api/v1/todos/session/context") { bearerAuth("exec-token") }.bodyAsText()).text
+        assertNull(context(), "no list, no reminder")
         call("/api/v1/todos/session", "exec-token", create)
+        assertTrue(context()!!.startsWith("[TeamCode todo] Your todo: 0 of 2 items done.\nPlan reference:\n  The plan"), context())
+        assertEquals(HttpStatusCode.Forbidden, client.request("/api/v1/todos/session/context") { bearerAuth("exec-old") }.status)
         assertEquals("verify", stop("""{"phase":"begin"}""").action)
         assertEquals("invalid_todo", code(call("/api/v1/todos/session/stop", "exec-token", """{"phase":"later"}""")))
         val first = stop("""{"phase":"verify","items":[{"itemId":"a","checks":[{"index":0,"passed":true,"observed":"PR #1 MERGED"}]}],"orphans":["https://github.com/acme/backend/pull/5"],"lastMessage":"done"}""")

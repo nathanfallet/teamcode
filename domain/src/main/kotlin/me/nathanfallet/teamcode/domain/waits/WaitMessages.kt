@@ -16,6 +16,16 @@ object WaitMessages {
     const val PREFIX = "[TeamCode wait answered]"
     private const val TRUNCATED = "\n[truncated]"
 
+    /**
+     * [message] followed by [block] after a blank line. The message keeps its room (the wait's lines are what the agent's instructions
+     * describe): when the whole is too long the block gives way, never the answer.
+     */
+    fun withContext(message: String, block: String): String {
+        val room = CloudConversationRules.MAX_MESSAGE_CHARS - message.length - 2
+        if (room < TRUNCATED.length + 40) return message
+        return message + "\n\n" + (if (block.length <= room) block else block.take(room - TRUNCATED.length) + TRUNCATED)
+    }
+
     /** Scoped to the session and the author by the conversation store: the same answer sent twice queues one message. */
     fun clientKey(waitId: String) = "wait-answer-$waitId"
 

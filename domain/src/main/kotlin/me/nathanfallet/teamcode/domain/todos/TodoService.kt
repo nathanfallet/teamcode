@@ -247,6 +247,22 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
         return TodoStopDecision(TodoStopAction.ALLOW, saved, why = "escalated", escalated = true)
     }
 
+    /** The block a session is reminded of after a compaction or on resume ([TodoMessages.context]), or null without a list. */
+    suspend fun context(actor: Principal, sessionId: String?): String? {
+        val id = session(actor, sessionId, write = false)
+        return wakeBlock(actor.teamId, id)
+    }
+
+    /**
+     * The block that follows the message waking a session (an answer, a delay, an event): the reference, the list with the answers to
+     * drop requests applied, and the next item. Null when the session has no list or its list is finished, so a session without a todo
+     * gets exactly the message it got before.
+     */
+    suspend fun wakeBlock(teamId: String, sessionId: String): String? {
+        val list = reconcile(teamId, sessionId) ?: return null
+        return if (list.status == TodoListStatus.ACTIVE) TodoMessages.context(list) else null
+    }
+
     /** What the hook failed to do (relay unreachable, slow, a server too old): recorded so a broken hook shows in the companion. */
     suspend fun hookError(actor: Principal, sessionId: String?, text: String): TodoList {
         val id = session(actor, sessionId, write = true)

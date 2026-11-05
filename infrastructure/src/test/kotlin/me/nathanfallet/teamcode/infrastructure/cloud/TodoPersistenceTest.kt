@@ -90,6 +90,11 @@ class TodoPersistenceTest {
             val afterYes = b.get(w.member, session)!!
             assertEquals(TodoItemStatus.DROPPED, afterYes.item("extra")!!.status)
             assertEquals(4, afterYes.items.size, "a dropped item stays in the list")
+            // The block that follows a wake message reads the list with the owner's answer applied, from either replica.
+            val wake = b.wakeBlock(w.teamId, session)!!
+            assertTrue(wake.startsWith("[TeamCode todo] Your todo: 1 of 4 items done."), wake)
+            assertTrue(wake.contains("extra") && wake.contains("dropped by the owner"), wake)
+            assertEquals(wake, a.context(w.member, session))
             val kept = a.requestDrop(w.member, session, "c", "Maybe not")
             waitService.answer(w.member, kept.item("c")!!.dropWaitId!!, WaitBackedDropWaits.NO, emptyMap())
             assertEquals(TodoItemStatus.TODO, a.get(w.member, session)!!.item("c")!!.status, "no keeps the item")

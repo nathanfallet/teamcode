@@ -50,6 +50,31 @@ internal class CloudTodoStop : SuspendingCliktCommand(name = "todo-stop") {
     private companion object { const val MAX_INPUT_CHARS = 8 * 1_048_576; val SESSION_ID = Regex("[a-zA-Z0-9-]{1,36}") }
 }
 
+/**
+ * `teamcode cloud todo-context --relay URL --session ID [--run ID]`: the `SessionStart` hook of an agent that keeps a todo. After a
+ * compaction (`compact`) and when the session resumes (`resume`) it prints the plan reference, the list and the next item as the
+ * context Claude Code injects ([TodoStop.contextOutput]); at any other start, or on any failure, it prints nothing and exits 0.
+ */
+internal class CloudTodoContext : SuspendingCliktCommand(name = "todo-context") {
+    override val hiddenFromHelp = true
+    override fun help(context: Context) = "Remind the agent of its todo after a compaction or on resume (run by the agent's SessionStart hook, not by hand)."
+    private val relay by option("--relay", help = "The launcher's loopback relay, http://127.0.0.1:<port>.").required()
+    private val session by option("--session", help = "The session whose todo this is.").required()
+    private val run by option("--run", help = "The agent run this hook belongs to.")
+    override suspend fun run() {
+        val input = StringBuilder()
+        for (line in generateSequence(::readlnOrNull)) {
+            if (input.length + line.length > 1_048_576) break
+            input.append(line).append('\n')
+        }
+        if (!Regex("[a-zA-Z0-9-]{1,36}").matches(session) || (run?.let { RunIdentifiers.isValid(it) } == false)) return
+        val output = try {
+            relayClient("TEAMCODE_TODO", run, relay).use { client -> TodoStop.contextOutput(input.toString()) { withTimeoutOrNull(TodoStop.CALL_MILLIS) { client.todoContext().text } } }
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        if (output != null) echo(output)
+    }
+}
+
 /** What the hook asks of the server, so the decision can be tested without one. */
 internal interface TodoStopApi {
     suspend fun stop(request: TodoStopRequest): TodoStopView
@@ -146,8 +171,29 @@ internal object TodoStop {
         return "${AgentEnvironment.quote(binary)} cloud todo-stop --relay http://127.0.0.1:$port --session $sessionId --mode $mode" + (runId?.let { " --run $it" } ?: "")
     }
 
+    /** The `SessionStart` hook as a shell command, for the agent's settings. */
+    fun contextCommand(binary: String, port: Int, sessionId: String, runId: String?): String {
+        require(port in 1..65535 && Regex("[a-zA-Z0-9-]{1,36}").matches(sessionId) && (runId == null || RunIdentifiers.isValid(runId)))
+        return "${AgentEnvironment.quote(binary)} cloud todo-context --relay http://127.0.0.1:$port --session $sessionId" + (runId?.let { " --run $it" } ?: "")
+    }
+
     /** The mode a launch uses: `TEAMCODE_TODO_STOP_MODE` (observe or block) when the operator set it, else observation. */
     fun modeOf(value: String?) = value?.trim()?.lowercase()?.takeIf { it == BLOCK } ?: OBSERVE
+
+    /** The `SessionStart` sources that get the reminder: a compaction loses the list from the context, a resume starts without it. */
+    val CONTEXT_SOURCES = setOf("compact", "resume")
+
+    /**
+     * The hook output for one `SessionStart` [input]: Claude Code's `additionalContext` carrying [text], or null (another source, no
+     * active list, an unreadable input or a failing [text]). Reading the list never keeps a session from starting.
+     */
+    suspend fun contextOutput(input: String, text: suspend () -> String?): String? {
+        val body = try { Json.parseToJsonElement(input) as? JsonObject } catch (_: Exception) { null } ?: return null
+        if ((body["hook_event_name"] as? JsonPrimitive)?.contentOrNull.let { it != null && it != "SessionStart" }) return null
+        if ((body["source"] as? JsonPrimitive)?.contentOrNull !in CONTEXT_SOURCES) return null
+        val block = try { text() } catch (error: CancellationException) { throw error } catch (_: Exception) { null }?.takeIf { it.isNotBlank() } ?: return null
+        return buildJsonObject { putJsonObject("hookSpecificOutput") { put("hookEventName", "SessionStart"); put("additionalContext", block) } }.toString()
+    }
 
     private val PR_URL = Regex("https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\\d+")
     private const val MAX_TRANSCRIPT_BYTES = 64L * 1_048_576
