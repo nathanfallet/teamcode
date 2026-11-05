@@ -15,7 +15,7 @@ A session keeps one todo: a free-text `reference` (usually a link to the plan) a
 | Reference at wake-up (the wait message, then the block), after a compaction and on resume (`SessionStart` hook `teamcode cloud todo-context`), route `GET /context` | implemented |
 | Server-side reminder (Codex, safety net): the engine's `todo-reminder` pass, the workflow `deliver` gate (`todo_open`) | implemented, always on |
 | Companion Todo view: the panel's Agents / Todo selector, the "4 / 9" counter in the session header and the office card, `cloud.todo` live (`todos.live.v1`), two shortcuts | implemented (desktop, Android and iOS share the screen; tested on the desktop target and in common code) |
-| Session for a local `teamcode run` | planned |
+| Session for a local `teamcode run` (`kind: local`, the Stop hook that also holds the agent for an open wait, the `SessionStart` reminder; Claude Code only for the hooks) | implemented |
 
 ### Domain rules (`TodoRules`)
 
@@ -132,4 +132,4 @@ The engine's `todo-reminder` pass (every 5 s, with the other engine steps) cover
 A workflow `deliver` (the agent's tool or the starter's) is refused with `409 todo_open` while the session's list has open items, so a step cannot end with work declared and not done.
 
 ### Not done yet
-The reminder's own trial on a real Codex session (tested only by the engine and persistence tests); `teamcode run` (a local session has no hook until `local-run`).
+The reminder's own trial on a real Codex session (tested only by the engine and persistence tests); a Codex terminal (a local session has the todo tools and the server-side reminder, but Codex runs no `Stop` hook).

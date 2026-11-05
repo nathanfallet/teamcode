@@ -35,7 +35,9 @@ data class TodoStopDecision(
 
 private const val MAX_ORPHANS = 5
 
-class TodoService(private val store: TodoStore, private val drops: TodoDropWaits? = null) {
+class TodoService(private val store: TodoStore, private val drops: TodoDropWaits? = null,
+    /** Hands the answers of a wait to the Stop hook of a local session; null where local sessions do not exist (the hook then never holds). */
+    private val wake: me.nathanfallet.teamcode.domain.cloud.LocalWake? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Session not found.")
 
     private suspend fun session(actor: Principal, sessionId: String?, write: Boolean): String {
@@ -176,6 +178,15 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
             runCatching { waits.cancel(actor, waitId) }
             throw e
         }
+    }
+
+    /**
+     * What the Stop hook of a local session hears while it holds the agent for a wait (docs/waits.md, "A local run"): the answers that
+     * arrived, and whether a wait is still open. A session that is not local, has no open wait or is gone answers `open = false` at once.
+     */
+    suspend fun wake(actor: Principal, sessionId: String?, waitMillis: Long): me.nathanfallet.teamcode.domain.cloud.LocalWakeResult {
+        val id = session(actor, sessionId, write = true)
+        return wake?.poll(actor.teamId, id, waitMillis) ?: me.nathanfallet.teamcode.domain.cloud.LocalWakeResult(false, emptyList())
     }
 
     /**

@@ -158,7 +158,7 @@ object CloudSessions : Table("cloud_sessions") {
     val awaitingSince = long("awaiting_since").nullable()
     val awaitingEventSeq = long("awaiting_event_seq").nullable()
     val awaitingEpoch = integer("awaiting_epoch").nullable()
-    /** `cloud` (a pod) or `remote` (a member's device); fixed at creation. */
+    /** `cloud` (a pod), `remote` (a member's device) or `local` (a member's `teamcode run`); fixed at creation. */
     val kind = varchar("kind", 16).default("cloud")
     /** Whose instructions an agent holding the owner's GitHub token follows: `owner`, `shared` or `none` (audit M2). */
     val githubAccess = varchar("github_access", 16).default("owner")
@@ -174,8 +174,11 @@ object CloudSessions : Table("cloud_sessions") {
     val hostResumeSessionId = varchar("host_resume_session_id", 36).nullable()
     /** The automation whose run created the session; such sessions are outside the member's running and retained caps. */
     val automationId = varchar("automation_id", 36).nullable()
+    /** The `teamcode run` launch a local session is attached to (at most one session per launch); null for every other kind. */
+    val runId = varchar("run_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
+        uniqueIndex("cloud_session_run", teamId, runId)
         index("cloud_session_owner", false, teamId, ownerId, createdAt)
         index("cloud_session_team", false, teamId, createdAt)
         // The unified waits list: the sessions whose agent waits for a person, of one owner or of the team.

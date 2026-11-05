@@ -22,6 +22,9 @@ import me.nathanfallet.teamcode.cli.service.loadService
 import me.nathanfallet.teamcode.cli.service.serviceResponds
 import me.nathanfallet.teamcode.api.models.Capabilities
 import me.nathanfallet.teamcode.client.TeamCodeClient
+import me.nathanfallet.teamcode.cli.cloud.agent.LOCAL_STOP_TIMEOUT_SECONDS
+import me.nathanfallet.teamcode.cli.cloud.agent.cloudHookSettings
+import me.nathanfallet.teamcode.cli.todo.TodoStop
 import me.nathanfallet.teamcode.cli.hooks.HookEvents
 import me.nathanfallet.teamcode.cli.hooks.InstalledHook
 import me.nathanfallet.teamcode.cli.hooks.teamHookSync
@@ -90,23 +93,28 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             // Whether the agent works or waits for a person: a state only, reported by the hooks that carry guidance.
             val activity = !noActivity && RUN_ACTIVITY_CAPABILITY in capabilities.features
             val claudeLogin = agent == "claude" && "--bare" !in arguments.takeWhile { it != "--" } && claudeLoggedIn()
-            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = terminal::report, labels = parsedLabels) { runId ->
-                val service = loadService(configPath())
+            trackedRun(client, agent, workload, "team.runs.v1" in capabilities.features, report = terminal::report, labels = parsedLabels) { runId -> coroutineScope {
+              // The launch's own session (docs/cloud-sessions.md, "Local sessions"): its todo, waits and artifacts. It goes through a proxy of
+              // its own, whose relays hold the credential confined to the session; the user service holds the member's login only.
+              val local = LocalSession.open(client, capabilities.features, runId, agent, this, terminal::report)
+              try {
+                val service = if (local != null) null else loadService(configPath())
                 if (service != null && serviceResponds(service, config.serverUrl, backgroundWorkload = workload == "background", runRouting = runId != null, mcpRelay = servers.isNotEmpty(), localTokenHeader = claudeLogin, artifactRelay = artifacts, activityRelay = activity && runId != null && claudeGuided())) {
                     echo("Running $agent through the TeamCode user service.", err = true)
-                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal)
+                    launch(client, service.port, service.localToken, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal, null)
                 } else {
                     val token = secureRandomBytes(32).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
                     // A dedicated listener also avoids stopping an older, incompatible shared service.
-                    val server = proxyServer(client, token, 0, report = terminal::report)
+                    val server = proxyServer(client, token, 0, sessionClient = local?.client, report = terminal::report)
                     try {
                         server.start(wait = false)
                         val port = server.engine.resolvedConnectors().single().port
                         echo("Running $agent through TeamCode.", err = true)
-                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal)
+                        launch(client, port, token, runId, servers, claudeLogin, hooks, artifacts, activity, variables, identity, terminal, local)
                     } finally { server.stop(500, 5_000) }
                 }
-            }
+              } finally { local?.close() }
+            } }
         }
     }
     /**
@@ -202,7 +210,7 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
     }
     /** Whether the session plugin carries TeamCode's local HTTP hooks (guidance, and activity with them). */
     private fun claudeGuided() = agent == "claude" && !noGuidance && "--bare" !in arguments.takeWhile { it != "--" }
-    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?, identity: String?, terminal: HeldTerminal): Int {
+    private suspend fun launch(client: TeamCodeClient, port: Int, token: String, runId: String?, mcpServers: List<String>, claudeLogin: Boolean, teamHooks: List<InstalledHook>, artifacts: Boolean, activity: Boolean, variables: Map<String, String>?, identity: String?, terminal: HeldTerminal, local: LocalSession?): Int {
         val options = arguments.takeWhile { it != "--" }
         val guided = claudeGuided()
         val plugin = if (agent == "claude" && (guided || teamHooks.isNotEmpty())) try {
@@ -237,17 +245,28 @@ private class LaunchAgent(private val agent: String) : SuspendingCliktCommand(na
             else -> true
         }
         if (!codexInstructions) echo("Your Codex developer_instructions are kept" + (if (artifactServer != null) "; publish pages with the teamcode_artifacts tools." else "."), err = true)
+        // With a session: the wait and todo tools, and (Claude Code) the hooks that block a stop on open todo items, hold the agent for
+        // a wait's answer and remind it of its list after a compaction or a resume. Codex has the tools only: it runs no Stop hook.
+        val command = servicePlatform().executable
+        val waits = local?.let { WaitsMcp(command, it.sessionId) }
+        val todo = local?.let { TodoMcp(command, it.sessionId) }
+        val ownSettings = options.any { it == "--settings" || it.startsWith("--settings=") }
+        if (local != null && agent == "claude" && ownSettings) echo("Your own --settings replace TeamCode's hooks: the todo does not block a stop and ask_human does not wake the agent in this run.", err = true)
+        val hooks = if (local == null || agent != "claude" || ownSettings || runId == null) emptyList() else cloudHookSettings(emptyList(),
+            todoStop = TodoStop.hookCommand(command, port, local.sessionId, runId, wake = true), todoContext = TodoStop.contextCommand(command, port, local.sessionId, runId),
+            todoStopTimeoutSeconds = LOCAL_STOP_TIMEOUT_SECONDS)?.let { listOf("--settings", it) }.orEmpty()
         try {
             val plan = agentLaunch(agent, arguments, port, token, plugin?.directory?.toString(), guidance.arguments, workload, runId, mcpServers,
                 claudeLogin, environment("ANTHROPIC_CUSTOM_HEADERS"), hookToken = plugin != null && guided, artifacts = artifactServer,
-                codexInstructions = codexInstructions, identity = identity)
+                waits = waits, todo = todo, codexInstructions = codexInstructions, identity = identity)
+            val settings = hooks
             // The variables go first: TeamCode's own settings always win (the server already refuses their names).
             val environment = variables.orEmpty() + plan.environment + mapOf("TEAMCODE_ACTIVITY" to null) + guidance.environment
             val variablesFile = if (agent == "claude" && variables != null) LocalEnvironmentFile.create(client, variables, terminal::report) else null
             return try {
                 coroutineScope {
                     val refresh = variablesFile?.let { file -> launch { file.refresh.run() } }
-                    try { terminal.holding { runInteractiveProcess(agent, plan.arguments, environment + (variablesFile?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it.path) }.orEmpty())) } }
+                    try { terminal.holding { runInteractiveProcess(agent, settings + plan.arguments, environment + (variablesFile?.let { mapOf(AgentEnvironment.CLAUDE_ENV_FILE to it.path) }.orEmpty())) } }
                     finally { refresh?.cancel() }
                 }
             } catch (error: me.nathanfallet.teamcode.cli.platform.ProcessStartException) { throw error.toUserError() }
@@ -313,9 +332,9 @@ internal const val ARTIFACTS_INSTRUCTIONS = "TeamCode artifacts are connected to
     "system. Give the person the link the tool returns, `<server>/artifact/<id>`."
 
 /**
- * `teamcode mcp waits`, started by the agent itself as a stdio server beside a cloud or remote session: [command] is
- * this TeamCode executable and [sessionId] the session every wait it asks belongs to. A local `teamcode run` has no
- * session, so it never gets one.
+ * `teamcode mcp waits`, started by the agent itself as a stdio server beside a cloud, remote or local session: [command] is
+ * this TeamCode executable and [sessionId] the session every wait it asks belongs to. A `teamcode run` has one when the server
+ * opens its local session ([LocalSession]); without one, it gets none.
  */
 internal class WaitsMcp(val command: String, val sessionId: String) {
     init { require(SESSION_ID.matches(sessionId)) { "Invalid session." } }
@@ -342,8 +361,8 @@ internal const val WAITS_INSTRUCTIONS = "When you need something only a person c
 
 /**
  * `teamcode mcp workflow`, started by the agent itself as a stdio server beside a cloud or remote session: [command] is
- * this TeamCode executable and [sessionId] the session whose workflow step it delivers. A local `teamcode run` has no
- * session, so it never gets one.
+ * this TeamCode executable and [sessionId] the session whose workflow step it delivers. A local `teamcode run` is no workflow
+ * step, so it never gets one.
  */
 internal class WorkflowMcp(val command: String, val sessionId: String) {
     init { require(SESSION_ID.matches(sessionId)) { "Invalid session." } }
@@ -359,8 +378,8 @@ internal const val WORKFLOW_INSTRUCTIONS = "When you are working on a workflow s
     "Do not call it for an ordinary session."
 
 /**
- * `teamcode mcp todo`, started by the agent itself as a stdio server beside a cloud or remote session: [command] is this TeamCode
- * executable and [sessionId] the session whose todo it keeps. A local `teamcode run` has no session, so it never gets one.
+ * `teamcode mcp todo`, started by the agent itself as a stdio server beside a cloud, remote or local session: [command] is this TeamCode
+ * executable and [sessionId] the session whose todo it keeps. A `teamcode run` has one when the server opens its local session ([LocalSession]).
  */
 internal class TodoMcp(val command: String, val sessionId: String) {
     init { require(SESSION_ID.matches(sessionId)) { "Invalid session." } }

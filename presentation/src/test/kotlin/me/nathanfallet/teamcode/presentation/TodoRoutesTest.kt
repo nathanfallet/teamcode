@@ -128,6 +128,11 @@ class TodoRoutesTest {
         assertTrue(context()!!.startsWith("[TeamCode todo] Your todo: 0 of 2 items done.\nPlan reference:\n  The plan"), context())
         assertEquals(HttpStatusCode.Forbidden, client.request("/api/v1/todos/session/context") { bearerAuth("exec-old") }.status)
         assertEquals("verify", stop("""{"phase":"begin"}""").action)
+        // The Stop hook of a local run asks what a wait has to say: the route answers from the session of its credential, and a reader cannot.
+        val wokeCall = call("/api/v1/todos/session/wake", "exec-token", """{"waitMillis":0}""")
+        val woke = Serialization.json.decodeFromString<TodoWakeView>(wokeCall.bodyAsText().also { assertEquals(HttpStatusCode.OK, wokeCall.status, it) })
+        assertEquals(false to emptyList(), woke.open to woke.messages, "A server without local sessions never holds the hook")
+        assertEquals(HttpStatusCode.Forbidden, call("/api/v1/todos/session/wake", "reader", """{}""").status)
         assertEquals("invalid_todo", code(call("/api/v1/todos/session/stop", "exec-token", """{"phase":"later"}""")))
         val first = stop("""{"phase":"verify","items":[{"itemId":"a","checks":[{"index":0,"passed":true,"observed":"PR #1 MERGED"}]}],"orphans":["https://github.com/acme/backend/pull/5"],"lastMessage":"done"}""")
         assertEquals("block", first.action)

@@ -59,6 +59,7 @@ class ReconcileCloudSessionsUseCase(
         val now = store.now()
         val s = session
         if (s.kind == CloudSessionKind.REMOTE) return remote(s, owner, now)
+        if (s.kind == CloudSessionKind.LOCAL) return local(s, owner, now)
         return when {
             s.transferId != null && transfers != null && (s.state.terminal || s.desiredState == DesiredState.TERMINATED) -> transfers.abandon(s, owner, now)
             s.state == TERMINATED -> cleanup(s, owner, now)
@@ -141,6 +142,32 @@ class ReconcileCloudSessionsUseCase(
                     }
                     else -> now + STEP_MILLIS
                 }
+            }
+            else -> now + MONITOR_MILLIS
+        }
+    }
+
+    /**
+     * A local session ([CloudSessionKind.LOCAL]): the `teamcode run` it is attached to is its host, with no pod, workspace or
+     * capacity, and it never pauses (the launch is the session: nothing is left to resume). It ends when the launch deletes it, when
+     * the launch never started its execution within [HOST_START_MILLIS], and when its execution has been silent for
+     * [HEARTBEAT_LOSS_MILLIS] (the launch was killed, or its computer went to sleep).
+     */
+    private suspend fun local(s: CloudSession, owner: String, now: Long): Long? {
+        val execution = if (s.currentEpoch > 0) store.execution(s.id, s.currentEpoch)?.takeIf { it.state != ExecutionState.ENDED } else null
+        fun ended(reason: String) = execution?.copy(state = ExecutionState.ENDED, endedAt = now, exitReason = reason)
+        val seen = execution?.let { it.lastHeartbeatAt ?: it.registeredAt ?: it.createdAt }
+        val silent = if (execution == null) now - s.createdAt > HOST_START_MILLIS
+            else seen != null && now - seen > (if (execution.state == ExecutionState.PENDING) HOST_START_MILLIS else HEARTBEAT_LOSS_MILLIS)
+        return when {
+            s.state == TERMINATED || s.state == FAILED -> null
+            s.desiredState == DesiredState.TERMINATED -> {
+                commit(s, owner, s.copy(state = TERMINATED, phase = null, expiresAt = null, waitingSince = null, updatedAt = now), "cloud.session.terminated",
+                    updateExecution = ended(s.terminatedReason ?: "deleted"))
+                null
+            }
+            silent -> {
+                commit(s, owner, s.copy(desiredState = DesiredState.TERMINATED, terminatedReason = "run_lost", updatedAt = now), "cloud.session.run_lost"); now
             }
             else -> now + MONITOR_MILLIS
         }

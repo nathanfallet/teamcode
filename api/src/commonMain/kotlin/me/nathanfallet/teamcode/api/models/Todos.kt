@@ -170,6 +170,14 @@ data class TodoStopRequest(
 @Serializable
 data class TodoStopView(val action: String, val todo: TodoView? = null, val reason: String? = null, val why: String? = null, val escalated: Boolean = false)
 
+/** One look of the Stop hook of a local run at the waits of its session: how long the server may hold the answer back, at most 30 000 ms. */
+@Serializable
+data class TodoWakeRequest(val sessionId: String? = null, val waitMillis: Long = 25_000)
+
+/** What came back: [open] says a wait of the session is still open (hold the agent), [messages] the answers that arrived, oldest first. */
+@Serializable
+data class TodoWakeView(val open: Boolean, val messages: List<String> = emptyList())
+
 /** The block a session is reminded of after a compaction or on resume: [text] is null while the session has no active list. */
 @Serializable
 data class TodoContextView(val text: String? = null)

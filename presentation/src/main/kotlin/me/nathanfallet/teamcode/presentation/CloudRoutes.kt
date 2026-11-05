@@ -20,18 +20,18 @@ internal fun CloudProblem.view() = CloudProblemView(code, message, retryable)
 internal fun CloudSession.view() = CloudSessionView(
     id = id, name = name, ownerId = ownerId, createdBy = CloudAttributionView(createdBy.initiatorId, createdBy.credentialId, createdBy.effectiveMemberId),
     state = state.wire, phase = phase, desiredState = desiredState.wire, generation = generation, currentEpoch = currentEpoch,
-    profile = if (kind == CloudSessionKind.REMOTE) CloudProfileRef(REMOTE_PLACEHOLDER, 0) else CloudProfileRef(profileId, profileVersion),
-    image = if (kind == CloudSessionKind.REMOTE) CloudImageView(REMOTE_PLACEHOLDER) else CloudImageView(imageReference, imageDigest),
+    profile = if (kind != CloudSessionKind.CLOUD) CloudProfileRef(REMOTE_PLACEHOLDER, 0) else CloudProfileRef(profileId, profileVersion),
+    image = if (kind != CloudSessionKind.CLOUD) CloudImageView(REMOTE_PLACEHOLDER) else CloudImageView(imageReference, imageDigest),
     agent = CloudAgentView(agentKind, agentVersion, agentModel, agentEffort), labels = labels,
     activity = CloudActivityView(lastActivityAt, idleTimeoutMinutes), resume = CloudResumeView(resumeWorkspace.wire, resumeConversation.wire),
     failure = failure?.view(), resumeBlocked = resumeBlocked?.view(),
-    workspaceDeletion = if (kind == CloudSessionKind.REMOTE) CloudWorkspaceDeletionView(NOT_APPLICABLE)
+    workspaceDeletion = if (kind != CloudSessionKind.CLOUD) CloudWorkspaceDeletionView(NOT_APPLICABLE)
         else CloudWorkspaceDeletionView(workspace.deletion.wire, workspace.claimDeletedAt, workspace.volumeDeletedAt, workspace.volumeHandle, workspace.deletionProblem?.view()),
     createdAt = createdAt, updatedAt = updatedAt, pausedAt = pausedAt, expiresAt = expiresAt, terminatedReason = terminatedReason, transferId = transferId,
     environment = environment.view(), kind = kind.wire,
     host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire, it.folderId) },
     waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
-    githubAccess = githubAccess.wire.takeIf { kind != CloudSessionKind.REMOTE },
+    githubAccess = githubAccess.wire.takeIf { kind == CloudSessionKind.CLOUD },
 )
 /** The profile id and image reference of a remote session, which has neither. */
 internal const val REMOTE_PLACEHOLDER = "remote"
@@ -193,7 +193,14 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
                         input.agent?.model, input.agent?.effort, input.labels, input.directoryName, mode, input.initialMessage, input.deviceId, input.folderId, input.resumeSessionId)
                     sessions.createRemote(call.principal, onBehalfOf, draft, idempotency)
                 }
-                else -> throw TeamFailure("invalid_kind", 400, "Use kind cloud or remote.")
+                CloudSessionKind.LOCAL.wire -> {
+                    if (input.profileId != null || input.image != null || input.idleTimeoutMinutes != null || input.environment != null || input.directoryName != null ||
+                        input.permissionMode != null || input.deviceId != null || input.folderId != null || input.resumeSessionId != null || input.initialMessage != null)
+                        throw TeamFailure("invalid_session", 400, "A local session has no profile, image, directory, device or initial message: it is attached to a teamcode run.")
+                    sessions.createLocal(call.principal, LocalSessionDraft(input.runId ?: throw TeamFailure("invalid_run", 400, "Send the runId of the launch."), input.name,
+                        input.agent?.kind ?: throw TeamFailure("invalid_agent", 400, "Send the agent of a local session: claude or codex."), input.labels))
+                }
+                else -> throw TeamFailure("invalid_kind", 400, "Use kind cloud, remote or local.")
             }
             when (outcome) {
                 is CloudCreateOutcome.Created -> call.respond(HttpStatusCode.Accepted, outcome.session.view())
@@ -211,7 +218,7 @@ internal fun Route.cloudRoutes(sessions: CloudSessionService, admin: CloudAdmini
             val owner = single("owner")?.let { if (it == "all") "*" else it }
             val limit = single("limit")?.let { it.toIntOrNull() ?: throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.") } ?: 50
             // Without `kind`, cloud sessions only: a client from before remote sessions never lists one it cannot show.
-            val kinds = q.getAll("kind")?.map { value -> CloudSessionKind.entries.find { it.wire == value } ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud or kind=remote.") }?.toSet()
+            val kinds = q.getAll("kind")?.map { value -> CloudSessionKind.entries.find { it.wire == value } ?: throw TeamFailure("invalid_kind", 400, "Use kind=cloud, kind=remote or kind=local.") }?.toSet()
                 ?: setOf(CloudSessionKind.CLOUD)
             val page = sessions.list(call.principal, CloudSessionQuery(owner, states, labels, single("before"), limit, kinds))
             call.respond(CloudSessionPageView(page.sessions.map { it.view() }, page.nextBeforeId))

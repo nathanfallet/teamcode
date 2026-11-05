@@ -101,6 +101,10 @@ data class CloudSessionView(
 object CloudSessionKinds {
     const val CLOUD = "cloud"
     const val REMOTE = "remote"
+    /** A session attached to a member's `teamcode run` launch, as long as the launch lives (`cloud.sessions.local.v1`). */
+    const val LOCAL = "local"
+    /** The server opens local sessions, and holds the Stop hook of a local run for a wait. */
+    const val LOCAL_CAPABILITY = "cloud.sessions.local.v1"
 }
 /**
  * The device of a remote session. [deviceId] is null once the device was removed; [deviceName], [platform] and
@@ -175,6 +179,11 @@ data class CreateCloudSessionRequest(
      * Left out of the body when null, so a request without it is the same as before.
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER) val resumeSessionId: String? = null,
+    /**
+     * With [kind] `local` (`cloud.sessions.local.v1`): the `teamcode run` launch (`POST /runs`) the session is attached to, which
+     * must be the caller's and still running. A second request for the same launch returns the first session.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val runId: String? = null,
 )
 /**
  * The execution a remote session's host just started (`POST /api/v1/cloud/sessions/{id}/host`): the host calls the

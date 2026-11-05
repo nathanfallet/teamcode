@@ -182,7 +182,11 @@ private fun ApiCatalog.cloudSessions() {
         description = "Creates a session from a profile: TeamCode prepares a workspace and starts the agent in the " +
             "cluster. The answer comes at once (202) with the session `creating`; follow `state` with " +
             "`GET /api/v1/cloud/sessions/{id}` or the transcript. `initialMessage` is delivered once the session is " +
-            "ready (`cloud.sessions.initial-message.v1`). Requires the `create` permission. With `kind: remote` " +
+            "ready (`cloud.sessions.initial-message.v1`). Requires the `create` permission. With `kind: local` " +
+            "(`cloud.sessions.local.v1`), the session is attached to the caller's own running `teamcode run` launch (`runId`, " +
+            "`POST /api/v1/runs`) and lives as long as it does: no profile, image, directory, device or message; `agent.kind` " +
+            "(`claude` or `codex`) is required, a second request for the same launch returns the same session, and " +
+            "the launch hosts it with `POST /api/v1/cloud/sessions/{id}/host`. With `kind: remote` " +
             "(`cloud.sessions.remote.v1`), the session runs on the caller's own device instead: no profile, image, idle " +
             "timeout or environment; `agent.kind` (`claude` or `codex`), `directoryName` (the directory's last segment, " +
             "never its path) and `permissionMode` (`ask`, the default, or `bypass`). Its device is the one of the caller's " +
@@ -235,7 +239,7 @@ private fun ApiCatalog.cloudSessions() {
             queryText("owner", "A member's identifier, or `all`.")
             queryList("state", "Only these states: `creating`, `preparing`, `ready`, `active`, `pausing`, `paused`, `resuming`, `transferring`, `terminated`, `failed`.")
             queryList("label", "Only sessions with these labels, each as `key=value`.")
-            queryList("kind", "Only these kinds: `cloud` (a pod) or `remote` (a member's device). Without it, `cloud` only, so a client that predates remote sessions never receives one.")
+            queryList("kind", "Only these kinds: `cloud` (a pod), `remote` (a member's device) or `local` (a member's `teamcode run`). Without it, `cloud` only, so a client that predates remote sessions never receives one.")
             queryText("before", "The `nextBefore` of the previous page.")
             queryNumber("limit", "The page size, 1 to 50.")
         }
@@ -402,7 +406,7 @@ private fun ApiCatalog.cloudConversation() {
             queryNumber("after", "Start after this sequence number; 0 for the oldest retained event.")
             headerText("Last-Event-ID", "Resume after this sequence number; wins over `after`.")
             queryText("types", "Comma-separated event types to keep, for example `cloud.turn,run.stale`.")
-            queryText("kind", "Session kinds whose events to carry, repeatable: `cloud`, `remote`. Without it, only cloud sessions'; run events always pass.")
+            queryText("kind", "Session kinds whose events to carry, repeatable: `cloud`, `remote`, `local`. Without it, only cloud sessions'; run events always pass.")
         }
         responses {
             HttpStatusCode.OK { description = "The event stream." }

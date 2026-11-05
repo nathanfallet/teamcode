@@ -72,6 +72,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[kind] = created.kind.wire; it[hostDeviceId] = created.host?.deviceId; it[hostDirectoryName] = created.host?.directoryName
             it[permissionMode] = created.host?.permissionMode?.wire; it[hostFolderId] = created.host?.folderId; it[hostResumeSessionId] = created.host?.resumeSessionId
             if (created.automationId != null) it[automationId] = created.automationId
+            if (created.runId != null) it[runId] = created.runId
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
@@ -202,6 +203,17 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
         Unit
     }
 
+    override suspend fun localRun(teamId: String, runId: String): LocalRun? = database.query {
+        AgentRuns.select(AgentRuns.memberId, AgentRuns.endedAt, AgentRuns.heartbeatAt).where { (AgentRuns.id eq runId) and (AgentRuns.teamId eq teamId) }.singleOrNull()?.let { row ->
+            LocalRun(row[AgentRuns.memberId], row[AgentRuns.endedAt] == null && nowMillis() - row[AgentRuns.heartbeatAt] <= AgentRunService.HEARTBEAT_TTL_MILLIS)
+        }
+    }
+
+    /** One row by the unique `(team, run)` index. */
+    override suspend fun findLocal(teamId: String, runId: String): CloudSession? = database.query {
+        CloudSessions.select(CloudSessions.id).where { (CloudSessions.teamId eq teamId) and (CloudSessions.runId eq runId) }.singleOrNull()?.let { readSession(teamId, it[CloudSessions.id]) }
+    }
+
     override suspend fun deviceOf(principal: Principal): String? = database.query {
         if (principal.serviceScopes != null) null
         // A cloud session's execution credential is never a host device, whatever its row says: one pod runs one session.
@@ -328,6 +340,7 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     // An unknown value (a newer server's) is the strictest mode that keeps the session usable by its owner.
     githubAccess = CloudGitHubAccess.parse(row[CloudSessions.githubAccess]) ?: CloudGitHubAccess.OWNER,
     automationId = row.getOrNull(CloudSessions.automationId),
+    runId = row.getOrNull(CloudSessions.runId),
 )
 /**
  * The host of a remote session; the device's name and system, and the liveness of the current execution, only when

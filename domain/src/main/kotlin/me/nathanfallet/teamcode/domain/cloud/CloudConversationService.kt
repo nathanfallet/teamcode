@@ -245,6 +245,7 @@ class CloudConversationService(
         val session = sessions.find(teamId, sessionId) ?: return false
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) return false
         if (session.desiredState == DesiredState.RUNNING && session.resumeBlocked == null) return false
+        if (session.kind == CloudSessionKind.LOCAL) return false
         // A session moving to another owner stays paused; the message waits for the transfer's own policy.
         if (session.transferId != null || session.state == TRANSFERRING) return false
         val owner = sessions.member(teamId, session.ownerId)
@@ -301,6 +302,9 @@ class CloudConversationService(
     private suspend fun open(principal: Principal, id: String, permission: CloudPermission): CloudSession {
         val (session, granted) = reach(principal, id, write = permission != CloudPermission.TRANSCRIPT)
         if (permission !in granted) throw denied(permission)
+        // The agent of a local session reads its terminal, not a queue: what a person writes to it is an answer to a wait.
+        if (permission == CloudPermission.MESSAGE && session.kind == CloudSessionKind.LOCAL)
+            throw TeamFailure("local_session", 409, "A local session takes no message: type in the terminal of its teamcode run, or answer its wait.")
         return session
     }
 

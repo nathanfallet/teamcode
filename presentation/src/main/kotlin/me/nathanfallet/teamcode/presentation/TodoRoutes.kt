@@ -82,6 +82,11 @@ internal fun Route.todoRoutes(todos: TodoService) {
             )
             call.respond(TodoStopView(decision.action.wire, decision.list?.view(), decision.reason, decision.why, decision.escalated))
         }
+        post("/wake") {
+            val input = call.jsonBody<TodoWakeRequest>(TODO_BYTES)
+            val woke = todos.wake(call.principal, session(input.sessionId), input.waitMillis)
+            call.respond(TodoWakeView(woke.open, woke.messages))
+        }
         post("/hook-error") {
             val input = call.jsonBody<TodoHookErrorRequest>(TODO_BYTES)
             call.respond(TodoSessionView(todos.hookError(call.principal, session(input.sessionId), input.text.take(TodoRules.MAX_HOOK_TEXT)).view()))

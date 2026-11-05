@@ -154,12 +154,12 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
     companion object {
         /** Pause and resume are offered to the owner and to administrators. */
         fun canControl(account: Account, session: CloudSession): Boolean = account.isAdministrator || session.ownerId == account.memberId
-        fun canPause(session: CloudSession): Boolean = session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)
+        fun canPause(session: CloudSession): Boolean = !session.local && session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)
         /**
          * A remote session resumes only from its own device, which this app never is: a message asks the device to
          * resume it instead (the server refuses an explicit resume from elsewhere).
          */
-        fun canResume(session: CloudSession): Boolean = !session.remote && (session.state == SessionState.PAUSED || session.state == SessionState.PAUSING)
+        fun canResume(session: CloudSession): Boolean = !session.remote && !session.local && (session.state == SessionState.PAUSED || session.state == SessionState.PAUSING)
         /** A session is ended once; the server deletes its workspace with it. A failed one can be ended too. */
         fun canEnd(session: CloudSession): Boolean = session.state != SessionState.TERMINATED
         /** The server refuses to rename a session that ended (terminated or failed). */
@@ -168,8 +168,8 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
         /** The server's name rules (as at creation): 1 to [MAX_NAME] characters, no control character. */
         fun validName(name: String): Boolean = name.isNotEmpty() && name.length <= MAX_NAME && name.none(Char::isISOControl)
         /** A remote session is never transferred (`409 remote_not_transferable`): its files stay on its device. */
-        fun canTransfer(session: CloudSession): Boolean = !session.remote
-        fun canMessage(session: CloudSession): Boolean = session.state.group != SessionGroup.ENDED && session.state != SessionState.TRANSFERRING
+        fun canTransfer(session: CloudSession): Boolean = !session.remote && !session.local
+        fun canMessage(session: CloudSession): Boolean = !session.local && session.state.group != SessionGroup.ENDED && session.state != SessionState.TRANSFERRING
     }
 }
 
