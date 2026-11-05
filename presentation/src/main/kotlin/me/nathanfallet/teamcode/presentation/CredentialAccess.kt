@@ -41,6 +41,8 @@ private val workflowSessionDeliver = "/api/v1/workflows/session/deliver"
 /** The Stop hook of a workflow step asks whether its session still has to deliver or ask: the same credentials as the delivery. */
 private val workflowSessionPending = "/api/v1/workflows/session/pending"
 private val automationCancel = Regex("/api/v1/automations/$CLOUD_ID/runs/$CLOUD_ID/cancel")
+/** A parent session's children (docs/orchestration.md): only `sessions:children`, which the orchestration service binds to its session. */
+private val childrenPath = Regex("/api/v1/cloud/children(/$CLOUD_ID(/messages|/events|/interrupt|/terminate|/wait)?)?")
 private val cloudSessionPath = Regex("/api/v1/cloud/sessions/$CLOUD_ID")
 private val cloudWriteDelete = Regex("/api/v1/cloud/sessions/$CLOUD_ID(/attachments/$CLOUD_ID)?")
 
@@ -73,6 +75,7 @@ internal fun credentialAction(method: String, path: String, inferencePaths: Set<
     method == "POST" && hookPublishPath.matches(path) -> CredentialAction.HOOKS_PUBLISH
     method == "GET" && path == "/api/v1/hook-delivery" -> CredentialAction.HOOKS_READ
     method == "GET" && hookArtifactPath.matches(path) -> CredentialAction.HOOKS_READ
+    (method == "GET" || method == "POST") && childrenPath.matches(path) -> CredentialAction.CHILDREN
     method == "GET" && cloudReadPath.matches(path) -> CredentialAction.CLOUD_READ
     // Webhooks are team-wide: the service accepts an administrator's login or `admin:cloud` key and refuses the rest.
     method == "GET" && webhookRead.matches(path) -> CredentialAction.CLOUD_READ

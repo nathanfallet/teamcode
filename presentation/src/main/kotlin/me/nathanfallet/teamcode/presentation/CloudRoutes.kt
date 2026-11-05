@@ -32,6 +32,7 @@ internal fun CloudSession.view() = CloudSessionView(
     host = host?.let { CloudSessionHostView(it.deviceId, it.device?.name, it.device?.platform, it.device?.osVersion, it.directoryName, it.online, it.lastHeartbeatAt, it.permissionMode.wire, it.folderId) },
     waiting = waitingForHuman?.let { CloudWaitingView(it.reason.wire, it.requestId, it.since, it.eventSeq) },
     githubAccess = githubAccess.wire.takeIf { kind == CloudSessionKind.CLOUD },
+    parentSessionId = parentSessionId, rootSessionId = root, depth = depth,
 )
 /** The profile id and image reference of a remote session, which has neither. */
 internal const val REMOTE_PLACEHOLDER = "remote"
@@ -44,9 +45,11 @@ private fun CloudEnvironmentView.domain() = CloudEnvironmentSpec(repositories.ma
 private fun CloudExecution.view() = CloudExecutionView(epoch, podName, state.wire, createdAt, registeredAt, lastHeartbeatAt, nodeName, imageDigest, endedAt, exitReason, checkpoint, ownerId)
 private fun CloudCluster.view() = CloudClusterView(id, name, apiUrl, allowedNamespaces, maxRunningPods, defaultStorageClass, version, orphanedVolumes, lastGarbageCollectionAt, createdAt, updatedAt)
 private fun CloudProfileSpec.view() = CloudProfileSpecView(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResourcesView(resources.cpuMillis, resources.memoryMebibytes),
-    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.view())
+    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.view(),
+    CloudOrchestrationView(orchestration.enabled, orchestration.maxActiveChildren, orchestration.maxDepth, orchestration.childProfileIds))
 private fun CloudProfileSpecView.domain() = CloudProfileSpec(clusterId, namespace, image, allowedImageOverrides, imagePullSecrets, CloudResources(resources.cpuMillis, resources.memoryMebibytes),
-    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.domain())
+    workspaceSizeGibibytes, storageClass, agentKind, agentVersion, idleTimeoutMinutes, minIdleTimeoutMinutes, maxIdleTimeoutMinutes, environment.domain(),
+    CloudOrchestrationSpec(orchestration.enabled, orchestration.maxActiveChildren, orchestration.maxDepth, orchestration.childProfileIds))
 private fun CloudProfile.view(clusterName: String? = null) = CloudProfileView(id, name, version, spec.view(), assignedMemberIds.sorted(), createdAt, updatedAt, clusterName)
 private fun CloudSettings.view() = CloudSettingsView(pausedRetentionDays, failedWorkspaceRetentionDays, maxRunningSessionsPerMember, maxRetainedSessionsPerMember, transcriptRetentionDays,
     memberTransfers.wire, transferOfferDays, transferPendingInputs.wire, permissionDeadlineMinutes, remoteIdleTimeoutMinutes, fileMaxMebibytes, messageFileMebibytes,
@@ -109,6 +112,9 @@ private val WORK_ROUTES = listOf(
     arrayOf("api", "v1", "cloud", "sessions", "*", "attachments"),
     arrayOf("api", "v1", "cloud", "sessions", "*", "transfer"),
     arrayOf("api", "v1", "cloud", "transfers", "*", "accept"),
+    // A parent starting or messaging its child sessions (docs/orchestration.md); waiting, reading, interrupting and terminating stay open.
+    arrayOf("api", "v1", "cloud", "children"),
+    arrayOf("api", "v1", "cloud", "children", "*", "messages"),
     // Arming an automation and a real test start runs; a dry run is refused too while sessions are off.
     arrayOf("api", "v1", "automations", "*", "enable"),
     arrayOf("api", "v1", "automations", "*", "run"),

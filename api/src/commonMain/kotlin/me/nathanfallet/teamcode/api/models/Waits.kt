@@ -140,6 +140,8 @@ data class WaitView(
      * (`POST`, a JSON body of at most 16 KiB). It holds the wait's secret, which the server keeps hashed and never shows again.
      */
     val eventUrl: String? = null,
+    /** `event` waits with source `child` (docs/orchestration.md): the child session the wait follows. */
+    val childSessionId: String? = null,
 )
 
 /**

@@ -55,6 +55,7 @@ internal fun Wait.view(eventUrl: String? = null) = WaitView(
     answer?.let { WaitAnswerView(it.action, it.values, it.authorId, it.answeredAt) }, createdAt, resolvedAt,
     dueAt = timer?.dueAt?.takeIf { resolver == WaitResolver.TIME }, timeoutAt = timer?.dueAt?.takeIf { resolver == WaitResolver.EVENT },
     eventSource = timer?.eventSource?.wire, onTimeout = timer?.onTimeout?.wire, resumeMessage = timer?.resumeMessage, eventUrl = eventUrl,
+    childSessionId = timer?.childSessionId,
 )
 
 /** A wait with its fields, refs and an answer of at most 128 KiB, encoded. */

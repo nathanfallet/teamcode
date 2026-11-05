@@ -97,6 +97,13 @@ data class CloudSessionView(
      * `shared` or `none`. Null from a server without the feature.
      */
     val githubAccess: String? = null,
+    /**
+     * Session orchestration (`cloud.orchestration.v1`, docs/orchestration.md): the session that started this one as its child, the
+     * root of its tree (its own id at the top) and its depth (0 at the top). Null and 0 from a server without the feature.
+     */
+    val parentSessionId: String? = null,
+    val rootSessionId: String? = null,
+    val depth: Int = 0,
 )
 object CloudSessionKinds {
     const val CLOUD = "cloud"
@@ -235,7 +242,15 @@ data class CloudProfileSpecView(
     val minIdleTimeoutMinutes: Int = 5,
     val maxIdleTimeoutMinutes: Int = 1440,
     val environment: CloudEnvironmentView = CloudEnvironmentView(),
+    /** Session orchestration (`cloud.orchestration.v1`); absent or off: sessions of this profile start no child. */
+    val orchestration: CloudOrchestrationView = CloudOrchestrationView(),
 )
+/**
+ * Whether sessions of a profile version may start child sessions (docs/orchestration.md): at most [maxActiveChildren] not ended at
+ * once (1 to 20), down to [maxDepth] levels below a top-level session (1 to 3), from this profile or one of [childProfileIds].
+ */
+@Serializable
+data class CloudOrchestrationView(val enabled: Boolean = false, val maxActiveChildren: Int = 5, val maxDepth: Int = 2, val childProfileIds: List<String> = emptyList())
 /** [clusterName] is the name of `spec.clusterId`, filled by `GET /cloud/profiles` (null from an older server). */
 @Serializable
 data class CloudProfileView(val id: String, val name: String, val version: Int, val spec: CloudProfileSpecView, val assignedMemberIds: List<String>, val createdAt: Long, val updatedAt: Long, val clusterName: String? = null)

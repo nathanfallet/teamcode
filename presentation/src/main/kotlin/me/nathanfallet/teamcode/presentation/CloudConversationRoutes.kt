@@ -28,7 +28,7 @@ private const val MAX_JSON_ARRAY = CloudTranscriptLimits.MAX_ENTRIES
 private val DROPPED_KEYS = CloudTranscriptLimits.DROPPED_KEYS
 
 internal fun CloudEvent.view() = CloudEventView(seq, type.wire, at, epoch, Serialization.json.parseToJsonElement(data).jsonObject)
-private fun CloudEventPage.view() = CloudEventPageView(events.map { it.view() }, firstSeq, lastSeq, nextAfter, nextBefore)
+internal fun CloudEventPage.view() = CloudEventPageView(events.map { it.view() }, firstSeq, lastSeq, nextAfter, nextBefore)
 private fun CloudInput.view() = CloudInputView(id, kind.wire, status.wire, authorId, text, wake, woke, clientKey, createdAt, deliveredAt, deliveredEpoch, consumedAt, finishedAt, reason, eventSeq)
 private fun CloudFile.view() = CloudFileView(id, sessionId, name, size, contentType.orEmpty(), sha256.orEmpty(), createdAt, expiresAt)
 private fun CloudFilePolicy.view() = CloudFilePolicyView(available, reason, maxFileBytes, maxMessageBytes, maxFilesPerMessage, types)
@@ -88,7 +88,7 @@ private fun ApplicationCall.longQuery(name: String): Long? = request.queryParame
 }
 
 /** `202` with the acknowledgement; a replayed idempotency key returns the current state with `Idempotency-Replayed: true`. */
-private suspend fun ApplicationCall.respondInput(outcome: InputOutcome) {
+internal suspend fun ApplicationCall.respondInput(outcome: InputOutcome) {
     val input = when (outcome) {
         is InputOutcome.Accepted -> outcome.input
         is InputOutcome.Replayed -> outcome.input.also { response.header(CloudHeaders.IDEMPOTENCY_REPLAYED, "true") }
@@ -276,7 +276,7 @@ internal fun Route.cloudRunnerConversationRoutes(channel: CloudRunnerChannel, co
         val pod = channel.authenticate(call.token(), body.teamId, body.sessionId, body.epoch)
         val agent = runner.agent(pod.teamId, pod.sessionId, pod.epoch)
         call.respond(RunnerAgentView(agent.kind, agent.version, agent.model, agent.effort, agent.conversation.wire, permissionRelay = agent.permissionRelay, permissionDeadlineMinutes = agent.permissionDeadlineMinutes, liveText = agent.liveText, permissionMode = agent.permissionMode?.wire,
-            backgroundTasks = agent.backgroundTasks, owner = agent.owner?.let { RunnerOwnerView(it.username, it.githubLogin) }))
+            backgroundTasks = agent.backgroundTasks, owner = agent.owner?.let { RunnerOwnerView(it.username, it.githubLogin) }, workload = agent.workload))
     }
     post(RUNNER_PATH + "events") {
         val body = call.boundedJson<RunnerEventsRequest>(RUNNER_BODY_BYTES)
