@@ -145,6 +145,13 @@ private data class StoredProfileSpec(
     val resources: StoredResources, val workspaceSizeGibibytes: Int, val storageClass: String?, val agentKind: String, val agentVersion: String?,
     val idleTimeoutMinutes: Int, val minIdleTimeoutMinutes: Int, val maxIdleTimeoutMinutes: Int,
     val environment: StoredEnvironment = StoredEnvironment(),
+    /** Absent in versions published before orchestration: off. */
+    val orchestration: StoredOrchestration = StoredOrchestration(),
+)
+@Serializable
+private data class StoredOrchestration(
+    val enabled: Boolean = false, val maxActiveChildren: Int = CloudOrchestrationSpec.DEFAULT_ACTIVE_CHILDREN,
+    val maxDepth: Int = CloudOrchestrationSpec.DEFAULT_DEPTH, val childProfileIds: List<String> = emptyList(),
 )
 private fun CloudEnvironmentSpec.stored() = StoredEnvironment(repositories.map { StoredRepository(it.url, it.path, it.ref, it.branch) }, workingDirectory,
     setup.create, setup.start, requiredVariables, requireGitHub, gitEmailDomain, repositoryHosts)
@@ -155,10 +162,12 @@ internal fun encodeEnvironment(spec: CloudEnvironmentSpec): String? = if (spec =
 internal fun decodeEnvironment(value: String?): CloudEnvironmentSpec = value?.let { Json.decodeFromString<StoredEnvironment>(it).domain() } ?: CloudEnvironmentSpec()
 internal fun encodeProfileSpec(s: CloudProfileSpec) = Json.encodeToString(StoredProfileSpec(s.clusterId, s.namespace, s.image, s.allowedImageOverrides, s.imagePullSecrets,
     StoredResources(s.resources.cpuMillis, s.resources.memoryMebibytes), s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion,
-    s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.stored()))
+    s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.stored(),
+    s.orchestration.let { StoredOrchestration(it.enabled, it.maxActiveChildren, it.maxDepth, it.childProfileIds) }))
 internal fun decodeProfileSpec(value: String) = Json.decodeFromString<StoredProfileSpec>(value).let { s ->
     CloudProfileSpec(s.clusterId, s.namespace, s.image, s.allowedImageOverrides, s.imagePullSecrets, CloudResources(s.resources.cpuMillis, s.resources.memoryMebibytes),
-        s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion, s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.domain())
+        s.workspaceSizeGibibytes, s.storageClass, s.agentKind, s.agentVersion, s.idleTimeoutMinutes, s.minIdleTimeoutMinutes, s.maxIdleTimeoutMinutes, s.environment.domain(),
+        s.orchestration.let { CloudOrchestrationSpec(it.enabled, it.maxActiveChildren, it.maxDepth, it.childProfileIds) })
 }
 internal fun readProfile(teamId: String, profileId: String): CloudProfile? {
     val row = CloudProfiles.selectAll().where { (CloudProfiles.id eq profileId) and (CloudProfiles.teamId eq teamId) }.singleOrNull() ?: return null

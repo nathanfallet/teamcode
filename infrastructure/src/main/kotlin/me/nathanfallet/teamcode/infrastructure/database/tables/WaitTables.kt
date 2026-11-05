@@ -36,6 +36,8 @@ object Waits : Table("waits") {
     val eventTokenHash = varchar("event_token_hash", 64).nullable()
     /** Set when the server resolved the wait and still owes its session the wake message; cleared once queued. */
     val wakePending = bool("wake_pending").default(false)
+    /** The child session a `child` event wait follows (docs/orchestration.md); null for every other wait. */
+    val childSessionId = varchar("child_session_id", 36).nullable()
     override val primaryKey = PrimaryKey(id)
     init {
         // A member's waits by status, newest first: equality columns, then the sort. It leads with the assignee so the
@@ -57,6 +59,8 @@ object Waits : Table("waits") {
         index("wait_due", false, status, dueAt)
         // The wake messages still owed after a resolution: a handful of rows, none in the normal case.
         index("wait_wake", false, wakePending, resolvedAt)
+        // The open waits that follow a child, read under the child's row lock when its turn ends or its state changes.
+        index("wait_child", false, childSessionId, status)
     }
 }
 

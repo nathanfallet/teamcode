@@ -29,7 +29,13 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     }
     override suspend fun settings(teamId: String): CloudSettings = database.query { readCloudSettings(teamId) }
 
-    override suspend fun insert(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int): CloudCreateOutcome = database.query {
+    override suspend fun insert(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int): CloudCreateOutcome =
+        database.query { insertSession(session, actor, idempotency, retainedLimit, null) }
+
+    override suspend fun insertChild(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest, retainedLimit: Int, link: ChildSessionLink): CloudCreateOutcome =
+        database.query { insertSession(session, actor, idempotency, retainedLimit, link) }
+
+    private fun JdbcTransaction.insertSession(session: CloudSession, actor: CloudActor, idempotency: IdempotencyRequest?, retainedLimit: Int, link: ChildSessionLink?): CloudCreateOutcome {
         val principal = actor.principal
         requireCurrent(this, principal)
         // Serialize per member (sorted to avoid lock-order deadlocks): retained caps and idempotency records.
@@ -48,7 +54,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
                     throw TeamFailure("idempotency_conflict", 422, "This Idempotency-Key was already used with a different request.")
                 val replay = readSession(principal.teamId, existing[CloudIdempotency.sessionId])
                     ?: throw TeamFailure("idempotency_conflict", 422, "This Idempotency-Key refers to a session that no longer exists.")
-                return@query CloudCreateOutcome.Replayed(replay)
+                return CloudCreateOutcome.Replayed(replay)
             }
             if (existing != null) CloudIdempotency.deleteWhere { scope }
         }
@@ -60,6 +66,16 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
                     (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire)) and CloudSessions.automationId.isNull()
             }.count()
             if (retained >= retainedLimit) throw TeamFailure("cloud_session_limit", 409, "The member already retains the maximum number of cloud sessions. Delete one first.")
+        }
+        // A parent's children are all its owner's, so the owner's row lock above serializes two spawns of one parent: the count holds.
+        // `cloud_session_parent_state (parent_session_id, state, desired_state)`: a range of the parent's live children, at most the cap.
+        if (link != null) {
+            val active = CloudSessions.select(CloudSessions.id).where {
+                (CloudSessions.parentSessionId eq link.parentId) and (CloudSessions.state notInList listOf(CloudSessionState.TERMINATED.wire, CloudSessionState.FAILED.wire)) and
+                    (CloudSessions.desiredState neq DesiredState.TERMINATED.wire)
+            }.limit(link.maxActiveChildren).count()
+            if (active >= link.maxActiveChildren) throw TeamFailure("child_session_limit", 409,
+                "This session already runs ${link.maxActiveChildren} child sessions, the most its profile allows. Wait for one to end, or terminate one first.")
         }
         val created = session.copy(generation = 1, createdAt = now, updatedAt = now, lastActivityAt = now)
         CloudSessions.insert {
@@ -73,6 +89,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[permissionMode] = created.host?.permissionMode?.wire; it[hostFolderId] = created.host?.folderId; it[hostResumeSessionId] = created.host?.resumeSessionId
             if (created.automationId != null) it[automationId] = created.automationId
             if (created.runId != null) it[runId] = created.runId
+            it[parentSessionId] = created.parentSessionId; it[rootSessionId] = created.rootSessionId; it[depth] = created.depth
             it[createdAt] = now
             writeSessionMutable(it, created)
             it[reconcileAfter] = now; it[reconcileRequested] = true
@@ -82,9 +99,10 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             it[teamId] = principal.teamId; it[initiatorId] = principal.member.id; it[route] = idempotency.route; it[key] = idempotency.key
             it[requestDigest] = idempotency.requestDigest; it[sessionId] = created.id; it[createdAt] = now; it[expiresAt] = now + IDEMPOTENCY_MILLIS
         }
-        audit(principal.teamId, principal.member.id, "cloud.session.created", created.id, actor.effectiveMemberId, principal.tokenId)
+        audit(principal.teamId, principal.member.id, if (link != null) "cloud.session.child_created" else "cloud.session.created", created.id, actor.effectiveMemberId, principal.tokenId,
+            details = link?.parentId)
         publishTeamEvent(created.teamId, TeamEventType.SESSION_CREATED, created.id, created.ownerId, sessionData(created, null, null), now)
-        CloudCreateOutcome.Created(created)
+        return CloudCreateOutcome.Created(created)
     }
 
     override suspend fun find(teamId: String, id: String): CloudSession? = database.query { readSession(teamId, id) }
@@ -143,7 +161,10 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
             if (actor != null) audit(expected.teamId, actor.principal.member.id, action, expected.id, actor.effectiveMemberId, actor.principal.tokenId)
             else audit(expected.teamId, "system", action, expected.id, expected.ownerId, null)
         }
+        // A child that is paused or ends wakes the parent waiting for it (docs/orchestration.md); the row's update above holds its lock.
+        val childEvents = ChildWaits.change(expected, next)?.let { (action, values) -> with(ChildWaits) { resolve(expected.id, action, values, now) } }.orEmpty()
         publishSessionChange(expected, next, write.auditAction, now)
+        if (childEvents.isNotEmpty()) publishTeamEvents(expected.teamId, childEvents)
         next.copy(generation = expected.generation + 1)
     }
 
@@ -302,7 +323,7 @@ class SqlCloudSessionStore(private val database: Database) : CloudSessionStore {
     companion object { const val IDEMPOTENCY_MILLIS = 24 * 3_600_000L }
 }
 
-private fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else
+internal fun labelsFor(ids: List<String>): Map<String, Map<String, String>> = if (ids.isEmpty()) emptyMap() else
     CloudSessionLabels.selectAll().where { CloudSessionLabels.sessionId inList ids }.groupBy({ it[CloudSessionLabels.sessionId] }) { it[CloudSessionLabels.key] to it[CloudSessionLabels.value] }
         .mapValues { (_, pairs) -> pairs.toMap() }
 /**
@@ -341,6 +362,8 @@ internal fun readSessionRow(row: ResultRow, labels: Map<String, String>) = Cloud
     githubAccess = CloudGitHubAccess.parse(row[CloudSessions.githubAccess]) ?: CloudGitHubAccess.OWNER,
     automationId = row.getOrNull(CloudSessions.automationId),
     runId = row.getOrNull(CloudSessions.runId),
+    parentSessionId = row.getOrNull(CloudSessions.parentSessionId), rootSessionId = row.getOrNull(CloudSessions.rootSessionId),
+    depth = row.getOrNull(CloudSessions.depth) ?: 0,
 )
 /**
  * The host of a remote session; the device's name and system, and the liveness of the current execution, only when

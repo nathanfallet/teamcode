@@ -176,6 +176,13 @@ object CloudSessions : Table("cloud_sessions") {
     val automationId = varchar("automation_id", 36).nullable()
     /** The `teamcode run` launch a local session is attached to (at most one session per launch); null for every other kind. */
     val runId = varchar("run_id", 36).nullable()
+    /**
+     * The session that created this one as its child (docs/orchestration.md), its tree's root (null for a top-level session, which is
+     * its own root) and its depth (0 at the top). Fixed at creation. No foreign key: a parent's row may be purged before its children's.
+     */
+    val parentSessionId = varchar("parent_session_id", 36).nullable()
+    val rootSessionId = varchar("root_session_id", 36).nullable()
+    val depth = integer("depth").default(0)
     override val primaryKey = PrimaryKey(id)
     init {
         uniqueIndex("cloud_session_run", teamId, runId)
@@ -193,6 +200,9 @@ object CloudSessions : Table("cloud_sessions") {
         index("cloud_session_cluster_waiting", false, clusterId, waitingSince)
         // The daemon's queue: a device's sessions waiting for their host, oldest request first.
         index("cloud_session_host_waiting", false, hostDeviceId, phase, desiredState, updatedAt)
+        // A parent's children, newest first (keyset on created_at, id), and the count of those not ended, for the child cap.
+        index("cloud_session_parent", false, parentSessionId, createdAt, id)
+        index("cloud_session_parent_state", false, parentSessionId, state, desiredState)
     }
 }
 object CloudSessionLabels : Table("cloud_session_labels") {

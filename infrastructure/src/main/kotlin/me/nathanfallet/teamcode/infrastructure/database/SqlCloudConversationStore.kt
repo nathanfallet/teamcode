@@ -39,10 +39,20 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         // A request raised while the session takes no answer (a pause asked: the runner denies it) never shows as waiting.
         val answerable = DesiredState.parse(session[CloudSessions.desiredState]) == DesiredState.RUNNING &&
             CloudSessionState.parse(session[CloudSessions.state]).let { it == CloudSessionState.READY || it == CloudSessionState.ACTIVE }
+        // The first turn end or permission request of the batch, for a child session's waiting parent (docs/orchestration.md).
+        val child = session[CloudSessions.parentSessionId] != null
+        var childSignal: Pair<String, Map<String, kotlinx.serialization.json.JsonElement>>? = null
         for (event in events.sortedBy { it.sequence }) {
             if (event.sequence <= through) continue
             if (event.sequence != through + 1) break // A gap: the runner resends from acceptedThrough + 1.
             insertEvent(sessionId, teamId, ++last, epoch, event.sequence, event.type, now, event.data)
+            if (child && childSignal == null) childSignal = when {
+                event.turn == TurnMarker.ENDED -> me.nathanfallet.teamcode.domain.waits.WaitService.CHILD_TURN_ENDED to
+                    listOfNotNull(jsonObject(event.data).str("phase")?.take(32)?.let { "phase" to JsonPrimitive(it) }).toMap()
+                event.type == CloudEventType.PERMISSION_REQUEST && answerable -> me.nathanfallet.teamcode.domain.waits.WaitService.CHILD_WAITING to
+                    mapOf("reason" to JsonPrimitive(if (jsonObject(event.data).str("question") == "true") "question" else "permission"))
+                else -> null
+            }
             if (event.type in FEED_TYPES) feed += Triple(last, event.type, event.data)
             // The wait follows the transcript event by event, so it is exact whatever the batch holds.
             wait = when {
@@ -57,8 +67,9 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
         if (wait != waited) saveHumanWait(sessionId, wait)
         // Last, so the team's cursor lock is taken after every other write of this transaction.
         val owner = session[CloudSessions.ownerId]
+        val childEvents = childSignal?.let { (action, values) -> with(ChildWaits) { resolve(sessionId, action, values, now) } }.orEmpty()
         // One batch, however many turns and requests the upload carried.
-        publishTeamEvents(teamId, feed.flatMap { (seq, type, data) ->
+        publishTeamEvents(teamId, childEvents + feed.flatMap { (seq, type, data) ->
             val event = when (type) {
                 CloudEventType.TURN -> turnEvent(sessionId, owner, seq, data, now)
                 CloudEventType.PERMISSION_EXPIRED -> expiredEvent(sessionId, owner, seq, data, now)
@@ -561,7 +572,8 @@ class SqlCloudConversationStore(private val database: Database) : CloudConversat
 
     private fun lockSession(sessionId: String): ResultRow =
         CloudSessions.select(CloudSessions.id, CloudSessions.teamId, CloudSessions.ownerId, CloudSessions.state, CloudSessions.desiredState, CloudSessions.blockedCode, CloudSessions.currentEpoch, CloudSessions.kind,
-            CloudSessions.awaitingReason, CloudSessions.awaitingRequestId, CloudSessions.awaitingSince, CloudSessions.awaitingEventSeq, CloudSessions.awaitingEpoch)
+            CloudSessions.awaitingReason, CloudSessions.awaitingRequestId, CloudSessions.awaitingSince, CloudSessions.awaitingEventSeq, CloudSessions.awaitingEpoch,
+            CloudSessions.parentSessionId)
             .where { CloudSessions.id eq sessionId }.forUpdate().singleOrNull() ?: throw TeamFailure("not_found", 404, "Cloud session not found.")
 
     private fun ownerChanged() = TeamFailure("session_busy", 409, "The cloud session changed owner. Retry the request.")
