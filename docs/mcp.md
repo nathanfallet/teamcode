@@ -3,6 +3,7 @@
 `mcp` is the server-side component that runs team MCP servers published as **stdio** packages (npm, PyPI) for the [MCP gateway](mcp-gateway.md). The two pages cover different things:
 
 - [MCP gateway](mcp-gateway.md): the agent-facing endpoint `/mcp/<server>`, authorization per member and per call, tool policies, limits and the journal. Agents only ever talk to the gateway, for every kind of server.
+- The servers TeamCode itself runs beside an agent over stdio (`teamcode mcp artifacts`, `waits`, `workflow`, `todo` and, for an [orchestrating](orchestration.md) session, `sessions`) are CLI processes in the session's pod or on the member's device, reaching the server through the launcher's loopback relays: they are not hosted here.
 - This page: the internal host behind the gateway for stdio servers. It starts one process per key, speaks stdio JSON-RPC with it, and answers the gateway over an internal HTTP protocol. Agents never reach it, and nothing runs on a member's workstation or in a session pod.
 
 It is the Gradle module `:mcp` and the image `nathanfallet/teamcode-mcp`, published with the same tags as the server image.
