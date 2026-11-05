@@ -1,0 +1,1 @@
+ALTER TABLE session_todos ADD hook_events text NULL;

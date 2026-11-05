@@ -68,10 +68,18 @@ data class TodoItem(
 /** A counter snapshot taken at a stop: a stop made progress when an item was finished or added, or a note written, since. */
 data class TodoProgress(val done: Int, val items: Int, val notes: Int)
 
+/**
+ * What the Stop hook recorded about itself: `would_block` (observation mode: the stop it would have refused, with the reason),
+ * `blocked` (the third stop without progress opened a wait) or `hook_error` (it failed open). The newest [TodoRules.MAX_HOOK_EVENTS] are kept.
+ */
+data class TodoHookEvent(val at: Long, val kind: String, val text: String) {
+    companion object { val kinds = listOf("would_block", "blocked", "hook_error") }
+}
+
 data class TodoList(
     val id: String, val sessionId: String, val teamId: String, val reference: String, val refs: List<WaitRef>,
     val status: TodoListStatus, val stall: Int, val lastStop: TodoProgress?, val items: List<TodoItem>,
-    val createdAt: Long, val updatedAt: Long,
+    val createdAt: Long, val updatedAt: Long, val hookEvents: List<TodoHookEvent> = emptyList(),
 ) {
     fun item(id: String) = items.firstOrNull { it.id == id }
     val doneCount get() = items.count { it.status == TodoItemStatus.DONE }

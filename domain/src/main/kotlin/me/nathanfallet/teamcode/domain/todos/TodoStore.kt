@@ -25,6 +25,12 @@ interface TodoStore {
     suspend fun artifactVersion(teamId: String, artifactId: String): Int?
     /** The status and answered action of a wait of this session, or null when it is not one of the session's. */
     suspend fun waitState(teamId: String, sessionId: String, waitId: String): WaitState?
+    /** Whether the session has any open wait (`exists`, on the session index): a stop with a wait open is never held back. */
+    suspend fun hasOpenWait(teamId: String, sessionId: String): Boolean
+    /** The current versions of these artifacts of the team that are not deleted, in one read. */
+    suspend fun artifactVersions(teamId: String, artifactIds: Collection<String>): Map<String, Int> = artifactIds.mapNotNull { id -> artifactVersion(teamId, id)?.let { id to it } }.toMap()
+    /** The state of these waits of the session, in one read. */
+    suspend fun waitStates(teamId: String, sessionId: String, waitIds: Collection<String>): Map<String, WaitState> = waitIds.mapNotNull { id -> waitState(teamId, sessionId, id)?.let { id to it } }.toMap()
     /** The outcome of each of these drop waits that was decided, in one read. */
     suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>): Map<String, DropOutcome>
 }
@@ -37,4 +43,9 @@ interface TodoDropWaits {
     /** Asks the session's owner; returns the wait's id. Answering `yes` drops the item, anything else keeps it. */
     suspend fun open(actor: Principal, sessionId: String, item: TodoItem, reason: String): String
     suspend fun cancel(actor: Principal, waitId: String)
+    /**
+     * Asks the owner to unblock a session that stopped three times without progress. With [dropItem], answering `yes` drops that item
+     * (the list's drop request names this wait); `no` resumes and `stop` tells the agent to stop. Returns the wait's id.
+     */
+    suspend fun openBlocked(actor: Principal, sessionId: String, title: String, body: String, dropItem: Boolean): String
 }

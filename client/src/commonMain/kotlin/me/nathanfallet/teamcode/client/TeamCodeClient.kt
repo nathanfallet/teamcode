@@ -853,6 +853,10 @@ class TeamCodeClient(
         require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/items")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
+    /** One stop of the agent for the Stop hook (`teamcode cloud todo-stop`): what to run next, whether the stop passes, or the message to block with. */
+    suspend fun todoStop(request: TodoStopRequest): TodoStopView = coded(HttpMethod.Post, "/api/v1/todos/session/stop", request)
+    /** Records a failure of the Stop hook on the session's list. */
+    suspend fun todoHookError(request: TodoHookErrorRequest): TodoSessionView = coded(HttpMethod.Post, "/api/v1/todos/session/hook-error", request)
     /** Asks the session's owner to drop an item; nothing is deleted until they say yes. */
     suspend fun requestTodoDrop(itemId: String, request: DropTodoItemRequest): TodoSessionView {
         identifier(itemId); return coded(HttpMethod.Post, "/api/v1/todos/session/items/$itemId/drop", request)

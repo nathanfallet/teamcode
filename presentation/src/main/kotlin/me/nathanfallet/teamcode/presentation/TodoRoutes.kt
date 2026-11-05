@@ -54,7 +54,7 @@ private fun TodoItem.view() = TodoItemView(
 
 internal fun TodoList.view() = TodoView(
     id, sessionId, reference, refs.map { TodoRefInput(it.kind, it.id, it.url, it.title) }, status.wire, stall, items.map { it.view() }, createdAt, updatedAt,
-    nextItemId = TodoRules.next(this)?.id,
+    nextItemId = TodoRules.next(this)?.id, hookEvents = hookEvents.map { TodoHookEventView(it.at, it.kind, it.text) },
 )
 
 /**
@@ -68,6 +68,22 @@ internal fun Route.todoRoutes(todos: TodoService) {
             val input = call.jsonBody<CreateTodoRequest>(TODO_BYTES)
             val list = todos.create(call.principal, session(input.sessionId), input.reference, input.refs.map { WaitRef(it.kind, it.id, it.url, it.title) }, input.items.map { it.domain() })
             call.respond(HttpStatusCode.Created, TodoSessionView(list.view()))
+        }
+        post("/stop") {
+            val input = call.jsonBody<TodoStopRequest>(TODO_BYTES)
+            val phase = when (input.phase) { "begin" -> TodoStopPhase.BEGIN; "verify" -> TodoStopPhase.VERIFY; "settle" -> TodoStopPhase.SETTLE; else -> throw invalid("Use a phase of begin, verify or settle.") }
+            val decision = todos.stop(
+                call.principal, session(input.sessionId),
+                TodoStopInput(
+                    phase, input.background, input.observe, input.items.map { i -> TodoStopItemReport(i.itemId, i.checks.map { TodoCheckReport(it.index, it.passed, it.observed, it.urls) }) },
+                    input.orphans, input.lastMessage?.take(2_000),
+                ),
+            )
+            call.respond(TodoStopView(decision.action.wire, decision.list?.view(), decision.reason, decision.why, decision.wouldBlock, decision.escalated))
+        }
+        post("/hook-error") {
+            val input = call.jsonBody<TodoHookErrorRequest>(TODO_BYTES)
+            call.respond(TodoSessionView(todos.hookError(call.principal, session(input.sessionId), input.text.take(TodoRules.MAX_HOOK_TEXT)).view()))
         }
         post("/items") {
             val input = call.jsonBody<AddTodoItemRequest>(TODO_BYTES)

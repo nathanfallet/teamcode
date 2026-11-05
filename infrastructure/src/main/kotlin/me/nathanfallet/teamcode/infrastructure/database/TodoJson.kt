@@ -66,4 +66,9 @@ internal object TodoJson {
         val o = it.jsonObject
         TodoLink(o.getValue("kind").jsonPrimitive.content, o.getValue("ref").jsonPrimitive.content, o["number"]?.jsonPrimitive?.int, o["sha"]?.jsonPrimitive?.content, o["tag"]?.jsonPrimitive?.content, o.getValue("at").jsonPrimitive.long)
     }
+
+    fun events(events: List<TodoHookEvent>) = buildJsonArray { events.forEach { e -> add(buildJsonObject { put("at", e.at); put("kind", e.kind); put("text", e.text) }) } }.toString()
+    fun events(text: String?): List<TodoHookEvent> = if (text == null) emptyList() else json.parseToJsonElement(text).jsonArray.map {
+        val o = it.jsonObject; TodoHookEvent(o.getValue("at").jsonPrimitive.long, o.getValue("kind").jsonPrimitive.content, o.getValue("text").jsonPrimitive.content)
+    }
 }

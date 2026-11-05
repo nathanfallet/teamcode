@@ -17,6 +17,8 @@ object SessionTodos : Table("session_todos") {
     val lastDone = integer("last_done").nullable()
     val lastItems = integer("last_items").nullable()
     val lastNotes = integer("last_notes").nullable()
+    /** JSON: what the Stop hook recorded about itself (would_block, blocked, hook_error), the newest 20. Null until the first. */
+    val hookEvents = text("hook_events").nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(sessionId)

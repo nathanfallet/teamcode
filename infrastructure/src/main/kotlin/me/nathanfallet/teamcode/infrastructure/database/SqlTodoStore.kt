@@ -62,6 +62,23 @@ class SqlTodoStore(private val database: Database) : TodoStore {
             ?.let { WaitState(it[Waits.status], it[Waits.answerAction]) }
     }
 
+    override suspend fun hasOpenWait(teamId: String, sessionId: String): Boolean = database.query {
+        Waits.select(Waits.id).where { (Waits.sessionId eq sessionId) and (Waits.status eq WaitStatus.OPEN.wire) and (Waits.teamId eq teamId) }.limit(1).any()
+    }
+
+    override suspend fun artifactVersions(teamId: String, artifactIds: Collection<String>): Map<String, Int> = database.query {
+        if (artifactIds.isEmpty()) return@query emptyMap()
+        Artifacts.select(Artifacts.id, Artifacts.currentVersion).where { (Artifacts.id inList artifactIds.toList()) and (Artifacts.teamId eq teamId) and Artifacts.deletedAt.isNull() }.limit(artifactIds.size)
+            .associate { it[Artifacts.id] to it[Artifacts.currentVersion] }
+    }
+
+    override suspend fun waitStates(teamId: String, sessionId: String, waitIds: Collection<String>): Map<String, WaitState> = database.query {
+        if (waitIds.isEmpty()) return@query emptyMap()
+        // By primary key; the session is checked on the rows, so the plan never walks the session's waits.
+        Waits.select(Waits.id, Waits.sessionId, Waits.status, Waits.answerAction).where { (Waits.id inList waitIds.toList()) and (Waits.teamId eq teamId) }.limit(waitIds.size)
+            .filter { it[Waits.sessionId] == sessionId }.associate { it[Waits.id] to WaitState(it[Waits.status], it[Waits.answerAction]) }
+    }
+
     private fun JdbcTransaction.read(teamId: String, sessionId: String, lock: Boolean): TodoList? {
         val query = SessionTodos.selectAll().where { (SessionTodos.sessionId eq sessionId) and (SessionTodos.teamId eq teamId) }
         val row = (if (lock) query.forUpdate() else query).singleOrNull() ?: return null
@@ -69,7 +86,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
         val last = row[SessionTodos.lastDone]?.let { TodoProgress(it, row[SessionTodos.lastItems]!!, row[SessionTodos.lastNotes]!!) }
         return TodoList(
             row[SessionTodos.id], sessionId, teamId, row[SessionTodos.reference], TodoJson.refs(row[SessionTodos.refs]),
-            TodoListStatus.parse(row[SessionTodos.status]) ?: error("Unknown todo status."), row[SessionTodos.stall], last, items, row[SessionTodos.createdAt], row[SessionTodos.updatedAt],
+            TodoListStatus.parse(row[SessionTodos.status]) ?: error("Unknown todo status."), row[SessionTodos.stall], last, items, row[SessionTodos.createdAt], row[SessionTodos.updatedAt], TodoJson.events(row[SessionTodos.hookEvents]),
         )
     }
 
@@ -102,6 +119,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
             SessionTodos.update({ SessionTodos.sessionId eq after.sessionId }) {
                 it[status] = after.status.wire; it[stall] = after.stall; it[lastDone] = after.lastStop?.done; it[lastItems] = after.lastStop?.items
                 it[lastNotes] = after.lastStop?.notes; it[updatedAt] = after.updatedAt
+                it[hookEvents] = after.hookEvents.takeIf { e -> e.isNotEmpty() }?.let(TodoJson::events)
             }
         }
         val old = before.items.withIndex().associate { it.value.id to it }

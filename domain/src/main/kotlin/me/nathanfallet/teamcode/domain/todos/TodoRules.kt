@@ -21,6 +21,8 @@ object TodoRules {
     const val MAX_COMMAND = 2_000
     /** Stops without progress before the hook asks a person (docs/todos.md, section 5). */
     const val STALL_LIMIT = 3
+    const val MAX_HOOK_EVENTS = 20
+    const val MAX_HOOK_TEXT = 500
 
     private val slug = Regex("[a-z0-9][a-z0-9-]{0,${MAX_ID - 1}}")
     private val repo = Regex("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
@@ -308,6 +310,33 @@ object TodoRules {
         val progressed = last != null && (now.done > last.done || now.items > last.items || now.notes > last.notes)
         val stall = if (progressed) 0 else list.stall + 1
         return TodoStop(list.copy(stall = stall, lastStop = now), progressed, stall >= STALL_LIMIT)
+    }
+
+    /** Keeps what the Stop hook says about itself, newest last, bounded. */
+    fun recordEvent(list: TodoList, kind: String, text: String, now: Long): TodoList {
+        require(kind in TodoHookEvent.kinds)
+        return list.copy(hookEvents = (list.hookEvents + TodoHookEvent(now, kind, text.filter { !it.isISOControl() || it == '\n' }.take(MAX_HOOK_TEXT))).takeLast(MAX_HOOK_EVENTS))
+    }
+
+    /**
+     * A pull request opened in the session that no item covers becomes an item of its own, already linked: "Finish PR #n". A PR
+     * that an item is linked to, or that is already an item, is not added twice.
+     */
+    fun addOrphan(list: TodoList, url: String, now: Long): TodoList {
+        val match = Regex("https://github\\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\\d+)").matchEntire(url) ?: return list
+        if (list.status != TodoListStatus.ACTIVE || list.items.size >= MAX_ITEMS || list.items.any { item -> item.links.any { it.ref == url } }) return list
+        val repo = match.groupValues[1]
+        val number = match.groupValues[2].toInt()
+        var id = "finish-pr-$number"
+        var n = 2
+        while (list.item(id) != null) id = "finish-pr-$number-${n++}"
+        val definition = TodoItemDefinition(
+            id, "Finish PR #$number", "A pull request you opened in this session, $url, is not covered by any item of the plan. Get it merged, or ask the owner to close it " +
+                "with todo_drop if it no longer makes sense. Out of scope: any other change.",
+            TodoDoneWhen("PR #$number of $repo is merged", listOf(TodoCheck.PrMerged(repo))),
+        )
+        val added = add(list, definition, "Opened in this session and not covered by an item.")
+        return link(added, id, TodoLink("pr", url, number), false, now)
     }
 
     /** After the person unblocked the session, the counter starts again. */

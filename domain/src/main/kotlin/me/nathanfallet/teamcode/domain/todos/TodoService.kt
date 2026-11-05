@@ -12,6 +12,26 @@ data class TodoCheckReport(val index: Int, val passed: Boolean?, val observed: S
  * acts with its execution credential (`todo:session`), confined to its own session; the session's owner, or an administrator
  * for a read, names the session. No method deletes an item, rewrites a condition or marks an item done without its checks.
  */
+enum class TodoStopPhase { BEGIN, VERIFY, SETTLE }
+enum class TodoStopAction(val wire: String) { ALLOW("allow"), VERIFY("verify"), SETTLE("settle"), BLOCK("block") }
+
+/** The outcome of the checks the hook ran for one item, by position in the item's stored checks. */
+data class TodoStopItemReport(val itemId: String, val checks: List<TodoCheckReport>)
+
+/** What the Stop hook tells the server: [background] a background agent of the session still runs, [observe] the profile is in observation (nothing is refused), [orphans] the PRs the session opened. */
+data class TodoStopInput(
+    val phase: TodoStopPhase, val background: Boolean = false, val observe: Boolean = false,
+    val items: List<TodoStopItemReport> = emptyList(), val orphans: List<String> = emptyList(), val lastMessage: String? = null,
+)
+
+/** [why] says why a stop passes (`no_list`, `finished`, `background_task`, `wait_open`, `observation`, `escalated`, `settled`). [reason] is the message of a block. */
+data class TodoStopDecision(
+    val action: TodoStopAction, val list: TodoList?, val reason: String? = null, val why: String? = null,
+    val wouldBlock: Boolean = false, val escalated: Boolean = false,
+)
+
+private const val MAX_ORPHANS = 5
+
 class TodoService(private val store: TodoStore, private val drops: TodoDropWaits? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Session not found.")
 
@@ -93,32 +113,42 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
     private suspend fun current(teamId: String, sessionId: String, itemId: String) = store.find(teamId, sessionId)?.item(itemId)
 
     /** The outcome of the checks the server verifies by itself: `artifact_published` and `wait_answered`, through what the item is linked to. */
-    private suspend fun serverChecks(teamId: String, sessionId: String, item: TodoItem): Map<TodoCheck, TodoCheckResult> = buildMap {
-        for (check in item.doneWhen.checks) when (check) {
-            is TodoCheck.ArtifactPublished -> {
-                val id = check.id ?: item.links.firstOrNull { it.kind == "artifact" }?.ref
-                val result = if (id == null) TodoCheckResult(check, false, "No artifact is linked to this item: publish it, then link it with todo_link.")
-                else store.artifactVersion(teamId, id).let { version ->
-                    when {
-                        version == null -> TodoCheckResult(check, false, "Artifact $id is not published.")
-                        check.minVersion != null && version < check.minVersion -> TodoCheckResult(check, false, "Artifact $id is at version $version, version ${check.minVersion} is needed.")
-                        else -> TodoCheckResult(check, true, "Artifact $id is published (version $version).")
+    private suspend fun serverChecks(teamId: String, sessionId: String, item: TodoItem): Map<TodoCheck, TodoCheckResult> = serverChecks(teamId, sessionId, listOf(item))[item.id].orEmpty()
+
+    /** The same for several items, with one read of the artifacts and one of the waits however many items there are. */
+    private suspend fun serverChecks(teamId: String, sessionId: String, items: List<TodoItem>): Map<String, Map<TodoCheck, TodoCheckResult>> {
+        fun artifactOf(item: TodoItem, check: TodoCheck.ArtifactPublished) = check.id ?: item.links.firstOrNull { it.kind == "artifact" }?.ref
+        val artifactIds = items.flatMap { item -> item.doneWhen.checks.filterIsInstance<TodoCheck.ArtifactPublished>().mapNotNull { artifactOf(item, it) } }.distinct()
+        val waitIds = items.filter { item -> item.doneWhen.checks.any { it is TodoCheck.WaitAnswered } }.mapNotNull { item -> item.links.firstOrNull { it.kind == "wait" }?.ref }.distinct()
+        val versions = if (artifactIds.isEmpty()) emptyMap() else store.artifactVersions(teamId, artifactIds)
+        val states = if (waitIds.isEmpty()) emptyMap() else store.waitStates(teamId, sessionId, waitIds)
+        return items.associate { item ->
+            item.id to buildMap {
+                for (check in item.doneWhen.checks) when (check) {
+                    is TodoCheck.ArtifactPublished -> {
+                        val id = artifactOf(item, check)
+                        val version = id?.let { versions[it] }
+                        put(check, when {
+                            id == null -> TodoCheckResult(check, false, "No artifact is linked to this item: publish it, then link it with todo_link.")
+                            version == null -> TodoCheckResult(check, false, "Artifact $id is not published.")
+                            check.minVersion != null && version < check.minVersion -> TodoCheckResult(check, false, "Artifact $id is at version $version, version ${check.minVersion} is needed.")
+                            else -> TodoCheckResult(check, true, "Artifact $id is published (version $version).")
+                        })
                     }
+                    is TodoCheck.WaitAnswered -> {
+                        val id = item.links.firstOrNull { it.kind == "wait" }?.ref
+                        val state = id?.let { states[it] }
+                        put(check, when {
+                            id == null -> TodoCheckResult(check, false, "No wait is linked to this item: ask with ask_human, then link the wait with todo_link.")
+                            state == null -> TodoCheckResult(check, false, "Wait $id is not one of this session's.")
+                            state.status != "resolved" -> TodoCheckResult(check, false, "Wait $id is ${state.status}: nobody answered it yet.")
+                            check.action != null && state.action != check.action -> TodoCheckResult(check, false, "Wait $id was answered with '${state.action}', not '${check.action}'.")
+                            else -> TodoCheckResult(check, true, "Wait $id was answered with '${state.action}'.")
+                        })
+                    }
+                    else -> {}
                 }
-                put(check, result)
             }
-            is TodoCheck.WaitAnswered -> {
-                val id = item.links.firstOrNull { it.kind == "wait" }?.ref
-                val state = id?.let { store.waitState(teamId, sessionId, it) }
-                put(check, when {
-                    id == null -> TodoCheckResult(check, false, "No wait is linked to this item: ask with ask_human, then link the wait with todo_link.")
-                    state == null -> TodoCheckResult(check, false, "Wait $id is not one of this session's.")
-                    state.status != "resolved" -> TodoCheckResult(check, false, "Wait $id is ${state.status}: nobody answered it yet.")
-                    check.action != null && state.action != check.action -> TodoCheckResult(check, false, "Wait $id was answered with '${state.action}', not '${check.action}'.")
-                    else -> TodoCheckResult(check, true, "Wait $id was answered with '${state.action}'.")
-                })
-            }
-            else -> {}
         }
     }
 
@@ -143,6 +173,103 @@ class TodoService(private val store: TodoStore, private val drops: TodoDropWaits
             runCatching { waits.cancel(actor, waitId) }
             throw e
         }
+    }
+
+    /**
+     * One stop of the agent (`teamcode cloud todo-stop`, docs/todos.md "The Stop hook"). It is asked up to three times, each answer
+     * telling the hook what to run next: [TodoStopPhase.BEGIN] (nothing to hold back? else which checks to run), then
+     * [TodoStopPhase.VERIFY] with the outcome of the cheap checks and the pull requests the session opened, then, when everything is
+     * closed, [TodoStopPhase.SETTLE] with the outcome of every check of the done items. A session without a list, a list that is
+     * finished, a background agent still running or any open wait of the session lets the stop pass without a question.
+     */
+    suspend fun stop(actor: Principal, sessionId: String?, input: TodoStopInput): TodoStopDecision {
+        val id = session(actor, sessionId, write = true)
+        val list = reconcile(actor.teamId, id) ?: return TodoStopDecision(TodoStopAction.ALLOW, null, why = "no_list")
+        if (list.status != TodoListStatus.ACTIVE) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "finished")
+        if (input.background) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "background_task")
+        if (store.hasOpenWait(actor.teamId, id)) return TodoStopDecision(TodoStopAction.ALLOW, list, why = "wait_open")
+        if (input.phase == TodoStopPhase.BEGIN) return TodoStopDecision(TodoStopAction.VERIFY, list)
+        validate(input)
+        val now = store.now()
+        val wanted = input.items.mapNotNull { r -> list.item(r.itemId) }
+        val observed = if (wanted.isEmpty()) emptyMap() else serverChecks(actor.teamId, id, wanted)
+        var settled = false
+        var counted: TodoStop? = null
+        // The ticks, the final verification and the counter are one change under the list's lock, so two replicas stopping at once count once each
+        // and only one of them sees the limit.
+        val after = store.mutate(actor.teamId, id) { current ->
+            var changed = current
+            if (input.phase == TodoStopPhase.VERIFY) {
+                input.orphans.forEach { changed = TodoRules.addOrphan(changed, it, now) }
+                for (report in input.items) {
+                    val item = changed.item(report.itemId) ?: continue
+                    if (item.status != TodoItemStatus.TODO && item.status != TodoItemStatus.DOING) continue
+                    val results = resultsOf(item, report, observed[item.id].orEmpty())
+                    changed = when (val outcome = TodoRules.complete(changed, item.id, results, now)) { is TodoCompletion.Done -> outcome.list; is TodoCompletion.Refused -> outcome.list }
+                }
+            } else if (changed.allClosed) {
+                val results = input.items.mapNotNull { report -> changed.item(report.itemId)?.takeIf { it.status == TodoItemStatus.DONE }?.let { it.id to resultsOf(it, report, observed[it.id].orEmpty()) } }.toMap()
+                changed = TodoRules.settle(changed, results, now)
+                settled = changed.status == TodoListStatus.DONE
+            }
+            if (!settled && !changed.allClosed && !input.observe) {
+                val stop = TodoRules.stop(changed)
+                counted = stop
+                // At the limit the counter starts again right here: the replica that sees it asks the owner, another one counts from zero.
+                changed = if (stop.escalate) TodoRules.resetStall(stop.list) else stop.list
+            }
+            changed.copy(updatedAt = now) to changed
+        }
+        if (settled) return TodoStopDecision(TodoStopAction.ALLOW, after, why = "settled")
+        if (after.allClosed && input.phase == TodoStopPhase.VERIFY) return TodoStopDecision(TodoStopAction.SETTLE, after)
+        if (input.observe) {
+            val line = "Would block: ${after.doneCount} of ${after.items.size} items done, next ${TodoRules.next(after)?.id ?: "none ready"}."
+            val recorded = store.mutate(actor.teamId, id) { current -> TodoRules.recordEvent(current, "would_block", line, now).copy(updatedAt = now).let { it to it } }
+            return TodoStopDecision(TodoStopAction.ALLOW, recorded, why = "observation", wouldBlock = true)
+        }
+        if (counted?.escalate != true) return TodoStopDecision(TodoStopAction.BLOCK, after, reason = TodoMessages.resume(after))
+        // Third stop without progress: ask the owner (outside any lock), mark the item that is stuck as waiting on that answer, and let the stop pass.
+        val waits = drops ?: throw TeamFailure("waits_unavailable", 503, "Waits are not available on this server.")
+        val stuck = TodoRules.next(after) ?: after.items.firstOrNull { it.status == TodoItemStatus.DOING }
+        val waitId = waits.openBlocked(actor, id, TodoMessages.blockedTitle(after), TodoMessages.blockedBody(after, input.lastMessage), dropItem = stuck != null)
+        val saved = try {
+            store.mutate(actor.teamId, id) { current ->
+                var changed = current
+                if (stuck != null && changed.item(stuck.id)?.status.let { it == TodoItemStatus.TODO || it == TodoItemStatus.DOING })
+                    changed = TodoRules.requestDrop(changed, stuck.id, "The agent stopped three times without progress on this item.", waitId)
+                changed = TodoRules.recordEvent(changed, "blocked", "Blocked on ${stuck?.id ?: "the todo"}: a wait asks the owner.", now)
+                changed.copy(updatedAt = now) to changed
+            }
+        } catch (e: Throwable) {
+            runCatching { waits.cancel(actor, waitId) }
+            throw e
+        }
+        return TodoStopDecision(TodoStopAction.ALLOW, saved, why = "escalated", escalated = true)
+    }
+
+    /** What the hook failed to do (relay unreachable, slow, a server too old): recorded so a broken hook shows in the companion. */
+    suspend fun hookError(actor: Principal, sessionId: String?, text: String): TodoList {
+        val id = session(actor, sessionId, write = true)
+        val now = store.now()
+        return store.mutate(actor.teamId, id) { current -> TodoRules.recordEvent(current, "hook_error", text, now).copy(updatedAt = now).let { it to it } }
+    }
+
+    private fun validate(input: TodoStopInput) {
+        if (input.items.size > TodoRules.MAX_ITEMS || input.orphans.size > MAX_ORPHANS || input.items.map { it.itemId }.distinct().size != input.items.size)
+            throw TodoRules.invalid("invalid_stop", "Report each item once, at most ${TodoRules.MAX_ITEMS} items and $MAX_ORPHANS pull requests.")
+    }
+
+    /** The results of one item: what the server saw for its own checks, what the hook reported (by position) for the others. */
+    private fun resultsOf(item: TodoItem, report: TodoStopItemReport, observed: Map<TodoCheck, TodoCheckResult>): List<TodoCheckResult> {
+        val checks = item.doneWhen.checks
+        if (report.checks.any { it.index !in checks.indices } || report.checks.map { it.index }.distinct().size != report.checks.size)
+            throw TodoRules.invalid("invalid_proof", "Report each check of '${item.id}' once, by its position 0 to ${checks.size - 1}.")
+        val reported = report.checks.filter { r -> checks[r.index] !in observed.keys }.map { r ->
+            if (r.observed.length > TodoRules.MAX_PROOF || r.urls.size > 10 || r.urls.any { !it.startsWith("https://") || it.length > 2_000 })
+                throw TodoRules.invalid("invalid_proof", "Keep observed under ${TodoRules.MAX_PROOF} characters and give at most 10 https URLs.")
+            TodoCheckResult(checks[r.index], r.passed, r.observed, r.urls)
+        }
+        return reported + observed.values
     }
 
     /** Applies the owner's answers to drop requests, in one read of the waits for all of the list's items. */

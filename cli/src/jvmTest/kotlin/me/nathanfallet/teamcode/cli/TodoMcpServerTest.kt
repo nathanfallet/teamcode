@@ -236,9 +236,9 @@ class TodoMcpServerTest {
     }
 
     @Test fun theRelayAllowsTheTodoRoutesAndNothingElse() {
-        assertEquals(mapOf(HttpMethod.Get to 1, HttpMethod.Post to 3), TODO_RELAY_ROUTES.mapValues { it.value.size })
+        assertEquals(mapOf(HttpMethod.Get to 1, HttpMethod.Post to 5), TODO_RELAY_ROUTES.mapValues { it.value.size })
         val posts = TODO_RELAY_ROUTES.getValue(HttpMethod.Post)
-        for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/items", "/api/v1/todos/session/items/a/start", "/api/v1/todos/session/items/a-b/proof", "/api/v1/todos/session/items/a/link", "/api/v1/todos/session/items/a/drop"))
+        for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/items", "/api/v1/todos/session/items/a/start", "/api/v1/todos/session/items/a-b/proof", "/api/v1/todos/session/items/a/link", "/api/v1/todos/session/items/a/drop", "/api/v1/todos/session/stop", "/api/v1/todos/session/hook-error"))
             assertTrue(posts.any { it.matches(path) }, path)
         for (path in listOf("/api/v1/todos", "/api/v1/todos/session/items/A/start", "/api/v1/todos/session/items/a/delete", "/api/v1/waits/x/answer", "/api/v1/todos/session/../waits"))
             assertTrue(posts.none { it.matches(path) }, path)

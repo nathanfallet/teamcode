@@ -78,6 +78,22 @@ internal fun ApiCatalog.todoOperations() {
             conflict("Not done yet (`not_done`: the message says what is missing), or the item is closed (`item_closed`).")
         }
     }
+    post("/api/v1/todos/session/stop") {
+        operationId = "stopTodoSession"; tag(ApiTags.TODOS)
+        summary = "Decide what a stop of the agent leads to"
+        description = "Asked by the Stop hook (`teamcode cloud todo-stop`) of a session, up to three times per stop: `begin` answers `allow` (no list, a finished list, a background agent still running or any open wait of the session) or `verify`; " +
+            "`verify` carries the outcome of the cheap checks and the pull requests the session opened, ticks what passed and answers `settle` (everything is closed), `block` (with the message for the agent) or `allow`; `settle` carries every check of the done items and finishes the list or reopens an item. " +
+            "A stop with no progress since the last blocked one adds to a counter kept here; at 3 a wait asks the owner and the stop passes. With `observe` nothing is refused: the decision is recorded as `would_block`. $TODO_TEXT"
+        body<TodoStopRequest>("The phase and what the hook observed.")
+        responses { ok<TodoStopView>("What to do next."); badRequest("An unknown phase, a position outside a condition or an oversized proof."); notFound("No such session.") }
+    }
+    post("/api/v1/todos/session/hook-error") {
+        operationId = "recordTodoHookError"; tag(ApiTags.TODOS)
+        summary = "Record a failure of the Stop hook"
+        description = "The hook fails open (the agent is never held by a broken hook), and says so here: the list keeps the newest 20 events (`hookEvents`). $TODO_TEXT"
+        body<TodoHookErrorRequest>("What failed, at most 500 characters.")
+        responses { ok<TodoSessionView>("The list."); notFound("No such session, or no todo (`todo_not_found`).") }
+    }
     post("/api/v1/todos/session/items/{item}/link") {
         operationId = "linkTodoItem"; tag(ApiTags.TODOS)
         summary = "Bind a PR, a release, an artifact or a wait to an item"
