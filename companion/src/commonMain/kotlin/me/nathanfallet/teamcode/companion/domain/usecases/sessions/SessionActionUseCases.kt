@@ -152,8 +152,8 @@ class ControlSessionUseCase(private val sessions: SessionRepository, private val
     }
 
     companion object {
-        /** Pause and resume are offered to the owner and to administrators. */
-        fun canControl(account: Account, session: CloudSession): Boolean = account.isAdministrator || session.ownerId == account.memberId
+        /** Pause and resume are offered to the session's owner: a role opens nobody else's session. */
+        fun canControl(account: Account, session: CloudSession): Boolean = session.ownerId == account.memberId
         fun canPause(session: CloudSession): Boolean = session.state in setOf(SessionState.READY, SessionState.ACTIVE, SessionState.RESUMING)
         /**
          * A remote session resumes only from its own device, which this app never is: a message asks the device to

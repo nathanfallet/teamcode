@@ -21,14 +21,13 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.SessionRepository
 import me.nathanfallet.teamcode.companion.infrastructure.stream.ReconnectPolicy
 import me.nathanfallet.teamcode.companion.infrastructure.stream.reconnecting
 
 class RemoteSessionRepository(private val calls: AccountCalls, private val policy: ReconnectPolicy) : SessionRepository {
-    override suspend fun sessions(accountId: String, scope: SessionScope, filter: SessionFilter, before: String?, kinds: Set<SessionKind>): SessionPage = calls.withAccount(accountId) { client ->
-        val page = client.cloudSessions(owner = if (scope == SessionScope.TEAM) "all" else null, states = filter.states.map { it.wire }, before = before, limit = 50,
+    override suspend fun sessions(accountId: String, filter: SessionFilter, before: String?, kinds: Set<SessionKind>): SessionPage = calls.withAccount(accountId) { client ->
+        val page = client.cloudSessions(owner = null, states = filter.states.map { it.wire }, before = before, limit = 50,
             kinds = kinds.map { it.wire }.sorted())
         SessionPage(page.sessions.map { it.domain() }, page.nextBefore)
     }

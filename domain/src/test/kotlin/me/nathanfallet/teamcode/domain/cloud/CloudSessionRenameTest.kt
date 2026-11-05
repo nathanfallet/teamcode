@@ -50,11 +50,12 @@ class CloudSessionRenameTest {
         assertNull(writes.single().reconcileAt, "A name changes nothing the reconciler acts on")
     }
 
-    @Test fun anotherMemberCannotButAnAdministratorCan() = runBlocking {
+    @Test fun noOtherMemberRenamesAnAdministratorIncluded() = runBlocking {
         failure("not_found") { service.rename(other, null, "s1", "Mine") }
         assertEquals("Task", session.name)
-        assertEquals("By the admin", service.rename(admin, null, "s1", "By the admin").name)
-        assertEquals(1, writes.size)
+        failure("not_found") { service.rename(admin, null, "s1", "By the admin") }
+        assertEquals("Task", session.name)
+        assertTrue(writes.isEmpty())
     }
 
     @Test fun theCreationNameRulesApply() {

@@ -73,42 +73,10 @@ class SessionsScreenTest {
         onNodeWithTag("filter-all").assertExists()
         onNodeWithTag("filter-open").assertExists()
         onNodeWithTag("filter-ended").performClick()
-        waitUntil { sessions.calls.lastOrNull() == "list MINE ENDED null" && !list.uiState.value.loading }
+        waitUntil { sessions.calls.lastOrNull() == "list ENDED null" && !list.uiState.value.loading }
         onNodeWithText("No ended session").assertExists()
-        // A member sees no team filter.
-        onNodeWithTag("scope-team").assertDoesNotExist()
-    }
-
-    @Test fun anAdministratorChoosesTheTeamFromTheScopePill() = runComposeUiTest {
-        val accounts = InMemoryAccountRepository(listOf(account("a1").copy(role = "ADMIN")))
-        val store = credentials().also { kotlinx.coroutines.runBlocking { it.write("a1", "token") } }
-        val auth = FakeAuthRepository().apply { meResult = { member(role = "ADMIN") } }
-        val sessions = FakeSessionRepository()
-        val feed = Channel<LiveUpdate<SessionChange>>(Channel.UNLIMITED)
-        sessions.changes = feed.receiveAsFlow()
-        sessions.pages = { _, _ -> SessionPage(emptyList(), null) }
-        val features = FakeFeatures()
-        val refresh = RefreshAccountUseCase(auth, accounts, store, FixedClock())
-        val guard = AccountGuard(refresh)
-        val list = SessionsViewModel(accounts, LoadSessionsUseCase(sessions, features, guard), GetSessionUseCase(sessions, guard), FollowSessionListUseCase(me.nathanfallet.teamcode.companion.domain.usecases.sessions.SessionFeed(sessions, features, kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)), features, guard), me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase(sessions, guard, SequenceIds(), features))
-        var newSession = false
-        setContent {
-            TeamCodeTheme {
-                SessionsScreen(onSignInAgain = {}, onOpenSession = { _, _ -> }, onNewSession = { newSession = true }, viewModel = HomeViewModel(accounts, refresh), sessionsViewModel = list, clock = FixedClock())
-            }
-        }
-        feed.trySend(LiveUpdate.Opened(false))
-        waitUntil { list.uiState.value.list != null && !list.uiState.value.loading }
-        // The empty active list offers a new session, like the + button.
-        onNodeWithTag("sessions-empty").assertExists()
-        onNodeWithText("No active session").assertExists()
-        onNodeWithTag("new-session").performClick()
-        assertTrue(newSession)
-
-        onNodeWithTag("scope").assertExists().performClick()
-        onNodeWithTag("scope-team").performClick()
-        waitUntil { sessions.calls.lastOrNull() == "list TEAM OPEN null" && !list.uiState.value.loading }
-        onNodeWithText("Team").assertExists()
+        // No one sees a team filter.
+        onNodeWithTag("scope").assertDoesNotExist()
     }
 
     @Test fun withRemoteSessionsRowsSayWhereTheyRun() = runComposeUiTest {
@@ -159,7 +127,7 @@ class SessionsScreenTest {
         waitUntil { list.uiState.value.list?.sessions?.isNotEmpty() == true }
         onNodeWithText("Session c1").assertExists()
         onNodeWithTag("where-c1", useUnmergedTree = true).assertDoesNotExist()
-        assertEquals(listOf("feed", "list MINE OPEN null"), sessions.calls)
+        assertEquals(listOf("feed", "list OPEN null"), sessions.calls)
     }
 
     /** A signed-in list over [rows], with its right-click menu on [account]; the feature set decides whether "Rename" is offered. */

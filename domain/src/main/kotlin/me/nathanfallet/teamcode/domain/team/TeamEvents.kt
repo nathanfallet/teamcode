@@ -91,8 +91,8 @@ data class TeamEventPage(val events: List<TeamEvent>, val through: Long, val mor
  */
 data class TeamEventAudience(val memberId: String, val sessions: Boolean, val runs: Boolean, val teamSessions: Boolean, val teamRuns: Boolean)
 
-/** Sessions of the whole team: what a cloud administrator or a `team:read` key reads (see [canReadTeamCloud]). */
-val Principal.readsTeamSessions: Boolean get() = canReadTeamCloud
+/** No credential reads the sessions of the whole team: a member's feed carries their own sessions only, administrators included. */
+val Principal.readsTeamSessions: Boolean get() = false
 
 /** Runs of the whole team: an interactive administrator or a `team:read` key (what `GET /runs?all=true` allows). */
 val Principal.readsTeamRuns: Boolean get() = canReadTeam

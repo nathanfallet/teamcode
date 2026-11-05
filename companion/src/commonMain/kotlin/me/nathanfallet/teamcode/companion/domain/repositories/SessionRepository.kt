@@ -12,7 +12,6 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 
 /** Cloud sessions of an account's server. Failures are [me.nathanfallet.teamcode.companion.domain.models.CompanionException]s. */
 interface SessionRepository {
@@ -20,7 +19,7 @@ interface SessionRepository {
      * Newest first, at most 50 per page; [before] is the previous page's cursor. [kinds]: the kinds asked for (only to
      * a server that announces remote sessions); empty for the server's default, cloud sessions only.
      */
-    suspend fun sessions(accountId: String, scope: SessionScope, filter: SessionFilter, before: String?, kinds: Set<SessionKind> = emptySet()): SessionPage
+    suspend fun sessions(accountId: String, filter: SessionFilter, before: String?, kinds: Set<SessionKind> = emptySet()): SessionPage
     suspend fun session(accountId: String, sessionId: String): CloudSession
     /** The profiles the member may start a session from. */
     suspend fun profiles(accountId: String): List<Profile>

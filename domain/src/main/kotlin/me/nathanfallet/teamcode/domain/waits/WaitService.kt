@@ -62,7 +62,7 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         if (only != null) return store.list(actor.teamId, WaitQuery(null, parsed, before, limit, only, resolvers))
         if (session != null) {
             val owner = store.session(actor.teamId, session)?.ownerId
-            if (owner == null || (owner != actor.member.id && !actor.canReadTeam)) throw TeamFailure("not_found", 404, "Session not found.")
+            if (owner == null || owner != actor.member.id) throw TeamFailure("not_found", 404, "Session not found.")
             return store.list(actor.teamId, WaitQuery(null, parsed, before, limit, session, resolvers))
         }
         val target = when {
@@ -79,7 +79,7 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         val now = store.now()
         val valid = WaitRules.validate(definition, now)
         confined(actor)?.let { if (valid.sessionId != it) throw TeamFailure("not_found", 404, "Session not found.") }
-        val session = store.session(actor.teamId, valid.sessionId)?.takeIf { it.ownerId == actor.member.id || actor.canReadTeam }
+        val session = store.session(actor.teamId, valid.sessionId)?.takeIf { it.ownerId == actor.member.id }
             ?: throw TeamFailure("not_found", 404, "Session not found.")
         if (session.ownerId != actor.member.id) throw TeamFailure("wait_session_owner_only", 403, "Only the session's owner asks for something on it.")
         // A secret reaches the agent through the per-command environment of Claude Code only: Codex reads its environment once, when

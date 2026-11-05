@@ -269,7 +269,7 @@ class ArtifactViewerRoutesTest {
 
         // A launch's page links to its artifacts while they are on, and only then.
         assertTrue("""href="$ARTIFACT_GALLERY_PATH?scope=team&amp;run=$run">Artifacts published from this launch""" in viewer("member", "/dashboard/sessions/$run").bodyAsText())
-        assertTrue("""scope=all&amp;run=$run""" in viewer("admin", "/dashboard/sessions/$run").bodyAsText(), "Administrators see every member's")
+        assertTrue("""scope=team&amp;run=$run""" in viewer("admin", "/dashboard/sessions/$run").bodyAsText(), "Administrators have no wider scope")
         store.active = false
         assertFalse("Artifacts published from this launch" in viewer("member", "/dashboard/sessions/$run").bodyAsText())
     }

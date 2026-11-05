@@ -129,7 +129,7 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
             throw TeamFailure("not_found", 404, "Page not found.")
         }
         val parameters = call.request.queryParameters
-        val scope = parameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose mine, shared, team or all.") } ?: ArtifactScope.TEAM
+        val scope = parameters["scope"]?.let { ArtifactScope.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose mine, shared or team.") } ?: ArtifactScope.TEAM
         val filters = GalleryFilters(
             parameters["origin"]?.takeIf { it.isNotEmpty() },
             parameters["access"]?.takeIf { it.isNotEmpty() }?.let { ArtifactAccess.parse(it) ?: throw TeamFailure("invalid_artifact_query", 400, "Choose personal, team or public.") },
@@ -137,8 +137,7 @@ internal fun Route.artifactViewerRoutes(viewing: ArtifactViewing, artifacts: Art
         )
         val page = artifacts.list(principal, ArtifactQuery(scope, sessionId = filters.session, runId = filters.run, before = parameters["before"],
             originKind = filters.origin, access = filters.access))
-        val tabs = listOfNotNull(ArtifactScope.TEAM to "Everything I can read", ArtifactScope.MINE to "Mine", ArtifactScope.SHARED to "Shared with me",
-            (ArtifactScope.ALL to "All (administrators)").takeIf { principal.canReadTeam })
+        val tabs = listOfNotNull(ArtifactScope.TEAM to "Everything I can read", ArtifactScope.MINE to "Mine", ArtifactScope.SHARED to "Shared with me")
         val nav = """<p class="tabs">""" + tabs.joinToString(" · ") { (value, label) ->
             if (value == scope) "<strong>${escape(label)}</strong>" else """<a href="${escape(filters.url(value))}">${escape(label)}</a>"""
         } + "</p>"
@@ -241,9 +240,8 @@ private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean
     val version = shell.version
     val id = escape(artifact.id)
     val title = artifact.title.ifEmpty { "Untitled" }
-    val administrator = viewer?.member?.role?.isAdministrator == true && shell.member
     val owner = artifact.relation == "owner"
-    val manageAccess = shell.member && (owner || administrator)
+    val manageAccess = shell.member && owner
     val invite = shell.member && (owner || artifact.relation == ArtifactMemberRole.EDITOR.wire)
     val byline = if (shell.member) "${escape(artifact.ownerName)} · " else ""
     // Only members learn that newer versions exist: a public link pinned to an older one says nothing about them.
@@ -257,7 +255,7 @@ private fun viewerPage(shell: ArtifactShell, viewer: Principal?, pinned: Boolean
             version.files.joinToString("") { """<tr><td>${escape(it.path)}${if (it.role == "page") " <span class=\"chip\">page</span>" else ""}</td><td class="num">${byteSize(it.size)}</td><td>${escape(it.contentType)}</td></tr>""" } +
             "</tbody></table></div></details>")
         if (shell.member && viewer != null && (manageAccess || invite)) add(sharingPanel(shell, viewer, manageAccess, invite))
-        if (shell.member && viewer != null && (owner || administrator)) add("""<details><summary>Delete</summary><div class="panel"><form method="post" action="$ARTIFACT_GALLERY_PATH/$id/delete">${csrf(viewer)}<p>Deleting removes every version and its files for everyone, at once and for good. Type the title (${escape(title)}) to confirm.</p><label>Title <input name="confirm" required autocomplete="off"></label><button class="danger">Delete this artifact</button></form></div></details>""")
+        if (shell.member && viewer != null && owner) add("""<details><summary>Delete</summary><div class="panel"><form method="post" action="$ARTIFACT_GALLERY_PATH/$id/delete">${csrf(viewer)}<p>Deleting removes every version and its files for everyone, at once and for good. Type the title (${escape(title)}) to confirm.</p><label>Title <input name="confirm" required autocomplete="off"></label><button class="danger">Delete this artifact</button></form></div></details>""")
     }
     val banner = if (!shell.member) """<p class="notice warn" role="note">Content published by a member of a TeamCode team. It is not verified; be careful with what it asks you to do.</p>""" else ""
     val live = if (shell.member && !pinned) """<p id="artifact-newer" class="notice" hidden>A newer version is published. <a href="/artifact/$id">Show it</a></p><script src="/dashboard/assets/artifact-viewer.js" defer></script>""" else ""

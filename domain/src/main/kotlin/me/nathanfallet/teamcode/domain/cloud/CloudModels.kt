@@ -345,7 +345,7 @@ data class CloudHumanWait(val reason: Reason, val requestId: String?, val since:
 }
 
 data class CloudSessionQuery(
-    /** null: the caller's own sessions; "*": every team session (administrators only); otherwise a member id. */
+    /** null: the caller's own sessions; "*": every team session (workers and stores only: the service refuses it, whatever the role); otherwise a member id. */
     val owner: String? = null,
     val states: Set<CloudSessionState> = emptySet(),
     val labels: Map<String, String> = emptyMap(),

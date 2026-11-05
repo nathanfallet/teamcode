@@ -43,7 +43,6 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionKind
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.SessionTransfer
 import me.nathanfallet.teamcode.companion.domain.models.SubscriptionAccount
@@ -95,8 +94,8 @@ import me.nathanfallet.teamcode.companion.domain.models.WorkflowRunPage
 
 /** The demo's sessions: messages and new sessions get the scripted reply; pause, resume and end apply at once. */
 class DemoSessionRepository(private val demo: DemoMode) : SessionRepository {
-    override suspend fun sessions(accountId: String, scope: SessionScope, filter: SessionFilter, before: String?, kinds: Set<SessionKind>): SessionPage {
-        // Every demo session is the member's own: both scopes list the same sessions.
+    override suspend fun sessions(accountId: String, filter: SessionFilter, before: String?, kinds: Set<SessionKind>): SessionPage {
+        // Every demo session is the member's own.
         val listed = demo.store().sessions.value.values.filter { it.state in filter }.sortedWith(compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id })
         return SessionPage(if (before == null) listed else emptyList(), null)
     }

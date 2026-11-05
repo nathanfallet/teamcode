@@ -104,7 +104,6 @@ class ArtifactRulesTest {
         val reader = owner.copy(serviceScopes = setOf(ServiceScope.ARTIFACTS_READ))
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { service.startUpload(reader, null, listOf(file("a"))) }.code)
         assertEquals("credential_scope", assertFailsWith<TeamFailure> { service.share(reader, id, "someone", "viewer") }.code)
-        assertEquals("forbidden", assertFailsWith<TeamFailure> { service.list(owner, ArtifactQuery(ArtifactScope.ALL)) }.code, "Only administrators list every artifact")
         assertEquals("not_found", assertFailsWith<TeamFailure> { service.artifact(owner, "not-an-id") }.code)
     }
 

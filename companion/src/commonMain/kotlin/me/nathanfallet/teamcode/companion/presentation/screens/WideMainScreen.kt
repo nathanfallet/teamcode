@@ -34,7 +34,6 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.drop
 import me.nathanfallet.teamcode.companion.domain.models.ArtifactScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.repositories.PreferencesRepository
 import me.nathanfallet.teamcode.companion.domain.services.PlatformInfo
 import me.nathanfallet.teamcode.companion.domain.usecases.artifacts.artifactViewerUrl
@@ -43,7 +42,6 @@ import me.nathanfallet.teamcode.companion.presentation.viewmodels.SessionsUiStat
 import me.nathanfallet.teamcode.companion.resources.artifacts_mine
 import me.nathanfallet.teamcode.companion.resources.sessions_filter_all
 import me.nathanfallet.teamcode.companion.resources.sessions_filter_ended
-import me.nathanfallet.teamcode.companion.resources.sessions_team
 import org.koin.compose.koinInject
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -507,7 +505,6 @@ internal fun paletteShortcutLabel(platform: PlatformInfo): String = if (platform
 @Composable
 private fun sessionsFilterLabel(state: SessionsUiState): String? = listOfNotNull(
     when (state.filter) { SessionFilter.OPEN -> null; SessionFilter.ALL -> stringResource(Res.string.sessions_filter_all); SessionFilter.ENDED -> stringResource(Res.string.sessions_filter_ended) },
-    if (state.scope == SessionScope.TEAM) stringResource(Res.string.sessions_team) else null,
 ).joinToString(" · ").ifEmpty { null }
 
 /** The shared artifact list's filter, when it is not the default (the team's). */

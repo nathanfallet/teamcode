@@ -163,7 +163,9 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions/admin-only") { bearerAuth("colleague") }.status)
         assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions/admin-only/resume") { bearerAuth("colleague") }.status)
         assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/sessions?owner=all") { bearerAuth("colleague") }.status)
-        assertEquals(HttpStatusCode.OK, client.get("/api/v1/cloud/sessions?owner=all&label=orchestrator.task=1234") { bearerAuth("admin") }.status)
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/sessions?owner=all&label=orchestrator.task=1234") { bearerAuth("admin") }.status, "No role lists the team's sessions")
+        assertEquals(HttpStatusCode.Forbidden, client.get("/api/v1/cloud/sessions?owner=colleague-id") { bearerAuth("admin") }.status)
+        assertEquals(HttpStatusCode.NotFound, client.get("/api/v1/cloud/sessions/${view.id}") { bearerAuth("admin") }.status, "Nor reads the colleague's session the administrator created for them")
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?state=sleeping") { bearerAuth("admin") }.status)
         assertEquals(HttpStatusCode.BadRequest, client.get("/api/v1/cloud/sessions?limit=51") { bearerAuth("admin") }.status)
         kindsAndHosts(client, store)
@@ -175,7 +177,7 @@ class CloudRoutesTest {
         store.sessions["remote-one"] = cloud.copy(id = "remote-one", kind = CloudSessionKind.REMOTE,
             host = CloudSessionHost("device-1", "teamcode", HostDevice("Work laptop", "macos", "15.1")))
         suspend fun ids(query: String) = Serialization.json.decodeFromString<CloudSessionPageView>(
-            client.get("/api/v1/cloud/sessions?owner=all$query") { bearerAuth("admin") }.bodyAsText()).sessions
+            client.get("/api/v1/cloud/sessions?$query") { bearerAuth("admin") }.bodyAsText()).sessions
         assertFalse(ids("").any { it.id == "remote-one" })
         assertTrue(ids("").all { it.kind == "cloud" && it.host == null })
         val remote = ids("&kind=remote").single()
@@ -225,7 +227,7 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.Accepted, create("admin", "reserved-id").status, "An administrator uses every profile")
     }
 
-    @Test fun renamingASessionIsForItsOwnerAndCloudAdministratorsUnderTheCreationNameRules() = testApplication {
+    @Test fun renamingASessionIsForItsOwnerOnlyUnderTheCreationNameRules() = testApplication {
         val store = Store()
         application { configureGateway(gateway, team = team(), cloudSessions = CloudSessionService(store), cloudAdmin = CloudAdministrationService(Admin(), FakeCluster), publicOrigin = "http://localhost") }
         assertTrue("cloud.sessions.rename.v1" in Serialization.json.decodeFromString<Capabilities>(client.get("/api/v1/capabilities") { bearerAuth("colleague") }.bodyAsText()).features)
@@ -244,13 +246,14 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.OK, rename("colleague-write", "Fix the build 2").status, "cloud:write is enough")
         assertEquals(HttpStatusCode.Forbidden, rename("colleague-read", "Nope").status, "cloud:read never writes")
         assertEquals(HttpStatusCode.NotFound, rename("admin-write", "Nope").status, "An administrator's key without admin:cloud is only its owner")
-        assertEquals(HttpStatusCode.OK, rename("admin", "By the admin").status, "A cloud administrator renames any session")
+        assertEquals(HttpStatusCode.NotFound, rename("admin", "By the admin").status, "A cloud administrator has no right over a colleague's session")
         for (bad in listOf("", "   ", "x".repeat(121), "line\nbreak")) {
             val refused = rename("colleague", bad)
             assertEquals(HttpStatusCode.BadRequest, refused.status, bad); assertTrue("invalid_session" in refused.bodyAsText())
         }
-        assertEquals("By the admin", store.sessions.getValue(view.id).name)
+        assertEquals("Fix the build 2", store.sessions.getValue(view.id).name)
         store.sessions["admin-only"] = store.sessions.getValue(view.id).copy(id = "admin-only", ownerId = "admin-id")
+        assertEquals(HttpStatusCode.OK, rename("admin", "My own", "admin-only").status, "An administrator renames their own session")
         assertEquals(HttpStatusCode.NotFound, rename("colleague", "Mine now", "admin-only").status)
         store.sessions[view.id] = store.sessions.getValue(view.id).copy(state = CloudSessionState.TERMINATED)
         assertEquals(HttpStatusCode.Conflict, rename("colleague", "Too late").status)
@@ -302,21 +305,20 @@ class CloudRoutesTest {
         val delegated = Serialization.json.decodeFromString<CloudSessionView>(delegatedResponse.bodyAsText())
         assertEquals("colleague-id", delegated.ownerId)
         assertEquals(CloudAttributionView("admin-id", "admin-cloud-key", "colleague-id"), delegated.createdBy)
-        assertEquals(HttpStatusCode.OK, get("admin-cloud", "/api/v1/cloud/transfers?scope=team").status)
-        // team:read: an administrator's key that reads every member's sessions and transfers and writes nothing.
-        val readable = Serialization.json.decodeFromString<CloudSessionPageView>(get("admin-read", "/api/v1/cloud/sessions?owner=all").bodyAsText())
-        assertEquals(setOf(own.id, delegated.id), readable.sessions.map { it.id }.toSet())
-        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/sessions/${own.id}").status)
-        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/sessions/${own.id}/executions").status)
-        assertEquals(HttpStatusCode.OK, get("admin-read", "/api/v1/cloud/transfers?scope=team").status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-cloud", "/api/v1/cloud/transfers?scope=team").status, "No key lists the team's transfers")
+        // team:read: an administrator's key that writes nothing and reads no member's sessions or transfers.
+        assertEquals(HttpStatusCode.Forbidden, get("admin-read", "/api/v1/cloud/sessions?owner=all").status)
+        assertEquals(HttpStatusCode.NotFound, get("admin-read", "/api/v1/cloud/sessions/${own.id}").status)
+        assertEquals(HttpStatusCode.NotFound, get("admin-read", "/api/v1/cloud/sessions/${own.id}/executions").status)
+        assertEquals(HttpStatusCode.Forbidden, get("admin-read", "/api/v1/cloud/transfers?scope=team").status)
         assertEquals(HttpStatusCode.Forbidden, get("admin-read", "/api/v1/cloud/settings").status)
         val refused = create("admin-read", "t1", onBehalf = "colleague-id")
         assertEquals(HttpStatusCode.Forbidden, refused.status); assertTrue("credential_scope" in refused.bodyAsText())
         assertEquals(HttpStatusCode.Forbidden, create("admin-read", "t2").status)
         for (action in listOf("pause", "resume", "transfer")) assertEquals(HttpStatusCode.Forbidden, client.post("/api/v1/cloud/sessions/${own.id}/$action") { bearerAuth("admin-read"); contentType(ContentType.Application.Json); setBody("{}") }.status, action)
         assertEquals(HttpStatusCode.Forbidden, client.delete("/api/v1/cloud/sessions/${own.id}") { bearerAuth("admin-read") }.status)
-        // team:read does not widen a write: combined with cloud:write the key is still only its owner for writes.
-        assertEquals(HttpStatusCode.OK, get("admin-read-write", "/api/v1/cloud/sessions/${own.id}").status)
+        // team:read opens nothing: combined with cloud:write the key is still only its owner, for reads and writes.
+        assertEquals(HttpStatusCode.NotFound, get("admin-read-write", "/api/v1/cloud/sessions/${own.id}").status)
         assertEquals(HttpStatusCode.NotFound, client.post("/api/v1/cloud/sessions/${own.id}/pause") { bearerAuth("admin-read-write") }.status)
         assertEquals(HttpStatusCode.NotFound, client.delete("/api/v1/cloud/sessions/${own.id}") { bearerAuth("admin-read-write") }.status)
         assertTrue("on_behalf_forbidden" in create("admin-read-write", "t3", onBehalf = "colleague-id").bodyAsText())
@@ -326,12 +328,13 @@ class CloudRoutesTest {
         assertEquals(HttpStatusCode.NotFound, get("admin-usage", "/api/v1/cloud/sessions/${own.id}").status)
         val orchestrator = TeamCodeClient("http://localhost", { "admin-cloud" }) { config -> createClient { config(this); install(HttpTimeout) { socketTimeoutMillis = null } } }
         try {
-            assertEquals(setOf(own.id, delegated.id), orchestrator.cloudSessions(owner = "all").sessions.map { it.id }.toSet())
-            assertEquals("paused", orchestrator.pauseCloudSession(own.id, onBehalfOf = "colleague-id").desiredState)
+            // Delegation creates; it opens no existing session of a member, nor a list of them.
+            assertEquals(HttpStatusCode.Forbidden, get("admin-cloud", "/api/v1/cloud/sessions?owner=all").status)
+            assertEquals(emptyList(), orchestrator.cloudSessions().sessions)
+            assertEquals(HttpStatusCode.NotFound, get("admin-cloud", "/api/v1/cloud/sessions/${own.id}").status)
+            assertFailsWith<TeamCodeException> { orchestrator.pauseCloudSession(own.id, onBehalfOf = "colleague-id") }
             store.sessions[delegated.id] = store.sessions.getValue(delegated.id).copy(state = CloudSessionState.READY)
-            val moved = orchestrator.transferCloudSession(delegated.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "o2", onBehalfOf = "colleague-id")
-            assertEquals("accepted", moved.state, "An admin:cloud transfer is immediate, like an interactive administrator's")
-            assertEquals(CloudAttributionView("admin-id", "admin-cloud-key", "colleague-id"), moved.initiatedBy)
+            assertFailsWith<TeamCodeException> { orchestrator.transferCloudSession(delegated.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "o2", onBehalfOf = "colleague-id") }
         } finally { orchestrator.close() }
     }
 
@@ -428,7 +431,8 @@ class CloudRoutesTest {
         try {
             assertEquals(listOf(offer.id), owner.cloudTransfers(direction = "outgoing").transfers.map { it.id })
             assertEquals(emptyList(), owner.cloudTransfers(direction = "incoming").transfers)
-            assertEquals(listOf(offer.id), recipient.cloudTransfers(team = true, states = listOf("offered")).transfers.map { it.id })
+            assertEquals(listOf(offer.id), recipient.cloudTransfers(states = listOf("offered")).transfers.map { it.id })
+            assertEquals(403, assertFailsWith<TeamCodeException> { recipient.cloudTransfers(team = true) }.statusCode, "Nobody lists the team's transfers")
             val accepted = recipient.acceptCloudTransfer(offer.id, resume = true)
             assertEquals("accepted" to true, accepted.state to accepted.resume)
             assertEquals(CloudAttributionView("admin-id", "admin-session", "admin-id"), accepted.decidedBy)
@@ -436,12 +440,15 @@ class CloudRoutesTest {
             assertEquals(offer.id to "paused", session.transferId to session.desiredState, "Acceptance pauses the session toward the transfer")
             assertEquals(409, assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { owner.resumeCloudSession(created.id) }.statusCode, "No resume while a transfer is accepted")
             assertEquals("transfer_forbidden", assertFailsWith<me.nathanfallet.teamcode.client.TeamCodeException> { owner.cancelCloudTransfer(offer.id) }.code)
-            assertEquals("cancelled", recipient.cancelCloudTransfer(offer.id).state, "An administrator stops it before the owner change")
-            assertNull(owner.cloudSession(created.id).transferId)
-            // An administrator transfers at once, with the delegated member recorded.
-            val direct = recipient.transferCloudSession(created.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "t2", onBehalfOf = "colleague-id")
-            assertEquals("accepted", direct.state); assertEquals("colleague-id", direct.initiatedBy.effectiveMemberId)
-            assertEquals(true, store.sessions.getValue(created.id).pauseForce)
+            assertEquals("transfer_forbidden", assertFailsWith<TeamCodeException> { recipient.cancelCloudTransfer(offer.id) }.code, "Only the session's owner cancels, a recipient who is an administrator included")
+            // An administrator has no right over a colleague's session, with or without delegation.
+            assertEquals(404, assertFailsWith<TeamCodeException> { recipient.transferCloudSession(created.id, CreateCloudTransferRequest("admin-id", resume = false, force = true), "t2", onBehalfOf = "colleague-id") }.statusCode)
+            // Their own session they transfer at once, with the delegated member recorded.
+            val adminOwn = (sessions.create(Principal(admin, "admin-session", "default"), null, CloudSessionDraft("Mine", "profile-id", null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session
+            store.sessions[adminOwn.id] = adminOwn.copy(state = CloudSessionState.READY)
+            val direct = recipient.transferCloudSession(adminOwn.id, CreateCloudTransferRequest("colleague-id", resume = false, force = true), "t3")
+            assertEquals("accepted", direct.state)
+            assertEquals(true, store.sessions.getValue(adminOwn.id).pauseForce)
             assertEquals(direct.id, recipient.cloudTransfer(direct.id).id)
         } finally { owner.close(); recipient.close() }
 

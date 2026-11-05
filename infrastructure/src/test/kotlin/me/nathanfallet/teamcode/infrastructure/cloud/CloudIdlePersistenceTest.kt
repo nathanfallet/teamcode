@@ -54,7 +54,7 @@ class CloudIdlePersistenceTest {
                 // An administrator creating on behalf of a member writes the message themselves.
                 val delegated = (ra.sessions.create(admin, member.member.id, draft(profile, "On behalf"), key("create-2")) as CloudCreateOutcome.Created).session
                 assertEquals(admin.member.id, ra.conversations.inputs(delegated.id, null, 10).inputs.single().authorId)
-                ra.sessions.delete(admin, null, delegated.id)
+                ra.sessions.delete(member, null, delegated.id)
 
                 // Delivered once the session is ready, never before.
                 pass(ra); pass(ra)
@@ -106,7 +106,7 @@ class CloudIdlePersistenceTest {
                 a.query { CloudSessionAttachments.update({ CloudSessionAttachments.sessionId eq created.id }) { it[leaseUntil] = 1 } }
                 rb.conversations.purgeTranscripts(100)
                 assertEquals(0L, a.query { CloudSessionAttachments.selectAll().where { CloudSessionAttachments.sessionId eq created.id }.count() })
-                ra.sessions.delete(admin, null, created.id)
+                ra.sessions.delete(member, null, created.id)
 
                 // Background work of the agent (a subagent, a background command, a scheduled wake-up), reported by the
                 // runner's heartbeats, keeps an idle session running; work that never ends counts for the team's cap only.

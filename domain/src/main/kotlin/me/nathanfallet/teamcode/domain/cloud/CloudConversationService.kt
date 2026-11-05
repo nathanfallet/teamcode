@@ -154,7 +154,7 @@ class CloudConversationService(
         val session = open(principal, id, CloudPermission.MESSAGE)
         // A bare denial only stops a tool use, like an interrupt: it stays open to everyone with `message`.
         if (!answer.isBareDenial) requireGitHubInstructor(principal, session)
-        val approver = session.ownerId == principal.member.id || principal.isCloudAdministrator
+        val approver = session.ownerId == principal.member.id
         val input = newInput(principal, session, CloudInputKind.PERMISSION, request.text, request.copy(wake = false))
         // Checked by the store under the session lock, after an idempotent retry was replayed (a retry of an answer
         // already consumed gets its acknowledgement back) and atomically with the insert (two members answering at
@@ -290,11 +290,11 @@ class CloudConversationService(
         if (write) principal.requireCloudWrite() else principal.requireCloudRead()
         sessions.revalidate(principal)
         val session = sessions.find(principal.teamId, id) ?: throw missing()
-        // A read also opens every session to `team:read`; a write needs the caller's own cloud rights.
-        val administrator = if (write) principal.isCloudAdministrator else principal.canReadTeamCloud
-        val granted = access.permissions(principal.teamId, principal.member, session.ownerId, administrator)
+        // An administrator holds every permission on their own sessions only; on another member's they hold what the
+        // team's access policy grants them, as any member does.
         val owner = session.ownerId == principal.member.id
-        if (!owner && !administrator && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
+        val granted = access.permissions(principal.teamId, principal.member, session.ownerId, owner && principal.isCloudAdministrator)
+        if (!owner && (granted - CloudPermission.CREATE).isEmpty()) throw missing()
         return session to granted
     }
 

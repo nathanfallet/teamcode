@@ -75,9 +75,9 @@ internal fun ApiCatalog.artifactMemberOperations() {
         operationId = "listArtifacts"; tag(ApiTags.ARTIFACTS)
         summary = "List artifacts"
         description = "Active artifacts, most recently changed first. `scope` is `mine` (owned), `shared` (invited), `team` (everything the caller can read: " +
-            "owned, invited, team and public artifacts; the default) or `all` (administrators, or a key with `team:read`). $INACTIVE"
+            "owned, invited, team and public artifacts; the default) no scope lists another member's personal artifact, administrators included. $INACTIVE"
         parameters {
-            queryText("scope", "`mine`, `shared`, `team` (default) or `all`.")
+            queryText("scope", "`mine`, `shared`, or `team` (default).")
             queryText("member", "Only artifacts owned by this member id.")
             queryText("session", "Only artifacts published from this cloud session.")
             queryText("run", "Only artifacts published from this agent run.")
@@ -183,7 +183,7 @@ internal fun ApiCatalog.artifactMemberOperations() {
     get("/api/v1/artifacts/{id}/versions/{number}") {
         operationId = "getArtifactVersion"; tag(ApiTags.ARTIFACTS)
         summary = "Read a version's manifest"
-        description = "The version and its files. An administrator's read of another member's personal artifact is audited (`artifact.admin_viewed`). $INACTIVE"
+        description = "The version and its files. Another member's personal artifact is `404`, whatever the caller's role. $INACTIVE"
         parameters { pathId("id", "The artifact id."); pathId("number", "The version number.") }
         responses { ok<ArtifactVersionView>("The version."); notFound(UNKNOWN) }
     }

@@ -5,16 +5,14 @@ import me.nathanfallet.teamcode.companion.domain.models.SessionChange
 import me.nathanfallet.teamcode.companion.domain.models.SessionFilter
 import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.domain.models.SessionPage
-import me.nathanfallet.teamcode.companion.domain.models.SessionScope
 import me.nathanfallet.teamcode.companion.domain.models.SessionState
 import me.nathanfallet.teamcode.companion.domain.models.SessionWaiting
 
 /**
- * The sessions one list shows (one [scope], one status [filter]), newest first as the server orders them, and the sessions
+ * The sessions one list shows (the member's own, one status [filter]), newest first as the server orders them, and the sessions
  * with a turn finished since they were last opened. Pure: every change returns a new list.
  */
 data class SessionList(
-    val scope: SessionScope,
     val filter: SessionFilter,
     val memberId: String,
     val sessions: List<CloudSession> = emptyList(),
@@ -58,7 +56,7 @@ data class SessionList(
         if (change.type in SessionChange.WAIT_TYPES) return this to null
         // A workflow run changed: it is no session's state, the workflows screens follow it.
         if (change.type == SessionChange.WORKFLOW_RUN) return this to null
-        if (scope == SessionScope.MINE && change.memberId != memberId) return this to null
+        if (change.memberId != memberId) return this to null
         val current = sessions.firstOrNull { it.id == change.sessionId }
         // A rename changes the name and nothing else: the row keeps its place (the list is ordered by creation).
         if (change.type == SessionChange.RENAMED) {
@@ -115,7 +113,7 @@ data class SessionList(
     fun opened(sessionId: String): SessionList = copy(finishedTurns = finishedTurns - sessionId)
 
     private fun belongs(session: CloudSession) =
-        session.state in filter && (scope == SessionScope.TEAM || session.ownerId == memberId)
+        session.state in filter && session.ownerId == memberId
 
     private companion object {
         val NEWEST_FIRST = compareByDescending<CloudSession> { it.createdAt }.thenByDescending { it.id }

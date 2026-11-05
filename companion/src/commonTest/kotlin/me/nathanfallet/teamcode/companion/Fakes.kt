@@ -136,9 +136,9 @@ class FakeSessionRepository : me.nathanfallet.teamcode.companion.domain.reposito
     /** Suspends each list load until released, to change things while it is in flight. */
     var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-    override suspend fun sessions(accountId: String, scope: me.nathanfallet.teamcode.companion.domain.models.SessionScope, filter: me.nathanfallet.teamcode.companion.domain.models.SessionFilter, before: String?,
+    override suspend fun sessions(accountId: String, filter: me.nathanfallet.teamcode.companion.domain.models.SessionFilter, before: String?,
         kinds: Set<me.nathanfallet.teamcode.companion.domain.models.SessionKind>): me.nathanfallet.teamcode.companion.domain.models.SessionPage {
-        calls += "list $scope $filter $before" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")
+        calls += "list $filter $before" + if (kinds.isEmpty()) "" else " " + kinds.map { it.wire }.sorted().joinToString(",")
         gate?.await()
         return pages(filter, before)
     }

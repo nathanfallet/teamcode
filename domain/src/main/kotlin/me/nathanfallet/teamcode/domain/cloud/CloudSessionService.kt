@@ -244,7 +244,9 @@ class CloudSessionService(
         if (query.limit !in 1..50) throw TeamFailure("invalid_limit", 400, "Use a page size between 1 and 50.")
         LabelRules.validateFilter(query.labels)
         val owner = query.owner ?: principal.member.id
-        if (owner != principal.member.id) principal.requireCloudTeamRead()
+        // Nobody lists other members' sessions, administrators included: a session is reached by its owner, through the
+        // team's access policy, or after a transfer.
+        if (owner != principal.member.id) throw TeamFailure("forbidden", 403, "Only your own sessions are listed.")
         store.revalidate(principal)
         return store.list(principal.teamId, query.copy(owner = owner.takeUnless { it == "*" }))
     }
@@ -252,7 +254,7 @@ class CloudSessionService(
     suspend fun get(principal: Principal, id: String): CloudSession {
         principal.requireCloudRead()
         store.revalidate(principal)
-        return visible(principal, store.find(principal.teamId, id), read = true)
+        return visible(principal, store.find(principal.teamId, id))
     }
 
     suspend fun executions(principal: Principal, id: String): List<CloudExecution> {
@@ -379,10 +381,9 @@ class CloudSessionService(
         } ?: throw missing()
     }
 
-    /** [read] also opens every member's session to a `team:read` key; a write needs the owner or a cloud administrator. */
-    private fun visible(principal: Principal, session: CloudSession?, read: Boolean = false): CloudSession {
-        val administrator = if (read) principal.canReadTeamCloud else principal.isCloudAdministrator
-        if (session == null || (session.ownerId != principal.member.id && !administrator)) throw missing()
+    /** The owner's session. A role, an administrator's included, opens nobody else's. */
+    private fun visible(principal: Principal, session: CloudSession?): CloudSession {
+        if (session == null || session.ownerId != principal.member.id) throw missing()
         return session
     }
 
