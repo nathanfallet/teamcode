@@ -847,10 +847,10 @@ class TeamCodeClient(
     }
     /**
      * Relays one todo call received by the local proxy (`teamcode mcp todo`), with this client's credential: only
-     * `/api/v1/todos/session` and its item routes (the proxy narrows each to its method), and a bounded answer.
+     * `/api/v1/todos/session` and the routes below it (items, stop, wake, context, hook-error; the proxy narrows each to its method), and a bounded answer.
      */
     suspend fun forwardTodo(method: HttpMethod, path: String, query: String, body: ByteArray, contentType: ContentType?, runId: String?): ArtifactRelayResponse {
-        require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/items")) { "Only the session todo is relayed." }
+        require(path == "/api/v1/todos/session" || path.startsWith("/api/v1/todos/session/")) { "Only the session todo is relayed." }
         return forwardApi(method, path, query, body, contentType, runId, emptyMap(), TODO_RELAY_LIMIT, WAIT_RELAYED_HEADERS)
     }
     /** The reminder block of the session's todo (after a compaction, on resume); its text is null without an active list. */
