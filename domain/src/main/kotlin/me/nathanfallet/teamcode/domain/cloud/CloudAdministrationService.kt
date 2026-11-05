@@ -285,6 +285,14 @@ class CloudAdministrationService(
                 spec.idleTimeoutMinutes !in spec.minIdleTimeoutMinutes..spec.maxIdleTimeoutMinutes || assigned.size > 1000)
                 throw TeamFailure("invalid_profile", 400, "Check the profile namespace, image, resources (100–64000 mCPU, 128–262144 MiB), workspace size (1–2048 GiB), agent and idle bounds (5–1440 minutes).")
             CloudEnvironmentRules.validate(spec.environment)
+            validate(spec.orchestration)
+        }
+        /** Session orchestration (docs/orchestration.md): 1–20 children at once, a depth of 1–3, at most 10 other child profiles. */
+        fun validate(orchestration: CloudOrchestrationSpec) {
+            if (orchestration.maxActiveChildren !in 1..CloudOrchestrationSpec.MAX_ACTIVE_CHILDREN || orchestration.maxDepth !in 1..CloudOrchestrationSpec.MAX_DEPTH ||
+                orchestration.childProfileIds.size > CloudOrchestrationSpec.MAX_CHILD_PROFILES || orchestration.childProfileIds.any { !CloudIdentifier.valid(it) } ||
+                orchestration.childProfileIds.toSet().size != orchestration.childProfileIds.size)
+                throw TeamFailure("invalid_profile", 400, "Orchestration takes maxActiveChildren 1–${CloudOrchestrationSpec.MAX_ACTIVE_CHILDREN}, maxDepth 1–${CloudOrchestrationSpec.MAX_DEPTH} and at most ${CloudOrchestrationSpec.MAX_CHILD_PROFILES} distinct childProfileIds.")
         }
     }
 }
