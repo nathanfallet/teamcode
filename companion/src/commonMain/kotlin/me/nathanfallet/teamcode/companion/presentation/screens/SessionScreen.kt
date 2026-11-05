@@ -134,7 +134,10 @@ import me.nathanfallet.teamcode.companion.resources.action_interrupt
 import me.nathanfallet.teamcode.companion.resources.action_resume
 import me.nathanfallet.teamcode.companion.resources.action_retry
 import me.nathanfallet.teamcode.companion.resources.artifacts_session_title
+import me.nathanfallet.teamcode.companion.domain.models.SessionGroup
 import me.nathanfallet.teamcode.companion.resources.composer_ended
+import me.nathanfallet.teamcode.companion.resources.composer_local
+import me.nathanfallet.teamcode.companion.resources.session_kind_local
 import me.nathanfallet.teamcode.companion.resources.composer_hint
 import me.nathanfallet.teamcode.companion.resources.composer_send
 import me.nathanfallet.teamcode.companion.resources.notice_nothing_running
@@ -393,7 +396,11 @@ private fun Summary(session: CloudSession, state: SessionUiState) {
             val line = listOfNotNull(session.agentKind, session.model, session.effort, session.host?.directoryName, session.repositories.firstOrNull()?.let { if (session.repositories.size > 1) "$it +${session.repositories.size - 1}" else it })
             Text(line.joinToString(" · "), style = MetaStyle, color = colors.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         } else {
-            Detail(stringResource(Res.string.session_detail_runs_on), if (session.remote) hostName(session.host) else stringResource(Res.string.session_kind_cloud))
+            Detail(stringResource(Res.string.session_detail_runs_on), when {
+                session.remote -> hostName(session.host)
+                session.local -> stringResource(Res.string.session_kind_local)
+                else -> stringResource(Res.string.session_kind_cloud)
+            })
             session.host?.let { host ->
                 systemOf(host)?.let { Detail(stringResource(Res.string.session_detail_system), it) }
                 host.directoryName?.let { Detail(stringResource(Res.string.session_detail_folder), it) }
@@ -536,7 +543,7 @@ private fun Dock(session: CloudSession, state: SessionUiState, viewModel: Sessio
         ) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!ControlSessionUseCase.canMessage(session)) {
-                    Text(stringResource(Res.string.composer_ended), color = colors.muted, fontSize = 13.5.sp, textAlign = TextAlign.Center,
+                    Text(stringResource(if (session.local && session.state.group != SessionGroup.ENDED) Res.string.composer_local else Res.string.composer_ended), color = colors.muted, fontSize = 13.5.sp, textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).testTag("composer-ended"))
                     return@Column
                 }

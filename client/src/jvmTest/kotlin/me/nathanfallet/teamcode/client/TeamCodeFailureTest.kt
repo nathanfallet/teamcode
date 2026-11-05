@@ -13,6 +13,15 @@ class TeamCodeFailureTest {
             HttpClient(MockEngine { respond(body, status, headers) }) { configure(this) }
         }
 
+    @Test fun theTodoRelayForwardsTheStopWakeAndContextRoutesAndNothingElse() = runBlocking {
+        failing(HttpStatusCode.OK, "{}").use { client ->
+            for (path in listOf("/api/v1/todos/session", "/api/v1/todos/session/stop", "/api/v1/todos/session/wake", "/api/v1/todos/session/context", "/api/v1/todos/session/hook-error", "/api/v1/todos/session/items/a/start"))
+                assertEquals(200, client.forwardTodo(HttpMethod.Post, path, "", ByteArray(0), null, null).status, path)
+            for (path in listOf("/api/v1/todos", "/api/v1/todos/sessions", "/api/v1/waits"))
+                assertFailsWith<IllegalArgumentException>(path) { client.forwardTodo(HttpMethod.Post, path, "", ByteArray(0), null, null) }
+        }
+    }
+
     @Test fun everyRequestStyleCarriesTheApiErrorCode() = runBlocking {
         val body = """{"error":{"type":"forbidden","message":"Administrator access is required."}}"""
         failing(HttpStatusCode.Forbidden, body).use { client ->

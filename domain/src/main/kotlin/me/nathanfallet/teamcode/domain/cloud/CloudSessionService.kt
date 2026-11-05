@@ -141,6 +141,44 @@ class CloudSessionService(
     }
 
     /**
+     * Opens the local session of a `teamcode run` launch ([CloudSessionKind.LOCAL]): a session attached to the launch, so its todo,
+     * its waits and its artifacts are the session's, visible to the team and answerable from the apps. The caller is the member who
+     * started the launch (`team.runs.v1`), never anyone else, and a second call for the same launch returns the first session. It has
+     * no profile, cluster, workspace or capacity, and no pod: the launch starts its one execution ([host]) and keeps it alive with
+     * its heartbeat; the session ends with the launch (deleted at exit, or lost after 90 s without a heartbeat).
+     */
+    suspend fun createLocal(principal: Principal, draft: LocalSessionDraft): CloudCreateOutcome {
+        val actor = actor(principal, null)
+        AgentRunService.identifier(draft.runId)
+        validate(CloudSessionDraft(draft.name, "", null, null, null, draft.labels, null))
+        if (draft.agentKind !in REMOTE_AGENTS) throw TeamFailure("invalid_agent", 400, "Use the agent claude or codex.")
+        val run = store.localRun(principal.teamId, draft.runId)
+        if (run == null || run.memberId != principal.member.id || !run.running)
+            throw TeamFailure("run_not_found", 404, "This launch is unknown, ended or not yours.")
+        store.findLocal(principal.teamId, draft.runId)?.let { found ->
+            if (found.ownerId == principal.member.id) return CloudCreateOutcome.Replayed(found)
+        }
+        val owner = store.member(principal.teamId, principal.member.id)
+            ?: throw TeamFailure("invalid_effective_member", 422, "The effective member must be an enabled team member who completed password setup.")
+        access?.require(principal.teamId, owner, owner.id, CloudPermission.CREATE)
+        val now = store.now()
+        val session = CloudSession(
+            id = UUID.randomUUID().toString(), teamId = principal.teamId, ownerId = owner.id, name = draft.name, createdBy = actor.attribution,
+            profileId = "", profileVersion = 0, clusterId = "", namespace = "", imageReference = "", imageDigest = null,
+            agentKind = draft.agentKind, agentVersion = null, agentModel = null, agentEffort = null, labels = draft.labels,
+            state = CloudSessionState.CREATING, phase = WAITING_HOST, desiredState = DesiredState.RUNNING, generation = 0, currentEpoch = 0,
+            idleTimeoutMinutes = 0, lastActivityAt = now, resumeWorkspace = WorkspaceResume.CONSISTENT, resumeConversation = ConversationResume.NONE,
+            failure = null, resumeBlocked = null, pauseRequestedAt = null, pauseForce = false, pausedAt = null, expiresAt = null,
+            terminatedReason = null, waitingSince = null, workspace = CloudWorkspace("", null, 0), createdAt = now, updatedAt = now,
+            kind = CloudSessionKind.LOCAL, runId = draft.runId,
+        )
+        return try { store.insert(session, actor, null, Int.MAX_VALUE) }
+        catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        // Two calls for one launch at once: the second one finds the first one's session.
+        catch (error: Exception) { store.findLocal(principal.teamId, draft.runId)?.takeIf { it.ownerId == principal.member.id }?.let { CloudCreateOutcome.Replayed(it) } ?: throw error }
+    }
+
+    /**
      * Starts the next execution of a remote session on its host (`POST /cloud/sessions/{id}/host`, called by
      * `teamcode remote`): only the owner, from the session's device, with an interactive login. A new epoch fences
      * the execution it replaces (a host started twice: the first one gets `409 execution_fenced` and exits). A paused
@@ -151,8 +189,9 @@ class CloudSessionService(
         val actor = actor(principal, null)
         val found = store.find(principal.teamId, id)
         if (found == null || found.ownerId != principal.member.id) throw missing()
-        if (found.kind != CloudSessionKind.REMOTE) throw TeamFailure("not_remote", 409, "This is a cloud session; it runs in a pod the server starts.")
-        requireHost(principal, found)
+        if (found.kind == CloudSessionKind.CLOUD) throw TeamFailure("not_remote", 409, "This is a cloud session; it runs in a pod the server starts.")
+        // A local session's host is the launch itself, on whatever device it runs: no device is bound to it.
+        if (found.kind == CloudSessionKind.REMOTE) requireHost(principal, found)
         repeat(5) {
             val current = store.find(principal.teamId, id) ?: throw missing()
             if (current.state.terminal || current.desiredState == DesiredState.TERMINATED) throw notRunning()
@@ -267,6 +306,7 @@ class CloudSessionService(
             val now = store.now()
             when {
                 current.state.terminal || current.desiredState == DesiredState.TERMINATED -> throw notRunning()
+                current.kind == CloudSessionKind.LOCAL -> throw localSession()
                 current.state == CloudSessionState.CREATING || current.state == CloudSessionState.PREPARING ->
                     throw TeamFailure("session_preparing", 409, "The session is still being prepared. Delete it to cancel creation.")
                 current.state == CloudSessionState.TRANSFERRING -> throw TeamFailure("session_transferring", 409, "The session is being transferred.")
@@ -311,7 +351,7 @@ class CloudSessionService(
         val actor = actor(principal, null)
         val found = store.find(principal.teamId, id)
         if (found == null || found.ownerId != principal.member.id) throw missing()
-        if (found.kind == CloudSessionKind.REMOTE) throw TeamFailure("github_access_unsupported", 409, "A remote session uses the GitHub access of the device it runs on.")
+        if (found.kind != CloudSessionKind.CLOUD) throw TeamFailure("github_access_unsupported", 409, "A remote or local session uses the GitHub access of the device it runs on.")
         return transition(principal.teamId, id) { current ->
             val now = store.now()
             when {
@@ -333,6 +373,7 @@ class CloudSessionService(
         val actor = actor(principal, onBehalfOf)
         val session = visible(principal, store.find(principal.teamId, id))
         if (session.state.terminal || session.desiredState == DesiredState.TERMINATED) throw notRunning()
+        if (session.kind == CloudSessionKind.LOCAL) throw localSession()
         // Synchronous rechecks: the owner must still be enabled and assigned to the profile.
         val owner = store.member(principal.teamId, session.ownerId)
         if (owner == null || owner.disabled || owner.passwordChangeRequired)
@@ -407,6 +448,8 @@ class CloudSessionService(
             if ((draft.deviceId == null || directory != null) && (directory == null || !DeviceDaemonRules.validDirectoryName(directory)))
                 throw TeamFailure("invalid_directory_name", 400, "Send the directory's name (its last segment, 1–255 characters), never its path.")
         }
+        private fun localSession() = TeamFailure("local_session", 409,
+            "A local session lives as long as its teamcode run: it cannot be paused or resumed. End the run, or delete the session.")
         private fun remoteRequiresDevice() = TeamFailure("remote_requires_device", 422,
             "A remote session runs on the device of an interactive login. Sign in with teamcode login on this device; service keys cannot host one.")
         fun claimName(sessionId: String) = "tc-ws-$sessionId"

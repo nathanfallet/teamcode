@@ -271,6 +271,9 @@ fun Application.configureGateway(gateway: GatewayService, accessToken: String = 
                         if (cloudSessions != null && cloudRunner?.inference != null) listOf("cloud.inference.v1") else null,
                         // A remote host's relays act with a credential confined to the session, not with the member's login.
                         if (cloudSessions != null && cloudRunner?.inference != null && cloudRunner.remoteHosts && cloudConversation != null) listOf("cloud.remote.session-credential.v1") else null,
+                        // A local run: its session, its confined credential, and the answers a wait gives its Stop hook (it also needs waits and the todo).
+                        if (cloudSessions != null && cloudRunner?.inference != null && cloudRunner.remoteHosts && cloudConversation != null && waits != null && todos != null)
+                            listOf(me.nathanfallet.teamcode.api.models.CloudSessionKinds.LOCAL_CAPABILITY) else null,
                         if (cloudSessions != null && cloudRunner?.github != null) listOf("cloud.github.v1") else null,
                         if (cloudSessions != null && cloudRunner?.variables != null) listOf("cloud.variables.v1") else null,
                         if (cloudSessions != null && cloudTransfers != null) listOf("cloud.transfer.v1", "cloud.transfer.recipients.v1") else null,

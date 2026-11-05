@@ -94,6 +94,14 @@ internal fun ApiCatalog.todoOperations() {
         body<TodoStopRequest>("The phase and what the hook observed.")
         responses { ok<TodoStopView>("What to do next."); badRequest("An unknown phase, a position outside a condition or an oversized proof."); notFound("No such session.") }
     }
+    post("/api/v1/todos/session/wake") {
+        operationId = "wakeTodoSession"; tag(ApiTags.TODOS)
+        summary = "What the waits of a local run's session have to say"
+        description = "Asked by the Stop hook of a local `teamcode run` (`teamcode cloud todo-stop --wake`, `cloud.sessions.local.v1`), after the stop passed because a wait of the session is open: it holds the request for up to `waitMillis` (at most 30 000) and answers as soon as the answer to a wait arrives, which it hands over once (`messages`, oldest first, each a `[TeamCode wait answered]` message). " +
+            "`open` says a wait of the session is still open, so the hook goes on holding the agent. A session that is not a local session, has ended or has no open wait answers `open: false` at once. $TODO_TEXT"
+        body<TodoWakeRequest>("How long the server may hold the answer back.")
+        responses { ok<TodoWakeView>("The answers that arrived, and whether a wait is still open."); notFound("No such session.") }
+    }
     post("/api/v1/todos/session/hook-error") {
         operationId = "recordTodoHookError"; tag(ApiTags.TODOS)
         summary = "Record a failure of the Stop hook"

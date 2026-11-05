@@ -92,6 +92,10 @@ The isolated fixture runs a real `exec_command` tool round trip through determin
 
 `scripts/smoke-hook.py` tests the native stdin bridge on every desktop CI platform, including exact byte limits, held-open stdin, lookup deadlines, deduplication and silent errors. Launcher acceptance also executes the actual generated hook command, including the encoded PowerShell command on Windows. The full real-client fixtures currently run on POSIX; their evidence does not imply a full real Codex Windows acceptance run.
 
+## The session of a launch
+
+When the server advertises `cloud.sessions.local.v1`, `teamcode run` also opens a [local session](cloud-sessions.md#local-sessions) for the launch and gives the agent three tool sets on top of the guidance: `teamcode_waits` (`ask_human`, `wait_for`), `teamcode_todo` (the session's list) and `teamcode_artifacts`, each reaching the launch's own loopback proxy, whose relays hold a credential confined to that session. With Claude Code it also passes `--settings` with two hooks: `Stop` (`teamcode cloud todo-stop --wake`: the todo blocks a stop while items are open and no wait is open, and while a wait is open the hook holds the agent and hands it the answer, [Waiting for a wait](waits.md#a-local-run)) and `SessionStart` on `compact` and `resume` (`teamcode cloud todo-context`). Codex gets the tools and no hook. The guidance hooks above and these ones are separate: `--no-guidance` leaves the second kind in place, and nothing here sends a prompt, a tool input or an answer anywhere but the session's own wait. A launch whose session could not be opened starts as it always did.
+
 ## Observation mode
 
 The administrator can enable [observation-only pacing](capacity.md#observation-only-controller-mode). Forecasts remain visible in the dashboard and informational preview API, but delivery reads/claims return no directive and predictive admission throttles are suspended. This applies to scoped and aggregate guidance, including manual hints and watchers. Hard team/provider limits remain enforced. Advice already emitted or in flight cannot be recalled.

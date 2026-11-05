@@ -82,6 +82,9 @@ class WaitService(private val store: WaitStore, private val sessions: WaitSessio
         val session = store.session(actor.teamId, valid.sessionId)?.takeIf { it.ownerId == actor.member.id || actor.canReadTeam }
             ?: throw TeamFailure("not_found", 404, "Session not found.")
         if (session.ownerId != actor.member.id) throw TeamFailure("wait_session_owner_only", 403, "Only the session's owner asks for something on it.")
+        // A local run reads no environment file of the server's: a secret has no way to reach it.
+        if (valid.fields.any { it.type == FieldType.SECRET } && session.local)
+            throw TeamFailure("secret_unsupported_local", 422, "A secret cannot reach the agent of a local teamcode run. Ask for it in a cloud or remote session, or have the person put it where the agent can read it.")
         // A secret reaches the agent through the per-command environment of Claude Code only: Codex reads its environment once, when
         // the process starts, so a value given later could not reach it, and one given earlier could not be withdrawn or expire.
         if (valid.fields.any { it.type == FieldType.SECRET } && session.agentKind !in WaitRules.SECRET_AGENTS)

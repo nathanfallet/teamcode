@@ -176,14 +176,14 @@ private class CloudList : SuspendingCliktCommand(name = "list") {
     private val member by option("--member", help = "Another member's sessions; administrators only.")
     private val states by option("--state", help = "Repeatable: ${CloudSessionStates.all.joinToString(", ")}.").multiple()
     private val labels by option("--label", help = "key=value; repeatable.").multiple()
-    private val kinds by option("--kind", help = "cloud or remote; repeatable. Both by default where the server has remote sessions.").choice(CloudSessionKinds.CLOUD, CloudSessionKinds.REMOTE).multiple()
+    private val kinds by option("--kind", help = "cloud, remote or local; repeatable. Cloud and remote by default where the server has remote sessions.").choice(CloudSessionKinds.CLOUD, CloudSessionKinds.REMOTE, CloudSessionKinds.LOCAL).multiple()
     private val json by option("--json").flag()
     override suspend fun run() {
         if (all && member != null) throw UsageError("Use --all or --member, not both.")
         val parsed = parseLabels(labels)
         sdk(loadConfig()).use { client ->
             val remote = REMOTE_CAPABILITY in client.capabilities().features
-            if (CloudSessionKinds.REMOTE in kinds && !remote) throw CliktError("This server has no remote sessions (cloud.sessions.remote.v1).")
+            if ((CloudSessionKinds.REMOTE in kinds || CloudSessionKinds.LOCAL in kinds) && !remote) throw CliktError("This server has no remote or local sessions (cloud.sessions.remote.v1).")
             // An older server lists cloud sessions only and would ignore the parameter.
             val listed = if (!remote) emptyList() else kinds.ifEmpty { listOf(CloudSessionKinds.CLOUD, CloudSessionKinds.REMOTE) }.distinct()
             var before: String? = null

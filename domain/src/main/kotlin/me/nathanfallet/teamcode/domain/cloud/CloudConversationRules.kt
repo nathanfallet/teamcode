@@ -9,7 +9,7 @@ object CloudConversationRules {
      * (audit M2), before the owner's link is checked: a non-owner, in `owner` mode, on a cloud session.
      */
     fun ownerOnly(session: CloudSession, authorId: String) =
-        authorId != session.ownerId && session.kind != CloudSessionKind.REMOTE && session.githubAccess == CloudGitHubAccess.OWNER
+        authorId != session.ownerId && session.kind == CloudSessionKind.CLOUD && session.githubAccess == CloudGitHubAccess.OWNER
 
     /**
      * The runner's text for a bare denial of [requestId] ([PermissionAnswer.isBareDenial]): the only shape of a

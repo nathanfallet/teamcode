@@ -372,6 +372,8 @@ private const val WORKFLOW_STOP_TIMEOUT_SECONDS = 5
 
 /** The todo `Stop` hook runs the checks of the open items (`gh`, at most 120 s for a `command`) and gives up at 140 s itself ([me.nathanfallet.teamcode.cli.todo.TodoStop.TIMEOUT_MILLIS]). */
 private const val TODO_STOP_TIMEOUT_SECONDS = 150
+/** The Stop hook of a local run, which holds the agent while a wait is open: a day, after which the agent stops and the answer waits in the apps. */
+internal const val LOCAL_STOP_TIMEOUT_SECONDS = 24 * 3_600
 
 /** The todo `SessionStart` hook reads one small answer from the relay and gives up at 20 s itself ([me.nathanfallet.teamcode.cli.todo.TodoStop.CALL_MILLIS]). */
 private const val TODO_CONTEXT_TIMEOUT_SECONDS = 25
@@ -392,7 +394,9 @@ internal data class CloudHook(val name: String, val definition: HookDefinitionVi
  * ([CloudWorkflowStop], only when the `teamcode_workflow` tool is connected), then [todoContext], the `SessionStart` reminder on `compact` and `resume` ([me.nathanfallet.teamcode.cli.todo.CloudTodoContext]), and [todoStop] ([me.nathanfallet.teamcode.cli.todo.CloudTodoStop], only when the
  * `teamcode_todo` tool is connected): each is one more entry of the `Stop` list, none replaces another.
  */
-internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null, workflowStop: String? = null, todoStop: String? = null, todoContext: String? = null): String? {
+internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = null, workflowStop: String? = null, todoStop: String? = null, todoContext: String? = null,
+    /** A local run's Stop hook holds the agent for a wait, so it runs much longer than a pod's ([LOCAL_STOP_TIMEOUT_SECONDS]). */
+    todoStopTimeoutSeconds: Int = TODO_STOP_TIMEOUT_SECONDS): String? {
     val events = (hooks.flatMap { HookEvents.forAgent("claude", it.definition) } + listOfNotNull((runnerStop ?: workflowStop ?: todoStop)?.let { "Stop" }, todoContext?.let { "SessionStart" })).distinct().sorted()
     if (events.isEmpty()) return null
     return buildJsonObject { putJsonObject("hooks") {
@@ -413,7 +417,7 @@ internal fun cloudHookSettings(hooks: List<CloudHook>, runnerStop: String? = nul
                 putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", todoContext); put("timeout", TODO_CONTEXT_TIMEOUT_SECONDS) }) }
             })
             if (event == "Stop" && todoStop != null) add(buildJsonObject {
-                putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", todoStop); put("timeout", TODO_STOP_TIMEOUT_SECONDS) }) }
+                putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", todoStop); put("timeout", todoStopTimeoutSeconds) }) }
             })
             if (event == "Stop" && workflowStop != null) add(buildJsonObject {
                 putJsonArray("hooks") { add(buildJsonObject { put("type", "command"); put("command", workflowStop); put("timeout", WORKFLOW_STOP_TIMEOUT_SECONDS) }) }

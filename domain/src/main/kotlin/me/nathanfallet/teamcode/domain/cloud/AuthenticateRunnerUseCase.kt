@@ -39,7 +39,7 @@ class AuthenticateRunnerUseCase(
         if (token == null || token.length !in 16..16_384 || token.any { it.isWhitespace() || it.isISOControl() } ||
             !identifier.matches(teamId) || !identifier.matches(sessionId) || epoch !in 1..1_000_000) throw unauthenticated()
         val session = store.find(teamId, sessionId) ?: throw unauthenticated()
-        if (session.kind == CloudSessionKind.REMOTE) return host(session, token, epoch)
+        if (session.kind != CloudSessionKind.CLOUD) return host(session, token, epoch)
         val identity = review(session.clusterId, token) ?: throw unauthenticated()
         val pod = identity.podName ?: throw unauthenticated()
         if (identity.namespace != session.namespace || !pod.startsWith("tc-${session.id}-e")) throw unauthenticated()
@@ -52,8 +52,11 @@ class AuthenticateRunnerUseCase(
         val principal = logins?.invoke(token) ?: throw unauthenticated()
         if (principal.serviceScopes != null || principal.member.passwordChangeRequired || principal.teamId != session.teamId || principal.member.id != session.ownerId)
             throw unauthenticated()
-        val device = session.host?.deviceId
-        if (device == null || store.deviceOf(principal) != device) throw unauthenticated()
+        // A remote session runs on one device; a local one on the device of the launch, which is whatever device its owner signed in on.
+        if (session.kind == CloudSessionKind.REMOTE) {
+            val device = session.host?.deviceId
+            if (device == null || store.deviceOf(principal) != device) throw unauthenticated()
+        }
         val execution = store.execution(session.id, epoch)
         if (epoch != session.currentEpoch || execution == null || execution.state == ExecutionState.ENDED)
             throw TeamFailure("execution_fenced", 409, "This execution is no longer current. Stop the agent and exit without checkpointing.")

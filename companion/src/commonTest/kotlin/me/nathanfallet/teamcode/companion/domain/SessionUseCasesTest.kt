@@ -259,6 +259,11 @@ class SessionUseCasesTest {
         val older = FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1"))
         LoadSessionsUseCase(sessions, older, guard())("a1", SessionScope.MINE, SessionFilter.OPEN)
         assertEquals(listOf("list MINE OPEN null cloud,remote", "list MINE OPEN null"), sessions.calls)
+        // The session of a `teamcode run` is asked for only from a server that says it has them: an older one would refuse the kind.
+        sessions.calls.clear()
+        LoadSessionsUseCase(sessions, FakeFeatures(setOf("cloud.sessions.v1", "cloud.events.v1", "cloud.sessions.remote.v1", "cloud.sessions.local.v1")), guard())("a1", SessionScope.MINE, SessionFilter.OPEN)
+        assertEquals(listOf("list MINE OPEN null cloud,local,remote"), sessions.calls)
+        sessions.calls.clear()
 
         sessions.calls.clear()
         sessions.changes = flowOf(LiveUpdate.Opened(false))
@@ -266,6 +271,15 @@ class SessionUseCasesTest {
         followList(sessions, older)("a1").toList()
         // The feed carries every kind from a server that has them, and is asked as before otherwise.
         assertEquals(listOf("feed cloud,remote", "feed"), sessions.calls)
+    }
+
+    @Test fun aLocalSessionTakesNoMessagePauseResumeOrTransferFromHere() {
+        val local = cloudSession("l", SessionState.READY, host = null).copy(kind = me.nathanfallet.teamcode.companion.domain.models.SessionKind.LOCAL)
+        val use = me.nathanfallet.teamcode.companion.domain.usecases.sessions.ControlSessionUseCase
+        assertFalse(use.canPause(local)); assertFalse(use.canResume(local)); assertFalse(use.canTransfer(local)); assertFalse(use.canMessage(local))
+        assertTrue(use.canEnd(local), "A local session can be deleted from the app")
+        assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionKind.LOCAL, me.nathanfallet.teamcode.companion.domain.models.SessionKind.of("local"))
+        assertEquals(me.nathanfallet.teamcode.companion.domain.models.SessionKind.CLOUD, me.nathanfallet.teamcode.companion.domain.models.SessionKind.of("something-newer"))
     }
 
     @Test fun aRemoteSessionIsNeitherResumedFromHereNorTransferred() {

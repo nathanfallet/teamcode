@@ -87,7 +87,7 @@ data class Wait(
 )
 
 /** The part of a cloud session a wait needs: who owns it and what to call it. */
-data class WaitSession(val id: String, val teamId: String, val ownerId: String, val name: String?, val agentKind: String = "")
+data class WaitSession(val id: String, val teamId: String, val ownerId: String, val name: String?, val agentKind: String = "", val local: Boolean = false)
 
 /**
  * A secret to keep for the session of the wait it answers: the variable it is delivered as ([envName], `TEAMCODE_WAIT_…`), the
