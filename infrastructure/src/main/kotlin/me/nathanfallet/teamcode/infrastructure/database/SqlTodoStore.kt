@@ -1,5 +1,10 @@
 package me.nathanfallet.teamcode.infrastructure.database
 
+import kotlinx.serialization.json.*
+import me.nathanfallet.teamcode.domain.cloud.CloudEventType
+import me.nathanfallet.teamcode.domain.cloud.CloudSessionState
+import me.nathanfallet.teamcode.domain.cloud.DesiredState
+import me.nathanfallet.teamcode.domain.team.Member
 import me.nathanfallet.teamcode.domain.team.Principal
 import me.nathanfallet.teamcode.domain.team.TeamFailure
 import me.nathanfallet.teamcode.domain.todos.*
@@ -13,7 +18,7 @@ import org.jetbrains.exposed.v1.jdbc.*
  * the difference in one transaction, so two replicas cannot both create a list or both finish an item (docs/todos.md). A list
  * costs two reads (the row, then its items in order); the drop outcomes one more, only while a drop request is open.
  */
-class SqlTodoStore(private val database: Database) : TodoStore {
+class SqlTodoStore(private val database: Database) : TodoStore, TodoReminderStore {
     override suspend fun now(): Long = database.query { nowMillis() }
     override suspend fun revalidate(actor: Principal) = database.query { requireCurrent(this, actor) }
     override suspend fun executionSession(tokenId: String): String? = database.query {
@@ -62,6 +67,45 @@ class SqlTodoStore(private val database: Database) : TodoStore {
             ?.let { WaitState(it[Waits.status], it[Waits.answerAction]) }
     }
 
+    override suspend fun candidates(since: Long, limit: Int): List<TodoReminderCandidate> = database.query {
+        // Active lists touched since [since] (index session_todo_active), joined to their session by primary key: only a session that is
+        // active and meant to run is looked at.
+        (SessionTodos innerJoin CloudSessions).select(SessionTodos.teamId, SessionTodos.sessionId, CloudSessions.ownerId)
+            .where { (SessionTodos.status eq TodoListStatus.ACTIVE.wire) and (SessionTodos.updatedAt greaterEq since) and (CloudSessions.state eq CloudSessionState.ACTIVE.wire) and (CloudSessions.desiredState eq DesiredState.RUNNING.wire) }
+            .orderBy(SessionTodos.updatedAt, SortOrder.DESC).limit(limit)
+            .map { TodoReminderCandidate(it[SessionTodos.teamId], it[SessionTodos.sessionId], it[CloudSessions.ownerId]) }
+    }
+
+    override suspend fun turnEnds(sessionIds: Collection<String>): Map<String, TodoTurnEnd> = database.query {
+        if (sessionIds.isEmpty()) return@query emptyMap()
+        val ids = sessionIds.toList()
+        val seq = CloudSessionEvents.seq.max()
+        fun latest(below: Map<String, Long>?): Map<String, Long> {
+            val condition: Op<Boolean> = if (below == null) CloudSessionEvents.sessionId inList ids
+                else below.entries.map { (id, s) -> (CloudSessionEvents.sessionId eq id) and (CloudSessionEvents.seq less s) }.reduce { a, b -> a or b }
+            return CloudSessionEvents.select(CloudSessionEvents.sessionId, seq).where { (CloudSessionEvents.type eq CloudEventType.TURN.wire) and condition }
+                .groupBy(CloudSessionEvents.sessionId).associate { it[CloudSessionEvents.sessionId] to it[seq]!! }
+        }
+        fun events(at: Map<String, Long>): Map<String, Pair<String?, Long>> {
+            if (at.isEmpty()) return emptyMap()
+            val condition = at.entries.map { (id, s) -> (CloudSessionEvents.sessionId eq id) and (CloudSessionEvents.seq eq s) }.reduce { a, b -> a or b }
+            return CloudSessionEvents.select(CloudSessionEvents.sessionId, CloudSessionEvents.data, CloudSessionEvents.at).where { condition }.associate {
+                it[CloudSessionEvents.sessionId] to (runCatching { Json.parseToJsonElement(it[CloudSessionEvents.data]).jsonObject["phase"]?.jsonPrimitive?.contentOrNull }.getOrNull() to it[CloudSessionEvents.at])
+            }
+        }
+        val last = latest(null)
+        val lastEvents = events(last)
+        // Only a turn that ended `completed`; the event before it tells when it began.
+        val completed = lastEvents.filter { it.value.first == "completed" }.keys
+        val before = if (completed.isEmpty()) emptyMap() else events(latest(last.filterKeys { it in completed }))
+        completed.associateWith { id -> TodoTurnEnd(last.getValue(id), before[id]?.second ?: lastEvents.getValue(id).second) }
+    }
+
+    override suspend fun member(teamId: String, memberId: String): Member? = database.query {
+        Members.selectAll().where { (Members.id eq memberId) and (Members.teamId eq teamId) }.singleOrNull()
+            ?.let { Member(it[Members.id], it[Members.username], readMemberRole(it), it[Members.disabled], it[Members.mustChangePassword]) }
+    }
+
     override suspend fun hasOpenWait(teamId: String, sessionId: String): Boolean = database.query {
         Waits.select(Waits.id).where { (Waits.sessionId eq sessionId) and (Waits.status eq WaitStatus.OPEN.wire) and (Waits.teamId eq teamId) }.limit(1).any()
     }
@@ -86,7 +130,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
         val last = row[SessionTodos.lastDone]?.let { TodoProgress(it, row[SessionTodos.lastItems]!!, row[SessionTodos.lastNotes]!!) }
         return TodoList(
             row[SessionTodos.id], sessionId, teamId, row[SessionTodos.reference], TodoJson.refs(row[SessionTodos.refs]),
-            TodoListStatus.parse(row[SessionTodos.status]) ?: error("Unknown todo status."), row[SessionTodos.stall], last, items, row[SessionTodos.createdAt], row[SessionTodos.updatedAt], TodoJson.events(row[SessionTodos.hookEvents]),
+            TodoListStatus.parse(row[SessionTodos.status]) ?: error("Unknown todo status."), row[SessionTodos.stall], last, items, row[SessionTodos.createdAt], row[SessionTodos.updatedAt], TodoJson.events(row[SessionTodos.hookEvents]), row[SessionTodos.lastHookAt], row[SessionTodos.reminderSeq],
         )
     }
 
@@ -120,6 +164,7 @@ class SqlTodoStore(private val database: Database) : TodoStore {
                 it[status] = after.status.wire; it[stall] = after.stall; it[lastDone] = after.lastStop?.done; it[lastItems] = after.lastStop?.items
                 it[lastNotes] = after.lastStop?.notes; it[updatedAt] = after.updatedAt
                 it[hookEvents] = after.hookEvents.takeIf { e -> e.isNotEmpty() }?.let(TodoJson::events)
+                it[lastHookAt] = after.lastHookAt; it[reminderSeq] = after.reminderSeq
             }
         }
         val old = before.items.withIndex().associate { it.value.id to it }

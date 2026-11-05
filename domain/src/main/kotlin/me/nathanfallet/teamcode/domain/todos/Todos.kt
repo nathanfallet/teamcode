@@ -80,6 +80,10 @@ data class TodoList(
     val id: String, val sessionId: String, val teamId: String, val reference: String, val refs: List<WaitRef>,
     val status: TodoListStatus, val stall: Int, val lastStop: TodoProgress?, val items: List<TodoItem>,
     val createdAt: Long, val updatedAt: Long, val hookEvents: List<TodoHookEvent> = emptyList(),
+    /** When the Stop hook last asked about this session: a turn it was asked in was already judged, so the server does not remind again. */
+    val lastHookAt: Long? = null,
+    /** The sequence of the last turn end the server-side reminder judged (`cloud_session_events.seq`), so a turn is reminded once across replicas and restarts. */
+    val reminderSeq: Long? = null,
 ) {
     fun item(id: String) = items.firstOrNull { it.id == id }
     val doneCount get() = items.count { it.status == TodoItemStatus.DONE }

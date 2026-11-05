@@ -19,10 +19,15 @@ object SessionTodos : Table("session_todos") {
     val lastNotes = integer("last_notes").nullable()
     /** JSON: what the Stop hook recorded about itself (would_block, blocked, hook_error), the newest 20. Null until the first. */
     val hookEvents = text("hook_events").nullable()
+    /** When the Stop hook last asked about this session, and the last turn end the server-side reminder judged (`cloud_session_events.seq`). */
+    val lastHookAt = long("last_hook_at").nullable()
+    val reminderSeq = long("reminder_seq").nullable()
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
     override val primaryKey = PrimaryKey(sessionId)
     init {
+        // The reminder's pass: active lists touched recently, in one range.
+        index("session_todo_active", false, status, updatedAt)
         // The marker of a PR names a list by the first 8 characters of its id.
         uniqueIndex("session_todo_id", id)
     }

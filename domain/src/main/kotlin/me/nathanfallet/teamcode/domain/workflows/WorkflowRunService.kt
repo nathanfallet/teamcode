@@ -19,11 +19,16 @@ object WorkflowRunRules {
     }
 }
 
+/** Whether a step's session still has a todo to finish before it delivers (docs/todos.md): the reason it may not, or null. */
+fun interface WorkflowTodoGate {
+    suspend fun refusal(teamId: String, sessionId: String): String?
+}
+
 /**
  * Starting, reading, cancelling and delivering into runs (docs/workflows.md). Running a workflow acts as its starter (their
  * sessions, quota and GitHub link), so a run is started signed in, never by a key.
  */
-class WorkflowRunService(private val store: WorkflowRunStore) {
+class WorkflowRunService(private val store: WorkflowRunStore, private val todoGate: WorkflowTodoGate? = null) {
     private fun missing() = TeamFailure("not_found", 404, "Run not found.")
     private fun visible(actor: Principal, run: WorkflowRun?): WorkflowRun {
         if (run == null || (run.starterId != actor.member.id && !actor.canReadTeamCloud)) throw missing()
@@ -139,6 +144,8 @@ class WorkflowRunService(private val store: WorkflowRunStore) {
     private suspend fun finishDelivery(actor: Principal, run: WorkflowRun, visit: NodeVisit, output: JsonElement): WorkflowRun {
         if (run.status.terminal || visit.kind != NodeKind.AGENT || visit.sessionId == null)
             throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")
+        // A step that keeps a todo delivers once the list is done: the list is what the step promised, the delivery is its end.
+        todoGate?.refusal(actor.teamId, visit.sessionId)?.let { throw TeamFailure("todo_open", 409, it) }
         val node = run.definition.nodes.first { it.id == visit.nodeId }
         val text = Deliverables.validate(node.deliverable!!, output)
         if (!store.complete(visit.id, VisitStatus.DONE, WorkflowRules.DELIVERED, text, store.now())) throw TeamFailure("nothing_to_deliver", 409, "This run is not waiting for a delivery.")

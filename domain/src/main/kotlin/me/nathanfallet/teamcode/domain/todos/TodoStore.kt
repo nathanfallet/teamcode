@@ -35,6 +35,21 @@ interface TodoStore {
     suspend fun dropOutcomes(teamId: String, waitIds: Collection<String>): Map<String, DropOutcome>
 }
 
+/** An active list whose session is running: what the server-side reminder looks at. */
+data class TodoReminderCandidate(val teamId: String, val sessionId: String, val ownerId: String)
+
+/** The latest turn of a session when it ended normally (`completed`): [seq] is its event's sequence, [startedAt] when it began (epoch milliseconds), null when unknown. */
+data class TodoTurnEnd(val seq: Long, val startedAt: Long?)
+
+/** What the server-side reminder reads (docs/todos.md, "The server-side reminder"): bounded, in batches, never one query per session. */
+interface TodoReminderStore {
+    /** Active lists touched since [since] (epoch milliseconds) whose session is active and meant to run, at most [limit]. */
+    suspend fun candidates(since: Long, limit: Int): List<TodoReminderCandidate>
+    /** For each of these sessions whose latest turn ended `completed`, that turn; a session whose latest turn is running, interrupted or failed is absent. */
+    suspend fun turnEnds(sessionIds: Collection<String>): Map<String, TodoTurnEnd>
+    suspend fun member(teamId: String, memberId: String): me.nathanfallet.teamcode.domain.team.Member?
+}
+
 /** A wait's `status` (open, resolved, cancelled) and, once answered, the `action` chosen. */
 data class WaitState(val status: String, val action: String?)
 

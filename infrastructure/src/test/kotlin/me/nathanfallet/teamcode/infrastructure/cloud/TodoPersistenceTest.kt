@@ -164,6 +164,60 @@ class TodoPersistenceTest {
         }
     }
 
+    @Test @Timeout(240)
+    fun theReminderReadsTurnsInBatchesAndJudgesEachTurnEndOnceAcrossReplicas() = runBlocking {
+        AutomationWorld.run(93) { w ->
+            val a = SqlTodoStore(w.a.database); val b = SqlTodoStore(w.b.database)
+            val svcA = TodoService(a, WaitBackedDropWaits(SqlWaitStore(w.a.database))); val svcB = TodoService(b, WaitBackedDropWaits(SqlWaitStore(w.b.database)))
+            suspend fun session(name: String) = (w.a.sessions.create(w.member, null, CloudSessionDraft(name, w.profile.id, null, null, null, emptyMap(), null), null) as CloudCreateOutcome.Created).session.id
+            val running = session("Running"); val paused = session("Paused"); val noTurn = session("No turn")
+            for (id in listOf(running, paused, noTurn)) svcA.create(w.member, id, "Plan", emptyList(), listOf(item("a"), item("b", "a")))
+            suspend fun turn(id: String, seq: Long, at: Long, phase: String) = w.a.database.query {
+                CloudSessionEvents.insert { it[sessionId] = id; it[CloudSessionEvents.seq] = seq; it[teamId] = w.teamId; it[epoch] = 0; it[runnerSeq] = null; it[type] = "turn"; it[CloudSessionEvents.at] = at; it[data] = """{"phase":"$phase"}""" }
+            }
+            w.a.database.query {
+                CloudSessions.update({ CloudSessions.id inList listOf(running, noTurn) }) { it[state] = "active"; it[desiredState] = "running" }
+                CloudSessions.update({ CloudSessions.id eq paused }) { it[state] = "paused"; it[desiredState] = "paused" }
+            }
+            // `running`: a turn started at 1000 and ended completed at 2000; `paused`: the same but not running; `noTurn`: no turn event at all.
+            for (id in listOf(running, paused)) { turn(id, 1, 1_000, "started"); turn(id, 2, 2_000, "completed") }
+            val now = a.now()
+            val candidates = b.candidates(now - 3_600_000, 50)
+            assertEquals(setOf(running, noTurn), candidates.map { it.sessionId }.toSet(), "only active sessions that are meant to run")
+            assertEquals(w.member.member.id, candidates.first().ownerId)
+            assertEquals(mapOf(running to TodoTurnEnd(2, 1_000), paused to TodoTurnEnd(2, 1_000)), b.turnEnds(listOf(running, paused, noTurn)))
+            // A turn that is running (latest event `started`) or was interrupted is not an end.
+            turn(running, 3, 3_000, "started")
+            assertEquals(setOf(paused), a.turnEnds(listOf(running, paused, noTurn)).keys)
+            turn(running, 4, 4_000, "interrupted")
+            assertTrue(a.turnEnds(listOf(running)).isEmpty())
+            turn(running, 5, 5_000, "started"); turn(running, 6, 6_000, "completed")
+            assertEquals(TodoTurnEnd(6, 5_000), a.turnEnds(listOf(running)).getValue(running))
+
+            // Two replicas judge the same turn end at once: one reminds, the other finds it marked.
+            val sent = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val owner = Principal(w.member.member, "waits-resolver", w.teamId)
+            val outcomes = coroutineScope {
+                listOf(svcA, svcB).map { s -> async(Dispatchers.IO) { s.remind(w.teamId, owner, running, TodoTurnEnd(6, 5_000), true) { text, key -> sent += key; assertTrue(text.startsWith("[TeamCode todo] 0 of 2 items done.")) } } }.awaitAll()
+            }
+            assertEquals(1, outcomes.count { it == TodoReminderOutcome.REMINDED }, outcomes.toString())
+            assertEquals(1, sent.size)
+            val after = svcA.get(w.member, running)!!
+            assertEquals(1, after.stall); assertEquals(6L, after.reminderSeq)
+            // The next turn end is a new judgement; a stop the hook saw inside it is not reminded.
+            svcB.stop(w.member, running, TodoStopInput(TodoStopPhase.BEGIN))
+            val hookAt = svcA.get(w.member, running)!!.lastHookAt!!
+            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(7, hookAt - 1), true) { _, _ -> error("not sent") })
+            assertEquals(7L, svcB.get(w.member, running)!!.reminderSeq)
+            // Stalls 2 and 3: the third turn end without progress asks the owner (a wait the server opens as itself), and no message goes out.
+            assertEquals(TodoReminderOutcome.REMINDED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(8, hookAt + 10), true) { _, _ -> sent += "second" })
+            assertEquals(TodoReminderOutcome.ESCALATED, svcB.remind(w.teamId, owner, running, TodoTurnEnd(9, hookAt + 10), true) { _, _ -> error("not sent") })
+            // The wait now open holds the reminder back, from either replica.
+            assertEquals(TodoReminderOutcome.SKIPPED, svcA.remind(w.teamId, owner, running, TodoTurnEnd(10, hookAt + 10), true) { _, _ -> error("not sent") })
+            w.a.database.query { assertEquals(1L, Waits.selectAll().where { (Waits.sessionId eq running) and (Waits.status eq "open") }.count()) }
+        }
+    }
+
     private suspend fun anExecutionCredentialIsConfinedToItsSession(a: TodoService, b: TodoService, w: AutomationWorld, own: String, other: String) {
         suspend fun credential(scopes: Set<ServiceScope>, bound: String?): Principal {
             val tokenId = java.util.UUID.randomUUID().toString()

@@ -185,6 +185,8 @@ object CloudSessions : Table("cloud_sessions") {
         index("cloud_session_owner_kind", false, teamId, ownerId, kind, createdAt)
         index("cloud_session_team_kind", false, teamId, kind, createdAt)
         index("cloud_session_due", false, reconcileAfter)
+        // The sessions that are running, for the todo reminder's pass: few among all the sessions that ever ran.
+        index("cloud_session_running", false, state, desiredState)
         index("cloud_session_cluster_waiting", false, clusterId, waitingSince)
         // The daemon's queue: a device's sessions waiting for their host, oldest request first.
         index("cloud_session_host_waiting", false, hostDeviceId, phase, desiredState, updatedAt)
